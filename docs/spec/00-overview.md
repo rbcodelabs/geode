@@ -29,20 +29,29 @@ branding were used. The name, icon, and styling are original.
 - **Core views**: file explorer (tree, context menus, active highlight), search (operators: `tag:` `path:` `file:` `content:`, `"phrases"`, `-negation`, `/regex/`), backlinks pane, outline pane (click-to-jump), tag pane (click-to-search)
 - **Command system**: command palette (Cmd+P), quick switcher (Cmd+O, create-on-no-match), hotkey registry, daily note (Cmd+D), random note
 - **Settings & theming**: dark/light via CSS variable theme (`.theme-dark`/`.theme-light` body classes, Obsidian-convention variable names), readable line length, per-vault settings persisted in `.geode/`
+- **Live Preview mode** (default): CM6 decorations hide markdown syntax away from the cursor — headings, emphasis, inline code, quotes, highlights; wikilinks/links render as clickable text; task markers become toggling checkboxes; HRs render as lines. Gotcha learned the hard way: block widgets must carry no external margins or CM's height map drifts and cursor motion breaks
+- **Properties editor**: frontmatter renders as an integrated, editable typed table (block widget) that serializes back to YAML
 
 ### Next (rough priority order)
 
-1. **Live Preview mode** — CM6 decorations that hide syntax away from the cursor (currently: source + reading modes only)
+0. **Test harness** — no automated tests exist yet; everything so far was
+   verified manually via CDP probes. Set up: (a) vitest unit tests for the
+   pure data layer — `parseMetadata`, link resolution
+   (`getFirstLinkpathDest`), search query parsing/matching, fuzzy matcher,
+   rename link-rewriting; (b) a Playwright `_electron.launch()` smoke test
+   that boots the app against `test-vault/`, opens a note, asserts Live
+   Preview rendering and no console errors. Wire both into `npm test` and
+   require green before push.
+1. **Live Preview embeds** — render `![[image]]`/`![[note]]` transclusions inline while editing (currently raw syntax in LP, rendered in reading view)
 2. **Graph view** — canvas force-directed renderer over `resolvedLinks`; local graph
 3. **Unlinked mentions** in backlinks pane; backlink context snippets
 4. **Canvas** — `.canvas` JSON Canvas 1.0 editor (spec in 02/04)
-5. **Properties editor UI** — typed key/value rows above the note (spec §6 of 01)
-6. **Plugin API layer** — `geode` module mirroring the documented `obsidian` API surface (spec 03); CSS snippets + community themes
-7. **Templates, bookmarks, note composer, page preview (hover), slash commands, workspaces** (specs in 02)
-8. **Search upgrades** — `line:`/`block:`/`section:`/`task:` operators, property `[key:value]` queries, embedded query blocks
-9. **Bases** — `.base` table/card views with formula language (spec in 02/04)
-10. **Mobile** (Capacitor) and packaging/auto-update (electron-builder), pop-out windows, vertical splits/stacked tabs
-11. **Sync alternative** — document Git/Syncthing workflows; optional E2EE sync server is out of scope for core
+5. **Plugin API layer** — `geode` module mirroring the documented `obsidian` API surface (spec 03); CSS snippets + community themes
+6. **Templates, bookmarks, note composer, page preview (hover), slash commands, workspaces** (specs in 02)
+7. **Search upgrades** — `line:`/`block:`/`section:`/`task:` operators, property `[key:value]` queries, embedded query blocks
+8. **Bases** — `.base` table/card views with formula language (spec in 02/04)
+9. **Mobile** (Capacitor) and packaging/auto-update (electron-builder), pop-out windows, vertical splits/stacked tabs
+10. **Sync alternative** — document Git/Syncthing workflows; optional E2EE sync server is out of scope for core
 
 ## Architecture map
 
