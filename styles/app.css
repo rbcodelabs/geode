@@ -551,6 +551,7 @@ button.mod-cta:hover {
 .cm-hr-widget hr {
   display: inline-block;
   width: 100%;
+  margin: 0;
   border: none;
   border-top: 1px solid var(--background-modifier-border);
   vertical-align: middle;
@@ -558,12 +559,18 @@ button.mod-cta:hover {
 
 /* Properties widget (frontmatter editor) */
 
+/* Block widget: no margins allowed (CodeMirror measures rect height only);
+   the bottom gap is padding on the root, the divider sits on the inner box. */
 .metadata-properties {
   display: block;
+  margin: 0;
+  padding: 0 0 16px;
+  font-size: 14px;
+}
+
+.metadata-properties-inner {
   border-bottom: 1px solid var(--background-modifier-border);
   padding: 4px 0 12px;
-  margin-bottom: 16px;
-  font-size: 14px;
 }
 
 .metadata-properties-heading {

@@ -41,8 +41,15 @@ class PropertiesWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    // IMPORTANT: block widgets are measured via getBoundingClientRect(),
+    // which excludes margins — all spacing must live inside this box
+    // (padding only), or CodeMirror's height map drifts and cursor
+    // motion/clicks land on the wrong lines.
     const root = document.createElement("div");
     root.className = "metadata-properties";
+    const inner = document.createElement("div");
+    inner.className = "metadata-properties-inner";
+    root.appendChild(inner);
     let obj: Record<string, unknown> = {};
     try {
       const parsed = parseYaml(this.yamlText);
@@ -56,12 +63,12 @@ class PropertiesWidget extends WidgetType {
     const heading = document.createElement("div");
     heading.className = "metadata-properties-heading";
     heading.textContent = "Properties";
-    root.appendChild(heading);
+    inner.appendChild(heading);
 
     const commit = () => writeFrontmatter(view, obj);
 
     for (const [key, value] of Object.entries(obj)) {
-      root.appendChild(this.renderRow(key, value, obj, commit));
+      inner.appendChild(this.renderRow(key, value, obj, commit));
     }
 
     // "Add property" row
@@ -71,7 +78,7 @@ class PropertiesWidget extends WidgetType {
     addRow.addEventListener("click", () => {
       addRow.replaceWith(this.renderNewRow(obj, commit));
     });
-    root.appendChild(addRow);
+    inner.appendChild(addRow);
     return root;
   }
 
