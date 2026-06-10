@@ -1,0 +1,41 @@
+{
+  "name": "geode",
+  "version": "0.1.0",
+  "description": "Geode — an open-source knowledge base that works on local Markdown files",
+  "main": "dist/main.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "electron": "^42.4.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/search": "^6.7.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.1",
+    "@lezer/common": "^1.5.2",
+    "@lezer/highlight": "^1.2.3",
+    "@lezer/markdown": "^1.6.4",
+    "chokidar": "^5.0.0",
+    "marked": "^18.0.5",
+    "yaml": "^2.9.0"
+  }
+}

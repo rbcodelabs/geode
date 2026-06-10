@@ -1,0 +1,316 @@
+import { EditorState, Prec } from "@codemirror/state";
+import {
+  EditorView,
+  keymap,
+  drawSelection,
+  highlightActiveLine,
+  placeholder,
+} from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import {
+  autocompletion,
+  CompletionContext,
+  CompletionResult,
+  completionKeymap,
+} from "@codemirror/autocomplete";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+import type { App } from "../app";
+import type { View } from "../workspace";
+import type { TFile } from "../types";
+
+const mdHighlight = HighlightStyle.define([
+  { tag: tags.heading1, class: "cm-header-1" },
+  { tag: tags.heading2, class: "cm-header-2" },
+  { tag: tags.heading3, class: "cm-header-3" },
+  { tag: tags.heading4, class: "cm-header-4" },
+  { tag: tags.heading5, class: "cm-header-5" },
+  { tag: tags.heading6, class: "cm-header-6" },
+  { tag: tags.strong, class: "cm-strong" },
+  { tag: tags.emphasis, class: "cm-em" },
+  { tag: tags.strikethrough, class: "cm-strikethrough" },
+  { tag: tags.link, class: "cm-link" },
+  { tag: tags.url, class: "cm-url" },
+  { tag: tags.monospace, class: "cm-inline-code" },
+  { tag: tags.quote, class: "cm-quote" },
+  { tag: tags.list, class: "cm-list" },
+  { tag: tags.meta, class: "cm-meta" },
+  { tag: tags.comment, class: "cm-comment" },
+]);
+
+export type MarkdownMode = "source" | "reading";
+
+export class MarkdownView implements View {
+  readonly viewType = "markdown";
+  containerEl: HTMLElement;
+  file: TFile | null = null;
+  mode: MarkdownMode = "source";
+  editor: EditorView | null = null;
+  private headerEl: HTMLElement;
+  private titleEl: HTMLElement;
+  private bodyEl: HTMLElement;
+  private readingEl: HTMLElement;
+  private editorHostEl: HTMLElement;
+  private saveTimer: number | null = null;
+  private lastSavedText = "";
+
+  constructor(private app: App) {
+    this.containerEl = document.createElement("div");
+    this.containerEl.className = "markdown-view";
+    this.headerEl = document.createElement("div");
+    this.headerEl.className = "view-header";
+    this.titleEl = document.createElement("div");
+    this.titleEl.className = "view-header-title";
+    this.titleEl.contentEditable = "plaintext-only";
+    this.titleEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.titleEl.blur();
+      }
+    });
+    this.titleEl.addEventListener("blur", () => this.commitTitleRename());
+    const modeBtn = document.createElement("button");
+    modeBtn.className = "view-mode-toggle clickable-icon";
+    modeBtn.title = "Toggle reading view (Cmd/Ctrl+E)";
+    modeBtn.textContent = "📖";
+    modeBtn.addEventListener("click", () => this.toggleMode());
+    this.headerEl.appendChild(this.titleEl);
+    this.headerEl.appendChild(modeBtn);
+
+    this.bodyEl = document.createElement("div");
+    this.bodyEl.className = "markdown-view-body";
+    this.editorHostEl = document.createElement("div");
+    this.editorHostEl.className = "markdown-source-view";
+    this.readingEl = document.createElement("div");
+    this.readingEl.className = "markdown-reading-view markdown-rendered";
+    this.bodyEl.appendChild(this.editorHostEl);
+    this.bodyEl.appendChild(this.readingEl);
+    this.containerEl.appendChild(this.headerEl);
+    this.containerEl.appendChild(this.bodyEl);
+  }
+
+  getDisplayText(): string {
+    return this.file?.basename ?? "Untitled";
+  }
+
+  getIcon(): string {
+    return "📝";
+  }
+
+  getFile(): TFile | null {
+    return this.file;
+  }
+
+  async setFile(file: TFile): Promise<void> {
+    await this.flush();
+    this.file = file;
+    this.titleEl.textContent = file.basename;
+    const text = await this.app.vault.read(file);
+    this.lastSavedText = text;
+    this.buildEditor(text);
+    if (this.mode === "reading") await this.renderReading();
+    this.applyMode();
+  }
+
+  private buildEditor(text: string) {
+    this.editor?.destroy();
+    const app = this.app;
+    const view = this;
+
+    const wikilinkCompletion = (ctx: CompletionContext): CompletionResult | null => {
+      const before = ctx.state.sliceDoc(Math.max(0, ctx.pos - 200), ctx.pos);
+      const open = before.lastIndexOf("[[");
+      if (open === -1) return null;
+      const fragment = before.slice(open + 2);
+      if (fragment.includes("]]") || fragment.includes("\n")) return null;
+      const from = ctx.pos - fragment.length;
+      const files = app.vault.getMarkdownFiles();
+      const options = files.map((f) => ({
+        label: f.basename,
+        detail: f.parent || undefined,
+        apply: (v: EditorView, _c: unknown, fromPos: number, toPos: number) => {
+          const insert = `${f.basename}]]`;
+          v.dispatch({ changes: { from: fromPos, to: toPos, insert } });
+        },
+      }));
+      return { from, options, validFor: /^[^\[\]]*$/ };
+    };
+
+    const state = EditorState.create({
+      doc: text,
+      extensions: [
+        history(),
+        drawSelection(),
+        highlightActiveLine(),
+        highlightSelectionMatches(),
+        markdown({ base: markdownLanguage }),
+        syntaxHighlighting(mdHighlight),
+        autocompletion({ override: [wikilinkCompletion] }),
+        placeholder("Start writing…"),
+        EditorView.lineWrapping,
+        Prec.high(
+          keymap.of([
+            {
+              key: "Mod-b",
+              run: (v) => (this.wrapSelection(v, "**"), true),
+            },
+            {
+              key: "Mod-i",
+              run: (v) => (this.wrapSelection(v, "*"), true),
+            },
+          ])
+        ),
+        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...completionKeymap, indentWithTab]),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) this.scheduleSave();
+        }),
+        EditorView.domEventHandlers({
+          mousedown(e, v) {
+            if (!(e.metaKey || e.ctrlKey)) return false;
+            const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+            if (pos == null) return false;
+            const link = view.wikilinkAt(v.state.doc.toString(), pos);
+            if (link) {
+              e.preventDefault();
+              app.openLink(link, view.file?.path ?? "", false);
+              return true;
+            }
+            return false;
+          },
+        }),
+      ],
+    });
+    this.editor = new EditorView({ state, parent: this.editorHostEl });
+  }
+
+  private wikilinkAt(text: string, pos: number): string | null {
+    const re = /\[\[([^\[\]\n]+)\]\]/g;
+    for (const m of text.matchAll(re)) {
+      if (pos >= m.index! && pos <= m.index! + m[0].length) {
+        return m[1].split("|")[0].trim();
+      }
+    }
+    return null;
+  }
+
+  private wrapSelection(v: EditorView, marker: string) {
+    const { from, to } = v.state.selection.main;
+    const selected = v.state.sliceDoc(from, to);
+    v.dispatch({
+      changes: { from, to, insert: `${marker}${selected}${marker}` },
+      selection: { anchor: from + marker.length, head: to + marker.length },
+    });
+  }
+
+  private scheduleSave() {
+    if (this.saveTimer) window.clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => this.flush(), 1000);
+    this.app.statusBar.update();
+  }
+
+  /** Persist pending edits immediately. */
+  async flush(): Promise<void> {
+    if (this.saveTimer) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.file || !this.editor) return;
+    const text = this.editor.state.doc.toString();
+    if (text === this.lastSavedText) return;
+    this.lastSavedText = text;
+    await this.app.vault.modify(this.file, text);
+  }
+
+  private async commitTitleRename() {
+    const newName = this.titleEl.textContent?.trim();
+    if (!this.file || !newName || newName === this.file.basename) return;
+    if (/[\\/:#|^\[\]]/.test(newName)) {
+      this.titleEl.textContent = this.file.basename;
+      this.app.notify("Invalid characters in file name");
+      return;
+    }
+    const newPath = (this.file.parent ? this.file.parent + "/" : "") + newName + "." + this.file.extension;
+    await this.app.renameFileWithLinkUpdate(this.file, newPath);
+  }
+
+  getText(): string {
+    return this.editor?.state.doc.toString() ?? this.lastSavedText;
+  }
+
+  async toggleMode(): Promise<void> {
+    this.mode = this.mode === "source" ? "reading" : "source";
+    if (this.mode === "reading") await this.renderReading();
+    this.applyMode();
+  }
+
+  private applyMode() {
+    this.editorHostEl.style.display = this.mode === "source" ? "" : "none";
+    this.readingEl.style.display = this.mode === "reading" ? "" : "none";
+    if (this.mode === "source") this.editor?.focus();
+  }
+
+  private async renderReading() {
+    await this.flush();
+    this.readingEl.innerHTML = "";
+    const inner = document.createElement("div");
+    inner.className = "markdown-preview-sizer";
+    this.readingEl.appendChild(inner);
+    if (this.file) {
+      const props = this.app.metadataCache.getFileCache(this.file)?.frontmatter;
+      if (props && Object.keys(props).length) {
+        inner.appendChild(renderProperties(props));
+      }
+    }
+    const contentEl = document.createElement("div");
+    inner.appendChild(contentEl);
+    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "");
+  }
+
+  /** Jump the editor to a given offset (used by outline/search). */
+  scrollToOffset(offset: number) {
+    if (this.mode === "reading") {
+      this.mode = "source";
+      this.applyMode();
+    }
+    if (!this.editor) return;
+    const pos = Math.min(offset, this.editor.state.doc.length);
+    this.editor.dispatch({
+      selection: { anchor: pos },
+      scrollIntoView: true,
+    });
+    this.editor.focus();
+  }
+
+  onOpen(): void {
+    if (this.mode === "source") this.editor?.focus();
+  }
+
+  async onClose(): Promise<void> {
+    await this.flush();
+    this.editor?.destroy();
+    this.editor = null;
+  }
+}
+
+function renderProperties(props: Record<string, unknown>): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "metadata-container";
+  const table = document.createElement("table");
+  table.className = "metadata-table";
+  for (const [key, value] of Object.entries(props)) {
+    const row = document.createElement("tr");
+    const k = document.createElement("td");
+    k.className = "metadata-key";
+    k.textContent = key;
+    const v = document.createElement("td");
+    v.className = "metadata-value";
+    v.textContent = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+    row.appendChild(k);
+    row.appendChild(v);
+    table.appendChild(row);
+  }
+  el.appendChild(table);
+  return el;
+}
