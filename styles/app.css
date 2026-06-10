@@ -422,7 +422,13 @@ button.mod-cta:hover {
   flex-direction: column;
 }
 
-.markdown-source-view,
+.markdown-source-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
 .markdown-reading-view {
   flex: 1;
   min-height: 0;
@@ -430,7 +436,11 @@ button.mod-cta:hover {
   padding: 8px 24px 120px;
 }
 
-.is-readable-line-length .markdown-source-view .cm-editor,
+.is-readable-line-length .cm-content {
+  max-width: 44em;
+  margin: 0 auto;
+}
+
 .is-readable-line-length .markdown-reading-view .markdown-preview-sizer {
   max-width: 44em;
   margin: 0 auto;
@@ -445,7 +455,9 @@ button.mod-cta:hover {
 /* CodeMirror */
 
 .cm-editor {
+  flex: 1;
   height: 100%;
+  width: 100%;
   font-size: 15.5px;
   line-height: 1.6;
 }
@@ -454,9 +466,18 @@ button.mod-cta:hover {
   outline: none;
 }
 
+/* CodeMirror defaults the scroller to monospace; use the app font. */
+.cm-scroller {
+  font-family: inherit !important;
+  line-height: inherit;
+  padding: 8px 24px 120px;
+  overflow-y: auto;
+}
+
 .cm-content {
   caret-color: var(--text-normal);
   font-family: inherit;
+  width: 100%;
 }
 
 .cm-line {
@@ -487,6 +508,151 @@ button.mod-cta:hover {
 .cm-quote { color: var(--text-muted); }
 .cm-meta { color: var(--text-faint); }
 .cm-comment { color: var(--text-faint); }
+
+/* ---- Live Preview ---- */
+
+.cm-live-wikilink,
+.cm-live-extlink {
+  color: var(--text-accent);
+  cursor: pointer;
+}
+
+.cm-live-wikilink:hover,
+.cm-live-extlink:hover {
+  text-decoration: underline;
+}
+
+.cm-live-highlight {
+  background: rgba(255, 208, 0, 0.4);
+  border-radius: 2px;
+}
+
+.cm-live-quote {
+  border-left: 3px solid var(--interactive-accent);
+  padding-left: 14px !important;
+  color: var(--text-muted);
+}
+
+.cm-live-codeblock {
+  background: var(--code-background);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.9em;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+
+.cm-task-checkbox {
+  vertical-align: middle;
+  margin: 0 6px 2px 0;
+  accent-color: var(--interactive-accent);
+  cursor: pointer;
+}
+
+.cm-hr-widget hr {
+  display: inline-block;
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--background-modifier-border);
+  vertical-align: middle;
+}
+
+/* Properties widget (frontmatter editor) */
+
+.metadata-properties {
+  display: block;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 4px 0 12px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.metadata-properties-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+
+.metadata-property {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  border-radius: 5px;
+}
+
+.metadata-property-remove {
+  opacity: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0 6px;
+}
+
+.metadata-property:hover .metadata-property-remove {
+  opacity: 1;
+}
+
+.metadata-property-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 150px;
+  flex-shrink: 0;
+}
+
+.metadata-property-icon {
+  color: var(--text-faint);
+  font-size: 12px;
+  width: 16px;
+  text-align: center;
+}
+
+.metadata-property-value {
+  flex: 1;
+}
+
+.metadata-input {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-normal);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 3px 6px;
+  width: 100%;
+  outline: none;
+}
+
+.metadata-key-input {
+  color: var(--text-muted);
+}
+
+.metadata-input:hover {
+  background: var(--background-modifier-hover);
+}
+
+.metadata-input:focus {
+  border-color: var(--interactive-accent);
+  background: var(--background-primary);
+}
+
+.metadata-add-button {
+  color: var(--text-faint);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
+  width: fit-content;
+}
+
+.metadata-add-button:hover {
+  color: var(--text-normal);
+}
+
+.metadata-property.is-new {
+  gap: 8px;
+}
 
 .cm-tooltip.cm-tooltip-autocomplete {
   background: var(--background-secondary);

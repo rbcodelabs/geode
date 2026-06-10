@@ -287,6 +287,9 @@ export class App {
     c("toggle-reading", "Toggle reading view", "Mod+E", () =>
       this.getActiveMarkdownView()?.toggleMode()
     );
+    c("toggle-source", "Toggle Live Preview/Source mode", undefined, () =>
+      this.getActiveMarkdownView()?.toggleSource()
+    );
     c("new-tab", "New tab", "Mod+T", () => this.openEmptyTab(this.workspace.activeGroup));
     c("close-tab", "Close current tab", "Mod+W", () =>
       this.workspace.getActiveLeaf()?.detach()

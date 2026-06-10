@@ -1,4 +1,4 @@
-import { EditorState, Prec } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -20,6 +20,7 @@ import { tags } from "@lezer/highlight";
 import type { App } from "../app";
 import type { View } from "../workspace";
 import type { TFile } from "../types";
+import { livePreview } from "../markdown/live-preview";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, class: "cm-header-1" },
@@ -40,13 +41,15 @@ const mdHighlight = HighlightStyle.define([
   { tag: tags.comment, class: "cm-comment" },
 ]);
 
-export type MarkdownMode = "source" | "reading";
+export type MarkdownMode = "live" | "source" | "reading";
 
 export class MarkdownView implements View {
   readonly viewType = "markdown";
   containerEl: HTMLElement;
   file: TFile | null = null;
-  mode: MarkdownMode = "source";
+  mode: MarkdownMode = "live";
+  private lastEditingMode: "live" | "source" = "live";
+  private editingCompartment = new Compartment();
   editor: EditorView | null = null;
   private headerEl: HTMLElement;
   private titleEl: HTMLElement;
@@ -71,12 +74,18 @@ export class MarkdownView implements View {
       }
     });
     this.titleEl.addEventListener("blur", () => this.commitTitleRename());
+    const sourceBtn = document.createElement("button");
+    sourceBtn.className = "view-mode-toggle clickable-icon";
+    sourceBtn.title = "Toggle Live Preview / Source mode";
+    sourceBtn.textContent = "</>";
+    sourceBtn.addEventListener("click", () => this.toggleSource());
     const modeBtn = document.createElement("button");
     modeBtn.className = "view-mode-toggle clickable-icon";
     modeBtn.title = "Toggle reading view (Cmd/Ctrl+E)";
     modeBtn.textContent = "📖";
     modeBtn.addEventListener("click", () => this.toggleMode());
     this.headerEl.appendChild(this.titleEl);
+    this.headerEl.appendChild(sourceBtn);
     this.headerEl.appendChild(modeBtn);
 
     this.bodyEl = document.createElement("div");
@@ -147,6 +156,11 @@ export class MarkdownView implements View {
         highlightSelectionMatches(),
         markdown({ base: markdownLanguage }),
         syntaxHighlighting(mdHighlight),
+        this.editingCompartment.of(
+          this.mode !== "source"
+            ? livePreview(this.app, () => this.file?.path ?? "")
+            : []
+        ),
         autocompletion({ override: [wikilinkCompletion] }),
         placeholder("Start writing…"),
         EditorView.lineWrapping,
@@ -239,16 +253,31 @@ export class MarkdownView implements View {
     return this.editor?.state.doc.toString() ?? this.lastSavedText;
   }
 
+  /** Cmd/Ctrl+E: flip between editing (live or source) and reading. */
   async toggleMode(): Promise<void> {
-    this.mode = this.mode === "source" ? "reading" : "source";
+    this.mode = this.mode === "reading" ? this.lastEditingMode : "reading";
     if (this.mode === "reading") await this.renderReading();
     this.applyMode();
   }
 
+  /** Flip between Live Preview and raw source while editing. */
+  toggleSource(): void {
+    if (this.mode === "reading") this.mode = this.lastEditingMode;
+    this.mode = this.mode === "live" ? "source" : "live";
+    this.lastEditingMode = this.mode;
+    this.editor?.dispatch({
+      effects: this.editingCompartment.reconfigure(
+        this.mode === "live" ? livePreview(this.app, () => this.file?.path ?? "") : []
+      ),
+    });
+    this.applyMode();
+  }
+
   private applyMode() {
-    this.editorHostEl.style.display = this.mode === "source" ? "" : "none";
-    this.readingEl.style.display = this.mode === "reading" ? "" : "none";
-    if (this.mode === "source") this.editor?.focus();
+    const editing = this.mode !== "reading";
+    this.editorHostEl.style.display = editing ? "" : "none";
+    this.readingEl.style.display = editing ? "none" : "";
+    if (editing) this.editor?.focus();
   }
 
   private async renderReading() {
@@ -271,7 +300,7 @@ export class MarkdownView implements View {
   /** Jump the editor to a given offset (used by outline/search). */
   scrollToOffset(offset: number) {
     if (this.mode === "reading") {
-      this.mode = "source";
+      this.mode = this.lastEditingMode;
       this.applyMode();
     }
     if (!this.editor) return;
@@ -284,7 +313,7 @@ export class MarkdownView implements View {
   }
 
   onOpen(): void {
-    if (this.mode === "source") this.editor?.focus();
+    if (this.mode !== "reading") this.editor?.focus();
   }
 
   async onClose(): Promise<void> {
