@@ -1,6 +1,6 @@
 {
   "name": "geode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
   "scripts": {
@@ -61,8 +61,20 @@
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "identity": null,
       "hardenedRuntime": false,
