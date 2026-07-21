@@ -3,15 +3,14 @@
   "version": "0.1.0",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
-  "directories": {
-    "doc": "docs"
-  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
     "start": "electron .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run build && electron-builder --mac",
+    "release": "npm run build && electron-builder --mac --publish always"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +19,7 @@
   "devDependencies": {
     "@types/node": "^25.9.2",
     "electron": "^42.4.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3"
   },
@@ -37,5 +37,35 @@
     "chokidar": "^5.0.0",
     "marked": "^18.0.5",
     "yaml": "^2.9.0"
+  },
+  "build": {
+    "appId": "com.rbcodelabs.geode",
+    "productName": "Geode",
+    "directories": {
+      "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "rbcodelabs",
+      "repo": "geode"
+    },
+    "files": [
+      "dist/**/*",
+      "src/renderer/index.html",
+      "styles/**/*",
+      "package.json",
+      "!src/**/*.ts",
+      "!**/*.map"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    }
   }
 }

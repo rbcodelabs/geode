@@ -24,6 +24,27 @@ cloud, no lock-in.
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
   dark/light themes via CSS variables
 
+## Install
+
+Prebuilt macOS installers (dmg + zip, Apple Silicon + Intel) are published on
+the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
+`v*` tag is pushed. Windows and Linux builds aren't set up yet — see the
+[roadmap](docs/spec/00-overview.md) item for packaging.
+
+1. Download `Geode-<version>-arm64.dmg` (Apple Silicon) or
+   `Geode-<version>.dmg` (Intel) from the latest release.
+2. Open the dmg and drag **Geode.app** to **Applications**.
+3. **These builds are unsigned** (no Apple Developer ID yet), so Gatekeeper
+   will block the first launch with an "unidentified developer" warning.
+   To open it anyway:
+   - Right-click (or Control-click) **Geode.app** → **Open** → **Open** again
+     in the confirmation dialog, **or**
+   - Run `xattr -dr com.apple.quarantine /Applications/Geode.app` in Terminal
+     once, then launch normally.
+
+> Note: this repo is currently **private**. You'll need collaborator access
+> to view the source or download release assets until it's made public.
+
 ## Develop
 
 ```bash
@@ -32,9 +53,19 @@ npm run build      # bundle main/preload/renderer with esbuild
 npm start          # launch Electron
 npm run dev        # esbuild watch mode
 npm run typecheck  # strict tsc
+npm run dist        # package a local unsigned macOS build (dmg + zip) into release/
+npm run release     # same, plus publish to GitHub Releases (requires GH_TOKEN)
 ```
 
 A demo vault lives in `test-vault/`.
+
+### Cutting a release
+
+Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`) —
+the `.github/workflows/release.yml` GitHub Action builds unsigned macOS
+installers and publishes them to a GitHub Release automatically. You can also
+trigger it manually from the Actions tab (`workflow_dispatch`) without cutting
+a tag, useful for testing the pipeline.
 
 ## Documentation
 
