@@ -47,7 +47,8 @@
     "publish": {
       "provider": "github",
       "owner": "rbcodelabs",
-      "repo": "geode"
+      "repo": "geode",
+      "releaseType": "release"
     },
     "files": [
       "dist/**/*",
