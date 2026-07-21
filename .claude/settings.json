@@ -6,8 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(git push*)",
-            "command": "jq -r 'if (.tool_input.command | test(\"git push\")) then {\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"QUALITY GATE: You just pushed to git. Before declaring this work done you MUST run the pr-checklist skill (or check .claude/pr-guidelines.md for this repo's requirements). Do not tell the user the work is done until the full checklist passes.\"}} | tojson else empty end'",
+            "command": "sh .claude/hooks/pr-checklist-reminder.sh",
             "timeout": 5
           }
         ]
