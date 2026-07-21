@@ -1,0 +1,43 @@
+name: Release
+
+# Builds unsigned macOS installers (dmg + zip, x64 + arm64) via electron-builder
+# and publishes them to a GitHub Release. Triggered by pushing a `v*` tag, or
+# manually via workflow_dispatch for testing.
+#
+# No code signing / notarization is configured yet — installers are unsigned,
+# so macOS Gatekeeper will warn on first launch. See README.md's "Install"
+# section for the user-facing workaround. Revisit once there's an Apple
+# Developer ID to sign + notarize with.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "25"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Bundle (esbuild)
+        run: npm run build
+
+      - name: Package + publish (macOS, unsigned)
+        run: npx electron-builder --mac --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
