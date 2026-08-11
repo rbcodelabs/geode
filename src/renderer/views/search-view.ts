@@ -1,21 +1,21 @@
 import type { App } from "../app";
 import type { View } from "../workspace";
-import { TFile } from "../types";
+import { TFile, TagCache } from "../types";
 
-interface SearchTerm {
+export interface SearchTerm {
   op: "text" | "file" | "path" | "tag" | "content" | "line";
   value: string;
   negated: boolean;
   regex: RegExp | null;
 }
 
-interface SearchMatch {
+export interface SearchMatch {
   file: TFile;
   snippets: { text: string; offset: number }[];
 }
 
 /** Parse a query into terms. Supports operators, "phrases", -negation, /regex/. */
-function parseQuery(query: string): SearchTerm[] {
+export function parseQuery(query: string): SearchTerm[] {
   const terms: SearchTerm[] = [];
   const re = /(-)?(?:(file|path|tag|content|line):)?(?:"([^"]*)"|\/((?:[^\/\\]|\\.)+)\/|(\S+))/g;
   for (const m of query.matchAll(re)) {
@@ -34,6 +34,71 @@ function parseQuery(query: string): SearchTerm[] {
     terms.push({ op, value: value.toLowerCase(), negated, regex });
   }
   return terms;
+}
+
+function snippetAt(content: string, index: number, len: number): { text: string; offset: number } {
+  const lineStart = content.lastIndexOf("\n", index) + 1;
+  let lineEnd = content.indexOf("\n", index + len);
+  if (lineEnd === -1) lineEnd = content.length;
+  return { text: content.slice(lineStart, lineEnd).slice(0, 250), offset: index };
+}
+
+/**
+ * Evaluate a parsed query's terms against a single file. Pure aside from the
+ * injected `getTags` lookup (tag matching needs the metadata cache, which is
+ * not available outside the app). All other operators only need `file` and
+ * `content`, so this can run without any DOM/Electron dependency.
+ */
+export function matchFileAgainstTerms(
+  file: TFile,
+  content: string | null,
+  terms: SearchTerm[],
+  getTags: (file: TFile) => TagCache[]
+): SearchMatch | null {
+  const snippets: { text: string; offset: number }[] = [];
+  const lower = content?.toLowerCase() ?? "";
+  for (const term of terms) {
+    let hit = false;
+    switch (term.op) {
+      case "file":
+        hit = file.name.toLowerCase().includes(term.value);
+        break;
+      case "path":
+        hit = file.path.toLowerCase().includes(term.value);
+        break;
+      case "tag": {
+        const tags = getTags(file);
+        const want = term.value.replace(/^#/, "");
+        hit = tags.some((t) => {
+          const tl = t.tag.toLowerCase();
+          return tl === want || tl.startsWith(want + "/");
+        });
+        break;
+      }
+      case "text":
+      case "content":
+      case "line": {
+        if (content == null) break;
+        if (term.regex) {
+          term.regex.lastIndex = 0;
+          const m = term.regex.exec(content);
+          if (m) {
+            hit = true;
+            if (!term.negated) snippets.push(snippetAt(content, m.index, m[0].length));
+          }
+        } else {
+          const idx = lower.indexOf(term.value);
+          if (idx !== -1) {
+            hit = true;
+            if (!term.negated) snippets.push(snippetAt(content, idx, term.value.length));
+          }
+        }
+        break;
+      }
+    }
+    if (term.negated ? hit : !hit) return null;
+  }
+  return { file, snippets };
 }
 
 export class SearchView implements View {
@@ -112,57 +177,8 @@ export class SearchView implements View {
   }
 
   private matchFile(file: TFile, content: string | null, terms: SearchTerm[]): SearchMatch | null {
-    const snippets: { text: string; offset: number }[] = [];
-    const lower = content?.toLowerCase() ?? "";
-    for (const term of terms) {
-      let hit = false;
-      switch (term.op) {
-        case "file":
-          hit = file.name.toLowerCase().includes(term.value);
-          break;
-        case "path":
-          hit = file.path.toLowerCase().includes(term.value);
-          break;
-        case "tag": {
-          const tags = this.app.metadataCache.getFileCache(file)?.tags ?? [];
-          const want = term.value.replace(/^#/, "");
-          hit = tags.some((t) => {
-            const tl = t.tag.toLowerCase();
-            return tl === want || tl.startsWith(want + "/");
-          });
-          break;
-        }
-        case "text":
-        case "content":
-        case "line": {
-          if (content == null) break;
-          if (term.regex) {
-            term.regex.lastIndex = 0;
-            const m = term.regex.exec(content);
-            if (m) {
-              hit = true;
-              if (!term.negated) snippets.push(this.snippetAt(content, m.index, m[0].length));
-            }
-          } else {
-            const idx = lower.indexOf(term.value);
-            if (idx !== -1) {
-              hit = true;
-              if (!term.negated) snippets.push(this.snippetAt(content, idx, term.value.length));
-            }
-          }
-          break;
-        }
-      }
-      if (term.negated ? hit : !hit) return null;
-    }
-    return { file, snippets };
-  }
-
-  private snippetAt(content: string, index: number, len: number): { text: string; offset: number } {
-    const lineStart = content.lastIndexOf("\n", index) + 1;
-    let lineEnd = content.indexOf("\n", index + len);
-    if (lineEnd === -1) lineEnd = content.length;
-    return { text: content.slice(lineStart, lineEnd).slice(0, 250), offset: index };
+    const getTags = (f: TFile) => this.app.metadataCache.getFileCache(f)?.tags ?? [];
+    return matchFileAgainstTerms(file, content, terms, getTags);
   }
 
   private renderResults(matches: SearchMatch[], token: number) {
