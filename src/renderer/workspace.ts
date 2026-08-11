@@ -284,6 +284,16 @@ export class Workspace extends Events {
     return null;
   }
 
+  /** Find an open leaf whose view has the given `viewType` (e.g. reusing a singleton view like Graph). */
+  findLeafByViewType(viewType: string): WorkspaceLeaf | null {
+    for (const group of this.groups) {
+      for (const leaf of group.leaves) {
+        if (leaf.view?.viewType === viewType) return leaf;
+      }
+    }
+    return null;
+  }
+
   iterateLeaves(cb: (leaf: WorkspaceLeaf) => void) {
     for (const group of this.groups) for (const leaf of group.leaves) cb(leaf);
   }

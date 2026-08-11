@@ -7,6 +7,7 @@ import { MarkdownView } from "./views/markdown-view";
 import { FileExplorerView } from "./views/file-explorer";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
+import { GraphView } from "./views/graph-view";
 import { Modal, SuggestModal } from "./modals/modals";
 import { TFile, pathName } from "./types";
 import { rewriteWikilinksForRename } from "./rename";
@@ -313,6 +314,7 @@ export class App {
       this.saveSettings();
     });
     c("daily-note", "Open today's daily note", "Mod+D", () => this.openDailyNote());
+    c("open-graph", "Graph view: Open graph view", "Mod+G", () => this.openGraphView());
     c("random-note", "Open random note", undefined, () => {
       const files = this.vault.getMarkdownFiles();
       if (files.length) this.openFile(files[Math.floor(Math.random() * files.length)], false);
@@ -349,6 +351,17 @@ export class App {
       await view.setFile(file);
       await leaf.setView(view);
     }
+  }
+
+  /** Open the (singleton) global graph view, reusing an already-open graph tab if there is one. */
+  async openGraphView(): Promise<void> {
+    const existing = this.workspace.findLeafByViewType("graph");
+    if (existing) {
+      existing.group.setActiveLeaf(existing);
+      return;
+    }
+    const leaf = this.workspace.getLeaf(false);
+    await leaf.setView(new GraphView(this));
   }
 
   async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {
