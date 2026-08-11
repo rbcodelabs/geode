@@ -9,6 +9,7 @@ import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
 import { Modal, SuggestModal } from "./modals/modals";
 import { TFile, pathName } from "./types";
+import { rewriteWikilinksForRename } from "./rename";
 import type { Command } from "./commands";
 
 interface AppSettings {
@@ -429,6 +430,7 @@ export class App {
   async renameFileWithLinkUpdate(file: TFile, newPath: string): Promise<void> {
     const oldBasename = file.basename;
     const oldPathNoExt = file.path.replace(/\.md$/, "");
+    const oldPath = file.path;
     const referencers = this.metadataCache
       .getBacklinks(file)
       .map((b) => b.source)
@@ -437,20 +439,9 @@ export class App {
     const renamed = this.vault.getFileByPath(newPath);
     if (!renamed) return;
     const newBasename = renamed.basename;
-    const linkRe = /(!?\[\[)([^\[\]\n|#]+)([^\[\]\n]*\]\])/g;
     for (const ref of referencers) {
       const text = await this.vault.read(ref);
-      const updated = text.replace(linkRe, (m, open, target, rest) => {
-        const t = target.trim();
-        if (
-          t.toLowerCase() === oldBasename.toLowerCase() ||
-          t === oldPathNoExt ||
-          t === file.path
-        ) {
-          return `${open}${newBasename}${rest}`;
-        }
-        return m;
-      });
+      const updated = rewriteWikilinksForRename(text, oldBasename, oldPathNoExt, oldPath, newBasename);
       if (updated !== text) await this.vault.modify(ref, updated);
     }
     // Refresh any open view of the renamed file
