@@ -73,6 +73,26 @@ test("boots into test-vault, opens a note, and renders Live Preview with no cons
     expect(editorText).toContain("Welcome to Geode");
     expect(editorText).not.toContain("# Welcome to Geode");
 
+    // Inline image embed (![[geode-logo.png]]) renders as an actual <img>
+    // in Live Preview, not raw "![[" / "]]" syntax.
+    const imageEmbed = window.locator(".cm-embed-widget img.internal-embed");
+    await expect(imageEmbed).toBeVisible();
+    await expect(imageEmbed).toHaveAttribute("src", /^blob:/);
+    expect(editorText).not.toContain("![[geode-logo.png]]");
+
+    // Block-level note transclusion (Daily Plan.md embeds
+    // Projects/Roadmap.md's "Q3" section) also renders inline, sliced to
+    // just that heading's content, not the raw ![[...]] syntax.
+    await window.locator('.nav-file-title[data-path="Daily Plan.md"]').click();
+    const noteEmbed = window.locator(".cm-embed-widget.cm-embed-block.markdown-embed");
+    await expect(noteEmbed).toBeVisible();
+    await expect(noteEmbed.locator(".markdown-embed-title")).toHaveText("Roadmap");
+    const embedContent = noteEmbed.locator(".markdown-embed-content");
+    await expect(embedContent).toContainText("Ship the editor");
+    expect(await embedContent.innerText()).not.toContain("Plugin API"); // Q4 section, outside the #Q3 subpath
+    const dailyPlanText = await window.locator(".cm-editor").innerText();
+    expect(dailyPlanText).not.toContain("![[Projects/Roadmap#Q3]]");
+
     expect(consoleErrors, `Console errors during smoke test: ${consoleErrors.join("\n")}`).toEqual(
       []
     );

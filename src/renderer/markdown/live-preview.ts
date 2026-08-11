@@ -10,6 +10,7 @@ import { Extension, Range, RangeSet, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
+import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
 
@@ -281,6 +282,122 @@ class HRWidget extends WidgetType {
   }
 }
 
+/**
+ * Renders `![[target]]` embeds inline while editing (Live Preview). Image /
+ * audio / video render as inline media; `.md` note transclusions reuse
+ * `MarkdownRenderer.renderNoteEmbed()` (src/renderer/markdown/render.ts) so
+ * the transcluded content — including nested embeds, links, and callouts —
+ * is produced by the same code path as Reading view, not a parallel one.
+ *
+ * `#^blockid` embeds are out of scope: Reading view doesn't support them
+ * either (only `#Heading` subpaths), so there's nothing to match here.
+ */
+class EmbedWidget extends WidgetType {
+  constructor(
+    private target: string,
+    private param: string,
+    private sourcePath: string,
+    private app: App,
+    private block: boolean
+  ) {
+    super();
+  }
+
+  eq(other: EmbedWidget): boolean {
+    return (
+      other.target === this.target &&
+      other.param === this.param &&
+      other.sourcePath === this.sourcePath &&
+      other.block === this.block
+    );
+  }
+
+  ignoreEvent(): boolean {
+    // The widget wires up its own click handling (links inside a
+    // transcluded note, audio/video controls) — let those events through
+    // rather than have CM6 try to place the cursor inside the widget.
+    return true;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement(this.block ? "div" : "span");
+    root.className = "cm-embed-widget";
+    if (this.block) root.classList.add("cm-embed-block");
+
+    const resolved = resolveEmbed(this.target, this.sourcePath, this.app);
+
+    if (resolved.kind === "unresolved") {
+      root.classList.add("internal-embed", "is-unresolved");
+      root.textContent = `Unresolved embed: ${this.target}`;
+      return root;
+    }
+
+    const file = resolved.file!;
+
+    if (resolved.kind === "image") {
+      const img = document.createElement("img");
+      img.className = "internal-embed";
+      img.alt = file.name;
+      const { width, height } = parseEmbedDims(this.param);
+      if (width) img.width = Number(width);
+      if (height) img.height = Number(height);
+      root.appendChild(img);
+      loadEmbedBlobUrl(this.app, file).then((url) => {
+        img.src = url;
+        view.requestMeasure();
+      });
+      return root;
+    }
+
+    if (resolved.kind === "audio") {
+      const audio = document.createElement("audio");
+      audio.className = "internal-embed";
+      audio.controls = true;
+      root.appendChild(audio);
+      loadEmbedBlobUrl(this.app, file).then((url) => (audio.src = url));
+      return root;
+    }
+
+    if (resolved.kind === "video") {
+      const video = document.createElement("video");
+      video.className = "internal-embed";
+      video.controls = true;
+      root.appendChild(video);
+      loadEmbedBlobUrl(this.app, file).then((url) => (video.src = url));
+      return root;
+    }
+
+    if (resolved.kind === "note") {
+      root.classList.add("markdown-embed");
+      const title = document.createElement("div");
+      title.className = "markdown-embed-title";
+      title.textContent = file.basename;
+      const content = document.createElement("div");
+      content.className = "markdown-embed-content";
+      content.textContent = "Loading…";
+      root.appendChild(title);
+      root.appendChild(content);
+      this.app.markdownRenderer
+        .renderNoteEmbed(file, resolved.subpath, this.sourcePath, content)
+        .then(() => view.requestMeasure());
+      return root;
+    }
+
+    // "other": resolved file with an extension Geode doesn't preview —
+    // link out, matching Reading view's renderEmbed() fallback.
+    const link = document.createElement("a");
+    link.className = "internal-link";
+    link.textContent = this.target;
+    link.href = "#";
+    link.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      this.app.openLink(this.target, this.sourcePath, e.metaKey || e.ctrlKey);
+    });
+    root.appendChild(link);
+    return root;
+  }
+}
+
 // --- Live preview extension -------------------------------------------------
 
 export function livePreview(app: App, getPath: () => string): Extension {
@@ -313,6 +430,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
   function buildInline(view: EditorView): DecorationSet {
     const decos: Range<Decoration>[] = [];
     const doc = view.state.doc;
+    const sourcePath = getPath();
     const active = new Set<number>();
     for (const r of view.state.selection.ranges) {
       const from = doc.lineAt(r.from).number;
@@ -423,11 +541,35 @@ export function livePreview(app: App, getPath: () => string): Extension {
         const text = line.text;
 
         for (const m of text.matchAll(/(!?)\[\[([^\[\]\n]+)\]\]/g)) {
-          if (m[1] === "!") continue; // embeds keep raw syntax for now
           const start = line.from + m.index!;
           const inner = m[2];
           const pipe = inner.indexOf("|");
           const target = (pipe === -1 ? inner : inner.slice(0, pipe)).trim();
+
+          if (m[1] === "!") {
+            // Embed: render inline (image/audio/video) or as a block widget
+            // (a `.md` note transclusion that occupies its whole line) —
+            // matching Reading view's rendering via a shared resolver.
+            const param = pipe === -1 ? "" : inner.slice(pipe + 1).trim();
+            const end = start + m[0].length;
+            const resolved = resolveEmbed(target, sourcePath, app);
+            const wholeLine = text.trim() === m[0];
+            // Note: CM6 only allows `block: true` decorations from a
+            // StateField, not a ViewPlugin (this decoration set is built by
+            // the inlinePlugin ViewPlugin below) — using block:true here
+            // throws "Block decorations may not be specified via plugins".
+            // Instead, a whole-line note embed gets a non-block replace
+            // decoration spanning the full line, with CSS (.cm-embed-block)
+            // giving it block layout — the same technique HRWidget already
+            // uses for full-line widgets in this file.
+            const isBlock = resolved.kind === "note" && wholeLine;
+            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock);
+            decos.push(
+              Decoration.replace({ widget }).range(isBlock ? line.from : start, isBlock ? line.to : end)
+            );
+            continue;
+          }
+
           const innerStart = start + 2;
           const displayFrom = pipe === -1 ? innerStart : innerStart + pipe + 1;
           const displayTo = start + 2 + inner.length;

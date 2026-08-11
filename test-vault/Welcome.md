@@ -22,3 +22,7 @@ This is your **first note**. It links to [[Daily Plan]] and [[Projects/Roadmap]]
 | --- | --- |
 | Wikilinks | ✅ |
 | Backlinks | ✅ |
+
+## Media
+
+Here's the Geode logo: ![[geode-logo.png]]
