@@ -63,25 +63,63 @@ export class BacklinksView extends SidebarView {
       this.empty("No file is open.");
       return;
     }
-    const backlinks = this.app.metadataCache.getBacklinks(this.file);
+    const file = this.file;
+    const linked = this.app.metadataCache.getBacklinksWithContext(file);
+    const unlinked = this.app.metadataCache.getUnlinkedMentions(file);
     this.bodyEl.innerHTML = "";
+
+    this.renderSection(
+      `Linked mentions (${linked.reduce((n, b) => n + b.count, 0)})`,
+      "No backlinks found.",
+      linked.map((b) => ({ source: b.source, count: b.count, snippets: b.snippets }))
+    );
+    this.renderSection(
+      `Unlinked mentions (${unlinked.reduce((n, u) => n + u.mentions.length, 0)})`,
+      "No unlinked mentions found.",
+      unlinked.map((u) => ({
+        source: u.source,
+        count: u.mentions.length,
+        snippets: u.mentions.map((m) => m.snippet),
+      }))
+    );
+  }
+
+  private renderSection(
+    headingText: string,
+    emptyText: string,
+    entries: { source: TFile; count: number; snippets: string[] }[]
+  ): void {
     const heading = document.createElement("div");
     heading.className = "pane-section-header";
-    heading.textContent = `Linked mentions (${backlinks.reduce((n, b) => n + b.count, 0)})`;
+    heading.textContent = headingText;
     this.bodyEl.appendChild(heading);
-    if (!backlinks.length) {
+    if (!entries.length) {
       const none = document.createElement("div");
       none.className = "pane-empty";
-      none.textContent = "No backlinks found.";
+      none.textContent = emptyText;
       this.bodyEl.appendChild(none);
       return;
     }
-    for (const { source, count } of backlinks) {
+    for (const { source, count, snippets } of entries) {
       const row = document.createElement("div");
       row.className = "pane-result nav-item";
-      row.innerHTML = `<span class="nav-item-title">${source.basename}</span><span class="pane-result-count">${count}</span>`;
+      const title = document.createElement("span");
+      title.className = "nav-item-title";
+      title.textContent = source.basename;
+      const badge = document.createElement("span");
+      badge.className = "pane-result-count";
+      badge.textContent = String(count);
+      row.append(title, badge);
       row.addEventListener("click", (e) => this.app.openFile(source, e.metaKey || e.ctrlKey));
       this.bodyEl.appendChild(row);
+
+      for (const snippet of snippets) {
+        const snippetEl = document.createElement("div");
+        snippetEl.className = "pane-result-context";
+        snippetEl.textContent = snippet; // textContent, not innerHTML: note content is untrusted.
+        snippetEl.addEventListener("click", (e) => this.app.openFile(source, e.metaKey || e.ctrlKey));
+        this.bodyEl.appendChild(snippetEl);
+      }
     }
   }
 }

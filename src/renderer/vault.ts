@@ -154,6 +154,17 @@ export class Vault extends Events {
     return data;
   }
 
+  /**
+   * Synchronously return a file's content if it's already been warmed by a
+   * prior `cachedRead()`/`read()` (no I/O, returns `undefined` if not yet
+   * cached). Used by `MetadataCache` to build backlink context snippets
+   * without turning that lookup into an async call — every markdown file
+   * is already warmed by `MetadataCache.initialize()`/`indexFile()`.
+   */
+  getCachedContent(path: string): string | undefined {
+    return this.contents.get(path);
+  }
+
   async read(file: TFile): Promise<string> {
     const data = await window.geode.read(file.path);
     this.contents.set(file.path, data);
