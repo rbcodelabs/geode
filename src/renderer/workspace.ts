@@ -212,6 +212,8 @@ export class Workspace extends Events {
   rightSidebar: Sidebar;
   groups: TabGroup[] = [];
   activeGroup: TabGroup;
+  /** viewType -> factory, populated by `Plugin.registerView` (see plugin.ts). */
+  private viewFactories = new Map<string, (leaf: WorkspaceLeaf) => View>();
 
   constructor(public app: App, parentEl: HTMLElement) {
     super();
@@ -286,5 +288,65 @@ export class Workspace extends Events {
 
   iterateLeaves(cb: (leaf: WorkspaceLeaf) => void) {
     for (const group of this.groups) for (const leaf of group.leaves) cb(leaf);
+  }
+
+  // --- Plugin view registration -------------------------------------------
+
+  /**
+   * Register a factory for a plugin-provided view type. Mirrors Obsidian's
+   * `Plugin.registerView(type, factory)` — plugins call this indirectly via
+   * `Plugin.registerView`, which also arranges auto-unregistration.
+   */
+  registerViewFactory(viewType: string, factory: (leaf: WorkspaceLeaf) => View): void {
+    if (this.viewFactories.has(viewType)) {
+      throw new Error(`View type "${viewType}" is already registered`);
+    }
+    this.viewFactories.set(viewType, factory);
+  }
+
+  /** Unregister a view factory. Also detaches any currently-open leaves of that type. */
+  unregisterViewFactory(viewType: string): void {
+    this.viewFactories.delete(viewType);
+    this.detachLeavesOfType(viewType);
+  }
+
+  getViewFactory(viewType: string): ((leaf: WorkspaceLeaf) => View) | undefined {
+    return this.viewFactories.get(viewType);
+  }
+
+  /** All open leaves (across every tab group) currently showing a view of this type. */
+  getLeavesOfType(viewType: string): WorkspaceLeaf[] {
+    const out: WorkspaceLeaf[] = [];
+    this.iterateLeaves((leaf) => {
+      if (leaf.view?.viewType === viewType) out.push(leaf);
+    });
+    return out;
+  }
+
+  /** Detach (close) every open leaf of this view type. */
+  detachLeavesOfType(viewType: string): void {
+    for (const leaf of this.getLeavesOfType(viewType)) leaf.detach();
+  }
+
+  /**
+   * Open a view registered via `registerViewFactory`/`Plugin.registerView`
+   * in the main tab area. Returns null if no factory is registered for
+   * `viewType`. When `newTab` is false, reuses an existing leaf of that
+   * type if one is open instead of creating another.
+   */
+  async openViewOfType(viewType: string, newTab = true): Promise<WorkspaceLeaf | null> {
+    const factory = this.viewFactories.get(viewType);
+    if (!factory) return null;
+    if (!newTab) {
+      const existing = this.getLeavesOfType(viewType)[0];
+      if (existing) {
+        existing.group.setActiveLeaf(existing);
+        return existing;
+      }
+    }
+    const leaf = this.getLeaf(newTab);
+    const view = factory(leaf);
+    await leaf.setView(view);
+    return leaf;
   }
 }

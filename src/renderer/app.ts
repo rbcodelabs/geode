@@ -2,6 +2,7 @@ import { Vault } from "./vault";
 import { MetadataCache } from "./metadata-cache";
 import { Workspace, TabGroup, View } from "./workspace";
 import { CommandRegistry } from "./commands";
+import { PluginManager } from "./plugin-manager";
 import { MarkdownRenderer } from "./markdown/render";
 import { MarkdownView } from "./views/markdown-view";
 import { FileExplorerView } from "./views/file-explorer";
@@ -101,7 +102,7 @@ class CommandPaletteModal extends SuggestModal<Command> {
   }
 
   onChooseItem(cmd: Command): void {
-    cmd.callback();
+    this.geodeApp.commands.execute(cmd.id);
   }
 }
 
@@ -187,6 +188,8 @@ export class App {
   markdownRenderer = new MarkdownRenderer(this);
   workspace!: Workspace;
   statusBar!: StatusBar;
+  /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
+  pluginManager!: PluginManager;
   settings: AppSettings = { theme: "dark", readableLineLength: true };
 
   async start() {
@@ -261,6 +264,9 @@ export class App {
     this.registerCommands();
     this.commands.attach(document);
     this.applySettings();
+
+    this.pluginManager = new PluginManager(this);
+    await this.pluginManager.initialize();
 
     this.openEmptyTab(this.workspace.activeGroup);
     this.metadataCache.initialize().then(() => {
