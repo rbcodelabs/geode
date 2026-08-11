@@ -557,6 +557,29 @@ button.mod-cta:hover {
   vertical-align: middle;
 }
 
+/* Live Preview embeds (images/audio/video/note transclusions) */
+
+.cm-embed-widget {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.cm-embed-widget.cm-embed-block {
+  display: block;
+  vertical-align: initial;
+}
+
+.cm-embed-widget img.internal-embed,
+.cm-embed-widget video.internal-embed {
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.cm-embed-widget.internal-embed.is-unresolved {
+  color: var(--text-error, #e06c75);
+}
+
 /* Properties widget (frontmatter editor) */
 
 /* Block widget: no margins allowed (CodeMirror measures rect height only);
