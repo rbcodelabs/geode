@@ -33,6 +33,23 @@ function mainJsSource(id: string): string {
   `;
 }
 
+// A plugin whose onload registers a command only AFTER an await — enable()
+// must block on the async onload so the registration is visible on return.
+function asyncMainJsSource(id: string): string {
+  return `
+    const { Plugin } = require('geode');
+    class AsyncPlugin extends Plugin {
+      async onload() {
+        await Promise.resolve();
+        await Promise.resolve();
+        globalThis.__pluginLog.push('${id}:onload');
+        this.addCommand({ id: 'late', name: 'Late', callback: () => {} });
+      }
+    }
+    module.exports.default = AsyncPlugin;
+  `;
+}
+
 function brokenMainJsSource(): string {
   return `module.exports.default = { not: "a class" };`;
 }
@@ -158,6 +175,24 @@ describe("PluginManager", () => {
     expect(pm.isEnabled("foo")).toBe(true);
     expect((globalThis as any).__pluginLog).toEqual(["foo:onload"]);
     expect(fs.config.get("plugins")).toEqual(["foo"]);
+  });
+
+  it("enable() awaits an async onload, so post-await registrations are done on return", async () => {
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    fs.files.set(".geode/plugins/foo/main.js", asyncMainJsSource("foo"));
+    const app = { commands: { add: vi.fn(), remove: vi.fn() } } as any;
+
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+
+    // The command registered AFTER the awaits inside onload must be present
+    // immediately after enable() resolves (regression guard: enable awaits
+    // the plugin's async onload before returning).
+    expect((globalThis as any).__pluginLog).toEqual(["foo:onload"]);
+    expect(app.commands.add).toHaveBeenCalledTimes(1);
+    expect(app.commands.add.mock.calls[0][0].id).toBe("foo:late");
   });
 
   it("enable() is a no-op (and does not re-persist) if the plugin is already enabled", async () => {
