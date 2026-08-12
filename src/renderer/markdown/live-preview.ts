@@ -10,6 +10,8 @@ import { Extension, Range, RangeSet, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
+import { setIcon } from "../api/icons";
+import { calloutMarkerLength, calloutMeta, parseCalloutHeader, type CalloutMeta } from "./callout";
 import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
@@ -282,6 +284,28 @@ class HRWidget extends WidgetType {
   }
 }
 
+/** Replaces a callout header's `[!type]+/-` marker with its Lucide icon (title text stays untouched, editable). */
+class CalloutIconWidget extends WidgetType {
+  constructor(private iconId: string) {
+    super();
+  }
+
+  eq(other: CalloutIconWidget): boolean {
+    return other.iconId === this.iconId;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-callout-icon";
+    setIcon(span, this.iconId);
+    return span;
+  }
+}
+
 /**
  * Renders `![[target]]` embeds inline while editing (Live Preview). Image /
  * audio / video render as inline media; `.md` note transclusions reuse
@@ -443,6 +467,11 @@ export function livePreview(app: App, getPath: () => string): Extension {
 
     const listMarks: { line: number; from: number; to: number }[] = [];
     const taskLines = new Set<number>();
+    // Lines belonging to a callout blockquote (`> [!type] Title`), keyed by
+    // 1-based line number — populated by the "Blockquote" case below and
+    // consumed by "QuoteMark" to tint the background and, on the header
+    // line, swap the `[!type]` marker for an icon.
+    const calloutLines = new Map<number, { meta: CalloutMeta; isHeader: boolean }>();
 
     for (const { from, to } of view.visibleRanges) {
       syntaxTree(view.state).iterate({
@@ -464,12 +493,47 @@ export function livePreview(app: App, getPath: () => string): Extension {
               if (!isActive(node.from)) decos.push(hide.range(node.from, node.to));
               break;
             }
+            case "Blockquote": {
+              // Only the outermost `> ` prefix is stripped here (nested
+              // callouts are out of scope), matching the marker Reading
+              // view's transformCallouts() looks for.
+              const startLine = doc.lineAt(node.from);
+              if (startLine.from < fmEnd) break;
+              const prefix = startLine.text.match(/^ {0,3}>\s?/);
+              if (!prefix) break;
+              const header = parseCalloutHeader(startLine.text.slice(prefix[0].length));
+              if (!header) break;
+              const meta = calloutMeta(header.type);
+              const endLine = doc.lineAt(Math.min(node.to, doc.length));
+              for (let ln = startLine.number; ln <= endLine.number; ln++) {
+                calloutLines.set(ln, { meta, isHeader: ln === startLine.number });
+              }
+              break;
+            }
             case "QuoteMark": {
               const line = doc.lineAt(node.from);
-              decos.push(Decoration.line({ class: "cm-live-quote" }).range(line.from));
+              const callout = calloutLines.get(line.number);
+              let cls = "cm-live-quote";
+              if (callout) {
+                cls += ` cm-callout callout-${callout.meta.cssClass}`;
+                if (callout.isHeader) cls += " cm-callout-title";
+              }
+              decos.push(Decoration.line({ class: cls }).range(line.from));
+              const after = doc.sliceString(node.to, node.to + 1);
+              const markerEnd = after === " " ? node.to + 1 : node.to;
               if (!isActive(node.from)) {
-                const after = doc.sliceString(node.to, node.to + 1);
-                decos.push(hide.range(node.from, after === " " ? node.to + 1 : node.to));
+                decos.push(hide.range(node.from, markerEnd));
+                if (callout?.isHeader) {
+                  const markerLen = calloutMarkerLength(doc.sliceString(markerEnd, line.to));
+                  if (markerLen !== null) {
+                    decos.push(
+                      Decoration.replace({ widget: new CalloutIconWidget(callout.meta.icon) }).range(
+                        markerEnd,
+                        markerEnd + markerLen
+                      )
+                    );
+                  }
+                }
               }
               break;
             }
