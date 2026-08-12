@@ -809,6 +809,21 @@ button.mod-cta:hover {
   color: var(--text-error, #e06c75);
 }
 
+/* Live Preview table widget (renders GFM pipe tables as real <table>s) */
+
+/* Block widget: no margins allowed (CodeMirror measures rect height only);
+   the bottom gap is padding on the root, the inner table's own margin is
+   zeroed out so it can't collapse through and throw off the height map. */
+.cm-table-widget {
+  display: block;
+  margin: 0;
+  padding: 0 0 1em;
+}
+
+.cm-table-widget table {
+  margin: 0;
+}
+
 /* Properties widget (frontmatter editor) */
 
 /* Block widget: no margins allowed (CodeMirror measures rect height only);

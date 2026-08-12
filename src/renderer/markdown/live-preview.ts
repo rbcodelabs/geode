@@ -6,11 +6,12 @@ import {
   ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { Extension, Range, RangeSet, StateField } from "@codemirror/state";
+import { EditorState, Extension, Range, RangeSet, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
 import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
+import { parseTable, renderTableHtml, type ParsedTable } from "./table";
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
 
@@ -283,6 +284,41 @@ class HRWidget extends WidgetType {
 }
 
 /**
+ * Renders a GFM pipe-table block as a real `<table>` while editing (Live
+ * Preview), reusing the pure parser/renderer in ./table.ts so the markup
+ * matches Reading view's `.markdown-rendered table` styling. Applied as a
+ * `block: true` decoration (see `tableField` below) since a table spans
+ * multiple lines — mirrors PropertiesWidget's approach for frontmatter.
+ */
+class TableWidget extends WidgetType {
+  constructor(
+    private raw: string,
+    private table: ParsedTable
+  ) {
+    super();
+  }
+
+  eq(other: TableWidget): boolean {
+    return other.raw === this.raw;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    // IMPORTANT: block widgets are measured via getBoundingClientRect(),
+    // which excludes margins (see PropertiesWidget above) — spacing here
+    // uses padding on the root, with the inner table's own margin zeroed
+    // out in CSS, to keep CodeMirror's height map accurate.
+    const root = document.createElement("div");
+    root.className = "cm-table-widget markdown-rendered";
+    root.innerHTML = renderTableHtml(this.table);
+    return root;
+  }
+}
+
+/**
  * Renders `![[target]]` embeds inline while editing (Live Preview). Image /
  * audio / video render as inline media; `.md` note transclusions reuse
  * `MarkdownRenderer.renderNoteEmbed()` (src/renderer/markdown/render.ts) so
@@ -425,6 +461,56 @@ export function livePreview(app: App, getPath: () => string): Extension {
         fm.end
       ),
     ]);
+  }
+
+  // Pipe tables are block-level and can span many lines, so — like
+  // frontmatter above — their decorations must come from a StateField, not
+  // the ViewPlugin below (CM6 throws "Block decorations may not be
+  // specified via plugins" for `block: true` decorations from a plugin).
+  // Table nodes come from CodeMirror's Lezer GFM grammar (already parses
+  // pipe tables into `Table` syntax-tree nodes), so detection is free; only
+  // parsing the matched text into cell data (./table.ts) is bespoke.
+  const tableField = StateField.define<DecorationSet>({
+    create(state) {
+      return computeTables(state);
+    },
+    update(value, tr) {
+      if (!tr.docChanged && tr.startState.selection.eq(tr.state.selection)) return value;
+      return computeTables(tr.state);
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+
+  function computeTables(state: EditorState): DecorationSet {
+    const doc = state.doc;
+    const active = new Set<number>();
+    for (const r of state.selection.ranges) {
+      const from = doc.lineAt(r.from).number;
+      const to = doc.lineAt(r.to).number;
+      for (let i = from; i <= to; i++) active.add(i);
+    }
+    const decos: Range<Decoration>[] = [];
+    syntaxTree(state).iterate({
+      enter(node) {
+        if (node.name !== "Table") return;
+        const to = Math.min(node.to, doc.length);
+        const firstLine = doc.lineAt(node.from).number;
+        const lastLine = doc.lineAt(to).number;
+        for (let i = firstLine; i <= lastLine; i++) {
+          if (active.has(i)) return; // cursor is inside — reveal raw markdown
+        }
+        const raw = doc.sliceString(node.from, to);
+        const table = parseTable(raw);
+        if (!table) return;
+        decos.push(
+          Decoration.replace({ widget: new TableWidget(raw, table), block: true }).range(
+            node.from,
+            to
+          )
+        );
+      },
+    });
+    return Decoration.set(decos, true);
   }
 
   function buildInline(view: EditorView): DecorationSet {
@@ -648,6 +734,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
 
   return [
     frontmatterField,
+    tableField,
     EditorView.atomicRanges.of(
       (view) => view.state.field(frontmatterField, false) ?? RangeSet.empty
     ),
