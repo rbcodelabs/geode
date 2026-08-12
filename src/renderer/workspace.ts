@@ -1,6 +1,7 @@
 import { Events } from "./events";
 import type { App } from "./app";
 import type { TFile } from "./types";
+import { setIcon } from "./api/icons";
 
 export interface View {
   readonly viewType: string;
@@ -380,7 +381,7 @@ export class Sidebar implements LeafContainer {
       const { icon, title } = this.metaOf(item);
       const btn = document.createElement("div");
       btn.className = "sidebar-icon";
-      btn.textContent = icon;
+      setIcon(btn, icon); // render a Lucide SVG (falls back to the glyph/text for emoji)
       btn.title = title;
       btn.classList.toggle("is-active", item === this.active);
       btn.addEventListener("click", () => this.show(item));

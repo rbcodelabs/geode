@@ -130,7 +130,7 @@ export class SearchView implements View {
   }
 
   getIcon(): string {
-    return "🔍";
+    return "search";
   }
 
   onOpen(): void {

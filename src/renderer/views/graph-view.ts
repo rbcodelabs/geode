@@ -63,7 +63,7 @@ export class GraphView implements View {
   }
 
   getIcon(): string {
-    return "🕸";
+    return "git-fork";
   }
 
   onOpen(): void {

@@ -55,7 +55,7 @@ export class BacklinksView extends SidebarView {
   }
 
   getIcon(): string {
-    return "🔗";
+    return "link";
   }
 
   render(): void {
@@ -136,7 +136,7 @@ export class OutlineView extends SidebarView {
   }
 
   getIcon(): string {
-    return "🗂";
+    return "list";
   }
 
   render(): void {
@@ -175,7 +175,7 @@ export class TagPaneView extends SidebarView {
   }
 
   getIcon(): string {
-    return "#";
+    return "tags";
   }
 
   render(): void {
