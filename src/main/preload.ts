@@ -43,4 +43,14 @@ const api = {
 
 export type GeodeApi = typeof api;
 
-contextBridge.exposeInMainWorld("geode", api);
+// The renderer runs with contextIsolation disabled (see main.ts's
+// webPreferences and the plugin-hosting rationale there), so the
+// contextBridge API is unavailable — it throws unless contextIsolation is
+// on. In that mode the preload shares the renderer's main world, so we
+// attach the API to `window` directly. The `contextBridge` path is kept as
+// a fallback in case the window is ever reconfigured with isolation on.
+try {
+  contextBridge.exposeInMainWorld("geode", api);
+} catch {
+  (globalThis as unknown as { geode: GeodeApi }).geode = api;
+}

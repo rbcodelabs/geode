@@ -134,6 +134,28 @@ export class Vault extends Events {
     return this.folders.get(path) ?? null;
   }
 
+  /** Obsidian-compatible lookup returning either a file or folder at `path`, or null. */
+  getAbstractFileByPath(path: string): TFile | TFolder | null {
+    return this.files.get(path) ?? this.folders.get(path) ?? null;
+  }
+
+  /**
+   * Obsidian's `vault.adapter`. Plugins use it mainly for `getBasePath()`
+   * (the vault's absolute filesystem path) to shell out with Node, plus
+   * `getResourcePath()` to turn a vault-relative path into a loadable URL.
+   */
+  get adapter() {
+    const root = this.root;
+    return {
+      basePath: root,
+      getBasePath: () => root,
+      getName: () => this.name,
+      getResourcePath: (normalizedPath: string) =>
+        `file://${root}/${normalizedPath}`.replace(/ /g, "%20"),
+      exists: (p: string) => window.geode.exists(p),
+    };
+  }
+
   getRoot(): TFolder {
     return this.folders.get("")!;
   }

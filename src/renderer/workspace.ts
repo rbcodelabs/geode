@@ -49,6 +49,49 @@ export class WorkspaceLeaf {
     return this.view?.getDisplayText() ?? "New tab";
   }
 
+  private viewState: { type: string; state?: unknown } = { type: "empty" };
+
+  /**
+   * Obsidian-compatible view opener: resolve the registered factory for
+   * `state.type` (from `Plugin.registerView`/`registerViewFactory`) and
+   * mount its view in this leaf. This is how Obsidian plugins open their
+   * own views (`leaf.setViewState({ type: MY_VIEW })`).
+   */
+  async setViewState(state: { type: string; active?: boolean; state?: unknown }): Promise<void> {
+    this.viewState = { type: state.type, state: state.state };
+    const factory = this.app.workspace.getViewFactory(state.type);
+    if (!factory) throw new Error(`No view registered for type "${state.type}"`);
+    const view = factory(this);
+    await this.setView(view);
+    if (state.state && typeof (view as any).setState === "function") {
+      await (view as any).setState(state.state, {});
+    }
+    if (state.active) this.group.setActiveLeaf(this);
+  }
+
+  getViewState(): { type: string; state?: unknown } {
+    return { type: this.view?.viewType ?? this.viewState.type, state: this.viewState.state };
+  }
+
+  /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
+  async openFile(file: TFile): Promise<void> {
+    const view = this.app.createMarkdownView();
+    await view.setFile(file);
+    await this.setView(view);
+  }
+
+  /** Re-render this leaf's tab header (Obsidian `leaf.updateHeader`). */
+  updateHeader(): void {
+    this.group.renderTabs();
+  }
+
+  private _tabTitleEl?: HTMLElement;
+  /** Obsidian's inner tab-title element. Geode rebuilds tab DOM on each render, so this is a stable scratch element plugins can write to without crashing. */
+  get tabHeaderInnerTitleEl(): HTMLElement {
+    if (!this._tabTitleEl) this._tabTitleEl = document.createElement("span");
+    return this._tabTitleEl;
+  }
+
   async detach(): Promise<void> {
     await this.view?.onClose();
     this.group.removeLeaf(this);
@@ -348,5 +391,54 @@ export class Workspace extends Events {
     const view = factory(leaf);
     await leaf.setView(view);
     return leaf;
+  }
+
+  // --- Obsidian-compat workspace API (for hosted plugins) ------------------
+
+  /**
+   * Obsidian returns a leaf docked in the right/left sidebar here. Geode's
+   * sidebars host fixed views rather than plugin leaves, so for compat we
+   * return a leaf in the main tab area — plugin views open as tabs, which
+   * keeps them fully visible and interactive. Docking hosted plugin views
+   * into the sidebars is a fuller-fidelity follow-up.
+   */
+  getRightLeaf(_split: boolean): WorkspaceLeaf {
+    return this.activeGroup.createLeaf();
+  }
+  getLeftLeaf(_split: boolean): WorkspaceLeaf {
+    return this.activeGroup.createLeaf();
+  }
+
+  /** Focus/activate a leaf (Obsidian `revealLeaf`). */
+  revealLeaf(leaf: WorkspaceLeaf): void {
+    leaf.group.setActiveLeaf(leaf);
+  }
+
+  /** Open an internal link, delegating to the app's link handler. */
+  async openLinkText(linktext: string, sourcePath: string, newLeaf?: boolean): Promise<void> {
+    await this.app.openLink(linktext, sourcePath, !!newLeaf);
+  }
+
+  /** Obsidian alias for iterating every open leaf. */
+  iterateAllLeaves(cb: (leaf: WorkspaceLeaf) => void): void {
+    this.iterateLeaves(cb);
+  }
+
+  /**
+   * Obsidian defers plugin work until the initial layout is ready. Geode's
+   * layout is constructed synchronously before plugins load, so the layout
+   * is always ready — run the callback on the next microtask.
+   */
+  onLayoutReady(cb: () => void): void {
+    Promise.resolve().then(cb);
+  }
+
+  /** Obsidian's `workspace.activeEditor` — the active editor host, or null. */
+  get activeEditor(): { editor?: unknown; file?: TFile | null } | null {
+    const view = this.getActiveLeaf()?.view as any;
+    if (view && (view.editor || typeof view.getFile === "function")) {
+      return { editor: view.editor, file: view.getFile?.() ?? null };
+    }
+    return null;
   }
 }

@@ -421,6 +421,11 @@ export class App {
     view.setQuery(query);
   }
 
+  /** Construct a fresh MarkdownView bound to this app (used by WorkspaceLeaf.openFile for hosted plugins). */
+  createMarkdownView(): MarkdownView {
+    return new MarkdownView(this);
+  }
+
   getActiveMarkdownView(): MarkdownView | null {
     const view = this.workspace.getActiveLeaf()?.view;
     return view instanceof MarkdownView ? view : null;
