@@ -16,12 +16,15 @@ export interface PluginManifest {
 }
 
 /**
- * The running app's version, used to gate plugin loading against each
- * manifest's `minAppVersion` (see `isVersionAtLeast`). Kept in sync with
- * `package.json` `version` by hand for now — there's no build-time
- * injection step yet (noted as follow-up).
+ * The Obsidian-API compatibility level Geode advertises to plugins. Each
+ * plugin's `manifest.json` `minAppVersion` is checked against this (see
+ * `isVersionAtLeast`) — it represents "which Obsidian app-API version this
+ * host behaves like", NOT Geode's own app/package version. Real Obsidian
+ * plugins gate on Obsidian's 1.x versions (e.g. Claude Threads requires
+ * 1.0.0), so this tracks that line rather than Geode's 0.x release number.
+ * Bumped by hand as the emulated API surface grows.
  */
-export const GEODE_API_VERSION = "0.1.1";
+export const GEODE_API_VERSION = "1.8.0";
 
 export class ManifestError extends Error {
   constructor(message: string) {
