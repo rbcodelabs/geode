@@ -39,6 +39,7 @@
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.6.4",
     "chokidar": "^5.0.0",
+    "lucide-static": "^1.31.0",
     "marked": "^18.0.5",
     "yaml": "^2.9.0"
   },

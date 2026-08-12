@@ -105,7 +105,7 @@ export class MarkdownView implements View {
   }
 
   getIcon(): string {
-    return "📝";
+    return "file-text";
   }
 
   getFile(): TFile | null {

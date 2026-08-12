@@ -253,6 +253,26 @@ button.mod-cta:hover {
   background: var(--background-modifier-hover);
 }
 
+/* Lucide icons render as inline SVGs; size them to the icon slot and inherit color. */
+.geode-icon svg,
+.sidebar-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+}
+.geode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Icons inside ribbon actions / menu items / status bar sit a touch smaller. */
+.side-dock-ribbon-action svg,
+.menu-item-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .sidebar-icon.is-active {
   background: var(--background-modifier-active);
   color: var(--text-normal);

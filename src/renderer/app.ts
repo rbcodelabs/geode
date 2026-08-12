@@ -46,7 +46,7 @@ class EmptyView implements View {
   }
 
   getIcon(): string {
-    return "📄";
+    return "file";
   }
 
   onOpen(): void {}

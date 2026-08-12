@@ -59,7 +59,7 @@ export class FileExplorerView implements View {
   }
 
   getIcon(): string {
-    return "📁";
+    return "folder-closed";
   }
 
   onOpen(): void {

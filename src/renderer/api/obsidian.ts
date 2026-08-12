@@ -13,6 +13,7 @@ import { Plugin as GeodePlugin } from "../plugin";
 import type { App } from "../app";
 import type { WorkspaceLeaf, View as GeodeView } from "../workspace";
 import { installObsidianDomExtensions } from "./obsidian-dom";
+import { addIcon, setIcon } from "./icons";
 
 // Ensure the DOM helpers exist the moment the compat module is first
 // evaluated (i.e. when a plugin requires 'obsidian'), even if the host
@@ -59,23 +60,8 @@ export function debounce<T extends (...args: any[]) => any>(fn: T, timeout = 0, 
   return debounced as T & { cancel(): void; run(): void };
 }
 
-/** A stripped SVG icon registry. Obsidian ships lucide; we only need names to resolve to *some* element. */
-const customIcons = new Map<string, string>();
-export function addIcon(iconId: string, svgContent: string): void {
-  customIcons.set(iconId, svgContent);
-}
-export function setIcon(el: HTMLElement, iconId: string): void {
-  el.addClass?.("geode-icon");
-  el.setAttribute("data-icon", iconId);
-  const custom = customIcons.get(iconId);
-  if (custom) {
-    el.innerHTML = `<svg viewBox="0 0 100 100" width="16" height="16">${custom}</svg>`;
-  } else {
-    // Placeholder glyph so the element is visible/measurable.
-    el.textContent = "";
-    el.innerHTML = `<svg class="svg-icon" width="16" height="16" aria-label="${iconId}"></svg>`;
-  }
-}
+// Icons resolve to real Lucide SVGs (Obsidian's icon set) — see api/icons.ts.
+export { addIcon, setIcon };
 export function setTooltip(el: HTMLElement, tooltip: string): void {
   el.setAttribute("aria-label", tooltip);
   el.setAttribute("title", tooltip);
