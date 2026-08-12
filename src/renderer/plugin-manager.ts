@@ -6,7 +6,7 @@ import {
   parseManifest,
   type PluginManifest,
 } from "./plugin-manifest";
-import * as GeodeAPI from "./api";
+import * as GeodeAPI from "./api/obsidian";
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
@@ -17,28 +17,51 @@ function pluginDir(id: string): string {
 }
 
 /**
+ * The real Node `require` exposed on the renderer's global scope because
+ * the window runs with `nodeIntegration: true` (see main.ts). Captured once
+ * so the plugin loader can delegate Node/Electron builtin specifiers
+ * (`fs`, `path`, `child_process`, `electron`, …) straight through to Node —
+ * exactly what Obsidian's own plugin host does. `undefined` only if Geode is
+ * ever run without Node integration (e.g. a future web build), in which case
+ * builtin requires from plugins will throw a clear error.
+ */
+const nodeRequire: ((id: string) => unknown) | undefined = (
+  globalThis as unknown as { require?: (id: string) => unknown }
+).require;
+
+/**
  * Compile a plugin's `main.js` (CommonJS, exactly as Obsidian plugins are
  * bundled) and return its default export, which must be a class extending
  * `Plugin`.
  *
- * Real Obsidian gives plugins `require('obsidian')`, Node builtins, and
- * `electron` because its main window runs with Node integration enabled.
- * Geode's renderer runs with `contextIsolation: true` / `nodeIntegration:
- * false` (the Electron-recommended default), so there is no `require()` to
- * hand plugin code short of a deliberate trust decision. For v1 we run
- * plugin code as a plain script in the renderer's own JS realm via
- * `Function(...)` (the CSP now allows this — see index.html) and shim
- * `require('geode')` to the public API surface below. Any other module
- * specifier throws: Node/Electron module access for plugins is explicitly
- * out of scope for this PR (see the plugin-api-layer report).
+ * Obsidian bundles plugins against `require('obsidian')` plus Node/Electron
+ * builtins. Geode mirrors that host contract:
+ *  - `require('obsidian')` and `require('geode')` both resolve to Geode's
+ *    Obsidian-compatible API surface (`GeodeAPI`).
+ *  - every other specifier is delegated to the renderer's real Node
+ *    `require` (available because the window runs with Node integration),
+ *    so `fs`/`path`/`child_process`/`electron`/… work as the plugin expects.
+ *
+ * The plugin body runs in the renderer's own JS realm via `Function(...)`
+ * (the CSP allows this — see index.html). This is a deliberate trust
+ * decision consistent with Obsidian: locally-installed plugins are trusted.
  */
 function instantiatePluginClass(code: string, pluginId: string): PluginConstructor {
   const moduleObj: { exports: any } = { exports: {} };
   const requireShim = (specifier: string): unknown => {
-    if (specifier === "geode") return GeodeAPI;
+    if (specifier === "obsidian" || specifier === "geode") return GeodeAPI;
+    if (nodeRequire) {
+      try {
+        return nodeRequire(specifier);
+      } catch (err) {
+        throw new Error(
+          `Plugin "${pluginId}" require("${specifier}") failed: ${(err as Error).message}`
+        );
+      }
+    }
     throw new Error(
-      `Plugin "${pluginId}" called require("${specifier}"), which isn't available yet — ` +
-        `only require("geode") is supported in this version of Geode's plugin API.`
+      `Plugin "${pluginId}" called require("${specifier}"), but Geode has no Node ` +
+        `integration in this build, so only require("obsidian")/require("geode") are available.`
     );
   };
   // eslint-disable-next-line no-new-func -- deliberate CJS-style plugin loader, see doc comment above
@@ -145,13 +168,40 @@ export class PluginManager {
     const instance = new PluginClass(this.app, manifest);
     this.loadErrors.delete(id);
     this.loaded.set(id, { manifest, instance });
+    await this.injectStyles(id);
     try {
       instance.load(); // Component.load() -> onload(), may return a Promise we don't block on (Obsidian doesn't either)
     } catch (err) {
+      this.removeStyles(id);
       this.loaded.delete(id);
       throw err;
     }
     if (persist) await this.persistEnabled();
+  }
+
+  /**
+   * Inject a plugin's `styles.css` into the document, mirroring Obsidian,
+   * which auto-loads each enabled plugin's stylesheet. Missing/empty
+   * stylesheets are ignored. Removed on disable via `removeStyles`.
+   */
+  private async injectStyles(id: string): Promise<void> {
+    if (typeof document === "undefined") return;
+    let css: string;
+    try {
+      css = await window.geode.read(`${pluginDir(id)}/styles.css`);
+    } catch {
+      return; // no stylesheet
+    }
+    if (!css.trim()) return;
+    const styleEl = document.createElement("style");
+    styleEl.dataset.pluginId = id;
+    styleEl.textContent = css;
+    document.head.appendChild(styleEl);
+  }
+
+  private removeStyles(id: string): void {
+    if (typeof document === "undefined") return;
+    document.head.querySelector(`style[data-plugin-id="${id}"]`)?.remove();
   }
 
   /** Call `onunload()` (reversing everything the plugin registered) and drop the instance. */
@@ -160,6 +210,7 @@ export class PluginManager {
     const entry = this.loaded.get(id);
     if (!entry) return;
     entry.instance.unload();
+    this.removeStyles(id);
     this.loaded.delete(id);
     if (persist) await this.persistEnabled();
   }

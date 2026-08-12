@@ -84,6 +84,38 @@ export function isTFolder(item: TAbstractFile | null | undefined): item is TFold
   return !!item && (item as TFolder).kind === "folder";
 }
 
+/**
+ * `TFile`/`TFolder` runtime classes for the Obsidian-compat surface. Geode
+ * represents files/folders as plain objects discriminated by `kind`, so
+ * rather than rewrite the whole vault to construct class instances, these
+ * classes customise `instanceof` via `Symbol.hasInstance`: any object with
+ * the right `kind` satisfies `obj instanceof TFile`/`TFolder`, which is how
+ * Obsidian plugins (Claude Threads included) test file types. Exported to
+ * plugins as `TFile`/`TFolder` from `api/obsidian.ts`.
+ */
+export class TFileClass {
+  static [Symbol.hasInstance](obj: unknown): boolean {
+    return isTFile(obj as TAbstractFile);
+  }
+}
+
+export class TFolderClass {
+  static [Symbol.hasInstance](obj: unknown): boolean {
+    return isTFolder(obj as TAbstractFile);
+  }
+}
+
+/**
+ * Obsidian's `normalizePath`: normalise a vault-relative path — backslashes
+ * to slashes, collapse duplicate slashes, strip a leading `./` and trailing
+ * slash. Returns "/" for an empty result.
+ */
+export function normalizePath(path: string): string {
+  let p = path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").trim();
+  p = p.replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "");
+  return p === "" ? "/" : p;
+}
+
 export function pathParent(p: string): string {
   const i = p.lastIndexOf("/");
   return i === -1 ? "" : p.slice(0, i);

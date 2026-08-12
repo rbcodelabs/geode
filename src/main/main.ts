@@ -4,6 +4,12 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import chokidar, { FSWatcher } from "chokidar";
 
+// Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
+// Obsidian enables it so plugins (and the libraries they bundle, e.g. the
+// Claude Agent SDK) can use it; Geode does the same for plugin
+// compatibility. Must be set before app 'ready'.
+app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
+
 interface VaultSession {
   root: string;
   watcher: FSWatcher | null;
@@ -254,8 +260,19 @@ function createWindow() {
     backgroundColor: "#1e1e1e",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      // Obsidian's own desktop model: the renderer runs with full Node
+      // integration so plugins can `require('fs')`/`require('child_process')`
+      // /`require('electron')` directly. Claude Threads (and plugins like
+      // it) spawn subprocesses and touch the filesystem, which cannot be
+      // faithfully bridged over a contextBridge (streams/EventEmitters/
+      // ChildProcess don't survive the proxy). This is a deliberate trust
+      // decision: Geode, like Obsidian, treats locally-installed plugins as
+      // trusted code. See src/renderer/plugin-manager.ts for how the plugin
+      // require() shim delegates unknown specifiers to this real Node require.
+      contextIsolation: false,
+      nodeIntegration: true,
+      // Keep spellcheck etc. defaults; sandbox must stay off for nodeIntegration.
+      sandbox: false,
     },
   });
   win.loadFile(path.join(__dirname, "..", "src", "renderer", "index.html"));
