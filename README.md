@@ -34,13 +34,19 @@ the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 1. Download `Geode-<version>-arm64.dmg` (Apple Silicon) or
    `Geode-<version>.dmg` (Intel) from the latest release.
 2. Open the dmg and drag **Geode.app** to **Applications**.
-3. **These builds are unsigned** (no Apple Developer ID yet), so Gatekeeper
-   will block the first launch with an "unidentified developer" warning.
-   To open it anyway:
+3. **These builds are ad-hoc signed but not notarized** (no Apple Developer
+   ID yet). The ad-hoc signature lets the app launch on any Mac — including
+   Apple Silicon, which refuses to run fully-unsigned apps — but Gatekeeper
+   still shows an "unidentified developer" warning on the first launch of a
+   downloaded copy. To open it:
    - Right-click (or Control-click) **Geode.app** → **Open** → **Open** again
-     in the confirmation dialog, **or**
+     in the confirmation dialog (also available under System Settings →
+     Privacy & Security → **Open Anyway**), **or**
    - Run `xattr -dr com.apple.quarantine /Applications/Geode.app` in Terminal
      once, then launch normally.
+
+   Full Developer ID signing + notarization (no warning at all) is a
+   follow-up that needs a paid Apple Developer account.
 
 > Note: this repo is currently **private**. You'll need collaborator access
 > to view the source or download release assets until it's made public.
@@ -53,7 +59,7 @@ npm run build      # bundle main/preload/renderer with esbuild
 npm start          # launch Electron
 npm run dev        # esbuild watch mode
 npm run typecheck  # strict tsc
-npm run dist        # package a local unsigned macOS build (dmg + zip) into release/
+npm run dist        # package a local ad-hoc-signed macOS build (dmg + zip) into release/
 npm run release     # same, plus publish to GitHub Releases (requires GH_TOKEN)
 ```
 
@@ -62,7 +68,7 @@ A demo vault lives in `test-vault/`.
 ### Cutting a release
 
 Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`) —
-the `.github/workflows/release.yml` GitHub Action builds unsigned macOS
+the `.github/workflows/release.yml` GitHub Action builds ad-hoc-signed macOS
 installers and publishes them to a GitHub Release automatically. You can also
 trigger it manually from the Actions tab (`workflow_dispatch`) without cutting
 a tag, useful for testing the pipeline.

@@ -81,7 +81,7 @@
           ]
         }
       ],
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     }
