@@ -748,11 +748,14 @@ export class Workspace extends Events {
   private serializeLeaf(leaf: WorkspaceLeaf): PersistedLeaf | null {
     const v = leaf.view;
     if (!v) return null;
+    // Empty/placeholder tabs (and markdown tabs whose file vanished) aren't
+    // worth persisting — and persisting them caused empties to accumulate
+    // across launches (restore recreated them, then a fresh one was added).
+    if (v.viewType === "empty") return null;
     if (v.viewType === "markdown") {
       const file = v.getFile?.()?.path;
-      return file ? { type: "markdown", file, pinned: leaf.pinned } : { type: "empty" };
+      return file ? { type: "markdown", file, pinned: leaf.pinned } : null;
     }
-    if (v.viewType === "empty") return { type: "empty" };
     return { type: v.viewType, state: leaf.getViewState().state, pinned: leaf.pinned };
   }
 
@@ -766,17 +769,25 @@ export class Workspace extends Events {
     };
   }
 
-  /** Snapshot the current layout for persistence. */
+  /** Snapshot the current layout for persistence. Empty tabs/groups are dropped. */
   serialize(): PersistedWorkspace {
+    const groups: { leaves: PersistedLeaf[]; active: number }[] = [];
+    let activeGroup = 0;
+    for (const g of this.groups) {
+      // Keep leaves and their persisted form paired so the active index maps
+      // correctly after empties are filtered out.
+      const kept = g.leaves
+        .map((l) => ({ leaf: l, ser: this.serializeLeaf(l) }))
+        .filter((x): x is { leaf: WorkspaceLeaf; ser: PersistedLeaf } => !!x.ser);
+      if (!kept.length) continue; // skip all-empty groups
+      if (g === this.activeGroup) activeGroup = groups.length;
+      const activeIdx = Math.max(0, kept.findIndex((x) => x.leaf === g.active));
+      groups.push({ leaves: kept.map((x) => x.ser), active: activeIdx });
+    }
     return {
       version: 1,
-      groups: this.groups.map((g) => ({
-        leaves: g.leaves
-          .map((l) => this.serializeLeaf(l))
-          .filter((l): l is PersistedLeaf => !!l),
-        active: Math.max(0, g.active ? g.leaves.indexOf(g.active) : 0),
-      })),
-      activeGroup: Math.max(0, this.groups.indexOf(this.activeGroup)),
+      groups,
+      activeGroup,
       left: this.serializeSidebar(this.leftSidebar),
       right: this.serializeSidebar(this.rightSidebar),
     };
@@ -822,26 +833,37 @@ export class Workspace extends Events {
    * back to opening an empty tab.
    */
   async deserialize(state: PersistedWorkspace): Promise<boolean> {
-    if (!state?.groups?.length) return false;
-    // Ensure we have exactly as many tab groups as the snapshot.
-    while (this.groups.length < state.groups.length) this.addGroup();
-    let restoredAny = false;
-    for (let gi = 0; gi < state.groups.length; gi++) {
+    const hasContent =
+      (state?.groups?.some((g) => g.leaves.length) ?? false) ||
+      !!state?.left?.leaves.length ||
+      !!state?.right?.leaves.length;
+    if (!hasContent) return false;
+
+    // Rebuild the (non-empty) tab groups. Groups the snapshot didn't include
+    // are added as needed; a restored group that ends up empty gets exactly
+    // one placeholder tab (never accumulating empties across launches).
+    const targetGroups = Math.max(1, state.groups.length);
+    while (this.groups.length < targetGroups) this.addGroup();
+    for (let gi = 0; gi < this.groups.length; gi++) {
       const group = this.groups[gi];
       const gs = state.groups[gi];
-      for (const ls of gs.leaves) {
-        const leaf = group.createLeaf();
-        await this.restoreLeafView(leaf, ls);
-        if (ls.type !== "empty") restoredAny = true;
+      if (gs) {
+        for (const ls of gs.leaves) {
+          const leaf = group.createLeaf();
+          await this.restoreLeafView(leaf, ls);
+        }
       }
-      const active = group.leaves[gs.active] ?? group.leaves[0];
+      if (group.leaves.length === 0) {
+        const leaf = group.createLeaf();
+        await leaf.setView(this.app.createEmptyView());
+      }
+      const active = (gs && group.leaves[gs.active]) || group.leaves[0];
       if (active) group.setActiveLeaf(active);
     }
     await this.restoreSidebar(this.leftSidebar, state.left);
     await this.restoreSidebar(this.rightSidebar, state.right);
-    if (state.left.leaves.length || state.right.leaves.length) restoredAny = true;
     const ag = this.groups[state.activeGroup] ?? this.groups[0];
     if (ag?.active) ag.setActiveLeaf(ag.active);
-    return restoredAny;
+    return true;
   }
 }
