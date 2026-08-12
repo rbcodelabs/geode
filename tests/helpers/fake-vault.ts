@@ -5,7 +5,8 @@ import type { Vault } from "../../src/renderer/vault";
 /**
  * Minimal in-memory stand-in for `Vault`, shaped to satisfy everything
  * `MetadataCache` calls on it: `getMarkdownFiles`, `getFiles`,
- * `getFileByPath`, `cachedRead`, and the `Events` `on`/`trigger` surface.
+ * `getFileByPath`, `cachedRead`, `getCachedContent`, and the `Events`
+ * `on`/`trigger` surface.
  *
  * `Vault` has private fields, so TypeScript won't structurally accept a
  * plain object in its place — this class extends the same `Events` base
@@ -60,6 +61,10 @@ export class FakeVault extends Events {
     const entry = this.files.get(file.path);
     if (!entry) throw new Error(`No such file: ${file.path}`);
     return entry.content;
+  }
+
+  getCachedContent(path: string): string | undefined {
+    return this.files.get(path)?.content;
   }
 
   asVault(): Vault {

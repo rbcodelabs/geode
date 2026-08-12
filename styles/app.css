@@ -356,6 +356,22 @@ button.mod-cta:hover {
   color: var(--text-muted);
 }
 
+/* Context snippet under a backlinks-pane result (linked or unlinked mention). */
+.pane-result-context {
+  padding: 2px 10px 6px 24px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-faint);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-result-context:hover {
+  color: var(--text-muted);
+}
+
 /* ---- Search ---- */
 
 .search-input {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MetadataCache, parseMetadata } from "../../src/renderer/metadata-cache";
+import { findUnlinkedMentions, MetadataCache, parseMetadata } from "../../src/renderer/metadata-cache";
 import { FakeVault } from "../helpers/fake-vault";
 
 describe("parseMetadata", () => {
@@ -193,5 +193,135 @@ describe("MetadataCache backlinks and tag index", () => {
     const b = fake.getFileByPath("B.md")!;
     const backlinks = cache.getBacklinks(b);
     expect(backlinks.map((bl) => bl.source.path)).toEqual(["A.md"]);
+  });
+});
+
+describe("findUnlinkedMentions", () => {
+  it("finds a whole-word, case-insensitive plain-text mention", () => {
+    const out = findUnlinkedMentions("I should read the Daily Plan tomorrow.", ["Daily Plan"]);
+    expect(out).toEqual([{ line: 0, snippet: "I should read the Daily Plan tomorrow.", count: 1 }]);
+  });
+
+  it("does not match a substring inside a longer word", () => {
+    const out = findUnlinkedMentions("Dailyplanner is not a mention of Daily Plan's name.", ["Daily"]);
+    expect(out).toHaveLength(1); // only the real "Daily Plan's" occurrence, not "Dailyplanner"
+    expect(out[0].snippet).toContain("Daily Plan's");
+  });
+
+  it("ignores occurrences already inside a [[wikilink]] or ![[embed]], even if unresolved", () => {
+    const text = "See [[Daily Plan]] and ![[Daily Plan#Section]] and [[Daily Plan|aliased]].";
+    expect(findUnlinkedMentions(text, ["Daily Plan"])).toEqual([]);
+  });
+
+  it("ignores occurrences inside fenced or inline code", () => {
+    const text = "Real mention of Target here.\n```\nTarget in code\n```\nInline `Target` too.";
+    const out = findUnlinkedMentions(text, ["Target"]);
+    expect(out).toHaveLength(1);
+    expect(out[0].snippet).toBe("Real mention of Target here.");
+  });
+
+  it("groups multiple occurrences on the same line into one entry with a count", () => {
+    const out = findUnlinkedMentions("Target and Target again.", ["Target"]);
+    expect(out).toEqual([{ line: 0, snippet: "Target and Target again.", count: 2 }]);
+  });
+
+  it("matches any of several candidate names (e.g. basename + aliases)", () => {
+    const text = "Line one mentions Home Base.\nLine two mentions HQ.\nLine three mentions neither.";
+    const out = findUnlinkedMentions(text, ["Home Base", "HQ"]);
+    expect(out.map((m) => m.line)).toEqual([0, 1]);
+  });
+
+  it("returns an empty array when there are no candidate names or no matches", () => {
+    expect(findUnlinkedMentions("Some text.", [])).toEqual([]);
+    expect(findUnlinkedMentions("Some text.", ["Nonexistent"])).toEqual([]);
+  });
+});
+
+describe("MetadataCache.getBacklinksWithContext", () => {
+  it("attaches a trimmed line snippet for each resolved link occurrence", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Intro line.\nSee [[Daily Plan]] for today's tasks.",
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
+    const backlinks = cache.getBacklinksWithContext(dailyPlan);
+    expect(backlinks).toHaveLength(1);
+    expect(backlinks[0]).toMatchObject({
+      count: 1,
+      snippets: ["See [[Daily Plan]] for today's tasks."],
+    });
+  });
+
+  it("collects one snippet per occurrence when a source links the same target multiple times", async () => {
+    const fake = new FakeVault({
+      "A.md": "First [[B]] mention.\nSecond [[B]] mention.",
+      "B.md": "",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const b = fake.getFileByPath("B.md")!;
+    const backlinks = cache.getBacklinksWithContext(b);
+    expect(backlinks[0].snippets).toEqual(["First [[B]] mention.", "Second [[B]] mention."]);
+  });
+});
+
+describe("MetadataCache.getUnlinkedMentions", () => {
+  it("detects a plain-text mention of the target's basename in another file", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Remember to check the Daily Plan before lunch.",
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
+    const mentions = cache.getUnlinkedMentions(dailyPlan);
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0].source.path).toBe("Welcome.md");
+    expect(mentions[0].mentions[0].snippet).toBe("Remember to check the Daily Plan before lunch.");
+  });
+
+  it("excludes the target file itself and any occurrence already inside a wikilink", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Linked: [[Daily Plan]]. Unlinked: Daily Plan mentioned again in prose.",
+      "Daily Plan.md": "This note is called Daily Plan too, but that doesn't count against itself.",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
+    const mentions = cache.getUnlinkedMentions(dailyPlan);
+    expect(mentions.map((m) => m.source.path)).toEqual(["Welcome.md"]); // not "Daily Plan.md" itself
+    expect(mentions[0].mentions).toHaveLength(1); // the [[Daily Plan]] occurrence is excluded
+    expect(mentions[0].mentions[0].snippet).toContain("Unlinked: Daily Plan mentioned again");
+  });
+
+  it("also matches the target's frontmatter aliases", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Start Here is where new users begin.",
+      "Home.md": "---\naliases: [Start Here]\n---\n",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const home = fake.getFileByPath("Home.md")!;
+    const mentions = cache.getUnlinkedMentions(home);
+    expect(mentions.map((m) => m.source.path)).toEqual(["Welcome.md"]);
+  });
+
+  it("returns an empty array when every mention is already linked", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "See [[Daily Plan]].",
+      "Daily Plan.md": "",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
+    expect(cache.getUnlinkedMentions(dailyPlan)).toEqual([]);
   });
 });

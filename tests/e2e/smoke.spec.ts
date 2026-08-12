@@ -93,6 +93,25 @@ test("boots into test-vault, opens a note, and renders Live Preview with no cons
     const dailyPlanText = await window.locator(".cm-editor").innerText();
     expect(dailyPlanText).not.toContain("![[Projects/Roadmap#Q3]]");
 
+    // Backlinks pane: Daily Plan.md has one linked mention (Welcome.md links
+    // to it via [[Daily Plan]]) with its surrounding line as context, and
+    // one unlinked mention (Notes/Scratch.md's plain-text "Daily Plan") with
+    // its own context snippet — not collapsed into just a filename + count.
+    const backlinksPane = window.locator(".sidebar-view").filter({ hasText: "Backlinks" });
+    await expect(backlinksPane.getByText("Linked mentions (1)", { exact: true })).toBeVisible();
+    await expect(backlinksPane.locator(".pane-result", { hasText: "Welcome" })).toBeVisible();
+    await expect(
+      backlinksPane.locator(".pane-result-context", {
+        hasText: "It links to [[Daily Plan]] and [[Projects/Roadmap]]",
+      })
+    ).toBeVisible();
+
+    await expect(backlinksPane.getByText("Unlinked mentions (1)", { exact: true })).toBeVisible();
+    await expect(backlinksPane.locator(".pane-result", { hasText: "Scratch" })).toBeVisible();
+    await expect(
+      backlinksPane.locator(".pane-result-context", { hasText: "plain mention of Daily Plan here" })
+    ).toBeVisible();
+
     expect(consoleErrors, `Console errors during smoke test: ${consoleErrors.join("\n")}`).toEqual(
       []
     );
