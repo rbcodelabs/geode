@@ -210,6 +210,34 @@ function registerIpc() {
     return sessions.get(win.id)?.root ?? null;
   });
 
+  // Plugin discovery: list subfolders of <vault>/.geode/plugins/ that look
+  // like a plugin (contain a manifest.json). Reading/writing manifest.json,
+  // main.js, and data.json themselves goes through the generic vault-read/
+  // vault-write/vault-exists handlers above, which are not restricted to
+  // indexed (non-dotfile) vault paths.
+  ipcMain.handle("plugins-list-ids", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) return [];
+    const pluginsDir = path.join(session.root, ".geode", "plugins");
+    let entries;
+    try {
+      entries = await fsp.readdir(pluginsDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const ids: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const hasManifest = await fsp
+        .access(path.join(pluginsDir, entry.name, "manifest.json"))
+        .then(() => true)
+        .catch(() => false);
+      if (hasManifest) ids.push(entry.name);
+    }
+    return ids;
+  });
+
   ipcMain.handle("open-external", (_e, url: string) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
   });

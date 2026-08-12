@@ -35,6 +35,7 @@ const api = {
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
+  listPluginIds: (): Promise<string[]> => ipcRenderer.invoke("plugins-list-ids"),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },

@@ -1,9 +1,17 @@
 export type EventCallback = (...args: any[]) => void;
 
+/**
+ * Opaque handle returned by `Events.on()`. Unlike Obsidian's `EventRef`
+ * (an opaque token consumed by `offref()`), ours *is* the unsubscribe
+ * function directly — calling it detaches the listener. `Component.
+ * registerEvent()` accepts it as-is.
+ */
+export type EventRef = () => void;
+
 export class Events {
   private handlers = new Map<string, Set<EventCallback>>();
 
-  on(name: string, cb: EventCallback): () => void {
+  on(name: string, cb: EventCallback): EventRef {
     let set = this.handlers.get(name);
     if (!set) {
       set = new Set();

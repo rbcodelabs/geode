@@ -2,7 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'" />
+    <!--
+      script-src 'unsafe-eval': required for the v1 plugin API to load
+      plugin main.js bundles at runtime (PluginManager compiles them via
+      `Function(...)` in the renderer's own JS realm — see
+      src/renderer/plugin-manager.ts). Plugins run fully trusted, matching
+      Obsidian's own (non-sandboxed) plugin trust model; this does not
+      grant Node/Electron access, which stays gated behind contextIsolation
+      + nodeIntegration:false in src/main/main.ts.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'" />
     <title>Geode</title>
     <link rel="stylesheet" href="../../styles/app.css" />
   </head>

@@ -70,6 +70,20 @@ export const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "p
 export const AUDIO_EXTENSIONS = new Set(["flac", "m4a", "mp3", "ogg", "wav", "3gp"]);
 export const VIDEO_EXTENSIONS = new Set(["mkv", "mov", "mp4", "ogv", "webm"]);
 
+/**
+ * `TFile`/`TFolder` are plain interfaces here (see `kind` above), not
+ * classes like Obsidian's — so plugin code can't do `instanceof TFile`.
+ * These guards are the supported alternative and are part of the public
+ * `geode` API surface (see `api/index.ts`).
+ */
+export function isTFile(item: TAbstractFile | null | undefined): item is TFile {
+  return !!item && (item as TFile).kind === "file";
+}
+
+export function isTFolder(item: TAbstractFile | null | undefined): item is TFolder {
+  return !!item && (item as TFolder).kind === "folder";
+}
+
 export function pathParent(p: string): string {
   const i = p.lastIndexOf("/");
   return i === -1 ? "" : p.slice(0, i);
