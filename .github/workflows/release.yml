@@ -37,7 +37,45 @@ jobs:
       - name: Bundle (esbuild)
         run: npm run build
 
-      - name: Package + publish (macOS, unsigned)
-        run: npx electron-builder --mac --publish always
+      # Build only — do NOT let electron-builder publish. Its GitHub uploader
+      # intermittently fails mid-upload (transient HTTP errors), which left
+      # releases with missing/partial assets. We upload separately, with retry.
+      - name: Package (macOS, unsigned)
+        run: npx electron-builder --mac --publish never
+
+      # Publish the release and upload artifacts via gh, retrying transient
+      # upload failures. Only on tag pushes (workflow_dispatch just builds).
+      - name: Publish GitHub Release (with retry)
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+
+          # Ensure the release exists (create from the tag if not).
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+
+          # Collect built artifacts (installers + auto-update metadata).
+          shopt -s nullglob
+          assets=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "No build artifacts found in release/" >&2
+            exit 1
+          fi
+          echo "Uploading ${#assets[@]} assets: ${assets[*]}"
+
+          # Retry the upload — transient GitHub upload errors are the whole
+          # reason this step is separate from electron-builder.
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$tag" "${assets[@]}" --clobber; then
+              echo "Upload succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed; retrying in $((attempt * 10))s..." >&2
+            sleep $((attempt * 10))
+          done
+          echo "All upload attempts failed" >&2
+          exit 1
