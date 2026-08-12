@@ -13,9 +13,22 @@ export interface View {
   getFile?(): TFile | null;
 }
 
+/**
+ * The minimal surface a `WorkspaceLeaf` needs from whatever hosts it. Both
+ * `TabGroup` (main tab area) and `Sidebar` (docked panes) implement this, so
+ * a leaf — and any plugin view mounted in it — can live in either place. This
+ * is what lets hosted Obsidian plugins open their views in the sidebars, the
+ * way real Obsidian does, rather than always as main-area tabs.
+ */
+export interface LeafContainer {
+  setActiveLeaf(leaf: WorkspaceLeaf): void;
+  removeLeaf(leaf: WorkspaceLeaf): void;
+  renderTabs(): void;
+}
+
 let leafIdCounter = 0;
 
-/** A leaf is one tab: a container that hosts a single view. */
+/** A leaf is one tab (or one docked sidebar pane): a container hosting a single view. */
 export class WorkspaceLeaf {
   id = `leaf-${++leafIdCounter}`;
   view: View | null = null;
@@ -24,7 +37,7 @@ export class WorkspaceLeaf {
   pinned = false;
 
   constructor(
-    public group: TabGroup,
+    public group: LeafContainer,
     public app: App
   ) {
     this.tabEl = document.createElement("div");
@@ -190,16 +203,29 @@ export class TabGroup {
   }
 }
 
-/** A sidebar dock: icon strip + one visible view at a time. */
-export class Sidebar {
+/** One entry shown in a sidebar: either a built-in fixed `View` or a docked plugin `WorkspaceLeaf`. */
+type SidebarItem = View | WorkspaceLeaf;
+
+/**
+ * A sidebar dock: an icon strip plus one visible pane at a time. It hosts
+ * both Geode's built-in fixed views (file explorer, search, backlinks, …)
+ * and — implementing `LeafContainer` — plugin `WorkspaceLeaf`s, so hosted
+ * Obsidian plugins can dock their panes here (`getRightLeaf`/`getLeftLeaf`
+ * + `revealLeaf`) exactly like real Obsidian.
+ */
+export class Sidebar implements LeafContainer {
   containerEl: HTMLElement;
   iconBarEl: HTMLElement;
   contentEl: HTMLElement;
   views: View[] = [];
-  active: View | null = null;
+  leaves: WorkspaceLeaf[] = [];
+  active: SidebarItem | null = null;
   collapsed = false;
 
-  constructor(public side: "left" | "right") {
+  constructor(
+    public side: "left" | "right",
+    public app: App
+  ) {
     this.containerEl = document.createElement("div");
     this.containerEl.className = `workspace-sidebar mod-${side}`;
     this.iconBarEl = document.createElement("div");
@@ -210,31 +236,93 @@ export class Sidebar {
     this.containerEl.appendChild(this.contentEl);
   }
 
+  private isLeaf(item: SidebarItem): item is WorkspaceLeaf {
+    return item instanceof WorkspaceLeaf;
+  }
+
+  private metaOf(item: SidebarItem): { icon: string; title: string; el: HTMLElement | null } {
+    if (this.isLeaf(item)) {
+      return {
+        icon: item.view?.getIcon() ?? "•",
+        title: item.view?.getDisplayText() ?? "…",
+        el: item.view?.containerEl ?? null,
+      };
+    }
+    return { icon: item.getIcon(), title: item.getDisplayText(), el: item.containerEl };
+  }
+
   addView(view: View) {
     this.views.push(view);
-    const btn = document.createElement("div");
-    btn.className = "sidebar-icon";
-    btn.textContent = view.getIcon();
-    btn.title = view.getDisplayText();
-    btn.dataset.viewType = view.viewType;
-    btn.addEventListener("click", () => this.show(view));
-    this.iconBarEl.appendChild(btn);
+    this.renderIcons();
     if (!this.active) this.show(view);
   }
 
-  show(view: View) {
-    this.active = view;
-    this.contentEl.innerHTML = "";
-    this.contentEl.appendChild(view.containerEl);
-    view.onOpen();
-    for (const icon of [...this.iconBarEl.children] as HTMLElement[]) {
-      icon.classList.toggle("is-active", icon.dataset.viewType === view.viewType);
+  /**
+   * Create and host a new plugin leaf docked in this sidebar. The icon
+   * appears (and updates) once a view is mounted via `leaf.setViewState`.
+   * Reuses an existing empty (view-less) docked leaf if one is available,
+   * so repeated `getRightLeaf` calls don't pile up blank panes.
+   */
+  addLeaf(): WorkspaceLeaf {
+    const empty = this.leaves.find((l) => !l.view);
+    if (empty) return empty;
+    const leaf = new WorkspaceLeaf(this, this.app);
+    this.leaves.push(leaf);
+    this.renderIcons();
+    return leaf;
+  }
+
+  private renderIcons() {
+    this.iconBarEl.innerHTML = "";
+    for (const item of [...this.views, ...this.leaves] as SidebarItem[]) {
+      if (this.isLeaf(item) && !item.view) continue; // no icon until a view is mounted
+      const { icon, title } = this.metaOf(item);
+      const btn = document.createElement("div");
+      btn.className = "sidebar-icon";
+      btn.textContent = icon;
+      btn.title = title;
+      btn.classList.toggle("is-active", item === this.active);
+      btn.addEventListener("click", () => this.show(item));
+      this.iconBarEl.appendChild(btn);
     }
+  }
+
+  show(item: SidebarItem) {
+    this.active = item;
+    this.contentEl.innerHTML = "";
+    const { el } = this.metaOf(item);
+    if (el) this.contentEl.appendChild(el);
+    if (!this.isLeaf(item)) item.onOpen(); // fixed views (re)render on show; leaf views already opened via setView
+    this.renderIcons();
     if (this.collapsed) this.toggle();
   }
 
   getView(viewType: string): View | null {
     return this.views.find((v) => v.viewType === viewType) ?? null;
+  }
+
+  // --- LeafContainer (docked plugin leaves) --------------------------------
+
+  setActiveLeaf(leaf: WorkspaceLeaf) {
+    this.show(leaf);
+  }
+
+  removeLeaf(leaf: WorkspaceLeaf) {
+    const i = this.leaves.indexOf(leaf);
+    if (i === -1) return;
+    this.leaves.splice(i, 1);
+    if (this.active === leaf) {
+      this.active = null;
+      this.contentEl.innerHTML = "";
+      const fallback = this.views[0] ?? this.leaves[0];
+      if (fallback) this.show(fallback);
+    }
+    this.renderIcons();
+  }
+
+  /** A docked leaf's view was (re)mounted — refresh its icon/title. */
+  renderTabs() {
+    this.renderIcons();
   }
 
   toggle() {
@@ -262,8 +350,8 @@ export class Workspace extends Events {
     super();
     this.rootEl = document.createElement("div");
     this.rootEl.className = "workspace";
-    this.leftSidebar = new Sidebar("left");
-    this.rightSidebar = new Sidebar("right");
+    this.leftSidebar = new Sidebar("left", this.app);
+    this.rightSidebar = new Sidebar("right", this.app);
     this.centerEl = document.createElement("div");
     this.centerEl.className = "workspace-center";
     this.rootEl.appendChild(this.leftSidebar.containerEl);
@@ -341,6 +429,10 @@ export class Workspace extends Events {
 
   iterateLeaves(cb: (leaf: WorkspaceLeaf) => void) {
     for (const group of this.groups) for (const leaf of group.leaves) cb(leaf);
+    // Docked plugin leaves count too, so getLeavesOfType/findLeafByViewType
+    // see sidebar panes and plugins don't reopen a view they already docked.
+    for (const leaf of this.leftSidebar.leaves) cb(leaf);
+    for (const leaf of this.rightSidebar.leaves) cb(leaf);
   }
 
   // --- Plugin view registration -------------------------------------------
@@ -406,20 +498,19 @@ export class Workspace extends Events {
   // --- Obsidian-compat workspace API (for hosted plugins) ------------------
 
   /**
-   * Obsidian returns a leaf docked in the right/left sidebar here. Geode's
-   * sidebars host fixed views rather than plugin leaves, so for compat we
-   * return a leaf in the main tab area — plugin views open as tabs, which
-   * keeps them fully visible and interactive. Docking hosted plugin views
-   * into the sidebars is a fuller-fidelity follow-up.
+   * Return a leaf docked in the right/left sidebar, matching Obsidian —
+   * this is where plugins put their panes (chat, outline, etc.). The leaf
+   * is hosted by the sidebar; mounting a view via `leaf.setViewState` makes
+   * its icon appear, and `revealLeaf` shows it.
    */
   getRightLeaf(_split: boolean): WorkspaceLeaf {
-    return this.activeGroup.createLeaf();
+    return this.rightSidebar.addLeaf();
   }
   getLeftLeaf(_split: boolean): WorkspaceLeaf {
-    return this.activeGroup.createLeaf();
+    return this.leftSidebar.addLeaf();
   }
 
-  /** Focus/activate a leaf (Obsidian `revealLeaf`). */
+  /** Focus/activate a leaf (Obsidian `revealLeaf`); expands its sidebar if collapsed. */
   revealLeaf(leaf: WorkspaceLeaf): void {
     leaf.group.setActiveLeaf(leaf);
   }
