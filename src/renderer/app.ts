@@ -276,16 +276,22 @@ export class App {
     // that plugin view factories are registered; fall back to an empty tab.
     await this.restoreWorkspaceLayout();
 
+    // Subscribe to layout changes BEFORE firing onLayoutReady, so that the
+    // initial layout — including panes a plugin opens in its onLayoutReady
+    // callback — is captured by the debounced save (restore itself is guarded
+    // by restoringLayout, so nothing saves mid-restore).
+    const scheduleSave = () => this.scheduleSaveLayout();
+    this.workspace.on("layout-change", scheduleSave);
+    this.workspace.on("active-leaf-change", scheduleSave);
+    this.workspace.on("file-open", scheduleSave);
+
     // Now that the layout is in place, fire plugins' onLayoutReady callbacks —
     // a plugin that opens its own view will find and reuse the restored pane
     // (via getLeavesOfType) instead of creating a duplicate.
     this.workspace.flushLayoutReady();
 
-    // Persist layout on any change (debounced), so it's there next launch.
-    const scheduleSave = () => this.scheduleSaveLayout();
-    this.workspace.on("layout-change", scheduleSave);
-    this.workspace.on("active-leaf-change", scheduleSave);
-    this.workspace.on("file-open", scheduleSave);
+    // Persist the initial layout (restored + any onLayoutReady-opened panes).
+    this.scheduleSaveLayout();
 
     this.metadataCache.initialize().then(() => {
       this.notify(`Indexed ${this.vault.getMarkdownFiles().length} notes`);

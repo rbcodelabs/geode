@@ -149,6 +149,12 @@ test("does not duplicate an auto-opening plugin's pane across relaunches", async
         await win.evaluate(() => (window as any).app.workspace.getLeavesOfType("auto-pane").length)
       );
       await win.waitForTimeout(700); // let the debounced layout save flush
+      if (i === 0) {
+        // The initial auto-opened layout must be persisted WITHOUT any user
+        // interaction (regression guard: save subscription is wired before
+        // onLayoutReady fires).
+        expect(fs.existsSync(path.join(vaultDir, ".geode", "workspace.json"))).toBe(true);
+      }
       await app.close();
     }
     expect(counts).toEqual([1, 1, 1]);
