@@ -164,6 +164,29 @@ test("does not duplicate an auto-opening plugin's pane across relaunches", async
   }
 });
 
+test("does not accumulate empty tabs across relaunches", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const leafCounts: number[] = [];
+  try {
+    // Launch repeatedly without opening anything. The main group must stay at
+    // a single placeholder tab — empties must never be persisted/re-created.
+    for (let i = 0; i < 3; i++) {
+      const app = await launch(userDataDir);
+      const win = await app.firstWindow();
+      await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+      await win.waitForTimeout(700); // allow any (suppressed) save to settle
+      leafCounts.push(
+        await win.evaluate(() => (window as any).app.workspace.activeGroup.leaves.length)
+      );
+      await app.close();
+    }
+    expect(leafCounts).toEqual([1, 1, 1]);
+  } finally {
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("moves a pane across containers (sidebar ↔ tab group) and reorders tabs by drag", async () => {
   const { vaultDir, userDataDir } = makeVault();
   const app = await launch(userDataDir);
