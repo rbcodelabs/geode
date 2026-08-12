@@ -265,6 +265,22 @@ button.mod-cta:hover {
   display: flex;
 }
 
+/* A plugin pane (Obsidian ItemView) docked in a sidebar fills the dock and
+   scrolls internally, like Geode's own sidebar views. */
+.sidebar-content > .view-content-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-content > .view-content-host > .view-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .sidebar-view {
   flex: 1;
   min-width: 0;

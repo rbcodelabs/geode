@@ -92,18 +92,38 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
       window.locator('style[data-plugin-id="obsidian-compat-probe"]')
     ).toHaveCount(1);
 
-    // Open the plugin's ItemView and verify it rendered via the DOM helpers,
-    // that the Node builtin resolved, that instanceof TFile works against a
-    // real vault file, and that secretStorage round-tripped synchronously.
-    await window.evaluate(async () => {
-      const leaf = await (window as any).app.workspace.openViewOfType("compat-probe-view", true);
-      return !!leaf;
+    // Open the plugin's ItemView the way a real Obsidian plugin does —
+    // getRightLeaf() + setViewState() + revealLeaf() — and verify it DOCKS
+    // IN THE RIGHT SIDEBAR (not the main tab area), rendered via the DOM
+    // helpers, with the Node builtin resolved, instanceof TFile working
+    // against a real vault file, and secretStorage round-tripping.
+    const docked = await window.evaluate(async () => {
+      const ws = (window as any).app.workspace;
+      const leaf = ws.getRightLeaf(false);
+      await leaf.setViewState({ type: "compat-probe-view", active: true });
+      ws.revealLeaf(leaf);
+      return leaf.group?.constructor?.name; // should be "Sidebar"
     });
-    await expect(window.locator(".probe-wrap h2")).toHaveText("probe-ok");
+    expect(docked).toBe("Sidebar");
+
+    // The rendered pane lives inside the right sidebar, not a main-area tab.
+    const rightPane = window.locator(".workspace-sidebar.mod-right .sidebar-content .probe-wrap");
+    await expect(rightPane).toBeVisible();
+    await expect(rightPane.locator("h2")).toHaveText("probe-ok");
+    await expect(
+      window.locator(".workspace-tab-content .probe-wrap")
+    ).toHaveCount(0); // definitely not in the main tab area
     await expect(window.locator(".probe-instanceof")).toHaveText("isTFile:true");
     await expect(window.locator(".probe-secret")).toHaveText("secret:sekret");
     // os.hostname() returned a non-empty string via the real Node require.
     await expect(window.locator(".probe-host")).not.toHaveText("host:0");
+
+    // getLeavesOfType() sees the docked sidebar leaf (so plugins don't
+    // reopen a pane they've already docked).
+    const leafCount = await window.evaluate(
+      () => (window as any).app.workspace.getLeavesOfType("compat-probe-view").length
+    );
+    expect(leafCount).toBe(1);
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
