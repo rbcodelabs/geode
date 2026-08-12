@@ -3,6 +3,7 @@ import { MetadataCache } from "./metadata-cache";
 import { Workspace, TabGroup, View, type PersistedWorkspace } from "./workspace";
 import { CommandRegistry } from "./commands";
 import { PluginManager } from "./plugin-manager";
+import { ThemeManager } from "./theme-manager";
 import { MarkdownRenderer } from "./markdown/render";
 import { MarkdownView } from "./views/markdown-view";
 import { FileExplorerView } from "./views/file-explorer";
@@ -17,6 +18,8 @@ import type { Command } from "./commands";
 interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
+  /** Selected community theme name ("" = built-in default). */
+  cssTheme: string;
 }
 
 class EmptyView implements View {
@@ -115,7 +118,7 @@ class SettingsModal extends Modal {
 
   onOpen(): void {
     const s = this.geodeApp.settings;
-    this.contentEl.innerHTML = `<h2>Settings</h2>`;
+    this.contentEl.innerHTML = `<h2>Appearance</h2>`;
     this.addToggle("Dark mode", s.theme === "dark", (v) => {
       s.theme = v ? "dark" : "light";
       this.geodeApp.applySettings();
@@ -124,21 +127,71 @@ class SettingsModal extends Modal {
       s.readableLineLength = v;
       this.geodeApp.applySettings();
     });
+    // Community theme picker: "Default" + any installed under .geode/themes/.
+    this.addDropdown(
+      "Theme",
+      () => this.geodeApp.themeManager.list(),
+      s.cssTheme,
+      async (value) => {
+        s.cssTheme = value;
+        await this.geodeApp.themeManager.apply(value);
+        this.geodeApp.saveSettings();
+      }
+    );
   }
 
   private addToggle(label: string, value: boolean, onChange: (v: boolean) => void) {
-    const row = document.createElement("div");
-    row.className = "setting-item";
-    const name = document.createElement("div");
-    name.className = "setting-item-name";
-    name.textContent = label;
+    const { control } = this.addRow(label);
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = value;
     input.addEventListener("change", () => onChange(input.checked));
-    row.appendChild(name);
-    row.appendChild(input);
+    control.appendChild(input);
+  }
+
+  private addDropdown(
+    label: string,
+    options: () => Promise<string[]>,
+    selected: string,
+    onChange: (value: string) => void
+  ) {
+    const { control } = this.addRow(label);
+    const select = document.createElement("select");
+    select.className = "dropdown";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = "Default";
+    select.appendChild(def);
+    select.value = selected;
+    select.addEventListener("change", () => onChange(select.value));
+    control.appendChild(select);
+    // Populate installed themes asynchronously.
+    options().then((names) => {
+      for (const name of names) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      }
+      select.value = selected; // re-apply once options exist
+    });
+  }
+
+  private addRow(label: string): { control: HTMLElement } {
+    const row = document.createElement("div");
+    row.className = "setting-item";
+    const info = document.createElement("div");
+    info.className = "setting-item-info";
+    const name = document.createElement("div");
+    name.className = "setting-item-name";
+    name.textContent = label;
+    info.appendChild(name);
+    const control = document.createElement("div");
+    control.className = "setting-item-control";
+    row.appendChild(info);
+    row.appendChild(control);
     this.contentEl.appendChild(row);
+    return { control };
   }
 
   onClose(): void {
@@ -191,7 +244,8 @@ export class App {
   statusBar!: StatusBar;
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
   pluginManager!: PluginManager;
-  settings: AppSettings = { theme: "dark", readableLineLength: true };
+  themeManager = new ThemeManager(this);
+  settings: AppSettings = { theme: "dark", readableLineLength: true, cssTheme: "" };
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -268,6 +322,8 @@ export class App {
     this.registerCommands();
     this.commands.attach(document);
     this.applySettings();
+    // Apply the selected community theme (if the vault has it installed).
+    this.themeManager.apply(this.settings.cssTheme);
 
     this.pluginManager = new PluginManager(this);
     await this.pluginManager.initialize();

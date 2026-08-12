@@ -36,6 +36,7 @@ const api = {
     ipcRenderer.invoke("config-write", name, data),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   listPluginIds: (): Promise<string[]> => ipcRenderer.invoke("plugins-list-ids"),
+  listThemes: (): Promise<string[]> => ipcRenderer.invoke("themes-list"),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },

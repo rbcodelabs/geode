@@ -244,6 +244,31 @@ function registerIpc() {
     return ids;
   });
 
+  // Community themes: subdirectories of <vault>/.geode/themes/ that contain a
+  // theme.css (Obsidian's theme layout). Returns their names for the picker.
+  ipcMain.handle("themes-list", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) return [];
+    const themesDir = path.join(session.root, ".geode", "themes");
+    let entries;
+    try {
+      entries = await fsp.readdir(themesDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const names: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const hasCss = await fsp
+        .access(path.join(themesDir, entry.name, "theme.css"))
+        .then(() => true)
+        .catch(() => false);
+      if (hasCss) names.push(entry.name);
+    }
+    return names.sort((a, b) => a.localeCompare(b));
+  });
+
   ipcMain.handle("open-external", (_e, url: string) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
   });
