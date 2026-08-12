@@ -170,7 +170,12 @@ export class PluginManager {
     this.loaded.set(id, { manifest, instance });
     await this.injectStyles(id);
     try {
-      instance.load(); // Component.load() -> onload(), may return a Promise we don't block on (Obsidian doesn't either)
+      instance.load(); // Component.load() -> onload()
+      // Await a possibly-async onload before considering the plugin loaded, so
+      // registrations made after an `await` inside onload (registerView,
+      // addCommand, …) are in place before startup continues to layout
+      // restore. Mirrors Obsidian, which awaits a plugin's onload here.
+      await instance.onloadResult;
     } catch (err) {
       this.removeStyles(id);
       this.loaded.delete(id);

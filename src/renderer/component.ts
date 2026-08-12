@@ -25,17 +25,25 @@ export class Component {
     return this.isLoaded;
   }
 
+  /**
+   * The value returned by the most recent `onload()`. For a component whose
+   * `onload` is async (e.g. a plugin), this is the pending promise; the host
+   * awaits it (see PluginManager.enable) so registrations that happen after
+   * an `await` inside `onload` are complete before it's considered loaded.
+   */
+  onloadResult: void | Promise<unknown> = undefined;
+
   /** Load this component and all children currently attached to it. */
   load(): void {
     if (this.isLoaded) return;
     this.isLoaded = true;
     this.hasUnloaded = false;
-    this.onload();
+    this.onloadResult = this.onload();
     for (const child of this.childComponents) child.load();
   }
 
-  /** Override to run setup logic. Called once per `load()`. */
-  onload(): void {}
+  /** Override to run setup logic. Called once per `load()`. May be async. */
+  onload(): void | Promise<unknown> {}
 
   /**
    * Unload this component: unload children first, then run every cleanup
