@@ -1118,3 +1118,20 @@ button.mod-cta:hover {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ---- Graph view ---- */
+
+.graph-view {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--background-primary);
+}
+
+.graph-view-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
