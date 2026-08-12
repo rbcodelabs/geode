@@ -1,6 +1,6 @@
 import { Vault } from "./vault";
 import { MetadataCache } from "./metadata-cache";
-import { Workspace, TabGroup, View } from "./workspace";
+import { Workspace, TabGroup, View, type PersistedWorkspace } from "./workspace";
 import { CommandRegistry } from "./commands";
 import { PluginManager } from "./plugin-manager";
 import { MarkdownRenderer } from "./markdown/render";
@@ -192,6 +192,9 @@ export class App {
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
   pluginManager!: PluginManager;
   settings: AppSettings = { theme: "dark", readableLineLength: true };
+  /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
+  private restoringLayout = false;
+  private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   async start() {
     const rootEl = document.getElementById("app")!;
@@ -269,7 +272,21 @@ export class App {
     this.pluginManager = new PluginManager(this);
     await this.pluginManager.initialize();
 
-    this.openEmptyTab(this.workspace.activeGroup);
+    // Restore the saved workspace layout (tabs + docked plugin panes) now
+    // that plugin view factories are registered; fall back to an empty tab.
+    await this.restoreWorkspaceLayout();
+
+    // Now that the layout is in place, fire plugins' onLayoutReady callbacks —
+    // a plugin that opens its own view will find and reuse the restored pane
+    // (via getLeavesOfType) instead of creating a duplicate.
+    this.workspace.flushLayoutReady();
+
+    // Persist layout on any change (debounced), so it's there next launch.
+    const scheduleSave = () => this.scheduleSaveLayout();
+    this.workspace.on("layout-change", scheduleSave);
+    this.workspace.on("active-leaf-change", scheduleSave);
+    this.workspace.on("file-open", scheduleSave);
+
     this.metadataCache.initialize().then(() => {
       this.notify(`Indexed ${this.vault.getMarkdownFiles().length} notes`);
     });
@@ -419,6 +436,35 @@ export class App {
     leaf.setView(new EmptyView(this));
   }
 
+  /** Restore the saved per-vault workspace layout, or open an empty tab if there's none. */
+  private async restoreWorkspaceLayout(): Promise<void> {
+    this.restoringLayout = true;
+    let restored = false;
+    try {
+      const saved = (await window.geode.readConfig("workspace")) as PersistedWorkspace | null;
+      if (saved && saved.version === 1) {
+        restored = await this.workspace.deserialize(saved);
+      }
+    } catch (err) {
+      console.error("Failed to restore workspace layout", err);
+    } finally {
+      this.restoringLayout = false;
+    }
+    if (!restored) this.openEmptyTab(this.workspace.activeGroup);
+  }
+
+  /** Debounced persist of the current layout to `.geode/workspace.json`. */
+  private scheduleSaveLayout(): void {
+    if (this.restoringLayout) return;
+    if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
+    this.saveLayoutTimer = setTimeout(() => {
+      this.saveLayoutTimer = null;
+      window.geode.writeConfig("workspace", this.workspace.serialize()).catch((err) => {
+        console.error("Failed to save workspace layout", err);
+      });
+    }, 400);
+  }
+
   openQuickSwitcher() {
     new QuickSwitcherModal(this).open();
   }
@@ -437,6 +483,11 @@ export class App {
   /** Construct a fresh MarkdownView bound to this app (used by WorkspaceLeaf.openFile for hosted plugins). */
   createMarkdownView(): MarkdownView {
     return new MarkdownView(this);
+  }
+
+  /** Construct the "No file is open" placeholder view (used when restoring/cleaning up empty leaves). */
+  createEmptyView(): View {
+    return new EmptyView(this);
   }
 
   getActiveMarkdownView(): MarkdownView | null {

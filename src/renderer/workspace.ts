@@ -22,11 +22,19 @@ export interface View {
  */
 export interface LeafContainer {
   setActiveLeaf(leaf: WorkspaceLeaf): void;
+  /** Remove and destroy the leaf's view (calls `onClose`). */
   removeLeaf(leaf: WorkspaceLeaf): void;
+  /** Detach the leaf without destroying its view — used when moving it elsewhere. */
+  extractLeaf(leaf: WorkspaceLeaf): void;
+  /** Adopt an already-constructed leaf (from another container) at an optional index. */
+  insertLeaf(leaf: WorkspaceLeaf, index?: number): void;
   renderTabs(): void;
 }
 
 let leafIdCounter = 0;
+
+/** The leaf currently being dragged, shared across containers during a drag-and-drop. */
+let draggingLeaf: WorkspaceLeaf | null = null;
 
 /** A leaf is one tab (or one docked sidebar pane): a container hosting a single view. */
 export class WorkspaceLeaf {
@@ -56,6 +64,7 @@ export class WorkspaceLeaf {
     if (view.getFile?.()) {
       this.app.workspace.trigger("file-open", view.getFile!());
     }
+    this.app.workspace.trigger("layout-change");
   }
 
   getDisplayText(): string {
@@ -134,13 +143,77 @@ export class TabGroup {
     this.containerEl.addEventListener("mousedown", () => {
       this.workspace.setActiveGroup(this);
     });
+    this.installDropTarget();
+  }
+
+  /** Accept a dragged leaf: dropping over the tab bar inserts at a position; over the body appends. */
+  private installDropTarget() {
+    const over = (e: DragEvent, el: HTMLElement) => {
+      if (!draggingLeaf) return;
+      e.preventDefault();
+      el.classList.add("drag-over");
+    };
+    const leave = (el: HTMLElement) => el.classList.remove("drag-over");
+    this.tabBarEl.addEventListener("dragover", (e) => over(e, this.tabBarEl));
+    this.tabBarEl.addEventListener("dragleave", () => leave(this.tabBarEl));
+    this.tabBarEl.addEventListener("drop", (e) => {
+      leave(this.tabBarEl);
+      if (!draggingLeaf) return;
+      e.preventDefault();
+      this.workspace.moveLeaf(draggingLeaf, this, this.dropIndex(e.clientX));
+    });
+    this.contentHostEl.addEventListener("dragover", (e) => over(e, this.containerEl));
+    this.contentHostEl.addEventListener("dragleave", () => leave(this.containerEl));
+    this.contentHostEl.addEventListener("drop", (e) => {
+      leave(this.containerEl);
+      if (!draggingLeaf) return;
+      e.preventDefault();
+      this.workspace.moveLeaf(draggingLeaf, this);
+    });
+  }
+
+  /** Insertion index for a drop at horizontal position `x` over the tab bar. */
+  private dropIndex(x: number): number {
+    const tabs = this.leaves;
+    for (let i = 0; i < tabs.length; i++) {
+      const r = tabs[i].tabEl.getBoundingClientRect();
+      if (x < r.left + r.width / 2) return i;
+    }
+    return tabs.length;
   }
 
   createLeaf(): WorkspaceLeaf {
     const leaf = new WorkspaceLeaf(this, this.app);
     this.leaves.push(leaf);
     this.setActiveLeaf(leaf);
+    this.workspace.trigger("layout-change");
     return leaf;
+  }
+
+  /** Detach a leaf without destroying its view (for moves). */
+  extractLeaf(leaf: WorkspaceLeaf) {
+    const i = this.leaves.indexOf(leaf);
+    if (i === -1) return;
+    this.leaves.splice(i, 1);
+    if (this.active === leaf) {
+      this.active = this.leaves[Math.min(i, this.leaves.length - 1)] ?? null;
+      this.contentHostEl.innerHTML = "";
+      if (this.active) this.contentHostEl.appendChild(this.active.contentEl);
+    }
+    this.renderTabs();
+  }
+
+  /** Adopt an existing leaf (from another container) at `index` (default: end). */
+  insertLeaf(leaf: WorkspaceLeaf, index?: number) {
+    leaf.group = this;
+    // The view element may have been mounted directly in a sidebar; put it
+    // back inside the leaf's own content wrapper for tab display.
+    if (leaf.view && leaf.view.containerEl.parentElement !== leaf.contentEl) {
+      leaf.contentEl.appendChild(leaf.view.containerEl);
+    }
+    const at = index ?? this.leaves.length;
+    this.leaves.splice(Math.max(0, Math.min(at, this.leaves.length)), 0, leaf);
+    this.renderTabs();
   }
 
   setActiveLeaf(leaf: WorkspaceLeaf) {
@@ -168,6 +241,7 @@ export class TabGroup {
       }
     }
     this.renderTabs();
+    this.workspace.trigger("layout-change");
   }
 
   renderTabs() {
@@ -176,6 +250,7 @@ export class TabGroup {
       const tab = leaf.tabEl;
       tab.innerHTML = "";
       tab.classList.toggle("is-active", leaf === this.active);
+      tab.draggable = true;
       const title = document.createElement("span");
       title.className = "workspace-tab-title";
       title.textContent = (leaf.pinned ? "📌 " : "") + leaf.getDisplayText();
@@ -191,6 +266,15 @@ export class TabGroup {
       tab.onmousedown = (e) => {
         if (e.button === 1) leaf.detach();
         else this.setActiveLeaf(leaf);
+      };
+      tab.ondragstart = (e) => {
+        draggingLeaf = leaf;
+        e.dataTransfer?.setData("text/plain", leaf.id);
+        tab.classList.add("is-dragging");
+      };
+      tab.ondragend = () => {
+        draggingLeaf = null;
+        tab.classList.remove("is-dragging");
       };
       this.tabBarEl.appendChild(tab);
     }
@@ -234,6 +318,23 @@ export class Sidebar implements LeafContainer {
     this.contentEl.className = "sidebar-content";
     this.containerEl.appendChild(this.iconBarEl);
     this.containerEl.appendChild(this.contentEl);
+    // Accept leaves dragged in from tab groups or the other sidebar.
+    this.containerEl.addEventListener("dragover", (e) => {
+      if (!draggingLeaf) return;
+      e.preventDefault();
+      this.containerEl.classList.add("drag-over");
+    });
+    this.containerEl.addEventListener("dragleave", (e) => {
+      if (!this.containerEl.contains(e.relatedTarget as Node)) {
+        this.containerEl.classList.remove("drag-over");
+      }
+    });
+    this.containerEl.addEventListener("drop", (e) => {
+      this.containerEl.classList.remove("drag-over");
+      if (!draggingLeaf) return;
+      e.preventDefault();
+      this.app.workspace.moveLeaf(draggingLeaf, this);
+    });
   }
 
   private isLeaf(item: SidebarItem): item is WorkspaceLeaf {
@@ -283,6 +384,20 @@ export class Sidebar implements LeafContainer {
       btn.title = title;
       btn.classList.toggle("is-active", item === this.active);
       btn.addEventListener("click", () => this.show(item));
+      // Docked plugin panes can be dragged out to a tab group or the other sidebar.
+      if (this.isLeaf(item)) {
+        const leaf = item;
+        btn.draggable = true;
+        btn.addEventListener("dragstart", (e) => {
+          draggingLeaf = leaf;
+          e.dataTransfer?.setData("text/plain", leaf.id);
+          btn.classList.add("is-dragging");
+        });
+        btn.addEventListener("dragend", () => {
+          draggingLeaf = null;
+          btn.classList.remove("is-dragging");
+        });
+      }
       this.iconBarEl.appendChild(btn);
     }
   }
@@ -295,6 +410,7 @@ export class Sidebar implements LeafContainer {
     if (!this.isLeaf(item)) item.onOpen(); // fixed views (re)render on show; leaf views already opened via setView
     this.renderIcons();
     if (this.collapsed) this.toggle();
+    this.app.workspace.trigger("layout-change");
   }
 
   getView(viewType: string): View | null {
@@ -308,6 +424,12 @@ export class Sidebar implements LeafContainer {
   }
 
   removeLeaf(leaf: WorkspaceLeaf) {
+    this.extractLeaf(leaf);
+    this.app.workspace.trigger("layout-change");
+  }
+
+  /** Remove a docked leaf, falling back to another pane if it was showing. */
+  extractLeaf(leaf: WorkspaceLeaf) {
     const i = this.leaves.indexOf(leaf);
     if (i === -1) return;
     this.leaves.splice(i, 1);
@@ -320,6 +442,13 @@ export class Sidebar implements LeafContainer {
     this.renderIcons();
   }
 
+  /** Adopt an existing leaf, docking it in this sidebar. */
+  insertLeaf(leaf: WorkspaceLeaf, _index?: number) {
+    leaf.group = this;
+    if (!this.leaves.includes(leaf)) this.leaves.push(leaf);
+    this.renderIcons();
+  }
+
   /** A docked leaf's view was (re)mounted — refresh its icon/title. */
   renderTabs() {
     this.renderIcons();
@@ -329,6 +458,31 @@ export class Sidebar implements LeafContainer {
     this.collapsed = !this.collapsed;
     this.containerEl.classList.toggle("is-collapsed", this.collapsed);
   }
+}
+
+/** One serialized leaf in the persisted workspace layout. */
+export interface PersistedLeaf {
+  type: string;
+  /** For markdown views: the file path. */
+  file?: string;
+  /** For plugin views: the view's serialized state (from `getViewState`). */
+  state?: unknown;
+  pinned?: boolean;
+}
+
+interface PersistedSidebar {
+  leaves: PersistedLeaf[];
+  activeType: string | null;
+  collapsed: boolean;
+}
+
+/** The whole persisted workspace layout, stored per-vault in `.geode/workspace.json`. */
+export interface PersistedWorkspace {
+  version: 1;
+  groups: { leaves: PersistedLeaf[]; active: number }[];
+  activeGroup: number;
+  left: PersistedSidebar;
+  right: PersistedSidebar;
 }
 
 /**
@@ -525,13 +679,31 @@ export class Workspace extends Events {
     this.iterateLeaves(cb);
   }
 
+  private layoutReadyCbs: (() => void)[] = [];
+  private layoutReady = false;
+
   /**
-   * Obsidian defers plugin work until the initial layout is ready. Geode's
-   * layout is constructed synchronously before plugins load, so the layout
-   * is always ready — run the callback on the next microtask.
+   * Obsidian defers plugin work until the initial layout is ready — crucially,
+   * *after* the saved workspace is restored, so a plugin's `onLayoutReady`
+   * (which typically opens its view, reusing any existing leaf of that type)
+   * reuses the restored pane instead of creating a duplicate. Geode mirrors
+   * that: callbacks queue until `flushLayoutReady()` is called post-restore.
    */
   onLayoutReady(cb: () => void): void {
-    Promise.resolve().then(cb);
+    if (this.layoutReady) Promise.resolve().then(cb);
+    else this.layoutReadyCbs.push(cb);
+  }
+
+  /** Fire queued `onLayoutReady` callbacks. Called once by App after layout restore. */
+  flushLayoutReady(): void {
+    this.layoutReady = true;
+    for (const cb of this.layoutReadyCbs.splice(0)) {
+      try {
+        cb();
+      } catch (err) {
+        console.error("Error in onLayoutReady callback", err);
+      }
+    }
   }
 
   /** Obsidian's `workspace.activeEditor` — the active editor host, or null. */
@@ -541,5 +713,135 @@ export class Workspace extends Events {
       return { editor: view.editor, file: view.getFile?.() ?? null };
     }
     return null;
+  }
+
+  // --- Drag-and-drop leaf moves --------------------------------------------
+
+  /**
+   * Move `leaf` into `target` (a tab group or a sidebar), at optional index.
+   * Reorders within the same tab group, or relocates the leaf — and its live
+   * view — across containers without destroying it. An emptied source tab
+   * group is cleaned up.
+   */
+  moveLeaf(leaf: WorkspaceLeaf, target: LeafContainer, index?: number): void {
+    const from = leaf.group;
+    if (from === target && target instanceof TabGroup) {
+      const arr = target.leaves;
+      const cur = arr.indexOf(leaf);
+      if (cur === -1) return;
+      let ins = index ?? arr.length;
+      if (ins > cur) ins -= 1; // account for the slot we're vacating
+      arr.splice(cur, 1);
+      arr.splice(Math.max(0, Math.min(ins, arr.length)), 0, leaf);
+      target.renderTabs();
+    } else if (from !== target) {
+      from.extractLeaf(leaf);
+      target.insertLeaf(leaf, index);
+      target.setActiveLeaf(leaf);
+      if (from instanceof TabGroup && from.leaves.length === 0) this.groupEmptied(from);
+    }
+    this.trigger("layout-change");
+  }
+
+  // --- Layout persistence --------------------------------------------------
+
+  private serializeLeaf(leaf: WorkspaceLeaf): PersistedLeaf | null {
+    const v = leaf.view;
+    if (!v) return null;
+    if (v.viewType === "markdown") {
+      const file = v.getFile?.()?.path;
+      return file ? { type: "markdown", file, pinned: leaf.pinned } : { type: "empty" };
+    }
+    if (v.viewType === "empty") return { type: "empty" };
+    return { type: v.viewType, state: leaf.getViewState().state, pinned: leaf.pinned };
+  }
+
+  private serializeSidebar(sb: Sidebar): PersistedSidebar {
+    return {
+      leaves: sb.leaves
+        .map((l) => this.serializeLeaf(l))
+        .filter((l): l is PersistedLeaf => !!l && l.type !== "empty"),
+      activeType: sb.active instanceof WorkspaceLeaf ? (sb.active.view?.viewType ?? null) : null,
+      collapsed: sb.collapsed,
+    };
+  }
+
+  /** Snapshot the current layout for persistence. */
+  serialize(): PersistedWorkspace {
+    return {
+      version: 1,
+      groups: this.groups.map((g) => ({
+        leaves: g.leaves
+          .map((l) => this.serializeLeaf(l))
+          .filter((l): l is PersistedLeaf => !!l),
+        active: Math.max(0, g.active ? g.leaves.indexOf(g.active) : 0),
+      })),
+      activeGroup: Math.max(0, this.groups.indexOf(this.activeGroup)),
+      left: this.serializeSidebar(this.leftSidebar),
+      right: this.serializeSidebar(this.rightSidebar),
+    };
+  }
+
+  private async restoreLeafView(leaf: WorkspaceLeaf, ls: PersistedLeaf): Promise<void> {
+    if (ls.type === "markdown" && ls.file) {
+      const file = this.app.vault.getFileByPath(ls.file);
+      if (file) {
+        const view = this.app.createMarkdownView();
+        await view.setFile(file);
+        await leaf.setView(view);
+      } else {
+        await leaf.setView(this.app.createEmptyView());
+      }
+    } else if (ls.type === "empty") {
+      await leaf.setView(this.app.createEmptyView());
+    } else if (this.getViewFactory(ls.type)) {
+      await leaf.setViewState({ type: ls.type, state: ls.state });
+    } else {
+      // Plugin providing this view type isn't installed/enabled — leave empty.
+      await leaf.setView(this.app.createEmptyView());
+    }
+    if (ls.pinned) leaf.pinned = true;
+  }
+
+  private async restoreSidebar(sb: Sidebar, ps: PersistedSidebar): Promise<void> {
+    for (const ls of ps.leaves) {
+      if (!this.getViewFactory(ls.type)) continue; // plugin absent
+      const leaf = sb.addLeaf();
+      await leaf.setViewState({ type: ls.type, state: ls.state });
+    }
+    if (ps.activeType) {
+      const l = sb.leaves.find((x) => x.view?.viewType === ps.activeType);
+      if (l) sb.setActiveLeaf(l);
+    }
+    if (ps.collapsed && !sb.collapsed) sb.toggle();
+  }
+
+  /**
+   * Rebuild the layout from a persisted snapshot. Returns false (restoring
+   * nothing) if the snapshot has no real content, so the caller can fall
+   * back to opening an empty tab.
+   */
+  async deserialize(state: PersistedWorkspace): Promise<boolean> {
+    if (!state?.groups?.length) return false;
+    // Ensure we have exactly as many tab groups as the snapshot.
+    while (this.groups.length < state.groups.length) this.addGroup();
+    let restoredAny = false;
+    for (let gi = 0; gi < state.groups.length; gi++) {
+      const group = this.groups[gi];
+      const gs = state.groups[gi];
+      for (const ls of gs.leaves) {
+        const leaf = group.createLeaf();
+        await this.restoreLeafView(leaf, ls);
+        if (ls.type !== "empty") restoredAny = true;
+      }
+      const active = group.leaves[gs.active] ?? group.leaves[0];
+      if (active) group.setActiveLeaf(active);
+    }
+    await this.restoreSidebar(this.leftSidebar, state.left);
+    await this.restoreSidebar(this.rightSidebar, state.right);
+    if (state.left.leaves.length || state.right.leaves.length) restoredAny = true;
+    const ag = this.groups[state.activeGroup] ?? this.groups[0];
+    if (ag?.active) ag.setActiveLeaf(ag.active);
+    return restoredAny;
   }
 }
