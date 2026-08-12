@@ -265,6 +265,26 @@ button.mod-cta:hover {
   display: flex;
 }
 
+/* ---- Drag-and-drop (moving panes) ---- */
+
+.workspace-tab-header.is-dragging,
+.sidebar-icon.is-dragging {
+  opacity: 0.4;
+}
+
+.workspace-tab-bar.drag-over {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 -2px 0 var(--interactive-accent);
+}
+
+.workspace-tab-group.drag-over .workspace-tab-content {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+.workspace-sidebar.drag-over {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
 /* A plugin pane (Obsidian ItemView) docked in a sidebar fills the dock and
    scrolls internally, like Geode's own sidebar views. */
 .sidebar-content > .view-content-host {
