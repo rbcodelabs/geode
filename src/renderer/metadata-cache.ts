@@ -44,6 +44,23 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * True if `err` is a benign "file no longer exists" race — e.g. a file
+ * deleted between vault enumeration and read, or between a `create`/`modify`
+ * event and the follow-up read. This is expected on large vaults and
+ * shouldn't spam the console.
+ *
+ * Deliberately checks `err.message` rather than `err.code === "ENOENT"`:
+ * `vault.cachedRead` goes through `ipcRenderer.invoke`, and Electron's IPC
+ * only forwards the thrown error's `message` across the main/renderer
+ * boundary — custom properties like `.code` are dropped. Matching on `.code`
+ * would never fire in production even though it looks correct in a
+ * same-process unit test.
+ */
+function isBenignEnoent(err: unknown): boolean {
+  return (err as Error)?.message?.includes("ENOENT") ?? false;
+}
+
 export interface UnlinkedMention {
   /** 0-based line number within the file. */
   line: number;
@@ -230,7 +247,7 @@ export class MetadataCache extends Events {
           const text = await this.vault.cachedRead(f);
           this.cache.set(f.path, parseMetadata(text));
         } catch (err) {
-          console.error(`Failed to index ${f.path}`, err);
+          if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
         }
       })
     );
@@ -248,7 +265,7 @@ export class MetadataCache extends Events {
       this.resolveAll();
       this.trigger("changed", file);
     } catch (err) {
-      console.error(`Failed to index ${file.path}`, err);
+      if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
     }
   }
 
