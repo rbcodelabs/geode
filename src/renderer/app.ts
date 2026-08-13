@@ -189,6 +189,9 @@ class SettingsModal extends Modal {
     const cm = this.geodeApp.communityManager;
     const refresh = () => this.renderCommunityList(listEl);
     const pinned = Boolean(item.pinnedVersion);
+    // Only meaningful for type "plugin" (themes aren't gated by plugin
+    // policy), but isBlocked() is a safe no-op id lookup either way.
+    const blocked = this.geodeApp.pluginManager.isBlocked(item.id);
 
     const row = document.createElement("div");
     row.className = "community-item";
@@ -200,6 +203,9 @@ class SettingsModal extends Modal {
       `<div class="community-item-title">${item.id}` +
       `<span class="community-item-badge">${item.type}</span>` +
       (pinned ? `<span class="community-item-badge is-pinned">pinned</span>` : "") +
+      (blocked
+        ? `<span class="community-item-badge is-blocked" title="Disabled by administrator policy">blocked by admin</span>`
+        : "") +
       `</div>` +
       `<div class="community-item-sub">${item.repo} · v${item.installedVersion}</div>`;
     row.appendChild(info);

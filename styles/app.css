@@ -1475,6 +1475,10 @@ button.mod-cta:hover {
   color: var(--text-on-accent);
   background: var(--interactive-accent);
 }
+.community-item-badge.is-blocked {
+  color: var(--text-on-accent);
+  background: var(--text-error, #e06c75);
+}
 .community-item-sub {
   font-size: var(--font-ui-small);
   color: var(--text-muted);

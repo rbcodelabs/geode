@@ -7,6 +7,7 @@ import {
   type PluginManifest,
 } from "./plugin-manifest";
 import * as GeodeAPI from "./api/obsidian";
+import { isPluginBlocked, type ManagedPolicy } from "./policy";
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
@@ -90,12 +91,20 @@ export class PluginManager {
   private manifests = new Map<string, PluginManifest>();
   private loadErrors = new Map<string, string>();
   private loaded = new Map<string, LoadedPlugin>();
+  private policy: ManagedPolicy | null = null;
 
   constructor(private app: App) {}
 
-  /** Discover installed plugins and enable whichever were enabled last session. */
+  /**
+   * Discover installed plugins and enable whichever were enabled last
+   * session. Fetches the enterprise-managed plugin policy (if any) first,
+   * fresh on every call — see `docs/adr/0002-enterprise-plugin-policy.md`.
+   * `getPluginPolicy` is optional on the `window.geode` fake used by unit
+   * tests, hence the `?.()`.
+   */
   async initialize(): Promise<void> {
     this.loadErrors.clear();
+    this.policy = (await window.geode.getPluginPolicy?.()) ?? null;
     await this.rescan();
 
     const enabledIds = ((await window.geode.readConfig(CONFIG_KEY)) as string[] | null) ?? [];
@@ -106,8 +115,19 @@ export class PluginManager {
       } catch (err) {
         this.loadErrors.set(id, (err as Error).message);
         console.error(`Failed to enable plugin "${id}"`, err);
+        if (this.isBlocked(id)) {
+          this.app.notify(
+            `"${this.manifests.get(id)?.name ?? id}" is disabled by your organization's policy.`,
+            6000
+          );
+        }
       }
     }
+  }
+
+  /** Whether plugin `id` is currently blocked by the enterprise-managed policy. */
+  isBlocked(id: string): boolean {
+    return isPluginBlocked(this.policy, id);
   }
 
   /**
@@ -192,6 +212,9 @@ export class PluginManager {
     if (this.loaded.has(id)) return;
     const manifest = this.manifests.get(id);
     if (!manifest) throw new Error(`Unknown plugin: "${id}"`);
+    if (this.isBlocked(id)) {
+      throw new Error(`Plugin "${id}" is blocked by administrator policy`);
+    }
     if (!isVersionAtLeast(GEODE_API_VERSION, manifest.minAppVersion)) {
       throw new Error(
         `Plugin "${id}" requires Geode ${manifest.minAppVersion}+ (running ${GEODE_API_VERSION})`

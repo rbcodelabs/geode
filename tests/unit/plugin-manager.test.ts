@@ -71,7 +71,10 @@ interface FakeFs {
   config: Map<string, unknown>;
 }
 
-function installFakeGeode(pluginIds: string[]): FakeFs {
+function installFakeGeode(
+  pluginIds: string[],
+  opts: { policy?: unknown } = {}
+): FakeFs {
   const fs: FakeFs = { files: new Map(), config: new Map() };
   const geode = {
     listPluginIds: vi.fn(async () => pluginIds),
@@ -88,6 +91,7 @@ function installFakeGeode(pluginIds: string[]): FakeFs {
     writeConfig: vi.fn(async (name: string, data: unknown) => {
       fs.config.set(name, data);
     }),
+    getPluginPolicy: vi.fn(async () => opts.policy ?? null),
   };
   (globalThis as any).window = { geode };
   return fs;
@@ -95,6 +99,7 @@ function installFakeGeode(pluginIds: string[]): FakeFs {
 
 const fakeApp = {
   commands: { add: vi.fn(), remove: vi.fn() },
+  notify: vi.fn(),
 } as unknown as App;
 
 describe("PluginManager", () => {
@@ -279,5 +284,97 @@ describe("PluginManager", () => {
     await expect(pm.disable("foo")).resolves.not.toThrow();
     const geode = (globalThis as any).window.geode as { writeConfig: ReturnType<typeof vi.fn> };
     expect(geode.writeConfig).not.toHaveBeenCalled();
+  });
+
+  describe("enterprise-managed plugin policy", () => {
+    it("enable() throws for a blocked id and never calls the plugin's onload", async () => {
+      const fs = installFakeGeode(["foo"], {
+        policy: { policyVersion: 1, plugins: { mode: "blocklist", ids: ["foo"] } },
+      });
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+      await expect(pm.enable("foo")).rejects.toThrow(/blocked by administrator policy/);
+
+      expect(pm.isEnabled("foo")).toBe(false);
+      expect((globalThis as any).__pluginLog).toEqual([]);
+    });
+
+    it("isBlocked() reflects blocklist and allowlist modes", async () => {
+      const fs = installFakeGeode(["foo", "bar"], {
+        policy: { policyVersion: 1, plugins: { mode: "allowlist", ids: ["foo"] } },
+      });
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/bar/manifest.json", manifestJson("bar"));
+
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+
+      expect(pm.isBlocked("foo")).toBe(false); // allowlisted
+      expect(pm.isBlocked("bar")).toBe(true); // not on the allowlist
+    });
+
+    it("initialize()'s auto-enable loop skips a blocked previously-enabled id, records a loadErrors entry, notifies, and does not persist", async () => {
+      const notify = vi.fn();
+      const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify } as unknown as App;
+      const fs = installFakeGeode(["foo"], {
+        policy: { policyVersion: 1, plugins: { mode: "blocklist", ids: ["foo"] } },
+      });
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+      fs.config.set("plugins", ["foo"]);
+
+      const pm = new PluginManager(app);
+      await pm.initialize();
+
+      expect(pm.isEnabled("foo")).toBe(false);
+      expect(pm.getLoadError("foo")).toMatch(/blocked by administrator policy/);
+      expect((globalThis as any).__pluginLog).toEqual([]);
+      // .geode/plugins.json (the persisted enabled-list) is never mutated by policy.
+      const geode = (globalThis as any).window.geode;
+      expect(geode.writeConfig).not.toHaveBeenCalled();
+      // Surfaced via App.notify(), not silent console.error only.
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(notify.mock.calls[0][0]).toMatch(/disabled by your organization's policy/);
+    });
+
+    it("isBlocked() reflects policy changes across two initialize() calls (admin relaxes the policy)", async () => {
+      const fs = installFakeGeode(["foo"], {
+        policy: { policyVersion: 1, plugins: { mode: "blocklist", ids: ["foo"] } },
+      });
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+      fs.config.set("plugins", ["foo"]);
+
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+      expect(pm.isBlocked("foo")).toBe(true);
+      expect(pm.isEnabled("foo")).toBe(false);
+
+      // Admin relaxes the policy — a fresh getPluginPolicy() response.
+      const geode = (globalThis as any).window.geode as { getPluginPolicy: ReturnType<typeof vi.fn> };
+      geode.getPluginPolicy.mockResolvedValue(null);
+
+      await pm.initialize();
+      expect(pm.isBlocked("foo")).toBe(false);
+      // Relaxing the policy resumes the plugin automatically next initialize(),
+      // with no user action, because the persisted enabled-list still lists it.
+      expect(pm.isEnabled("foo")).toBe(true);
+    });
+
+    it("a plugin not mentioned by any policy is unaffected", async () => {
+      const fs = installFakeGeode(["foo"], {
+        policy: { policyVersion: 1, plugins: { mode: "blocklist", ids: ["someone-else"] } },
+      });
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+      await expect(pm.enable("foo")).resolves.not.toThrow();
+      expect(pm.isEnabled("foo")).toBe(true);
+    });
   });
 });
