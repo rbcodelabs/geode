@@ -368,6 +368,10 @@ export class App {
       this.notify(`Indexed ${this.vault.getMarkdownFiles().length} notes`);
     });
 
+    // Check opt-in community items for updates shortly after startup, off the
+    // critical path. No-op unless a tracked item has auto-update enabled.
+    setTimeout(() => void this.checkCommunityUpdates(false), 2500);
+
     // Re-render open views when files change externally
     this.vault.on("modify", async (file: TFile) => {
       const leaf = this.workspace.findLeafForFile(file.path);
@@ -410,6 +414,9 @@ export class App {
     c("open-settings", "Open settings", "Mod+,", () => new SettingsModal(this).open());
     c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
       new InstallFromGithubModal(this, this.communityManager).open()
+    );
+    c("community-check-updates", "Community: Check for updates", undefined, () =>
+      void this.checkCommunityUpdates(true)
     );
     c("toggle-theme", "Toggle dark/light theme", undefined, () => {
       this.settings.theme = this.settings.theme === "dark" ? "light" : "dark";
@@ -665,6 +672,28 @@ export class App {
     this.settings.cssTheme = name;
     await this.themeManager.apply(name);
     this.saveSettings();
+  }
+
+  /**
+   * Run a community update check and surface the result as notices. `force`
+   * (the command) checks every non-pinned item; otherwise (on-launch) only
+   * opt-in items past the cadence.
+   */
+  async checkCommunityUpdates(force: boolean): Promise<void> {
+    try {
+      const sum = await this.communityManager.checkForUpdates({ force });
+      if (sum.updated.length) {
+        this.notify(`Updated ${sum.updated.length} community item(s): ${sum.updated.join(", ")}`);
+      } else if (force) {
+        this.notify(sum.checked ? `Community: all ${sum.checked} up to date` : "No community items to check");
+      }
+      for (const f of sum.failed) console.error(`Community update check failed for ${f.repo}: ${f.error}`);
+      if (force && sum.failed.length) {
+        this.notify(`${sum.failed.length} community update check(s) failed — see console`);
+      }
+    } catch (err) {
+      console.error("Community update check failed", err);
+    }
   }
 }
 

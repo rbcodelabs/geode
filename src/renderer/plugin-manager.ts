@@ -140,6 +140,25 @@ export class PluginManager {
     }
   }
 
+  /**
+   * Hot-reload a plugin whose files changed on disk (e.g. a community update).
+   * If it's enabled: disable (runs onunload) → rescan (pick up the new
+   * manifest) → enable (runs the new main.js). If it's disabled: just rescan
+   * so the new manifest/version is visible. Enabled-set membership is
+   * preserved (persist:false), since a reload isn't an enable/disable choice.
+   *
+   * Caveat: re-running main.js in the same renderer realm means any
+   * module-level side effect the plugin didn't reverse in onunload() persists
+   * until an app restart — callers should surface a "restart to finish" hint
+   * if enable() throws here.
+   */
+  async reload(id: string): Promise<void> {
+    const wasEnabled = this.loaded.has(id);
+    if (wasEnabled) await this.disable(id, { persist: false });
+    await this.rescan();
+    if (wasEnabled) await this.enable(id, { persist: false });
+  }
+
   private async readManifest(id: string): Promise<PluginManifest> {
     const raw = await window.geode.read(`${pluginDir(id)}/manifest.json`);
     return parseManifest(raw, id);

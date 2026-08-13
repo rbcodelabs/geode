@@ -65,6 +65,7 @@ function toPreview(spec: RepoSpec, resolved: ResolvedItem): CommunityPreview {
     id: resolved.id,
     name: resolved.name,
     version: resolved.version,
+    minAppVersion: resolved.minAppVersion,
     source: resolved.source,
     ref: resolved.ref,
   };

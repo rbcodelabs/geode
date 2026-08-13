@@ -9,11 +9,22 @@
 import type { App } from "../app";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "../../main/github-resolve";
 import {
+  itemsToCheck,
   normalizeConfig,
+  shouldUpdate,
   upsertItem,
   type CommunityConfig,
   type CommunityItem,
 } from "./store";
+
+export interface UpdateSummary {
+  /** How many items were actually checked against GitHub. */
+  checked: number;
+  /** "Name x.y.z" for each item updated. */
+  updated: string[];
+  /** Per-item failures (network, resolve, reload). */
+  failed: { repo: string; error: string }[];
+}
 
 const CONFIG_KEY = "community"; // <vault>/.geode/community.json
 
@@ -59,5 +70,60 @@ export class CommunityManager {
       await this.app.pluginManager.rescan();
     }
     return installed;
+  }
+
+  /**
+   * Check tracked items for a newer version and update the ones that have one.
+   * With `force`, checks every non-pinned item; otherwise only opt-in
+   * (`autoUpdate`) items past the cadence (see itemsToCheck). Updating a
+   * plugin re-downloads + hot-reloads it; updating the active theme re-applies
+   * it. `installedVersion`/`ref`/`lastChecked` are persisted back to
+   * community.json. Never throws — per-item failures are collected.
+   */
+  async checkForUpdates(opts: { force?: boolean } = {}): Promise<UpdateSummary> {
+    const now = Date.now();
+    let config = await this.load();
+    const candidates = opts.force
+      ? config.items.filter((i) => !i.pinnedVersion)
+      : itemsToCheck(config, now);
+
+    const summary: UpdateSummary = { checked: 0, updated: [], failed: [] };
+
+    for (const item of candidates) {
+      summary.checked++;
+      try {
+        const preview = await this.resolve(item.repo, { type: item.type });
+        const decision = shouldUpdate(item, preview.version, {
+          minAppVersion: preview.minAppVersion,
+        });
+
+        if (!decision.update) {
+          config = upsertItem(config, { ...item, lastChecked: now });
+          continue;
+        }
+
+        const installed = await window.geode.installCommunity(item.repo, { type: item.type });
+        config = upsertItem(config, {
+          ...item,
+          installedVersion: installed.version,
+          source: installed.source,
+          ref: installed.ref,
+          lastChecked: now,
+        });
+
+        if (installed.type === "plugin") {
+          await this.app.pluginManager.reload(installed.id);
+        } else if (this.app.settings.cssTheme === installed.id) {
+          // Only the *active* theme needs a live re-apply; others just sit on disk.
+          await this.app.themeManager.apply(installed.id);
+        }
+        summary.updated.push(`${installed.name} ${installed.version}`);
+      } catch (err) {
+        summary.failed.push({ repo: item.repo, error: (err as Error).message });
+      }
+    }
+
+    await this.save(config);
+    return summary;
   }
 }

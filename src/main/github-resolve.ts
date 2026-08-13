@@ -54,6 +54,8 @@ export interface ResolvedItem {
   name: string;
   /** manifest.json `version` (authoritative). */
   version: string;
+  /** manifest.json `minAppVersion`, if present (plugins) — used to guard updates. */
+  minAppVersion?: string;
   source: "release" | "raw";
   /** Release tag, or "HEAD" for a raw default-branch install. */
   ref: string;
@@ -73,6 +75,8 @@ export interface CommunityPreview {
   id: string;
   name: string;
   version: string;
+  /** manifest.json `minAppVersion`, if present — lets the update-check guard. */
+  minAppVersion?: string;
   source: "release" | "raw";
   ref: string;
 }
@@ -173,7 +177,12 @@ export function classifyItem(fileNames: string[]): ItemType | "ambiguous" {
  * convention), so `id` falls back to `name`. Full validation
  * (`parseManifest`) happens at install time, not here.
  */
-export function readManifestMeta(raw: string): { id: string; name: string; version: string } {
+export function readManifestMeta(raw: string): {
+  id: string;
+  name: string;
+  version: string;
+  minAppVersion?: string;
+} {
   let json: unknown;
   try {
     json = JSON.parse(raw);
@@ -189,7 +198,8 @@ export function readManifestMeta(raw: string): { id: string; name: string; versi
   const version = typeof obj.version === "string" ? obj.version : undefined;
   if (!id) throw new Error('manifest.json is missing "id" (or "name")');
   if (!version) throw new Error('manifest.json is missing "version"');
-  return { id, name: name ?? id, version };
+  const minAppVersion = typeof obj.minAppVersion === "string" ? obj.minAppVersion : undefined;
+  return { id, name: name ?? id, version, minAppVersion };
 }
 
 function apiBaseOf(deps: ResolveDeps): string {
@@ -248,6 +258,7 @@ async function resolvePluginFromRelease(
     id: meta.id,
     name: meta.name,
     version: meta.version,
+    minAppVersion: meta.minAppVersion,
     source: "release",
     ref: release.tag_name,
     files,
@@ -280,6 +291,7 @@ async function resolveFromRaw(
     id: meta.id,
     name: meta.name,
     version: meta.version,
+    minAppVersion: meta.minAppVersion,
     source: "raw",
     ref: "HEAD",
     files,
