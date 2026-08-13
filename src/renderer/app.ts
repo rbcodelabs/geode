@@ -659,6 +659,13 @@ export class App {
   saveSettings() {
     window.geode.writeConfig("app", this.settings);
   }
+
+  /** Select a community theme by name (or "" for the built-in default): apply it and persist. */
+  async applyCommunityTheme(name: string): Promise<void> {
+    this.settings.cssTheme = name;
+    await this.themeManager.apply(name);
+    this.saveSettings();
+  }
 }
 
 const app = new App();

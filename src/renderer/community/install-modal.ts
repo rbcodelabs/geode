@@ -61,7 +61,9 @@ export class InstallFromGithubModal extends Modal {
     this.enableCheckbox.type = "checkbox";
     this.enableCheckbox.className = "community-enable-checkbox";
     enableRow.appendChild(this.enableCheckbox);
-    enableRow.appendChild(document.createTextNode(" Enable plugin after installing"));
+    // A plugin gets enabled; a theme gets applied. The label covers both since
+    // the type can be auto-detected only at install time.
+    enableRow.appendChild(document.createTextNode(" Enable / apply after installing"));
     this.contentEl.appendChild(enableRow);
 
     this.statusEl = document.createElement("div");
@@ -123,9 +125,12 @@ export class InstallFromGithubModal extends Modal {
     this.setStatus("Installing…");
     try {
       const installed = await this.community.install(spec, this.resolveOpts());
-      if (installed.type === "plugin" && this.enableCheckbox.checked) {
+      if (this.enableCheckbox.checked && installed.type === "plugin") {
         await this.app.pluginManager.enable(installed.id);
         this.app.notify(`Enabled ${installed.name} ${installed.version}`);
+      } else if (this.enableCheckbox.checked && installed.type === "theme") {
+        await this.app.applyCommunityTheme(installed.id);
+        this.app.notify(`Applied ${installed.name} ${installed.version}`);
       } else {
         this.app.notify(`Installed ${installed.name} ${installed.version}`);
       }
