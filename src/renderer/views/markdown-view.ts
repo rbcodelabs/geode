@@ -1,4 +1,4 @@
-import { Compartment, EditorState, Prec } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Prec } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -20,7 +20,7 @@ import { tags } from "@lezer/highlight";
 import type { App } from "../app";
 import type { View } from "../workspace";
 import type { TFile } from "../types";
-import { livePreview } from "../markdown/live-preview";
+import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, class: "cm-header-1" },
@@ -147,8 +147,12 @@ export class MarkdownView implements View {
       return { from, options, validFor: /^[^\[\]]*$/ };
     };
 
+    const initialCursorOffset =
+      this.mode !== "source" ? frontmatterEndOffset(text) : null;
+
     const state = EditorState.create({
       doc: text,
+      selection: EditorSelection.cursor(initialCursorOffset ?? 0),
       extensions: [
         history(),
         drawSelection(),
