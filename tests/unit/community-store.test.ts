@@ -6,6 +6,8 @@ import {
   itemsToCheck,
   normalizeConfig,
   removeItem,
+  setAutoUpdate,
+  setPinned,
   shouldUpdate,
   upsertItem,
   type CommunityItem,
@@ -117,6 +119,31 @@ describe("upsertItem / removeItem / findItem", () => {
     const cfg = upsertItem(emptyConfig(), item({ repo: "o/a", id: "aa" }));
     expect(findItem(cfg, "o/a")?.id).toBe("aa");
     expect(findItem(cfg, "o/none")).toBeUndefined();
+  });
+});
+
+// --- setAutoUpdate / setPinned ---------------------------------------------
+
+describe("setAutoUpdate / setPinned", () => {
+  it("toggles autoUpdate immutably", () => {
+    const cfg = upsertItem(emptyConfig(), item({ repo: "o/a", autoUpdate: false }));
+    const next = setAutoUpdate(cfg, "o/a", true);
+    expect(next.items[0].autoUpdate).toBe(true);
+    expect(cfg.items[0].autoUpdate).toBe(false); // original unchanged
+  });
+
+  it("pins at the installed version and unpins by clearing", () => {
+    let cfg = upsertItem(emptyConfig(), item({ repo: "o/a", installedVersion: "1.3.0" }));
+    cfg = setPinned(cfg, "o/a", true);
+    expect(cfg.items[0].pinnedVersion).toBe("1.3.0");
+    cfg = setPinned(cfg, "o/a", false);
+    expect(cfg.items[0].pinnedVersion).toBeUndefined();
+  });
+
+  it("is a no-op for an unknown repo", () => {
+    const cfg = upsertItem(emptyConfig(), item({ repo: "o/a" }));
+    expect(setAutoUpdate(cfg, "o/none", true)).toBe(cfg);
+    expect(setPinned(cfg, "o/none", true)).toBe(cfg);
   });
 });
 

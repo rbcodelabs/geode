@@ -19,7 +19,11 @@ export class InstallFromGithubModal extends Modal {
   private installBtn!: HTMLButtonElement;
   private busy = false;
 
-  constructor(app: App, private community: CommunityManager) {
+  constructor(
+    app: App,
+    private community: CommunityManager,
+    private onInstalled?: () => void
+  ) {
     super(app);
     this.modalEl.classList.add("mod-community-install");
   }
@@ -134,6 +138,7 @@ export class InstallFromGithubModal extends Modal {
       } else {
         this.app.notify(`Installed ${installed.name} ${installed.version}`);
       }
+      this.onInstalled?.();
       this.close();
     } catch (err) {
       this.setStatus((err as Error).message, true);

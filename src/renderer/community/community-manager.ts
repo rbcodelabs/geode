@@ -9,8 +9,12 @@
 import type { App } from "../app";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "../../main/github-resolve";
 import {
+  findItem,
   itemsToCheck,
   normalizeConfig,
+  removeItem,
+  setAutoUpdate,
+  setPinned,
   shouldUpdate,
   upsertItem,
   type CommunityConfig,
@@ -80,12 +84,16 @@ export class CommunityManager {
    * it. `installedVersion`/`ref`/`lastChecked` are persisted back to
    * community.json. Never throws — per-item failures are collected.
    */
-  async checkForUpdates(opts: { force?: boolean } = {}): Promise<UpdateSummary> {
+  async checkForUpdates(
+    opts: { force?: boolean; repos?: string[] } = {}
+  ): Promise<UpdateSummary> {
     const now = Date.now();
     let config = await this.load();
-    const candidates = opts.force
-      ? config.items.filter((i) => !i.pinnedVersion)
-      : itemsToCheck(config, now);
+    const candidates = opts.repos
+      ? config.items.filter((i) => opts.repos!.includes(i.repo) && !i.pinnedVersion)
+      : opts.force
+        ? config.items.filter((i) => !i.pinnedVersion)
+        : itemsToCheck(config, now);
 
     const summary: UpdateSummary = { checked: 0, updated: [], failed: [] };
 
@@ -125,5 +133,49 @@ export class CommunityManager {
 
     await this.save(config);
     return summary;
+  }
+
+  /** Toggle an item's opt-in auto-update flag. */
+  async setAutoUpdate(repo: string, on: boolean): Promise<void> {
+    await this.save(setAutoUpdate(await this.load(), repo, on));
+  }
+
+  /** Pin (freeze at installed version) or unpin an item. */
+  async setPinned(repo: string, pinned: boolean): Promise<void> {
+    await this.save(setPinned(await this.load(), repo, pinned));
+  }
+
+  /**
+   * Stop managing an item: remove it from community.json. Files stay on disk
+   * and a plugin stays enabled / a theme stays applied — this only ends
+   * update tracking (distinct from uninstall).
+   */
+  async stopUpdating(repo: string): Promise<void> {
+    await this.save(removeItem(await this.load(), repo));
+  }
+
+  /**
+   * Fully remove an item: disable the plugin (or revert the active theme to
+   * default), delete its files, and untrack it. Files go to the OS trash,
+   * matching the vault's delete behavior.
+   */
+  async uninstall(repo: string): Promise<void> {
+    const config = await this.load();
+    const item = findItem(config, repo);
+    if (!item) return;
+
+    if (item.type === "plugin") {
+      if (this.app.pluginManager.isEnabled(item.id)) {
+        await this.app.pluginManager.disable(item.id);
+      }
+      await window.geode.trash(`.geode/plugins/${item.id}`);
+      await this.app.pluginManager.rescan();
+    } else {
+      if (this.app.settings.cssTheme === item.id) {
+        await this.app.applyCommunityTheme(""); // revert to built-in default
+      }
+      await window.geode.trash(`.geode/themes/${item.id}`);
+    }
+    await this.save(removeItem(config, repo));
   }
 }

@@ -147,11 +147,120 @@ class SettingsModal extends Modal {
     const { control } = this.addRow("Install from GitHub");
     const addBtn = document.createElement("button");
     addBtn.textContent = "Add…";
-    addBtn.addEventListener("click", () => {
-      this.close();
-      new InstallFromGithubModal(this.geodeApp, this.geodeApp.communityManager).open();
-    });
     control.appendChild(addBtn);
+    const listEl = document.createElement("div");
+    listEl.className = "community-list";
+    this.contentEl.appendChild(listEl);
+    addBtn.addEventListener("click", () => {
+      new InstallFromGithubModal(this.geodeApp, this.geodeApp.communityManager, () =>
+        this.renderCommunityList(listEl)
+      ).open();
+    });
+    void this.renderCommunityList(listEl);
+  }
+
+  /** Render the list of tracked community items with per-item controls. */
+  private async renderCommunityList(listEl: HTMLElement): Promise<void> {
+    listEl.innerHTML = "";
+    const cfg = await this.geodeApp.communityManager.load();
+    if (!cfg.items.length) {
+      const empty = document.createElement("div");
+      empty.className = "community-empty";
+      empty.textContent = "No community plugins or themes installed yet.";
+      listEl.appendChild(empty);
+      return;
+    }
+    for (const item of cfg.items) {
+      listEl.appendChild(this.renderCommunityRow(item, listEl));
+    }
+  }
+
+  private renderCommunityRow(
+    item: import("./community/store").CommunityItem,
+    listEl: HTMLElement
+  ): HTMLElement {
+    const cm = this.geodeApp.communityManager;
+    const refresh = () => this.renderCommunityList(listEl);
+    const pinned = Boolean(item.pinnedVersion);
+
+    const row = document.createElement("div");
+    row.className = "community-item";
+    row.dataset.repo = item.repo;
+
+    const info = document.createElement("div");
+    info.className = "community-item-info";
+    info.innerHTML =
+      `<div class="community-item-title">${item.id}` +
+      `<span class="community-item-badge">${item.type}</span>` +
+      (pinned ? `<span class="community-item-badge is-pinned">pinned</span>` : "") +
+      `</div>` +
+      `<div class="community-item-sub">${item.repo} · v${item.installedVersion}</div>`;
+    row.appendChild(info);
+
+    const controls = document.createElement("div");
+    controls.className = "community-item-controls";
+
+    const autoLabel = document.createElement("label");
+    autoLabel.className = "community-item-toggle";
+    const auto = document.createElement("input");
+    auto.type = "checkbox";
+    auto.checked = item.autoUpdate;
+    auto.disabled = pinned;
+    auto.addEventListener("change", async () => {
+      await cm.setAutoUpdate(item.repo, auto.checked);
+      await refresh();
+    });
+    autoLabel.appendChild(auto);
+    autoLabel.appendChild(document.createTextNode(" auto-update"));
+    controls.appendChild(autoLabel);
+
+    const pinLabel = document.createElement("label");
+    pinLabel.className = "community-item-toggle";
+    const pin = document.createElement("input");
+    pin.type = "checkbox";
+    pin.checked = pinned;
+    pin.addEventListener("change", async () => {
+      await cm.setPinned(item.repo, pin.checked);
+      await refresh();
+    });
+    pinLabel.appendChild(pin);
+    pinLabel.appendChild(document.createTextNode(" pin"));
+    controls.appendChild(pinLabel);
+
+    const updateBtn = document.createElement("button");
+    updateBtn.textContent = "Update now";
+    updateBtn.disabled = pinned;
+    updateBtn.addEventListener("click", async () => {
+      updateBtn.disabled = true;
+      const sum = await cm.checkForUpdates({ repos: [item.repo] });
+      if (sum.updated.length) this.geodeApp.notify(`Updated ${sum.updated.join(", ")}`);
+      else if (sum.failed.length) this.geodeApp.notify(`Update failed: ${sum.failed[0].error}`);
+      else this.geodeApp.notify(`${item.id} is up to date`);
+      await refresh();
+    });
+    controls.appendChild(updateBtn);
+
+    const stopBtn = document.createElement("button");
+    stopBtn.textContent = "Stop updating";
+    stopBtn.title = "Keep the files but stop tracking updates";
+    stopBtn.addEventListener("click", async () => {
+      await cm.stopUpdating(item.repo);
+      this.geodeApp.notify(`Stopped tracking ${item.id}`);
+      await refresh();
+    });
+    controls.appendChild(stopBtn);
+
+    const uninstallBtn = document.createElement("button");
+    uninstallBtn.textContent = "Uninstall";
+    uninstallBtn.addEventListener("click", async () => {
+      await cm.uninstall(item.repo);
+      this.geodeApp.notify(`Uninstalled ${item.id}`);
+      await refresh();
+    });
+    controls.appendChild(uninstallBtn);
+
+    row.appendChild(controls);
+    return row;
   }
 
   private addToggle(label: string, value: boolean, onChange: (v: boolean) => void) {

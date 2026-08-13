@@ -115,6 +115,31 @@ export function removeItem(config: CommunityConfig, repo: string): CommunityConf
   return { version: 1, items: config.items.filter((i) => i.repo !== repo) };
 }
 
+/** Set an item's opt-in auto-update flag (immutably). No-op if absent. */
+export function setAutoUpdate(
+  config: CommunityConfig,
+  repo: string,
+  autoUpdate: boolean
+): CommunityConfig {
+  const item = findItem(config, repo);
+  if (!item) return config;
+  return upsertItem(config, { ...item, autoUpdate });
+}
+
+/**
+ * Pin/unpin an item (immutably). Pinning freezes it at its currently-installed
+ * version (so update checks skip it); unpinning clears the freeze. No-op if
+ * the item is absent.
+ */
+export function setPinned(config: CommunityConfig, repo: string, pinned: boolean): CommunityConfig {
+  const item = findItem(config, repo);
+  if (!item) return config;
+  const next: CommunityItem = { ...item };
+  if (pinned) next.pinnedVersion = item.installedVersion;
+  else delete next.pinnedVersion;
+  return upsertItem(config, next);
+}
+
 /**
  * Items eligible for an *automatic* (launch-time) update check: opt-in
  * (`autoUpdate`), not pinned, and either never checked or last checked longer
