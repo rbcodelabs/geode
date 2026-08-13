@@ -95,22 +95,8 @@ export class PluginManager {
 
   /** Discover installed plugins and enable whichever were enabled last session. */
   async initialize(): Promise<void> {
-    this.manifests.clear();
     this.loadErrors.clear();
-    let ids: string[] = [];
-    try {
-      ids = await window.geode.listPluginIds();
-    } catch (err) {
-      console.error("Failed to list plugins", err);
-    }
-    for (const id of ids) {
-      try {
-        this.manifests.set(id, await this.readManifest(id));
-      } catch (err) {
-        this.loadErrors.set(id, (err as Error).message);
-        console.error(`Failed to read manifest for plugin "${id}"`, err);
-      }
-    }
+    await this.rescan();
 
     const enabledIds = ((await window.geode.readConfig(CONFIG_KEY)) as string[] | null) ?? [];
     for (const id of enabledIds) {
@@ -121,6 +107,36 @@ export class PluginManager {
         this.loadErrors.set(id, (err as Error).message);
         console.error(`Failed to enable plugin "${id}"`, err);
       }
+    }
+  }
+
+  /**
+   * Re-read installed plugin ids + manifests from disk into the in-memory map
+   * WITHOUT enabling anything. Adds newly-installed ids, refreshes existing
+   * manifests (so a bumped version is picked up), and drops manifests for ids
+   * gone from disk that aren't currently loaded. Loaded plugins are never
+   * touched. This is what lets a freshly-installed plugin be enabled without
+   * restarting the app — `enable()` throws for ids it hasn't seen.
+   */
+  async rescan(): Promise<void> {
+    let ids: string[] = [];
+    try {
+      ids = await window.geode.listPluginIds();
+    } catch (err) {
+      console.error("Failed to list plugins", err);
+      return;
+    }
+    const present = new Set(ids);
+    for (const id of ids) {
+      try {
+        this.manifests.set(id, await this.readManifest(id));
+      } catch (err) {
+        this.loadErrors.set(id, (err as Error).message);
+        console.error(`Failed to read manifest for plugin "${id}"`, err);
+      }
+    }
+    for (const id of [...this.manifests.keys()]) {
+      if (!present.has(id) && !this.loaded.has(id)) this.manifests.delete(id);
     }
   }
 

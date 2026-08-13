@@ -4,6 +4,8 @@ import { Workspace, TabGroup, View, type PersistedWorkspace } from "./workspace"
 import { CommandRegistry } from "./commands";
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
+import { CommunityManager } from "./community/community-manager";
+import { InstallFromGithubModal } from "./community/install-modal";
 import { MarkdownRenderer } from "./markdown/render";
 import { MarkdownView } from "./views/markdown-view";
 import { FileExplorerView } from "./views/file-explorer";
@@ -138,6 +140,18 @@ class SettingsModal extends Modal {
         this.geodeApp.saveSettings();
       }
     );
+
+    const communityHeading = document.createElement("h2");
+    communityHeading.textContent = "Community plugins & themes";
+    this.contentEl.appendChild(communityHeading);
+    const { control } = this.addRow("Install from GitHub");
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Add…";
+    addBtn.addEventListener("click", () => {
+      this.close();
+      new InstallFromGithubModal(this.geodeApp, this.geodeApp.communityManager).open();
+    });
+    control.appendChild(addBtn);
   }
 
   private addToggle(label: string, value: boolean, onChange: (v: boolean) => void) {
@@ -245,6 +259,7 @@ export class App {
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
   pluginManager!: PluginManager;
   themeManager = new ThemeManager(this);
+  communityManager = new CommunityManager(this);
   settings: AppSettings = { theme: "dark", readableLineLength: true, cssTheme: "" };
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
@@ -393,6 +408,9 @@ export class App {
       this.workspace.rightSidebar.toggle()
     );
     c("open-settings", "Open settings", "Mod+,", () => new SettingsModal(this).open());
+    c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
+      new InstallFromGithubModal(this, this.communityManager).open()
+    );
     c("toggle-theme", "Toggle dark/light theme", undefined, () => {
       this.settings.theme = this.settings.theme === "dark" ? "light" : "dark";
       this.applySettings();

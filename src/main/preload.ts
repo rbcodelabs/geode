@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
 
 export interface VaultFileEntry {
   path: string;
@@ -37,6 +38,10 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   listPluginIds: (): Promise<string[]> => ipcRenderer.invoke("plugins-list-ids"),
   listThemes: (): Promise<string[]> => ipcRenderer.invoke("themes-list"),
+  resolveCommunity: (spec: string, opts?: ResolveOpts): Promise<CommunityPreview> =>
+    ipcRenderer.invoke("community-resolve", spec, opts ?? {}),
+  installCommunity: (spec: string, opts?: ResolveOpts): Promise<InstalledResult> =>
+    ipcRenderer.invoke("community-install", spec, opts ?? {}),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },

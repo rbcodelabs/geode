@@ -1350,6 +1350,55 @@ button.mod-cta:hover {
   overflow-y: auto;
 }
 
+/* Install-from-GitHub modal (community plugins & themes) */
+.mod-community-install .modal-content {
+  padding: 16px 24px 24px;
+  gap: 12px;
+}
+.mod-community-install h2 {
+  margin: 0;
+}
+.mod-community-install .community-repo-input {
+  font: inherit;
+  font-size: var(--font-ui-medium);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: 8px 12px;
+  outline: none;
+}
+.mod-community-install .community-repo-input:focus {
+  border-color: var(--interactive-accent);
+}
+.mod-community-install .community-type-select {
+  align-self: flex-start;
+}
+.mod-community-install .community-trust-warning {
+  margin: 0;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.mod-community-install .community-enable-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-small);
+}
+.mod-community-install .community-status {
+  min-height: 1.2em;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.mod-community-install .community-status.is-error {
+  color: var(--text-error, #e06c75);
+}
+.mod-community-install .community-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .prompt-input {
   font: inherit;
   font-size: 16px;

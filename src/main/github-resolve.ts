@@ -60,6 +60,26 @@ export interface ResolvedItem {
   files: ResolvedFile[];
 }
 
+/**
+ * A resolved item flattened to the metadata the renderer/IPC layer needs —
+ * no file URLs. Returned by the main-process resolve/install handlers for the
+ * modal preview and for recording in community.json. Pure type (no node deps)
+ * so both the main and renderer bundles can import it.
+ */
+export interface CommunityPreview {
+  /** "owner/repo" — the normalized add key. */
+  repo: string;
+  type: ItemType;
+  id: string;
+  name: string;
+  version: string;
+  source: "release" | "raw";
+  ref: string;
+}
+
+/** Result of a completed install — same shape as the preview. */
+export type InstalledResult = CommunityPreview;
+
 /** Minimal HTTP response shape the resolver needs from its injected client. */
 export interface HttpResponse {
   status: number;
