@@ -366,10 +366,15 @@ button.mod-cta:hover {
 .workspace-sidebar {
   display: flex;
   flex-direction: column;
-  width: 280px;
+  position: relative;
+  width: var(--sidebar-width, 280px);
   min-width: 200px;
   background: var(--background-secondary);
   transition: width 0.15s ease;
+}
+
+.workspace-sidebar.is-resizing {
+  transition: none;
 }
 
 .workspace-sidebar.mod-left {
@@ -428,6 +433,33 @@ button.mod-cta:hover {
   height: var(--tab-height);
   padding: 0 8px;
   border-bottom: 1px solid var(--background-modifier-border);
+  -webkit-app-region: drag;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 1;
+  background: transparent;
+  transition: background 0.1s ease;
+  -webkit-app-region: no-drag;
+}
+.workspace-sidebar.mod-left .sidebar-resize-handle {
+  right: -3px;
+}
+.workspace-sidebar.mod-right .sidebar-resize-handle {
+  left: -3px;
+}
+.sidebar-resize-handle:hover,
+.workspace-sidebar.is-resizing .sidebar-resize-handle {
+  background: var(--interactive-accent);
+}
+.workspace-sidebar.is-collapsed .sidebar-resize-handle {
+  display: none;
+  pointer-events: none;
 }
 
 .mod-left .sidebar-icon-bar {
@@ -448,6 +480,7 @@ button.mod-cta:hover {
   cursor: pointer;
   color: var(--text-muted);
   font-size: 14px;
+  -webkit-app-region: no-drag;
 }
 
 .sidebar-icon:hover {

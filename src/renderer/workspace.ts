@@ -291,6 +291,10 @@ export class TabGroup {
 /** One entry shown in a sidebar: either a built-in fixed `View` or a docked plugin `WorkspaceLeaf`. */
 type SidebarItem = View | WorkspaceLeaf;
 
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 600;
+
 /**
  * A sidebar dock: an icon strip plus one visible pane at a time. It hosts
  * both Geode's built-in fixed views (file explorer, search, backlinks, …)
@@ -302,10 +306,15 @@ export class Sidebar implements LeafContainer {
   containerEl: HTMLElement;
   iconBarEl: HTMLElement;
   contentEl: HTMLElement;
+  resizeHandleEl: HTMLElement;
   views: View[] = [];
   leaves: WorkspaceLeaf[] = [];
   active: SidebarItem | null = null;
   collapsed = false;
+  width: number = SIDEBAR_DEFAULT_WIDTH;
+  private dragging = false;
+  private dragStartX = 0;
+  private dragStartWidth = 0;
 
   constructor(
     public side: "left" | "right",
@@ -336,6 +345,56 @@ export class Sidebar implements LeafContainer {
       e.preventDefault();
       this.app.workspace.moveLeaf(draggingLeaf, this);
     });
+    this.resizeHandleEl = document.createElement("div");
+    this.resizeHandleEl.className = "sidebar-resize-handle";
+    this.containerEl.appendChild(this.resizeHandleEl);
+    this.attachResizeHandle();
+  }
+
+  private endDrag(): void {
+    this.containerEl.classList.remove("is-resizing");
+    this.dragging = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }
+
+  /**
+   * Drag-to-resize via the thin strip at the sidebar's inner edge. Mirrors
+   * the shape of `graph-view.ts`'s `attachInteraction()`: `mousedown` starts
+   * the drag on the handle itself, but `mousemove`/`mouseup` are bound to
+   * `window` (not the handle) so the drag survives the cursor leaving the
+   * 6px-wide strip mid-gesture.
+   */
+  private attachResizeHandle(): void {
+    this.resizeHandleEl.addEventListener("mousedown", (e) => {
+      if (this.collapsed) return;
+      e.preventDefault();
+      this.dragging = true;
+      this.dragStartX = e.clientX;
+      this.dragStartWidth = this.width;
+      this.containerEl.classList.add("is-resizing");
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!this.dragging) return;
+      const dx = e.clientX - this.dragStartX;
+      const delta = this.side === "left" ? dx : -dx;
+      this.setWidth(this.dragStartWidth + delta);
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (!this.dragging) return;
+      this.endDrag();
+      this.app.workspace.trigger("layout-change");
+    });
+  }
+
+  setWidth(px: number): void {
+    const effectiveMax = Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth * 0.5);
+    this.width = Math.min(Math.max(px, SIDEBAR_MIN_WIDTH), effectiveMax);
+    this.containerEl.style.setProperty("--sidebar-width", `${this.width}px`);
   }
 
   private isLeaf(item: SidebarItem): item is WorkspaceLeaf {
@@ -462,6 +521,7 @@ export class Sidebar implements LeafContainer {
   }
 
   toggle() {
+    if (this.dragging) this.endDrag();
     this.collapsed = !this.collapsed;
     this.containerEl.classList.toggle("is-collapsed", this.collapsed);
     this.renderIcons();
@@ -482,6 +542,7 @@ interface PersistedSidebar {
   leaves: PersistedLeaf[];
   activeType: string | null;
   collapsed: boolean;
+  width?: number;
 }
 
 /** The whole persisted workspace layout, stored per-vault in `.geode/workspace.json`. */
@@ -774,6 +835,7 @@ export class Workspace extends Events {
         .filter((l): l is PersistedLeaf => !!l && l.type !== "empty"),
       activeType: sb.active instanceof WorkspaceLeaf ? (sb.active.view?.viewType ?? null) : null,
       collapsed: sb.collapsed,
+      width: sb.width,
     };
   }
 
@@ -832,19 +894,30 @@ export class Workspace extends Events {
       const l = sb.leaves.find((x) => x.view?.viewType === ps.activeType);
       if (l) sb.setActiveLeaf(l);
     }
+    // Must run before the collapsed-toggle below so the correct expanded
+    // width is recorded even if the sidebar restores collapsed.
+    if (typeof ps.width === "number" && Number.isFinite(ps.width)) sb.setWidth(ps.width);
     if (ps.collapsed && !sb.collapsed) sb.toggle();
   }
 
   /**
    * Rebuild the layout from a persisted snapshot. Returns false (restoring
-   * nothing) if the snapshot has no real content, so the caller can fall
-   * back to opening an empty tab.
+   * nothing beyond sidebar chrome) if the snapshot has no real tab/leaf
+   * content, so the caller can fall back to opening an empty tab.
    */
   async deserialize(state: PersistedWorkspace): Promise<boolean> {
     const hasContent =
       (state?.groups?.some((g) => g.leaves.length) ?? false) ||
       !!state?.left?.leaves.length ||
       !!state?.right?.leaves.length;
+
+    // Restore sidebar chrome (width/collapsed/docked leaves) unconditionally,
+    // even when there's no tab/leaf content at all — a sidebar the user
+    // resized (or collapsed) should keep that state even if they never
+    // opened a note, so this must not be gated behind `hasContent` below.
+    if (state?.left) await this.restoreSidebar(this.leftSidebar, state.left);
+    if (state?.right) await this.restoreSidebar(this.rightSidebar, state.right);
+
     if (!hasContent) return false;
 
     // Rebuild the (non-empty) tab groups. Groups the snapshot didn't include
@@ -868,8 +941,6 @@ export class Workspace extends Events {
       const active = (gs && group.leaves[gs.active]) || group.leaves[0];
       if (active) group.setActiveLeaf(active);
     }
-    await this.restoreSidebar(this.leftSidebar, state.left);
-    await this.restoreSidebar(this.rightSidebar, state.right);
     const ag = this.groups[state.activeGroup] ?? this.groups[0];
     if (ag?.active) ag.setActiveLeaf(ag.active);
     return true;
