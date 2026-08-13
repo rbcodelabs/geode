@@ -95,22 +95,8 @@ export class PluginManager {
 
   /** Discover installed plugins and enable whichever were enabled last session. */
   async initialize(): Promise<void> {
-    this.manifests.clear();
     this.loadErrors.clear();
-    let ids: string[] = [];
-    try {
-      ids = await window.geode.listPluginIds();
-    } catch (err) {
-      console.error("Failed to list plugins", err);
-    }
-    for (const id of ids) {
-      try {
-        this.manifests.set(id, await this.readManifest(id));
-      } catch (err) {
-        this.loadErrors.set(id, (err as Error).message);
-        console.error(`Failed to read manifest for plugin "${id}"`, err);
-      }
-    }
+    await this.rescan();
 
     const enabledIds = ((await window.geode.readConfig(CONFIG_KEY)) as string[] | null) ?? [];
     for (const id of enabledIds) {
@@ -122,6 +108,55 @@ export class PluginManager {
         console.error(`Failed to enable plugin "${id}"`, err);
       }
     }
+  }
+
+  /**
+   * Re-read installed plugin ids + manifests from disk into the in-memory map
+   * WITHOUT enabling anything. Adds newly-installed ids, refreshes existing
+   * manifests (so a bumped version is picked up), and drops manifests for ids
+   * gone from disk that aren't currently loaded. Loaded plugins are never
+   * touched. This is what lets a freshly-installed plugin be enabled without
+   * restarting the app — `enable()` throws for ids it hasn't seen.
+   */
+  async rescan(): Promise<void> {
+    let ids: string[] = [];
+    try {
+      ids = await window.geode.listPluginIds();
+    } catch (err) {
+      console.error("Failed to list plugins", err);
+      return;
+    }
+    const present = new Set(ids);
+    for (const id of ids) {
+      try {
+        this.manifests.set(id, await this.readManifest(id));
+      } catch (err) {
+        this.loadErrors.set(id, (err as Error).message);
+        console.error(`Failed to read manifest for plugin "${id}"`, err);
+      }
+    }
+    for (const id of [...this.manifests.keys()]) {
+      if (!present.has(id) && !this.loaded.has(id)) this.manifests.delete(id);
+    }
+  }
+
+  /**
+   * Hot-reload a plugin whose files changed on disk (e.g. a community update).
+   * If it's enabled: disable (runs onunload) → rescan (pick up the new
+   * manifest) → enable (runs the new main.js). If it's disabled: just rescan
+   * so the new manifest/version is visible. Enabled-set membership is
+   * preserved (persist:false), since a reload isn't an enable/disable choice.
+   *
+   * Caveat: re-running main.js in the same renderer realm means any
+   * module-level side effect the plugin didn't reverse in onunload() persists
+   * until an app restart — callers should surface a "restart to finish" hint
+   * if enable() throws here.
+   */
+  async reload(id: string): Promise<void> {
+    const wasEnabled = this.loaded.has(id);
+    if (wasEnabled) await this.disable(id, { persist: false });
+    await this.rescan();
+    if (wasEnabled) await this.enable(id, { persist: false });
   }
 
   private async readManifest(id: string): Promise<PluginManifest> {

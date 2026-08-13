@@ -3,6 +3,8 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import chokidar, { FSWatcher } from "chokidar";
+import { installCommunity, resolveCommunity } from "./community";
+import type { ResolveOpts } from "./github-resolve";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -271,6 +273,21 @@ function registerIpc() {
 
   ipcMain.handle("open-external", (_e, url: string) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
+  });
+
+  // Community install-from-GitHub (see src/main/community.ts). Resolve returns
+  // install metadata for the modal preview; install downloads + writes files.
+  // Both re-resolve from the caller's owner/repo spec — the renderer never
+  // supplies file URLs or paths.
+  ipcMain.handle("community-resolve", async (_e, spec: string, opts: ResolveOpts) => {
+    return resolveCommunity(spec, opts ?? {});
+  });
+
+  ipcMain.handle("community-install", async (e, spec: string, opts: ResolveOpts) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    return installCommunity(session.root, spec, opts ?? {});
   });
 }
 

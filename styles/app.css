@@ -1350,6 +1350,118 @@ button.mod-cta:hover {
   overflow-y: auto;
 }
 
+/* Install-from-GitHub modal (community plugins & themes) */
+.mod-community-install .modal-content {
+  padding: 16px 24px 24px;
+  gap: 12px;
+}
+.mod-community-install h2 {
+  margin: 0;
+}
+.mod-community-install .community-repo-input {
+  font: inherit;
+  font-size: var(--font-ui-medium);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: 8px 12px;
+  outline: none;
+}
+.mod-community-install .community-repo-input:focus {
+  border-color: var(--interactive-accent);
+}
+.mod-community-install .community-type-select {
+  align-self: flex-start;
+}
+.mod-community-install .community-trust-warning {
+  margin: 0;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.mod-community-install .community-enable-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-small);
+}
+.mod-community-install .community-status {
+  min-height: 1.2em;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.mod-community-install .community-status.is-error {
+  color: var(--text-error, #e06c75);
+}
+.mod-community-install .community-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Community management list (Settings → Community plugins & themes) */
+.community-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.community-empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  padding: 8px 0;
+}
+.community-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+.community-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: var(--font-weight-medium);
+}
+.community-item-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  border-radius: var(--radius-s);
+  padding: 1px 6px;
+}
+.community-item-badge.is-pinned {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+}
+.community-item-sub {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.community-item-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.community-item-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.community-item-controls button {
+  font-size: var(--font-ui-small);
+  padding: 3px 8px;
+}
+
 .prompt-input {
   font: inherit;
   font-size: 16px;

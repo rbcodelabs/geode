@@ -4,6 +4,8 @@ import { Workspace, TabGroup, View, type PersistedWorkspace } from "./workspace"
 import { CommandRegistry } from "./commands";
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
+import { CommunityManager } from "./community/community-manager";
+import { InstallFromGithubModal } from "./community/install-modal";
 import { MarkdownRenderer } from "./markdown/render";
 import { MarkdownView } from "./views/markdown-view";
 import { FileExplorerView } from "./views/file-explorer";
@@ -138,6 +140,127 @@ class SettingsModal extends Modal {
         this.geodeApp.saveSettings();
       }
     );
+
+    const communityHeading = document.createElement("h2");
+    communityHeading.textContent = "Community plugins & themes";
+    this.contentEl.appendChild(communityHeading);
+    const { control } = this.addRow("Install from GitHub");
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Add…";
+    control.appendChild(addBtn);
+    const listEl = document.createElement("div");
+    listEl.className = "community-list";
+    this.contentEl.appendChild(listEl);
+    addBtn.addEventListener("click", () => {
+      new InstallFromGithubModal(this.geodeApp, this.geodeApp.communityManager, () =>
+        this.renderCommunityList(listEl)
+      ).open();
+    });
+    void this.renderCommunityList(listEl);
+  }
+
+  /** Render the list of tracked community items with per-item controls. */
+  private async renderCommunityList(listEl: HTMLElement): Promise<void> {
+    listEl.innerHTML = "";
+    const cfg = await this.geodeApp.communityManager.load();
+    if (!cfg.items.length) {
+      const empty = document.createElement("div");
+      empty.className = "community-empty";
+      empty.textContent = "No community plugins or themes installed yet.";
+      listEl.appendChild(empty);
+      return;
+    }
+    for (const item of cfg.items) {
+      listEl.appendChild(this.renderCommunityRow(item, listEl));
+    }
+  }
+
+  private renderCommunityRow(
+    item: import("./community/store").CommunityItem,
+    listEl: HTMLElement
+  ): HTMLElement {
+    const cm = this.geodeApp.communityManager;
+    const refresh = () => this.renderCommunityList(listEl);
+    const pinned = Boolean(item.pinnedVersion);
+
+    const row = document.createElement("div");
+    row.className = "community-item";
+    row.dataset.repo = item.repo;
+
+    const info = document.createElement("div");
+    info.className = "community-item-info";
+    info.innerHTML =
+      `<div class="community-item-title">${item.id}` +
+      `<span class="community-item-badge">${item.type}</span>` +
+      (pinned ? `<span class="community-item-badge is-pinned">pinned</span>` : "") +
+      `</div>` +
+      `<div class="community-item-sub">${item.repo} · v${item.installedVersion}</div>`;
+    row.appendChild(info);
+
+    const controls = document.createElement("div");
+    controls.className = "community-item-controls";
+
+    const autoLabel = document.createElement("label");
+    autoLabel.className = "community-item-toggle";
+    const auto = document.createElement("input");
+    auto.type = "checkbox";
+    auto.checked = item.autoUpdate;
+    auto.disabled = pinned;
+    auto.addEventListener("change", async () => {
+      await cm.setAutoUpdate(item.repo, auto.checked);
+      await refresh();
+    });
+    autoLabel.appendChild(auto);
+    autoLabel.appendChild(document.createTextNode(" auto-update"));
+    controls.appendChild(autoLabel);
+
+    const pinLabel = document.createElement("label");
+    pinLabel.className = "community-item-toggle";
+    const pin = document.createElement("input");
+    pin.type = "checkbox";
+    pin.checked = pinned;
+    pin.addEventListener("change", async () => {
+      await cm.setPinned(item.repo, pin.checked);
+      await refresh();
+    });
+    pinLabel.appendChild(pin);
+    pinLabel.appendChild(document.createTextNode(" pin"));
+    controls.appendChild(pinLabel);
+
+    const updateBtn = document.createElement("button");
+    updateBtn.textContent = "Update now";
+    updateBtn.disabled = pinned;
+    updateBtn.addEventListener("click", async () => {
+      updateBtn.disabled = true;
+      const sum = await cm.checkForUpdates({ repos: [item.repo] });
+      if (sum.updated.length) this.geodeApp.notify(`Updated ${sum.updated.join(", ")}`);
+      else if (sum.failed.length) this.geodeApp.notify(`Update failed: ${sum.failed[0].error}`);
+      else this.geodeApp.notify(`${item.id} is up to date`);
+      await refresh();
+    });
+    controls.appendChild(updateBtn);
+
+    const stopBtn = document.createElement("button");
+    stopBtn.textContent = "Stop updating";
+    stopBtn.title = "Keep the files but stop tracking updates";
+    stopBtn.addEventListener("click", async () => {
+      await cm.stopUpdating(item.repo);
+      this.geodeApp.notify(`Stopped tracking ${item.id}`);
+      await refresh();
+    });
+    controls.appendChild(stopBtn);
+
+    const uninstallBtn = document.createElement("button");
+    uninstallBtn.textContent = "Uninstall";
+    uninstallBtn.addEventListener("click", async () => {
+      await cm.uninstall(item.repo);
+      this.geodeApp.notify(`Uninstalled ${item.id}`);
+      await refresh();
+    });
+    controls.appendChild(uninstallBtn);
+
+    row.appendChild(controls);
+    return row;
   }
 
   private addToggle(label: string, value: boolean, onChange: (v: boolean) => void) {
@@ -245,6 +368,7 @@ export class App {
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
   pluginManager!: PluginManager;
   themeManager = new ThemeManager(this);
+  communityManager = new CommunityManager(this);
   settings: AppSettings = { theme: "dark", readableLineLength: true, cssTheme: "" };
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
@@ -353,6 +477,10 @@ export class App {
       this.notify(`Indexed ${this.vault.getMarkdownFiles().length} notes`);
     });
 
+    // Check opt-in community items for updates shortly after startup, off the
+    // critical path. No-op unless a tracked item has auto-update enabled.
+    setTimeout(() => void this.checkCommunityUpdates(false), 2500);
+
     // Re-render open views when files change externally
     this.vault.on("modify", async (file: TFile) => {
       const leaf = this.workspace.findLeafForFile(file.path);
@@ -393,6 +521,12 @@ export class App {
       this.workspace.rightSidebar.toggle()
     );
     c("open-settings", "Open settings", "Mod+,", () => new SettingsModal(this).open());
+    c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
+      new InstallFromGithubModal(this, this.communityManager).open()
+    );
+    c("community-check-updates", "Community: Check for updates", undefined, () =>
+      void this.checkCommunityUpdates(true)
+    );
     c("toggle-theme", "Toggle dark/light theme", undefined, () => {
       this.settings.theme = this.settings.theme === "dark" ? "light" : "dark";
       this.applySettings();
@@ -640,6 +774,35 @@ export class App {
 
   saveSettings() {
     window.geode.writeConfig("app", this.settings);
+  }
+
+  /** Select a community theme by name (or "" for the built-in default): apply it and persist. */
+  async applyCommunityTheme(name: string): Promise<void> {
+    this.settings.cssTheme = name;
+    await this.themeManager.apply(name);
+    this.saveSettings();
+  }
+
+  /**
+   * Run a community update check and surface the result as notices. `force`
+   * (the command) checks every non-pinned item; otherwise (on-launch) only
+   * opt-in items past the cadence.
+   */
+  async checkCommunityUpdates(force: boolean): Promise<void> {
+    try {
+      const sum = await this.communityManager.checkForUpdates({ force });
+      if (sum.updated.length) {
+        this.notify(`Updated ${sum.updated.length} community item(s): ${sum.updated.join(", ")}`);
+      } else if (force) {
+        this.notify(sum.checked ? `Community: all ${sum.checked} up to date` : "No community items to check");
+      }
+      for (const f of sum.failed) console.error(`Community update check failed for ${f.repo}: ${f.error}`);
+      if (force && sum.failed.length) {
+        this.notify(`${sum.failed.length} community update check(s) failed — see console`);
+      }
+    } catch (err) {
+      console.error("Community update check failed", err);
+    }
   }
 }
 
