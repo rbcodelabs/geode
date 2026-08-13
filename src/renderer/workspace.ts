@@ -401,6 +401,12 @@ export class Sidebar implements LeafContainer {
       }
       this.iconBarEl.appendChild(btn);
     }
+    const collapseBtn = document.createElement("div");
+    collapseBtn.className = "sidebar-icon sidebar-collapse-btn";
+    setIcon(collapseBtn, this.side === "left" ? "panel-left" : "panel-right");
+    collapseBtn.title = this.collapsed ? "Expand sidebar" : "Collapse sidebar";
+    collapseBtn.addEventListener("click", () => this.toggle());
+    this.iconBarEl.appendChild(collapseBtn);
   }
 
   show(item: SidebarItem) {
@@ -458,6 +464,7 @@ export class Sidebar implements LeafContainer {
   toggle() {
     this.collapsed = !this.collapsed;
     this.containerEl.classList.toggle("is-collapsed", this.collapsed);
+    this.renderIcons();
   }
 }
 

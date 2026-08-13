@@ -365,6 +365,7 @@ button.mod-cta:hover {
 
 .workspace-sidebar {
   display: flex;
+  flex-direction: column;
   width: 280px;
   min-width: 200px;
   background: var(--background-secondary);
@@ -377,7 +378,6 @@ button.mod-cta:hover {
 
 .workspace-sidebar.mod-right {
   border-left: 1px solid var(--background-modifier-border);
-  flex-direction: row-reverse;
 }
 
 .workspace-sidebar.is-collapsed {
@@ -385,21 +385,57 @@ button.mod-cta:hover {
   min-width: 38px;
 }
 
+/* The macOS traffic-light buttons are an OS-drawn overlay pinned to the
+   window's top-left in *screen* pixels, not clipped to any element — they
+   sit roughly 0-77px from the window edge regardless of what's underneath.
+   A collapsed left sidebar at the default 38px width would place its lone
+   collapse button entirely under the lights (unclickable, invisible).
+   Widen just the collapsed left sidebar so the button clears them; the
+   right sidebar has no such constraint and keeps the narrow 38px strip. */
+.workspace-sidebar.is-collapsed.mod-left {
+  width: 116px;
+  min-width: 116px;
+}
+
 .workspace-sidebar.is-collapsed .sidebar-content {
   display: none;
 }
 
-.sidebar-icon-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 40px 4px 8px;
-  border-right: 1px solid var(--background-modifier-border);
+.workspace-sidebar.is-collapsed .sidebar-icon-bar .sidebar-icon:not(.sidebar-collapse-btn) {
+  display: none;
 }
 
-.mod-right .sidebar-icon-bar {
-  border-right: none;
-  border-left: 1px solid var(--background-modifier-border);
+.workspace-sidebar.is-collapsed .sidebar-icon-bar {
+  justify-content: center;
+}
+
+/* The left sidebar keeps its 78px padding-left (below) even collapsed, so
+   the button already lands clear of the traffic lights without centering —
+   centering would fight the padding and pull it back toward the lights. */
+.workspace-sidebar.is-collapsed.mod-left .sidebar-icon-bar {
+  justify-content: flex-start;
+}
+
+.workspace-sidebar.is-collapsed .sidebar-collapse-btn {
+  margin-left: 0;
+}
+
+.sidebar-icon-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  height: var(--tab-height);
+  padding: 0 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.mod-left .sidebar-icon-bar {
+  padding-left: 78px;
+}
+
+.sidebar-collapse-btn {
+  margin-left: auto;
 }
 
 .sidebar-icon {
