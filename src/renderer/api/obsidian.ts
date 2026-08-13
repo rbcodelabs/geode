@@ -14,11 +14,24 @@ import type { App } from "../app";
 import type { WorkspaceLeaf, View as GeodeView } from "../workspace";
 import { installObsidianDomExtensions } from "./obsidian-dom";
 import { addIcon, setIcon } from "./icons";
+import moment from "moment";
 
 // Ensure the DOM helpers exist the moment the compat module is first
 // evaluated (i.e. when a plugin requires 'obsidian'), even if the host
 // forgot to install them at boot.
 installObsidianDomExtensions();
+
+// Obsidian bundles moment and puts it on window as well as re-exporting it
+// from the 'obsidian' module, and some plugins reference `window.moment`
+// directly at module scope (before onload() runs). Attach it here, at
+// module-eval time, mirroring the DOM-extensions install-at-eval-time
+// pattern above. Guard on `typeof window` since this module is also
+// imported by Node-environment unit tests. `??=` avoids clobbering a
+// host-provided moment (e.g. a real Obsidian-compatible environment that
+// already set one).
+if (typeof window !== "undefined") {
+  (window as unknown as { moment?: unknown }).moment ??= moment;
+}
 
 // --- Re-exports of Geode primitives that already match Obsidian ------------
 export { Component } from "../component";
@@ -62,6 +75,7 @@ export function debounce<T extends (...args: any[]) => any>(fn: T, timeout = 0, 
 
 // Icons resolve to real Lucide SVGs (Obsidian's icon set) — see api/icons.ts.
 export { addIcon, setIcon };
+export { moment };
 export function setTooltip(el: HTMLElement, tooltip: string): void {
   el.setAttribute("aria-label", tooltip);
   el.setAttribute("title", tooltip);

@@ -59,7 +59,14 @@ export class FakeVault extends Events {
 
   async cachedRead(file: TFile): Promise<string> {
     const entry = this.files.get(file.path);
-    if (!entry) throw new Error(`No such file: ${file.path}`);
+    if (!entry) {
+      // Mirrors the real shape of an ipcRenderer.invoke rejection: Electron
+      // wraps the main-process error's message (and only its message —
+      // custom properties like `.code` are dropped across the IPC boundary).
+      throw new Error(
+        `Error invoking remote method 'vault-read': Error: ENOENT: no such file or directory, open '${file.path}'`
+      );
+    }
     return entry.content;
   }
 

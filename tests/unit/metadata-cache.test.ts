@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { findUnlinkedMentions, MetadataCache, parseMetadata } from "../../src/renderer/metadata-cache";
 import { FakeVault } from "../helpers/fake-vault";
 
@@ -193,6 +193,41 @@ describe("MetadataCache backlinks and tag index", () => {
     const b = fake.getFileByPath("B.md")!;
     const backlinks = cache.getBacklinks(b);
     expect(backlinks.map((bl) => bl.source.path)).toEqual(["A.md"]);
+  });
+
+  it("silently ignores a benign ENOENT race (file deleted between the event and the read)", async () => {
+    const fake = new FakeVault({ "A.md": "content" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const aFile = fake.getFileByPath("A.md")!;
+
+    // File is gone by the time indexFile's cachedRead runs — FakeVault's
+    // cachedRead throws a wrapped-IPC-shaped ENOENT message for a missing file.
+    fake.removeFile("A.md");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fake.trigger("modify", aFile);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("still logs a genuine, non-ENOENT indexing failure", async () => {
+    const fake = new FakeVault({ "A.md": "content" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const aFile = fake.getFileByPath("A.md")!;
+
+    (fake as any).cachedRead = async () => {
+      throw new Error("disk exploded");
+    };
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fake.trigger("modify", aFile);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain("Failed to index");
+    errorSpy.mockRestore();
   });
 });
 
