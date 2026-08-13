@@ -500,9 +500,10 @@ button.mod-cta:hover {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
+  padding: 5px 8px;
+  min-height: 28px;
   border-radius: 5px;
-  font-size: 13.5px;
+  font-size: var(--nav-item-size);
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
@@ -516,6 +517,11 @@ button.mod-cta:hover {
 .nav-item.is-active {
   background: var(--background-modifier-active);
   color: var(--text-normal);
+  font-weight: var(--font-weight-medium);
+}
+
+.nav-folder.is-open > .nav-folder-title {
+  font-weight: var(--font-weight-medium);
 }
 
 .nav-item-title {
@@ -525,8 +531,50 @@ button.mod-cta:hover {
 }
 
 .nav-folder-arrow {
-  width: 12px;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.nav-folder-arrow svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nav-folder-children {
+  border-left: 1px solid var(--background-modifier-border);
+  margin-left: 13px;
+  padding-left: 1px;
+}
+
+.sidebar-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidebar-view-actions .clickable-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--text-faint);
+}
+
+.sidebar-view-actions .clickable-icon:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.sidebar-view-actions .clickable-icon svg {
+  width: 15px;
+  height: 15px;
 }
 
 .nav-file-tag {

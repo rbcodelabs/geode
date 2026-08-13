@@ -47,6 +47,19 @@ test("boots into test-vault, opens a note, and renders Live Preview with no cons
     // Vault auto-opened: file explorer should list the seeded note.
     const welcomeRow = window.locator('.nav-file-title[data-path="Welcome.md"]');
     await expect(welcomeRow).toBeVisible();
+
+    // File explorer toolbar renders real Lucide SVG icons, not the old
+    // emoji glyphs (📄+/📁+) or missing icons.
+    const toolbarButtons = window.locator(".sidebar-view-actions .clickable-icon");
+    await expect(toolbarButtons).toHaveCount(5);
+    const toolbarText = await toolbarButtons.allInnerTexts();
+    for (const text of toolbarText) {
+      expect(text).not.toContain("📄");
+      expect(text).not.toContain("📁");
+    }
+    await expect(toolbarButtons.locator("svg").first()).toBeVisible();
+    expect(await toolbarButtons.locator("svg").count()).toBe(5);
+
     await welcomeRow.click();
 
     // Live Preview is the default editing mode (MarkdownView.mode === "live").
