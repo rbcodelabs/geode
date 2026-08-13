@@ -26,6 +26,28 @@ function frontmatterRange(docPrefix: string): { end: number; yaml: string } | nu
   return { end: m[0].length - (m[2]?.length ?? 0), yaml: m[1] };
 }
 
+/**
+ * Returns the doc offset just past the frontmatter block in `text`, or
+ * `null` if `text` has no frontmatter. Scans the same bounded prefix that
+ * `computeFrontmatter()` uses, so results stay consistent with the widget's
+ * replaced range.
+ *
+ * `frontmatterRange().end` stops right after the closing `---` delimiter,
+ * before its trailing newline — that's the right boundary for the widget's
+ * replaced range and the atomic range, but it's still on the frontmatter's
+ * last line. Landing a cursor exactly there renders it at the block
+ * widget's full height (CodeMirror treats the position as belonging to the
+ * replaced line). Advance past the trailing newline, if any, so the cursor
+ * lands on the real line that follows the frontmatter block.
+ */
+export function frontmatterEndOffset(text: string): number | null {
+  const prefix = text.slice(0, Math.min(text.length, FM_SCAN));
+  const fm = frontmatterRange(prefix);
+  if (!fm) return null;
+  const trailingNewline = prefix.slice(fm.end).match(/^\r?\n/);
+  return trailingNewline ? fm.end + trailingNewline[0].length : fm.end;
+}
+
 // --- Properties (frontmatter) widget ---------------------------------------
 
 class PropertiesWidget extends WidgetType {

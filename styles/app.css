@@ -983,6 +983,8 @@ button.mod-cta:hover {
   font-size: 12px;
   width: 16px;
   text-align: center;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .metadata-property-value {
