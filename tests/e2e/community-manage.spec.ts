@@ -104,8 +104,13 @@ test("manages a tracked plugin from Settings: toggle auto-update, then uninstall
     await expect(modal).toBeHidden();
     await expect.poll(() => fs.existsSync(pluginDir), { timeout: 5000 }).toBe(true);
 
-    // Open Settings → the managed item shows in the community list.
+    // Open Settings → Community tab → the managed item shows in the list.
+    // Settings now opens on Appearance; the community list lives behind its
+    // own vertical-tab, so click into it the way a user would.
     await window.evaluate(() => (window as unknown as { app: any }).app.commands.execute("open-settings"));
+    await window
+      .locator(".vertical-tab-nav-item", { hasText: "Community plugins & themes" })
+      .click();
     const rowLoc = window.locator('.community-item[data-repo="geode-tests/managed"]');
     await expect(rowLoc).toBeVisible();
     await expect(rowLoc.locator(".community-item-sub")).toContainText("v1.0.0");
