@@ -1511,6 +1511,11 @@ button.mod-cta:hover {
   z-index: 100;
 }
 
+.modal-container:has(.mod-settings) {
+  align-items: center;
+  padding-top: 0;
+}
+
 .modal {
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
@@ -1533,9 +1538,11 @@ button.mod-cta:hover {
 
 /* Settings modal: wider two-pane layout (nav + content), still capped by
    max-width so it degrades gracefully on small windows. */
-.mod-settings .modal {
-  width: 780px;
-  max-width: 90vw;
+.modal.mod-settings {
+  width: 80vw;
+  height: 80vh;
+  max-width: 80vw;
+  max-height: 80vh;
 }
 
 .mod-settings .modal-content {
