@@ -46,14 +46,15 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
     await expect(graphView).toBeVisible();
     await expect(window.locator(".graph-view-canvas")).toBeVisible();
 
-    // test-vault has 4 markdown files (Welcome, Daily Plan, Projects/Roadmap, Notes/Scratch)
-    // and 4 resolved-link edges: Welcome->Daily Plan, Welcome->Roadmap,
-    // Daily Plan->Roadmap (via its ![[Projects/Roadmap#Q3]] embed), and
-    // Roadmap->Welcome (via "Linked from [[Welcome]]"). Daily Plan's other
-    // wikilink, [[Welcome to Geode|the welcome note]], doesn't resolve —
-    // "Welcome to Geode" isn't Welcome.md's basename or an alias — so it
-    // doesn't add a 5th edge.
-    await expect(graphView).toHaveAttribute("data-graph-node-count", "4");
+    // test-vault has 7 markdown files (Welcome, Daily Plan, Projects/Roadmap,
+    // Notes/Scratch, plus the 3 frontmatter-bearing Tasks/*.md fixtures added
+    // for the Bases E2E tests, which have no links) and 4 resolved-link
+    // edges: Welcome->Daily Plan, Welcome->Roadmap, Daily Plan->Roadmap (via
+    // its ![[Projects/Roadmap#Q3]] embed), and Roadmap->Welcome (via "Linked
+    // from [[Welcome]]"). Daily Plan's other wikilink, [[Welcome to
+    // Geode|the welcome note]], doesn't resolve — "Welcome to Geode" isn't
+    // Welcome.md's basename or an alias — so it doesn't add a 5th edge.
+    await expect(graphView).toHaveAttribute("data-graph-node-count", "7");
     await expect(graphView).toHaveAttribute("data-graph-edge-count", "4");
 
     // Positions populate once the force sim has run at least one tick
@@ -64,7 +65,7 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
         const raw = await graphView.getAttribute("data-graph-node-positions");
         return raw ? Object.keys(JSON.parse(raw)).length : 0;
       })
-      .toBe(4);
+      .toBe(7);
 
     // Open a second, unrelated tab, then re-invoke "Open graph view" — it
     // should switch back to the existing graph tab (singleton view)

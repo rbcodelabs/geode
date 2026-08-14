@@ -223,6 +223,10 @@ export class FileExplorerView implements View {
         action: () => this.app.createNewNote(folder.path),
       },
       {
+        title: "New base",
+        action: () => this.app.createNewBase(folder.path),
+      },
+      {
         title: "New folder",
         action: async () => {
           const name = prompt("Folder name");
