@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import chokidar, { FSWatcher } from "chokidar";
 import { installCommunity, resolveCommunity } from "./community";
 import type { ResolveOpts } from "./github-resolve";
+import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -38,6 +39,52 @@ function loadConfig(): GlobalConfig {
 
 function saveConfig(cfg: GlobalConfig) {
   fs.writeFileSync(appConfigPath(), JSON.stringify(cfg, null, 2));
+}
+
+/**
+ * Fixed, OS-specific, machine-level path for the enterprise-managed plugin
+ * policy file — deliberately NOT the same directory as `appConfigPath()`
+ * above. `appConfigPath()` lives under `app.getPath("userData")`, which on
+ * macOS resolves to `~/Library/Application Support/Geode/` (inside the
+ * user's home, user-owned). The managed-policy path below is
+ * `/Library/Application Support/Geode/` at the filesystem root (no `~`) —
+ * owned by an admin/root account under default OS permissions. That's the
+ * entire tamper-resistance story for v1; see docs/adr/0002.
+ *
+ * `GEODE_POLICY_PATH` overrides the OS default so tests (and e2e specs) can
+ * point at a temp file instead of requiring root writes to a real system
+ * path — never touch the real system paths from tests/CI.
+ */
+function policyFilePath(): string {
+  if (process.env.GEODE_POLICY_PATH) return process.env.GEODE_POLICY_PATH;
+  switch (process.platform) {
+    case "darwin":
+      return "/Library/Application Support/Geode/managed-policy.json";
+    case "win32":
+      return path.join(process.env.ProgramData ?? "C:\\ProgramData", "Geode", "managed-policy.json");
+    default:
+      return "/etc/geode/managed-policy.json";
+  }
+}
+
+/**
+ * Read + validate the managed policy file fresh on every call — no
+ * caching, no file watcher (see docs/adr/0002 "Live-apply vs. read-once").
+ * Fails open (returns `null`) on a missing file, unreadable file, or
+ * invalid JSON; `validatePolicy` handles fail-open for structurally
+ * invalid-but-parseable content (bad `policyVersion`/`mode`/etc).
+ */
+function loadManagedPolicy(): ManagedPolicy | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(policyFilePath(), "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error("Managed policy: failed to read/parse policy file; ignoring (fail open).", err);
+    }
+    return null;
+  }
+  return validatePolicy(raw);
 }
 
 /** Resolve a vault-relative path and refuse anything escaping the vault root. */
@@ -132,6 +179,12 @@ function registerIpc() {
     const cfg = loadConfig();
     return cfg.recentVaults.filter((v) => fs.existsSync(v));
   });
+
+  // Enterprise-managed plugin policy — machine-level, not vault-scoped (see
+  // policyFilePath()/loadManagedPolicy() above and docs/adr/0002). No
+  // caching: re-read on every call so a new vault window opened in an
+  // already-running process picks up a just-changed policy immediately.
+  ipcMain.handle("get-plugin-policy", () => loadManagedPolicy());
 
   ipcMain.handle("vault-list", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
