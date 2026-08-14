@@ -50,10 +50,9 @@ test("Open web viewer mounts a <webview> tab in its own persist:webviewer sessio
 
     // The tab title tracks the page's <title> once it loads, not staying on
     // the initial URL-derived fallback text forever.
-    await expect(window.locator(".workspace-tab-header.is-active .workspace-tab-title")).not.toHaveText(
-      "",
-      { timeout: 20000 }
-    );
+    await expect(
+      window.locator(".workspace-tab-header.is-active .workspace-tab-header-inner-title")
+    ).not.toHaveText("", { timeout: 20000 });
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
