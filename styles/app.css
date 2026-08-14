@@ -2281,6 +2281,24 @@ select.dropdown:hover {
   white-space: nowrap;
 }
 
+/* ---- Bases embedded in a note (```base block or ![[File.base]]) ---- */
+
+.bases-embed-view {
+  display: flex;
+  flex-direction: column;
+  height: 400px;
+  max-height: 60vh;
+  margin: var(--size-4-2) 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px);
+  overflow: hidden;
+}
+
+.bases-embed-view .base-view-body {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ---- Bases toolbar floating panels (Filter/Sort/Properties) ---- */
 
 .bases-panel {

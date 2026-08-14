@@ -200,6 +200,77 @@ test("switch a base view to Cards, render cards, and persist the type to disk", 
   }
 });
 
+test("renders an embedded ```base block and a ![[File.base]] transclusion in reading view", async () => {
+  const vaultDir = makeVaultCopy();
+  // A standalone .base file at the vault root (so `![[Roster.base]]` resolves
+  // directly by path) plus a note that both embeds an inline base and
+  // transcludes that .base file.
+  fs.writeFileSync(
+    path.join(vaultDir, "Roster.base"),
+    "views:\n  - type: table\n    name: Roster\n"
+  );
+  fs.writeFileSync(
+    path.join(vaultDir, "Embed.md"),
+    [
+      "# Embedded bases",
+      "",
+      "Inline base:",
+      "",
+      "```base",
+      "views:",
+      "  - type: table",
+      "    name: Inline",
+      "```",
+      "",
+      "Transcluded base:",
+      "",
+      "![[Roster.base]]",
+      "",
+    ].join("\n")
+  );
+
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-bases-e2e-ud-"));
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const app = await electron.launch({
+    args: [repoRoot, `--user-data-dir=${userDataDir}`],
+    cwd: repoRoot,
+  });
+
+  try {
+    const window = await app.firstWindow();
+    const consoleErrors: string[] = [];
+    window.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    window.on("pageerror", (err) => consoleErrors.push(String(err)));
+
+    // Open the note, then switch to reading view (where embeds render).
+    await window.locator('.nav-file-title[data-path="Embed.md"]').click();
+    await window.locator('[title="Toggle reading view (Cmd/Ctrl+E)"]').click();
+
+    // Both the inline ```base block and the ![[Roster.base]] transclusion
+    // become live embedded base views, each with a toolbar and a table.
+    const embeds = window.locator(".markdown-reading-view .bases-embed-view");
+    await expect(embeds).toHaveCount(2);
+    await expect(embeds.first().locator(".bases-toolbar")).toBeVisible();
+    await expect(embeds.first().locator(".bases-table thead th").first()).toBeVisible();
+    await expect(embeds.nth(1).locator(".bases-table")).toBeVisible();
+
+    // Each embedded base ran its query against the vault and produced rows.
+    await expect(embeds.first().locator(".bases-data-row").first()).toBeVisible();
+
+    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("Copy on the results menu puts the view on the clipboard as TSV", async () => {
   const vaultDir = makeVaultCopy();
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-bases-e2e-ud-"));

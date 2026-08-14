@@ -93,8 +93,22 @@ export class BaseView implements View {
    */
   private lastKnownText: string | null = null;
 
+  /**
+   * When set, this base is an *embedded* base (a ```base code block in a
+   * note) rather than a standalone `.base` file: `this.file` is the host
+   * note (supplying the `this` context and new-file folder), reads come from
+   * the inline YAML, and persistence goes through this callback (which
+   * rewrites the code block in the host note) instead of `vault.modify`.
+   */
+  private inlinePersist: ((text: string) => Promise<void>) | null = null;
+
   private readonly onVaultChange = (changedFile?: TFile) => {
     if (changedFile && this.file && changedFile.path === this.file.path) {
+      // For an embedded base the host note's own changes must NOT be
+      // re-parsed as base YAML — the inline text we hold is authoritative,
+      // and our own persist writes back to that same host note (ignoring it
+      // here also avoids a write→modify→reload loop).
+      if (this.inlinePersist) return;
       void this.reloadIfChangedExternally();
       return;
     }
@@ -180,6 +194,39 @@ export class BaseView implements View {
     this.file = file;
     this.titleEl.textContent = file.basename;
     await this.reloadFromDisk();
+  }
+
+  /**
+   * Mount this base from inline YAML — an embedded ```base code block. The
+   * host note supplies the `this` context and the folder for the "New"
+   * button; edits persist via `persist` (which rewrites the code block in
+   * the note). Used by the Markdown renderer for embedded bases; the tab
+   * header is hidden since an embed has no tab of its own.
+   */
+  async mountInline(
+    hostFile: TFile,
+    text: string,
+    persist: (text: string) => Promise<void>,
+    viewName?: string
+  ): Promise<void> {
+    this.inlinePersist = persist;
+    this.file = hostFile;
+    this.markEmbedded();
+    if (viewName) this.currentViewName = viewName;
+    await this.applyText(text);
+  }
+
+  /** Hide the tab-style header and mark the container as an embed — used when this view is embedded/transcluded inside a note. */
+  markEmbedded(): void {
+    this.headerEl.style.display = "none";
+    this.containerEl.classList.add("bases-embed-view");
+  }
+
+  /** Select a specific view by name (used by `![[File.base#ViewName]]` transclusion); no-op if it doesn't exist. */
+  selectView(name: string): void {
+    if (!this.def || !this.def.views.some((v) => v.name === name)) return;
+    this.currentViewName = name;
+    this.runAndRender();
   }
 
   private async reloadFromDisk(): Promise<void> {
@@ -342,7 +389,8 @@ export class BaseView implements View {
     if (!this.def || !this.file) return;
     const text = stringifyBaseFile(this.def);
     this.lastKnownText = text;
-    await this.app.vault.modify(this.file, text);
+    if (this.inlinePersist) await this.inlinePersist(text);
+    else await this.app.vault.modify(this.file, text);
     this.runAndRender();
   }
 

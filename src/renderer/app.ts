@@ -883,9 +883,8 @@ export class App {
 
   /**
    * "Bases: Insert new base" — embeds a base as a ```base fenced code block
-   * in the active markdown note, at the cursor. Full embedded-base rendering
-   * (turning that code block into a live table) is Phase D's job; until
-   * then it renders as a plain code block, which is expected for this phase.
+   * in the active markdown note, at the cursor. Reading view renders that
+   * block as a live, interactive base (see MarkdownRenderer.mountBases).
    */
   insertNewBase(): void {
     const view = this.getActiveMarkdownView();
