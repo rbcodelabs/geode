@@ -42,6 +42,8 @@ export class WorkspaceLeaf {
   id = `leaf-${++leafIdCounter}`;
   view: View | null = null;
   tabEl: HTMLElement;
+  /** Obsidian's `.workspace-leaf` wrapper: hosts `contentEl` when mounted into a tab group. */
+  leafEl: HTMLElement;
   contentEl: HTMLElement;
   pinned = false;
 
@@ -53,12 +55,16 @@ export class WorkspaceLeaf {
     this.tabEl.className = "workspace-tab-header";
     this.contentEl = document.createElement("div");
     this.contentEl.className = "workspace-leaf-content";
+    this.leafEl = document.createElement("div");
+    this.leafEl.className = "workspace-leaf mod-active";
+    this.leafEl.appendChild(this.contentEl);
   }
 
   async setView(view: View): Promise<void> {
     if (this.view) await this.view.onClose();
     this.view = view;
     this.contentEl.innerHTML = "";
+    this.contentEl.dataset.type = view.viewType;
     this.contentEl.appendChild(view.containerEl);
     await view.onOpen();
     this.group.renderTabs();
@@ -106,6 +112,10 @@ export class WorkspaceLeaf {
   /** Re-render this leaf's tab header (Obsidian `leaf.updateHeader`). */
   updateHeader(): void {
     this.group.renderTabs();
+    // ItemView (api/obsidian.ts) exposes this to refresh its own
+    // `.view-header-title` text; duck-typed rather than imported to avoid a
+    // workspace.ts <-> obsidian.ts circular dependency.
+    (this.view as { refreshHeaderTitle?(): void } | null)?.refreshHeaderTitle?.();
   }
 
   private _tabTitleEl?: HTMLElement;
@@ -121,12 +131,93 @@ export class WorkspaceLeaf {
   }
 }
 
+/**
+ * `.view-header-nav-buttons` (back/forward), shared by `ItemView`
+ * (api/obsidian.ts) and `MarkdownView` (views/markdown-view.ts). Geode's
+ * `Workspace` has no navigation history to wire these to yet, so they render
+ * as inert placeholders — real DOM/class shape for themes to style, but
+ * disabled and inert rather than silently doing nothing on click. Follow-up:
+ * wire to a real back/forward history once `Workspace` tracks one.
+ */
+export function buildViewHeaderNavButtons(): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "view-header-nav-buttons";
+  for (const [icon, label] of [
+    ["arrow-left", "Navigate back"],
+    ["arrow-right", "Navigate forward"],
+  ] as const) {
+    const btn = document.createElement("div");
+    btn.className = "clickable-icon view-action nav-action-button";
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("aria-disabled", "true");
+    setIcon(btn, icon);
+    wrap.appendChild(btn);
+  }
+  return wrap;
+}
+
+/**
+ * Build (or rebuild) `leaf.tabEl`'s contents to match real Obsidian's tab
+ * header DOM: `.workspace-tab-header[data-type][aria-label]` >
+ * `.workspace-tab-header-inner` (icon + title + close button) plus a sibling
+ * `.workspace-tab-header-status-container` (pin icon). Shared by `TabGroup`
+ * and `Sidebar` so both main-area tabs and docked panes expose the same
+ * class names for community themes to target. Caller wires up drag/drop and
+ * click handlers afterward — this only builds the static structure.
+ */
+function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
+  const tab = leaf.tabEl;
+  tab.innerHTML = "";
+  tab.className = "workspace-tab-header";
+  tab.classList.toggle("is-active", isActive);
+  tab.classList.toggle("mod-pinned", leaf.pinned);
+  tab.dataset.type = leaf.view?.viewType ?? "empty";
+  tab.setAttribute("aria-label", leaf.getDisplayText());
+
+  const inner = document.createElement("div");
+  inner.className = "workspace-tab-header-inner";
+
+  const icon = document.createElement("div");
+  icon.className = "workspace-tab-header-inner-icon";
+  if (leaf.view) setIcon(icon, leaf.view.getIcon());
+
+  const title = document.createElement("div");
+  title.className = "workspace-tab-header-inner-title";
+  title.textContent = leaf.getDisplayText();
+
+  const close = document.createElement("div");
+  close.className = "workspace-tab-header-inner-close-button";
+  close.setAttribute("aria-label", "Close");
+  setIcon(close, "x");
+  close.addEventListener("click", (e) => {
+    e.stopPropagation();
+    leaf.detach();
+  });
+
+  inner.append(icon, title, close);
+
+  const status = document.createElement("div");
+  status.className = "workspace-tab-header-status-container";
+  if (leaf.pinned) {
+    const pin = document.createElement("div");
+    pin.className = "workspace-tab-header-status-icon mod-pinned";
+    setIcon(pin, "pin");
+    status.appendChild(pin);
+  }
+
+  tab.append(inner, status);
+  return tab;
+}
+
 /** A group of tabs sharing one content area. */
 export class TabGroup {
   leaves: WorkspaceLeaf[] = [];
   active: WorkspaceLeaf | null = null;
   containerEl: HTMLElement;
+  /** `.workspace-tab-header-container` — the whole header bar (scrollable inner row + tab-list/new-tab). */
   tabBarEl: HTMLElement;
+  /** `.workspace-tab-header-container-inner` — the scrollable row that actually holds the tab headers. */
+  tabHeaderInnerEl: HTMLElement;
   contentHostEl: HTMLElement;
 
   constructor(
@@ -134,11 +225,34 @@ export class TabGroup {
     public app: App
   ) {
     this.containerEl = document.createElement("div");
-    this.containerEl.className = "workspace-tab-group";
+    this.containerEl.className = "workspace-tabs mod-top";
     this.tabBarEl = document.createElement("div");
-    this.tabBarEl.className = "workspace-tab-bar";
+    this.tabBarEl.className = "workspace-tab-header-container";
+    this.tabHeaderInnerEl = document.createElement("div");
+    this.tabHeaderInnerEl.className = "workspace-tab-header-container-inner";
+    this.tabBarEl.appendChild(this.tabHeaderInnerEl);
+
+    const tabList = document.createElement("div");
+    tabList.className = "workspace-tab-header-tab-list";
+    const tabListIcon = document.createElement("div");
+    tabListIcon.className = "clickable-icon";
+    tabListIcon.title = "All tabs";
+    setIcon(tabListIcon, "chevron-down");
+    tabList.appendChild(tabListIcon);
+    this.tabBarEl.appendChild(tabList);
+
+    const newTab = document.createElement("div");
+    newTab.className = "workspace-tab-header-new-tab";
+    const newTabIcon = document.createElement("div");
+    newTabIcon.className = "clickable-icon";
+    newTabIcon.title = "New tab";
+    setIcon(newTabIcon, "plus");
+    newTabIcon.addEventListener("click", () => this.app.openEmptyTab(this));
+    newTab.appendChild(newTabIcon);
+    this.tabBarEl.appendChild(newTab);
+
     this.contentHostEl = document.createElement("div");
-    this.contentHostEl.className = "workspace-tab-content";
+    this.contentHostEl.className = "workspace-tab-container";
     this.containerEl.appendChild(this.tabBarEl);
     this.containerEl.appendChild(this.contentHostEl);
     this.containerEl.addEventListener("mousedown", () => {
@@ -199,7 +313,7 @@ export class TabGroup {
     if (this.active === leaf) {
       this.active = this.leaves[Math.min(i, this.leaves.length - 1)] ?? null;
       this.contentHostEl.innerHTML = "";
-      if (this.active) this.contentHostEl.appendChild(this.active.contentEl);
+      if (this.active) this.contentHostEl.appendChild(this.active.leafEl);
     }
     this.renderTabs();
   }
@@ -220,7 +334,7 @@ export class TabGroup {
   setActiveLeaf(leaf: WorkspaceLeaf) {
     this.active = leaf;
     this.contentHostEl.innerHTML = "";
-    this.contentHostEl.appendChild(leaf.contentEl);
+    this.contentHostEl.appendChild(leaf.leafEl);
     this.renderTabs();
     this.workspace.activeGroup = this;
     this.workspace.trigger("active-leaf-change", leaf);
@@ -246,24 +360,10 @@ export class TabGroup {
   }
 
   renderTabs() {
-    this.tabBarEl.innerHTML = "";
+    this.tabHeaderInnerEl.innerHTML = "";
     for (const leaf of this.leaves) {
-      const tab = leaf.tabEl;
-      tab.innerHTML = "";
-      tab.classList.toggle("is-active", leaf === this.active);
+      const tab = buildTabHeader(leaf, leaf === this.active);
       tab.draggable = true;
-      const title = document.createElement("span");
-      title.className = "workspace-tab-title";
-      title.textContent = (leaf.pinned ? "📌 " : "") + leaf.getDisplayText();
-      const close = document.createElement("span");
-      close.className = "workspace-tab-close";
-      close.textContent = "×";
-      close.addEventListener("click", (e) => {
-        e.stopPropagation();
-        leaf.detach();
-      });
-      tab.appendChild(title);
-      tab.appendChild(close);
       tab.onmousedown = (e) => {
         if (e.button === 1) leaf.detach();
         else this.setActiveLeaf(leaf);
@@ -277,14 +377,11 @@ export class TabGroup {
         draggingLeaf = null;
         tab.classList.remove("is-dragging");
       };
-      this.tabBarEl.appendChild(tab);
+      this.tabHeaderInnerEl.appendChild(tab);
     }
-    const newTab = document.createElement("div");
-    newTab.className = "workspace-tab-new";
-    newTab.textContent = "+";
-    newTab.title = "New tab";
-    newTab.addEventListener("click", () => this.app.openEmptyTab(this));
-    this.tabBarEl.appendChild(newTab);
+    const spacer = document.createElement("div");
+    spacer.className = "workspace-tab-header-spacer";
+    this.tabHeaderInnerEl.appendChild(spacer);
   }
 }
 
@@ -439,9 +536,16 @@ export class Sidebar implements LeafContainer {
       if (this.isLeaf(item) && !item.view) continue; // no icon until a view is mounted
       const { icon, title } = this.metaOf(item);
       const btn = document.createElement("div");
-      btn.className = "sidebar-icon";
+      // Docked-pane icon strip: real Obsidian renders this as a compressed
+      // `.workspace-tab-header` row (title collapsed via `.mod-left-split`/
+      // `.mod-right-split` CSS). Geode keeps its own icon-rail layout but
+      // carries the same `workspace-tab-header-inner-icon` class + data-type/
+      // aria-label so community-theme icon rules still apply here too.
+      btn.className = "sidebar-icon workspace-tab-header-inner-icon";
+      btn.dataset.type = this.isLeaf(item) ? (item.view?.viewType ?? "empty") : item.viewType;
       setIcon(btn, icon); // render a Lucide SVG (falls back to the glyph/text for emoji)
       btn.title = title;
+      btn.setAttribute("aria-label", title);
       btn.classList.toggle("is-active", item === this.active);
       btn.addEventListener("click", () => this.show(item));
       // Docked plugin panes can be dragged out to a tab group or the other sidebar.

@@ -67,7 +67,7 @@ test("persists workspace layout (tabs + docked plugin pane) across a relaunch", 
       a.workspace.revealLeaf(leaf);
     });
     // Two markdown tabs + the docked pane are present now.
-    await expect(win.locator(".workspace-tab-title", { hasText: "Beta" })).toBeVisible();
+    await expect(win.locator(".workspace-tab-header-inner-title", { hasText: "Beta" })).toBeVisible();
     await expect(
       win.locator(".workspace-sidebar.mod-right .probe-pane-body")
     ).toBeVisible();
@@ -83,8 +83,8 @@ test("persists workspace layout (tabs + docked plugin pane) across a relaunch", 
     const consoleErrors: string[] = [];
     win.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
 
-    await expect(win.locator(".workspace-tab-title", { hasText: "Alpha" })).toBeVisible();
-    await expect(win.locator(".workspace-tab-title", { hasText: "Beta" })).toBeVisible();
+    await expect(win.locator(".workspace-tab-header-inner-title", { hasText: "Alpha" })).toBeVisible();
+    await expect(win.locator(".workspace-tab-header-inner-title", { hasText: "Beta" })).toBeVisible();
     // The docked plugin pane came back in the right sidebar.
     await expect(
       win.locator(".workspace-sidebar.mod-right .probe-pane-body")
@@ -205,7 +205,7 @@ test("moves a pane across containers (sidebar ↔ tab group) and reorders tabs b
       a.workspace.moveLeaf(leaf, a.workspace.activeGroup);
       return {
         group: leaf.group?.constructor?.name,
-        inMain: !!document.querySelector(".workspace-tab-content .probe-pane-body"),
+        inMain: !!document.querySelector(".workspace-tab-container .probe-pane-body"),
         inSidebar: !!document.querySelector(".workspace-sidebar.mod-right .probe-pane-body"),
       };
     });
@@ -232,7 +232,7 @@ test("moves a pane across containers (sidebar ↔ tab group) and reorders tabs b
       await a.openFile(a.vault.getFileByPath("Beta.md"), true);
     });
     const order1 = await win.evaluate(() =>
-      [...document.querySelectorAll(".workspace-tab-content .workspace-tab-title, .workspace-tab-bar .workspace-tab-title")]
+      [...document.querySelectorAll(".workspace-tab-container .workspace-tab-header-inner-title, .workspace-tab-header-container .workspace-tab-header-inner-title")]
         .map((e) => (e as HTMLElement).textContent)
     );
     // Drag the "Beta" tab to before the "Alpha" tab.

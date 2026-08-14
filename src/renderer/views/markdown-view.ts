@@ -18,7 +18,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { App } from "../app";
-import type { View } from "../workspace";
+import { buildViewHeaderNavButtons, type View } from "../workspace";
 import type { TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 
@@ -52,6 +52,7 @@ export class MarkdownView implements View {
   private editingCompartment = new Compartment();
   editor: EditorView | null = null;
   private headerEl: HTMLElement;
+  private titleParentEl: HTMLElement;
   private titleEl: HTMLElement;
   private bodyEl: HTMLElement;
   private readingEl: HTMLElement;
@@ -64,6 +65,16 @@ export class MarkdownView implements View {
     this.containerEl.className = "markdown-view";
     this.headerEl = document.createElement("div");
     this.headerEl.className = "view-header";
+
+    const left = document.createElement("div");
+    left.className = "view-header-left";
+    left.appendChild(buildViewHeaderNavButtons());
+
+    const titleContainer = document.createElement("div");
+    titleContainer.className = "view-header-title-container";
+    this.titleParentEl = document.createElement("div");
+    this.titleParentEl.className = "view-header-title-parent";
+
     this.titleEl = document.createElement("div");
     this.titleEl.className = "view-header-title";
     this.titleEl.contentEditable = "plaintext-only";
@@ -74,19 +85,25 @@ export class MarkdownView implements View {
       }
     });
     this.titleEl.addEventListener("blur", () => this.commitTitleRename());
+
+    titleContainer.append(this.titleParentEl, this.titleEl);
+    left.appendChild(titleContainer);
+
+    const actions = document.createElement("div");
+    actions.className = "view-actions";
     const sourceBtn = document.createElement("button");
-    sourceBtn.className = "view-mode-toggle clickable-icon";
+    sourceBtn.className = "view-mode-toggle clickable-icon view-action";
     sourceBtn.title = "Toggle Live Preview / Source mode";
     sourceBtn.textContent = "</>";
     sourceBtn.addEventListener("click", () => this.toggleSource());
     const modeBtn = document.createElement("button");
-    modeBtn.className = "view-mode-toggle clickable-icon";
+    modeBtn.className = "view-mode-toggle clickable-icon view-action";
     modeBtn.title = "Toggle reading view (Cmd/Ctrl+E)";
     modeBtn.textContent = "📖";
     modeBtn.addEventListener("click", () => this.toggleMode());
-    this.headerEl.appendChild(this.titleEl);
-    this.headerEl.appendChild(sourceBtn);
-    this.headerEl.appendChild(modeBtn);
+    actions.append(sourceBtn, modeBtn);
+
+    this.headerEl.append(left, actions);
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "markdown-view-body";
@@ -116,6 +133,10 @@ export class MarkdownView implements View {
     await this.flush();
     this.file = file;
     this.titleEl.textContent = file.basename;
+    this.titleParentEl.innerHTML = "";
+    if (file.parent) {
+      for (const el of buildBreadcrumbs(file.parent)) this.titleParentEl.appendChild(el);
+    }
     const text = await this.app.vault.read(file);
     this.lastSavedText = text;
     this.buildEditor(text);
@@ -325,6 +346,31 @@ export class MarkdownView implements View {
     this.editor?.destroy();
     this.editor = null;
   }
+}
+
+/**
+ * `.view-header-title-parent`'s children: one `.view-header-breadcrumb` per
+ * folder path segment plus a literal (JS-inserted, not CSS `::after`)
+ * `.view-header-breadcrumb-separator` between each — real Obsidian's app.css
+ * has a dedicated rule for the separator element, confirming it isn't a
+ * pseudo-element.
+ */
+function buildBreadcrumbs(parentPath: string): HTMLElement[] {
+  const segments = parentPath.split("/").filter(Boolean);
+  const out: HTMLElement[] = [];
+  segments.forEach((segment, i) => {
+    if (i > 0) {
+      const sep = document.createElement("span");
+      sep.className = "view-header-breadcrumb-separator";
+      sep.textContent = "/";
+      out.push(sep);
+    }
+    const crumb = document.createElement("span");
+    crumb.className = "view-header-breadcrumb";
+    crumb.textContent = segment;
+    out.push(crumb);
+  });
+  return out;
 }
 
 function renderProperties(props: Record<string, unknown>): HTMLElement {
