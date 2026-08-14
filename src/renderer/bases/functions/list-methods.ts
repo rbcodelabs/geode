@@ -82,6 +82,18 @@ export const LIST_METHODS: Record<string, MethodFn> = {
     return str(l.map(valueToDisplayString).join(sep));
   },
 
+  // Not in the spec's documented function list, but used by the spec's own
+  // worked example (`values.mean().round(3)` under `summaries:`) — average
+  // of the list's numeric elements, ignoring non-numbers. Undocumented gap
+  // in the upstream spec, added so summary formulas built on the spec's own
+  // example actually work.
+  mean: (target) => {
+    const l = asList(target);
+    if (l === null) return nullValue();
+    const nums = l.filter((v) => v.type === "number").map((v) => v.value as number);
+    return nums.length ? num(nums.reduce((a, b) => a + b, 0) / nums.length) : nullValue();
+  },
+
   // vars: value, index
   map: (target, args, ctx) => {
     const l = asList(target);

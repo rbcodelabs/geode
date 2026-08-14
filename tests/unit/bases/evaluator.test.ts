@@ -397,6 +397,11 @@ describe("evaluator: list methods", () => {
     const ctx = await fixtureCtx();
     expect(run(ctx, 'nums.join(", ")')).toEqual(str("3, 1, 2"));
   });
+  it("mean (undocumented in the function list, but used by the spec's own summaries example)", async () => {
+    const ctx = await fixtureCtx();
+    expect(run(ctx, "nums.mean()")).toEqual(num(2));
+    expect(run(ctx, "list().mean()")).toEqual(nullValue());
+  });
   it("reverse/sort/unique", async () => {
     const ctx = await fixtureCtx();
     expect(run(ctx, "nums.reverse()")).toEqual(listValue([num(2), num(1), num(3)]));
