@@ -16,6 +16,10 @@ export interface VaultEvent {
   path: string;
 }
 
+export interface UpdaterCheckResult {
+  status: "checking" | "disabled";
+}
+
 const api = {
   chooseVault: (): Promise<string | null> => ipcRenderer.invoke("choose-vault"),
   openVault: (
@@ -52,6 +56,7 @@ const api = {
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },
+  checkForUpdates: (): Promise<UpdaterCheckResult> => ipcRenderer.invoke("updater-check"),
 };
 
 export type GeodeApi = typeof api;

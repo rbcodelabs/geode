@@ -8,6 +8,7 @@ import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import { withPathLock } from "./path-lock";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
+import { checkForUpdatesManually, initAutoUpdater } from "./auto-updater";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -375,6 +376,10 @@ function registerIpc() {
   // what's actually injected into the persist:webviewer session.
   ipcMain.handle("chrome-list-profiles", () => listChromeProfiles());
   ipcMain.handle("chrome-import-cookies", (_e, profileDir: string) => importChromeCookies(profileDir));
+
+  // Auto-updater manual "check now" trigger (src/main/auto-updater.ts). Not
+  // vault-scoped — updates apply to the whole app, not a session.
+  ipcMain.handle("updater-check", () => checkForUpdatesManually());
 }
 
 function createWindow() {
@@ -420,6 +425,7 @@ function createWindow() {
 app.whenReady().then(() => {
   registerIpc();
   createWindow();
+  initAutoUpdater();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
