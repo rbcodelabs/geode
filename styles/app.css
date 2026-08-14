@@ -1380,9 +1380,82 @@ button.mod-cta:hover {
   padding: 0;
 }
 
+/* Settings modal: wider two-pane layout (nav + content), still capped by
+   max-width so it degrades gracefully on small windows. */
+.mod-settings .modal {
+  width: 780px;
+  max-width: 90vw;
+}
+
 .mod-settings .modal-content {
-  padding: 16px 24px 24px;
+  flex-direction: row;
+  padding: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ---- Settings nav (left column) ---- */
+
+.vertical-tab-header {
+  flex: 0 0 220px;
   overflow-y: auto;
+  padding: 16px 8px;
+  border-right: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.vertical-tab-header-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.vertical-tab-header-group-title {
+  padding: 4px 10px;
+  font-size: var(--font-ui-smaller, 12px);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.vertical-tab-nav-item {
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-medium);
+  cursor: pointer;
+  user-select: none;
+}
+
+.vertical-tab-nav-item:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.vertical-tab-nav-item.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* ---- Settings content (right column) ---- */
+
+.vertical-tab-content-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+}
+
+/* `.vertical-tab-content` is the class already used on
+   `PluginSettingTab.containerEl` (see api/obsidian.ts) — it's the inner
+   wrapper a plugin's settings render into. */
+.vertical-tab-content {
+  display: block;
+}
+
+.setting-tab-error {
+  color: var(--text-error, #e06c75);
+  padding: 8px 0;
 }
 
 /* Install-from-GitHub modal (community plugins & themes) */
