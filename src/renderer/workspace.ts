@@ -618,6 +618,16 @@ export class Workspace extends Events {
     return this.activeGroup.active;
   }
 
+  /**
+   * Obsidian's `workspace.activeLeaf` — a plain property, not just a method
+   * (real plugins commonly destructure `{ view } = this.app.workspace.activeLeaf`
+   * unguarded, e.g. the vendored Calendar fixture's `updateActiveFile`).
+   * Kept in sync with `getActiveLeaf()`.
+   */
+  get activeLeaf(): WorkspaceLeaf | null {
+    return this.getActiveLeaf();
+  }
+
   /** Active file in the workspace (from the active leaf's view). */
   getActiveFile(): TFile | null {
     return this.getActiveLeaf()?.view?.getFile?.() ?? null;
@@ -628,6 +638,27 @@ export class Workspace extends Events {
     const active = this.getActiveLeaf();
     if (!newTab && active && !active.pinned) return active;
     return this.activeGroup.createLeaf();
+  }
+
+  /**
+   * Obsidian's `workspace.getUnpinnedLeaf()`: a leaf plugins can open a file
+   * into without evicting a pinned tab — identical to `getLeaf(false)`'s
+   * "reuse the active leaf unless it's pinned" semantics. Called directly
+   * (not via a `Plugin` wrapper) by real plugins, e.g. the vendored
+   * Calendar fixture's `openOrCreateDailyNote`/`tryToCreateDailyNote`.
+   */
+  getUnpinnedLeaf(): WorkspaceLeaf {
+    return this.getLeaf(false);
+  }
+
+  /**
+   * Obsidian's `workspace.splitActiveLeaf()`: open a new leaf in a fresh
+   * split next to the active group, mirroring the "split-right" command's
+   * `addGroup(activeGroup)` + create-leaf pattern.
+   */
+  splitActiveLeaf(_direction?: "vertical" | "horizontal"): WorkspaceLeaf {
+    const group = this.addGroup(this.activeGroup);
+    return group.createLeaf();
   }
 
   /** Find an open leaf already displaying the given file. */
@@ -763,7 +794,15 @@ export class Workspace extends Events {
     else this.layoutReadyCbs.push(cb);
   }
 
-  /** Fire queued `onLayoutReady` callbacks. Called once by App after layout restore. */
+  /**
+   * Fire queued `onLayoutReady` callbacks. Called once by App after layout
+   * restore. Also emits the `"layout-ready"` Events-based signal — real
+   * Obsidian plugins commonly use `workspace.on("layout-ready", cb)`
+   * (rather than, or in addition to, `onLayoutReady(cb)`) to defer opening
+   * their own view until here; without this, that idiom silently never
+   * fires in Geode. Purely additive: nothing in Geode's own code currently
+   * subscribes via `.on("layout-ready", ...)`.
+   */
   flushLayoutReady(): void {
     this.layoutReady = true;
     for (const cb of this.layoutReadyCbs.splice(0)) {
@@ -773,6 +812,7 @@ export class Workspace extends Events {
         console.error("Error in onLayoutReady callback", err);
       }
     }
+    this.trigger("layout-ready");
   }
 
   /** Obsidian's `workspace.activeEditor` — the active editor host, or null. */

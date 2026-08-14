@@ -15,7 +15,14 @@ import { GraphView } from "./views/graph-view";
 import { Modal, SuggestModal } from "./modals/modals";
 import { TFile, pathName } from "./types";
 import { rewriteWikilinksForRename } from "./rename";
+import {
+  resolveDailyNoteSettings,
+  matchDailyNoteFile,
+  dailyNotePath,
+  type DailyNoteSettings,
+} from "./daily-notes";
 import type { Command } from "./commands";
+import moment from "moment";
 
 interface AppSettings {
   theme: "dark" | "light";
@@ -370,6 +377,8 @@ export class App {
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = { theme: "dark", readableLineLength: true, cssTheme: "" };
+  /** Resolved "daily-notes" config (defaults until a vault is opened); also read by the internalPlugins compat shim. */
+  dailyNoteSettings: DailyNoteSettings = resolveDailyNoteSettings(null);
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -423,6 +432,14 @@ export class App {
     }
     const saved = (await window.geode.readConfig("app")) as Partial<AppSettings> | null;
     if (saved) this.settings = { ...this.settings, ...saved };
+
+    // Loaded before pluginManager.initialize() so the internalPlugins compat
+    // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready
+    // before any hosted plugin (e.g. Calendar) can query "daily-notes".
+    const savedDailyNotes = (await window.geode.readConfig(
+      "daily-notes"
+    )) as Partial<DailyNoteSettings> | null;
+    this.dailyNoteSettings = resolveDailyNoteSettings(savedDailyNotes);
 
     rootEl.innerHTML = "";
     const shell = document.createElement("div");
@@ -611,19 +628,23 @@ export class App {
     await this.openFile(file, false);
   }
 
+  /**
+   * Open today's daily note, creating it (under the configured folder/format)
+   * if it doesn't exist yet. Shares `resolveDailyNoteSettings`/
+   * `matchDailyNoteFile` with the "daily-notes" internalPlugins compat shim
+   * (api/obsidian.ts) so Geode's own feature and hosted plugins (e.g.
+   * Calendar, via obsidian-daily-notes-interface) agree on what "today's
+   * note" means.
+   */
   async openDailyNote(): Promise<void> {
-    const today = new Date();
-    const name = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    let file = this.vault.getFileByPath(`${name}.md`);
+    const settings = this.dailyNoteSettings;
+    const today = moment();
+    const key = today.format(settings.format);
+    const index = matchDailyNoteFile(this.vault.getMarkdownFiles(), settings);
+    let file = index.get(key) ?? null;
     if (!file) {
-      for (const f of this.vault.getMarkdownFiles()) {
-        if (f.basename === name) {
-          file = f;
-          break;
-        }
-      }
+      file = await this.vault.create(dailyNotePath(today, settings), `# ${key}\n\n`);
     }
-    if (!file) file = await this.vault.create(`${name}.md`, `# ${name}\n\n`);
     await this.openFile(file, false);
   }
 
