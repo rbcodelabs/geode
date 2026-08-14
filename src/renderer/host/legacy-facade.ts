@@ -44,6 +44,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     importChromeCookies: unavailable("chromeCookieImport") as never,
     getProcessMetrics: unavailable("processDiagnostics") as never,
     getFdPressure: unavailable("processDiagnostics") as never,
+    checkForUpdates: unavailable("autoUpdate") as never,
     getCrashRecoveryState: () => host.plugins.getCrashRecoveryState() as never,
     reportCrashDiagnostic: (entry) => host.plugins.reportCrashDiagnostic(entry),
     reportActivePlugins: (ids) => host.plugins.reportActivePlugins(ids),
