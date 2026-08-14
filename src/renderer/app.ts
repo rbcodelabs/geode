@@ -17,6 +17,7 @@ import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { TFile, pathName } from "./types";
 import { rewriteWikilinksForRename } from "./rename";
+import { anchorSnapshot, shouldInterceptAnchor } from "./external-links";
 import {
   resolveDailyNoteSettings,
   matchDailyNoteFile,
@@ -625,6 +626,7 @@ export class App {
   }
 
   async start() {
+    this.installExternalLinkInterceptor();
     const rootEl = document.getElementById("app")!;
     const recents = await window.geode.getRecentVaults();
     if (recents.length) {
@@ -875,10 +877,47 @@ export class App {
     }).open();
   }
 
+  /**
+   * Global safety net for external-link clicks. Plugin content (e.g. Claude
+   * Threads) renders ordinary `<a href="https://…">` anchors that no other
+   * handler catches, so without this a click would navigate the entire
+   * renderer window away from the app. This delegated listener intercepts
+   * such clicks and routes them through `openExternalLink` (Web Viewer or OS
+   * browser) instead.
+   *
+   * Anchors already handled elsewhere — Live Preview external/wiki links and
+   * rendered-Markdown internal-link/tag anchors (which call `preventDefault`
+   * before the event bubbles to `document`) — are skipped: the
+   * `defaultPrevented` bail-out defers to those handlers, and
+   * `shouldInterceptAnchor` additionally skips them by class / `data-href`.
+   * The main-process `will-navigate` guard (src/main/main.ts) is the last
+   * line of defense if anything ever slips past this.
+   */
+  private installExternalLinkInterceptor(): void {
+    document.addEventListener("click", (e) => {
+      if (e.defaultPrevented || e.button !== 0) return;
+      const target = e.target as HTMLElement | null;
+      const anchor = target?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!anchor || !shouldInterceptAnchor(anchorSnapshot(anchor))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const href = anchor.href || anchor.getAttribute("href")!;
+      // Cmd/Ctrl-click forces the OS browser, matching the Live Preview
+      // convention (markdown/live-preview.ts).
+      if (e.metaKey || e.ctrlKey) window.geode.openExternal(href);
+      else this.openExternalLink(href);
+    });
+  }
+
   /** Route an external link click through the Web Viewer or the OS browser, per the "open links in app" setting. */
   openExternalLink(url: string): void {
-    if (this.settings.webViewer.openLinksInApp) void this.openWebViewer(url);
-    else window.geode.openExternal(url);
+    // Only web URLs can render in the in-app Web Viewer; anything else (e.g.
+    // mailto:) always goes to the OS regardless of the setting.
+    if (this.settings.webViewer.openLinksInApp && /^https?:\/\//i.test(url)) {
+      void this.openWebViewer(url);
+    } else {
+      window.geode.openExternal(url);
+    }
   }
 
   async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {

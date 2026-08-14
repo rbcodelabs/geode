@@ -133,3 +133,148 @@ test("boots into test-vault, opens a note, and renders Live Preview with no cons
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("clicking a plain external link (plugin-style <a href>) does not navigate the app window", async () => {
+  const { app, window, userDataDir, consoleErrors } = await launchAppAgainstTestVault();
+
+  try {
+    // Wait for the app to finish booting (file explorer present).
+    await expect(window.locator('.nav-file-title[data-path="Welcome.md"]')).toBeVisible();
+
+    const initialUrl = await window.evaluate(() => window.location.href);
+
+    // Stub the external-open bridge so the interceptor's routing is observable
+    // without actually launching the OS browser, then inject a plain external
+    // anchor exactly like a plugin (e.g. Claude Threads) would render — no
+    // `.cm-live-extlink` class, no `data-href`, so only the global interceptor
+    // can catch it.
+    await window.evaluate(() => {
+      const w = window as unknown as {
+        __externalOpens: string[];
+        geode: { openExternal: (url: string) => Promise<void> };
+      };
+      w.__externalOpens = [];
+      const original = w.geode.openExternal.bind(w.geode);
+      w.geode.openExternal = (url: string) => {
+        w.__externalOpens.push(url);
+        // Do not forward to the real shell.openExternal — keep the OS browser
+        // out of the test run. Reference `original` so it is not flagged unused.
+        void original;
+        return Promise.resolve();
+      };
+
+      const a = document.createElement("a");
+      a.id = "e2e-external-link";
+      a.href = "https://example.com/";
+      a.textContent = "External example";
+      a.style.cssText = "position:fixed;top:0;left:0;z-index:99999;padding:8px;";
+      document.body.appendChild(a);
+    });
+
+    await window.locator("#e2e-external-link").click();
+    // Give any (erroneous) top-level navigation time to occur before asserting.
+    await window.waitForTimeout(400);
+
+    const afterUrl = await window.evaluate(() => window.location.href);
+    const opens = await window.evaluate(
+      () => (window as unknown as { __externalOpens: string[] }).__externalOpens
+    );
+
+    // The main window must NOT have navigated away from the app's index.html.
+    expect(afterUrl).toBe(initialUrl);
+    expect(afterUrl).toContain("index.html");
+    // And the click must have been routed through the external-link handler.
+    expect(opens).toContain("https://example.com/");
+
+    expect(
+      consoleErrors,
+      `Console errors during external-link test: ${consoleErrors.join("\n")}`
+    ).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("reading-view external links honor the 'open links in app' setting (Web Viewer when ON, OS browser on Cmd/Ctrl-click)", async () => {
+  const { app, window, userDataDir, consoleErrors } = await launchAppAgainstTestVault();
+  const isMac = process.platform === "darwin";
+
+  try {
+    await expect(window.locator(".workspace")).toBeVisible();
+
+    // Turn the setting ON, then stub both routing sinks so the reading-view
+    // handler's decision (render.ts) is observable without touching the OS
+    // browser or the network. Render a plain external Markdown link through the
+    // real MarkdownRenderer so render.ts wires its actual click handler.
+    await window.evaluate(async () => {
+      const w = window as unknown as {
+        app: {
+          settings: { webViewer: { openLinksInApp: boolean } };
+          markdownRenderer: { render: (src: string, el: HTMLElement, path: string) => Promise<void> };
+          openWebViewer: (url?: string) => Promise<void>;
+        };
+        geode: { openExternal: (url: string) => Promise<void> };
+        __externalOpens: string[];
+        __webViewerOpens: string[];
+      };
+
+      w.app.settings.webViewer.openLinksInApp = true;
+
+      w.__externalOpens = [];
+      w.__webViewerOpens = [];
+      w.geode.openExternal = (url: string) => {
+        w.__externalOpens.push(url);
+        return Promise.resolve();
+      };
+      w.app.openWebViewer = (url?: string) => {
+        w.__webViewerOpens.push(url ?? "");
+        return Promise.resolve();
+      };
+
+      const host = document.createElement("div");
+      host.id = "e2e-reading-host";
+      host.style.cssText = "position:fixed;top:0;left:0;z-index:99999;padding:8px;background:#fff;";
+      document.body.appendChild(host);
+      await w.app.markdownRenderer.render("[External example](https://example.com/)", host, "");
+      const a = host.querySelector("a[href^='http']") as HTMLAnchorElement | null;
+      if (a) a.id = "e2e-reading-external-link";
+    });
+
+    const link = window.locator("#e2e-reading-external-link");
+    await expect(link).toBeVisible();
+
+    // Plain click: setting is ON, so it must route to the Web Viewer, NOT the OS browser.
+    await link.click();
+    await window.waitForTimeout(200);
+    let opens = await window.evaluate(
+      () => (window as unknown as { __externalOpens: string[] }).__externalOpens
+    );
+    let webViewerOpens = await window.evaluate(
+      () => (window as unknown as { __webViewerOpens: string[] }).__webViewerOpens
+    );
+    expect(webViewerOpens).toContain("https://example.com/");
+    expect(opens).toEqual([]);
+
+    // Cmd/Ctrl-click: always forces the OS browser regardless of the setting.
+    await link.click({ modifiers: [isMac ? "Meta" : "Control"] });
+    await window.waitForTimeout(200);
+    opens = await window.evaluate(
+      () => (window as unknown as { __externalOpens: string[] }).__externalOpens
+    );
+    webViewerOpens = await window.evaluate(
+      () => (window as unknown as { __webViewerOpens: string[] }).__webViewerOpens
+    );
+    expect(opens).toContain("https://example.com/");
+    // The modifier click must not have opened another Web Viewer tab.
+    expect(webViewerOpens).toEqual(["https://example.com/"]);
+
+    expect(
+      consoleErrors,
+      `Console errors during reading-view external-link test: ${consoleErrors.join("\n")}`
+    ).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
