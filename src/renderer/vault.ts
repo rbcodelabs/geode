@@ -3,6 +3,7 @@ import {
   TFile,
   TFolder,
   TAbstractFile,
+  FileSystemAdapter,
   pathParent,
   pathName,
   splitExt,
@@ -151,21 +152,33 @@ export class Vault extends Events {
     return this.files.get(key) ?? this.folders.get(key) ?? null;
   }
 
+  /** Cached `FileSystemAdapter`, rebuilt only when `this.root` changes. */
+  private _adapter?: FileSystemAdapter;
+  private _adapterRoot?: string;
+
   /**
    * Obsidian's `vault.adapter`. Plugins use it mainly for `getBasePath()`
    * (the vault's absolute filesystem path) to shell out with Node, plus
    * `getResourcePath()` to turn a vault-relative path into a loadable URL.
+   *
+   * Returns a real `FileSystemAdapter` instance (not a plain object) so that
+   * plugin `adapter instanceof FileSystemAdapter` guards resolve — e.g.
+   * obsidian-claude-threads uses that guard to derive a chat's working
+   * directory, and falls back to the home directory when it fails. The
+   * instance is memoized (rebuilt only if `this.root` changes) so repeated
+   * `vault.adapter` reads return a stable reference. `getName`/`exists` are
+   * injected as live closures, so they reflect the current vault name and
+   * IPC `exists` at call time.
    */
-  get adapter() {
-    const root = this.root;
-    return {
-      basePath: root,
-      getBasePath: () => root,
-      getName: () => this.name,
-      getResourcePath: (normalizedPath: string) =>
-        `file://${root}/${normalizedPath}`.replace(/ /g, "%20"),
-      exists: (p: string) => window.geode.exists(p),
-    };
+  get adapter(): FileSystemAdapter {
+    if (!this._adapter || this._adapterRoot !== this.root) {
+      this._adapter = new FileSystemAdapter(this.root, {
+        getName: () => this.name,
+        exists: (p: string) => window.geode.exists(p),
+      });
+      this._adapterRoot = this.root;
+    }
+    return this._adapter;
   }
 
   getRoot(): TFolder {

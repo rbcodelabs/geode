@@ -724,22 +724,14 @@ export class FileView {
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal FileSystemAdapter. Obsidian plugins use this mainly for
- * `getBasePath()` (the absolute vault path) to shell out with Node. Geode
- * exposes the vault root on the Vault, so we surface it here.
+ * `FileSystemAdapter` is defined in the leaf `../types` module (alongside the
+ * `TFile`/`TFolder` runtime classes) so that `vault.ts` can construct real
+ * instances for `vault.adapter` without importing this module — importing
+ * `api/obsidian.ts` from `vault.ts` would form a cycle, since this module
+ * already re-exports `Vault` from `vault.ts`. Re-exported here so plugins get
+ * it from `require('obsidian').FileSystemAdapter`.
  */
-export class FileSystemAdapter {
-  constructor(private basePath: string) {}
-  getBasePath(): string {
-    return this.basePath;
-  }
-  getName(): string {
-    return "";
-  }
-  async exists(_normalizedPath: string): Promise<boolean> {
-    return false;
-  }
-}
+export { FileSystemAdapter } from "../types";
 
 // ---------------------------------------------------------------------------
 // TFile / TFolder classes (for `instanceof`)

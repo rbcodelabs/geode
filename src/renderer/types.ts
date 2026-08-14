@@ -107,6 +107,61 @@ export class TFolderClass {
 }
 
 /**
+ * Obsidian's `FileSystemAdapter`: the desktop/Node filesystem adapter
+ * exposed as `vault.adapter`. Plugins use it mainly for `getBasePath()` (the
+ * vault's absolute filesystem path, to shell out with Node) and
+ * `getResourcePath()` (turn a vault-relative path into a loadable URL), and
+ * critically test `adapter instanceof FileSystemAdapter` to decide whether
+ * they're running on desktop with real fs access (obsidian-claude-threads
+ * does exactly this to derive a chat's working directory). For that guard to
+ * resolve, `vault.adapter` MUST be a real instance of this class.
+ *
+ * Lives in this leaf module (alongside `TFileClass`/`TFolderClass`) rather
+ * than in `api/obsidian.ts` so that `vault.ts` can construct it without
+ * importing `api/obsidian.ts` — that would form an import cycle, since
+ * `api/obsidian.ts` already re-exports `Vault` from `vault.ts`. It is
+ * re-exported to plugins as `FileSystemAdapter` from `api/obsidian.ts`.
+ *
+ * Behaviour is injected via the constructor (`getName`/`exists`) so this
+ * module stays dependency-free; safe defaults keep any bare
+ * `new FileSystemAdapter(basePath)` construction working.
+ */
+export class FileSystemAdapter {
+  /** Absolute vault path. Public because real Obsidian exposes it directly. */
+  basePath: string;
+  private readonly nameProvider: () => string;
+  private readonly existsProvider: (normalizedPath: string) => Promise<boolean> | boolean;
+
+  constructor(
+    basePath: string,
+    opts?: {
+      getName?: () => string;
+      exists?: (normalizedPath: string) => Promise<boolean> | boolean;
+    }
+  ) {
+    this.basePath = basePath;
+    this.nameProvider = opts?.getName ?? (() => "");
+    this.existsProvider = opts?.exists ?? (() => false);
+  }
+
+  getBasePath(): string {
+    return this.basePath;
+  }
+
+  getName(): string {
+    return this.nameProvider();
+  }
+
+  getResourcePath(normalizedPath: string): string {
+    return `file://${this.basePath}/${normalizedPath}`.replace(/ /g, "%20");
+  }
+
+  exists(normalizedPath: string): Promise<boolean> | boolean {
+    return this.existsProvider(normalizedPath);
+  }
+}
+
+/**
  * Obsidian's `normalizePath`: normalise a vault-relative path — backslashes
  * to slashes, collapse duplicate slashes, strip a leading `./` and trailing
  * slash. Returns "/" for an empty result.
