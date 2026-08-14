@@ -5,11 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.1). The core loop works — vaults, editing, wikilinks,
-> backlinks, search, tags, reading view — but many features are still on the
+> ⚠️ Early alpha (v0.2). The core loop works — vaults, editing, wikilinks,
+> backlinks, search, tags, reading view, community plugins/themes, a Web
+> Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.1)
+## Features (v0.2)
 
 - **Vaults** — open any folder; external edits are picked up live
 - **Editor** — CodeMirror 6, markdown highlighting, `[[wikilink]]` autocomplete,
@@ -17,12 +18,20 @@ cloud, no lock-in.
 - **Reading view** — callouts (13 types, foldable), embeds (notes/images/audio/
   video), highlights, tags, tables, task lists, YAML properties
 - **Knowledge graph plumbing** — backlinks pane, outline, tag pane, unresolved
-  link styling, link resolution by shortest path and alias
+  link styling, link resolution by shortest path and alias, graph view
 - **Search** — `tag:` `path:` `file:` operators, quoted phrases, negation, regex
 - **Workspace** — tabs, split panes, pinned tabs, collapsible sidebars,
-  status-bar word count
+  status-bar word count; tab bar and view header DOM/CSS match real Obsidian
+  so community themes and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
   dark/light themes via CSS variables
+- **Settings** — tabbed Settings window (Appearance, Community plugins &
+  themes, plus one tab per installed plugin that calls `Plugin.addSettingTab`)
+- **Community plugins & themes** — install from GitHub, enable/disable,
+  auto-update
+- **Web Viewer** — open web pages in an in-app tab (`webview`-backed, its own
+  session), plus a one-time "Import cookies from Chrome" option so viewer
+  tabs open already logged in
 
 ## Install
 
