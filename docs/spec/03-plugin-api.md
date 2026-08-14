@@ -424,6 +424,8 @@ interface DataWriteOptions { ctime?: number; mtime?: number; }
 
 `DataAdapter` is the low-level FS abstraction beneath Vault (implementations: `FileSystemAdapter` on desktop/Node, Capacitor adapter on mobile). String-path based, no TFile objects, can reach inside `.obsidian/`:
 
+> Geode note: `vault.adapter` must be a real `FileSystemAdapter` instance (not a shape-compatible object literal), because desktop plugins branch on `adapter instanceof FileSystemAdapter` to detect real Node FS access — e.g. obsidian-claude-threads uses that guard to derive a chat's working directory and falls back to the home directory when it fails.
+
 ```ts
 interface DataAdapter {
   getName(): string;
