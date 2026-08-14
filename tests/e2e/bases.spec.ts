@@ -199,3 +199,54 @@ test("switch a base view to Cards, render cards, and persist the type to disk", 
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("Copy on the results menu puts the view on the clipboard as TSV", async () => {
+  const vaultDir = makeVaultCopy();
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-bases-e2e-ud-"));
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const app = await electron.launch({
+    args: [repoRoot, `--user-data-dir=${userDataDir}`],
+    cwd: repoRoot,
+  });
+
+  try {
+    const window = await app.firstWindow();
+    await expect(window.locator('.nav-file-title[data-path="Welcome.md"]')).toBeVisible();
+
+    const tasksFolderRow = window.locator(".nav-folder-title", { hasText: "Tasks" });
+    await tasksFolderRow.click({ button: "right" });
+    await window.locator(".context-menu-item", { hasText: "New base" }).click();
+    await expect(window.locator(".bases-table-container")).toBeVisible();
+
+    // Filter to the single Done task so the copied output is deterministic.
+    await window.locator(".bases-toolbar-btn", { hasText: "Filter" }).click();
+    const thisViewScope = window.locator(".bases-filter-panel .bases-filter-scope").nth(1);
+    await thisViewScope.locator("button.bases-filter-add", { hasText: "+ Condition" }).click();
+    const conditionRow = thisViewScope.locator(".bases-filter-row").first();
+    await conditionRow.locator(".bases-filter-prop").fill("note.status");
+    await conditionRow.locator(".bases-filter-prop").press("Tab");
+    await conditionRow.locator(".bases-filter-value").fill("Done");
+    await conditionRow.locator(".bases-filter-value").press("Tab");
+    await window.keyboard.press("Escape");
+    await expect(window.locator(".bases-data-row")).toHaveCount(1);
+
+    // Results button → Copy.
+    await window.locator(".bases-toolbar-results").click();
+    await window.locator(".context-menu-item", { hasText: "Copy" }).click();
+
+    // Read the system clipboard from the Electron main process.
+    const clip = await app.evaluate(({ clipboard }) => clipboard.readText());
+    const lines = clip.split("\n");
+    expect(lines[0].split("\t")).toContain("file.name"); // header row
+    expect(clip).toContain("Gamma Task.md"); // the one visible row
+    expect(clip).not.toContain("Alpha Task.md"); // filtered out
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});

@@ -1,6 +1,10 @@
 import type { App } from "../app";
 import { parseBaseFile, runQuery, type BaseDefinition, type BaseViewDefinition, type QueryResult } from "../bases";
 import { stringifyBaseFile } from "../bases/base-file-write";
+import { buildExportMatrix, matrixToCsv, matrixToTsv } from "../bases/base-export";
+import { valueToDisplayString } from "../bases/coerce";
+import { matchesSearch } from "../bases/search-match";
+import type { QueryRow } from "../bases/query-engine";
 import { enumerateFrontmatterKeys, frontmatterKeyForColumn, parseEditedValue, resolveColumns } from "../bases/columns";
 import { PromptModal } from "../modals/modals";
 import type { TFile } from "../types";
@@ -135,6 +139,8 @@ export class BaseView implements View {
       onSearch: (query) => this.setSearchQuery(query),
       onNewFile: () => this.createNewFileInFolder(),
       onRowHeightChange: (height) => this.setRowHeight(height),
+      onCopy: () => void this.copyViewToClipboard(),
+      onExportCsv: () => this.exportViewAsCsv(),
     };
     this.toolbar = new BasesToolbar(app, handlers);
 
@@ -500,6 +506,57 @@ export class BaseView implements View {
       if (value === undefined) delete fm[key];
       else fm[key] = value;
     });
+  }
+
+  // --- Copy / CSV export ----------------------------------------------------
+
+  /**
+   * The rows currently shown to the user for the active view: the query
+   * result flattened across groups and filtered by the live search query, so
+   * Copy/Export mirror exactly what's on screen.
+   */
+  private visibleRows(): QueryRow[] {
+    if (!this.lastResult) return [];
+    const flat = this.lastResult.groups
+      ? this.lastResult.groups.flatMap((g) => g.rows)
+      : this.lastResult.rows;
+    if (!this.searchQuery) return flat;
+    return flat.filter((row) =>
+      matchesSearch(
+        this.lastColumns.map((p) => {
+          const v = row.properties[p];
+          return v ? valueToDisplayString(v) : "";
+        }),
+        this.searchQuery
+      )
+    );
+  }
+
+  private async copyViewToClipboard(): Promise<void> {
+    if (!this.def) return;
+    const matrix = buildExportMatrix(this.visibleRows(), this.lastColumns, this.def);
+    try {
+      await navigator.clipboard.writeText(matrixToTsv(matrix));
+    } catch {
+      // Clipboard access denied/unavailable — silently no-op.
+    }
+  }
+
+  private exportViewAsCsv(): void {
+    if (!this.def || !this.file) return;
+    const matrix = buildExportMatrix(this.visibleRows(), this.lastColumns, this.def);
+    const csv = matrixToCsv(matrix);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${this.file.basename}.csv`;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoke on the next tick so the click's download has captured the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }
 

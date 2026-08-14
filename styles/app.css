@@ -2070,6 +2070,16 @@ select.dropdown:hover {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   white-space: nowrap;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+}
+
+.bases-toolbar-results:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
 
 .bases-row-height-select,

@@ -24,6 +24,10 @@ export interface ToolbarHandlers {
   onSearch(query: string): void;
   onNewFile(): void;
   onRowHeightChange(height: RowHeight): void;
+  /** Copy the current view (visible rows/columns) to the clipboard as TSV. */
+  onCopy(): void;
+  /** Export the current view to a CSV file. */
+  onExportCsv(): void;
 }
 
 const ROW_HEIGHTS: RowHeight[] = ["short", "medium", "tall", "extra tall"];
@@ -55,8 +59,10 @@ export class BasesToolbar {
     this.viewBtn.className = "bases-toolbar-btn bases-view-btn";
     this.viewBtn.addEventListener("click", () => this.openViewMenu());
 
-    this.resultsEl = document.createElement("span");
+    this.resultsEl = document.createElement("button");
     this.resultsEl.className = "bases-toolbar-results";
+    this.resultsEl.title = "Copy or export results";
+    this.resultsEl.addEventListener("click", () => this.openResultsMenu());
 
     this.sortBtn = document.createElement("button");
     this.sortBtn.className = "bases-toolbar-btn";
@@ -132,6 +138,14 @@ export class BasesToolbar {
     }
     const rect = this.viewBtn.getBoundingClientRect();
     this.app.showMenu({ clientX: rect.left, clientY: rect.bottom } as unknown as MouseEvent, items);
+  }
+
+  private openResultsMenu() {
+    const rect = this.resultsEl.getBoundingClientRect();
+    this.app.showMenu({ clientX: rect.left, clientY: rect.bottom } as unknown as MouseEvent, [
+      { title: "Copy", action: () => this.handlers.onCopy() },
+      { title: "Export CSV", action: () => this.handlers.onExportCsv() },
+    ]);
   }
 
   private state: ToolbarState = { viewNames: [], currentViewName: "", currentViewType: "table", resultCount: 0, rowHeight: "medium" };
