@@ -22,21 +22,37 @@ describe("obsidian shim: moment", () => {
     else delete (globalThis as any).window;
   });
 
-  it("exports a real, working moment function", async () => {
-    const GeodeAPI = await import("../../src/renderer/api/obsidian");
-    expect(GeodeAPI.moment("2024-03-14").format("YYYY-MM-DD")).toBe("2024-03-14");
-  });
+  // vi.resetModules() forces a full cold re-transform of the module graph
+  // (including the 'moment' dependency) on every test in this file, which
+  // can exceed vitest's default 5000ms test timeout on a loaded/cold-cache
+  // machine even though nothing is actually hanging — bump it generously.
+  it(
+    "exports a real, working moment function",
+    async () => {
+      const GeodeAPI = await import("../../src/renderer/api/obsidian");
+      expect(GeodeAPI.moment("2024-03-14").format("YYYY-MM-DD")).toBe("2024-03-14");
+    },
+    20000
+  );
 
-  it("attaches moment to window at module-eval time", async () => {
-    (globalThis as any).window = {};
-    const GeodeAPI = await import("../../src/renderer/api/obsidian");
-    expect((globalThis as any).window.moment).toBe(GeodeAPI.moment);
-  });
+  it(
+    "attaches moment to window at module-eval time",
+    async () => {
+      (globalThis as any).window = {};
+      const GeodeAPI = await import("../../src/renderer/api/obsidian");
+      expect((globalThis as any).window.moment).toBe(GeodeAPI.moment);
+    },
+    20000
+  );
 
-  it("does not clobber a pre-existing window.moment", async () => {
-    const hostMoment = () => "host-provided moment";
-    (globalThis as any).window = { moment: hostMoment };
-    await import("../../src/renderer/api/obsidian");
-    expect((globalThis as any).window.moment).toBe(hostMoment);
-  });
+  it(
+    "does not clobber a pre-existing window.moment",
+    async () => {
+      const hostMoment = () => "host-provided moment";
+      (globalThis as any).window = { moment: hostMoment };
+      await import("../../src/renderer/api/obsidian");
+      expect((globalThis as any).window.moment).toBe(hostMoment);
+    },
+    20000
+  );
 });
