@@ -663,7 +663,10 @@ export abstract class ItemView extends View {
 
     const left = document.createElement("div");
     left.className = "view-header-left";
-    left.append(buildViewHeaderNavButtons());
+    // Back/forward nav belongs to the main pane only — real Obsidian never
+    // renders it in a docked sidebar pane. `this.leaf` is set in `super()`
+    // above, so the container kind is known here at construction time.
+    if (!this.leaf.group?.isSidebar) left.append(buildViewHeaderNavButtons());
 
     const titleContainer = document.createElement("div");
     titleContainer.className = "view-header-title-container";

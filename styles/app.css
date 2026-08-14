@@ -64,6 +64,15 @@
      real Obsidian's own app.css value (`--header-height: 40px`). */
   --header-height: 40px;
 
+  /* Tab-curve system (Obsidian's canonical `--tab-*` set): scheme-independent
+     literals here; the theme-token-derived members live in `.theme-light` /
+     `.theme-dark` so their `var(--background-*)` refs resolve where those
+     tokens are actually defined (a `var()` to an undefined property at :root
+     would compute to empty and silently drop the whole declaration). */
+  --tab-outline-width: 1px;
+  --tab-curve: 6px;
+  --tab-radius: var(--radius-s);
+
   /* Callouts — one variable per type so community themes can restyle
      individual types (icon color, title color, and tinted background all
      derive from these). Shared by Reading view (.callout-<type>) and Live
@@ -119,6 +128,14 @@
   --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow: rgba(0, 0, 0, 0.5);
+
+  /* Theme-token-derived members of the tab-curve system (see :root). */
+  --tab-background-active: var(--background-primary);
+  --tab-container-background: var(--background-secondary);
+  --tab-outline-color: var(--background-modifier-border);
+  --tab-divider-color: var(--background-modifier-border);
+  --tab-text-color: var(--text-faint);
+  --tab-text-color-active: var(--text-normal);
 }
 
 .theme-light {
@@ -156,6 +173,14 @@
   --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.14);
   --shadow: rgba(0, 0, 0, 0.15);
+
+  /* Theme-token-derived members of the tab-curve system (see :root). */
+  --tab-background-active: var(--background-primary);
+  --tab-container-background: var(--background-secondary);
+  --tab-outline-color: var(--background-modifier-border);
+  --tab-divider-color: var(--background-modifier-border);
+  --tab-text-color: var(--text-faint);
+  --tab-text-color-active: var(--text-normal);
 }
 
 * {
@@ -293,14 +318,29 @@ button.mod-cta:hover {
   display: none;
 }
 
+/* Main-pane container: tinted bar with a 1px bottom border, and the tab row
+   pulled down 1px so the active tab's bg bleeds over the border and merges
+   into the content pane below (the curve's counterpart). Overflow is allowed
+   to show so the corner-curve pseudo-elements aren't clipped at the row edge. */
+.workspace-split.mod-root .workspace-tab-header-container {
+  background: var(--tab-container-background);
+  border-bottom: 1px solid var(--tab-outline-color);
+}
+.workspace-split.mod-root .workspace-tab-header-container-inner {
+  margin: 6px -5px calc(var(--tab-outline-width) * -1);
+  padding: 1px 15px 0;
+  overflow: visible;
+}
+
 .workspace-tab-header {
   -webkit-app-region: no-drag;
+  position: relative;
   display: flex;
   align-items: center;
   margin-top: var(--size-4-1);
   border-radius: var(--radius-s) var(--radius-s) 0 0;
   font-size: var(--font-ui-small);
-  color: var(--text-faint);
+  color: var(--tab-text-color);
   cursor: default;
   white-space: nowrap;
   max-width: 220px;
@@ -311,12 +351,61 @@ button.mod-cta:hover {
   color: var(--text-muted);
 }
 
-.workspace-tab-header.is-active {
-  background: var(--background-primary);
-  color: var(--text-normal);
+/* ---- Active-tab curve (ported verbatim from Obsidian 1.13.7's canonical tab
+   CSS). Every tab carries two corner circles pinned to its bottom-outer
+   corners; they're transparent until the active tab in the main root split
+   fills them with the content-pane bg, carving a concave curve so the active
+   tab flows into the content below. */
+.workspace-tab-header::before,
+.workspace-tab-header::after {
+  position: absolute;
+  bottom: 0;
+  content: "";
+  width: calc(var(--tab-curve) * 2);
+  height: calc(var(--tab-curve) * 2);
+  border-radius: 100%;
+  box-shadow: 0 0 0 calc(var(--tab-curve) * 3) transparent;
+  pointer-events: none;
+}
+.workspace-tab-header::before {
+  left: calc(var(--tab-curve) * -2);
+  clip-path: inset(50% calc(var(--tab-curve) * -1) 0 50%);
+}
+.workspace-tab-header::after {
+  right: calc(var(--tab-curve) * -2);
+  clip-path: inset(50% 50% 0 calc(var(--tab-curve) * -1));
+}
+
+/* Fill scoped to the MAIN pane only (`.workspace-split.mod-root`). */
+.workspace-split.mod-root .workspace-tab-header.is-active::before,
+.workspace-split.mod-root .workspace-tab-header.is-active::after {
+  box-shadow:
+    inset 0 0 0 var(--tab-outline-width) var(--tab-outline-color),
+    0 0 0 calc(var(--tab-curve) * 4) var(--tab-background-active);
+}
+
+/* Ring omits the bottom edge on purpose: a uniform `0 0 0 1px` box-shadow
+   paints OUTSIDE the tab's border-box on all four sides, including a 1px
+   band directly below the tab (bleeding into the content pane). That band
+   isn't covered by anything — the corner curve fill (::before/::after,
+   above) only paints the far corners, not the flat middle of the bottom
+   edge — so it rendered as a hairline crossing under the active tab,
+   defeating the "seamless" merge into content below. Confirmed via pixel
+   sampling (see 2026-08-14 QA note): with the full 4-side ring, the pixel
+   row right under the tab read as a distinct lighter shade; dropping the
+   bottom side alone (top/left/right only) makes that row match the content
+   background exactly, with no effect on the corner curves. */
+.workspace-split.mod-root .workspace-tab-header.is-active {
+  box-shadow:
+    0 -1px 0 0 var(--tab-outline-color),
+    -1px 0 0 0 var(--tab-outline-color),
+    1px 0 0 0 var(--tab-outline-color);
+  background-color: var(--tab-background-active);
+  color: var(--tab-text-color-active);
 }
 
 .workspace-tab-header-inner {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--size-4-1);
@@ -326,14 +415,31 @@ button.mod-cta:hover {
   padding: 0 var(--size-4-2) 0 var(--size-4-3);
 }
 
+/* 1px divider between inactive main-pane tabs; the active tab hides its own. */
+.workspace-split.mod-root .workspace-tab-header-inner::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: -0.5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 20px;
+  background: var(--tab-divider-color);
+}
+.workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner::after {
+  opacity: 0;
+}
+
 .workspace-tab-header-inner-icon {
   flex: 0 0 auto;
   display: flex;
 }
-/* Hide the tab icon for a note/empty tab, matching real Obsidian — other
-   view types (Kanban, Search, plugin views, …) keep their icon. */
-.workspace-tab-header[data-type="markdown"] .workspace-tab-header-inner-icon,
-.workspace-tab-header[data-type="empty"] .workspace-tab-header-inner-icon {
+/* Hide the tab icon for a note/empty tab in the main pane, matching real
+   Obsidian — other view types (Kanban, Search, plugin views, …) keep their
+   icon. Scoped to the main pane so sidebar tabs (which are icon-only) always
+   render their icon even for a docked markdown pane. */
+.workspace-split.mod-root .workspace-tab-header[data-type="markdown"] .workspace-tab-header-inner-icon,
+.workspace-split.mod-root .workspace-tab-header[data-type="empty"] .workspace-tab-header-inner-icon {
   display: none;
 }
 
@@ -474,18 +580,19 @@ button.mod-cta:hover {
   display: none;
 }
 
-.workspace-sidebar.is-collapsed .sidebar-icon-bar .sidebar-icon:not(.sidebar-collapse-btn) {
+/* Collapsed: hide the whole tab row, leaving only the collapse button. */
+.workspace-sidebar.is-collapsed .workspace-tab-header-container-inner {
   display: none;
 }
 
-.workspace-sidebar.is-collapsed .sidebar-icon-bar {
+.workspace-sidebar.is-collapsed .workspace-tab-header-container {
   justify-content: center;
 }
 
 /* The left sidebar keeps its 78px padding-left (below) even collapsed, so
    the button already lands clear of the traffic lights without centering —
    centering would fight the padding and pull it back toward the lights. */
-.workspace-sidebar.is-collapsed.mod-left .sidebar-icon-bar {
+.workspace-sidebar.is-collapsed.mod-left .workspace-tab-header-container {
   justify-content: flex-start;
 }
 
@@ -493,12 +600,14 @@ button.mod-cta:hover {
   margin-left: 0;
 }
 
-.sidebar-icon-bar {
+/* Sidebar docked-pane tab strip: same `.workspace-tab-header-container` DOM as
+   the main pane, but a flat icon-only tab row (see `.mod-*-split` rules). */
+.workspace-sidebar .workspace-tab-header-container {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 4px;
-  height: var(--tab-height);
+  height: var(--header-height);
+  min-height: var(--header-height);
   padding: 0 8px;
   border-bottom: 1px solid var(--background-modifier-border);
   -webkit-app-region: drag;
@@ -530,34 +639,81 @@ button.mod-cta:hover {
   pointer-events: none;
 }
 
-.mod-left .sidebar-icon-bar {
+/* Frameless-window traffic-light clearance: push the left sidebar's tab row
+   right so its tabs (and, when collapsed, its lone collapse button) clear the
+   macOS traffic lights overlaid on the top-left. */
+.mod-left .workspace-tab-header-container {
   padding-left: 78px;
 }
 
 .sidebar-collapse-btn {
   margin-left: auto;
-}
-
-.sidebar-icon {
-  width: 30px;
-  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-s);
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 14px;
   -webkit-app-region: no-drag;
 }
-
-.sidebar-icon:hover {
+.sidebar-collapse-btn:hover {
   background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* ---- Sidebar tabs (Obsidian's `.mod-left-split` / `.mod-right-split`): kill
+   the main-pane curve and render flat, icon-only pills — no title, no close,
+   tighter padding + 3px gap, subtle hover-bg pill on active. Ported from
+   Obsidian 1.13.7's canonical sidedock tab CSS. */
+.mod-left-split .workspace-tab-header-container-inner,
+.mod-right-split .workspace-tab-header-container-inner {
+  padding: 1px 0 7px;
+  margin: 6px 0 0;
+  gap: 3px;
+}
+.mod-left-split .workspace-tab-header,
+.mod-right-split .workspace-tab-header {
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  margin-top: 0;
+  max-width: none;
+  border-radius: var(--radius-s);
+}
+.mod-left-split .workspace-tab-header::before,
+.mod-left-split .workspace-tab-header::after,
+.mod-right-split .workspace-tab-header::before,
+.mod-right-split .workspace-tab-header::after {
+  display: none;
+}
+.mod-left-split .workspace-tab-header.is-active,
+.mod-right-split .workspace-tab-header.is-active {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.mod-left-split .workspace-tab-header:hover,
+.mod-right-split .workspace-tab-header:hover {
+  background-color: var(--background-modifier-hover);
+}
+/* Icon-only: hide the title/close/status + the inactive divider. */
+.mod-left-split .workspace-tab-header-inner-title,
+.mod-right-split .workspace-tab-header-inner-title,
+.mod-left-split .workspace-tab-header-inner-close-button,
+.mod-right-split .workspace-tab-header-inner-close-button,
+.mod-left-split .workspace-tab-header-status-container,
+.mod-right-split .workspace-tab-header-status-container {
+  display: none;
+}
+.mod-left-split .workspace-tab-header-inner,
+.mod-right-split .workspace-tab-header-inner {
+  padding: 5px 6px;
 }
 
 /* Lucide icons render as inline SVGs; size them to the icon slot and inherit color. */
-.geode-icon svg,
-.sidebar-icon svg {
+.geode-icon svg {
   width: 18px;
   height: 18px;
   stroke: currentColor;
@@ -575,9 +731,12 @@ button.mod-cta:hover {
   height: 16px;
 }
 
-.sidebar-icon.is-active {
-  background: var(--background-modifier-active);
-  color: var(--text-normal);
+/* Back/forward nav is main-pane-only. A view built in the main pane and then
+   dragged into a sidebar keeps its (now inert) nav buttons in the DOM; hide
+   them here so no docked pane ever shows them, regardless of how it got here.
+   (Panes constructed directly in a sidebar already skip building them.) */
+.workspace-sidebar .view-header-nav-buttons {
+  display: none;
 }
 
 .sidebar-content {
@@ -589,8 +748,7 @@ button.mod-cta:hover {
 
 /* ---- Drag-and-drop (moving panes) ---- */
 
-.workspace-tab-header.is-dragging,
-.sidebar-icon.is-dragging {
+.workspace-tab-header.is-dragging {
   opacity: 0.4;
 }
 

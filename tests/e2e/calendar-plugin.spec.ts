@@ -90,7 +90,7 @@ test("real Calendar plugin sees existing daily notes and opens (not recreates) t
     // Its icon then appears in the sidebar icon bar; click it to reveal the
     // panel, same as a user would.
     const calendarIcon = window.locator(
-      '.workspace-sidebar.mod-right .sidebar-icon[title="Calendar"]'
+      '.workspace-sidebar.mod-right .workspace-tab-header[aria-label="Calendar"]'
     );
     await expect(calendarIcon).toBeVisible({ timeout: 15000 });
     await calendarIcon.click();
