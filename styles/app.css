@@ -1816,6 +1816,41 @@ button.mod-cta:hover {
   gap: var(--size-4-2);
 }
 
+/* Toggle switch (ToggleComponent renders <div class="checkbox-container"> and toggles .is-enabled) */
+.checkbox-container {
+  --toggle-w: 40px;
+  --toggle-h: 22px;
+  --toggle-thumb: 18px;
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--toggle-w);
+  height: var(--toggle-h);
+  border-radius: var(--toggle-h);
+  background: var(--background-modifier-border-hover);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background 0.15s ease-in-out;
+}
+.checkbox-container.is-enabled {
+  background: var(--interactive-accent);
+}
+.checkbox-container::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: var(--toggle-thumb);
+  height: var(--toggle-thumb);
+  border-radius: 50%;
+  background: var(--text-on-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease-in-out;
+}
+.checkbox-container.is-enabled::after {
+  transform: translateX(calc(var(--toggle-w) - var(--toggle-thumb) - 4px));
+}
+
 select.dropdown {
   font: inherit;
   font-size: var(--font-ui-small);
