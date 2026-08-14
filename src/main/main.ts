@@ -351,7 +351,8 @@ function registerIpc() {
   });
 
   ipcMain.handle("open-external", (_e, url: string) => {
-    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    // Web links and mailto: addresses only — never file:/javascript:/etc.
+    if (/^(https?:\/\/|mailto:)/i.test(url)) shell.openExternal(url);
   });
 
   // Community install-from-GitHub (see src/main/community.ts). Resolve returns
@@ -409,6 +410,27 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, "..", "src", "renderer", "index.html"));
+
+  // External-link navigation hard guard (defense in depth behind the
+  // renderer-side interceptor in src/renderer/app.ts). The main window must
+  // only ever display the app's own index.html; any attempt to navigate it
+  // away — e.g. a plugin-rendered <a href="https://…"> that slips past the
+  // renderer interceptor — is cancelled, and web URLs are handed to the OS
+  // browser instead. This is attached to the MAIN window's webContents only:
+  // the in-app Web Viewer runs in a separate <webview> with its own
+  // webContents (partition="persist:webviewer", see
+  // src/renderer/views/web-view.ts), so in-app browsing follows links
+  // normally and is unaffected by this guard.
+  win.webContents.on("will-navigate", (e, url) => {
+    if (url.startsWith("file://")) return; // the app's own pages (index.html, reloads)
+    e.preventDefault();
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
   win.on("closed", () => {
     const session = sessions.get(win.id);
     session?.watcher?.close();
