@@ -6,6 +6,7 @@ import chokidar, { FSWatcher } from "chokidar";
 import { installCommunity, resolveCommunity } from "./community";
 import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
+import { withPathLock } from "./path-lock";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -207,10 +208,12 @@ function registerIpc() {
   ipcMain.handle("vault-write", async (e, rel: string, data: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    await fsp.mkdir(path.dirname(abs), { recursive: true });
-    await fsp.writeFile(abs, data, "utf8");
-    const st = await fsp.stat(abs);
-    return { mtime: st.mtimeMs, size: st.size };
+    return withPathLock([abs], async () => {
+      await fsp.mkdir(path.dirname(abs), { recursive: true });
+      await fsp.writeFile(abs, data, "utf8");
+      const st = await fsp.stat(abs);
+      return { mtime: st.mtimeMs, size: st.size };
+    });
   });
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
@@ -221,16 +224,20 @@ function registerIpc() {
   ipcMain.handle("vault-delete", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    // Move to OS trash rather than permanent deletion (Obsidian's default).
-    await shell.trashItem(abs);
+    return withPathLock([abs], async () => {
+      // Move to OS trash rather than permanent deletion (Obsidian's default).
+      await shell.trashItem(abs);
+    });
   });
 
   ipcMain.handle("vault-rename", async (e, rel: string, newRel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const from = resolveVaultPath(win, rel);
     const to = resolveVaultPath(win, newRel);
-    await fsp.mkdir(path.dirname(to), { recursive: true });
-    await fsp.rename(from, to);
+    return withPathLock([from, to], async () => {
+      await fsp.mkdir(path.dirname(to), { recursive: true });
+      await fsp.rename(from, to);
+    });
   });
 
   ipcMain.handle("vault-exists", async (e, rel: string) => {
