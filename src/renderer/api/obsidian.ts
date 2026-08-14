@@ -11,7 +11,7 @@
 import { Component } from "../component";
 import { Plugin as GeodePlugin } from "../plugin";
 import type { App } from "../app";
-import type { WorkspaceLeaf, View as GeodeView } from "../workspace";
+import { buildViewHeaderNavButtons, type WorkspaceLeaf, type View as GeodeView } from "../workspace";
 import { installObsidianDomExtensions } from "./obsidian-dom";
 import { addIcon, setIcon } from "./icons";
 import moment from "moment";
@@ -650,16 +650,46 @@ export class View extends Component implements GeodeView {
 
 export abstract class ItemView extends View {
   contentEl: HTMLElement;
+  private headerTitleEl: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
     // Obsidian ItemView layout: containerEl > .view-header + .view-content.
-    // Plugins render into contentEl.
+    // Plugins render into contentEl. This base ItemView has no backing file,
+    // so its header is title-only (no breadcrumb) — matching real Obsidian's
+    // plugin views (Kanban Board, Skills Manager, …).
     const header = document.createElement("div");
     header.className = "view-header";
+
+    const left = document.createElement("div");
+    left.className = "view-header-left";
+    left.append(buildViewHeaderNavButtons());
+
+    const titleContainer = document.createElement("div");
+    titleContainer.className = "view-header-title-container";
+    this.headerTitleEl = document.createElement("div");
+    this.headerTitleEl.className = "view-header-title";
+    titleContainer.append(this.headerTitleEl);
+    left.append(titleContainer);
+
+    const actions = document.createElement("div");
+    actions.className = "view-actions";
+
+    header.append(left, actions);
     this.contentEl = document.createElement("div");
     this.contentEl.className = "view-content";
     this.containerEl.append(header, this.contentEl);
+
+    // `getDisplayText()` is commonly overridden using fields the subclass
+    // sets in its own constructor body, which hasn't run yet at this point
+    // (we're still inside `super()`). Defer the first read to a microtask,
+    // after the subclass constructor completes, so it sees real state.
+    Promise.resolve().then(() => this.refreshHeaderTitle());
+  }
+
+  /** Refresh the header's title text from `getDisplayText()`. Also called by `WorkspaceLeaf.updateHeader()`. */
+  refreshHeaderTitle(): void {
+    this.headerTitleEl.textContent = this.getDisplayText();
   }
 
   abstract getViewType(): string;

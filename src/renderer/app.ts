@@ -797,6 +797,10 @@ export class App {
     document.body.classList.toggle("theme-dark", this.settings.theme === "dark");
     document.body.classList.toggle("theme-light", this.settings.theme === "light");
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
+    // Real Obsidian hides .view-header entirely unless <body> has this class
+    // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
+    // Geode always shows it — there's no settings toggle for this yet.
+    document.body.classList.add("show-view-header");
   }
 
   saveSettings() {
