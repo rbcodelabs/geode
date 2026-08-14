@@ -384,8 +384,22 @@ button.mod-cta:hover {
     0 0 0 calc(var(--tab-curve) * 4) var(--tab-background-active);
 }
 
+/* Ring omits the bottom edge on purpose: a uniform `0 0 0 1px` box-shadow
+   paints OUTSIDE the tab's border-box on all four sides, including a 1px
+   band directly below the tab (bleeding into the content pane). That band
+   isn't covered by anything — the corner curve fill (::before/::after,
+   above) only paints the far corners, not the flat middle of the bottom
+   edge — so it rendered as a hairline crossing under the active tab,
+   defeating the "seamless" merge into content below. Confirmed via pixel
+   sampling (see 2026-08-14 QA note): with the full 4-side ring, the pixel
+   row right under the tab read as a distinct lighter shade; dropping the
+   bottom side alone (top/left/right only) makes that row match the content
+   background exactly, with no effect on the corner curves. */
 .workspace-split.mod-root .workspace-tab-header.is-active {
-  box-shadow: 0 0 0 var(--tab-outline-width) var(--tab-outline-color);
+  box-shadow:
+    0 -1px 0 0 var(--tab-outline-color),
+    -1px 0 0 0 var(--tab-outline-color),
+    1px 0 0 0 var(--tab-outline-color);
   background-color: var(--tab-background-active);
   color: var(--tab-text-color-active);
 }
