@@ -10,6 +10,7 @@ function file(name: string): TFile {
     basename: name.replace(/\.md$/, ""),
     extension: "md",
     mtime: 0,
+    ctime: 0,
     size: 0,
     parent: "",
   };

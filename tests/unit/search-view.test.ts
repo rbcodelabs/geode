@@ -68,6 +68,7 @@ describe("matchFileAgainstTerms", () => {
       basename: dot > 0 ? name.slice(0, dot) : name,
       extension: dot > 0 ? name.slice(dot + 1) : "",
       mtime: 0,
+      ctime: 0,
       size: 0,
       parent: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "",
     };

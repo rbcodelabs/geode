@@ -12,6 +12,7 @@ function file(path: string): TFile {
     basename,
     extension: "md",
     mtime: 0,
+    ctime: 0,
     size: 0,
     parent: "",
   };

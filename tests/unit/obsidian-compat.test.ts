@@ -27,7 +27,7 @@ describe("normalizePath", () => {
 });
 
 describe("TFile / TFolder instanceof", () => {
-  const file = { kind: "file", path: "A.md", name: "A.md", basename: "A", extension: "md", mtime: 0, size: 0, parent: "" } as TFile;
+  const file = { kind: "file", path: "A.md", name: "A.md", basename: "A", extension: "md", mtime: 0, ctime: 0, size: 0, parent: "" } as TFile;
   const folder = { kind: "folder", path: "Sub", name: "Sub", parent: "", children: [] } as TFolder;
 
   it("recognizes a Geode file object as an instanceof TFile (via Symbol.hasInstance)", () => {

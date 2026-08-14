@@ -16,6 +16,7 @@ export interface TFile extends TAbstractFile {
   basename: string;
   extension: string;
   mtime: number;
+  ctime: number;
   size: number;
   parent: string; // folder path, "" for root
 }
