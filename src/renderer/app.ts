@@ -8,6 +8,7 @@ import { CommunityManager } from "./community/community-manager";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { MarkdownRenderer } from "./markdown/render";
 import { MarkdownView } from "./views/markdown-view";
+import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { FileExplorerView } from "./views/file-explorer";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
@@ -819,11 +820,36 @@ export class App {
         leaf.group.renderTabs();
       }
     });
+    c("bases-create", "Bases: Create new base", undefined, () => {
+      const activeFile = this.workspace.getActiveFile();
+      void this.createNewBase(activeFile?.parent ?? "");
+    });
+    c("bases-insert", "Bases: Insert new base", undefined, () => this.insertNewBase());
+    c("bases-add-view", "Bases: Add view", undefined, () => this.getActiveBaseView()?.addView());
   }
 
   // --- File opening -------------------------------------------------------
 
   async openFile(file: TFile, newTab: boolean): Promise<void> {
+    if (file.extension === "base") {
+      const existing = this.workspace.findLeafForFile(file.path);
+      if (existing && !newTab) {
+        existing.group.setActiveLeaf(existing);
+        return;
+      }
+      const leaf = this.workspace.getLeaf(newTab);
+      const current = leaf.view;
+      if (current instanceof BaseView) {
+        await current.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new BaseView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
+      return;
+    }
     if (file.extension !== "md") {
       this.notify(`Cannot open .${file.extension} files yet`);
       return;
@@ -844,6 +870,33 @@ export class App {
       await view.setFile(file);
       await leaf.setView(view);
     }
+  }
+
+  /** Create a new `.base` file (Obsidian's "Bases: Create new base" command / file-explorer "New base" menu item) and open it. */
+  async createNewBase(folder?: string, name?: string): Promise<void> {
+    const path = name
+      ? this.vault.availablePath(folder ?? "", name, "base")
+      : this.vault.availablePath(folder ?? "", "Untitled", "base");
+    const file = await this.vault.create(path, defaultBaseYaml());
+    await this.openFile(file, false);
+  }
+
+  /**
+   * "Bases: Insert new base" — embeds a base as a ```base fenced code block
+   * in the active markdown note, at the cursor. Reading view renders that
+   * block as a live, interactive base (see MarkdownRenderer.mountBases).
+   */
+  insertNewBase(): void {
+    const view = this.getActiveMarkdownView();
+    if (!view?.editor) return;
+    const block = "```base\n" + defaultBaseYaml() + "```\n";
+    const { from, to } = view.editor.state.selection.main;
+    view.editor.dispatch({ changes: { from, to, insert: block } });
+  }
+
+  getActiveBaseView(): BaseView | null {
+    const view = this.workspace.getActiveLeaf()?.view;
+    return view instanceof BaseView ? view : null;
   }
 
   /** Open the (singleton) global graph view, reusing an already-open graph tab if there is one. */

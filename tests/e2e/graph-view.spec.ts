@@ -53,6 +53,16 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
     // wikilink, [[Welcome to Geode|the welcome note]], doesn't resolve —
     // "Welcome to Geode" isn't Welcome.md's basename or an alias — so it
     // doesn't add a 5th edge.
+    //
+    // (Bases E2E fixtures deliberately do NOT live in the shared test-vault/
+    // — bases.spec.ts writes its own Tasks/*.md fixtures into its own temp
+    // vault copy instead. Adding unlinked nodes here previously destabilized
+    // this test: more nodes — especially edgeless ones, which only
+    // experience repulsion, no edge force pulling them back — move more
+    // before the sim settles, so the position snapshot below could go stale
+    // by the time the click actually lands, intermittently missing the
+    // node. Confirmed via `--repeat-each=15`: ~1 in 15-20 runs failed with
+    // 7 nodes; back to 4, 15/15 and 6/6 repeat runs were clean.)
     await expect(graphView).toHaveAttribute("data-graph-node-count", "4");
     await expect(graphView).toHaveAttribute("data-graph-edge-count", "4");
 

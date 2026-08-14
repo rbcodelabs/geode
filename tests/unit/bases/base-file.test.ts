@@ -151,3 +151,29 @@ describe("parseBaseFile: leniency", () => {
     expect("error" in result).toBe(true);
   });
 });
+
+describe("parseBaseFile: cards view options", () => {
+  it("parses image/imageFit/imageAspectRatio/cardSize on a cards view", () => {
+    const result = parseBaseFile(
+      "views:\n  - type: cards\n    name: Gallery\n    image: note.cover\n    imageFit: contain\n    imageAspectRatio: 1.5\n    cardSize: 300\n"
+    );
+    if (!("def" in result)) throw new Error(result.error);
+    const view = result.def.views[0];
+    expect(view.type).toBe("cards");
+    expect(view.image).toBe("note.cover");
+    expect(view.imageFit).toBe("contain");
+    expect(view.imageAspectRatio).toBe(1.5);
+    expect(view.cardSize).toBe(300);
+  });
+
+  it("drops an invalid imageFit and non-positive numeric options instead of keeping them", () => {
+    const result = parseBaseFile(
+      "views:\n  - type: cards\n    name: Gallery\n    imageFit: stretch\n    imageAspectRatio: 0\n    cardSize: -10\n"
+    );
+    if (!("def" in result)) throw new Error(result.error);
+    const view = result.def.views[0];
+    expect(view.imageFit).toBeUndefined();
+    expect(view.imageAspectRatio).toBeUndefined();
+    expect(view.cardSize).toBeUndefined();
+  });
+});

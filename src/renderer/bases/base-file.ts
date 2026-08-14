@@ -11,6 +11,15 @@ export interface BaseViewDefinition {
   sort?: { property: string; direction: "ASC" | "DESC" }[];
   /** property path -> summary name (built-in) or formula name, per the spec's view.summaries shape. */
   summaries?: Record<string, string>;
+  // --- Cards-view layout options (type: "cards") -------------------------
+  /** Property path whose value supplies each card's cover image. */
+  image?: string;
+  /** How the cover image fills its box (CSS object-fit). Default "cover". */
+  imageFit?: "cover" | "contain";
+  /** Cover image aspect ratio (width / height). Default 16/9. */
+  imageAspectRatio?: number;
+  /** Minimum card width in px, driving the responsive grid. */
+  cardSize?: number;
 }
 
 export interface BasePropertyConfig {
@@ -71,6 +80,11 @@ function parseView(raw: unknown): BaseViewDefinition | null {
 
   const summaries = stringMap(rec.summaries);
   if (Object.keys(summaries).length) view.summaries = summaries;
+
+  if (typeof rec.image === "string") view.image = rec.image;
+  if (rec.imageFit === "cover" || rec.imageFit === "contain") view.imageFit = rec.imageFit;
+  if (typeof rec.imageAspectRatio === "number" && rec.imageAspectRatio > 0) view.imageAspectRatio = rec.imageAspectRatio;
+  if (typeof rec.cardSize === "number" && rec.cardSize > 0) view.cardSize = rec.cardSize;
 
   return view;
 }
