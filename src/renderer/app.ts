@@ -12,7 +12,9 @@ import { FileExplorerView } from "./views/file-explorer";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
-import { Modal, SuggestModal } from "./modals/modals";
+import { WebView } from "./views/web-view";
+import { Modal, PromptModal, SuggestModal } from "./modals/modals";
+import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { TFile, pathName } from "./types";
 import { rewriteWikilinksForRename } from "./rename";
 import {
@@ -25,11 +27,28 @@ import type { Command } from "./commands";
 import moment from "moment";
 import type { PluginSettingTab } from "./api/obsidian";
 
+/** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
+interface WebViewerSettings {
+  /** URL prefix a search query is appended to (URI-encoded). */
+  searchEngine: string;
+  /** Default URL for "Open web viewer". */
+  homeUrl: string;
+  /** When true, clicking an external link opens it in a Web Viewer tab instead of the OS browser. */
+  openLinksInApp: boolean;
+}
+
+const DEFAULT_WEB_VIEWER_SETTINGS: WebViewerSettings = {
+  searchEngine: "https://duckduckgo.com/?q=",
+  homeUrl: "https://duckduckgo.com/",
+  openLinksInApp: false,
+};
+
 interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
   /** Selected community theme name ("" = built-in default). */
   cssTheme: string;
+  webViewer: WebViewerSettings;
 }
 
 class EmptyView implements View {
@@ -261,6 +280,32 @@ class SettingsModal extends Modal {
   }
 
   private renderCommunityTab(container: HTMLElement): void {
+    const s = this.geodeApp.settings;
+    const webViewerHeading = document.createElement("h2");
+    webViewerHeading.textContent = "Web Viewer";
+    container.appendChild(webViewerHeading);
+    this.addTextInput(container, "Search engine", s.webViewer.searchEngine, (v) => {
+      s.webViewer.searchEngine = v;
+      this.geodeApp.saveSettings();
+    });
+    this.addTextInput(container, "Home URL", s.webViewer.homeUrl, (v) => {
+      s.webViewer.homeUrl = v;
+      this.geodeApp.saveSettings();
+    });
+    this.addToggle(container, "Open external links in Geode", s.webViewer.openLinksInApp, (v) => {
+      s.webViewer.openLinksInApp = v;
+      this.geodeApp.saveSettings();
+    });
+    const { control: cookieControl } = this.addRow(
+      container,
+      "Import cookies from Chrome",
+      "One-time import so viewer tabs open already logged in."
+    );
+    const cookieBtn = document.createElement("button");
+    cookieBtn.textContent = "Import cookies from Chrome…";
+    cookieBtn.addEventListener("click", () => new ChromeCookieImportModal(this.geodeApp).open());
+    cookieControl.appendChild(cookieBtn);
+
     const communityHeading = document.createElement("h2");
     communityHeading.textContent = "Community plugins & themes";
     container.appendChild(communityHeading);
@@ -427,7 +472,7 @@ class SettingsModal extends Modal {
     });
   }
 
-  private addRow(container: HTMLElement, label: string): { control: HTMLElement } {
+  private addRow(container: HTMLElement, label: string, description?: string): { control: HTMLElement } {
     const row = document.createElement("div");
     row.className = "setting-item";
     const info = document.createElement("div");
@@ -436,12 +481,29 @@ class SettingsModal extends Modal {
     name.className = "setting-item-name";
     name.textContent = label;
     info.appendChild(name);
+    if (description) {
+      const desc = document.createElement("div");
+      desc.className = "setting-item-description";
+      desc.textContent = description;
+      info.appendChild(desc);
+    }
     const control = document.createElement("div");
     control.className = "setting-item-control";
     row.appendChild(info);
     row.appendChild(control);
     container.appendChild(row);
     return { control };
+  }
+
+  private addTextInput(container: HTMLElement, label: string, value: string, onChange: (v: string) => void) {
+    const { control } = this.addRow(container, label);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "web-view-address";
+    input.value = value;
+    input.spellcheck = false;
+    input.addEventListener("change", () => onChange(input.value.trim()));
+    control.appendChild(input);
   }
 
   onClose(): void {
@@ -509,7 +571,12 @@ export class App {
   pluginManager!: PluginManager;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
-  settings: AppSettings = { theme: "dark", readableLineLength: true, cssTheme: "" };
+  settings: AppSettings = {
+    theme: "dark",
+    readableLineLength: true,
+    cssTheme: "",
+    webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
+  };
   /** Resolved "daily-notes" config (defaults until a vault is opened); also read by the internalPlugins compat shim. */
   dailyNoteSettings: DailyNoteSettings = resolveDailyNoteSettings(null);
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
@@ -605,7 +672,13 @@ export class App {
       return;
     }
     const saved = (await window.geode.readConfig("app")) as Partial<AppSettings> | null;
-    if (saved) this.settings = { ...this.settings, ...saved };
+    if (saved) {
+      this.settings = {
+        ...this.settings,
+        ...saved,
+        webViewer: { ...this.settings.webViewer, ...saved.webViewer },
+      };
+    }
 
     // Loaded before pluginManager.initialize() so the internalPlugins compat
     // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready
@@ -633,6 +706,12 @@ export class App {
     this.workspace.rightSidebar.addView(new BacklinksView(this));
     this.workspace.rightSidebar.addView(new OutlineView(this));
     this.workspace.rightSidebar.addView(new TagPaneView(this));
+
+    // Obsidian Web Viewer compat: viewType "webviewer" + { url } state, so
+    // any hosted plugin targeting that view type (e.g. Threads'
+    // obsidian_open_url) opens a tab here too. Must be registered before
+    // restoreWorkspaceLayout() below, which resolves saved leaves by type.
+    this.workspace.registerViewFactory("webviewer", (leaf) => new WebView(this, leaf));
 
     this.registerCommands();
     this.commands.attach(document);
@@ -729,6 +808,8 @@ export class App {
       const files = this.vault.getMarkdownFiles();
       if (files.length) this.openFile(files[Math.floor(Math.random() * files.length)], false);
     });
+    c("open-web-viewer", "Open web viewer", undefined, () => void this.openWebViewer());
+    c("search-web", "Search the web", undefined, () => this.searchWeb());
     c("pin-tab", "Toggle pin on current tab", undefined, () => {
       const leaf = this.workspace.getActiveLeaf();
       if (leaf) {
@@ -772,6 +853,32 @@ export class App {
     }
     const leaf = this.workspace.getLeaf(false);
     await leaf.setView(new GraphView(this));
+  }
+
+  /** "Open web viewer" (Obsidian compat command `open-web-viewer`): opens a new Web Viewer tab at the given URL, or the configured home URL. */
+  async openWebViewer(url?: string): Promise<void> {
+    const leaf = this.workspace.getLeaf(true);
+    await leaf.setViewState({
+      type: "webviewer",
+      active: true,
+      state: { url: url ?? this.settings.webViewer.homeUrl },
+    });
+  }
+
+  /** "Search the web" (Obsidian compat command `search-web`): prompts for a query, opens the results in a Web Viewer tab. */
+  searchWeb(): void {
+    new PromptModal(this, {
+      placeholder: "Search the web…",
+      onSubmit: (query) => {
+        void this.openWebViewer(`${this.settings.webViewer.searchEngine}${encodeURIComponent(query)}`);
+      },
+    }).open();
+  }
+
+  /** Route an external link click through the Web Viewer or the OS browser, per the "open links in app" setting. */
+  openExternalLink(url: string): void {
+    if (this.settings.webViewer.openLinksInApp) void this.openWebViewer(url);
+    else window.geode.openExternal(url);
   }
 
   async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {

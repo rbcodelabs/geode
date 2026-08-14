@@ -68,6 +68,37 @@ export function fuzzyMatch(query: string, text: string): number | null {
   return qi === q.length ? score - t.length * 0.05 : null;
 }
 
+/** A single-line text prompt: Enter calls `onSubmit`, Escape cancels. */
+export class PromptModal extends Modal {
+  inputEl: HTMLInputElement;
+
+  constructor(
+    app: App,
+    private opts: { placeholder?: string; initialValue?: string; onSubmit: (value: string) => void }
+  ) {
+    super(app);
+    this.modalEl.classList.add("prompt");
+    this.inputEl = document.createElement("input");
+    this.inputEl.className = "prompt-input";
+    this.inputEl.type = "text";
+    this.inputEl.placeholder = opts.placeholder ?? "";
+    this.inputEl.value = opts.initialValue ?? "";
+    this.contentEl.appendChild(this.inputEl);
+    this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const value = this.inputEl.value.trim();
+        this.close();
+        if (value) this.opts.onSubmit(value);
+      }
+    });
+  }
+
+  onOpen(): void {
+    this.inputEl.focus();
+  }
+}
+
 export abstract class SuggestModal<T> extends Modal {
   inputEl: HTMLInputElement;
   resultsEl: HTMLElement;

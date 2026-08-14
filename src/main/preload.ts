@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
 import type { ManagedPolicy } from "../renderer/policy";
+import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 
 export interface VaultFileEntry {
   path: string;
@@ -44,6 +45,9 @@ const api = {
     ipcRenderer.invoke("community-resolve", spec, opts ?? {}),
   installCommunity: (spec: string, opts?: ResolveOpts): Promise<InstalledResult> =>
     ipcRenderer.invoke("community-install", spec, opts ?? {}),
+  listChromeProfiles: (): Promise<ChromeProfile[]> => ipcRenderer.invoke("chrome-list-profiles"),
+  importChromeCookies: (profileDir: string): Promise<ChromeCookieImportResult> =>
+    ipcRenderer.invoke("chrome-import-cookies", profileDir),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },
