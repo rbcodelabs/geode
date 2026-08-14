@@ -6,15 +6,35 @@ import { _electron as electron, expect, test } from "@playwright/test";
 const repoRoot = path.resolve(__dirname, "..", "..");
 const testVaultFixturePath = path.join(repoRoot, "test-vault");
 
+const TASK_FIXTURES: { name: string; frontmatter: string; body: string }[] = [
+  { name: "Alpha Task", frontmatter: "status: Todo\npriority: 1\ndone: false", body: "First task in the queue." },
+  { name: "Beta Task", frontmatter: "status: In Progress\npriority: 2\ndone: false", body: "Second task, currently being worked." },
+  { name: "Gamma Task", frontmatter: "status: Done\npriority: 3\ndone: true", body: "Third task, already finished." },
+];
+
 /**
  * Bases (Phase B) writes back to the vault (creating the `.base` file,
  * editing a cell's frontmatter) — unlike the read-only specs that share
  * `test-vault/` directly (smoke/graph-view/etc.), this test works against a
  * throwaway copy so it never mutates the checked-in fixtures.
+ *
+ * The 3 frontmatter-bearing `Tasks/*.md` fixtures this spec needs (for
+ * filter/sort/group coverage against real properties) are written directly
+ * into that copy here, rather than being checked into the shared
+ * `test-vault/` — adding unlinked nodes there previously destabilized
+ * `graph-view.spec.ts`'s force-simulation-position-based click test (more
+ * nodes, especially edgeless ones, move more before the sim settles). Keeping
+ * this spec's fixtures local to its own vault copy avoids that cross-test
+ * coupling entirely.
  */
 function makeVaultCopy(): string {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-bases-e2e-"));
   fs.cpSync(testVaultFixturePath, vaultDir, { recursive: true });
+  const tasksDir = path.join(vaultDir, "Tasks");
+  fs.mkdirSync(tasksDir, { recursive: true });
+  for (const { name, frontmatter, body } of TASK_FIXTURES) {
+    fs.writeFileSync(path.join(tasksDir, `${name}.md`), `---\n${frontmatter}\n---\n\n# ${name}\n\n${body}\n`);
+  }
   return vaultDir;
 }
 

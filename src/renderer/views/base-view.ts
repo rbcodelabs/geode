@@ -63,24 +63,31 @@ export class BaseView implements View {
   private lastResult: QueryResult | null = null;
   private renderScheduled = false;
   /**
-   * Set right before our own `persist()` writes the `.base` file, consumed
-   * by the very next "modify" event for that same path. Without this, our
-   * own write would trigger a `reloadFromDisk()` that replaces `this.def`
-   * with freshly parsed objects — silently invalidating any view/def object
-   * reference an already-open Sort/Filter/Properties panel is still holding
-   * (its next edit would land on the orphaned old object and never reach
-   * the file). A later watcher-echo "modify" for the same write is still
-   * harmless to reload from, since by then disk and memory already agree.
+   * The exact text we last knew to be on disk for this file — set both
+   * right before `persist()` writes it (predicting the write's outcome)
+   * and every time `reloadFromDisk()` actually reads it. Used to make the
+   * "did our own file change externally?" check idempotent against content
+   * rather than a single-consume flag.
+   *
+   * This file's writes are echoed by up to *two* "modify" events: one
+   * synchronous one from `Vault.modify()` itself, and a second, later one
+   * from the main-process chokidar watcher noticing the same write on disk
+   * (see `src/main/main.ts`'s `startWatcher`). A single-consume "skip the
+   * next reload" flag only absorbs the first of those — the later watcher
+   * echo would still trigger a real `reloadFromDisk()`, which replaces
+   * `this.def` with freshly parsed objects and silently orphans any view/def
+   * object reference an already-open Sort/Filter/Properties panel is still
+   * holding (its next edit would land on the orphaned object and never
+   * reach the file — this caused a real, reproducible flake in
+   * `bases.spec.ts`). Comparing content instead is immune to however many
+   * duplicate/delayed echoes arrive: if the file's current text already
+   * matches what we expect, there's nothing to reload.
    */
-  private suppressNextOwnReload = false;
+  private lastKnownText: string | null = null;
 
   private readonly onVaultChange = (changedFile?: TFile) => {
     if (changedFile && this.file && changedFile.path === this.file.path) {
-      if (this.suppressNextOwnReload) {
-        this.suppressNextOwnReload = false;
-        return;
-      }
-      void this.reloadFromDisk();
+      void this.reloadIfChangedExternally();
       return;
     }
     // Some other file changed (a row's frontmatter was edited, a note was
@@ -88,6 +95,14 @@ export class BaseView implements View {
     // (unchanged) `.base` definition, no need to re-parse it from disk.
     this.scheduleRerender();
   };
+
+  /** Re-parse from disk only if the file's current content differs from what we last wrote/read — see `lastKnownText`'s doc comment. */
+  private async reloadIfChangedExternally(): Promise<void> {
+    if (!this.file) return;
+    const text = await this.app.vault.read(this.file);
+    if (text === this.lastKnownText) return;
+    await this.applyText(text);
+  }
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -155,6 +170,12 @@ export class BaseView implements View {
   private async reloadFromDisk(): Promise<void> {
     if (!this.file) return;
     const text = await this.app.vault.read(this.file);
+    await this.applyText(text);
+  }
+
+  /** Parse `text` (freshly read from disk) into `this.def` and re-render. Records `text` as the current known-good state (see `lastKnownText`). */
+  private async applyText(text: string): Promise<void> {
+    this.lastKnownText = text;
     const parsed = parseBaseFile(text);
     if ("error" in parsed) {
       this.showError(`Couldn't parse base: ${parsed.error}`);
@@ -269,7 +290,7 @@ export class BaseView implements View {
    */
   private persistQueue: Promise<void> = Promise.resolve();
 
-  /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `suppressNextOwnReload`'s doc comment for why the resulting "modify" event must not trigger a second, object-identity-breaking reload). */
+  /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `lastKnownText`'s doc comment for why the resulting "modify" event(s) must not trigger a second, object-identity-breaking reload). */
   private persist(): Promise<void> {
     this.persistQueue = this.persistQueue.then(() => this.doPersist());
     return this.persistQueue;
@@ -278,7 +299,7 @@ export class BaseView implements View {
   private async doPersist(): Promise<void> {
     if (!this.def || !this.file) return;
     const text = stringifyBaseFile(this.def);
-    this.suppressNextOwnReload = true;
+    this.lastKnownText = text;
     await this.app.vault.modify(this.file, text);
     this.runAndRender();
   }
