@@ -666,6 +666,29 @@ export abstract class ItemView extends View {
   abstract getDisplayText(): string;
 }
 
+/**
+ * Obsidian's `FileView` compat: real plugins use `instanceof FileView` to
+ * test "is this view showing a file at all" (e.g. the vendored Calendar
+ * fixture's `updateActiveFile`/`revealActiveNote`, checking the active
+ * leaf's view before reading `.file`). Geode's own file-backed view
+ * (`MarkdownView`) isn't a class in this hierarchy — it `implements View`
+ * directly (see src/renderer/views/markdown-view.ts) rather than
+ * subclassing the plugin-facing `View`/`ItemView` above — so, like
+ * `TFile`/`TFolder`, this customises `instanceof` via `Symbol.hasInstance`
+ * instead of relying on a real prototype chain: anything exposing a
+ * `getFile()` method (Geode's own convention for "this view shows a file",
+ * already used by `Workspace.getActiveFile()`) satisfies
+ * `instanceof FileView`. No plugin in this repo's test fixtures subclasses
+ * `FileView` itself, so a lightweight instanceof-only shim (vs. a fully
+ * extendable base class with `file`/`onLoadFile`/`onUnloadFile`) is
+ * sufficient.
+ */
+export class FileView {
+  static [Symbol.hasInstance](obj: unknown): boolean {
+    return !!obj && typeof (obj as { getFile?: unknown }).getFile === "function";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FileSystemAdapter
 // ---------------------------------------------------------------------------
@@ -739,10 +762,42 @@ function installObsidianAppCompat(app: App): void {
     };
   }
   if (!a.internalPlugins) {
+    // "daily-notes" is the one internal plugin id real community plugins
+    // actually query (e.g. Calendar, via the bundled
+    // obsidian-daily-notes-interface library, reads
+    // `getPluginById("daily-notes")?.instance?.options` for
+    // folder/format/template, and separately checks
+    // `internalPlugins.plugins["daily-notes"]?.enabled` — see
+    // tests/fixtures/plugins/calendar/main.js). Both lookups are backed
+    // live by App.dailyNoteSettings so hosted plugins and Geode's own
+    // daily-notes feature (App.openDailyNote) agree on config. Every other
+    // internal plugin id still resolves to null/disabled — Geode has no
+    // compat shim for them.
+    const dailyNotesDescriptor = () => ({
+      enabled: true,
+      instance: { options: (app as any).dailyNoteSettings },
+    });
     a.internalPlugins = {
-      plugins: {},
-      getPluginById: () => null,
-      getEnabledPluginById: () => null,
+      plugins: {
+        get "daily-notes"() {
+          return dailyNotesDescriptor();
+        },
+      },
+      getPluginById: (id: string) => (id === "daily-notes" ? dailyNotesDescriptor() : null),
+      getEnabledPluginById: (id: string) => (id === "daily-notes" ? dailyNotesDescriptor() : null),
+    };
+  }
+  if (!a.foldManager) {
+    // Obsidian's fold-state manager (collapsed headings/list items per
+    // file). Geode doesn't persist fold state, but real plugins call
+    // `app.foldManager.save(file, info)`/`.load(file)` unguarded when
+    // creating a note (e.g. obsidian-daily-notes-interface's
+    // `createDailyNote`, bundled into the vendored Calendar fixture) — so
+    // this must exist and never throw. `load` always reports "no saved
+    // fold state" (null); `save` is a no-op.
+    a.foldManager = {
+      load: (_file: unknown) => null,
+      save: (_file: unknown, _info: unknown) => {},
     };
   }
 }

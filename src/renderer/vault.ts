@@ -7,6 +7,7 @@ import {
   pathName,
   splitExt,
   MARKDOWN_EXTENSIONS,
+  isTFolder,
 } from "./types";
 import type { VaultFileEntry } from "../main/preload";
 
@@ -131,12 +132,22 @@ export class Vault extends Events {
   }
 
   getFolderByPath(path: string): TFolder | null {
-    return this.folders.get(path) ?? null;
+    return this.folders.get(path === "/" ? "" : path) ?? null;
   }
 
-  /** Obsidian-compatible lookup returning either a file or folder at `path`, or null. */
+  /**
+   * Obsidian-compatible lookup returning either a file or folder at `path`,
+   * or null. `normalizePath("")` (the empty/root folder path) resolves to
+   * `"/"` in this repo (matching real Obsidian), but the root TFolder is
+   * indexed internally under `""` — so `"/"` is treated as an alias for it
+   * here. Without this, callers that normalize an empty/root folder setting
+   * before looking it up (e.g. obsidian-daily-notes-interface's
+   * `getAllDailyNotes`, called by the vendored Calendar plugin fixture) get
+   * `null` instead of the root folder.
+   */
   getAbstractFileByPath(path: string): TFile | TFolder | null {
-    return this.files.get(path) ?? this.folders.get(path) ?? null;
+    const key = path === "/" ? "" : path;
+    return this.files.get(key) ?? this.folders.get(key) ?? null;
   }
 
   /**
@@ -158,6 +169,35 @@ export class Vault extends Events {
 
   getRoot(): TFolder {
     return this.folders.get("")!;
+  }
+
+  /**
+   * Obsidian's `vault.getConfig(key)` reads a raw value out of the vault's
+   * `.obsidian/app.json` (things like `"defaultViewMode"`,
+   * `"readableLineLength"`). Geode has no such config store, so this is a
+   * compat stub in the same spirit as `internalPlugins.getPluginById` for
+   * ids other than `"daily-notes"`: real plugins call it unguarded (e.g.
+   * the vendored Calendar fixture's `openOrCreateDailyNote` reads
+   * `"defaultViewMode"` before opening a leaf), so it must exist and never
+   * throw. Always returns `undefined` — callers already treat that as "no
+   * preference set", Obsidian's own convention for an absent config key.
+   */
+  getConfig(_key: string): unknown {
+    return undefined;
+  }
+
+  /**
+   * Obsidian's `Vault.recurseChildren` static: depth-first visit every
+   * descendant (files and folders) of `root`, calling `cb` on each. Real
+   * plugins call this directly on the `Vault` class (not an instance) —
+   * e.g. obsidian-daily-notes-interface's `getAllDailyNotes` uses it to
+   * enumerate every file under the configured daily-notes folder.
+   */
+  static recurseChildren(root: TFolder, cb: (file: TAbstractFile) => any): void {
+    for (const child of root.children) {
+      cb(child);
+      if (isTFolder(child)) Vault.recurseChildren(child, cb);
+    }
   }
 
   getFiles(): TFile[] {
