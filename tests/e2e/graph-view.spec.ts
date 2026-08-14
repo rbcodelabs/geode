@@ -70,13 +70,13 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
     // should switch back to the existing graph tab (singleton view)
     // instead of stacking a duplicate "Graph view" tab.
     await window.keyboard.press(isMac ? "Meta+T" : "Control+T");
-    await expect(window.locator(".workspace-tab-header-inner-title")).toHaveCount(2);
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(2);
     await window.keyboard.press(isMac ? "Meta+P" : "Control+P");
     await window.locator(".prompt-input").fill("Graph view");
     await window.getByText("Graph view: Open graph view").click();
-    await expect(window.locator(".workspace-tab-header-inner-title")).toHaveCount(2); // still 2, not 3
-    await expect(window.locator(".workspace-tab-header-inner-title:text-is('Graph view')")).toHaveCount(1);
-    await expect(window.locator(".workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText(
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(2); // still 2, not 3
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title:text-is('Graph view')")).toHaveCount(1);
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText(
       "Graph view"
     );
 
@@ -91,11 +91,11 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
     const [wx, wy] = positions["Welcome.md"];
     await window.mouse.click(box.x + box.width / 2 + wx, box.y + box.height / 2 + wy);
 
-    await expect(window.locator(".workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText(
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText(
       "Welcome"
     );
     await expect(window.locator(".markdown-source-view")).toBeVisible();
-    await expect(window.locator(".workspace-tab-header-inner-title")).toHaveCount(2); // the other tab is untouched
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(2); // the other tab is untouched
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {

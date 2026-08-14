@@ -22,6 +22,14 @@ export interface View {
  * way real Obsidian does, rather than always as main-area tabs.
  */
 export interface LeafContainer {
+  /**
+   * Distinguishes a docked-sidebar container from a main-area tab group
+   * without a cross-module `instanceof` (which would force an
+   * obsidian.ts -> workspace.ts import cycle). Used by views to decide
+   * whether to render main-pane-only chrome such as the back/forward
+   * navigation buttons. `Sidebar` sets `true`, `TabGroup` sets `false`.
+   */
+  readonly isSidebar: boolean;
   setActiveLeaf(leaf: WorkspaceLeaf): void;
   /** Remove and destroy the leaf's view (calls `onClose`). */
   removeLeaf(leaf: WorkspaceLeaf): void;
@@ -222,7 +230,8 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
 }
 
 /** A group of tabs sharing one content area. */
-export class TabGroup {
+export class TabGroup implements LeafContainer {
+  readonly isSidebar = false;
   leaves: WorkspaceLeaf[] = [];
   active: WorkspaceLeaf | null = null;
   containerEl: HTMLElement;
@@ -412,8 +421,12 @@ const SIDEBAR_MAX_WIDTH = 600;
  * + `revealLeaf`) exactly like real Obsidian.
  */
 export class Sidebar implements LeafContainer {
+  readonly isSidebar = true;
   containerEl: HTMLElement;
-  iconBarEl: HTMLElement;
+  /** `.workspace-tab-header-container` — the docked-pane tab strip (Obsidian's real sidebar DOM). */
+  tabHeaderContainerEl: HTMLElement;
+  /** `.workspace-tab-header-container-inner` — the row holding the `.workspace-tab-header` icons. */
+  tabHeaderInnerEl: HTMLElement;
   contentEl: HTMLElement;
   resizeHandleEl: HTMLElement;
   views: View[] = [];
@@ -430,12 +443,20 @@ export class Sidebar implements LeafContainer {
     public app: App
   ) {
     this.containerEl = document.createElement("div");
-    this.containerEl.className = `workspace-sidebar mod-${side}`;
-    this.iconBarEl = document.createElement("div");
-    this.iconBarEl.className = "sidebar-icon-bar";
+    // Alongside Geode's own `.workspace-sidebar mod-${side}` (which existing
+    // selectors/tests key on), carry Obsidian's real sidedock container hooks
+    // so `.mod-${side}-split` / `.workspace-split.mod-sidedock` descendant
+    // rules (and community themes) apply here exactly as in Obsidian.
+    this.containerEl.className =
+      `workspace-sidebar mod-${side} mod-${side}-split workspace-split mod-sidedock`;
+    this.tabHeaderContainerEl = document.createElement("div");
+    this.tabHeaderContainerEl.className = "workspace-tab-header-container";
+    this.tabHeaderInnerEl = document.createElement("div");
+    this.tabHeaderInnerEl.className = "workspace-tab-header-container-inner";
+    this.tabHeaderContainerEl.appendChild(this.tabHeaderInnerEl);
     this.contentEl = document.createElement("div");
     this.contentEl.className = "sidebar-content";
-    this.containerEl.appendChild(this.iconBarEl);
+    this.containerEl.appendChild(this.tabHeaderContainerEl);
     this.containerEl.appendChild(this.contentEl);
     // Accept leaves dragged in from tab groups or the other sidebar.
     this.containerEl.addEventListener("dragover", (e) => {
@@ -542,46 +563,78 @@ export class Sidebar implements LeafContainer {
     return leaf;
   }
 
-  private renderIcons() {
-    this.iconBarEl.innerHTML = "";
-    for (const item of [...this.views, ...this.leaves] as SidebarItem[]) {
-      if (this.isLeaf(item) && !item.view) continue; // no icon until a view is mounted
+  /**
+   * Build one docked-pane tab header, matching real Obsidian's sidedock DOM:
+   * `.workspace-tab-header-container-inner` > `.workspace-tab-header` rows.
+   * Sidebar tabs are icon-only (the inner title/close/status are hidden by
+   * `.mod-${side}-split` CSS), so a fixed built-in view — which isn't a
+   * detachable leaf — gets no close button here; only docked plugin
+   * `WorkspaceLeaf`s do (and only those are draggable out).
+   */
+  private buildSidebarTab(item: SidebarItem, isActive: boolean): HTMLElement {
+    let tab: HTMLElement;
+    if (this.isLeaf(item)) {
+      // Reuse the shared tab-header builder so docked plugin panes carry the
+      // identical class shape as main-area tabs (incl. the detach close button,
+      // hidden by sidebar CSS but functional), then wire drag-out + select.
+      tab = buildTabHeader(item, isActive);
+      const leaf = item;
+      tab.draggable = true;
+      tab.ondragstart = (e) => {
+        draggingLeaf = leaf;
+        e.dataTransfer?.setData("text/plain", leaf.id);
+        tab.classList.add("is-dragging");
+      };
+      tab.ondragend = () => {
+        draggingLeaf = null;
+        tab.classList.remove("is-dragging");
+      };
+    } else {
+      // Fixed built-in view (file explorer, search, …): same structure minus
+      // the close button, since it can't be detached.
       const { icon, title } = this.metaOf(item);
-      const btn = document.createElement("div");
-      // Docked-pane icon strip: real Obsidian renders this as a compressed
-      // `.workspace-tab-header` row (title collapsed via `.mod-left-split`/
-      // `.mod-right-split` CSS). Geode keeps its own icon-rail layout but
-      // carries the same `workspace-tab-header-inner-icon` class + data-type/
-      // aria-label so community-theme icon rules still apply here too.
-      btn.className = "sidebar-icon workspace-tab-header-inner-icon";
-      btn.dataset.type = this.isLeaf(item) ? (item.view?.viewType ?? "empty") : item.viewType;
-      setIcon(btn, icon); // render a Lucide SVG (falls back to the glyph/text for emoji)
-      btn.title = title;
-      btn.setAttribute("aria-label", title);
-      btn.classList.toggle("is-active", item === this.active);
-      btn.addEventListener("click", () => this.show(item));
-      // Docked plugin panes can be dragged out to a tab group or the other sidebar.
-      if (this.isLeaf(item)) {
-        const leaf = item;
-        btn.draggable = true;
-        btn.addEventListener("dragstart", (e) => {
-          draggingLeaf = leaf;
-          e.dataTransfer?.setData("text/plain", leaf.id);
-          btn.classList.add("is-dragging");
-        });
-        btn.addEventListener("dragend", () => {
-          draggingLeaf = null;
-          btn.classList.remove("is-dragging");
-        });
-      }
-      this.iconBarEl.appendChild(btn);
+      tab = document.createElement("div");
+      tab.className = "workspace-tab-header";
+      tab.classList.toggle("is-active", isActive);
+      tab.dataset.type = item.viewType;
+      tab.setAttribute("aria-label", title);
+      const inner = document.createElement("div");
+      inner.className = "workspace-tab-header-inner";
+      const iconEl = document.createElement("div");
+      iconEl.className = "workspace-tab-header-inner-icon";
+      setIcon(iconEl, icon);
+      const titleEl = document.createElement("div");
+      titleEl.className = "workspace-tab-header-inner-title";
+      titleEl.textContent = title;
+      inner.append(iconEl, titleEl);
+      const status = document.createElement("div");
+      status.className = "workspace-tab-header-status-container";
+      tab.append(inner, status);
     }
+    tab.onmousedown = () => this.show(item);
+    return tab;
+  }
+
+  private renderIcons() {
+    // Reset the whole strip (tab row + collapse button) so neither the tabs
+    // nor the trailing collapse button accumulate across re-renders.
+    this.tabHeaderContainerEl.innerHTML = "";
+    this.tabHeaderInnerEl.innerHTML = "";
+    this.tabHeaderContainerEl.appendChild(this.tabHeaderInnerEl);
+    for (const item of [...this.views, ...this.leaves] as SidebarItem[]) {
+      if (this.isLeaf(item) && !item.view) continue; // no tab until a view is mounted
+      this.tabHeaderInnerEl.appendChild(this.buildSidebarTab(item, item === this.active));
+    }
+    // The collapse affordance is a sibling of the tab row, kept out of the
+    // draggable tab strip so it stays clickable. Real Obsidian toggles the
+    // sidebar from the main tab bar; Geode keeps its own inline button.
     const collapseBtn = document.createElement("div");
-    collapseBtn.className = "sidebar-icon sidebar-collapse-btn";
+    collapseBtn.className = "clickable-icon sidebar-collapse-btn";
     setIcon(collapseBtn, this.side === "left" ? "panel-left" : "panel-right");
+    collapseBtn.setAttribute("aria-label", this.collapsed ? "Expand sidebar" : "Collapse sidebar");
     collapseBtn.title = this.collapsed ? "Expand sidebar" : "Collapse sidebar";
     collapseBtn.addEventListener("click", () => this.toggle());
-    this.iconBarEl.appendChild(collapseBtn);
+    this.tabHeaderContainerEl.appendChild(collapseBtn);
   }
 
   show(item: SidebarItem) {
@@ -692,7 +745,12 @@ export class Workspace extends Events {
     this.leftSidebar = new Sidebar("left", this.app);
     this.rightSidebar = new Sidebar("right", this.app);
     this.centerEl = document.createElement("div");
-    this.centerEl.className = "workspace-center";
+    // `workspace-split mod-root mod-vertical` are Obsidian's real root-split
+    // hooks (added alongside Geode's own `workspace-center`, which existing
+    // selectors/tests still key on). They scope the main-pane-only active-tab
+    // curve and let community themes targeting `.workspace-split.mod-root`
+    // restyle Geode's main area.
+    this.centerEl.className = "workspace-center workspace-split mod-root mod-vertical";
     this.rootEl.appendChild(this.leftSidebar.containerEl);
     this.rootEl.appendChild(this.centerEl);
     this.rootEl.appendChild(this.rightSidebar.containerEl);
