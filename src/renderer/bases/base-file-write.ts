@@ -20,6 +20,10 @@ function viewToRaw(view: BaseViewDefinition): Record<string, unknown> {
     order: view.order,
     sort: view.sort,
     summaries: view.summaries && Object.keys(view.summaries).length ? view.summaries : undefined,
+    image: view.image,
+    imageFit: view.imageFit,
+    imageAspectRatio: view.imageAspectRatio,
+    cardSize: view.cardSize,
   });
 }
 

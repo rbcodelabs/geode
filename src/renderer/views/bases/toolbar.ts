@@ -1,16 +1,20 @@
 import type { App } from "../../app";
 import type { RowHeight } from "./table-view";
 
+export type BaseViewType = "table" | "cards";
+
 export interface ToolbarState {
   viewNames: string[];
   currentViewName: string;
+  currentViewType: BaseViewType;
   resultCount: number;
   rowHeight: RowHeight;
 }
 
 export interface ToolbarHandlers {
   onSwitchView(name: string): void;
-  onAddView(): void;
+  onAddView(type: BaseViewType): void;
+  onSetViewType(type: BaseViewType): void;
   onRenameView(name: string): void;
   onDeleteView(name: string): void;
   onMoveView(name: string, dir: -1 | 1): void;
@@ -25,11 +29,10 @@ export interface ToolbarHandlers {
 const ROW_HEIGHTS: RowHeight[] = ["short", "medium", "tall", "extra tall"];
 
 /**
- * The Bases toolbar: View menu, results count, Sort, Filter, Properties,
- * Search, New — per the spec's "Toolbar UI" section. Copy-to-clipboard and
- * Export CSV (also toolbar items in real Obsidian) are explicitly Phase C —
- * the Results button here only shows the count, with a comment marking
- * where those two actions attach later.
+ * The Bases toolbar: View menu (switch/add views, change view type between
+ * Table and Cards), results count, Sort, Filter, Properties, Search, New —
+ * per the spec's "Toolbar UI" section. Copy-to-clipboard and Export CSV
+ * attach to the Results element in a later phase.
  */
 export class BasesToolbar {
   containerEl: HTMLElement;
@@ -111,7 +114,13 @@ export class BasesToolbar {
       title: name === currentViewName ? `● ${name}` : name,
       action: () => this.handlers.onSwitchView(name),
     }));
-    items.push({ title: "+ New view", action: () => this.handlers.onAddView() });
+    items.push({ title: "+ New table view", action: () => this.handlers.onAddView("table") });
+    items.push({ title: "+ New cards view", action: () => this.handlers.onAddView("cards") });
+    const otherType: BaseViewType = this.state.currentViewType === "cards" ? "table" : "cards";
+    items.push({
+      title: `Change type to ${otherType === "cards" ? "Cards" : "Table"}`,
+      action: () => this.handlers.onSetViewType(otherType),
+    });
     items.push({ title: "Rename current view…", action: () => this.handlers.onRenameView(currentViewName) });
     const idx = viewNames.indexOf(currentViewName);
     if (idx > 0) items.push({ title: "Move view up", action: () => this.handlers.onMoveView(currentViewName, -1) });
@@ -125,13 +134,14 @@ export class BasesToolbar {
     this.app.showMenu({ clientX: rect.left, clientY: rect.bottom } as unknown as MouseEvent, items);
   }
 
-  private state: ToolbarState = { viewNames: [], currentViewName: "", resultCount: 0, rowHeight: "medium" };
+  private state: ToolbarState = { viewNames: [], currentViewName: "", currentViewType: "table", resultCount: 0, rowHeight: "medium" };
 
   update(state: ToolbarState): void {
     this.state = state;
     this.viewBtn.textContent = `${state.currentViewName} ▾`;
-    // Results: count only this phase — Copy-to-clipboard/Export CSV attach here in Phase C.
     this.resultsEl.textContent = `${state.resultCount} result${state.resultCount === 1 ? "" : "s"}`;
     this.rowHeightSelect.value = state.rowHeight;
+    // Row height is a Table-view-only control; hide it on Cards views.
+    this.rowHeightSelect.style.display = state.currentViewType === "cards" ? "none" : "";
   }
 }

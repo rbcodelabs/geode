@@ -2184,6 +2184,93 @@ select.dropdown:hover {
   white-space: normal;
 }
 
+/* ---- Bases Cards view ---- */
+
+.bases-cards-container {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+  padding: var(--size-4-3);
+}
+
+.bases-cards-group-header {
+  color: var(--text-muted);
+  font-weight: var(--font-weight-medium, 600);
+  font-size: var(--font-ui-small);
+  margin: var(--size-4-2) 0 var(--size-4-1);
+}
+
+.bases-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--bases-card-size, 240px), 1fr));
+  gap: var(--size-4-3);
+  margin-bottom: var(--size-4-4);
+}
+
+.bases-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px);
+  background: var(--background-secondary);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
+.bases-card:hover {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+
+.bases-card-cover {
+  width: 100%;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+
+.bases-card-cover.is-empty {
+  background: var(--background-modifier-hover);
+}
+
+.bases-card-cover-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.bases-card-title {
+  padding: var(--size-4-2) var(--size-4-3) 0;
+  font-weight: var(--font-weight-medium, 600);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+.bases-card-field {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+  padding: 2px var(--size-4-3);
+  font-size: var(--font-ui-smaller, 12px);
+}
+
+.bases-card-field:last-child {
+  padding-bottom: var(--size-4-2);
+}
+
+.bases-card-field-label {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.bases-card-field-value {
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- Bases toolbar floating panels (Filter/Sort/Properties) ---- */
 
 .bases-panel {

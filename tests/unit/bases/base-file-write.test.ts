@@ -51,4 +51,34 @@ describe("stringifyBaseFile", () => {
     expect(yamlText).not.toContain("summaries:");
     expect(yamlText).not.toContain("filters:");
   });
+
+  it("round-trips a cards view's layout options (image/imageFit/imageAspectRatio/cardSize)", () => {
+    const def: BaseDefinition = {
+      filters: undefined,
+      formulas: {},
+      properties: {},
+      summaries: {},
+      views: [
+        {
+          type: "cards",
+          name: "Gallery",
+          order: ["note.author", "note.rating"],
+          image: "note.cover",
+          imageFit: "contain",
+          imageAspectRatio: 1.5,
+          cardSize: 300,
+        },
+      ],
+    };
+    const parsed = parseBaseFile(stringifyBaseFile(def));
+    if ("error" in parsed) throw new Error(parsed.error);
+    expect(parsed.def).toEqual(def);
+  });
+
+  it("omits cards options that a table view leaves unset", () => {
+    const yamlText = stringifyBaseFile(minimalDef());
+    expect(yamlText).not.toContain("image:");
+    expect(yamlText).not.toContain("imageFit:");
+    expect(yamlText).not.toContain("cardSize:");
+  });
 });

@@ -10,7 +10,11 @@ import { patchFrontmatter } from "../frontmatter-io";
 import { openPropertiesMenu } from "./bases/properties-menu";
 import { openSortGroupMenu, type SortGroupValue } from "./bases/sort-group-menu";
 import { BasesTableView, type RowHeight } from "./bases/table-view";
+import { BasesCardsView } from "./bases/cards-view";
 import { BasesToolbar, type ToolbarHandlers } from "./bases/toolbar";
+
+const DEFAULT_CARD_ASPECT_RATIO = 16 / 9;
+const DEFAULT_CARD_SIZE = 240;
 
 const FILE_NAMESPACE_FIELDS = [
   "file.name",
@@ -38,9 +42,8 @@ function defaultBaseYaml(): string {
 
 /**
  * The Bases view: parses a `.base` file, runs its current view's query, and
- * renders the toolbar + Table view (Phase B's only view type — Cards/List
- * are Phase C). File-backed like `MarkdownView`, mirroring its
- * `containerEl`/`setFile`/header structure.
+ * renders the toolbar plus the active view type (Table or Cards). File-backed
+ * like `MarkdownView`, mirroring its `containerEl`/`setFile`/header structure.
  */
 export class BaseView implements View {
   readonly viewType = "base";
@@ -54,6 +57,7 @@ export class BaseView implements View {
 
   private toolbar: BasesToolbar;
   private tableView: BasesTableView;
+  private cardsView: BasesCardsView;
 
   private def: BaseDefinition | null = null;
   private currentViewName = "";
@@ -120,7 +124,8 @@ export class BaseView implements View {
 
     const handlers: ToolbarHandlers = {
       onSwitchView: (name) => this.switchView(name),
-      onAddView: () => this.addView(),
+      onAddView: (type) => this.addView(type),
+      onSetViewType: (type) => this.setViewType(type),
       onRenameView: (name) => this.renameView(name),
       onDeleteView: (name) => this.deleteView(name),
       onMoveView: (name, dir) => this.moveView(name, dir),
@@ -142,9 +147,13 @@ export class BaseView implements View {
       onEditCell: (file, columnPath, rawText) => void this.editCell(file, columnPath, rawText),
     });
 
+    this.cardsView = new BasesCardsView(app, {
+      onOpenFile: (file, newTab) => void this.app.openFile(file, newTab),
+    });
+
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "base-view-body";
-    this.bodyEl.append(this.toolbar.containerEl, this.errorEl, this.tableView.containerEl);
+    this.bodyEl.append(this.toolbar.containerEl, this.errorEl, this.tableView.containerEl, this.cardsView.containerEl);
 
     this.containerEl.append(this.headerEl, this.bodyEl);
   }
@@ -201,6 +210,7 @@ export class BaseView implements View {
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
+    this.cardsView.destroy();
   }
 
   private scheduleRerender(): void {
@@ -216,11 +226,14 @@ export class BaseView implements View {
     this.errorEl.textContent = message;
     this.errorEl.style.display = "";
     this.tableView.containerEl.style.display = "none";
+    this.cardsView.containerEl.style.display = "none";
   }
 
   private clearError(): void {
     this.errorEl.style.display = "none";
-    this.tableView.containerEl.style.display = "";
+    const isCards = this.currentView()?.type === "cards";
+    this.tableView.containerEl.style.display = isCards ? "none" : "";
+    this.cardsView.containerEl.style.display = isCards ? "" : "none";
   }
 
   private currentView(): BaseViewDefinition | null {
@@ -268,16 +281,39 @@ export class BaseView implements View {
     this.toolbar.update({
       viewNames: this.def.views.map((v) => v.name),
       currentViewName: this.currentViewName,
+      currentViewType: view.type === "cards" ? "cards" : "table",
       resultCount: result.rows.length,
       rowHeight: this.rowHeights.get(this.currentViewName) ?? "medium",
     });
 
-    this.tableView.render(result, {
-      columns,
-      def: this.def,
-      rowHeight: this.rowHeights.get(this.currentViewName) ?? "medium",
-      searchQuery: this.searchQuery,
-    });
+    this.renderActiveView(view, result, columns);
+  }
+
+  /** Dispatch rendering to the Table or Cards view based on `view.type`, keeping only the active one visible. */
+  private renderActiveView(view: BaseViewDefinition, result: QueryResult, columns: string[]): void {
+    if (!this.def) return;
+    const isCards = view.type === "cards";
+    this.tableView.containerEl.style.display = isCards ? "none" : "";
+    this.cardsView.containerEl.style.display = isCards ? "" : "none";
+
+    if (isCards) {
+      this.cardsView.render(result, {
+        columns,
+        def: this.def,
+        imageProperty: view.image,
+        imageFit: view.imageFit ?? "cover",
+        imageAspectRatio: view.imageAspectRatio ?? DEFAULT_CARD_ASPECT_RATIO,
+        cardSize: view.cardSize ?? DEFAULT_CARD_SIZE,
+        searchQuery: this.searchQuery,
+      });
+    } else {
+      this.tableView.render(result, {
+        columns,
+        def: this.def,
+        rowHeight: this.rowHeights.get(this.currentViewName) ?? "medium",
+        searchQuery: this.searchQuery,
+      });
+    }
   }
 
   /**
@@ -311,16 +347,24 @@ export class BaseView implements View {
     this.runAndRender();
   }
 
-  addView(): void {
+  addView(type: "table" | "cards" = "table"): void {
     new PromptModal(this.app, {
       placeholder: "View name",
       onSubmit: (name) => {
         if (!this.def || this.def.views.some((v) => v.name === name)) return;
-        this.def.views.push({ type: "table", name });
+        this.def.views.push({ type, name });
         this.currentViewName = name;
         void this.persist();
       },
     }).open();
+  }
+
+  /** Change the current view's type (e.g. Table ↔ Cards), preserving its other settings. */
+  private setViewType(type: "table" | "cards"): void {
+    const view = this.currentView();
+    if (!view || view.type === type) return;
+    view.type = type;
+    void this.persist();
   }
 
   private renameView(name: string): void {
@@ -430,13 +474,9 @@ export class BaseView implements View {
 
   private setSearchQuery(query: string): void {
     this.searchQuery = query;
-    if (this.lastResult && this.def) {
-      this.tableView.render(this.lastResult, {
-        columns: this.lastColumns,
-        def: this.def,
-        rowHeight: this.rowHeights.get(this.currentViewName) ?? "medium",
-        searchQuery: query,
-      });
+    const view = this.currentView();
+    if (this.lastResult && this.def && view) {
+      this.renderActiveView(view, this.lastResult, this.lastColumns);
     }
   }
 

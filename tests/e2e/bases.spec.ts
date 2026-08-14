@@ -132,3 +132,70 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("switch a base view to Cards, render cards, and persist the type to disk", async () => {
+  const vaultDir = makeVaultCopy();
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-bases-e2e-ud-"));
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const app = await electron.launch({
+    args: [repoRoot, `--user-data-dir=${userDataDir}`],
+    cwd: repoRoot,
+  });
+
+  try {
+    const window = await app.firstWindow();
+    const consoleErrors: string[] = [];
+    window.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    window.on("pageerror", (err) => consoleErrors.push(String(err)));
+
+    await expect(window.locator('.nav-file-title[data-path="Welcome.md"]')).toBeVisible();
+
+    // --- Create a base (starts as a Table view) ---
+    const tasksFolderRow = window.locator(".nav-folder-title", { hasText: "Tasks" });
+    await tasksFolderRow.click({ button: "right" });
+    await window.locator(".context-menu-item", { hasText: "New base" }).click();
+    await expect(window.locator(".bases-table-container")).toBeVisible();
+
+    // --- View menu → Change type to Cards ---
+    await window.locator(".bases-view-btn").click();
+    await window.locator(".context-menu-item", { hasText: "Change type to Cards" }).click();
+
+    // Table container hidden, cards grid visible with one card per markdown file (7).
+    const cardsContainer = window.locator(".bases-cards-container");
+    await expect(cardsContainer).toBeVisible();
+    await expect(window.locator(".bases-table-container")).toBeHidden();
+    await expect(window.locator(".bases-card")).toHaveCount(7);
+
+    // Card titles are the note basenames; the 3 Task fixtures should be present.
+    const titles = await window.locator(".bases-card-title").allInnerTexts();
+    expect(titles).toEqual(expect.arrayContaining(["Alpha Task", "Beta Task", "Gamma Task"]));
+
+    // The row-height selector is a Table-only control and is hidden on Cards.
+    await expect(window.locator(".bases-row-height-select")).toBeHidden();
+
+    // --- The type change persisted to the .base file on disk ---
+    const baseFile = fs
+      .readdirSync(path.join(vaultDir, "Tasks"))
+      .find((f) => f.endsWith(".base"));
+    expect(baseFile, "a .base file should have been created in Tasks/").toBeTruthy();
+    const baseYaml = fs.readFileSync(path.join(vaultDir, "Tasks", baseFile!), "utf8");
+    expect(baseYaml).toMatch(/type:\s*cards/);
+
+    // --- Search filters cards live: only Alpha remains ---
+    await window.locator(".bases-toolbar-search").fill("Alpha");
+    await expect(window.locator(".bases-card")).toHaveCount(1);
+    await expect(window.locator(".bases-card-title").first()).toHaveText("Alpha Task");
+
+    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
