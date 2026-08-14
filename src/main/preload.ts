@@ -7,6 +7,7 @@ export interface VaultFileEntry {
   path: string;
   isFolder: boolean;
   mtime: number;
+  ctime: number;
   size: number;
 }
 
@@ -28,7 +29,7 @@ const api = {
   read: (path: string): Promise<string> => ipcRenderer.invoke("vault-read", path),
   readBinary: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("vault-read-binary", path),
-  write: (path: string, data: string): Promise<{ mtime: number; size: number }> =>
+  write: (path: string, data: string): Promise<{ mtime: number; ctime: number; size: number }> =>
     ipcRenderer.invoke("vault-write", path, data),
   mkdir: (path: string): Promise<void> => ipcRenderer.invoke("vault-mkdir", path),
   trash: (path: string): Promise<void> => ipcRenderer.invoke("vault-delete", path),

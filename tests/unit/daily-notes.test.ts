@@ -10,7 +10,7 @@ import { pathParent, pathName, splitExt, type TFile } from "../../src/renderer/t
 function file(path: string): TFile {
   const name = pathName(path);
   const { basename, extension } = splitExt(name);
-  return { kind: "file", path, name, basename, extension, mtime: 0, size: 0, parent: pathParent(path) };
+  return { kind: "file", path, name, basename, extension, mtime: 0, ctime: 0, size: 0, parent: pathParent(path) };
 }
 
 describe("resolveDailyNoteSettings", () => {

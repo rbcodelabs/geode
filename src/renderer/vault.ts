@@ -37,7 +37,7 @@ export class Vault extends Events {
     window.geode.onVaultEvent(async (ev) => {
       if (ev.event === "create") {
         if (this.files.has(ev.path)) return;
-        this.indexEntry({ path: ev.path, isFolder: false, mtime: Date.now(), size: 0 });
+        this.indexEntry({ path: ev.path, isFolder: false, mtime: Date.now(), ctime: Date.now(), size: 0 });
         this.rebuildChildren();
         this.contents.delete(ev.path);
         this.trigger("create", this.getFileByPath(ev.path));
@@ -56,7 +56,7 @@ export class Vault extends Events {
         this.trigger("delete", f);
       } else if (ev.event === "create-folder") {
         if (this.folders.has(ev.path)) return;
-        this.indexEntry({ path: ev.path, isFolder: true, mtime: Date.now(), size: 0 });
+        this.indexEntry({ path: ev.path, isFolder: true, mtime: Date.now(), ctime: Date.now(), size: 0 });
         this.rebuildChildren();
         this.trigger("create", this.folders.get(ev.path));
       } else if (ev.event === "delete-folder") {
@@ -88,6 +88,7 @@ export class Vault extends Events {
         basename,
         extension,
         mtime: entry.mtime,
+        ctime: entry.ctime,
         size: entry.size,
         parent: pathParent(entry.path),
       });
@@ -239,8 +240,8 @@ export class Vault extends Events {
 
   async create(path: string, data: string): Promise<TFile> {
     if (this.files.has(path)) throw new Error(`File already exists: ${path}`);
-    const { mtime, size } = await window.geode.write(path, data);
-    this.indexEntry({ path, isFolder: false, mtime, size });
+    const { mtime, ctime, size } = await window.geode.write(path, data);
+    this.indexEntry({ path, isFolder: false, mtime, ctime, size });
     this.contents.set(path, data);
     this.rebuildChildren();
     const file = this.files.get(path)!;
@@ -250,7 +251,7 @@ export class Vault extends Events {
 
   async createFolder(path: string): Promise<void> {
     await window.geode.mkdir(path);
-    this.indexEntry({ path, isFolder: true, mtime: Date.now(), size: 0 });
+    this.indexEntry({ path, isFolder: true, mtime: Date.now(), ctime: Date.now(), size: 0 });
     this.rebuildChildren();
     this.trigger("create", this.folders.get(path));
   }

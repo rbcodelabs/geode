@@ -104,8 +104,20 @@ function toRel(root: string, abs: string): string {
   return path.relative(root, abs).split(path.sep).join("/");
 }
 
-async function listVaultFiles(root: string): Promise<{ path: string; isFolder: boolean; mtime: number; size: number }[]> {
-  const out: { path: string; isFolder: boolean; mtime: number; size: number }[] = [];
+/**
+ * `stats.birthtimeMs` is unreliable on some filesystems (e.g. some Linux
+ * ext filesystems report it as 0, meaning "unavailable") — fall back to
+ * mtime in that case so `file.ctime` never reports an epoch-zero date.
+ */
+function birthtimeOf(st: fs.Stats | null): number {
+  if (!st) return 0;
+  return st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs;
+}
+
+async function listVaultFiles(
+  root: string
+): Promise<{ path: string; isFolder: boolean; mtime: number; ctime: number; size: number }[]> {
+  const out: { path: string; isFolder: boolean; mtime: number; ctime: number; size: number }[] = [];
   async function walk(dir: string) {
     let entries;
     try {
@@ -118,11 +130,17 @@ async function listVaultFiles(root: string): Promise<{ path: string; isFolder: b
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         const st = await fsp.stat(abs).catch(() => null);
-        out.push({ path: toRel(root, abs), isFolder: true, mtime: st?.mtimeMs ?? 0, size: 0 });
+        out.push({ path: toRel(root, abs), isFolder: true, mtime: st?.mtimeMs ?? 0, ctime: birthtimeOf(st), size: 0 });
         await walk(abs);
       } else if (e.isFile()) {
         const st = await fsp.stat(abs).catch(() => null);
-        out.push({ path: toRel(root, abs), isFolder: false, mtime: st?.mtimeMs ?? 0, size: st?.size ?? 0 });
+        out.push({
+          path: toRel(root, abs),
+          isFolder: false,
+          mtime: st?.mtimeMs ?? 0,
+          ctime: birthtimeOf(st),
+          size: st?.size ?? 0,
+        });
       }
     }
   }
@@ -213,7 +231,7 @@ function registerIpc() {
       await fsp.mkdir(path.dirname(abs), { recursive: true });
       await fsp.writeFile(abs, data, "utf8");
       const st = await fsp.stat(abs);
-      return { mtime: st.mtimeMs, size: st.size };
+      return { mtime: st.mtimeMs, ctime: birthtimeOf(st), size: st.size };
     });
   });
 
