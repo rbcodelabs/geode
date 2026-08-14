@@ -147,10 +147,15 @@ const WINDOWS_TO_UNIX_EPOCH_OFFSET_SECONDS = 11644473600;
  * means a session cookie with no expiration — returned as `undefined` so
  * callers omit `expirationDate` entirely (a session cookie, not one that
  * expired in 1601).
+ *
+ * Accepts `bigint` as well as `number`: `expires_utc` for far-future cookies
+ * exceeds `Number.MAX_SAFE_INTEGER`, so it is read from SQLite as a BigInt.
+ * Converting to `number` before the division is safe — the result is in
+ * seconds (~1e10), well within the safe-integer range.
  */
-export function chromeEpochToUnixSeconds(expiresUtc: number): number | undefined {
+export function chromeEpochToUnixSeconds(expiresUtc: number | bigint): number | undefined {
   if (!expiresUtc) return undefined;
-  return expiresUtc / 1_000_000 - WINDOWS_TO_UNIX_EPOCH_OFFSET_SECONDS;
+  return Number(expiresUtc) / 1_000_000 - WINDOWS_TO_UNIX_EPOCH_OFFSET_SECONDS;
 }
 
 interface CookieRow {
@@ -159,8 +164,11 @@ interface CookieRow {
   value: string;
   encrypted_value: Uint8Array;
   path: string;
-  is_secure: number;
-  expires_utc: number;
+  // Integer columns are read in BigInt mode (see readCookieRows) so that
+  // far-future `expires_utc` values, which exceed Number.MAX_SAFE_INTEGER,
+  // don't throw a RangeError when SQLite returns them.
+  is_secure: number | bigint;
+  expires_utc: number | bigint;
 }
 
 /** Read all cookie rows out of a Chrome profile's Cookies DB. Copies the file first — Chrome keeps its live DB locked while running. */
@@ -173,11 +181,15 @@ async function readCookieRows(dbPath: string): Promise<CookieRow[]> {
   try {
     const db = new DatabaseSync(tmpPath, { readOnly: true });
     try {
-      return db
-        .prepare(
-          "SELECT host_key, name, value, encrypted_value, path, is_secure, expires_utc FROM cookies"
-        )
-        .all() as unknown as CookieRow[];
+      const stmt = db.prepare(
+        "SELECT host_key, name, value, encrypted_value, path, is_secure, expires_utc FROM cookies"
+      );
+      // Read integer columns as BigInt: `expires_utc` for far-future cookies
+      // exceeds Number.MAX_SAFE_INTEGER, and node:sqlite throws a RangeError
+      // rather than silently losing precision when returning such a value as
+      // a JS number.
+      stmt.setReadBigInts(true);
+      return stmt.all() as unknown as CookieRow[];
     } finally {
       db.close();
     }

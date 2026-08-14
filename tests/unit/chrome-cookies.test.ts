@@ -85,4 +85,17 @@ describe("chromeEpochToUnixSeconds", () => {
   it("treats expires_utc === 0 as a session cookie (undefined, not epoch 1601)", () => {
     expect(chromeEpochToUnixSeconds(0)).toBeUndefined();
   });
+
+  it("handles a BigInt expires_utc that exceeds Number.MAX_SAFE_INTEGER", () => {
+    // Far-future cookies are read from SQLite as BigInt because their value
+    // overflows a JS number. This is the exact value that crashed the live
+    // import: 13436061507056382 microseconds since 1601-01-01.
+    const expiresUtc = 13436061507056382n;
+    expect(expiresUtc > BigInt(Number.MAX_SAFE_INTEGER)).toBe(true);
+    expect(chromeEpochToUnixSeconds(expiresUtc)).toBeCloseTo(1791587907.056382, 3);
+  });
+
+  it("treats a BigInt 0n expires_utc as a session cookie", () => {
+    expect(chromeEpochToUnixSeconds(0n)).toBeUndefined();
+  });
 });
