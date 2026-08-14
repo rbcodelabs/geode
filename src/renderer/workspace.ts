@@ -96,6 +96,18 @@ export class WorkspaceLeaf {
     return { type: this.view?.viewType ?? this.viewState.type, state: this.viewState.state };
   }
 
+  /**
+   * Update this leaf's persisted view state in place, without recreating
+   * the view (unlike calling `setViewState` again). For views whose state
+   * changes after mount as a side effect of user interaction — e.g.
+   * `WebView` tracking navigation — so session restore (`Workspace.serialize`,
+   * which reads `getViewState().state`) reflects the current state rather
+   * than only the state the view was first opened with.
+   */
+  setPersistedState(state: unknown): void {
+    this.viewState.state = state;
+  }
+
   /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
   async openFile(file: TFile): Promise<void> {
     const view = this.app.createMarkdownView();

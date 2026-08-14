@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import chokidar, { FSWatcher } from "chokidar";
 import { installCommunity, resolveCommunity } from "./community";
 import type { ResolveOpts } from "./github-resolve";
+import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -289,6 +290,13 @@ function registerIpc() {
     if (!session) throw new Error("No vault open");
     return installCommunity(session.root, spec, opts ?? {});
   });
+
+  // Web Viewer's "Import cookies from Chrome" (src/main/chrome-cookies.ts).
+  // Done in the main process: it needs filesystem + Keychain (child_process)
+  // access, and keeps the decrypted cookie values out of the renderer beyond
+  // what's actually injected into the persist:webviewer session.
+  ipcMain.handle("chrome-list-profiles", () => listChromeProfiles());
+  ipcMain.handle("chrome-import-cookies", (_e, profileDir: string) => importChromeCookies(profileDir));
 }
 
 function createWindow() {
@@ -315,6 +323,11 @@ function createWindow() {
       nodeIntegration: true,
       // Keep spellcheck etc. defaults; sandbox must stay off for nodeIntegration.
       sandbox: false,
+      // Enables the <webview> tag, used by the Web Viewer's WebView view
+      // (src/renderer/views/web-view.ts) to host in-app browser tabs. Its
+      // partition="persist:webviewer" gives it an isolated, persistent
+      // session separate from the app's own cookie jar.
+      webviewTag: true,
     },
   });
   win.loadFile(path.join(__dirname, "..", "src", "renderer", "index.html"));

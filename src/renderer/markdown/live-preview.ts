@@ -811,7 +811,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
       const extlink = target.closest(".cm-live-extlink") as HTMLElement | null;
       if (extlink?.dataset.href) {
         e.preventDefault();
-        window.geode.openExternal(extlink.dataset.href);
+        app.openExternalLink(extlink.dataset.href);
         return true;
       }
       return false;
