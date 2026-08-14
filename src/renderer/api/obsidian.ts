@@ -11,7 +11,7 @@
 import { Component } from "../component";
 import { Plugin as GeodePlugin } from "../plugin";
 import type { App } from "../app";
-import type { WorkspaceLeaf, View as GeodeView } from "../workspace";
+import { buildViewHeaderNavButtons, type WorkspaceLeaf, type View as GeodeView } from "../workspace";
 import { installObsidianDomExtensions } from "./obsidian-dom";
 import { addIcon, setIcon } from "./icons";
 import moment from "moment";
@@ -650,20 +650,73 @@ export class View extends Component implements GeodeView {
 
 export abstract class ItemView extends View {
   contentEl: HTMLElement;
+  private headerTitleEl: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
     // Obsidian ItemView layout: containerEl > .view-header + .view-content.
-    // Plugins render into contentEl.
+    // Plugins render into contentEl. This base ItemView has no backing file,
+    // so its header is title-only (no breadcrumb) — matching real Obsidian's
+    // plugin views (Kanban Board, Skills Manager, …).
     const header = document.createElement("div");
     header.className = "view-header";
+
+    const left = document.createElement("div");
+    left.className = "view-header-left";
+    left.append(buildViewHeaderNavButtons());
+
+    const titleContainer = document.createElement("div");
+    titleContainer.className = "view-header-title-container";
+    this.headerTitleEl = document.createElement("div");
+    this.headerTitleEl.className = "view-header-title";
+    titleContainer.append(this.headerTitleEl);
+    left.append(titleContainer);
+
+    const actions = document.createElement("div");
+    actions.className = "view-actions";
+
+    header.append(left, actions);
     this.contentEl = document.createElement("div");
     this.contentEl.className = "view-content";
     this.containerEl.append(header, this.contentEl);
+
+    // `getDisplayText()` is commonly overridden using fields the subclass
+    // sets in its own constructor body, which hasn't run yet at this point
+    // (we're still inside `super()`). Defer the first read to a microtask,
+    // after the subclass constructor completes, so it sees real state.
+    Promise.resolve().then(() => this.refreshHeaderTitle());
+  }
+
+  /** Refresh the header's title text from `getDisplayText()`. Also called by `WorkspaceLeaf.updateHeader()`. */
+  refreshHeaderTitle(): void {
+    this.headerTitleEl.textContent = this.getDisplayText();
   }
 
   abstract getViewType(): string;
   abstract getDisplayText(): string;
+}
+
+/**
+ * Obsidian's `FileView` compat: real plugins use `instanceof FileView` to
+ * test "is this view showing a file at all" (e.g. the vendored Calendar
+ * fixture's `updateActiveFile`/`revealActiveNote`, checking the active
+ * leaf's view before reading `.file`). Geode's own file-backed view
+ * (`MarkdownView`) isn't a class in this hierarchy — it `implements View`
+ * directly (see src/renderer/views/markdown-view.ts) rather than
+ * subclassing the plugin-facing `View`/`ItemView` above — so, like
+ * `TFile`/`TFolder`, this customises `instanceof` via `Symbol.hasInstance`
+ * instead of relying on a real prototype chain: anything exposing a
+ * `getFile()` method (Geode's own convention for "this view shows a file",
+ * already used by `Workspace.getActiveFile()`) satisfies
+ * `instanceof FileView`. No plugin in this repo's test fixtures subclasses
+ * `FileView` itself, so a lightweight instanceof-only shim (vs. a fully
+ * extendable base class with `file`/`onLoadFile`/`onUnloadFile`) is
+ * sufficient.
+ */
+export class FileView {
+  static [Symbol.hasInstance](obj: unknown): boolean {
+    return !!obj && typeof (obj as { getFile?: unknown }).getFile === "function";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -739,10 +792,42 @@ function installObsidianAppCompat(app: App): void {
     };
   }
   if (!a.internalPlugins) {
+    // "daily-notes" is the one internal plugin id real community plugins
+    // actually query (e.g. Calendar, via the bundled
+    // obsidian-daily-notes-interface library, reads
+    // `getPluginById("daily-notes")?.instance?.options` for
+    // folder/format/template, and separately checks
+    // `internalPlugins.plugins["daily-notes"]?.enabled` — see
+    // tests/fixtures/plugins/calendar/main.js). Both lookups are backed
+    // live by App.dailyNoteSettings so hosted plugins and Geode's own
+    // daily-notes feature (App.openDailyNote) agree on config. Every other
+    // internal plugin id still resolves to null/disabled — Geode has no
+    // compat shim for them.
+    const dailyNotesDescriptor = () => ({
+      enabled: true,
+      instance: { options: (app as any).dailyNoteSettings },
+    });
     a.internalPlugins = {
-      plugins: {},
-      getPluginById: () => null,
-      getEnabledPluginById: () => null,
+      plugins: {
+        get "daily-notes"() {
+          return dailyNotesDescriptor();
+        },
+      },
+      getPluginById: (id: string) => (id === "daily-notes" ? dailyNotesDescriptor() : null),
+      getEnabledPluginById: (id: string) => (id === "daily-notes" ? dailyNotesDescriptor() : null),
+    };
+  }
+  if (!a.foldManager) {
+    // Obsidian's fold-state manager (collapsed headings/list items per
+    // file). Geode doesn't persist fold state, but real plugins call
+    // `app.foldManager.save(file, info)`/`.load(file)` unguarded when
+    // creating a note (e.g. obsidian-daily-notes-interface's
+    // `createDailyNote`, bundled into the vendored Calendar fixture) — so
+    // this must exist and never throw. `load` always reports "no saved
+    // fold state" (null); `save` is a no-op.
+    a.foldManager = {
+      load: (_file: unknown) => null,
+      save: (_file: unknown, _info: unknown) => {},
     };
   }
 }

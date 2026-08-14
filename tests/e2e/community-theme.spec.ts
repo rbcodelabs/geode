@@ -13,6 +13,13 @@ const THEME_CSS = `
   --interactive-accent: #ff5a3c;
   --background-primary: #101418;
 }
+/* Real community themes (Minimal, AnuPpuccin, …) restyle the tab bar by
+   targeting Obsidian's real tab-header class names directly. This proves
+   Geode's tab DOM now matches: this rule has zero effect on any
+   Geode-invented class name, only on the real one. */
+.workspace-tab-header-inner {
+  background-color: rgb(17, 34, 51);
+}
 `;
 
 test("discovers, applies, persists, and clears a community theme", async () => {
@@ -59,12 +66,24 @@ test("discovers, applies, persists, and clears a community theme", async () => {
     );
     expect(accent).toBe("#ff5a3c");
 
-    // Clear → back to the default; style element removed.
+    // The real proof the tab-header DOM/class rename worked: a theme that
+    // targets Obsidian's actual `.workspace-tab-header-inner` class name
+    // (not a Geode invention) visibly restyles the tab bar once applied.
+    const tabHeaderInnerBg = () =>
+      window
+        .locator(".workspace-tab-header-container .workspace-tab-header-inner")
+        .first()
+        .evaluate((el) => getComputedStyle(el).backgroundColor);
+    await expect(window.locator(".workspace-tab-header-inner").first()).toBeVisible();
+    expect(await tabHeaderInnerBg()).toBe("rgb(17, 34, 51)");
+
+    // Clear → back to the default; style element removed, tab bar reverts.
     await window.evaluate(async () => {
       await (window as any).app.themeManager.apply("");
     });
     await expect(window.locator("style#geode-community-theme")).toHaveCount(0);
     expect(await bgVar()).toBe(defaultBg);
+    expect(await tabHeaderInnerBg()).not.toBe("rgb(17, 34, 51)");
 
     // Persistence: re-select, relaunch, and the theme is applied on boot.
     await window.evaluate(async () => {

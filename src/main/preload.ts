@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
+import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 
 export interface VaultFileEntry {
@@ -21,6 +22,7 @@ const api = {
   ): Promise<{ root: string; name: string; files: VaultFileEntry[] }> =>
     ipcRenderer.invoke("open-vault", path),
   getRecentVaults: (): Promise<string[]> => ipcRenderer.invoke("get-recent-vaults"),
+  getPluginPolicy: (): Promise<ManagedPolicy | null> => ipcRenderer.invoke("get-plugin-policy"),
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
   read: (path: string): Promise<string> => ipcRenderer.invoke("vault-read", path),

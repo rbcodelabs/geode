@@ -60,6 +60,9 @@
   --nav-item-size: var(--font-ui-small);
   --tab-height: 34px;
   --icon-size: 18px;
+  /* Shared by .workspace-tab-header-container and .view-header — matches
+     real Obsidian's own app.css value (`--header-height: 40px`). */
+  --header-height: 40px;
 
   /* Callouts — one variable per type so community themes can restyle
      individual types (icon color, title color, and tinted background all
@@ -247,7 +250,14 @@ button.mod-cta:hover {
   min-width: 0;
 }
 
-.workspace-tab-group {
+/* ---- Tab bar (Obsidian-compatible DOM: see `TabGroup` in workspace.ts) ----
+   Structural/layout fallback only — real property values (heights, padding,
+   flex-grow) are pulled from Obsidian's own app.css where straightforward.
+   Colors/borders/radii intentionally stay on Geode's existing tokens so a
+   community theme's `.workspace-tab-header*` rules are what give this its
+   final polish, matching the role Obsidian's base app.css plays. */
+
+.workspace-tabs.mod-top {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -255,23 +265,31 @@ button.mod-cta:hover {
   border-right: 1px solid var(--background-modifier-border);
 }
 
-.workspace-tab-group:last-child {
+.workspace-tabs.mod-top:last-child {
   border-right: none;
 }
 
-.workspace-tab-bar {
+.workspace-tab-header-container {
   display: flex;
-  align-items: stretch;
   background: var(--background-secondary);
+  height: var(--header-height);
+  min-height: var(--header-height);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex: 0 0 auto;
   padding: 0 var(--size-4-2);
-  gap: var(--size-4-1);
-  height: var(--tab-height);
-  min-height: var(--tab-height);
-  overflow-x: auto;
-  scrollbar-width: none;
-  -webkit-app-region: drag;
+  position: relative;
 }
-.workspace-tab-bar::-webkit-scrollbar {
+
+.workspace-tab-header-container-inner {
+  -webkit-app-region: drag;
+  display: flex;
+  flex: 0 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  gap: 4px;
+}
+.workspace-tab-header-container-inner::-webkit-scrollbar {
   display: none;
 }
 
@@ -279,9 +297,7 @@ button.mod-cta:hover {
   -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
-  gap: var(--size-4-2);
   margin-top: var(--size-4-1);
-  padding: 0 var(--size-4-2) 0 var(--size-4-3);
   border-radius: var(--radius-s) var(--radius-s) 0 0;
   font-size: var(--font-ui-small);
   color: var(--text-faint);
@@ -300,57 +316,109 @@ button.mod-cta:hover {
   color: var(--text-normal);
 }
 
-.workspace-tab-title {
+.workspace-tab-header-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  padding: 0 var(--size-4-2) 0 var(--size-4-3);
+}
+
+.workspace-tab-header-inner-icon {
+  flex: 0 0 auto;
+  display: flex;
+}
+/* Hide the tab icon for a note/empty tab, matching real Obsidian — other
+   view types (Kanban, Search, plugin views, …) keep their icon. */
+.workspace-tab-header[data-type="markdown"] .workspace-tab-header-inner-icon,
+.workspace-tab-header[data-type="empty"] .workspace-tab-header-inner-icon {
+  display: none;
+}
+
+.workspace-tab-header-inner-title {
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.workspace-tab-close {
+.workspace-tab-header-status-container {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+.workspace-tab-header-status-container:empty {
+  display: none;
+}
+
+.workspace-tab-header-status-icon,
+.workspace-tab-header-inner-close-button {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 18px;
   height: 18px;
   border-radius: var(--radius-s);
-  opacity: 0;
   cursor: pointer;
   color: var(--text-muted);
+}
+
+.workspace-tab-header-inner-close-button {
+  opacity: 0;
   transition:
     opacity 0.1s ease,
     background 0.1s ease;
 }
 
-.workspace-tab-header:hover .workspace-tab-close,
-.workspace-tab-header.is-active .workspace-tab-close {
+.workspace-tab-header:hover .workspace-tab-header-inner-close-button,
+.workspace-tab-header.is-active .workspace-tab-header-inner-close-button {
   opacity: 0.7;
 }
 
-.workspace-tab-close:hover {
+.workspace-tab-header-inner-close-button:hover {
   opacity: 1 !important;
   background: var(--background-modifier-hover);
 }
 
-.workspace-tab-new {
-  -webkit-app-region: no-drag;
+.workspace-tab-header-status-icon:hover {
+  background: var(--background-modifier-hover);
+}
+
+.workspace-tab-header-spacer {
+  display: flex;
+  flex-grow: 1;
+  -webkit-app-region: drag;
+}
+
+.workspace-tab-header-tab-list,
+.workspace-tab-header-new-tab {
   display: flex;
   align-items: center;
-  align-self: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-s);
+  flex: 0 0 auto;
+}
+
+.workspace-tab-header-tab-list .clickable-icon,
+.workspace-tab-header-new-tab .clickable-icon {
   color: var(--text-faint);
   cursor: pointer;
-  font-size: 16px;
 }
-.workspace-tab-new:hover {
+.workspace-tab-header-tab-list .clickable-icon:hover,
+.workspace-tab-header-new-tab .clickable-icon:hover {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
 
-.workspace-tab-content {
+.workspace-tab-container {
   flex: 1;
   min-height: 0;
+  display: flex;
+}
+
+.workspace-leaf {
+  flex: 1;
+  min-width: 0;
   display: flex;
 }
 
@@ -526,12 +594,12 @@ button.mod-cta:hover {
   opacity: 0.4;
 }
 
-.workspace-tab-bar.drag-over {
+.workspace-tab-header-container.drag-over {
   background: var(--background-modifier-hover);
   box-shadow: inset 0 -2px 0 var(--interactive-accent);
 }
 
-.workspace-tab-group.drag-over .workspace-tab-content {
+.workspace-tabs.drag-over .workspace-tab-container {
   box-shadow: inset 0 0 0 2px var(--interactive-accent);
 }
 
@@ -755,19 +823,102 @@ button.mod-cta:hover {
   min-height: 0;
 }
 
+/* ---- View header (breadcrumb/actions bar above each leaf's content) ----
+   Real Obsidian DOM: .view-header > .view-header-left (nav buttons +
+   title-container) + .view-actions. Structural fallback only — colors and
+   polish come from the active community theme, matching real Obsidian's
+   own base app.css. See `ItemView` (api/obsidian.ts) and `MarkdownView`
+   (views/markdown-view.ts) for the DOM this styles. */
+
 .view-header {
+  height: var(--header-height);
   display: flex;
   align-items: center;
-  padding: var(--size-4-2) var(--size-4-8) 0;
+  gap: var(--size-4-2);
+  padding: 0 var(--size-4-3);
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.view-header-left {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+}
+
+.view-header-nav-buttons {
+  display: flex;
+  align-items: center;
+}
+/* No navigation history to wire up yet (see Workspace in workspace.ts) —
+   rendered as inert placeholders rather than blocking on that follow-up. */
+.view-header-nav-buttons .clickable-icon[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.view-header-title-container {
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-weight-normal);
+  flex: 1 1 auto;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-1);
+  min-width: 0;
+}
+
+.view-header-title-parent {
+  color: var(--text-muted);
+  flex: 0 100 auto;
+  display: flex;
+  gap: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.view-header-title-parent:empty {
+  display: none;
+}
+.view-header-title-parent .view-header-breadcrumb {
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.view-header-title-parent .view-header-breadcrumb:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.view-header-title-parent .view-header-breadcrumb-separator {
+  padding: 2px 1px;
+  color: var(--text-faint);
 }
 
 .view-header-title {
-  flex: 1;
-  font-size: 1.4em;
-  font-weight: var(--h1-weight);
-  color: var(--text-normal);
+  flex: 0 0 auto;
+  max-width: 100%;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
   outline: none;
-  padding: var(--size-4-1) 0;
+  padding: 2px 4px;
+}
+.view-header-title:focus-within {
+  max-width: 100%;
+  overflow: auto;
+  text-overflow: unset;
+}
+
+.view-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 .markdown-view-body {
@@ -1380,9 +1531,82 @@ button.mod-cta:hover {
   padding: 0;
 }
 
+/* Settings modal: wider two-pane layout (nav + content), still capped by
+   max-width so it degrades gracefully on small windows. */
+.mod-settings .modal {
+  width: 780px;
+  max-width: 90vw;
+}
+
 .mod-settings .modal-content {
-  padding: 16px 24px 24px;
+  flex-direction: row;
+  padding: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ---- Settings nav (left column) ---- */
+
+.vertical-tab-header {
+  flex: 0 0 220px;
   overflow-y: auto;
+  padding: 16px 8px;
+  border-right: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.vertical-tab-header-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.vertical-tab-header-group-title {
+  padding: 4px 10px;
+  font-size: var(--font-ui-smaller, 12px);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.vertical-tab-nav-item {
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-medium);
+  cursor: pointer;
+  user-select: none;
+}
+
+.vertical-tab-nav-item:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.vertical-tab-nav-item.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* ---- Settings content (right column) ---- */
+
+.vertical-tab-content-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+}
+
+/* `.vertical-tab-content` is the class already used on
+   `PluginSettingTab.containerEl` (see api/obsidian.ts) — it's the inner
+   wrapper a plugin's settings render into. */
+.vertical-tab-content {
+  display: block;
+}
+
+.setting-tab-error {
+  color: var(--text-error, #e06c75);
+  padding: 8px 0;
 }
 
 /* Install-from-GitHub modal (community plugins & themes) */
@@ -1474,6 +1698,10 @@ button.mod-cta:hover {
 .community-item-badge.is-pinned {
   color: var(--text-on-accent);
   background: var(--interactive-accent);
+}
+.community-item-badge.is-blocked {
+  color: var(--text-on-accent);
+  background: var(--text-error, #e06c75);
 }
 .community-item-sub {
   font-size: var(--font-ui-small);

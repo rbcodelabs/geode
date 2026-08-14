@@ -7,6 +7,7 @@ import {
   pathName,
   splitExt,
   MARKDOWN_EXTENSIONS,
+  isTFolder,
 } from "./types";
 import type { VaultFileEntry } from "../main/preload";
 
@@ -131,12 +132,22 @@ export class Vault extends Events {
   }
 
   getFolderByPath(path: string): TFolder | null {
-    return this.folders.get(path) ?? null;
+    return this.folders.get(path === "/" ? "" : path) ?? null;
   }
 
-  /** Obsidian-compatible lookup returning either a file or folder at `path`, or null. */
+  /**
+   * Obsidian-compatible lookup returning either a file or folder at `path`,
+   * or null. `normalizePath("")` (the empty/root folder path) resolves to
+   * `"/"` in this repo (matching real Obsidian), but the root TFolder is
+   * indexed internally under `""` — so `"/"` is treated as an alias for it
+   * here. Without this, callers that normalize an empty/root folder setting
+   * before looking it up (e.g. obsidian-daily-notes-interface's
+   * `getAllDailyNotes`, called by the vendored Calendar plugin fixture) get
+   * `null` instead of the root folder.
+   */
   getAbstractFileByPath(path: string): TFile | TFolder | null {
-    return this.files.get(path) ?? this.folders.get(path) ?? null;
+    const key = path === "/" ? "" : path;
+    return this.files.get(key) ?? this.folders.get(key) ?? null;
   }
 
   /**
@@ -158,6 +169,35 @@ export class Vault extends Events {
 
   getRoot(): TFolder {
     return this.folders.get("")!;
+  }
+
+  /**
+   * Obsidian's `vault.getConfig(key)` reads a raw value out of the vault's
+   * `.obsidian/app.json` (things like `"defaultViewMode"`,
+   * `"readableLineLength"`). Geode has no such config store, so this is a
+   * compat stub in the same spirit as `internalPlugins.getPluginById` for
+   * ids other than `"daily-notes"`: real plugins call it unguarded (e.g.
+   * the vendored Calendar fixture's `openOrCreateDailyNote` reads
+   * `"defaultViewMode"` before opening a leaf), so it must exist and never
+   * throw. Always returns `undefined` — callers already treat that as "no
+   * preference set", Obsidian's own convention for an absent config key.
+   */
+  getConfig(_key: string): unknown {
+    return undefined;
+  }
+
+  /**
+   * Obsidian's `Vault.recurseChildren` static: depth-first visit every
+   * descendant (files and folders) of `root`, calling `cb` on each. Real
+   * plugins call this directly on the `Vault` class (not an instance) —
+   * e.g. obsidian-daily-notes-interface's `getAllDailyNotes` uses it to
+   * enumerate every file under the configured daily-notes folder.
+   */
+  static recurseChildren(root: TFolder, cb: (file: TAbstractFile) => any): void {
+    for (const child of root.children) {
+      cb(child);
+      if (isTFolder(child)) Vault.recurseChildren(child, cb);
+    }
   }
 
   getFiles(): TFile[] {
@@ -244,6 +284,25 @@ export class Vault extends Events {
     this.trigger("delete", item);
   }
 
+  /**
+   * Updates `item`'s path/name/basename/extension/parent in place to reflect
+   * a move, keeping the same object reference. Matches Obsidian's real
+   * contract: TFile/TFolder are mutated on rename, not replaced, so plugin
+   * code that holds a reference across a rename (a normal pattern) keeps
+   * working against Geode the same way it does against real Obsidian.
+   */
+  private reindexInPlace(item: TFile | TFolder, newPath: string) {
+    const name = pathName(newPath);
+    item.path = newPath;
+    item.name = name;
+    item.parent = pathParent(newPath);
+    if (item.kind === "file") {
+      const { basename, extension } = splitExt(name);
+      item.basename = basename;
+      item.extension = extension;
+    }
+  }
+
   async rename(item: TFile | TFolder, newPath: string): Promise<void> {
     const oldPath = item.path;
     await window.geode.rename(oldPath, newPath);
@@ -251,35 +310,49 @@ export class Vault extends Events {
       this.files.delete(oldPath);
       const content = this.contents.get(oldPath);
       this.contents.delete(oldPath);
-      this.indexEntry({ path: newPath, isFolder: false, mtime: Date.now(), size: item.size });
-      if (content !== undefined) this.contents.set(newPath, content);
+      this.reindexInPlace(item, newPath);
+      item.mtime = Date.now();
+      this.files.set(item.path, item);
+      if (content !== undefined) this.contents.set(item.path, content);
       this.rebuildChildren();
-      this.trigger("rename", this.files.get(newPath), oldPath);
+      this.trigger("rename", item, oldPath);
     } else {
-      // Re-key every descendant path.
-      const moves: [string, string][] = [];
-      for (const p of this.files.keys()) {
-        if (p.startsWith(oldPath + "/")) moves.push([p, newPath + p.slice(oldPath.length)]);
-      }
-      this.folders.delete(oldPath);
-      for (const p of [...this.folders.keys()]) {
+      // Collect the folder itself plus every descendant folder/file OBJECT
+      // (not just path strings) before mutating any maps, so old-path
+      // lookups below are unaffected by earlier deletions.
+      const folderMoves: { obj: TFolder; oldP: string; newP: string }[] = [
+        { obj: item, oldP: oldPath, newP: newPath },
+      ];
+      for (const p of this.folders.keys()) {
         if (p.startsWith(oldPath + "/")) {
-          this.folders.delete(p);
-          this.indexEntry({ path: newPath + p.slice(oldPath.length), isFolder: true, mtime: 0, size: 0 });
+          folderMoves.push({ obj: this.folders.get(p)!, oldP: p, newP: newPath + p.slice(oldPath.length) });
         }
       }
-      this.indexEntry({ path: newPath, isFolder: true, mtime: 0, size: 0 });
-      for (const [from, to] of moves) {
-        const f = this.files.get(from)!;
-        this.files.delete(from);
-        this.indexEntry({ path: to, isFolder: false, mtime: f.mtime, size: f.size });
-        const content = this.contents.get(from);
-        this.contents.delete(from);
-        if (content !== undefined) this.contents.set(to, content);
+      const fileMoves: { obj: TFile; oldP: string; newP: string }[] = [];
+      for (const p of this.files.keys()) {
+        if (p.startsWith(oldPath + "/")) {
+          fileMoves.push({ obj: this.files.get(p)!, oldP: p, newP: newPath + p.slice(oldPath.length) });
+        }
       }
+
+      for (const { oldP } of folderMoves) this.folders.delete(oldP);
+      for (const { oldP } of fileMoves) this.files.delete(oldP);
+
+      for (const m of folderMoves) {
+        this.reindexInPlace(m.obj, m.newP);
+        this.folders.set(m.obj.path, m.obj);
+      }
+      for (const m of fileMoves) {
+        this.reindexInPlace(m.obj, m.newP);
+        this.files.set(m.obj.path, m.obj);
+        const content = this.contents.get(m.oldP);
+        this.contents.delete(m.oldP);
+        if (content !== undefined) this.contents.set(m.obj.path, content);
+      }
+
       this.rebuildChildren();
-      this.trigger("rename", this.folders.get(newPath), oldPath);
-      for (const [from, to] of moves) this.trigger("rename", this.files.get(to), from);
+      this.trigger("rename", folderMoves[0].obj, folderMoves[0].oldP);
+      for (const m of fileMoves) this.trigger("rename", m.obj, m.oldP);
     }
   }
 

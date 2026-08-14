@@ -17,7 +17,15 @@ import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { TFile, pathName } from "./types";
 import { rewriteWikilinksForRename } from "./rename";
+import {
+  resolveDailyNoteSettings,
+  matchDailyNoteFile,
+  dailyNotePath,
+  type DailyNoteSettings,
+} from "./daily-notes";
 import type { Command } from "./commands";
+import moment from "moment";
+import type { PluginSettingTab } from "./api/obsidian";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -131,25 +139,135 @@ class CommandPaletteModal extends SuggestModal<Command> {
   }
 }
 
+/** Ids of the two built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
+type BuiltinTabId = "appearance" | "community-plugins";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "community-plugins"];
+
 class SettingsModal extends Modal {
+  private navEl!: HTMLElement;
+  private contentContainerEl!: HTMLElement;
+  private activeTabId: string = "appearance";
+  private unsubscribeSettingTabs: (() => void) | null = null;
+
   constructor(private geodeApp: App) {
     super(geodeApp);
     this.modalEl.classList.add("mod-settings");
   }
 
   onOpen(): void {
+    this.contentEl.empty();
+    this.navEl = document.createElement("div");
+    this.navEl.className = "vertical-tab-header";
+    this.contentContainerEl = document.createElement("div");
+    this.contentContainerEl.className = "vertical-tab-content-container";
+    this.contentEl.append(this.navEl, this.contentContainerEl);
+
+    // A plugin being enabled/disabled while the modal is open must update the
+    // nav immediately, and bounce back to Appearance if the currently active
+    // tab just disappeared.
+    this.unsubscribeSettingTabs = this.geodeApp.onSettingTabsChanged(() => {
+      this.renderNav();
+      if (
+        !(BUILTIN_TAB_IDS as string[]).includes(this.activeTabId) &&
+        !this.geodeApp.settingTabs.has(this.activeTabId)
+      ) {
+        this.activateTab("appearance");
+      }
+    });
+
+    // Real Obsidian always opens Settings on Appearance; last-active tab is
+    // not persisted across opens.
+    this.activateTab("appearance");
+  }
+
+  /** Switch the content pane (and nav highlight) to the tab with this id. Drives nav clicks, openTabById, and the initial onOpen(). */
+  activateTab(id: string): void {
+    if (!(BUILTIN_TAB_IDS as string[]).includes(this.activeTabId)) {
+      const prevTab = this.geodeApp.settingTabs.get(this.activeTabId);
+      if (prevTab) {
+        try {
+          prevTab.hide();
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    }
+
+    this.activeTabId = id;
+    this.renderNav();
+    this.contentContainerEl.empty();
+
+    if (id === "appearance") {
+      this.renderAppearanceTab(this.contentContainerEl);
+    } else if (id === "community-plugins") {
+      this.renderCommunityTab(this.contentContainerEl);
+    } else {
+      const tab = this.geodeApp.settingTabs.get(id);
+      if (!tab) {
+        // The requested plugin tab no longer exists (e.g. race with a
+        // disable) — fall back rather than render an empty pane.
+        this.activateTab("appearance");
+        return;
+      }
+      this.contentContainerEl.appendChild(tab.containerEl);
+      try {
+        tab.display();
+      } catch (err) {
+        console.error(err);
+        const errEl = document.createElement("div");
+        errEl.className = "setting-tab-error";
+        errEl.textContent = "This plugin's settings failed to load";
+        this.contentContainerEl.appendChild(errEl);
+      }
+    }
+  }
+
+  /** Rebuild the left nav column: built-in tabs, then an alphabetized "Plugin options" group. */
+  private renderNav(): void {
+    this.navEl.empty();
+
+    const addNavItem = (id: string, label: string, container: HTMLElement) => {
+      const item = document.createElement("div");
+      item.className = "vertical-tab-nav-item";
+      item.textContent = label;
+      item.classList.toggle("is-active", id === this.activeTabId);
+      item.addEventListener("click", () => this.activateTab(id));
+      container.appendChild(item);
+    };
+
+    addNavItem("appearance", "Appearance", this.navEl);
+    addNavItem("community-plugins", "Community plugins & themes", this.navEl);
+
+    const pluginTabs = [...this.geodeApp.settingTabs.keys()]
+      .map((id) => ({ id, name: this.geodeApp.pluginManager?.getManifest(id)?.name ?? id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (pluginTabs.length) {
+      const group = document.createElement("div");
+      group.className = "vertical-tab-header-group";
+      const title = document.createElement("div");
+      title.className = "vertical-tab-header-group-title";
+      title.textContent = "Plugin options";
+      group.appendChild(title);
+      for (const { id, name } of pluginTabs) addNavItem(id, name, group);
+      this.navEl.appendChild(group);
+    }
+  }
+
+  private renderAppearanceTab(container: HTMLElement): void {
     const s = this.geodeApp.settings;
-    this.contentEl.innerHTML = `<h2>Appearance</h2>`;
-    this.addToggle("Dark mode", s.theme === "dark", (v) => {
+    container.innerHTML = `<h2>Appearance</h2>`;
+    this.addToggle(container, "Dark mode", s.theme === "dark", (v) => {
       s.theme = v ? "dark" : "light";
       this.geodeApp.applySettings();
     });
-    this.addToggle("Readable line length", s.readableLineLength, (v) => {
+    this.addToggle(container, "Readable line length", s.readableLineLength, (v) => {
       s.readableLineLength = v;
       this.geodeApp.applySettings();
     });
     // Community theme picker: "Default" + any installed under .geode/themes/.
     this.addDropdown(
+      container,
       "Theme",
       () => this.geodeApp.themeManager.list(),
       s.cssTheme,
@@ -159,23 +277,27 @@ class SettingsModal extends Modal {
         this.geodeApp.saveSettings();
       }
     );
+  }
 
+  private renderCommunityTab(container: HTMLElement): void {
+    const s = this.geodeApp.settings;
     const webViewerHeading = document.createElement("h2");
     webViewerHeading.textContent = "Web Viewer";
-    this.contentEl.appendChild(webViewerHeading);
-    this.addTextInput("Search engine", s.webViewer.searchEngine, (v) => {
+    container.appendChild(webViewerHeading);
+    this.addTextInput(container, "Search engine", s.webViewer.searchEngine, (v) => {
       s.webViewer.searchEngine = v;
       this.geodeApp.saveSettings();
     });
-    this.addTextInput("Home URL", s.webViewer.homeUrl, (v) => {
+    this.addTextInput(container, "Home URL", s.webViewer.homeUrl, (v) => {
       s.webViewer.homeUrl = v;
       this.geodeApp.saveSettings();
     });
-    this.addToggle("Open external links in Geode", s.webViewer.openLinksInApp, (v) => {
+    this.addToggle(container, "Open external links in Geode", s.webViewer.openLinksInApp, (v) => {
       s.webViewer.openLinksInApp = v;
       this.geodeApp.saveSettings();
     });
     const { control: cookieControl } = this.addRow(
+      container,
       "Import cookies from Chrome",
       "One-time import so viewer tabs open already logged in."
     );
@@ -186,14 +308,14 @@ class SettingsModal extends Modal {
 
     const communityHeading = document.createElement("h2");
     communityHeading.textContent = "Community plugins & themes";
-    this.contentEl.appendChild(communityHeading);
-    const { control } = this.addRow("Install from GitHub");
+    container.appendChild(communityHeading);
+    const { control } = this.addRow(container, "Install from GitHub");
     const addBtn = document.createElement("button");
     addBtn.textContent = "Add…";
     control.appendChild(addBtn);
     const listEl = document.createElement("div");
     listEl.className = "community-list";
-    this.contentEl.appendChild(listEl);
+    container.appendChild(listEl);
     addBtn.addEventListener("click", () => {
       new InstallFromGithubModal(this.geodeApp, this.geodeApp.communityManager, () =>
         this.renderCommunityList(listEl)
@@ -225,6 +347,9 @@ class SettingsModal extends Modal {
     const cm = this.geodeApp.communityManager;
     const refresh = () => this.renderCommunityList(listEl);
     const pinned = Boolean(item.pinnedVersion);
+    // Only meaningful for type "plugin" (themes aren't gated by plugin
+    // policy), but isBlocked() is a safe no-op id lookup either way.
+    const blocked = this.geodeApp.pluginManager.isBlocked(item.id);
 
     const row = document.createElement("div");
     row.className = "community-item";
@@ -236,6 +361,9 @@ class SettingsModal extends Modal {
       `<div class="community-item-title">${item.id}` +
       `<span class="community-item-badge">${item.type}</span>` +
       (pinned ? `<span class="community-item-badge is-pinned">pinned</span>` : "") +
+      (blocked
+        ? `<span class="community-item-badge is-blocked" title="Disabled by administrator policy">blocked by admin</span>`
+        : "") +
       `</div>` +
       `<div class="community-item-sub">${item.repo} · v${item.installedVersion}</div>`;
     row.appendChild(info);
@@ -306,8 +434,8 @@ class SettingsModal extends Modal {
     return row;
   }
 
-  private addToggle(label: string, value: boolean, onChange: (v: boolean) => void) {
-    const { control } = this.addRow(label);
+  private addToggle(container: HTMLElement, label: string, value: boolean, onChange: (v: boolean) => void) {
+    const { control } = this.addRow(container, label);
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = value;
@@ -316,12 +444,13 @@ class SettingsModal extends Modal {
   }
 
   private addDropdown(
+    container: HTMLElement,
     label: string,
     options: () => Promise<string[]>,
     selected: string,
     onChange: (value: string) => void
   ) {
-    const { control } = this.addRow(label);
+    const { control } = this.addRow(container, label);
     const select = document.createElement("select");
     select.className = "dropdown";
     const def = document.createElement("option");
@@ -343,7 +472,7 @@ class SettingsModal extends Modal {
     });
   }
 
-  private addRow(label: string, description?: string): { control: HTMLElement } {
+  private addRow(container: HTMLElement, label: string, description?: string): { control: HTMLElement } {
     const row = document.createElement("div");
     row.className = "setting-item";
     const info = document.createElement("div");
@@ -362,12 +491,12 @@ class SettingsModal extends Modal {
     control.className = "setting-item-control";
     row.appendChild(info);
     row.appendChild(control);
-    this.contentEl.appendChild(row);
+    container.appendChild(row);
     return { control };
   }
 
-  private addTextInput(label: string, value: string, onChange: (v: string) => void) {
-    const { control } = this.addRow(label);
+  private addTextInput(container: HTMLElement, label: string, value: string, onChange: (v: string) => void) {
+    const { control } = this.addRow(container, label);
     const input = document.createElement("input");
     input.type = "text";
     input.className = "web-view-address";
@@ -378,6 +507,19 @@ class SettingsModal extends Modal {
   }
 
   onClose(): void {
+    if (!(BUILTIN_TAB_IDS as string[]).includes(this.activeTabId)) {
+      const activeTab = this.geodeApp.settingTabs.get(this.activeTabId);
+      if (activeTab) {
+        try {
+          activeTab.hide();
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    }
+    this.unsubscribeSettingTabs?.();
+    this.unsubscribeSettingTabs = null;
+    this.geodeApp.activeSettingsModal = null;
     this.geodeApp.saveSettings();
   }
 }
@@ -435,9 +577,52 @@ export class App {
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
   };
+  /** Resolved "daily-notes" config (defaults until a vault is opened); also read by the internalPlugins compat shim. */
+  dailyNoteSettings: DailyNoteSettings = resolveDailyNoteSettings(null);
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // --- Plugin settings tabs -----------------------------------------------
+
+  /** Registered plugin settings tabs, keyed by plugin id (`Plugin.addSettingTab`). */
+  settingTabs = new Map<string, PluginSettingTab>();
+  private settingTabListeners = new Set<() => void>();
+
+  registerSettingTab(id: string, tab: PluginSettingTab): void {
+    this.settingTabs.set(id, tab);
+    this.settingTabListeners.forEach((fn) => fn());
+  }
+
+  unregisterSettingTab(id: string): void {
+    this.settingTabs.delete(id);
+    this.settingTabListeners.forEach((fn) => fn());
+  }
+
+  /** Subscribe to setting-tab registry changes; returns an unsubscribe function. */
+  onSettingTabsChanged(fn: () => void): () => void {
+    this.settingTabListeners.add(fn);
+    return () => this.settingTabListeners.delete(fn);
+  }
+
+  setting = {
+    open: () => this.openSettingsModal(),
+    openTabById: (id: string) => this.openSettingsModal(id),
+    close: () => this.activeSettingsModal?.close(),
+  };
+
+  /**
+   * The singleton Settings modal instance, reused across opens. Not
+   * `private` — `SettingsModal.onClose()` clears it back to `null` when the
+   * modal closes.
+   */
+  activeSettingsModal: SettingsModal | null = null;
+
+  private openSettingsModal(tabId?: string): void {
+    if (!this.activeSettingsModal) this.activeSettingsModal = new SettingsModal(this);
+    this.activeSettingsModal.open();
+    if (tabId) this.activeSettingsModal.activateTab(tabId);
+  }
 
   async start() {
     const rootEl = document.getElementById("app")!;
@@ -494,6 +679,14 @@ export class App {
         webViewer: { ...this.settings.webViewer, ...saved.webViewer },
       };
     }
+
+    // Loaded before pluginManager.initialize() so the internalPlugins compat
+    // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready
+    // before any hosted plugin (e.g. Calendar) can query "daily-notes".
+    const savedDailyNotes = (await window.geode.readConfig(
+      "daily-notes"
+    )) as Partial<DailyNoteSettings> | null;
+    this.dailyNoteSettings = resolveDailyNoteSettings(savedDailyNotes);
 
     rootEl.innerHTML = "";
     const shell = document.createElement("div");
@@ -597,7 +790,7 @@ export class App {
     c("toggle-right-sidebar", "Toggle right sidebar", "Mod+Shift+R", () =>
       this.workspace.rightSidebar.toggle()
     );
-    c("open-settings", "Open settings", "Mod+,", () => new SettingsModal(this).open());
+    c("open-settings", "Open settings", "Mod+,", () => this.setting.open());
     c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
       new InstallFromGithubModal(this, this.communityManager).open()
     );
@@ -716,19 +909,23 @@ export class App {
     await this.openFile(file, false);
   }
 
+  /**
+   * Open today's daily note, creating it (under the configured folder/format)
+   * if it doesn't exist yet. Shares `resolveDailyNoteSettings`/
+   * `matchDailyNoteFile` with the "daily-notes" internalPlugins compat shim
+   * (api/obsidian.ts) so Geode's own feature and hosted plugins (e.g.
+   * Calendar, via obsidian-daily-notes-interface) agree on what "today's
+   * note" means.
+   */
   async openDailyNote(): Promise<void> {
-    const today = new Date();
-    const name = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    let file = this.vault.getFileByPath(`${name}.md`);
+    const settings = this.dailyNoteSettings;
+    const today = moment();
+    const key = today.format(settings.format);
+    const index = matchDailyNoteFile(this.vault.getMarkdownFiles(), settings);
+    let file = index.get(key) ?? null;
     if (!file) {
-      for (const f of this.vault.getMarkdownFiles()) {
-        if (f.basename === name) {
-          file = f;
-          break;
-        }
-      }
+      file = await this.vault.create(dailyNotePath(today, settings), `# ${key}\n\n`);
     }
-    if (!file) file = await this.vault.create(`${name}.md`, `# ${name}\n\n`);
     await this.openFile(file, false);
   }
 
@@ -875,6 +1072,10 @@ export class App {
     document.body.classList.toggle("theme-dark", this.settings.theme === "dark");
     document.body.classList.toggle("theme-light", this.settings.theme === "light");
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
+    // Real Obsidian hides .view-header entirely unless <body> has this class
+    // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
+    // Geode always shows it — there's no settings toggle for this yet.
+    document.body.classList.add("show-view-header");
   }
 
   saveSettings() {

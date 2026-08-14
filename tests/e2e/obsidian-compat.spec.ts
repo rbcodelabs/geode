@@ -111,7 +111,7 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
     await expect(rightPane).toBeVisible();
     await expect(rightPane.locator("h2")).toHaveText("probe-ok");
     await expect(
-      window.locator(".workspace-tab-content .probe-wrap")
+      window.locator(".workspace-tab-container .probe-wrap")
     ).toHaveCount(0); // definitely not in the main tab area
     await expect(window.locator(".probe-instanceof")).toHaveText("isTFile:true");
     await expect(window.locator(".probe-secret")).toHaveText("secret:sekret");
