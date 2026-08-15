@@ -5,7 +5,9 @@ import {
   CachedMetadata,
   HeadingCache,
   LinkCache,
+  ListItemCache,
   Loc,
+  SectionCache,
   TFile,
   TagCache,
 } from "./types";
@@ -13,6 +15,12 @@ import {
 const WIKILINK_RE = /(!)?\[\[([^\[\]\n]+)\]\]/g;
 const TAG_RE = /(^|[\s(])#([\p{L}\p{N}_\/-]*[\p{L}_\/-][\p{L}\p{N}_\/-]*)/gu;
 const HEADING_RE = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?$/;
+// A list item: leading indent, a bullet (-,*,+) or ordered marker (1. / 1)),
+// then optionally a `[x]` checkbox, then the content. Group 1 = indent,
+// group 2 = the checkbox character (present only for tasks).
+const LIST_ITEM_RE = /^(\s*)(?:[-*+]|\d+[.)])[ \t]+(?:\[(.)\][ \t]?)?/;
+// Trailing block id, e.g. `- [ ] do it ^abc-123`.
+const BLOCK_ID_RE = /[ \t]\^([A-Za-z0-9-]+)\s*$/;
 
 function offsetToLoc(text: string, start: number, end: number): Loc {
   // Line/ch computed lazily and cheaply: count newlines up to offset.
@@ -175,21 +183,102 @@ export function parseMetadata(text: string): CachedMetadata {
 
   let offset = bodyOffset;
   let inFence = false;
+  const listItems: ListItemCache[] = [];
+  const sections: SectionCache[] = [];
+  // Ancestor stack for resolving list nesting by indentation: each entry is a
+  // still-open ancestor item's (indent width, absolute line). A new item's
+  // parent is the nearest shallower ancestor; a shallower/non-list line pops
+  // deeper entries.
+  const stack: { indent: number; line: number }[] = [];
+  // The block section currently being accumulated (a maximal run of adjacent
+  // same-type lines). Flushed on a blank line, a type change, or EOF.
+  let cur: { type: string; start: number; end: number } | null = null;
+  const flush = () => {
+    if (cur) {
+      sections.push({ type: cur.type, position: offsetToLoc(text, cur.start, cur.end) });
+      cur = null;
+    }
+  };
+
+  // Frontmatter is its own "yaml" section, matching Obsidian.
+  if (meta.frontmatter && meta.frontmatterEndOffset > 0) {
+    sections.push({
+      type: "yaml",
+      position: offsetToLoc(text, 0, Math.max(0, meta.frontmatterEndOffset - 1)),
+    });
+  }
+
   for (const line of body.split("\n")) {
-    const fence = line.match(/^(```|~~~)/);
-    if (fence) inFence = !inFence;
-    if (!inFence) {
+    const lineStart = offset;
+    const lineEnd = offset + line.length;
+    const isFence = /^(\s*)(```|~~~)/.test(line);
+
+    if (inFence) {
+      // Inside a fenced code block: everything (incl. the closing fence line)
+      // belongs to the "code" section.
+      if (cur) cur.end = lineEnd;
+      if (isFence) {
+        inFence = false;
+        flush();
+      }
+    } else if (isFence) {
+      flush();
+      stack.length = 0;
+      inFence = true;
+      cur = { type: "code", start: lineStart, end: lineEnd };
+    } else if (line.trim() === "") {
+      // Blank line ends the current block/section and any list context.
+      flush();
+      stack.length = 0;
+    } else {
       const h = line.match(HEADING_RE);
-      if (h) {
+      const li = h ? null : line.match(LIST_ITEM_RE);
+      const type = h ? "heading" : li ? "list" : "paragraph";
+
+      if (type === "heading") {
+        flush();
+        stack.length = 0;
         meta.headings.push({
-          heading: h[2].trim(),
-          level: h[1].length,
-          position: offsetToLoc(text, offset, offset + line.length),
+          heading: h![2].trim(),
+          level: h![1].length,
+          position: offsetToLoc(text, lineStart, lineEnd),
         });
+        sections.push({ type: "heading", position: offsetToLoc(text, lineStart, lineEnd) });
+      } else {
+        // Extend the current same-type section, or start a new one.
+        if (cur && cur.type === type) cur.end = lineEnd;
+        else {
+          flush();
+          cur = { type, start: lineStart, end: lineEnd };
+        }
+
+        if (type === "list") {
+          const indent = li![1].length;
+          const pos = offsetToLoc(text, lineStart, lineEnd);
+          const lineNo = pos.start.line;
+          // Discard ancestors at this indent or deeper — they can't be parents.
+          while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+          const parent = stack.length ? stack[stack.length - 1].line : -1 - lineNo;
+          const item: ListItemCache = { position: pos, parent };
+          // li[2] is the checkbox char (only for `[x]`-style task items).
+          if (li![2] !== undefined) item.task = li![2];
+          const blockId = line.match(BLOCK_ID_RE);
+          if (blockId) item.id = blockId[1];
+          listItems.push(item);
+          stack.push({ indent, line: lineNo });
+        } else {
+          // A paragraph line ends any list nesting context.
+          stack.length = 0;
+        }
       }
     }
     offset += line.length + 1;
   }
+  flush();
+
+  // Obsidian-faithful: present only when the note actually has content.
+  if (listItems.length) meta.listItems = listItems;
+  if (sections.length) meta.sections = sections;
 
   return meta;
 }

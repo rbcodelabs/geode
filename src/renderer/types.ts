@@ -56,6 +56,31 @@ export interface HeadingCache {
   position: Loc;
 }
 
+export interface SectionCache {
+  /** Block type: "heading" | "paragraph" | "list" | "code" | "yaml" | … */
+  type: string;
+  position: Loc;
+  id?: string;
+}
+
+export interface ListItemCache {
+  position: Loc;
+  /**
+   * Line number of this item's parent list item. Negative when the item is
+   * top-level (Obsidian convention) — consumers use it purely as a key into a
+   * line→item map, where a negative value simply misses and marks a root.
+   */
+  parent: number;
+  /**
+   * The single character inside a task checkbox (`' '` for an open task,
+   * `'x'` for done, `'/'`, `'-'`, etc.). ABSENT for a plain (non-checkbox)
+   * list item — obsidian-tasks skips items whose `task` is undefined.
+   */
+  task?: string;
+  /** Trailing block id (`^id`) on the item's line, if present. */
+  id?: string;
+}
+
 export interface CachedMetadata {
   // Obsidian-faithful: this key is ABSENT (undefined) when a note has no
   // frontmatter — real plugins branch on `frontmatter !== undefined` (e.g.
@@ -69,6 +94,21 @@ export interface CachedMetadata {
   tags: TagCache[];
   headings: HeadingCache[];
   aliases: string[];
+  /**
+   * List/checklist items in the note. Obsidian-faithful: ABSENT (undefined)
+   * when the note has no list items — obsidian-tasks branches on
+   * `listItems === undefined` to skip a file entirely, so an empty array
+   * would mean "scanned, none" rather than "not scanned".
+   */
+  listItems?: ListItemCache[];
+  /**
+   * Top-level block sections (paragraph/list/heading/code/…). obsidian-tasks
+   * requires every list item's line to be covered by a section — it looks up
+   * `getSection(line, sections)` and SKIPS any item whose line has no section
+   * (that lookup is why a ```tasks query rendered 0 rows before sections
+   * existed). Present when the note has any block content.
+   */
+  sections?: SectionCache[];
 }
 
 export const MARKDOWN_EXTENSIONS = new Set(["md"]);

@@ -795,17 +795,24 @@ export class App {
     this.workspace.on("active-leaf-change", scheduleSave);
     this.workspace.on("file-open", scheduleSave);
 
-    // Now that the layout is in place, fire plugins' onLayoutReady callbacks —
-    // a plugin that opens its own view will find and reuse the restored pane
-    // (via getLeavesOfType) instead of creating a duplicate.
+    // Index the vault's metadata BEFORE firing onLayoutReady. Obsidian
+    // guarantees the metadata cache is resolved by the time layout-ready
+    // fires, and plugins rely on it: obsidian-tasks builds its task cache in
+    // an onLayoutReady callback by reading `getFileCache(f).listItems` for
+    // every file — if the metadata isn't indexed yet it finds nothing, caches
+    // an empty result, and a ```tasks query renders "0 tasks". `initialize()`
+    // also fires the "resolved" event plugins subscribe to.
+    await this.metadataCache.initialize();
+    this.notify(`Indexed ${this.vault.getMarkdownFiles().length} notes`);
+
+    // Now that the layout is in place and metadata is indexed, fire plugins'
+    // onLayoutReady callbacks — a plugin that opens its own view will find and
+    // reuse the restored pane (via getLeavesOfType) instead of creating a
+    // duplicate.
     this.workspace.flushLayoutReady();
 
     // Persist the initial layout (restored + any onLayoutReady-opened panes).
     this.scheduleSaveLayout();
-
-    this.metadataCache.initialize().then(() => {
-      this.notify(`Indexed ${this.vault.getMarkdownFiles().length} notes`);
-    });
 
     // Check opt-in community items for updates shortly after startup, off the
     // critical path. No-op unless a tracked item has auto-update enabled.
