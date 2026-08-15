@@ -125,6 +125,24 @@ describe("PluginManager", () => {
     expect(pm.getManifest("foo")?.name).toBe("Plugin foo");
   });
 
+  it("stamps manifest.dir with the plugin's vault-relative folder at load time (mirrors Obsidian)", async () => {
+    const fs = installFakeGeode(["claude-threads"]);
+    // manifest.json on disk deliberately has NO `dir` — Obsidian/Geode set it
+    // at load time, so a plugin can resolve sibling files against itself.
+    fs.files.set(
+      ".geode/plugins/claude-threads/manifest.json",
+      manifestJson("claude-threads")
+    );
+
+    const pm = new PluginManager(fakeApp);
+    await pm.initialize();
+
+    // Regression guard for the Claude Threads skill-sources crash: without a
+    // populated `dir`, `path.join(vaultRoot, manifest.dir, ...)` throws
+    // TypeError (Received undefined) during onload.
+    expect(pm.getManifest("claude-threads")?.dir).toBe(".geode/plugins/claude-threads");
+  });
+
   it("records a load error and skips a plugin whose manifest is invalid, without failing discovery of the rest", async () => {
     const fs = installFakeGeode(["good", "bad"]);
     fs.files.set(".geode/plugins/good/manifest.json", manifestJson("good"));

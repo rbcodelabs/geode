@@ -181,7 +181,15 @@ export class PluginManager {
 
   private async readManifest(id: string): Promise<PluginManifest> {
     const raw = await window.geode.read(`${pluginDir(id)}/manifest.json`);
-    return parseManifest(raw, id);
+    const manifest = parseManifest(raw, id);
+    // Stamp the plugin's own vault-relative folder onto the manifest, exactly
+    // as Obsidian does at load time. `dir` is deliberately not part of the
+    // on-disk manifest.json (parseManifest stays a pure parser); the loader is
+    // the single place that knows where the plugin lives, so it sets it here.
+    // Plugins resolve sibling files against this (e.g. Claude Threads'
+    // skill-sources: `path.join(vaultRoot, manifest.dir, "skill-sources")`).
+    manifest.dir = pluginDir(id);
+    return manifest;
   }
 
   /** All discovered plugin manifests, whether enabled or not. */

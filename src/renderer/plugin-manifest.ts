@@ -13,6 +13,15 @@ export interface PluginManifest {
   author: string;
   authorUrl?: string;
   isDesktopOnly?: boolean;
+  /**
+   * Vault-relative path to the plugin's own folder (e.g. `.geode/plugins/<id>`),
+   * mirroring Obsidian's runtime `manifest.dir`. NOT read from `manifest.json`
+   * on disk — Obsidian stamps this at load time, and so does Geode's loader
+   * (`PluginManager.readManifest`). Plugins that locate sibling files relative
+   * to themselves rely on it (e.g. Claude Threads' skill-sources feature does
+   * `path.join(vaultRoot, manifest.dir, "skill-sources")`).
+   */
+  dir?: string;
 }
 
 /**
