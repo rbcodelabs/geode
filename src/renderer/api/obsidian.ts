@@ -14,6 +14,10 @@ import type { App } from "../app";
 import { buildViewHeaderNavButtons, type WorkspaceLeaf, type View as GeodeView } from "../workspace";
 import { installObsidianDomExtensions } from "./obsidian-dom";
 import { addIcon, setIcon } from "./icons";
+import type {
+  MarkdownPostProcessor,
+  MarkdownPostProcessorContext,
+} from "../markdown/processor-registry";
 import moment from "moment";
 
 // Ensure the DOM helpers exist the moment the compat module is first
@@ -865,10 +869,114 @@ export abstract class Plugin extends GeodePlugin {
     (this.app as any).registerProtocolHandler?.(action, handler);
   }
 
-  registerMarkdownPostProcessor(_processor: unknown): void {}
-  registerMarkdownCodeBlockProcessor(_lang: string, _handler: unknown): void {}
+  /**
+   * Register a reading-view post processor that runs over the whole rendered
+   * document. Returns the `MarkdownPostProcessor` handle (with `sortOrder`);
+   * auto-unregistered on `onunload()`.
+   */
+  registerMarkdownPostProcessor(
+    processor: (el: HTMLElement, ctx: MarkdownPostProcessorContext) => void | Promise<any>,
+    sortOrder = 0
+  ): MarkdownPostProcessor {
+    const handle: MarkdownPostProcessor | undefined = (this.app as any).registerMarkdownPostProcessor?.(
+      processor,
+      sortOrder
+    );
+    this.register(() => (this.app as any).unregisterMarkdownPostProcessor?.(handle ?? processor));
+    return handle ?? (Object.assign(processor, { sortOrder }) as MarkdownPostProcessor);
+  }
+
+  /**
+   * Register a reading-view processor for a fenced code-block language (e.g.
+   * ```tasks). The handler receives the block's raw source, a fresh container
+   * element (which replaces the rendered `<pre>`), and the render context.
+   * Auto-unregistered on `onunload()`.
+   */
+  registerMarkdownCodeBlockProcessor(
+    lang: string,
+    handler: (
+      source: string,
+      el: HTMLElement,
+      ctx: MarkdownPostProcessorContext
+    ) => void | Promise<any>,
+    _sortOrder = 0
+  ): MarkdownPostProcessor {
+    const handle: MarkdownPostProcessor | undefined = (
+      this.app as any
+    ).registerMarkdownCodeBlockProcessor?.(lang, handler);
+    this.register(() => (this.app as any).unregisterMarkdownCodeBlockProcessor?.(lang, handler));
+    return handle ?? (Object.assign((_el: HTMLElement) => {}, { sortOrder: 0 }) as MarkdownPostProcessor);
+  }
+
   registerEditorExtension(_ext: unknown): void {}
-  registerHoverLinkSource(_id: string, _info: unknown): void {}
+
+  /**
+   * Register a hover-link source. STORE-ONLY: Geode has no hover-preview
+   * infrastructure yet, so this just stashes `id`/`info` on the app (removed
+   * on `onunload()`) rather than wiring any rendering behavior — a
+   * well-behaved stub, not a working hover preview.
+   */
+  registerHoverLinkSource(id: string, info: unknown): void {
+    (this.app as any).hoverLinkSources?.set(id, info);
+    this.register(() => (this.app as any).hoverLinkSources?.delete(id));
+  }
+
   registerEditorSuggest(_suggest: unknown): void {}
   registerExtensions(_exts: string[], _viewType: string): void {}
+}
+
+// ---------------------------------------------------------------------------
+// Markdown reading-view processor API surface
+// ---------------------------------------------------------------------------
+
+export { MarkdownRenderChild, MarkdownProcessorRegistry } from "../markdown/processor-registry";
+export type {
+  MarkdownPostProcessorContext,
+  MarkdownPostProcessor,
+  MarkdownSectionInformation,
+  MarkdownCodeBlockProcessor,
+} from "../markdown/processor-registry";
+
+/**
+ * Static Markdown-rendering helper mirroring Obsidian's `MarkdownRenderer`
+ * class. Plugins (obsidian-tasks among them) call
+ * `MarkdownRenderer.render(app, markdown, el, sourcePath, component)` to
+ * render arbitrary markdown into a container; this delegates to the app's
+ * shared reading-view renderer.
+ *
+ * NB: the internal instance renderer lives in `../markdown/render.ts` (also
+ * named `MarkdownRenderer`); this class is the plugin-facing static facade and
+ * is deliberately separate.
+ */
+export class MarkdownRenderer {
+  /**
+   * Render `markdown` into `el` as reading-view HTML. `component` owns any
+   * child lifecycles a plugin attaches; Geode's renderer ties the surfaces it
+   * mounts (bases, render children) to `el` and tears them down on re-render,
+   * so the argument is accepted for API parity but not separately tracked.
+   */
+  static async render(
+    app: App,
+    markdown: string,
+    el: HTMLElement,
+    sourcePath: string,
+    _component: Component
+  ): Promise<void> {
+    await app.markdownRenderer.render(markdown, el, sourcePath);
+  }
+
+  /**
+   * Deprecated Obsidian alias for {@link MarkdownRenderer.render}. Geode
+   * requires `app` as the first argument (there is no global app singleton to
+   * fall back on, unlike Obsidian's legacy no-`app` signature).
+   */
+  static async renderMarkdown(
+    app: App,
+    markdown: string,
+    el: HTMLElement,
+    sourcePath: string,
+    _component: Component
+  ): Promise<void> {
+    await app.markdownRenderer.render(markdown, el, sourcePath);
+  }
 }
