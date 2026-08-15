@@ -295,6 +295,7 @@ button.mod-cta:hover {
 }
 
 .workspace-tab-header-container {
+  -webkit-app-region: drag;
   display: flex;
   background: var(--background-secondary);
   height: var(--header-height);
@@ -500,6 +501,7 @@ button.mod-cta:hover {
 
 .workspace-tab-header-tab-list,
 .workspace-tab-header-new-tab {
+  -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
   flex: 0 0 auto;
