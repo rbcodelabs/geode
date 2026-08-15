@@ -581,6 +581,14 @@ export class App {
    * silently dropped. Nothing reads it to drive rendering.
    */
   hoverLinkSources = new Map<string, unknown>();
+  /**
+   * In-editor autocomplete suggests registered by plugins
+   * (`Plugin.registerEditorSuggest`). STORE-ONLY, like `hoverLinkSources`:
+   * Geode doesn't yet drive the suggest popover from the editor, so this
+   * keeps the registration inspectable/cleaned-up rather than silently
+   * dropping it. Nothing reads it to drive behavior yet.
+   */
+  editorSuggests = new Set<unknown>();
   workspace!: Workspace;
   statusBar!: StatusBar;
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
