@@ -22,14 +22,14 @@ describe("parseMetadata", () => {
     expect(meta.tags.map((t) => t.tag)).toEqual(["solo"]);
   });
 
-  it("treats malformed frontmatter YAML as body text", () => {
+  it("treats malformed frontmatter YAML as body text (frontmatter left undefined, Obsidian-style)", () => {
     const meta = parseMetadata(`---\n: not valid: yaml: at all\n---\nBody\n`);
-    expect(meta.frontmatter).toBeNull();
+    expect(meta.frontmatter).toBeUndefined();
   });
 
-  it("has no frontmatter when the document doesn't start with a --- block", () => {
+  it("has no frontmatter (undefined, not null) when the document doesn't start with a --- block", () => {
     const meta = parseMetadata(`# Just a note\n\nNo frontmatter here.\n`);
-    expect(meta.frontmatter).toBeNull();
+    expect(meta.frontmatter).toBeUndefined();
     expect(meta.frontmatterEndOffset).toBe(0);
   });
 

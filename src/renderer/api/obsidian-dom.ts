@@ -246,6 +246,26 @@ export function installObsidianDomExtensions(): void {
     return this;
   });
 
+  // Obsidian's show/hide/isShown visibility helpers. Toggle the `is-hidden`
+  // convention (display:none) and report current visibility. obsidian-tasks'
+  // query renderer calls `containerEl.isShown()` (via an IntersectionObserver
+  // callback) to decide whether to (re)render, so this must exist.
+  define(htmlProto, "show", function (this: HTMLElement) {
+    this.style.removeProperty("display");
+    this.removeClass?.("is-hidden");
+  });
+  define(htmlProto, "hide", function (this: HTMLElement) {
+    this.style.setProperty("display", "none");
+  });
+  define(htmlProto, "isShown", function (this: HTMLElement) {
+    return this.style.getPropertyValue("display") !== "none" && !this.hasClass?.("is-hidden");
+  });
+  define(htmlProto, "toggleVisibility", function (this: HTMLElement, visible: boolean) {
+    if (visible) (this as any).show();
+    else (this as any).hide();
+    return this;
+  });
+
   // --- globals: createEl / createDiv / createSpan / createFragment ----------
   const g = globalThis as any;
   if (typeof g.createDiv !== "function")

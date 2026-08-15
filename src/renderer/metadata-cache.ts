@@ -100,7 +100,8 @@ export function findUnlinkedMentions(text: string, names: string[]): UnlinkedMen
 
 export function parseMetadata(text: string): CachedMetadata {
   const meta: CachedMetadata = {
-    frontmatter: null,
+    // Left undefined (key absent) unless real frontmatter is parsed below —
+    // matches Obsidian, whose plugins guard on `frontmatter !== undefined`.
     frontmatterEndOffset: 0,
     links: [],
     embeds: [],
