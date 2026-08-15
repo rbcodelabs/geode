@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const testVaultPath = path.join(repoRoot, "test-vault");
+const welcomePath = path.join(testVaultPath, "Welcome.md");
 
 /** See tests/e2e/smoke.spec.ts for the full rationale behind this harness. */
 async function launchAppAgainstTestVault(): Promise<{
@@ -34,58 +35,114 @@ async function launchAppAgainstTestVault(): Promise<{
   return { app, window, userDataDir, consoleErrors };
 }
 
-test("renders a GFM pipe table as a real <table> in Live Preview, revealing raw markdown when the cursor is inside", async () => {
+/** Reads the active Live Preview editor's underlying markdown (the CM6 document). */
+function docText(window: Page): Promise<string> {
+  return window.evaluate(
+    () => (window as unknown as { app: any }).app.workspace.activeLeaf.view.getText() as string
+  );
+}
+
+test("renders a GFM pipe table as an in-place editable <table> in Live Preview", async () => {
+  // The Welcome.md table is edited in place, so this test restores the file's
+  // original bytes afterwards to keep the checked-in test vault pristine.
+  const original = fs.readFileSync(welcomePath);
   const { app, window, userDataDir, consoleErrors } = await launchAppAgainstTestVault();
 
   try {
     await window.locator('.nav-file-title[data-path="Welcome.md"]').click();
     await expect(window.locator(".cm-editor")).toBeVisible();
 
-    // test-vault/Welcome.md's "## A table" section renders as a real HTML
-    // table, not raw "| Feature | Status |" pipe syntax.
-    const tableWidget = window.locator(".cm-table-widget");
-    await expect(tableWidget).toBeVisible();
-    const table = tableWidget.locator("table");
+    const widget = window.locator(".cm-table-widget");
+    const table = widget.locator("table");
     await expect(table).toBeVisible();
 
+    // Header + data cells are real <input>s (not static text): 2 columns ×
+    // (1 header + 2 data rows) = 6 cell inputs, pre-filled from the markdown.
+    const inputs = window.locator(".cm-table-cell-input");
+    await expect(inputs).toHaveCount(6);
+    await expect(table.locator("thead th").nth(0).locator("input")).toHaveValue("Feature");
+    await expect(table.locator("thead th").nth(1).locator("input")).toHaveValue("Status");
+    await expect(table.locator("tbody tr")).toHaveCount(2);
+    await expect(table.locator("tbody tr").nth(0).locator("td").nth(0).locator("input")).toHaveValue(
+      "Wikilinks"
+    );
+
+    // The raw pipe markdown is never shown as text — the widget stays.
     const editorTextBefore = await window.locator(".cm-editor").innerText();
-    expect(editorTextBefore).not.toContain("| --- | --- |");
     expect(editorTextBefore).not.toContain("| Feature | Status |");
+    expect(editorTextBefore).not.toContain("| --- | --- |");
 
-    // Header cells and data rows are real <th>/<td> elements with the
-    // expected text, styled by the shared .markdown-rendered CSS.
-    await expect(table.locator("th").nth(0)).toHaveText("Feature");
-    await expect(table.locator("th").nth(1)).toHaveText("Status");
-    const bodyRows = table.locator("tbody tr");
-    expect(await bodyRows.count()).toBe(2);
-    await expect(bodyRows.nth(0).locator("td").nth(0)).toHaveText("Wikilinks");
-    await expect(bodyRows.nth(1).locator("td").nth(0)).toHaveText("Backlinks");
-
-    // Placing the cursor inside the table (click the heading right above it,
-    // then step the cursor rightward into the table block, one document
-    // position at a time — the table is a multi-line block widget, so
-    // vertical motion jumps clean over it, but horizontal motion still
-    // walks into the underlying raw text one character at a time) reveals
-    // the raw pipe-table markdown — matching how other Live Preview widgets
-    // (embeds, wikilinks) hide their rendered form once the cursor enters.
+    // Cursor entering the table's line range keeps it rendered (the block is
+    // atomic; the cursor skips over it) — the old revert-to-raw behavior is
+    // gone. Click the heading above, then step the cursor rightward past it.
     await window.getByText("A table", { exact: true }).click();
     await window.keyboard.press("End");
     await window.keyboard.press("ArrowRight");
     await window.keyboard.press("ArrowRight");
+    await expect(widget).toBeVisible();
+    await expect(table).toBeVisible();
+    expect(await window.locator(".cm-editor").innerText()).not.toContain("| Feature | Status |");
 
-    await expect(tableWidget).not.toBeVisible();
-    const editorTextInside = await window.locator(".cm-editor").innerText();
-    expect(editorTextInside).toContain("| --- | --- |");
-    expect(editorTextInside).toContain("| Feature | Status |");
+    // --- Editing a cell writes back to the underlying markdown -------------
+    const wikilinksCell = table.locator("tbody tr").nth(0).locator("td").nth(0).locator("input");
+    await wikilinksCell.click();
+    await wikilinksCell.fill("Wikilinks!");
+    await wikilinksCell.press("Tab"); // Tab commits + moves to the next cell
+    await expect
+      .poll(() => docText(window))
+      .toContain("| Wikilinks! | ✅ |");
 
-    // Moving the cursor back out (clicking the heading above) re-collapses
-    // the table back into its rendered <table> form.
-    await window.getByText("A table", { exact: true }).click();
-    await expect(window.locator(".cm-table-widget table")).toBeVisible();
+    // --- Per-column alignment toggle reflects in the delimiter row ---------
+    const firstHeaderTh = table.locator("thead th").nth(0);
+    await firstHeaderTh.hover();
+    await firstHeaderTh.locator(".cm-table-align-btn").click(); // default → left
+    await expect.poll(() => docText(window)).toContain(":---");
+
+    // --- Add a row --------------------------------------------------------
+    await widget.hover();
+    await window.locator(".cm-table-addrow").click();
+    await expect(table.locator("tbody tr")).toHaveCount(3);
+    await expect.poll(() => docText(window)).toContain("|  |  |"); // empty row landed
+    // The new row is editable too: type into its first cell and commit.
+    const newRowCell = table.locator("tbody tr").nth(2).locator("td").nth(0).locator("input");
+    await newRowCell.click();
+    await newRowCell.fill("Sync");
+    await table.locator("thead th").nth(1).locator("input").click(); // blur → commit
+    await expect.poll(() => docText(window)).toContain("| Sync |");
+
+    // --- Add a column -----------------------------------------------------
+    await widget.hover();
+    await window.locator(".cm-table-addcol .cm-table-ctl-btn").click();
+    // 3 columns × (1 header + 3 data rows) = 12 cell inputs.
+    await expect(window.locator(".cm-table-cell-input")).toHaveCount(12);
+    const newHeaderCell = table.locator("thead th").nth(2).locator("input");
+    await newHeaderCell.fill("Notes");
+    await newHeaderCell.press("Tab");
+    await expect.poll(() => docText(window)).toContain("Notes");
+
+    // --- Delete the added row --------------------------------------------
+    const addedRow = table.locator("tbody tr").nth(2);
+    await addedRow.hover();
+    await addedRow.locator(".cm-table-rowctl button").click();
+    await expect(table.locator("tbody tr")).toHaveCount(2);
+    await expect.poll(() => docText(window)).not.toContain("| Sync |");
+
+    // --- Delete the added column -----------------------------------------
+    const notesTh = table.locator("thead th").nth(2);
+    await notesTh.hover();
+    await notesTh.locator(".cm-table-del-btn").click();
+    // Back to 2 columns × (1 header + 2 data rows) = 6 cell inputs.
+    await expect(window.locator(".cm-table-cell-input")).toHaveCount(6);
+    const afterDelete = await docText(window);
+    expect(afterDelete).not.toContain("Notes");
+    // Still valid GFM: a header row, a delimiter row, and the edits held.
+    expect(afterDelete).toContain("| Wikilinks! | ✅ |");
+    expect(afterDelete).toMatch(/\|\s*:?-{3,}:?\s*\|/); // delimiter row present
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.writeFileSync(welcomePath, original); // restore the pristine test vault
   }
 });
