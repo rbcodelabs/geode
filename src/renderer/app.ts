@@ -7,6 +7,11 @@ import { ThemeManager } from "./theme-manager";
 import { CommunityManager } from "./community/community-manager";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { MarkdownRenderer } from "./markdown/render";
+import {
+  MarkdownProcessorRegistry,
+  type MarkdownCodeBlockProcessor,
+  type MarkdownPostProcessor,
+} from "./markdown/processor-registry";
 import { MarkdownView } from "./views/markdown-view";
 import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { FileExplorerView } from "./views/file-explorer";
@@ -567,6 +572,15 @@ export class App {
   metadataCache = new MetadataCache(this.vault);
   commands = new CommandRegistry();
   markdownRenderer = new MarkdownRenderer(this);
+  /** Reading-view code-block + post processors registered by plugins (see `Plugin.registerMarkdownCodeBlockProcessor`). */
+  markdownProcessors = new MarkdownProcessorRegistry();
+  /**
+   * Hover-link sources registered by plugins (`Plugin.registerHoverLinkSource`).
+   * STORE-ONLY: Geode has no hover-preview infrastructure yet, so this is kept
+   * purely so the registration is a well-behaved, inspectable no-op rather than
+   * silently dropped. Nothing reads it to drive rendering.
+   */
+  hoverLinkSources = new Map<string, unknown>();
   workspace!: Workspace;
   statusBar!: StatusBar;
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
@@ -605,6 +619,41 @@ export class App {
   onSettingTabsChanged(fn: () => void): () => void {
     this.settingTabListeners.add(fn);
     return () => this.settingTabListeners.delete(fn);
+  }
+
+  // --- Markdown reading-view processors -----------------------------------
+  // Thin delegations to `markdownProcessors`, called by the Obsidian-compat
+  // `Plugin` (see api/obsidian.ts). Registration returns a handle and cleanup
+  // is arranged plugin-side via `Component.register`, mirroring `registerView`.
+
+  /**
+   * Register a reading-view code-block processor for a fenced language.
+   * Returns a `MarkdownPostProcessor` handle for API parity with Obsidian
+   * (whose `.sortOrder` is settable); the handle itself is not what drives
+   * dispatch — code blocks dispatch by language via `markdownProcessors`.
+   */
+  registerMarkdownCodeBlockProcessor(
+    lang: string,
+    handler: MarkdownCodeBlockProcessor
+  ): MarkdownPostProcessor {
+    this.markdownProcessors.registerCodeBlock(lang, handler);
+    return Object.assign((_el: HTMLElement) => {}, { sortOrder: 0 }) as MarkdownPostProcessor;
+  }
+
+  unregisterMarkdownCodeBlockProcessor(lang: string, handler: MarkdownCodeBlockProcessor): void {
+    this.markdownProcessors.unregisterCodeBlock(lang, handler);
+  }
+
+  /** Register a whole-document reading-view post processor. Returns the handle for later unregistration. */
+  registerMarkdownPostProcessor(
+    processor: MarkdownPostProcessor,
+    sortOrder = 0
+  ): MarkdownPostProcessor {
+    return this.markdownProcessors.registerPostProcessor(processor, sortOrder);
+  }
+
+  unregisterMarkdownPostProcessor(processor: MarkdownPostProcessor): void {
+    this.markdownProcessors.unregisterPostProcessor(processor);
   }
 
   setting = {
