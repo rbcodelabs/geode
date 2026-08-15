@@ -18,6 +18,7 @@ import type {
   MarkdownPostProcessor,
   MarkdownPostProcessorContext,
 } from "../markdown/processor-registry";
+import { Scope, EditorSuggest } from "./suggest";
 import moment from "moment";
 
 // Ensure the DOM helpers exist the moment the compat module is first
@@ -47,6 +48,17 @@ export { MarkdownView } from "../views/markdown-view";
 export { isTFile, isTFolder, normalizePath } from "../types";
 export type { App } from "../app";
 export type { TAbstractFile, CachedMetadata } from "../types";
+// Keymap + in-editor suggest primitives. `EditorSuggest` must be a real,
+// subclassable export (plugins do `class X extends EditorSuggest` at
+// module-eval time) and `Scope` backs `app.scope` (installed below). See
+// ./suggest for the PR-2a "loads, doesn't yet drive a popover" scope.
+export { Scope, EditorSuggest } from "./suggest";
+export type {
+  KeymapEventHandler,
+  KeymapEventListener,
+  EditorSuggestContext,
+  EditorSuggestTriggerInfo,
+} from "./suggest";
 
 // ---------------------------------------------------------------------------
 // Utility functions
@@ -816,6 +828,15 @@ function installObsidianAppCompat(app: App): void {
       getEnabledPluginById: (id: string) => (id === "daily-notes" ? dailyNotesDescriptor() : null),
     };
   }
+  if (!a.scope) {
+    // Root keymap scope. Plugins that build editor suggests register hotkey
+    // handlers against `app.scope` at construction time (e.g. obsidian-tasks
+    // does `app.scope.register([], "Tab", …)` inside its EditorSuggest
+    // subclass constructor). STORE-ONLY for now — Geode has no keymap stack,
+    // so handlers are recorded but never dispatched (see ./suggest). This
+    // just has to exist and not throw so those plugins finish loading.
+    a.scope = new Scope();
+  }
   if (!a.foldManager) {
     // Obsidian's fold-state manager (collapsed headings/list items per
     // file). Geode doesn't persist fold state, but real plugins call
@@ -921,7 +942,18 @@ export abstract class Plugin extends GeodePlugin {
     this.register(() => (this.app as any).hoverLinkSources?.delete(id));
   }
 
-  registerEditorSuggest(_suggest: unknown): void {}
+  /**
+   * Register an in-editor autocomplete suggest. STORE-ONLY: Geode does not
+   * yet drive the suggest popover from the editor (that's follow-up work), so
+   * this stashes the suggest on the app — making the registration inspectable
+   * and cleaned up on `onunload()` — rather than silently dropping it. The
+   * suggest still constructs (see `EditorSuggest`/`app.scope`), which is what
+   * unblocks plugin *load*; its trigger callbacks just aren't invoked yet.
+   */
+  registerEditorSuggest(suggest: unknown): void {
+    (this.app as any).editorSuggests?.add(suggest);
+    this.register(() => (this.app as any).editorSuggests?.delete(suggest));
+  }
   registerExtensions(_exts: string[], _viewType: string): void {}
 }
 
