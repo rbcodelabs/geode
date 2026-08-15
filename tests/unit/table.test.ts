@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTable, renderTableHtml } from "../../src/renderer/markdown/table";
+import { parseTable, renderTableHtml, serializeTable, type ParsedTable } from "../../src/renderer/markdown/table";
 
 describe("parseTable", () => {
   it("parses a simple header + delimiter + rows table", () => {
@@ -116,5 +116,70 @@ describe("renderTableHtml", () => {
   it("renders an empty tbody when there are no data rows", () => {
     const html = renderTableHtml({ align: [null], header: ["A"], rows: [] });
     expect(html).toBe("<table><thead><tr><th>A</th></tr></thead><tbody></tbody></table>");
+  });
+});
+
+describe("serializeTable", () => {
+  it("serializes a simple table to GFM pipe syntax", () => {
+    const table: ParsedTable = {
+      align: [null, null],
+      header: ["Feature", "Status"],
+      rows: [
+        ["Wikilinks", "✅"],
+        ["Backlinks", "✅"],
+      ],
+    };
+    expect(serializeTable(table)).toBe(
+      ["| Feature | Status |", "| --- | --- |", "| Wikilinks | ✅ |", "| Backlinks | ✅ |"].join("\n")
+    );
+  });
+
+  it("emits the correct delimiter cell for each alignment variant", () => {
+    const table: ParsedTable = {
+      align: ["left", "center", "right", null],
+      header: ["A", "B", "C", "D"],
+      rows: [["1", "2", "3", "4"]],
+    };
+    expect(serializeTable(table)).toBe(
+      ["| A | B | C | D |", "| :--- | :---: | ---: | --- |", "| 1 | 2 | 3 | 4 |"].join("\n")
+    );
+  });
+
+  it("escapes literal pipes in cell text as \\|", () => {
+    const table: ParsedTable = {
+      align: [null, null],
+      header: ["A", "B"],
+      rows: [["a | b", "c"]],
+    };
+    expect(serializeTable(table)).toBe(["| A | B |", "| --- | --- |", "| a \\| b | c |"].join("\n"));
+  });
+
+  it("round-trips through parseTable for every alignment variant", () => {
+    const table: ParsedTable = {
+      align: ["left", "center", "right", null],
+      header: ["A", "B", "C", "D"],
+      rows: [
+        ["1", "2", "3", "4"],
+        ["x", "y", "z", "w"],
+      ],
+    };
+    expect(parseTable(serializeTable(table))).toEqual(table);
+  });
+
+  it("round-trips a table with escaped pipes and empty cells", () => {
+    const table: ParsedTable = {
+      align: [null, "center"],
+      header: ["Key", "Value"],
+      rows: [
+        ["a | b", ""],
+        ["", "c | d | e"],
+      ],
+    };
+    expect(parseTable(serializeTable(table))).toEqual(table);
+  });
+
+  it("round-trips a header-only table (no data rows)", () => {
+    const table: ParsedTable = { align: [null, "right"], header: ["A", "B"], rows: [] };
+    expect(parseTable(serializeTable(table))).toEqual(table);
   });
 });

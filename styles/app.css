@@ -1270,6 +1270,137 @@ button.mod-cta:hover {
   margin: 0;
 }
 
+/* Editable table: cells host borderless inputs that fill the cell, plus
+   hover-revealed structural controls. Keep all spacing as padding (block
+   widgets are measured by rect height, margins excluded — see the note
+   above), so no margins on the inner elements. */
+.cm-table-widget td,
+.cm-table-widget th {
+  position: relative;
+  padding: 0;
+}
+
+.cm-table-cell-input {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.cm-table-cell-input:hover {
+  background: var(--background-modifier-hover);
+}
+
+.cm-table-cell-input:focus {
+  border-color: var(--interactive-accent);
+  background: var(--background-primary);
+}
+
+/* Per-column controls (alignment toggle + delete), revealed on header hover. */
+.cm-table-col-controls {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  pointer-events: none;
+}
+
+.cm-table-widget th:hover .cm-table-col-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Per-row delete control cell, revealed on row hover. */
+.cm-table-rowctl {
+  border: none !important;
+  background: transparent !important;
+  width: 1px;
+  white-space: nowrap;
+  padding-left: 4px !important;
+}
+
+.cm-table-rowctl .cm-table-ctl-btn {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.cm-table-widget tbody tr:hover .cm-table-rowctl .cm-table-ctl-btn {
+  opacity: 1;
+}
+
+.cm-table-ctl-btn {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 2px 5px;
+  cursor: pointer;
+  min-width: 18px;
+}
+
+.cm-table-ctl-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.cm-table-align-btn {
+  font-weight: 600;
+}
+
+.cm-table-del-btn:hover {
+  color: var(--text-error, #e06c75);
+}
+
+/* Add-column header cell: a thin trailing column with a "+" affordance. */
+.cm-table-addcol {
+  border: none !important;
+  background: transparent !important;
+  width: 1px;
+  white-space: nowrap;
+  padding-left: 4px !important;
+  text-align: center;
+}
+
+.cm-table-addcol .cm-table-ctl-btn {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.cm-table-widget:hover .cm-table-addcol .cm-table-ctl-btn {
+  opacity: 1;
+}
+
+/* Add-row affordance below the table. */
+.cm-table-addrow {
+  color: var(--text-faint);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 2px 0;
+  width: fit-content;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.cm-table-widget:hover .cm-table-addrow {
+  opacity: 1;
+}
+
+.cm-table-addrow:hover {
+  color: var(--text-normal);
+}
+
 /* Properties widget (frontmatter editor) */
 
 /* Block widget: no margins allowed (CodeMirror measures rect height only);

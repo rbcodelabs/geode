@@ -13,7 +13,7 @@ import type { App } from "../app";
 import { setIcon } from "../api/icons";
 import { calloutMarkerLength, calloutMeta, parseCalloutHeader, type CalloutMeta } from "./callout";
 import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
-import { parseTable, renderTableHtml, type ParsedTable } from "./table";
+import { parseTable, serializeTable, type Align, type ParsedTable } from "./table";
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
 
@@ -329,38 +329,315 @@ class CalloutIconWidget extends WidgetType {
   }
 }
 
+/** Alignment cycle order used by the per-column header toggle (default → left → center → right → …). */
+const ALIGN_CYCLE: Align[] = [null, "left", "center", "right"];
+
 /**
- * Renders a GFM pipe-table block as a real `<table>` while editing (Live
- * Preview), reusing the pure parser/renderer in ./table.ts so the markup
- * matches Reading view's `.markdown-rendered table` styling. Applied as a
- * `block: true` decoration (see `tableField` below) since a table spans
- * multiple lines — mirrors PropertiesWidget's approach for frontmatter.
+ * Renders a GFM pipe-table block as an always-on, in-place editable `<table>`
+ * in Live Preview — mirroring PropertiesWidget's frontmatter editor. Unlike
+ * the other Live Preview widgets, this one never reverts to raw markdown when
+ * the cursor is near it (the block is added to `EditorView.atomicRanges` so
+ * the cursor skips over it); editing happens entirely through the real
+ * `<input>` elements it renders per cell, and every change is written back to
+ * the document via a single `view.dispatch` over the table's `[from, to)`
+ * range (see `commit()`), exactly like `writeFrontmatter()`.
+ *
+ * The widget owns its DOM: it keeps an in-memory `ParsedTable` model and
+ * mutates the live DOM directly on structural edits, rather than relying on
+ * CodeMirror to rebuild it. `eq()` compares the serialized `raw` (and is
+ * kept true across the widget's own commits by updating `this.raw` *before*
+ * dispatching) so CM6 reuses this DOM — and its focus — instead of throwing
+ * it away mid-edit.
  */
 class TableWidget extends WidgetType {
+  private root: HTMLElement | null = null;
+  private view: EditorView | null = null;
+  /** Live per-cell inputs, indexed `[rowKey][col]` where rowKey 0 = header, 1.. = data rows. */
+  private cellInputs: HTMLInputElement[][] = [];
+
   constructor(
     private raw: string,
-    private table: ParsedTable
+    private table: ParsedTable,
+    private from: number,
+    private to: number
   ) {
     super();
   }
 
   eq(other: TableWidget): boolean {
-    return other.raw === this.raw;
+    // Compare raw so CM6 reuses our DOM (and its focus) across the recompute
+    // our own commit triggers. Sync the fresh document coordinates from the
+    // incoming widget so the stored [from, to) range stays correct even when
+    // content above the table shifts it.
+    if (other.raw !== this.raw) return false;
+    this.from = other.from;
+    this.to = other.to;
+    return true;
   }
 
   ignoreEvent(): boolean {
     return true;
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     // IMPORTANT: block widgets are measured via getBoundingClientRect(),
     // which excludes margins (see PropertiesWidget above) — spacing here
     // uses padding on the root, with the inner table's own margin zeroed
     // out in CSS, to keep CodeMirror's height map accurate.
+    this.view = view;
     const root = document.createElement("div");
     root.className = "cm-table-widget markdown-rendered";
-    root.innerHTML = renderTableHtml(this.table);
+    this.root = root;
+    this.render();
     return root;
+  }
+
+  // --- Model → DOM -----------------------------------------------------------
+
+  /** Rebuilds the widget's DOM children from the current `this.table` model. */
+  private render(): void {
+    const root = this.root;
+    if (!root) return;
+    root.replaceChildren();
+    this.cellInputs = [];
+    const cols = this.table.header.length;
+
+    const tableEl = document.createElement("table");
+
+    const thead = document.createElement("thead");
+    const headTr = document.createElement("tr");
+    const headerInputs: HTMLInputElement[] = [];
+    this.table.header.forEach((cell, c) => {
+      const th = document.createElement("th");
+      this.applyAlign(th, this.table.align[c]);
+      const input = this.buildCellInput(cell, 0, c);
+      th.appendChild(input);
+      th.appendChild(this.buildColControls(c));
+      headerInputs.push(input);
+      headTr.appendChild(th);
+    });
+    headTr.appendChild(this.buildAddColCell());
+    thead.appendChild(headTr);
+    tableEl.appendChild(thead);
+    this.cellInputs.push(headerInputs);
+
+    const tbody = document.createElement("tbody");
+    this.table.rows.forEach((row, r) => {
+      const tr = document.createElement("tr");
+      const rowInputs: HTMLInputElement[] = [];
+      for (let c = 0; c < cols; c++) {
+        const td = document.createElement("td");
+        this.applyAlign(td, this.table.align[c]);
+        const input = this.buildCellInput(row[c] ?? "", r + 1, c);
+        td.appendChild(input);
+        rowInputs.push(input);
+        tr.appendChild(td);
+      }
+      tr.appendChild(this.buildRowControlCell(r));
+      tbody.appendChild(tr);
+      this.cellInputs.push(rowInputs);
+    });
+    tableEl.appendChild(tbody);
+    root.appendChild(tableEl);
+
+    const addRow = document.createElement("div");
+    addRow.className = "cm-table-addrow";
+    addRow.textContent = "+ Add row";
+    addRow.title = "Add row";
+    addRow.addEventListener("mousedown", (e) => e.preventDefault());
+    addRow.addEventListener("click", () => this.addRow());
+    root.appendChild(addRow);
+  }
+
+  private applyAlign(cell: HTMLElement, align: Align): void {
+    cell.style.textAlign = align ?? "";
+  }
+
+  private buildCellInput(value: string, rowKey: number, col: number): HTMLInputElement {
+    const input = document.createElement("input");
+    input.className = "cm-table-cell-input";
+    input.value = value;
+    input.style.textAlign = this.table.align[col] ?? "";
+    input.addEventListener("input", () => this.setCell(rowKey, col, input.value));
+    input.addEventListener("blur", () => this.commit());
+    input.addEventListener("keydown", (e) => this.onCellKeydown(e, rowKey, col));
+    return input;
+  }
+
+  private buildColControls(col: number): HTMLElement {
+    const ctl = document.createElement("div");
+    ctl.className = "cm-table-col-controls";
+
+    const alignBtn = this.controlButton(this.alignLabel(this.table.align[col]), () =>
+      this.cycleAlign(col)
+    );
+    alignBtn.classList.add("cm-table-align-btn");
+    alignBtn.title = `Align: ${this.table.align[col] ?? "default"} (click to cycle)`;
+
+    const delBtn = this.controlButton("×", () => this.deleteColumn(col));
+    delBtn.classList.add("cm-table-del-btn");
+    delBtn.title = "Delete column";
+
+    ctl.appendChild(alignBtn);
+    ctl.appendChild(delBtn);
+    return ctl;
+  }
+
+  private buildAddColCell(): HTMLElement {
+    const th = document.createElement("th");
+    th.className = "cm-table-addcol";
+    const btn = this.controlButton("+", () => this.addColumn());
+    btn.title = "Add column";
+    th.appendChild(btn);
+    return th;
+  }
+
+  private buildRowControlCell(row: number): HTMLElement {
+    const td = document.createElement("td");
+    td.className = "cm-table-rowctl";
+    const btn = this.controlButton("×", () => this.deleteRow(row));
+    btn.title = "Delete row";
+    td.appendChild(btn);
+    return td;
+  }
+
+  private controlButton(label: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cm-table-ctl-btn";
+    btn.textContent = label;
+    // Keep the caret in the currently-focused cell (its value is already in
+    // the model via 'input'); we drive focus explicitly after the mutation.
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      onClick();
+    });
+    return btn;
+  }
+
+  private alignLabel(align: Align): string {
+    return align === "left" ? "L" : align === "center" ? "C" : align === "right" ? "R" : "–";
+  }
+
+  // --- Editing ---------------------------------------------------------------
+
+  private setCell(rowKey: number, col: number, value: string): void {
+    if (rowKey === 0) this.table.header[col] = value;
+    else this.table.rows[rowKey - 1][col] = value;
+  }
+
+  private onCellKeydown(e: KeyboardEvent, rowKey: number, col: number): void {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      this.moveCell(rowKey, col, e.shiftKey ? -1 : 1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      this.moveRow(rowKey, col, e.shiftKey ? -1 : 1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      this.moveRow(rowKey, col, 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      this.moveRow(rowKey, col, -1);
+    }
+  }
+
+  /** Tab / Shift+Tab: move to the next / previous cell in reading order, wrapping across rows. */
+  private moveCell(rowKey: number, col: number, dir: 1 | -1): void {
+    const cols = this.table.header.length;
+    const lastRowKey = this.table.rows.length; // header = 0, data rows 1..N
+    let nextCol = col + dir;
+    let nextRow = rowKey;
+    if (nextCol >= cols) {
+      nextCol = 0;
+      nextRow = rowKey >= lastRowKey ? 0 : rowKey + 1;
+    } else if (nextCol < 0) {
+      nextCol = cols - 1;
+      nextRow = rowKey <= 0 ? lastRowKey : rowKey - 1;
+    }
+    this.focusCell(nextRow, nextCol);
+  }
+
+  /** Enter / arrows: move to the same column of the next / previous row (clamped). */
+  private moveRow(rowKey: number, col: number, dir: 1 | -1): void {
+    const lastRowKey = this.table.rows.length;
+    this.focusCell(Math.min(lastRowKey, Math.max(0, rowKey + dir)), col);
+  }
+
+  private focusCell(rowKey: number, col: number): void {
+    const row = this.cellInputs[rowKey];
+    if (!row) return;
+    const input = row[Math.min(col, row.length - 1)];
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }
+
+  private addRow(): void {
+    const cols = this.table.header.length;
+    this.table.rows.push(new Array(cols).fill(""));
+    this.render();
+    this.commit();
+    this.focusCell(this.table.rows.length, 0);
+  }
+
+  private deleteRow(row: number): void {
+    if (this.table.rows.length <= 1) return; // keep at least one data row
+    this.table.rows.splice(row, 1);
+    this.render();
+    this.commit();
+    this.focusCell(Math.min(row + 1, this.table.rows.length), 0);
+  }
+
+  private addColumn(): void {
+    this.table.header.push("");
+    this.table.align.push(null);
+    for (const row of this.table.rows) row.push("");
+    this.render();
+    this.commit();
+    this.focusCell(0, this.table.header.length - 1);
+  }
+
+  private deleteColumn(col: number): void {
+    if (this.table.header.length <= 1) return; // keep at least one column
+    this.table.header.splice(col, 1);
+    this.table.align.splice(col, 1);
+    for (const row of this.table.rows) row.splice(col, 1);
+    this.render();
+    this.commit();
+    this.focusCell(0, Math.min(col, this.table.header.length - 1));
+  }
+
+  private cycleAlign(col: number): void {
+    const idx = ALIGN_CYCLE.indexOf(this.table.align[col]);
+    this.table.align[col] = ALIGN_CYCLE[(idx + 1) % ALIGN_CYCLE.length];
+    this.render();
+    this.commit();
+    const btns = this.root?.querySelectorAll<HTMLElement>(".cm-table-align-btn");
+    btns?.[col]?.focus();
+  }
+
+  // --- DOM → document --------------------------------------------------------
+
+  /**
+   * Serializes the model and writes it over the table's `[from, to)` range in
+   * a single dispatch. `this.raw`/`this.to` are updated *before* dispatching
+   * so the recompute this triggers finds an equal widget (`eq`) and reuses
+   * this DOM. A no-op change (serialized text unchanged) is skipped so
+   * blurring an untouched cell doesn't churn the document.
+   */
+  private commit(): void {
+    const view = this.view;
+    if (!view) return;
+    const raw = serializeTable(this.table);
+    if (raw === this.raw) return;
+    const from = this.from;
+    const to = this.to;
+    this.raw = raw;
+    this.to = from + raw.length;
+    view.dispatch({ changes: { from, to, insert: raw } });
   }
 }
 
@@ -521,7 +798,10 @@ export function livePreview(app: App, getPath: () => string): Extension {
       return computeTables(state);
     },
     update(value, tr) {
-      if (!tr.docChanged && tr.startState.selection.eq(tr.state.selection)) return value;
+      // Tables are always rendered (the widget edits in place), so — unlike
+      // the inline decorations below — the decoration set only depends on the
+      // document, never the selection.
+      if (!tr.docChanged) return value;
       return computeTables(tr.state);
     },
     provide: (f) => EditorView.decorations.from(f),
@@ -529,30 +809,29 @@ export function livePreview(app: App, getPath: () => string): Extension {
 
   function computeTables(state: EditorState): DecorationSet {
     const doc = state.doc;
-    const active = new Set<number>();
-    for (const r of state.selection.ranges) {
-      const from = doc.lineAt(r.from).number;
-      const to = doc.lineAt(r.to).number;
-      for (let i = from; i <= to; i++) active.add(i);
-    }
     const decos: Range<Decoration>[] = [];
     syntaxTree(state).iterate({
       enter(node) {
         if (node.name !== "Table") return;
-        const to = Math.min(node.to, doc.length);
-        const firstLine = doc.lineAt(node.from).number;
-        const lastLine = doc.lineAt(to).number;
-        for (let i = firstLine; i <= lastLine; i++) {
-          if (active.has(i)) return; // cursor is inside — reveal raw markdown
-        }
-        const raw = doc.sliceString(node.from, to);
-        const table = parseTable(raw);
+        // Trim any trailing newline/whitespace Lezer folds into the Table
+        // node so the replaced range covers exactly the table's text — the
+        // widget writes serialized output (no trailing newline) back over
+        // this same range, and eating the following blank line/newline would
+        // merge the table into the next block.
+        const nodeFrom = node.from;
+        const rawFull = doc.sliceString(nodeFrom, Math.min(node.to, doc.length));
+        const trimmed = rawFull.replace(/\s+$/, "");
+        const to = nodeFrom + trimmed.length;
+        const table = parseTable(trimmed);
         if (!table) return;
+        // Always decorate (no cursor check): the block is atomic (see the
+        // atomicRanges provider below), so the cursor never lands in the raw
+        // markdown — editing goes through the widget's cell inputs instead.
         decos.push(
-          Decoration.replace({ widget: new TableWidget(raw, table), block: true }).range(
-            node.from,
-            to
-          )
+          Decoration.replace({
+            widget: new TableWidget(trimmed, table, nodeFrom, to),
+            block: true,
+          }).range(nodeFrom, to)
         );
       },
     });
@@ -824,6 +1103,10 @@ export function livePreview(app: App, getPath: () => string): Extension {
     EditorView.atomicRanges.of(
       (view) => view.state.field(frontmatterField, false) ?? RangeSet.empty
     ),
+    // Tables are always-rendered block widgets edited via their own cell
+    // inputs; make the block atomic so cursor motion skips over it instead of
+    // landing on the hidden raw markdown (mirrors frontmatter above).
+    EditorView.atomicRanges.of((view) => view.state.field(tableField, false) ?? RangeSet.empty),
     inlinePlugin,
     clickHandler,
   ];
