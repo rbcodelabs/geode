@@ -46,6 +46,11 @@ export { Workspace, WorkspaceLeaf, TabGroup } from "../workspace";
 export { MetadataCache, parseMetadata } from "../metadata-cache";
 export { MarkdownView } from "../views/markdown-view";
 export { isTFile, isTFolder, normalizePath } from "../types";
+// Frontmatter/tag helpers. Plugins call these module-level (not via app),
+// often inside cache-building loops — obsidian-tasks calls
+// `parseFrontMatterTags` per file while building its task cache, so an
+// undefined export throws mid-scan. See ./frontmatter.
+export { parseFrontMatterTags, getAllTags } from "./frontmatter";
 export type { App } from "../app";
 export type { TAbstractFile, CachedMetadata } from "../types";
 // Keymap + in-editor suggest primitives. `EditorSuggest` must be a real,
@@ -836,6 +841,23 @@ function installObsidianAppCompat(app: App): void {
     // so handlers are recorded but never dispatched (see ./suggest). This
     // just has to exist and not throw so those plugins finish loading.
     a.scope = new Scope();
+  }
+  if (!a.metadataTypeManager) {
+    // Obsidian's property-type registry (the "Properties" core feature).
+    // obsidian-tasks reads `getAllProperties()` and calls `setType(name,type)`
+    // for its own known task properties (see `setObsidianPropertiesTypes`).
+    // Geode has no user-facing property-type system, so this is a minimal
+    // in-memory shim: `getAllProperties()` returns a map of the types set so
+    // far (empty at first, never undefined), and `setType` records one.
+    // Enough for plugins that probe/seed property types without throwing.
+    const types: Record<string, { type: string; name: string }> = {};
+    a.metadataTypeManager = {
+      getAllProperties: () => types,
+      getPropertyInfo: (name: string) => types[name.toLowerCase()] ?? null,
+      setType: (name: string, type: string) => {
+        types[name.toLowerCase()] = { type, name };
+      },
+    };
   }
   if (!a.foldManager) {
     // Obsidian's fold-state manager (collapsed headings/list items per

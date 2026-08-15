@@ -57,7 +57,12 @@ export interface HeadingCache {
 }
 
 export interface CachedMetadata {
-  frontmatter: Record<string, unknown> | null;
+  // Obsidian-faithful: this key is ABSENT (undefined) when a note has no
+  // frontmatter — real plugins branch on `frontmatter !== undefined` (e.g.
+  // obsidian-tasks deep-clones it only when defined; a `null` here passes that
+  // guard and then crashes on `clone.tags = …`). `| null` is retained so the
+  // many existing call sites that coalesce `?? null` still type-check.
+  frontmatter?: Record<string, unknown> | null;
   frontmatterEndOffset: number;
   links: LinkCache[];
   embeds: LinkCache[];
