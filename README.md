@@ -28,7 +28,9 @@ cloud, no lock-in.
 - **Settings** — tabbed Settings window (Appearance, Community plugins &
   themes, plus one tab per installed plugin that calls `Plugin.addSettingTab`)
 - **Community plugins & themes** — install from GitHub, enable/disable,
-  auto-update
+  auto-update; broad plugin-API compatibility (`EditorSuggest`, `Scope`,
+  metadata cache with list items/sections + frontmatter tag helpers) so real
+  plugins like **obsidian-tasks** load and render their query blocks
 - **Web Viewer** — open web pages in an in-app tab (`webview`-backed, its own
   session), plus a one-time "Import cookies from Chrome" option so viewer
   tabs open already logged in
