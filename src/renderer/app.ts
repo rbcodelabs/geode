@@ -12,7 +12,7 @@ import {
   type MarkdownCodeBlockProcessor,
   type MarkdownPostProcessor,
 } from "./markdown/processor-registry";
-import { MarkdownView } from "./views/markdown-view";
+import { hasExternalChange, MarkdownView } from "./views/markdown-view";
 import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { FileExplorerView } from "./views/file-explorer";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
@@ -803,13 +803,30 @@ export class App {
     // critical path. No-op unless a tracked item has auto-update enabled.
     setTimeout(() => void this.checkCommunityUpdates(false), 2500);
 
-    // Re-render open views when files change externally
+    // Re-render open views when files change externally.
+    //
+    // This must compare against `view.getLastKnownText()` (last text this
+    // view knows to be on disk), NOT `view.getText()` (live, in-progress
+    // editor content). `MarkdownView.flush()` autosaves 1s after the last
+    // keystroke and can be echoed by up to two "modify" events (a
+    // synchronous one from `Vault.modify()` and a delayed one from the
+    // main-process chokidar watcher — see `src/main/main.ts`). If the user
+    // is still typing when that echo arrives, `getText()` legitimately
+    // differs from what was just saved, which this handler used to
+    // misdiagnose as an external change and respond to with a full
+    // `setFile()` → editor teardown/rebuild — the visible "document
+    // disappears then re-renders" flicker, which also dropped any
+    // keystrokes typed after the autosave snapshot. Comparing disk content
+    // against the last-known-saved text instead is immune to duplicate/
+    // delayed echoes and only fires `setFile()` for genuine external edits.
+    // Mirrors `BaseView.reloadIfChangedExternally()` (`base-view.ts`) —
+    // don't "simplify" this back to comparing live editor text.
     this.vault.on("modify", async (file: TFile) => {
       const leaf = this.workspace.findLeafForFile(file.path);
       const view = leaf?.view;
       if (view instanceof MarkdownView && view.file) {
         const text = await this.vault.cachedRead(view.file);
-        if (text !== view.getText()) await view.setFile(view.file);
+        if (hasExternalChange(text, view.getLastKnownText())) await view.setFile(view.file);
       }
     });
   }
