@@ -131,7 +131,21 @@ export class InstallFromGithubModal extends Modal {
       const installed = await this.community.install(spec, this.resolveOpts());
       if (this.enableCheckbox.checked && installed.type === "plugin") {
         await this.app.pluginManager.enable(installed.id);
-        this.app.notify(`Enabled ${installed.name} ${installed.version}`);
+        // enable() resolves even if the plugin's onload() didn't finish within
+        // the timeout (a hang no longer wedges this modal). Distinguish that
+        // soft case — the plugin is installed and enabled but not fully
+        // started — from a clean start, so the user isn't told "Enabled" when
+        // the plugin is still churning in the background.
+        const warning = this.app.pluginManager.getLoadError(installed.id);
+        if (warning) {
+          this.app.notify(
+            `Installed ${installed.name} ${installed.version}, but it hasn't finished starting up. ` +
+              `It's enabled — check the developer console (View → Toggle Developer Tools) if it misbehaves.`,
+            8000
+          );
+        } else {
+          this.app.notify(`Enabled ${installed.name} ${installed.version}`);
+        }
       } else if (this.enableCheckbox.checked && installed.type === "theme") {
         await this.app.applyCommunityTheme(installed.id);
         this.app.notify(`Applied ${installed.name} ${installed.version}`);

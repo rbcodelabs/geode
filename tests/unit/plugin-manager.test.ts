@@ -66,6 +66,40 @@ function throwingMainJsSource(): string {
   `;
 }
 
+// A plugin whose async onload() does its synchronous registrations, then
+// blocks forever on a promise that never settles (mirrors the real-world
+// Claude Threads hang that wedged the installer). enable() must not wait on it
+// indefinitely.
+function hangingMainJsSource(id: string): string {
+  return `
+    const { Plugin } = require('geode');
+    class HangingPlugin extends Plugin {
+      async onload() {
+        globalThis.__pluginLog.push('${id}:onload');
+        this.addCommand({ id: 'sync', name: 'Sync', callback: () => {} });
+        await new Promise(() => {}); // never resolves
+        globalThis.__pluginLog.push('${id}:after-hang'); // unreachable
+      }
+    }
+    module.exports.default = HangingPlugin;
+  `;
+}
+
+// A plugin whose async onload() rejects after an await (a genuine load
+// failure, distinct from a hang) — enable() must roll back and throw.
+function rejectingAsyncMainJsSource(): string {
+  return `
+    const { Plugin } = require('geode');
+    class RejectingPlugin extends Plugin {
+      async onload() {
+        await Promise.resolve();
+        throw new Error("async boom during onload");
+      }
+    }
+    module.exports.default = RejectingPlugin;
+  `;
+}
+
 interface FakeFs {
   files: Map<string, string>;
   config: Map<string, unknown>;
@@ -276,6 +310,80 @@ describe("PluginManager", () => {
     await expect(pm.enable("foo")).rejects.toThrow(/boom during onload/);
     expect(pm.isEnabled("foo")).toBe(false);
     expect(pm.getPlugin("foo")).toBeUndefined();
+  });
+
+  describe("onload timeout (a hanging plugin must not wedge enable/startup)", () => {
+    it("enable() stops waiting when onload never settles: resolves, keeps the plugin loaded, persists, and records a soft load note", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const app = { commands: { add: vi.fn(), remove: vi.fn() } } as any;
+      const fs = installFakeGeode(["foo"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", hangingMainJsSource("foo"));
+
+      const pm = new PluginManager(app, 20);
+      await pm.initialize();
+
+      // enable() must NOT hang forever — it resolves once the timeout elapses.
+      await expect(pm.enable("foo")).resolves.toBeUndefined();
+
+      // The plugin is considered enabled: its synchronous registrations (the
+      // 'sync' command) ran, and it's persisted so it survives a restart.
+      expect(pm.isEnabled("foo")).toBe(true);
+      expect(app.commands.add).toHaveBeenCalledTimes(1);
+      expect(app.commands.add.mock.calls[0][0].id).toBe("foo:sync");
+      expect((globalThis as any).__pluginLog).toEqual(["foo:onload"]); // never got past the hang
+      expect(fs.config.get("plugins")).toEqual(["foo"]);
+
+      // The stalled onload is surfaced (not silently swallowed) via getLoadError.
+      expect(pm.getLoadError("foo")).toMatch(/did not finish|start/i);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("enable() still rolls back and throws when an async onload REJECTS (a real failure, distinct from a hang)", async () => {
+      const fs = installFakeGeode(["foo"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", rejectingAsyncMainJsSource());
+
+      // Generous timeout so the rejection — not the timer — decides the outcome.
+      const pm = new PluginManager(fakeApp, 1000);
+      await pm.initialize();
+
+      await expect(pm.enable("foo")).rejects.toThrow(/async boom during onload/);
+      expect(pm.isEnabled("foo")).toBe(false);
+      expect(pm.getPlugin("foo")).toBeUndefined();
+      expect(fs.config.get("plugins")).toBeUndefined(); // never persisted
+    });
+
+    it("a fast, well-behaved async onload records no load note", async () => {
+      const app = { commands: { add: vi.fn(), remove: vi.fn() } } as any;
+      const fs = installFakeGeode(["foo"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", asyncMainJsSource("foo"));
+
+      const pm = new PluginManager(app, 1000);
+      await pm.initialize();
+      await pm.enable("foo");
+
+      expect(pm.isEnabled("foo")).toBe(true);
+      expect(pm.getLoadError("foo")).toBeUndefined();
+    });
+
+    it("initialize()'s startup auto-enable does not hang when a persisted plugin's onload never settles", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fs = installFakeGeode(["foo"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", hangingMainJsSource("foo"));
+      fs.config.set("plugins", ["foo"]);
+
+      const pm = new PluginManager(fakeApp, 20);
+      // App boot awaits initialize(); a hanging plugin must not wedge it.
+      await expect(pm.initialize()).resolves.not.toThrow();
+
+      expect(pm.isEnabled("foo")).toBe(true);
+      expect(pm.getLoadError("foo")).toMatch(/did not finish|start/i);
+      warn.mockRestore();
+    });
   });
 
   it("disable() calls onunload(), drops the instance, and persists", async () => {
