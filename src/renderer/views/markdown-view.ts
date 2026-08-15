@@ -3,7 +3,6 @@ import {
   EditorView,
   keymap,
   drawSelection,
-  highlightActiveLine,
   placeholder,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -190,7 +189,6 @@ export class MarkdownView implements View {
       extensions: [
         history(),
         drawSelection(),
-        highlightActiveLine(),
         highlightSelectionMatches(),
         markdown({ base: markdownLanguage }),
         syntaxHighlighting(mdHighlight),
