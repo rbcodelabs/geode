@@ -61,11 +61,13 @@
       "src/renderer/index.html",
       "styles/**/*",
       "package.json",
+      "resources/**/*",
       "!src/**/*.ts",
       "!**/*.map"
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "icon": "resources/icon.icns",
       "target": [
         {
           "target": "dmg",

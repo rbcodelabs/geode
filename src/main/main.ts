@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -390,6 +390,7 @@ function createWindow() {
     minWidth: 640,
     minHeight: 440,
     title: "Geode",
+    icon: path.join(__dirname, "..", "resources", "icon.png"),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     backgroundColor: "#1e1e1e",
     webPreferences: {
@@ -448,6 +449,12 @@ function createWindow() {
 app.whenReady().then(() => {
   if (isHeadless && process.platform === "darwin" && app.dock) {
     app.dock.hide();
+  } else if (process.platform === "darwin" && app.dock) {
+    // macOS ignores the per-window `icon` option, so set the dock icon
+    // explicitly. This makes the Geode icon show during unpackaged dev runs;
+    // packaged builds use resources/icon.icns via electron-builder.
+    const dockIcon = nativeImage.createFromPath(path.join(__dirname, "..", "resources", "icon.png"));
+    if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
   }
   registerIpc();
   createWindow();
