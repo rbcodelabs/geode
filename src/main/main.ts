@@ -378,8 +378,13 @@ function registerIpc() {
   ipcMain.handle("chrome-import-cookies", (_e, profileDir: string) => importChromeCookies(profileDir));
 }
 
+const isHeadless =
+  process.env.GEODE_HEADLESS === "1" ||
+  process.argv.includes("--headless");
+
 function createWindow() {
   const win = new BrowserWindow({
+    show: !isHeadless,
     width: 1280,
     height: 840,
     minWidth: 640,
@@ -389,6 +394,7 @@ function createWindow() {
     backgroundColor: "#1e1e1e",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      backgroundThrottling: false,
       // Obsidian's own desktop model: the renderer runs with full Node
       // integration so plugins can `require('fs')`/`require('child_process')`
       // /`require('electron')` directly. Claude Threads (and plugins like
@@ -440,6 +446,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (isHeadless && process.platform === "darwin" && app.dock) {
+    app.dock.hide();
+  }
   registerIpc();
   createWindow();
   app.on("activate", () => {
