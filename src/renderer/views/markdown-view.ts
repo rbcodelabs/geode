@@ -43,6 +43,19 @@ const mdHighlight = HighlightStyle.define([
 
 export type MarkdownMode = "live" | "source" | "reading";
 
+/**
+ * Pure comparison used to decide whether a `"modify"` event on the currently
+ * open file represents a genuine external change (disk content differs from
+ * what this view last knew to be on disk) versus an echo of this view's own
+ * autosave write. Extracted as a standalone function so it's unit-testable
+ * without a DOM/CodeMirror harness — see `MarkdownView.getLastKnownText()`
+ * and the vault "modify" handler in `app.ts` for why content comparison
+ * (rather than comparing against live, in-progress editor text) is required.
+ */
+export function hasExternalChange(diskText: string, lastKnownText: string): boolean {
+  return diskText !== lastKnownText;
+}
+
 export class MarkdownView implements View {
   readonly viewType = "markdown";
   containerEl: HTMLElement;
@@ -276,6 +289,21 @@ export class MarkdownView implements View {
 
   getText(): string {
     return this.editor?.state.doc.toString() ?? this.lastSavedText;
+  }
+
+  /**
+   * The text we last knew to be on disk for this file — set on load
+   * (`setFile`) and after each successful autosave write (`flush`), BEFORE
+   * the write's own `vault.modify()` event can echo back to us. Unlike
+   * `getText()` (live, in-progress editor content, which is expected to
+   * differ from disk between keystrokes), this is safe to compare against a
+   * freshly-read disk value to detect genuine external changes. Mirrors
+   * `BaseView`'s `lastKnownText` pattern (`base-view.ts`) — see its doc
+   * comment for why content comparison, not live-state comparison, is
+   * required here.
+   */
+  getLastKnownText(): string {
+    return this.lastSavedText;
   }
 
   /** Cmd/Ctrl+E: flip between editing (live or source) and reading. */
