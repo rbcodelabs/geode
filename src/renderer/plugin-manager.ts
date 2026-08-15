@@ -13,6 +13,17 @@ type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
 const CONFIG_KEY = "plugins"; // <vault>/.geode/plugins.json — array of enabled plugin ids
 
+/**
+ * How long `enable()` waits for a plugin's async `onload()` to settle before it
+ * stops blocking and considers the plugin "started in the background". This
+ * bounds the two callers that would otherwise wedge on a plugin whose onload
+ * never resolves: the community install modal and `App.initialize()`'s
+ * auto-enable loop (which app boot awaits). Chosen generous enough that a
+ * legitimately slow onload isn't flagged, but finite so a hang can't freeze the
+ * UI. See the real-world Claude Threads install-hang this guards against.
+ */
+export const PLUGIN_ONLOAD_TIMEOUT_MS = 10_000;
+
 function pluginDir(id: string): string {
   return `.geode/plugins/${id}`;
 }
@@ -93,7 +104,10 @@ export class PluginManager {
   private loaded = new Map<string, LoadedPlugin>();
   private policy: ManagedPolicy | null = null;
 
-  constructor(private app: App) {}
+  constructor(
+    private app: App,
+    private onloadTimeoutMs: number = PLUGIN_ONLOAD_TIMEOUT_MS
+  ) {}
 
   /**
    * Discover installed plugins and enable whichever were enabled last
@@ -235,18 +249,67 @@ export class PluginManager {
     this.loadErrors.delete(id);
     this.loaded.set(id, { manifest, instance });
     await this.injectStyles(id);
+
+    let onloadResult: void | Promise<unknown>;
     try {
-      instance.load(); // Component.load() -> onload()
-      // Await a possibly-async onload before considering the plugin loaded, so
-      // registrations made after an `await` inside onload (registerView,
-      // addCommand, …) are in place before startup continues to layout
-      // restore. Mirrors Obsidian, which awaits a plugin's onload here.
-      await instance.onloadResult;
+      instance.load(); // Component.load() -> onload() (may throw synchronously)
+      onloadResult = instance.onloadResult;
     } catch (err) {
       this.removeStyles(id);
       this.loaded.delete(id);
       throw err;
     }
+
+    // Await a possibly-async onload before considering the plugin fully started,
+    // so registrations made after an `await` inside onload (registerView,
+    // addCommand, …) are in place before startup continues to layout restore —
+    // mirroring Obsidian. But BOUND the wait: a plugin whose onload() never
+    // settles must not wedge the caller (the community install modal, or
+    // App.initialize()'s auto-enable loop, which app boot awaits). On timeout
+    // the plugin stays loaded — its synchronous registrations already ran — and
+    // the slow onload keeps running in the background; the stall is surfaced via
+    // getLoadError() instead of being silently swallowed.
+    if (onloadResult !== undefined) {
+      const onload = Promise.resolve(onloadResult);
+      const TIMED_OUT = Symbol("onload-timeout");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), this.onloadTimeoutMs);
+      });
+
+      let outcome: unknown;
+      try {
+        outcome = await Promise.race([onload, timeout]);
+      } catch (err) {
+        // onload() genuinely rejected (a real load failure, not a hang) —
+        // roll back exactly as before.
+        clearTimeout(timer);
+        this.removeStyles(id);
+        this.loaded.delete(id);
+        throw err;
+      }
+      clearTimeout(timer);
+
+      if (outcome === TIMED_OUT) {
+        const note =
+          `Plugin "${id}" onload() did not finish within ${this.onloadTimeoutMs}ms; ` +
+          `it is enabled but may not have finished starting up.`;
+        this.loadErrors.set(id, note);
+        console.warn(note);
+        // The onload promise is still live. Attach handlers so a later rejection
+        // is logged (not an unhandledrejection), and the soft note clears if
+        // onload eventually completes cleanly.
+        onload.then(
+          () => {
+            if (this.loadErrors.get(id) === note) this.loadErrors.delete(id);
+          },
+          (err) => {
+            console.error(`Plugin "${id}" onload() failed after enable() returned:`, err);
+          }
+        );
+      }
+    }
+
     if (persist) await this.persistEnabled();
   }
 
