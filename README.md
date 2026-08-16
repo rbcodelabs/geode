@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.2). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.5). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.2)
+## Features (v0.5)
 
 - **Vaults** — open any folder; external edits are picked up live
 - **Editor** — CodeMirror 6, markdown highlighting, `[[wikilink]]` autocomplete,
@@ -18,7 +18,8 @@ cloud, no lock-in.
 - **Reading view** — callouts (13 types, foldable), embeds (notes/images/audio/
   video), highlights, tags, tables, task lists, YAML properties
 - **Knowledge graph plumbing** — backlinks pane, outline, tag pane, unresolved
-  link styling, link resolution by shortest path and alias, graph view
+  link styling, link resolution by shortest path and alias, graph view;
+  metadata is cached across launches so unchanged notes do not need re-indexing
 - **Search** — `tag:` `path:` `file:` operators, quoted phrases, negation, regex
 - **Workspace** — tabs, split panes, pinned tabs, collapsible sidebars,
   status-bar word count; tab bar and view header DOM/CSS match real Obsidian
