@@ -8,6 +8,7 @@ import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import { withPathLock } from "./path-lock";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
+import { getProcessMetricsSnapshot } from "./process-metrics";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -376,6 +377,11 @@ function registerIpc() {
   // what's actually injected into the persist:webviewer session.
   ipcMain.handle("chrome-list-profiles", () => listChromeProfiles());
   ipcMain.handle("chrome-import-cookies", (_e, profileDir: string) => importChromeCookies(profileDir));
+
+  // Per-process CPU/memory telemetry for the Settings -> Performance tab
+  // (src/renderer/settings/performance-tab.ts). Polled from the renderer on
+  // a timer, so no caching here -- always return a fresh snapshot.
+  ipcMain.handle("get-process-metrics", () => getProcessMetricsSnapshot());
 }
 
 const isHeadless =

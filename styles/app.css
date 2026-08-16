@@ -2037,6 +2037,30 @@ button.mod-cta:hover {
   padding: 3px 8px;
 }
 
+/* Settings → Performance tab */
+.performance-tab-section {
+  margin-bottom: 24px;
+}
+.performance-tab-section h3 {
+  margin: 0 0 8px;
+  font-size: var(--font-ui-medium);
+}
+.performance-tab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui-small);
+}
+.performance-tab-table th,
+.performance-tab-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.performance-tab-table th {
+  color: var(--text-muted);
+  font-weight: var(--font-weight-medium);
+}
+
 .prompt-input {
   font: inherit;
   font-size: 16px;
