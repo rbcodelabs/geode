@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { findUnlinkedMentions, MetadataCache, parseMetadata } from "../../src/renderer/metadata-cache";
+import {
+  findUnlinkedMentions,
+  INDEX_CONCURRENCY,
+  MetadataCache,
+  parseMetadata,
+  processInBatches,
+} from "../../src/renderer/metadata-cache";
 import { FakeVault } from "../helpers/fake-vault";
 
 describe("parseMetadata", () => {
@@ -358,5 +364,119 @@ describe("MetadataCache.getUnlinkedMentions", () => {
 
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
     expect(cache.getUnlinkedMentions(dailyPlan)).toEqual([]);
+  });
+});
+
+describe("processInBatches", () => {
+  const noopYield = () => Promise.resolve();
+
+  it("never runs more than `concurrency` callbacks concurrently, and every item is still processed exactly once", async () => {
+    const items = Array.from({ length: 23 }, (_, i) => i);
+    const concurrency = 4;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const processed: number[] = [];
+
+    await processInBatches(
+      items,
+      concurrency,
+      async (item) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await Promise.resolve();
+        processed.push(item);
+        inFlight--;
+      },
+      noopYield
+    );
+
+    expect(maxInFlight).toBeLessThanOrEqual(concurrency);
+    expect(processed.slice().sort((a, b) => a - b)).toEqual(items);
+    expect(processed).toHaveLength(items.length);
+  });
+
+  it("yields exactly once between each batch, and not after the final batch", async () => {
+    const items = Array.from({ length: 10 }, (_, i) => i);
+    let yieldCount = 0;
+    const countingYield = () => {
+      yieldCount++;
+      return Promise.resolve();
+    };
+
+    await processInBatches(items, 3, async () => {}, countingYield);
+
+    // 10 items / batch size 3 -> batches of [3,3,3,1] -> 3 boundaries -> 3 yields.
+    expect(yieldCount).toBe(3);
+  });
+
+  it("does not yield at all when everything fits in a single batch", async () => {
+    const items = [1, 2, 3];
+    let yieldCount = 0;
+    const countingYield = () => {
+      yieldCount++;
+      return Promise.resolve();
+    };
+
+    await processInBatches(items, 5, async () => {}, countingYield);
+
+    expect(yieldCount).toBe(0);
+  });
+});
+
+describe("MetadataCache.initialize batching", () => {
+  it("indexes correctly across multiple concurrency batches (real yieldToEventLoop)", async () => {
+    const fileCount = INDEX_CONCURRENCY * 3 + 5; // spans several batches
+    const files: Record<string, string> = {};
+    for (let i = 0; i < fileCount; i++) files[`Note${i}.md`] = `Note number ${i}.`;
+    // A cross-file wikilink so we can confirm resolution/name-index rebuild
+    // happened only after every batch finished.
+    files["Linker.md"] = "See [[Note0]] for details.";
+
+    const fake = new FakeVault(files);
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    expect(cache.initialized).toBe(true);
+
+    const note0 = fake.getFileByPath("Note0.md")!;
+    expect(cache.getFirstLinkpathDest("Note0", "Linker.md")?.path).toBe("Note0.md");
+
+    const resolved = cache.resolvedLinks.get("Linker.md");
+    expect(resolved?.get("Note0.md")).toBe(1);
+
+    const backlinks = cache.getBacklinks(note0);
+    expect(backlinks.map((bl) => bl.source.path)).toEqual(["Linker.md"]);
+  });
+
+  it("isolates a genuine read failure on a file in a later batch: logs once, doesn't abort the rest, and initialized still ends up true", async () => {
+    const fileCount = INDEX_CONCURRENCY * 2 + 3;
+    const files: Record<string, string> = {};
+    for (let i = 0; i < fileCount; i++) files[`Note${i}.md`] = `Note number ${i}.`;
+
+    const fake = new FakeVault(files);
+    // Pick a file whose index lands at/after INDEX_CONCURRENCY (a later batch).
+    const failingIndex = INDEX_CONCURRENCY + 1;
+    const failingPath = `Note${failingIndex}.md`;
+    const realCachedRead = fake.cachedRead.bind(fake);
+    (fake as any).cachedRead = async (file: { path: string }) => {
+      if (file.path === failingPath) throw new Error("disk exploded");
+      return realCachedRead(file as any);
+    };
+
+    const cache = new MetadataCache(fake.asVault());
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await cache.initialize();
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain(`Failed to index ${failingPath}`);
+    expect(cache.initialized).toBe(true);
+
+    // Every other file was still indexed despite the one failure.
+    const okFile = fake.getFileByPath("Note0.md")!;
+    expect(cache.getFirstLinkpathDest("Note0", "Note1.md")?.path).toBe("Note0.md");
+    expect(fake.getFileByPath(failingPath)).not.toBeNull();
+
+    errorSpy.mockRestore();
   });
 });

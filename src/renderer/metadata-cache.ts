@@ -22,6 +22,49 @@ const LIST_ITEM_RE = /^(\s*)(?:[-*+]|\d+[.)])[ \t]+(?:\[(.)\][ \t]?)?/;
 // Trailing block id, e.g. `- [ ] do it ^abc-123`.
 const BLOCK_ID_RE = /[ \t]\^([A-Za-z0-9-]+)\s*$/;
 
+/**
+ * Yields to the event loop via a MessageChannel round-trip rather than
+ * setTimeout — setTimeout(0) gets clamped to a 4ms floor after a few levels
+ * of nesting, which would add real overhead across the ~500 yields needed
+ * to index an 8,000-file vault. MessageChannel dispatches as a fresh
+ * macrotask with no such clamp, and — unlike requestAnimationFrame — is a
+ * real global under plain Node (no jsdom needed), so it's usable as-is
+ * under vitest (environment: "node", confirmed in vitest.config.mts).
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => resolve();
+    channel.port2.postMessage(undefined);
+  });
+}
+
+/** Concurrent IPC reads in flight during indexing. Tuned to hide IPC
+ * round-trip latency without overwhelming Node's libuv threadpool (default
+ * size 4, which `fsp.readFile` in the main process runs on) — higher just
+ * queues extra requests behind the same 4 threadpool slots while making
+ * each batch's synchronous-parse jank window bigger. */
+export const INDEX_CONCURRENCY = 16;
+
+/**
+ * Runs `fn` over `items` in fixed-size concurrent chunks of `concurrency`,
+ * awaiting each chunk fully before starting the next and yielding to the
+ * event loop between chunks (never after the last one). Chunked rather than
+ * a sliding pool so there's a clear batch boundary to yield at.
+ */
+export async function processInBatches<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+  yieldFn: () => Promise<void> = yieldToEventLoop
+): Promise<void> {
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    await Promise.all(batch.map(fn));
+    if (i + concurrency < items.length) await yieldFn();
+  }
+}
+
 function offsetToLoc(text: string, start: number, end: number): Loc {
   // Line/ch computed lazily and cheaply: count newlines up to offset.
   const before = text.slice(0, start);
@@ -331,16 +374,14 @@ export class MetadataCache extends Events {
 
   async initialize(): Promise<void> {
     const files = this.vault.getMarkdownFiles();
-    await Promise.all(
-      files.map(async (f) => {
-        try {
-          const text = await this.vault.cachedRead(f);
-          this.cache.set(f.path, parseMetadata(text));
-        } catch (err) {
-          if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
-        }
-      })
-    );
+    await processInBatches(files, INDEX_CONCURRENCY, async (f) => {
+      try {
+        const text = await this.vault.cachedRead(f);
+        this.cache.set(f.path, parseMetadata(text));
+      } catch (err) {
+        if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
+      }
+    });
     this.rebuildNameIndex();
     this.resolveAll();
     this.initialized = true;
