@@ -135,10 +135,12 @@ export class BaseView implements View {
     const left = document.createElement("div");
     left.className = "view-header-left";
     left.appendChild(buildViewHeaderNavButtons());
+    const titleContainer = document.createElement("div");
+    titleContainer.className = "view-header-title-container mod-at-start mod-fade mod-at-end";
     this.titleEl = document.createElement("div");
     this.titleEl.className = "view-header-title";
-    left.appendChild(this.titleEl);
-    this.headerEl.appendChild(left);
+    titleContainer.appendChild(this.titleEl);
+    this.headerEl.append(left, titleContainer);
 
     const handlers: ToolbarHandlers = {
       onSwitchView: (name) => this.switchView(name),
