@@ -21,6 +21,7 @@ import { GraphView } from "./views/graph-view";
 import { WebView } from "./views/web-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
+import { renderPerformanceTab } from "./settings/performance-tab";
 import { TFile, pathName } from "./types";
 import { rewriteWikilinksForRename } from "./rename";
 import { anchorSnapshot, shouldInterceptAnchor } from "./external-links";
@@ -146,15 +147,17 @@ class CommandPaletteModal extends SuggestModal<Command> {
   }
 }
 
-/** Ids of the two built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "community-plugins";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "community-plugins"];
+/** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
+type BuiltinTabId = "appearance" | "community-plugins" | "performance";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "community-plugins", "performance"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
   private contentContainerEl!: HTMLElement;
   private activeTabId: string = "appearance";
   private unsubscribeSettingTabs: (() => void) | null = null;
+  /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
+  private stopPerformanceTab: (() => void) | null = null;
 
   constructor(private geodeApp: App) {
     super(geodeApp);
@@ -199,6 +202,13 @@ class SettingsModal extends Modal {
         }
       }
     }
+    // Leaving the Performance tab must stop its ~2s metrics-polling
+    // interval — otherwise it keeps polling in the background for as long
+    // as the modal stays open on a different tab.
+    if (this.activeTabId === "performance" && this.stopPerformanceTab) {
+      this.stopPerformanceTab();
+      this.stopPerformanceTab = null;
+    }
 
     this.activeTabId = id;
     this.renderNav();
@@ -208,6 +218,8 @@ class SettingsModal extends Modal {
       this.renderAppearanceTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
+    } else if (id === "performance") {
+      this.stopPerformanceTab = renderPerformanceTab(this.contentContainerEl);
     } else {
       const tab = this.geodeApp.settingTabs.get(id);
       if (!tab) {
@@ -244,6 +256,7 @@ class SettingsModal extends Modal {
 
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
+    addNavItem("performance", "Performance", this.navEl);
 
     const pluginTabs = [...this.geodeApp.settingTabs.keys()]
       .map((id) => ({ id, name: this.geodeApp.pluginManager?.getManifest(id)?.name ?? id }))
@@ -523,6 +536,13 @@ class SettingsModal extends Modal {
           console.error(err);
         }
       }
+    }
+    // The modal can close while Performance is the active tab (not just via
+    // activateTab switching away from it) — stop its polling interval here
+    // too, or it leaks and keeps polling in the background.
+    if (this.stopPerformanceTab) {
+      this.stopPerformanceTab();
+      this.stopPerformanceTab = null;
     }
     this.unsubscribeSettingTabs?.();
     this.unsubscribeSettingTabs = null;

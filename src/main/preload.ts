@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
 import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
+import type { ProcessMetric } from "./process-metrics";
 
 export interface VaultFileEntry {
   path: string;
@@ -49,6 +50,7 @@ const api = {
   listChromeProfiles: (): Promise<ChromeProfile[]> => ipcRenderer.invoke("chrome-list-profiles"),
   importChromeCookies: (profileDir: string): Promise<ChromeCookieImportResult> =>
     ipcRenderer.invoke("chrome-import-cookies", profileDir),
+  getProcessMetrics: (): Promise<ProcessMetric[]> => ipcRenderer.invoke("get-process-metrics"),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },

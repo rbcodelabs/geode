@@ -2,6 +2,7 @@ import { Events } from "./events";
 import type { App } from "./app";
 import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
+import { markStart, markEnd } from "./perf-instrumentation";
 
 export interface View {
   readonly viewType: string;
@@ -69,17 +70,22 @@ export class WorkspaceLeaf {
   }
 
   async setView(view: View): Promise<void> {
-    if (this.view) await this.view.onClose();
-    this.view = view;
-    this.contentEl.innerHTML = "";
-    this.contentEl.dataset.type = view.viewType;
-    this.contentEl.appendChild(view.containerEl);
-    await view.onOpen();
-    this.group.renderTabs();
-    if (view.getFile?.()) {
-      this.app.workspace.trigger("file-open", view.getFile!());
+    markStart("view-mount");
+    try {
+      if (this.view) await this.view.onClose();
+      this.view = view;
+      this.contentEl.innerHTML = "";
+      this.contentEl.dataset.type = view.viewType;
+      this.contentEl.appendChild(view.containerEl);
+      await view.onOpen();
+      this.group.renderTabs();
+      if (view.getFile?.()) {
+        this.app.workspace.trigger("file-open", view.getFile!());
+      }
+      this.app.workspace.trigger("layout-change");
+    } finally {
+      markEnd("view-mount");
     }
-    this.app.workspace.trigger("layout-change");
   }
 
   getDisplayText(): string {
@@ -146,8 +152,19 @@ export class WorkspaceLeaf {
   }
 
   async detach(): Promise<void> {
-    await this.view?.onClose();
-    this.group.removeLeaf(this);
+    // "leaf-detach" is marked here rather than (also) inside
+    // TabGroup.removeLeaf/Sidebar.removeLeaf below, since removeLeaf is only
+    // ever reached via this method -- double-wrapping the same op name would
+    // nest two markStart("leaf-detach") calls under the same fixed mark
+    // names and corrupt the measured duration. This boundary also captures
+    // the full user-facing cost of closing a tab, including view teardown.
+    markStart("leaf-detach");
+    try {
+      await this.view?.onClose();
+      this.group.removeLeaf(this);
+    } finally {
+      markEnd("leaf-detach");
+    }
   }
 }
 
@@ -319,11 +336,16 @@ export class TabGroup implements LeafContainer {
   }
 
   createLeaf(): WorkspaceLeaf {
-    const leaf = new WorkspaceLeaf(this, this.app);
-    this.leaves.push(leaf);
-    this.setActiveLeaf(leaf);
-    this.workspace.trigger("layout-change");
-    return leaf;
+    markStart("leaf-create");
+    try {
+      const leaf = new WorkspaceLeaf(this, this.app);
+      this.leaves.push(leaf);
+      this.setActiveLeaf(leaf);
+      this.workspace.trigger("layout-change");
+      return leaf;
+    } finally {
+      markEnd("leaf-create");
+    }
   }
 
   /** Detach a leaf without destroying its view (for moves). */
@@ -353,14 +375,19 @@ export class TabGroup implements LeafContainer {
   }
 
   setActiveLeaf(leaf: WorkspaceLeaf) {
-    this.active = leaf;
-    this.contentHostEl.innerHTML = "";
-    this.contentHostEl.appendChild(leaf.leafEl);
-    this.renderTabs();
-    this.workspace.activeGroup = this;
-    this.workspace.trigger("active-leaf-change", leaf);
-    const file = leaf.view?.getFile?.();
-    if (file) this.workspace.trigger("file-open", file);
+    markStart("leaf-activate");
+    try {
+      this.active = leaf;
+      this.contentHostEl.innerHTML = "";
+      this.contentHostEl.appendChild(leaf.leafEl);
+      this.renderTabs();
+      this.workspace.activeGroup = this;
+      this.workspace.trigger("active-leaf-change", leaf);
+      const file = leaf.view?.getFile?.();
+      if (file) this.workspace.trigger("file-open", file);
+    } finally {
+      markEnd("leaf-activate");
+    }
   }
 
   removeLeaf(leaf: WorkspaceLeaf) {
@@ -655,7 +682,12 @@ export class Sidebar implements LeafContainer {
   // --- LeafContainer (docked plugin leaves) --------------------------------
 
   setActiveLeaf(leaf: WorkspaceLeaf) {
-    this.show(leaf);
+    markStart("leaf-activate");
+    try {
+      this.show(leaf);
+    } finally {
+      markEnd("leaf-activate");
+    }
   }
 
   removeLeaf(leaf: WorkspaceLeaf) {
