@@ -690,16 +690,15 @@ export abstract class ItemView extends View {
     if (!this.leaf.group?.isSidebar) left.append(buildViewHeaderNavButtons());
 
     const titleContainer = document.createElement("div");
-    titleContainer.className = "view-header-title-container";
+    titleContainer.className = "view-header-title-container mod-at-start mod-fade mod-at-end";
     this.headerTitleEl = document.createElement("div");
     this.headerTitleEl.className = "view-header-title";
     titleContainer.append(this.headerTitleEl);
-    left.append(titleContainer);
 
     const actions = document.createElement("div");
     actions.className = "view-actions";
 
-    header.append(left, actions);
+    header.append(left, titleContainer, actions);
     this.contentEl = document.createElement("div");
     this.contentEl.className = "view-content";
     this.containerEl.append(header, this.contentEl);

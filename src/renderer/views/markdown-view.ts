@@ -18,6 +18,7 @@ import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { App } from "../app";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
+import { setIcon } from "../api/icons";
 import type { TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 
@@ -83,7 +84,7 @@ export class MarkdownView implements View {
     left.appendChild(buildViewHeaderNavButtons());
 
     const titleContainer = document.createElement("div");
-    titleContainer.className = "view-header-title-container";
+    titleContainer.className = "view-header-title-container mod-at-start mod-fade mod-at-end";
     this.titleParentEl = document.createElement("div");
     this.titleParentEl.className = "view-header-title-parent";
 
@@ -99,23 +100,24 @@ export class MarkdownView implements View {
     this.titleEl.addEventListener("blur", () => this.commitTitleRename());
 
     titleContainer.append(this.titleParentEl, this.titleEl);
-    left.appendChild(titleContainer);
 
     const actions = document.createElement("div");
     actions.className = "view-actions";
     const sourceBtn = document.createElement("button");
     sourceBtn.className = "view-mode-toggle clickable-icon view-action";
     sourceBtn.title = "Toggle Live Preview / Source mode";
-    sourceBtn.textContent = "</>";
+    sourceBtn.setAttribute("aria-label", "Toggle Live Preview / Source mode");
+    setIcon(sourceBtn, "code-2");
     sourceBtn.addEventListener("click", () => this.toggleSource());
     const modeBtn = document.createElement("button");
     modeBtn.className = "view-mode-toggle clickable-icon view-action";
     modeBtn.title = "Toggle reading view (Cmd/Ctrl+E)";
-    modeBtn.textContent = "📖";
+    modeBtn.setAttribute("aria-label", "Toggle reading view (Cmd/Ctrl+E)");
+    setIcon(modeBtn, "book-open");
     modeBtn.addEventListener("click", () => this.toggleMode());
     actions.append(sourceBtn, modeBtn);
 
-    this.headerEl.append(left, actions);
+    this.headerEl.append(left, titleContainer, actions);
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "markdown-view-body";

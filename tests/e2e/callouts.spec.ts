@@ -49,7 +49,7 @@ test("renders Obsidian-style callouts with an icon, colored title, and type clas
     await expect(lpWarningHeader.locator(".cm-callout-icon svg")).toBeVisible();
 
     // --- Reading view ---------------------------------------------------
-    await window.locator(".view-mode-toggle", { hasText: "📖" }).click();
+    await window.locator('[title="Toggle reading view (Cmd/Ctrl+E)"]').click();
     await expect(window.locator(".markdown-reading-view")).toBeVisible();
 
     const tipCallout = window.locator(".callout.callout-tip");

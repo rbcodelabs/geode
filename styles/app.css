@@ -1002,11 +1002,15 @@ button.mod-cta:hover {
 }
 
 /* ---- View header (breadcrumb/actions bar above each leaf's content) ----
-   Real Obsidian DOM: .view-header > .view-header-left (nav buttons +
-   title-container) + .view-actions. Structural fallback only — colors and
-   polish come from the active community theme, matching real Obsidian's
-   own base app.css. See `ItemView` (api/obsidian.ts) and `MarkdownView`
-   (views/markdown-view.ts) for the DOM this styles. */
+   Real Obsidian DOM: .view-header > .view-header-left (nav buttons only) +
+   .view-header-title-container + .view-actions. The title-container is a
+   DIRECT child of .view-header, a sibling of .view-header-left and
+   .view-actions (NOT nested inside .view-header-left) — that is what lets it
+   flex: 1 1 auto and center the title between the left nav and right actions.
+   Structural fallback only — colors and polish come from the active
+   community theme, matching real Obsidian's own base app.css. See `ItemView`
+   (api/obsidian.ts) and `MarkdownView` (views/markdown-view.ts) for the DOM
+   this styles. */
 
 .view-header {
   height: var(--header-height);
@@ -1130,11 +1134,12 @@ button.mod-cta:hover {
   margin: 0 auto;
 }
 
-.is-readable-line-length .view-header {
-  max-width: calc(var(--file-line-width) + 2 * var(--size-4-8));
-  margin: 0 auto;
-  width: 100%;
-}
+/* The view header stays full-width even under `.is-readable-line-length` —
+   only the CONTENT (`.cm-content`, `.markdown-preview-sizer`) is clamped to the
+   readable line width. This matches real Obsidian: nav buttons pin to the pane's
+   far-left edge, action icons to the far-right corner, and the centered title
+   spans the full pane width. (Do not re-add a `.is-readable-line-length
+   .view-header` max-width clamp — it centers the title inside a too-narrow box.) */
 
 /* CodeMirror */
 
