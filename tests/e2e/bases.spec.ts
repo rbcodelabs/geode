@@ -309,7 +309,11 @@ test("Copy on the results menu puts the view on the clipboard as TSV", async () 
     await window.locator(".bases-toolbar-results").click();
     await window.locator(".context-menu-item", { hasText: "Copy" }).click();
 
-    // Read the system clipboard from the Electron main process.
+    // The menu action starts an async navigator.clipboard write. Poll the
+    // main-process clipboard so the assertion cannot race that write.
+    await expect
+      .poll(() => app.evaluate(({ clipboard }) => clipboard.readText()))
+      .toContain("file.name");
     const clip = await app.evaluate(({ clipboard }) => clipboard.readText());
     const lines = clip.split("\n");
     expect(lines[0].split("\t")).toContain("file.name"); // header row
