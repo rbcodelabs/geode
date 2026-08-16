@@ -304,12 +304,15 @@ button.mod-cta:hover {
   flex: 0 0 auto;
   padding: 0 var(--size-4-2);
   position: relative;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .workspace-tab-header-container-inner {
   -webkit-app-region: drag;
   display: flex;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -330,7 +333,7 @@ button.mod-cta:hover {
 .workspace-split.mod-root .workspace-tab-header-container-inner {
   margin: 6px -5px calc(var(--tab-outline-width) * -1);
   padding: 1px 15px 0;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .workspace-tab-header {
@@ -345,7 +348,13 @@ button.mod-cta:hover {
   cursor: default;
   white-space: nowrap;
   max-width: 220px;
+  min-width: 96px;
+  flex: 1 1 140px;
   transition: color 0.1s ease;
+}
+
+.workspace-tab-header.is-tab-overflow-hidden {
+  display: none;
 }
 
 .workspace-tab-header:hover {
