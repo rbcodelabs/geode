@@ -42,7 +42,27 @@ export class GraphView implements View {
   /** Disposers for the window-level listeners attached in `attachInteraction()`, run in `onClose()`. */
   private interactionCleanups: (() => void)[] = [];
 
-  private readonly onDataChanged = () => this.rebuild();
+  /**
+   * Coalesce a burst of metadata `changed`/`resolved` events into a single
+   * `rebuild()` (which reconstructs the graph and restarts the force sim).
+   * A burst fires N synchronous `changed` events inside one microtask; the
+   * boolean gate + queueMicrotask below collapses them to one rebuild on the
+   * next microtask, mirroring base-view.ts's `scheduleRerender` pattern.
+   */
+  private rebuildScheduled = false;
+  private closed = false;
+  private readonly onDataChanged = () => this.scheduleRebuild();
+
+  private scheduleRebuild(): void {
+    if (this.rebuildScheduled) return;
+    this.rebuildScheduled = true;
+    queueMicrotask(() => {
+      this.rebuildScheduled = false;
+      // Skip if the view was closed between scheduling and this microtask —
+      // rebuild() would otherwise start a RAF loop that onClose can't stop.
+      if (!this.closed) this.rebuild();
+    });
+  }
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -67,6 +87,7 @@ export class GraphView implements View {
   }
 
   onOpen(): void {
+    this.closed = false;
     this.app.metadataCache.on("changed", this.onDataChanged);
     this.app.metadataCache.on("resolved", this.onDataChanged);
     this.resizeObserver.observe(this.containerEl);
@@ -75,6 +96,7 @@ export class GraphView implements View {
   }
 
   onClose(): void {
+    this.closed = true;
     this.app.metadataCache.off("changed", this.onDataChanged);
     this.app.metadataCache.off("resolved", this.onDataChanged);
     this.resizeObserver.disconnect();

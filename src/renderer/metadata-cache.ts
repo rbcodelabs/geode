@@ -1,6 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import { Events } from "./events";
 import { Vault } from "./vault";
+import { withPerfMark } from "./perf-instrumentation";
 import {
   CachedMetadata,
   HeadingCache,
@@ -10,6 +11,8 @@ import {
   SectionCache,
   TFile,
   TagCache,
+  pathName,
+  splitExt,
 } from "./types";
 
 const WIKILINK_RE = /(!)?\[\[([^\[\]\n]+)\]\]/g;
@@ -326,103 +329,311 @@ export function parseMetadata(text: string): CachedMetadata {
   return meta;
 }
 
+/** Lowercased basename + full-name keys a file path contributes to `byBasename`. */
+function nameKeysFor(path: string): { basenameKey: string; nameKey: string } {
+  const name = pathName(path);
+  const { basename } = splitExt(name);
+  return { basenameKey: basename.toLowerCase(), nameKey: name.toLowerCase() };
+}
+
+/** All lowercased name-index keys a present file provides: basename, full name, and aliases. */
+function providedKeys(path: string, aliases: string[]): Set<string> {
+  const { basenameKey, nameKey } = nameKeysFor(path);
+  const keys = new Set<string>([basenameKey, nameKey]);
+  for (const a of aliases) keys.add(a.toLowerCase());
+  return keys;
+}
+
+function isMdPath(path: string): boolean {
+  return splitExt(pathName(path)).extension === "md";
+}
+
+/** Push `value` into the string[] at `key`, keeping the list de-duplicated and path-sorted. */
+function pushSorted(map: Map<string, string[]>, key: string, value: string): void {
+  const list = map.get(key) ?? [];
+  if (!list.includes(value)) {
+    list.push(value);
+    list.sort();
+  }
+  map.set(key, list);
+}
+
+/** Remove `value` from the string[] at `key`, dropping the key entirely once empty. */
+function pullValue(map: Map<string, string[]>, key: string, value: string): void {
+  const list = map.get(key);
+  if (!list) return;
+  const filtered = list.filter((v) => v !== value);
+  if (filtered.length) map.set(key, filtered);
+  else map.delete(key);
+}
+
+function addToSet(map: Map<string, Set<string>>, key: string, value: string): void {
+  let set = map.get(key);
+  if (!set) {
+    set = new Set();
+    map.set(key, set);
+  }
+  set.add(value);
+}
+
+function removeFromSet(map: Map<string, Set<string>>, key: string, value: string): void {
+  const set = map.get(key);
+  if (!set) return;
+  set.delete(value);
+  if (set.size === 0) map.delete(key);
+}
+
+/** Per-file operation accumulated during a burst: whether the path existed before the burst and whether it's present after it. */
+interface DirtyOp {
+  existedBefore: boolean;
+  present: boolean;
+}
+
 /**
  * Vault-wide metadata index. Parses every markdown file, resolves links to
  * files, and maintains backlink/tag indices. Events: 'resolved' (initial
- * index complete), 'changed' (file: TFile).
+ * index complete), 'changed' (file: TFile[, oldPath]).
+ *
+ * Cold start (`initialize()`) does one batched full pass. Per-edit vault
+ * events (create/modify/delete/rename) are coalesced into a dirty set and
+ * flushed ONCE per microtask burst via an incremental pass that touches only
+ * the minimal set of affected files — never the whole vault — so a sync/
+ * git-pull/bulk-rename burst of N events is O(affected), not O(N × files).
+ * By the time each `changed` fires, `resolvedLinks`/`byBasename`/`byAlias`
+ * are globally correct (graph + sidebar panes read them wholesale).
  */
 export class MetadataCache extends Events {
   private cache = new Map<string, CachedMetadata>();
-  /** basename (lowercase) -> file paths with that basename */
+  /** basename/name (lowercase) -> file paths, path-sorted */
   private byBasename = new Map<string, string[]>();
-  /** alias (lowercase) -> file paths */
+  /** alias (lowercase) -> file paths, path-sorted */
   private byAlias = new Map<string, string[]>();
-  /** source path -> set of resolved target paths */
+  /** source path -> resolved target path -> count */
   resolvedLinks = new Map<string, Map<string, number>>();
   /** source path -> unresolved link text -> count */
   unresolvedLinks = new Map<string, Map<string, number>>();
+  /** Reverse of resolvedLinks: target path -> source paths that resolve to it. */
+  private resolvedBy = new Map<string, Set<string>>();
+  /** Reverse of unresolvedLinks keys: lowercased dangling key -> source paths that use it. */
+  private unresolvedByKey = new Map<string, Set<string>>();
   initialized = false;
+
+  /** Paths touched in the current burst, flushed once on a microtask. */
+  private dirty = new Map<string, DirtyOp>();
+  /** Files to fire `changed` for after the flush, keyed by (current) path. */
+  private pendingChanged = new Map<string, { file: TFile; oldPath?: string }>();
+  private flushScheduled = false;
 
   constructor(private vault: Vault) {
     super();
-    vault.on("create", (f: TFile) => {
-      if (f?.kind === "file" && f.extension === "md") this.indexFile(f);
-      else this.rebuildNameIndex();
-    });
+    vault.on("create", (f: TFile) => this.enqueue(f, false, true));
     vault.on("modify", (f: TFile) => {
-      if (f?.kind === "file" && f.extension === "md") this.indexFile(f);
+      // Non-md modifies are content-only with an unchanged name — they touch
+      // neither the name index nor resolution, so they're ignored (matching
+      // prior behaviour). Only markdown modifies re-parse + re-resolve.
+      if (f?.kind === "file" && f.extension === "md") this.enqueue(f, true, true);
     });
-    vault.on("delete", (f: TFile) => {
-      if (!f) return;
-      this.cache.delete(f.path);
-      this.resolvedLinks.delete(f.path);
-      this.unresolvedLinks.delete(f.path);
-      this.rebuildNameIndex();
-      this.resolveAll();
-      this.trigger("changed", f);
+    vault.on("delete", (f: TFile) => this.enqueue(f, true, false));
+    vault.on("rename", (f: TFile, oldPath: string) => this.enqueueRename(f, oldPath));
+  }
+
+  /** Record a single-path create/modify/delete event and schedule a flush. */
+  private enqueue(f: TFile, existedBefore: boolean, present: boolean): void {
+    // Folders carry no metadata and never appear in the name index; their
+    // descendant files fire their own file events (see Vault.rename), so
+    // folder events are index no-ops.
+    if (!f || f.kind !== "file") return;
+    const cur = this.dirty.get(f.path);
+    if (cur) cur.present = present;
+    else this.dirty.set(f.path, { existedBefore, present });
+    this.pendingChanged.set(f.path, { file: f });
+    this.scheduleFlush();
+  }
+
+  /** Record a rename as a delete of the old path + a create of the new path. */
+  private enqueueRename(f: TFile, oldPath: string): void {
+    if (!f || f.kind !== "file") return;
+    const old = this.dirty.get(oldPath);
+    if (old) old.present = false;
+    else this.dirty.set(oldPath, { existedBefore: true, present: false });
+    const nw = this.dirty.get(f.path);
+    if (nw) nw.present = true;
+    else this.dirty.set(f.path, { existedBefore: false, present: true });
+    // The file now lives at the new path — fire a single `changed(new, old)`.
+    this.pendingChanged.delete(oldPath);
+    this.pendingChanged.set(f.path, { file: f, oldPath });
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushScheduled) return;
+    this.flushScheduled = true;
+    queueMicrotask(() => void this.flush());
+  }
+
+  /**
+   * Apply one incremental pass for the whole burst, then fire `changed` per
+   * changed file. Ordering within the pass matters: the name index is brought
+   * fully up to date BEFORE any link resolution, so `getFirstLinkpathDest`
+   * sees current names.
+   */
+  private async flush(): Promise<void> {
+    this.flushScheduled = false;
+    const dirty = this.dirty;
+    this.dirty = new Map();
+    const pendingChanged = this.pendingChanged;
+    this.pendingChanged = new Map();
+    if (dirty.size === 0) return;
+
+    // Paths whose content read failed this flush — excluded from the index
+    // update AND from `changed` firing (a read failure is a no-op, matching
+    // the pre-incremental indexFile()'s early return on error).
+    const failed = new Set<string>();
+
+    await withPerfMark("metadata-index-flush", async () => {
+      // Phase 1 — read + parse new content for every present markdown path.
+      const newMeta = new Map<string, CachedMetadata>();
+      const toRead: string[] = [];
+      for (const [path, op] of dirty) if (op.present && isMdPath(path)) toRead.push(path);
+      await processInBatches(toRead, INDEX_CONCURRENCY, async (path) => {
+        const file = this.vault.getFileByPath(path);
+        if (!file) {
+          failed.add(path);
+          return;
+        }
+        try {
+          newMeta.set(path, parseMetadata(await this.vault.cachedRead(file)));
+        } catch (err) {
+          failed.add(path);
+          if (!isBenignEnoent(err)) console.error(`Failed to index ${path}`, err);
+        }
+      });
+
+      // Phase 2 — compute the MINIMAL affected source set from the reverse
+      // indices, BEFORE mutating any index (so lookups reflect prior state).
+      const affected = new Set<string>();
+      for (const [path, op] of dirty) {
+        if (failed.has(path)) continue;
+        const md = isMdPath(path);
+        const oldAliases = op.existedBefore ? this.cache.get(path)?.aliases ?? [] : [];
+        const newAliases = op.present && md ? newMeta.get(path)?.aliases ?? [] : [];
+        const oldProvided = op.existedBefore ? providedKeys(path, oldAliases) : new Set<string>();
+        const newProvided = op.present ? providedKeys(path, newAliases) : new Set<string>();
+        // A removed key (delete, rename-away, or alias removal) means anything
+        // that resolved TO this path must re-resolve (sibling or unresolved).
+        let removedKey = false;
+        for (const k of oldProvided) {
+          if (!newProvided.has(k)) {
+            removedKey = true;
+            break;
+          }
+        }
+        if (removedKey) for (const src of this.resolvedBy.get(path) ?? []) affected.add(src);
+        // A newly provided key (create, rename-in, alias addition) can (a)
+        // satisfy any source that currently has that key dangling, and (b)
+        // STEAL a link from a same-key file that a source currently resolves
+        // to, because this path may now win the shortest-path / first-alias
+        // tiebreak. Re-resolving the competitor's backlinks is idempotent when
+        // this path doesn't actually win, and is still bounded by same-key
+        // backlinks rather than the whole vault.
+        for (const k of newProvided) {
+          if (oldProvided.has(k)) continue;
+          for (const src of this.unresolvedByKey.get(k) ?? []) affected.add(src);
+          for (const q of this.byBasename.get(k) ?? []) {
+            for (const src of this.resolvedBy.get(q) ?? []) affected.add(src);
+          }
+          for (const q of this.byAlias.get(k) ?? []) {
+            for (const src of this.resolvedBy.get(q) ?? []) affected.add(src);
+          }
+        }
+        // A present markdown file's own outgoing links must be (re)resolved.
+        if (op.present && md) affected.add(path);
+      }
+
+      // Phase 3a — bring the name index + cache fully up to date.
+      for (const [path, op] of dirty) {
+        if (failed.has(path)) continue;
+        const md = isMdPath(path);
+        if (op.existedBefore) {
+          const oldAliases = this.cache.get(path)?.aliases ?? [];
+          this.removeNameEntries(path, oldAliases);
+        }
+        if (op.present && md) {
+          const meta = newMeta.get(path);
+          if (meta) this.cache.set(path, meta);
+        } else {
+          this.cache.delete(path);
+        }
+        if (op.present) {
+          const newAliases = md ? this.cache.get(path)?.aliases ?? [] : [];
+          this.addNameEntries(path, newAliases);
+        }
+      }
+
+      // Phase 3b — re-resolve the affected sources plus deleted markdown paths
+      // (the latter to purge their own forward + reverse entries).
+      for (const [path, op] of dirty) {
+        if (failed.has(path)) continue;
+        if (!op.present && isMdPath(path)) affected.add(path);
+      }
+      for (const src of affected) this.resolveFile(src);
     });
-    vault.on("rename", (f: TFile, oldPath: string) => {
-      if (!f) return;
-      const meta = this.cache.get(oldPath);
-      this.cache.delete(oldPath);
-      if (meta && f.kind === "file") this.cache.set(f.path, meta);
-      this.rebuildNameIndex();
-      this.resolveAll();
-      this.trigger("changed", f, oldPath);
-    });
+
+    // Fire `changed` once per changed file (skipping reads that failed), so
+    // BaseView per-file semantics + the public plugin contract are preserved.
+    for (const { file, oldPath } of pendingChanged.values()) {
+      if (failed.has(file.path)) continue;
+      if (oldPath !== undefined) this.trigger("changed", file, oldPath);
+      else this.trigger("changed", file);
+    }
   }
 
   async initialize(): Promise<void> {
-    const files = this.vault.getMarkdownFiles();
-    await processInBatches(files, INDEX_CONCURRENCY, async (f) => {
-      try {
-        const text = await this.vault.cachedRead(f);
-        this.cache.set(f.path, parseMetadata(text));
-      } catch (err) {
-        if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
-      }
+    await withPerfMark("metadata-initialize", async () => {
+      const files = this.vault.getMarkdownFiles();
+      await processInBatches(files, INDEX_CONCURRENCY, async (f) => {
+        try {
+          const text = await this.vault.cachedRead(f);
+          this.cache.set(f.path, parseMetadata(text));
+        } catch (err) {
+          if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
+        }
+      });
+      this.rebuildNameIndex();
+      this.resolveAll();
     });
-    this.rebuildNameIndex();
-    this.resolveAll();
     this.initialized = true;
     this.trigger("resolved");
   }
 
-  private async indexFile(file: TFile) {
-    try {
-      const text = await this.vault.cachedRead(file);
-      this.cache.set(file.path, parseMetadata(text));
-      this.rebuildNameIndex();
-      this.resolveAll();
-      this.trigger("changed", file);
-    } catch (err) {
-      if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
-    }
+  /** Add a present file's basename/name (+ alias) keys to the name index. */
+  private addNameEntries(path: string, aliases: string[]): void {
+    const { basenameKey, nameKey } = nameKeysFor(path);
+    pushSorted(this.byBasename, basenameKey, path);
+    if (nameKey !== basenameKey) pushSorted(this.byBasename, nameKey, path);
+    for (const a of aliases) pushSorted(this.byAlias, a.toLowerCase(), path);
   }
 
+  /** Remove a path's basename/name (+ alias) keys from the name index. */
+  private removeNameEntries(path: string, aliases: string[]): void {
+    const { basenameKey, nameKey } = nameKeysFor(path);
+    pullValue(this.byBasename, basenameKey, path);
+    if (nameKey !== basenameKey) pullValue(this.byBasename, nameKey, path);
+    for (const a of aliases) pullValue(this.byAlias, a.toLowerCase(), path);
+  }
+
+  /**
+   * Full rebuild of the name index from scratch. Used by `initialize()` and
+   * as the equivalence oracle for the incremental `add`/`removeNameEntries`
+   * mutators. Lists are path-sorted so a from-scratch rebuild is byte-for-byte
+   * identical to the incrementally maintained index.
+   */
   private rebuildNameIndex() {
     this.byBasename.clear();
     this.byAlias.clear();
-    for (const f of this.vault.getFiles()) {
-      const key = f.basename.toLowerCase();
-      const list = this.byBasename.get(key) ?? [];
-      list.push(f.path);
-      this.byBasename.set(key, list);
-      // Full name (with extension) also resolvable, e.g. [[img.png]]
-      const nameKey = f.name.toLowerCase();
-      if (nameKey !== key) {
-        const nlist = this.byBasename.get(nameKey) ?? [];
-        nlist.push(f.path);
-        this.byBasename.set(nameKey, nlist);
-      }
-    }
+    for (const f of this.vault.getFiles()) this.addNameEntries(f.path, []);
     for (const [path, meta] of this.cache) {
-      for (const alias of meta.aliases) {
-        const key = alias.toLowerCase();
-        const list = this.byAlias.get(key) ?? [];
-        list.push(path);
-        this.byAlias.set(key, list);
-      }
+      for (const alias of meta.aliases) pushSorted(this.byAlias, alias.toLowerCase(), path);
     }
   }
 
@@ -461,9 +672,17 @@ export class MetadataCache extends Events {
     return null;
   }
 
+  /**
+   * From-scratch resolution of every cached file's links, rebuilding both the
+   * forward maps (`resolvedLinks`/`unresolvedLinks`) and the reverse indices
+   * (`resolvedBy`/`unresolvedByKey`). Used by `initialize()` and as the
+   * equivalence oracle for the incremental `resolveFile`.
+   */
   private resolveAll() {
     this.resolvedLinks.clear();
     this.unresolvedLinks.clear();
+    this.resolvedBy.clear();
+    this.unresolvedByKey.clear();
     for (const [path, meta] of this.cache) {
       const resolved = new Map<string, number>();
       const unresolved = new Map<string, number>();
@@ -477,7 +696,52 @@ export class MetadataCache extends Events {
       }
       this.resolvedLinks.set(path, resolved);
       this.unresolvedLinks.set(path, unresolved);
+      for (const target of resolved.keys()) addToSet(this.resolvedBy, target, path);
+      for (const key of unresolved.keys()) addToSet(this.unresolvedByKey, key.toLowerCase(), path);
     }
+  }
+
+  /**
+   * Incrementally (re)resolve a single source file's outgoing links, keeping
+   * the forward maps AND the reverse indices consistent. Resolution semantics
+   * are identical to `resolveAll` (same `getFirstLinkpathDest`), only the
+   * scope differs. When `path` has no cache entry (a deleted/non-md file) its
+   * entries + reverse contributions are simply purged.
+   */
+  private resolveFile(path: string): void {
+    withPerfMark("metadata-resolve-file", () => {
+      // Retract this file's previous contributions to the reverse indices.
+      const prevResolved = this.resolvedLinks.get(path);
+      if (prevResolved) {
+        for (const target of prevResolved.keys()) removeFromSet(this.resolvedBy, target, path);
+      }
+      const prevUnresolved = this.unresolvedLinks.get(path);
+      if (prevUnresolved) {
+        for (const key of prevUnresolved.keys()) removeFromSet(this.unresolvedByKey, key.toLowerCase(), path);
+      }
+
+      const meta = this.cache.get(path);
+      if (!meta) {
+        this.resolvedLinks.delete(path);
+        this.unresolvedLinks.delete(path);
+        return;
+      }
+
+      const resolved = new Map<string, number>();
+      const unresolved = new Map<string, number>();
+      for (const link of [...meta.links, ...meta.embeds]) {
+        const dest = this.getFirstLinkpathDest(link.link, path);
+        if (dest) resolved.set(dest.path, (resolved.get(dest.path) ?? 0) + 1);
+        else {
+          const key = link.link.split("#")[0].trim();
+          if (key) unresolved.set(key, (unresolved.get(key) ?? 0) + 1);
+        }
+      }
+      this.resolvedLinks.set(path, resolved);
+      this.unresolvedLinks.set(path, unresolved);
+      for (const target of resolved.keys()) addToSet(this.resolvedBy, target, path);
+      for (const key of unresolved.keys()) addToSet(this.unresolvedByKey, key.toLowerCase(), path);
+    });
   }
 
   getFileCache(file: TFile): CachedMetadata | null {
