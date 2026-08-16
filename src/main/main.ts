@@ -9,6 +9,7 @@ import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import { withPathLock } from "./path-lock";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { getProcessMetricsSnapshot } from "./process-metrics";
+import { readMetadataCache, writeMetadataCache } from "./metadata-cache-store";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -268,6 +269,18 @@ function registerIpc() {
     } catch {
       return false;
     }
+  });
+
+  ipcMain.handle("metadata-cache-read", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    return session ? readMetadataCache(session.root) : null;
+  });
+
+  ipcMain.handle("metadata-cache-write", async (e, data: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (session) await writeMetadataCache(session.root, data);
   });
 
   // Per-vault config stored in <vault>/.geode/<name>.json

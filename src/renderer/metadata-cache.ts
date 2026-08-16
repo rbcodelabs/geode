@@ -48,6 +48,42 @@ function yieldToEventLoop(): Promise<void> {
  * queues extra requests behind the same 4 threadpool slots while making
  * each batch's synchronous-parse jank window bigger. */
 export const INDEX_CONCURRENCY = 16;
+export const METADATA_CACHE_SCHEMA_VERSION = 1;
+
+interface PersistedMetadataEntry {
+  mtimeMs: number;
+  size: number;
+  content: string;
+  metadata: CachedMetadata;
+}
+
+interface PersistedMetadataCache {
+  schemaVersion: number;
+  entries: Record<string, PersistedMetadataEntry>;
+}
+
+function isPersistedMetadataCache(value: unknown): value is PersistedMetadataCache {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<PersistedMetadataCache>;
+  if (candidate.schemaVersion !== METADATA_CACHE_SCHEMA_VERSION) return false;
+  if (!candidate.entries || typeof candidate.entries !== "object" || Array.isArray(candidate.entries)) return false;
+  return Object.values(candidate.entries).every((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const item = entry as Partial<PersistedMetadataEntry>;
+    return (
+      typeof item.mtimeMs === "number" &&
+      typeof item.size === "number" &&
+      typeof item.content === "string" &&
+      !!item.metadata &&
+      typeof item.metadata === "object" &&
+      Array.isArray(item.metadata.links) &&
+      Array.isArray(item.metadata.embeds) &&
+      Array.isArray(item.metadata.tags) &&
+      Array.isArray(item.metadata.headings) &&
+      Array.isArray(item.metadata.aliases)
+    );
+  });
+}
 
 /**
  * Runs `fn` over `items` in fixed-size concurrent chunks of `concurrency`,
@@ -424,6 +460,35 @@ export class MetadataCache extends Events {
   private pendingChanged = new Map<string, { file: TFile; oldPath?: string }>();
   private flushScheduled = false;
 
+  private async loadPersistedCache(): Promise<PersistedMetadataCache | null> {
+    try {
+      const api = typeof window === "undefined" ? undefined : window.geode;
+      if (!api?.readMetadataCache) return null;
+      const value = await api.readMetadataCache();
+      return isPersistedMetadataCache(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async persistCache(): Promise<void> {
+    try {
+      const api = typeof window === "undefined" ? undefined : window.geode;
+      if (!api?.writeMetadataCache) return;
+      const entries: Record<string, PersistedMetadataEntry> = {};
+      for (const file of this.vault.getMarkdownFiles()) {
+        const metadata = this.cache.get(file.path);
+        const content = this.vault.getCachedContent(file.path);
+        if (metadata && content !== undefined) {
+          entries[file.path] = { mtimeMs: file.mtime, size: file.size, content, metadata };
+        }
+      }
+      await api.writeMetadataCache({ schemaVersion: METADATA_CACHE_SCHEMA_VERSION, entries });
+    } catch (error) {
+      console.error("Failed to persist metadata cache", error);
+    }
+  }
+
   constructor(private vault: Vault) {
     super();
     vault.on("create", (f: TFile) => this.enqueue(f, false, true));
@@ -577,6 +642,8 @@ export class MetadataCache extends Events {
         if (!op.present && isMdPath(path)) affected.add(path);
       }
       for (const src of affected) this.resolveFile(src);
+
+      await this.persistCache();
     });
 
     // Fire `changed` once per changed file (skipping reads that failed), so
@@ -591,7 +658,19 @@ export class MetadataCache extends Events {
   async initialize(): Promise<void> {
     await withPerfMark("metadata-initialize", async () => {
       const files = this.vault.getMarkdownFiles();
-      await processInBatches(files, INDEX_CONCURRENCY, async (f) => {
+      const persisted = await this.loadPersistedCache();
+      this.cache.clear();
+      const toRead: TFile[] = [];
+      for (const file of files) {
+        const entry = persisted?.entries[file.path];
+        if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
+          this.cache.set(file.path, entry.metadata);
+          this.vault.primeCachedContent(file.path, entry.content);
+        } else {
+          toRead.push(file);
+        }
+      }
+      await processInBatches(toRead, INDEX_CONCURRENCY, async (f) => {
         try {
           const text = await this.vault.cachedRead(f);
           this.cache.set(f.path, parseMetadata(text));
@@ -601,6 +680,7 @@ export class MetadataCache extends Events {
       });
       this.rebuildNameIndex();
       this.resolveAll();
+      await this.persistCache();
     });
     this.initialized = true;
     this.trigger("resolved");
