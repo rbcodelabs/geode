@@ -37,6 +37,8 @@ const api = {
   rename: (path: string, newPath: string): Promise<void> =>
     ipcRenderer.invoke("vault-rename", path, newPath),
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),
+  readMetadataCache: (): Promise<unknown | null> => ipcRenderer.invoke("metadata-cache-read"),
+  writeMetadataCache: (data: unknown): Promise<void> => ipcRenderer.invoke("metadata-cache-write", data),
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),

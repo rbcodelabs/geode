@@ -241,6 +241,11 @@ export class Vault extends Events {
     return this.contents.get(path);
   }
 
+  /** Restore content bundled with a validated persistent metadata entry. */
+  primeCachedContent(path: string, content: string): void {
+    this.contents.set(path, content);
+  }
+
   async read(file: TFile): Promise<string> {
     const data = await window.geode.read(file.path);
     this.contents.set(file.path, data);

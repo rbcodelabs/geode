@@ -82,6 +82,10 @@ export class FakeVault extends Events {
     return this.files.get(path)?.content;
   }
 
+  primeCachedContent(_path: string, _content: string): void {
+    // FakeVault already keeps every file's source text in memory.
+  }
+
   asVault(): Vault {
     return this as unknown as Vault;
   }
