@@ -7,6 +7,7 @@ abstract class SidebarView implements View {
   containerEl: HTMLElement;
   protected bodyEl: HTMLElement;
   protected file: TFile | null = null;
+  private renderScheduled = false;
 
   constructor(protected app: App, title: string) {
     this.containerEl = document.createElement("div");
@@ -19,17 +20,31 @@ abstract class SidebarView implements View {
     this.containerEl.appendChild(header);
     this.containerEl.appendChild(this.bodyEl);
 
+    // file-open is a single discrete user action — render immediately.
     app.workspace.on("file-open", (file: TFile | null) => {
       this.file = file;
       this.render();
     });
-    app.metadataCache.on("changed", () => this.render());
-    app.metadataCache.on("resolved", () => this.render());
+    // A metadata burst fires N synchronous `changed` events in one microtask;
+    // coalesce them into a single re-render on the next microtask, mirroring
+    // base-view.ts's `scheduleRerender` pattern. Nothing about WHAT renders
+    // changes — only how often.
+    app.metadataCache.on("changed", () => this.scheduleRender());
+    app.metadataCache.on("resolved", () => this.scheduleRender());
   }
 
   abstract getDisplayText(): string;
   abstract getIcon(): string;
   abstract render(): void;
+
+  private scheduleRender(): void {
+    if (this.renderScheduled) return;
+    this.renderScheduled = true;
+    queueMicrotask(() => {
+      this.renderScheduled = false;
+      this.render();
+    });
+  }
 
   onOpen(): void {
     this.file = this.app.workspace.getActiveFile();
