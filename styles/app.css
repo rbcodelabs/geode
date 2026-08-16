@@ -565,6 +565,7 @@ button.mod-cta:hover {
   min-width: 200px;
   background: var(--background-secondary);
   transition: width 0.15s ease;
+  overflow: hidden;
 }
 
 .workspace-sidebar.is-resizing {
@@ -580,44 +581,19 @@ button.mod-cta:hover {
 }
 
 .workspace-sidebar.is-collapsed {
-  width: 38px;
-  min-width: 38px;
-}
-
-/* The macOS traffic-light buttons are an OS-drawn overlay pinned to the
-   window's top-left in *screen* pixels, not clipped to any element — they
-   sit roughly 0-77px from the window edge regardless of what's underneath.
-   A collapsed left sidebar at the default 38px width would place its lone
-   collapse button entirely under the lights (unclickable, invisible).
-   Widen just the collapsed left sidebar so the button clears them; the
-   right sidebar has no such constraint and keeps the narrow 38px strip. */
-.workspace-sidebar.is-collapsed.mod-left {
-  width: 116px;
-  min-width: 116px;
+  width: 0;
+  min-width: 0;
+  border-width: 0;
 }
 
 .workspace-sidebar.is-collapsed .sidebar-content {
   display: none;
 }
 
-/* Collapsed: hide the whole tab row, leaving only the collapse button. */
+/* Collapsed: hide the whole tab row (its toggle button now lives in the main
+   pane's tab bar, not here — see `.sidebar-toggle-button`). */
 .workspace-sidebar.is-collapsed .workspace-tab-header-container-inner {
   display: none;
-}
-
-.workspace-sidebar.is-collapsed .workspace-tab-header-container {
-  justify-content: center;
-}
-
-/* The left sidebar keeps its 78px padding-left (below) even collapsed, so
-   the button already lands clear of the traffic lights without centering —
-   centering would fight the padding and pull it back toward the lights. */
-.workspace-sidebar.is-collapsed.mod-left .workspace-tab-header-container {
-  justify-content: flex-start;
-}
-
-.workspace-sidebar.is-collapsed .sidebar-collapse-btn {
-  margin-left: 0;
 }
 
 /* Sidebar docked-pane tab strip: same `.workspace-tab-header-container` DOM as
@@ -659,15 +635,29 @@ button.mod-cta:hover {
   pointer-events: none;
 }
 
-/* Frameless-window traffic-light clearance: push the left sidebar's tab row
-   right so its tabs (and, when collapsed, its lone collapse button) clear the
-   macOS traffic lights overlaid on the top-left. */
+/* Frameless-window traffic-light clearance: push the left sidebar's own tab
+   row right so its tabs clear the macOS traffic lights overlaid on the
+   top-left. Only relevant while the sidebar is visible/expanded — while
+   collapsed the sidebar is width:0 and this rule is moot. */
 .mod-left .workspace-tab-header-container {
   padding-left: 78px;
 }
 
-.sidebar-collapse-btn {
-  margin-left: auto;
+/* When the left sidebar is collapsed, it no longer occupies the top-left
+   corner, so the FIRST (leftmost) main-pane tab group's own tab bar — which
+   now hosts the left sidebar's toggle button — needs the same clearance
+   instead. Gated on `mod-left-collapsed` (toggled on the workspace root by
+   `Sidebar.toggle()`) so this never doubles up with the sidebar's own
+   padding above when expanded. */
+.workspace.mod-left-collapsed .workspace-tabs:first-child > .workspace-tab-header-container {
+  padding-left: 78px;
+}
+
+/* Reusable toggle button (left/right sidebar collapse-expand), now hosted in
+   the main pane's tab bar rather than inside the collapsible sidebar itself
+   — this is what lets the sidebar shrink to width 0 without hiding its own
+   toggle. Same visual treatment as the old sidebar-owned `.sidebar-collapse-btn`. */
+.sidebar-toggle-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -678,9 +668,19 @@ button.mod-cta:hover {
   color: var(--text-muted);
   -webkit-app-region: no-drag;
 }
-.sidebar-collapse-btn:hover {
+.sidebar-toggle-button:hover {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
+}
+
+/* Horizontal splits: only the outermost tab groups' toggle buttons are
+   meaningful (a left toggle in a middle/right group, or a right toggle in a
+   middle/left group, wouldn't sit next to the sidebar it controls). */
+.workspace-tabs:not(:first-child) .sidebar-toggle-button.mod-left {
+  display: none;
+}
+.workspace-tabs:not(:last-child) .sidebar-toggle-button.mod-right {
+  display: none;
 }
 
 /* ---- Sidebar tabs (Obsidian's `.mod-left-split` / `.mod-right-split`): kill

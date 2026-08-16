@@ -257,6 +257,10 @@ export class TabGroup implements LeafContainer {
   /** `.workspace-tab-header-container-inner` — the scrollable row that actually holds the tab headers. */
   tabHeaderInnerEl: HTMLElement;
   contentHostEl: HTMLElement;
+  /** Left-sidebar toggle button, first child of `tabBarEl` (only meaningful/visible on the leftmost group). */
+  leftToggleEl: HTMLElement;
+  /** Right-sidebar toggle button, last child of `tabBarEl` (only meaningful/visible on the rightmost group). */
+  rightToggleEl: HTMLElement;
 
   constructor(
     public workspace: Workspace,
@@ -268,6 +272,17 @@ export class TabGroup implements LeafContainer {
     this.tabBarEl.className = "workspace-tab-header-container";
     this.tabHeaderInnerEl = document.createElement("div");
     this.tabHeaderInnerEl.className = "workspace-tab-header-container-inner";
+
+    // Left sidebar toggle: first child of the tab bar, outside the
+    // collapsible sidebar itself so it stays clickable when the sidebar
+    // shrinks to width 0 (the reason for this whole change — see the
+    // `Sidebar.toggle()`/CSS comments for context).
+    this.leftToggleEl = document.createElement("div");
+    this.leftToggleEl.className = "clickable-icon sidebar-toggle-button mod-left";
+    setIcon(this.leftToggleEl, "panel-left");
+    this.leftToggleEl.addEventListener("click", () => this.workspace.leftSidebar.toggle());
+    this.tabBarEl.appendChild(this.leftToggleEl);
+
     this.tabBarEl.appendChild(this.tabHeaderInnerEl);
 
     const tabList = document.createElement("div");
@@ -288,6 +303,13 @@ export class TabGroup implements LeafContainer {
     newTabIcon.addEventListener("click", () => this.app.openEmptyTab(this));
     newTab.appendChild(newTabIcon);
     this.tabBarEl.appendChild(newTab);
+
+    // Right sidebar toggle: last child of the tab bar.
+    this.rightToggleEl = document.createElement("div");
+    this.rightToggleEl.className = "clickable-icon sidebar-toggle-button mod-right";
+    setIcon(this.rightToggleEl, "panel-right");
+    this.rightToggleEl.addEventListener("click", () => this.workspace.rightSidebar.toggle());
+    this.tabBarEl.appendChild(this.rightToggleEl);
 
     this.contentHostEl = document.createElement("div");
     this.contentHostEl.className = "workspace-tab-container";
@@ -643,8 +665,10 @@ export class Sidebar implements LeafContainer {
   }
 
   private renderIcons() {
-    // Reset the whole strip (tab row + collapse button) so neither the tabs
-    // nor the trailing collapse button accumulate across re-renders.
+    // Reset the tab row so tabs don't accumulate across re-renders. The
+    // sidebar no longer owns a collapse/expand button — that now lives in
+    // the main pane's tab bar (`TabGroup.leftToggleEl`/`rightToggleEl`) so it
+    // stays clickable even when this sidebar shrinks to width 0.
     this.tabHeaderContainerEl.innerHTML = "";
     this.tabHeaderInnerEl.innerHTML = "";
     this.tabHeaderContainerEl.appendChild(this.tabHeaderInnerEl);
@@ -652,16 +676,6 @@ export class Sidebar implements LeafContainer {
       if (this.isLeaf(item) && !item.view) continue; // no tab until a view is mounted
       this.tabHeaderInnerEl.appendChild(this.buildSidebarTab(item, item === this.active));
     }
-    // The collapse affordance is a sibling of the tab row, kept out of the
-    // draggable tab strip so it stays clickable. Real Obsidian toggles the
-    // sidebar from the main tab bar; Geode keeps its own inline button.
-    const collapseBtn = document.createElement("div");
-    collapseBtn.className = "clickable-icon sidebar-collapse-btn";
-    setIcon(collapseBtn, this.side === "left" ? "panel-left" : "panel-right");
-    collapseBtn.setAttribute("aria-label", this.collapsed ? "Expand sidebar" : "Collapse sidebar");
-    collapseBtn.title = this.collapsed ? "Expand sidebar" : "Collapse sidebar";
-    collapseBtn.addEventListener("click", () => this.toggle());
-    this.tabHeaderContainerEl.appendChild(collapseBtn);
   }
 
   show(item: SidebarItem) {
@@ -725,7 +739,18 @@ export class Sidebar implements LeafContainer {
     if (this.dragging) this.endDrag();
     this.collapsed = !this.collapsed;
     this.containerEl.classList.toggle("is-collapsed", this.collapsed);
+    // Mirrored onto the workspace root so the main pane's toggle button
+    // (which lives outside this sidebar) and traffic-light-clearance CSS can
+    // react to collapse state without a cross-module class query.
+    this.app.workspace.rootEl.classList.toggle(`mod-${this.side}-collapsed`, this.collapsed);
     this.renderIcons();
+    this.app.workspace.syncSidebarToggleButtons();
+    // Pre-existing gap: toggling collapse state alone never scheduled a
+    // layout save (only file-open/active-leaf-change/other layout-change
+    // events did, so collapse survived a relaunch only incidentally). Fire
+    // it here too, matching `show()` and the resize-drag handler below, so a
+    // manual collapse/expand is persisted on its own.
+    this.app.workspace.trigger("layout-change");
   }
 }
 
@@ -800,8 +825,27 @@ export class Workspace extends Events {
       this.groups.push(group);
       this.centerEl.appendChild(group.containerEl);
     }
+    this.syncSidebarToggleButtons();
     this.trigger("layout-change");
     return group;
+  }
+
+  /**
+   * Keep every `TabGroup`'s sidebar-toggle buttons' `aria-label`/`title` in
+   * sync with actual collapsed state. Called whenever a sidebar is toggled
+   * and whenever a new group is added (splits), so a freshly-created group
+   * doesn't start with stale "Collapse sidebar" labels if a sidebar is
+   * already collapsed.
+   */
+  syncSidebarToggleButtons(): void {
+    for (const group of this.groups) {
+      const leftLabel = this.leftSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
+      group.leftToggleEl.setAttribute("aria-label", leftLabel);
+      group.leftToggleEl.title = leftLabel;
+      const rightLabel = this.rightSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
+      group.rightToggleEl.setAttribute("aria-label", rightLabel);
+      group.rightToggleEl.title = rightLabel;
+    }
   }
 
   groupEmptied(group: TabGroup) {
