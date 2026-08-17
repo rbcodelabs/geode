@@ -298,6 +298,10 @@ button.mod-cta:hover {
   border-right: 1px solid var(--background-modifier-border);
 }
 
+body:not(.show-ribbon) .workspace-ribbon.mod-left {
+  display: none;
+}
+
 .workspace-ribbon-actions,
 .workspace-ribbon-bottom {
   display: flex;

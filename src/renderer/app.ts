@@ -55,6 +55,7 @@ const DEFAULT_WEB_VIEWER_SETTINGS: WebViewerSettings = {
 interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
+  showRibbon: boolean;
   /** Selected community theme name ("" = built-in default). */
   cssTheme: string;
   webViewer: WebViewerSettings;
@@ -285,6 +286,11 @@ class SettingsModal extends Modal {
     this.addToggle(container, "Readable line length", s.readableLineLength, (v) => {
       s.readableLineLength = v;
       this.geodeApp.applySettings();
+    });
+    this.addToggle(container, "Show ribbon", s.showRibbon, (v) => {
+      s.showRibbon = v;
+      this.geodeApp.applySettings();
+      this.geodeApp.saveSettings();
     });
     // Community theme picker: "Default" + any installed under .geode/themes/.
     this.addDropdown(
@@ -649,6 +655,7 @@ export class App {
   settings: AppSettings = {
     theme: "dark",
     readableLineLength: true,
+    showRibbon: true,
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
   };
@@ -1364,6 +1371,7 @@ export class App {
     document.body.classList.toggle("theme-dark", this.settings.theme === "dark");
     document.body.classList.toggle("theme-light", this.settings.theme === "light");
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
+    document.body.classList.toggle("show-ribbon", this.settings.showRibbon);
     // Real Obsidian hides .view-header entirely unless <body> has this class
     // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
     // Geode always shows it — there's no settings toggle for this yet.

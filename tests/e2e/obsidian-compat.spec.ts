@@ -180,3 +180,72 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("hides and restores the ribbon without unloading plugin actions, and persists the choice", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-ribbon-settings-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-ribbon-settings-ud-"));
+  const screenshotDir = process.env.GEODE_QA_SCREENSHOT_DIR;
+  if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true });
+  fs.writeFileSync(path.join(vaultDir, "Note.md"), "# Hello\n");
+  const pluginDir = path.join(vaultDir, ".geode", "plugins", "obsidian-compat-probe");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, "manifest.json"), JSON.stringify(MANIFEST));
+  fs.writeFileSync(path.join(pluginDir, "main.js"), MAIN_JS);
+  fs.writeFileSync(path.join(vaultDir, ".geode", "plugins.json"), JSON.stringify(["obsidian-compat-probe"]));
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const launch = () =>
+    electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  let app = await launch();
+  try {
+    let window = await app.firstWindow();
+    const ribbon = window.locator(".workspace-ribbon.mod-left");
+    const probeAction = ribbon.locator('button[aria-label="Open probe"]');
+    await expect(ribbon).toBeVisible();
+    await expect(probeAction).toBeVisible();
+
+    await ribbon.getByRole("button", { name: "Open settings" }).click();
+    const showRibbonRow = window.locator(".setting-item", { hasText: "Show ribbon" });
+    const showRibbonToggle = showRibbonRow.locator('input[type="checkbox"]');
+    await expect(showRibbonToggle).toBeChecked();
+    await showRibbonToggle.uncheck();
+
+    await expect(ribbon).toBeHidden();
+    await expect(probeAction).toHaveCount(1);
+    if (screenshotDir) {
+      await window.screenshot({ path: path.join(screenshotDir, "left-ribbon-hidden-setting.png") });
+    }
+    await expect
+      .poll(() =>
+        JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "app.json"), "utf8")).showRibbon
+      )
+      .toBe(false);
+
+    await app.close();
+    app = await launch();
+    window = await app.firstWindow();
+    const relaunchedRibbon = window.locator(".workspace-ribbon.mod-left");
+    await expect(relaunchedRibbon).toBeHidden();
+    const relaunchedProbeAction = relaunchedRibbon.locator('button[aria-label="Open probe"]');
+    await expect(relaunchedProbeAction).toHaveCount(1);
+
+    await window.evaluate(() => (window as any).app.setting.open());
+    const relaunchedToggle = window
+      .locator(".setting-item", { hasText: "Show ribbon" })
+      .locator('input[type="checkbox"]');
+    await expect(relaunchedToggle).not.toBeChecked();
+    await relaunchedToggle.check();
+    await expect(relaunchedRibbon).toBeVisible();
+    await expect(relaunchedProbeAction).toBeVisible();
+    if (screenshotDir) {
+      await window.screenshot({ path: path.join(screenshotDir, "left-ribbon-restored-setting.png") });
+    }
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
