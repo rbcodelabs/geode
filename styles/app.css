@@ -348,13 +348,9 @@ button.mod-cta:hover {
   cursor: default;
   white-space: nowrap;
   max-width: 220px;
-  min-width: 96px;
+  min-width: 0;
   flex: 1 1 140px;
   transition: color 0.1s ease;
-}
-
-.workspace-tab-header.is-tab-overflow-hidden {
-  display: none;
 }
 
 .workspace-tab-header:hover {
@@ -444,15 +440,6 @@ button.mod-cta:hover {
   flex: 0 0 auto;
   display: flex;
 }
-/* Hide the tab icon for a note/empty tab in the main pane, matching real
-   Obsidian — other view types (Kanban, Search, plugin views, …) keep their
-   icon. Scoped to the main pane so sidebar tabs (which are icon-only) always
-   render their icon even for a docked markdown pane. */
-.workspace-split.mod-root .workspace-tab-header[data-type="markdown"] .workspace-tab-header-inner-icon,
-.workspace-split.mod-root .workspace-tab-header[data-type="empty"] .workspace-tab-header-inner-icon {
-  display: none;
-}
-
 .workspace-tab-header-inner-title {
   flex: 1 1 auto;
   overflow: hidden;
@@ -670,12 +657,19 @@ button.mod-cta:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 28px;
+  margin-top: 6px;
+  padding: 5px 6px;
   border-radius: var(--radius-s);
   cursor: pointer;
   color: var(--text-muted);
   -webkit-app-region: no-drag;
+}
+.sidebar-toggle-button svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
 }
 .sidebar-toggle-button:hover {
   background: var(--background-modifier-hover);
@@ -710,6 +704,8 @@ button.mod-cta:hover {
   margin: 0;
   margin-top: 0;
   max-width: none;
+  min-width: 0;
+  flex: 0 0 auto;
   border-radius: var(--radius-s);
 }
 .mod-left-split .workspace-tab-header::before,
