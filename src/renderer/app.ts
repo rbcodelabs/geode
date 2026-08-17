@@ -348,7 +348,36 @@ class SettingsModal extends Modal {
   private async renderCommunityList(listEl: HTMLElement): Promise<void> {
     listEl.innerHTML = "";
     const cfg = await this.geodeApp.communityManager.load();
-    if (!cfg.items.length) {
+    const quarantined = this.geodeApp.pluginManager.listQuarantined();
+    for (const [pluginId, diagnostic] of Object.entries(quarantined)) {
+      const row = document.createElement("div");
+      row.className = "community-item plugin-quarantine-item";
+      row.dataset.pluginId = pluginId;
+      const info = document.createElement("div");
+      info.className = "community-item-info";
+      const title = document.createElement("div");
+      title.className = "community-item-title";
+      title.textContent = `${this.geodeApp.pluginManager.getManifest(pluginId)?.name ?? pluginId} — quarantined`;
+      const detail = document.createElement("div");
+      detail.className = "community-item-sub";
+      detail.textContent = `${diagnostic.boundary}: ${diagnostic.message}`;
+      info.append(title, detail);
+      const restore = document.createElement("button");
+      restore.textContent = "Restore plugin";
+      restore.addEventListener("click", async () => {
+        restore.disabled = true;
+        try {
+          await this.geodeApp.pluginManager.restoreQuarantined(pluginId);
+          this.geodeApp.notify(`Restored ${this.geodeApp.pluginManager.getManifest(pluginId)?.name ?? pluginId}`);
+        } catch (error) {
+          this.geodeApp.notify(`Could not restore ${pluginId}: ${(error as Error).message}`);
+        }
+        await this.renderCommunityList(listEl);
+      });
+      row.append(info, restore);
+      listEl.appendChild(row);
+    }
+    if (!cfg.items.length && !Object.keys(quarantined).length) {
       const empty = document.createElement("div");
       empty.className = "community-empty";
       empty.textContent = "No community plugins or themes installed yet.";
@@ -801,6 +830,7 @@ export class App {
 
     this.pluginManager = new PluginManager(this);
     await this.pluginManager.initialize();
+    if (this.pluginManager.isRecoveryMode()) this.showCrashRecoveryBanner(shell);
 
     // Restore the saved workspace layout (tabs + docked plugin panes) now
     // that plugin view factories are registered; fall back to an empty tab.
@@ -864,6 +894,22 @@ export class App {
         if (hasExternalChange(text, view.getLastKnownText())) await view.setFile(view.file);
       }
     });
+  }
+
+  private showCrashRecoveryBanner(shell: HTMLElement): void {
+    const banner = document.createElement("div");
+    banner.className = "crash-recovery-banner";
+    const message = document.createElement("span");
+    message.textContent = "Geode recovered from a renderer failure. Community plugins are temporarily suppressed; your vault data was not changed.";
+    const retry = document.createElement("button");
+    retry.textContent = "Restart with plugins";
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      await this.pluginManager.leaveRecoveryMode();
+      location.reload();
+    });
+    banner.append(message, retry);
+    shell.prepend(banner);
   }
 
   private registerCommands() {

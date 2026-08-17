@@ -4,6 +4,7 @@ import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 import type { ProcessMetric } from "./process-metrics";
 import type { MetadataIndexSnapshot } from "../indexer/metadata-indexer";
+import type { CrashDiagnostic } from "./crash-journal";
 
 export interface VaultFileEntry {
   path: string;
@@ -63,10 +64,23 @@ const api = {
   importChromeCookies: (profileDir: string): Promise<ChromeCookieImportResult> =>
     ipcRenderer.invoke("chrome-import-cookies", profileDir),
   getProcessMetrics: (): Promise<ProcessMetric[]> => ipcRenderer.invoke("get-process-metrics"),
+  getCrashRecoveryState: (): Promise<{ suppressPlugins: boolean; entries: CrashDiagnostic[] }> =>
+    ipcRenderer.invoke("crash-recovery-state"),
+  reportCrashDiagnostic: (entry: CrashDiagnostic): Promise<void> =>
+    ipcRenderer.invoke("crash-diagnostic", entry),
+  reportActivePlugins: (pluginIds: string[]): Promise<void> =>
+    ipcRenderer.invoke("crash-active-plugins", pluginIds),
+  leaveCrashRecovery: (): Promise<void> => ipcRenderer.invoke("crash-recovery-leave"),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },
 };
+
+// A main-process watchdog can distinguish a wedged renderer from a merely
+// crashed one. backgroundThrottling is disabled for this window in main.ts.
+const heartbeat = setInterval(() => ipcRenderer.send("renderer-heartbeat"), 5_000);
+heartbeat.unref?.();
+ipcRenderer.send("renderer-heartbeat");
 
 export type GeodeApi = typeof api;
 
