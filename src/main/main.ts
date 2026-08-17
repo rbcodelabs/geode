@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -13,6 +13,8 @@ import { getProcessMetricsSnapshot } from "./process-metrics";
 import { readMetadataCache, writeMetadataCache } from "./metadata-cache-store";
 import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
+import { MetadataIndexerHost } from "./metadata-indexer-host";
+import type { MetadataFileStat } from "../indexer/metadata-indexer";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -23,6 +25,8 @@ app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
 interface VaultSession {
   root: string;
   watcher: FSWatcher | null;
+  indexer: MetadataIndexerHost | null;
+  indexerReady: Promise<unknown | null>;
 }
 
 const sessions = new Map<number, VaultSession>();
@@ -162,7 +166,11 @@ function startWatcher(win: BrowserWindow, root: string): FSWatcher {
   });
   const send = (event: string, abs: string) => {
     if (win.isDestroyed()) return;
-    win.webContents.send("vault-event", { event, path: toRel(root, abs) });
+    const relative = toRel(root, abs);
+    win.webContents.send("vault-event", { event, path: relative });
+    if (event === "create" || event === "modify" || event === "delete") {
+      sessions.get(win.id)?.indexer?.postVaultEvent(event, relative);
+    }
   };
   watcher
     .on("add", (p) => send("create", p))
@@ -190,14 +198,30 @@ function registerIpc() {
     if (!st?.isDirectory()) throw new Error(`Not a folder: ${vaultPath}`);
     const prev = sessions.get(win.id);
     if (prev?.watcher) await prev.watcher.close();
+    if (prev?.indexer) await prev.indexer.shutdown();
     const root = path.resolve(vaultPath);
-    sessions.set(win.id, { root, watcher: startWatcher(win, root) });
+    const files = await listVaultFiles(root);
+    let indexer: MetadataIndexerHost | null = null;
+    let indexerReady: Promise<unknown | null> = Promise.resolve(null);
+    try {
+      const child = utilityProcess.fork(path.join(__dirname, "indexer-process.js"));
+      indexer = new MetadataIndexerHost(child, (message) => {
+        if (!win.isDestroyed()) win.webContents.send("metadata-indexer-message", message);
+      });
+      const markdownFiles: MetadataFileStat[] = files
+        .filter((file) => !file.isFolder && file.path.toLowerCase().endsWith(".md"))
+        .map((file) => ({ path: file.path, mtimeMs: file.mtime, size: file.size }));
+      indexerReady = indexer.initialize(root, markdownFiles);
+    } catch (error) {
+      console.error("Metadata utility process unavailable; using renderer fallback", error);
+    }
+    sessions.set(win.id, { root, watcher: startWatcher(win, root), indexer, indexerReady });
     const cfg = loadConfig();
     cfg.recentVaults = [root, ...cfg.recentVaults.filter((v) => v !== root)].slice(0, 10);
     cfg.lastVault = root;
     saveConfig(cfg);
     win.setTitle(`${path.basename(root)} — Geode`);
-    return { root, name: path.basename(root), files: await listVaultFiles(root) };
+    return { root, name: path.basename(root), files };
   });
 
   ipcMain.handle("get-recent-vaults", () => {
@@ -284,6 +308,11 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (session) await writeMetadataCache(session.root, data);
+  });
+
+  ipcMain.handle("metadata-indexer-start", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    return sessions.get(win.id)?.indexerReady ?? null;
   });
 
   // Per-vault config stored in <vault>/.geode/<name>.json
@@ -495,6 +524,7 @@ function createWindow() {
   win.on("closed", () => {
     const session = sessions.get(win.id);
     session?.watcher?.close();
+    if (session?.indexer) void session.indexer.shutdown();
     sessions.delete(win.id);
   });
   return win;

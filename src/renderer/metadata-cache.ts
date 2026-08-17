@@ -1,7 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import { Events } from "./events";
 import { Vault } from "./vault";
-import { withPerfMark } from "./perf-instrumentation";
+import { recordMeasure, withPerfMark } from "./perf-instrumentation";
 import {
   CachedMetadata,
   HeadingCache,
@@ -459,6 +459,9 @@ export class MetadataCache extends Events {
   /** Files to fire `changed` for after the flush, keyed by (current) path. */
   private pendingChanged = new Map<string, { file: TFile; oldPath?: string }>();
   private flushScheduled = false;
+  /** Parsed entries delivered by the utility process, keyed by dirty path. */
+  private workerMetadata = new Map<string, CachedMetadata>();
+  private backgroundIndexerActive = false;
 
   private async loadPersistedCache(): Promise<PersistedMetadataCache | null> {
     try {
@@ -491,19 +494,42 @@ export class MetadataCache extends Events {
 
   constructor(private vault: Vault) {
     super();
-    vault.on("create", (f: TFile) => this.enqueue(f, false, true));
+    vault.on("create", (f: TFile) => this.enqueue(f, false, true, !(this.backgroundIndexerActive && f?.extension === "md")));
     vault.on("modify", (f: TFile) => {
       // Non-md modifies are content-only with an unchanged name — they touch
       // neither the name index nor resolution, so they're ignored (matching
       // prior behaviour). Only markdown modifies re-parse + re-resolve.
-      if (f?.kind === "file" && f.extension === "md") this.enqueue(f, true, true);
+      if (f?.kind === "file" && f.extension === "md") this.enqueue(f, true, true, !this.backgroundIndexerActive);
     });
-    vault.on("delete", (f: TFile) => this.enqueue(f, true, false));
+    vault.on("delete", (f: TFile) => this.enqueue(f, true, false, !(this.backgroundIndexerActive && f?.extension === "md")));
     vault.on("rename", (f: TFile, oldPath: string) => this.enqueueRename(f, oldPath));
+    const api = typeof window === "undefined" ? undefined : window.geode;
+    api?.onMetadataIndexerMessage?.((message) => this.onIndexerMessage(message));
+  }
+
+  private onIndexerMessage(message: any): void {
+    if (message?.type === "performance") {
+      recordMeasure(message.operation, message.duration);
+      return;
+    }
+    if (message?.type === "unavailable") {
+      this.backgroundIndexerActive = false;
+      if (this.dirty.size) this.scheduleFlush();
+      return;
+    }
+    if (message?.type !== "delta") return;
+    if (message.entry) {
+      this.workerMetadata.set(message.path, message.entry.metadata);
+      this.vault.primeCachedContent(message.path, message.entry.content);
+    }
+    // The raw vault event normally arrives first and records the public
+    // changed-event payload. Be defensive if a platform delivers the worker
+    // message first: the next raw event will schedule the same path.
+    if (this.dirty.has(message.path)) this.scheduleFlush();
   }
 
   /** Record a single-path create/modify/delete event and schedule a flush. */
-  private enqueue(f: TFile, existedBefore: boolean, present: boolean): void {
+  private enqueue(f: TFile, existedBefore: boolean, present: boolean, schedule = true): void {
     // Folders carry no metadata and never appear in the name index; their
     // descendant files fire their own file events (see Vault.rename), so
     // folder events are index no-ops.
@@ -512,7 +538,7 @@ export class MetadataCache extends Events {
     if (cur) cur.present = present;
     else this.dirty.set(f.path, { existedBefore, present });
     this.pendingChanged.set(f.path, { file: f });
-    this.scheduleFlush();
+    if (schedule) this.scheduleFlush();
   }
 
   /** Record a rename as a delete of the old path + a create of the new path. */
@@ -555,7 +581,7 @@ export class MetadataCache extends Events {
     // the pre-incremental indexFile()'s early return on error).
     const failed = new Set<string>();
 
-    await withPerfMark("metadata-index-flush", async () => {
+    await withPerfMark("metadata-renderer-apply-resolve", async () => {
       // Phase 1 — read + parse new content for every present markdown path.
       const newMeta = new Map<string, CachedMetadata>();
       const toRead: string[] = [];
@@ -567,7 +593,13 @@ export class MetadataCache extends Events {
           return;
         }
         try {
-          newMeta.set(path, parseMetadata(await this.vault.cachedRead(file)));
+          const fromWorker = this.workerMetadata.get(path);
+          if (fromWorker) {
+            newMeta.set(path, fromWorker);
+            this.workerMetadata.delete(path);
+          } else {
+            newMeta.set(path, parseMetadata(await this.vault.cachedRead(file)));
+          }
         } catch (err) {
           failed.add(path);
           if (!isBenignEnoent(err)) console.error(`Failed to index ${path}`, err);
@@ -643,7 +675,6 @@ export class MetadataCache extends Events {
       }
       for (const src of affected) this.resolveFile(src);
 
-      await this.persistCache();
     });
 
     // Fire `changed` once per changed file (skipping reads that failed), so
@@ -658,12 +689,23 @@ export class MetadataCache extends Events {
   async initialize(): Promise<void> {
     await withPerfMark("metadata-initialize", async () => {
       const files = this.vault.getMarkdownFiles();
-      const persisted = await this.loadPersistedCache();
+      const api = typeof window === "undefined" ? undefined : window.geode;
+      let backgroundSnapshot: PersistedMetadataCache | null = null;
+      try {
+        const candidate = await api?.startMetadataIndexer?.();
+        if (isPersistedMetadataCache(candidate)) {
+          backgroundSnapshot = candidate;
+          this.backgroundIndexerActive = true;
+        }
+      } catch {
+        // Automatic fallback below retains the in-renderer indexing path.
+      }
+      const persisted = backgroundSnapshot ?? await this.loadPersistedCache();
       this.cache.clear();
       const toRead: TFile[] = [];
       for (const file of files) {
         const entry = persisted?.entries[file.path];
-        if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
+        if (entry && (this.backgroundIndexerActive || (entry.mtimeMs === file.mtime && entry.size === file.size))) {
           this.cache.set(file.path, entry.metadata);
           this.vault.primeCachedContent(file.path, entry.content);
         } else {
@@ -680,7 +722,7 @@ export class MetadataCache extends Events {
       });
       this.rebuildNameIndex();
       this.resolveAll();
-      await this.persistCache();
+      if (!this.backgroundIndexerActive) await this.persistCache();
     });
     this.initialized = true;
     this.trigger("resolved");

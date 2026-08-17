@@ -32,6 +32,11 @@ function pushMeasure(op: string, durationMs: number): void {
   while (ring.length > RING_CAPACITY) ring.shift();
 }
 
+/** Record a duration measured outside the renderer (for example by the metadata utility process). */
+export function recordMeasure(op: string, durationMs: number): void {
+  if (Number.isFinite(durationMs) && durationMs >= 0) pushMeasure(op, durationMs);
+}
+
 let observer: PerformanceObserver | null = null;
 
 /**
