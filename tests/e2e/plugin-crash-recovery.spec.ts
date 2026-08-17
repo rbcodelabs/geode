@@ -63,7 +63,10 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
     expect(await window.evaluate(() => (window as any).app.pluginManager.isEnabled("loaded-probe"))).toBe(true);
 
     const replacementPromise = app.waitForEvent("window");
-    await window.evaluate(() => process.crash()).catch(() => {});
+    await window.evaluate(() => {
+      console.error("geode-e2e-before-controlled-crash");
+      process.crash();
+    }).catch(() => {});
     const recoveredWindow = await replacementPromise;
     await expect(recoveredWindow.locator(".crash-recovery-banner")).toBeVisible({ timeout: 10_000 });
 
@@ -71,7 +74,20 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
     expect(await recoveredWindow.evaluate(() => (window as any).app.pluginManager.isEnabled("loaded-probe"))).toBe(false);
     expect(JSON.parse(fs.readFileSync(path.join(vaultPath, ".geode", "plugins.json"), "utf8"))).toEqual(["loaded-probe"]);
     const journal = JSON.parse(fs.readFileSync(path.join(userDataDir, "crash-journal.json"), "utf8"));
-    expect(journal.at(-1)).toMatchObject({ type: "renderer-gone", activePlugins: ["loaded-probe"] });
+    expect(journal.at(-1)).toMatchObject({
+      type: "renderer-gone",
+      activePlugins: ["loaded-probe"],
+      incidentId: expect.any(String),
+      appVersion: expect.any(String),
+      electronVersion: expect.any(String),
+      platform: process.platform,
+    });
+    expect(journal.at(-1).consoleEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: "geode-e2e-before-controlled-crash" }),
+    ]));
+    expect(journal.at(-1).dumpFiles ?? []).toEqual(expect.any(Array));
+    const diagnosticLog = fs.readFileSync(path.join(userDataDir, "diagnostic.log"), "utf8");
+    expect(diagnosticLog).toContain("geode-e2e-before-controlled-crash");
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
