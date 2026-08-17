@@ -196,6 +196,48 @@ test("clicking a plain external link (plugin-style <a href>) does not navigate t
   }
 });
 
+test("clicking a plugin-style absolute vault file link opens it without navigating the app window", async () => {
+  const { app, window, userDataDir, consoleErrors } = await launchAppAgainstTestVault();
+
+  try {
+    await expect(window.locator('.nav-file-title[data-path="Welcome.md"]')).toBeVisible();
+    const initialUrl = await window.evaluate(() => window.location.href);
+    const target = `${path.join(testVaultPath, "Projects", "Roadmap.md")}:3:3`;
+
+    await window.evaluate((href) => {
+      const host = document.createElement("div");
+      host.id = "e2e-plugin-shadow-host";
+      host.style.cssText = "position:fixed;top:0;left:0;z-index:99999;padding:8px;";
+      const root = host.attachShadow({ mode: "open" });
+      const a = document.createElement("a");
+      a.id = "e2e-local-file-link";
+      a.setAttribute("href", href);
+      a.textContent = "Vault run note";
+      root.appendChild(a);
+      document.body.appendChild(host);
+    }, target);
+
+    await window.locator("#e2e-local-file-link").click();
+    await expect(
+      window.locator(".workspace-split.mod-root .workspace-tab-header.is-active")
+    ).toHaveAttribute("aria-label", "Roadmap");
+    const cursor = await window.evaluate(() => {
+      const view = window.app.getActiveMarkdownView();
+      const editor = view?.editor;
+      if (!editor) return null;
+      const head = editor.state.selection.main.head;
+      const line = editor.state.doc.lineAt(head);
+      return { line: line.number, column: head - line.from + 1, text: line.text };
+    });
+    expect(cursor).toEqual({ line: 3, column: 3, text: "Linked from [[Welcome]]." });
+    expect(await window.evaluate(() => window.location.href)).toBe(initialUrl);
+    expect(consoleErrors, `Console errors during local-file test: ${consoleErrors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("reading-view external links honor the 'open links in app' setting (Web Viewer when ON, OS browser on Cmd/Ctrl-click)", async () => {
   const { app, window, userDataDir, consoleErrors } = await launchAppAgainstTestVault();
   const isMac = process.platform === "darwin";

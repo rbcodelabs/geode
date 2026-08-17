@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electro
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
+import { pathToFileURL } from "node:url";
 import chokidar, { FSWatcher } from "chokidar";
 import { installCommunity, resolveCommunity } from "./community";
 import type { ResolveOpts } from "./github-resolve";
@@ -10,6 +11,8 @@ import { withPathLock } from "./path-lock";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { getProcessMetricsSnapshot } from "./process-metrics";
 import { readMetadataCache, writeMetadataCache } from "./metadata-cache-store";
+import { parseLocalFileHref } from "../renderer/external-links";
+import { isAllowedAppNavigation } from "./navigation-policy";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -369,6 +372,36 @@ function registerIpc() {
     if (/^(https?:\/\/|mailto:)/i.test(url)) shell.openExternal(url);
   });
 
+  ipcMain.handle("open-local-file", async (e, href: string) => {
+    const target = parseLocalFileHref(href);
+    if (!target || !path.isAbsolute(target.path)) return { kind: "rejected" } as const;
+
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win ? sessions.get(win.id) : null;
+    if (!session) return { kind: "rejected" } as const;
+
+    const stat = await fsp.stat(target.path).catch(() => null);
+    if (!stat?.isFile()) return { kind: "rejected" } as const;
+
+    // Resolve symlinks before deciding whether a path is vault-contained.
+    // A symlink inside the vault that points outside must use the OS handler.
+    const [realRoot, realTarget] = await Promise.all([
+      fsp.realpath(session.root).catch(() => null),
+      fsp.realpath(target.path).catch(() => null),
+    ]);
+    if (!realRoot || !realTarget) return { kind: "rejected" } as const;
+    const realRel = path.relative(realRoot, realTarget);
+    if (realRel !== "" && !realRel.startsWith(`..${path.sep}`) && realRel !== ".." && !path.isAbsolute(realRel)) {
+      const rel = toRel(session.root, path.resolve(target.path));
+      if (!rel.startsWith("../") && rel !== "..") {
+        return { kind: "vault", path: rel, line: target.line, column: target.column } as const;
+      }
+    }
+
+    const error = await shell.openPath(realTarget);
+    return error ? ({ kind: "rejected" } as const) : ({ kind: "external" } as const);
+  });
+
   // Community install-from-GitHub (see src/main/community.ts). Resolve returns
   // install metadata for the modal preview; install downloads + writes files.
   // Both re-resolve from the caller's owner/repo spec — the renderer never
@@ -402,6 +435,8 @@ const isHeadless =
   process.argv.includes("--headless");
 
 function createWindow() {
+  const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
+  const indexUrl = pathToFileURL(indexPath).href;
   const win = new BrowserWindow({
     show: !isHeadless,
     width: 1280,
@@ -435,7 +470,7 @@ function createWindow() {
       webviewTag: true,
     },
   });
-  win.loadFile(path.join(__dirname, "..", "src", "renderer", "index.html"));
+  win.loadFile(indexPath);
 
   // External-link navigation hard guard (defense in depth behind the
   // renderer-side interceptor in src/renderer/app.ts). The main window must
@@ -448,7 +483,7 @@ function createWindow() {
   // src/renderer/views/web-view.ts), so in-app browsing follows links
   // normally and is unaffected by this guard.
   win.webContents.on("will-navigate", (e, url) => {
-    if (url.startsWith("file://")) return; // the app's own pages (index.html, reloads)
+    if (isAllowedAppNavigation(url, indexUrl)) return;
     e.preventDefault();
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });

@@ -29,6 +29,40 @@ export function isExternalHref(href: string | null | undefined): boolean {
   return /^(https?:|mailto:)/i.test(href.trim());
 }
 
+export interface LocalFileTarget {
+  path: string;
+  line?: number;
+  column?: number;
+}
+
+/** Parse a local absolute path or local file: URL, separating :line[:column]. */
+export function parseLocalFileHref(href: string | null | undefined): LocalFileTarget | null {
+  if (!href) return null;
+  let value = href.trim();
+  if (!value || value.includes("\0")) return null;
+
+  if (/^file:/i.test(value)) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "file:" || url.hostname || url.search || url.hash) return null;
+      value = decodeURIComponent(url.pathname);
+    } catch {
+      return null;
+    }
+  } else if (!value.startsWith("/")) {
+    return null;
+  }
+
+  const suffix = value.match(/:(\d+)(?::(\d+))?$/);
+  const line = suffix ? Number(suffix[1]) : undefined;
+  const column = suffix?.[2] ? Number(suffix[2]) : undefined;
+  if (line !== undefined && (!Number.isSafeInteger(line) || line < 1)) return null;
+  if (column !== undefined && (!Number.isSafeInteger(column) || column < 1)) return null;
+  const filePath = suffix ? value.slice(0, suffix.index) : value;
+  if (!filePath.startsWith("/") || filePath === "/") return null;
+  return { path: filePath, line, column };
+}
+
 /** Primitive view of a clicked anchor, extracted from the DOM by `anchorSnapshot`. */
 export interface AnchorSnapshot {
   /** The href attribute as authored (e.g. "https://x.com", "#top", "note.md"). */
@@ -58,7 +92,15 @@ export function shouldInterceptAnchor(a: AnchorSnapshot): boolean {
 
   // Prefer the resolved absolute href (marked emits absolute URLs), but fall
   // back to the raw value so an unresolved/edge anchor is still classified.
-  return isExternalHref(a.resolvedHref) || isExternalHref(raw);
+  return (
+    isExternalHref(a.resolvedHref) ||
+    isExternalHref(raw) ||
+    parseLocalFileHref(raw) !== null ||
+    parseLocalFileHref(a.resolvedHref) !== null ||
+    raw.startsWith("/") ||
+    /^file:/i.test(a.resolvedHref ?? "") ||
+    /^(?:javascript|data|vbscript):/i.test(raw)
+  );
 }
 
 /** Extract the primitives `shouldInterceptAnchor` needs from a live anchor element. */

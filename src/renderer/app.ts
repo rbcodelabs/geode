@@ -22,9 +22,9 @@ import { WebView } from "./views/web-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
-import { TFile, pathName } from "./types";
+import { TFile, isTFile, pathName } from "./types";
 import { rewriteWikilinksForRename } from "./rename";
-import { anchorSnapshot, shouldInterceptAnchor } from "./external-links";
+import { anchorSnapshot, parseLocalFileHref, shouldInterceptAnchor } from "./external-links";
 import {
   resolveDailyNoteSettings,
   matchDailyNoteFile,
@@ -1050,17 +1050,45 @@ export class App {
   private installExternalLinkInterceptor(): void {
     document.addEventListener("click", (e) => {
       if (e.defaultPrevented || e.button !== 0) return;
-      const target = e.target as HTMLElement | null;
-      const anchor = target?.closest?.("a[href]") as HTMLAnchorElement | null;
+      // Events crossing a plugin's shadow-root boundary are retargeted to the
+      // shadow host at `document`. Inspect the composed path first so anchors
+      // rendered inside an open shadow root receive the same handling as
+      // ordinary plugin DOM.
+      const anchor = e.composedPath().find(
+        (node): node is HTMLAnchorElement =>
+          node instanceof HTMLAnchorElement && node.matches("a[href]")
+      ) ?? null;
       if (!anchor || !shouldInterceptAnchor(anchorSnapshot(anchor))) return;
       e.preventDefault();
       e.stopPropagation();
-      const href = anchor.href || anchor.getAttribute("href")!;
+      const rawHref = anchor.getAttribute("href")!;
+      const localHref = parseLocalFileHref(rawHref) ? rawHref :
+        (parseLocalFileHref(anchor.href) ? anchor.href : null);
+      if (localHref) {
+        void this.openLocalFileLink(localHref);
+        return;
+      }
+      const href = anchor.href || rawHref;
       // Cmd/Ctrl-click forces the OS browser, matching the Live Preview
       // convention (markdown/live-preview.ts).
       if (e.metaKey || e.ctrlKey) window.geode.openExternal(href);
       else this.openExternalLink(href);
     });
+  }
+
+  private async openLocalFileLink(href: string): Promise<void> {
+    const result = await window.geode.openLocalFile(href);
+    if (result.kind !== "vault") return;
+    const file = this.vault.getAbstractFileByPath(result.path);
+    if (!isTFile(file)) return;
+    await this.openFile(file, false);
+    if (file.extension === "md" && result.line !== undefined) {
+      const view = this.getActiveMarkdownView();
+      if (!view?.editor) return;
+      const line = view.editor.state.doc.line(Math.min(result.line, view.editor.state.doc.lines));
+      const columnOffset = Math.min((result.column ?? 1) - 1, line.length);
+      view.scrollToOffset(line.from + columnOffset);
+    }
   }
 
   /** Route an external link click through the Web Viewer or the OS browser, per the "open links in app" setting. */
