@@ -100,6 +100,46 @@ function rejectingAsyncMainJsSource(): string {
   `;
 }
 
+function lateRejectingMainJsSource(): string {
+  return `
+    const { Plugin } = require('geode');
+    module.exports.default = class extends Plugin {
+      async onload() {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        throw new Error('late onload boom');
+      }
+    };
+  `;
+}
+
+function resilientPluginSource(id: string): string {
+  return `
+    const { Plugin } = require('geode');
+    class ResilientPlugin extends Plugin {
+      onload() {
+        this.addCommand({ id: 'explode', name: 'Explode', callback: () => { throw new Error('command boom'); } });
+        this.addCommand({ id: 'reject', name: 'Reject', callback: async () => { throw new Error('async boom'); } });
+      }
+    }
+    module.exports.default = ResilientPlugin;
+  `;
+}
+
+function boundaryPluginSource(): string {
+  return `
+    const { Plugin } = require('geode');
+    module.exports.default = class extends Plugin {
+      onload() {
+        this.registerDomEvent(globalThis.__pluginElement, 'click', () => { throw new Error('dom boom'); });
+        this.registerView('bad-view', () => ({
+          viewType: 'bad-view', containerEl: {}, getDisplayText(){ return 'Bad'; }, getIcon(){ return 'x'; },
+          onOpen(){ throw new Error('view boom'); }, onClose(){}
+        }));
+      }
+    };
+  `;
+}
+
 interface FakeFs {
   files: Map<string, string>;
   config: Map<string, unknown>;
@@ -126,6 +166,8 @@ function installFakeGeode(
       fs.config.set(name, data);
     }),
     getPluginPolicy: vi.fn(async () => opts.policy ?? null),
+    getCrashRecoveryState: vi.fn(async () => ({ suppressPlugins: false, entries: [] })),
+    reportCrashDiagnostic: vi.fn(async () => {}),
   };
   (globalThis as any).window = { geode };
   return fs;
@@ -205,6 +247,114 @@ describe("PluginManager", () => {
     // Re-enabling on startup shouldn't rewrite the config that was just read from.
     const geode = (globalThis as any).window.geode;
     expect(geode.writeConfig).not.toHaveBeenCalled();
+  });
+
+  it("suppresses all startup plugins while recovering from a renderer crash without mutating the enabled list", async () => {
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+    fs.config.set("plugins", ["foo"]);
+    const geode = (globalThis as any).window.geode;
+    geode.getCrashRecoveryState.mockResolvedValue({ suppressPlugins: true, entries: [{ type: "renderer-gone" }] });
+
+    const pm = new PluginManager(fakeApp);
+    await pm.initialize();
+
+    expect(pm.isEnabled("foo")).toBe(false);
+    expect(fs.config.get("plugins")).toEqual(["foo"]);
+    expect(pm.isRecoveryMode()).toBe(true);
+  });
+
+  it("attributes a throwing command to its plugin, journals it, and quarantines only that plugin", async () => {
+    const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn() } as any;
+    const fs = installFakeGeode(["foo", "bar"]);
+    for (const id of ["foo", "bar"]) {
+      fs.files.set(`.geode/plugins/${id}/manifest.json`, manifestJson(id));
+      fs.files.set(`.geode/plugins/${id}/main.js`, resilientPluginSource(id));
+    }
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+    await pm.enable("bar");
+    const fooCommand = app.commands.add.mock.calls.find(([cmd]: any[]) => cmd.id === "foo:explode")[0];
+
+    expect(() => fooCommand.callback()).not.toThrow();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+
+    expect(pm.isEnabled("bar")).toBe(true);
+    expect(fs.config.get("plugin-quarantine")).toMatchObject({ foo: { boundary: "command:explode", message: "command boom" } });
+    expect((globalThis as any).window.geode.reportCrashDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "plugin-error", pluginId: "foo", boundary: "command:explode", message: "command boom" })
+    );
+  });
+
+  it("contains rejected async command callbacks and lets the user reverse quarantine", async () => {
+    const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn() } as any;
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    fs.files.set(".geode/plugins/foo/main.js", resilientPluginSource("foo"));
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+    const command = app.commands.add.mock.calls.find(([cmd]: any[]) => cmd.id === "foo:reject")[0];
+
+    await expect(command.callback()).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+    await pm.restoreQuarantined("foo");
+
+    expect(pm.isEnabled("foo")).toBe(true);
+    expect(fs.config.get("plugin-quarantine")).toEqual({});
+  });
+
+  it("contains errors at registered DOM and plugin-view lifecycle boundaries", async () => {
+    let domCallback: (() => void) | undefined;
+    (globalThis as any).__pluginElement = {
+      addEventListener: vi.fn((_type: string, cb: () => void) => { domCallback = cb; }),
+      removeEventListener: vi.fn(),
+    };
+    let viewFactory: (() => any) | undefined;
+    const app = {
+      commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn(),
+      workspace: {
+        registerViewFactory: vi.fn((_type: string, factory: () => any) => { viewFactory = factory; }),
+        unregisterViewFactory: vi.fn(),
+      },
+    } as any;
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    fs.files.set(".geode/plugins/foo/main.js", boundaryPluginSource());
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+
+    expect(() => domCallback!()).not.toThrow();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+    await pm.restoreQuarantined("foo");
+    const view = viewFactory!();
+    expect(() => view.onOpen()).not.toThrow();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+
+    expect((globalThis as any).window.geode.reportCrashDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "foo", boundary: "view-onOpen:bad-view", message: "view boom" })
+    );
+    delete (globalThis as any).__pluginElement;
+  });
+
+  it("still disables the faulty plugin when durable diagnostic reporting fails", async () => {
+    const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn() } as any;
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    fs.files.set(".geode/plugins/foo/main.js", resilientPluginSource("foo"));
+    (globalThis as any).window.geode.reportCrashDiagnostic.mockRejectedValue(new Error("disk full"));
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+    const command = app.commands.add.mock.calls.find(([cmd]: any[]) => cmd.id === "foo:explode")[0];
+
+    command.callback();
+
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+    expect(fs.config.get("plugin-quarantine")).toMatchObject({ foo: { message: "command boom" } });
   });
 
   it("ignores config entries for plugins that are no longer installed", async () => {
@@ -382,6 +532,22 @@ describe("PluginManager", () => {
 
       expect(pm.isEnabled("foo")).toBe(true);
       expect(pm.getLoadError("foo")).toMatch(/did not finish|start/i);
+      warn.mockRestore();
+    });
+
+    it("quarantines a plugin whose onload rejects after the startup timeout", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fs = installFakeGeode(["foo"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", lateRejectingMainJsSource());
+      const pm = new PluginManager(fakeApp, 5);
+      await pm.initialize();
+      await pm.enable("foo");
+      expect(pm.isEnabled("foo")).toBe(true);
+
+      await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+
+      expect(fs.config.get("plugin-quarantine")).toMatchObject({ foo: { boundary: "onload", message: "late onload boom" } });
       warn.mockRestore();
     });
   });

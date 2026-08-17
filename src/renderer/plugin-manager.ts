@@ -12,6 +12,9 @@ import { isPluginBlocked, type ManagedPolicy } from "./policy";
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
 const CONFIG_KEY = "plugins"; // <vault>/.geode/plugins.json — array of enabled plugin ids
+const QUARANTINE_KEY = "plugin-quarantine";
+
+interface QuarantineEntry { at: number; boundary: string; message: string }
 
 /**
  * How long `enable()` waits for a plugin's async `onload()` to settle before it
@@ -103,6 +106,9 @@ export class PluginManager {
   private loadErrors = new Map<string, string>();
   private loaded = new Map<string, LoadedPlugin>();
   private policy: ManagedPolicy | null = null;
+  private quarantine: Record<string, QuarantineEntry> = {};
+  private recoveryMode = false;
+  private containing = new Set<string>();
 
   constructor(
     private app: App,
@@ -121,9 +127,16 @@ export class PluginManager {
     this.policy = (await window.geode.getPluginPolicy?.()) ?? null;
     await this.rescan();
 
+    this.quarantine =
+      ((await window.geode.readConfig(QUARANTINE_KEY)) as Record<string, QuarantineEntry> | null) ?? {};
+    const recovery = await window.geode.getCrashRecoveryState?.();
+    this.recoveryMode = recovery?.suppressPlugins === true;
+
     const enabledIds = ((await window.geode.readConfig(CONFIG_KEY)) as string[] | null) ?? [];
+    if (this.recoveryMode) return;
     for (const id of enabledIds) {
       if (!this.manifests.has(id)) continue;
+      if (this.quarantine[id]) continue;
       try {
         await this.enable(id, { persist: false });
       } catch (err) {
@@ -137,6 +150,22 @@ export class PluginManager {
         }
       }
     }
+  }
+
+  isRecoveryMode(): boolean { return this.recoveryMode; }
+
+  listQuarantined(): Record<string, QuarantineEntry> { return { ...this.quarantine }; }
+
+  async restoreQuarantined(id: string): Promise<void> {
+    if (!this.quarantine[id]) return;
+    delete this.quarantine[id];
+    await window.geode.writeConfig(QUARANTINE_KEY, this.quarantine);
+    await this.enable(id);
+  }
+
+  async leaveRecoveryMode(): Promise<void> {
+    await window.geode.leaveCrashRecovery?.();
+    this.recoveryMode = false;
   }
 
   /** Whether plugin `id` is currently blocked by the enterprise-managed policy. */
@@ -234,6 +263,7 @@ export class PluginManager {
     if (this.loaded.has(id)) return;
     const manifest = this.manifests.get(id);
     if (!manifest) throw new Error(`Unknown plugin: "${id}"`);
+    if (this.quarantine[id]) throw new Error(`Plugin "${id}" is quarantined after an error`);
     if (this.isBlocked(id)) {
       throw new Error(`Plugin "${id}" is blocked by administrator policy`);
     }
@@ -246,6 +276,7 @@ export class PluginManager {
     const code = await window.geode.read(`${pluginDir(id)}/main.js`);
     const PluginClass = instantiatePluginClass(code, id);
     const instance = new PluginClass(this.app, manifest);
+    instance.setErrorHandler((boundary, error) => this.containPluginError(id, boundary, error));
     this.loadErrors.delete(id);
     this.loaded.set(id, { manifest, instance });
     await this.injectStyles(id);
@@ -257,6 +288,7 @@ export class PluginManager {
     } catch (err) {
       this.removeStyles(id);
       this.loaded.delete(id);
+      await this.recordAndQuarantine(id, "onload", err);
       throw err;
     }
 
@@ -286,6 +318,7 @@ export class PluginManager {
         clearTimeout(timer);
         this.removeStyles(id);
         this.loaded.delete(id);
+        await this.recordAndQuarantine(id, "onload", err);
         throw err;
       }
       clearTimeout(timer);
@@ -305,12 +338,14 @@ export class PluginManager {
           },
           (err) => {
             console.error(`Plugin "${id}" onload() failed after enable() returned:`, err);
+            void this.containPluginError(id, "onload", err);
           }
         );
       }
     }
 
     if (persist) await this.persistEnabled();
+    await this.reportActivePlugins();
   }
 
   /**
@@ -343,13 +378,50 @@ export class PluginManager {
     const { persist = true } = opts;
     const entry = this.loaded.get(id);
     if (!entry) return;
-    entry.instance.unload();
+    try {
+      entry.instance.unload();
+    } catch (error) {
+      await this.recordAndQuarantine(id, "onunload", error);
+    }
     this.removeStyles(id);
     this.loaded.delete(id);
     if (persist) await this.persistEnabled();
+    await this.reportActivePlugins();
+  }
+
+  private async containPluginError(id: string, boundary: string, error: unknown): Promise<void> {
+    if (this.containing.has(id)) return;
+    this.containing.add(id);
+    try {
+      await this.recordAndQuarantine(id, boundary, error);
+      await this.disable(id, { persist: false });
+      this.app.notify(`Plugin "${this.manifests.get(id)?.name ?? id}" was disabled after an error.`, 6000);
+    } finally {
+      this.containing.delete(id);
+    }
+  }
+
+  private async recordAndQuarantine(id: string, boundary: string, error: unknown): Promise<void> {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    const entry = { at: Date.now(), boundary, message: normalized.message };
+    this.quarantine[id] = entry;
+    const results = await Promise.allSettled([
+      window.geode.writeConfig(QUARANTINE_KEY, this.quarantine),
+      window.geode.reportCrashDiagnostic?.({
+        type: "plugin-error", at: entry.at, pluginId: id, boundary,
+        message: normalized.message, stack: normalized.stack,
+      }),
+    ]);
+    for (const result of results) {
+      if (result.status === "rejected") console.error("Failed to persist plugin crash diagnostic", result.reason);
+    }
   }
 
   private async persistEnabled(): Promise<void> {
     await window.geode.writeConfig(CONFIG_KEY, [...this.loaded.keys()]);
+  }
+
+  private async reportActivePlugins(): Promise<void> {
+    await window.geode.reportActivePlugins?.([...this.loaded.keys()]);
   }
 }

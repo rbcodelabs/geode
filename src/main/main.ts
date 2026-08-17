@@ -15,6 +15,7 @@ import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
 import { MetadataIndexerHost } from "./metadata-indexer-host";
 import type { MetadataFileStat } from "../indexer/metadata-indexer";
+import { CrashJournal, type CrashDiagnostic } from "./crash-journal";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -30,6 +31,13 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
+interface CrashState { suppressPlugins: boolean; activePlugins: string[]; lastHeartbeat: number; recovering: boolean }
+const crashStates = new Map<number, CrashState>();
+let journal: CrashJournal | undefined;
+
+function crashJournal(): CrashJournal {
+  return (journal ??= new CrashJournal(path.join(app.getPath("userData"), "crash-journal.json")));
+}
 
 function appConfigPath(): string {
   return path.join(app.getPath("userData"), "geode.json");
@@ -457,13 +465,34 @@ function registerIpc() {
   // (src/renderer/settings/performance-tab.ts). Polled from the renderer on
   // a timer, so no caching here -- always return a fresh snapshot.
   ipcMain.handle("get-process-metrics", () => getProcessMetricsSnapshot());
+  ipcMain.handle("crash-recovery-state", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const state = win ? crashStates.get(win.id) : undefined;
+    return { suppressPlugins: state?.suppressPlugins ?? false, entries: crashJournal().read() };
+  });
+  ipcMain.handle("crash-diagnostic", async (_e, entry: CrashDiagnostic) => crashJournal().append(entry));
+  ipcMain.handle("crash-active-plugins", (e, pluginIds: string[]) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const state = win ? crashStates.get(win.id) : undefined;
+    if (state) state.activePlugins = [...pluginIds];
+  });
+  ipcMain.handle("crash-recovery-leave", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const state = win ? crashStates.get(win.id) : undefined;
+    if (state) state.suppressPlugins = false;
+  });
+  ipcMain.on("renderer-heartbeat", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const state = win ? crashStates.get(win.id) : undefined;
+    if (state) state.lastHeartbeat = Date.now();
+  });
 }
 
 const isHeadless =
   process.env.GEODE_HEADLESS === "1" ||
   process.argv.includes("--headless");
 
-function createWindow() {
+function createWindow(suppressPlugins = false) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
   const win = new BrowserWindow({
@@ -499,7 +528,41 @@ function createWindow() {
       webviewTag: true,
     },
   });
+  crashStates.set(win.id, { suppressPlugins, activePlugins: [], lastHeartbeat: Date.now(), recovering: suppressPlugins });
   win.loadFile(indexPath);
+
+  const recoverRenderer = async (diagnostic: CrashDiagnostic) => {
+    const state = crashStates.get(win.id);
+    if (!state) return;
+    await crashJournal().append(diagnostic);
+    state.suppressPlugins = true;
+    if (state.recovering || win.isDestroyed()) return;
+    state.recovering = true;
+    setTimeout(() => {
+      // A crashed WebContents is not reliably reusable on every Electron/macOS
+      // combination. Replace the window and carry recovery state forward.
+      // Creating first avoids window-all-closed quitting the app on Windows/Linux.
+      createWindow(true);
+      if (!win.isDestroyed()) win.destroy();
+    }, 250);
+  };
+
+  win.webContents.on("render-process-gone", (_event, details) => {
+    const state = crashStates.get(win.id);
+    if (!state || details.reason === "clean-exit") return;
+    void recoverRenderer({
+      type: "renderer-gone", at: Date.now(), reason: details.reason,
+      exitCode: details.exitCode, activePlugins: [...state.activePlugins],
+    });
+  });
+
+  // Do not arm until the renderer has loaded once; this avoids treating normal
+  // startup/build latency as a hang. One automatic recovery only prevents loops.
+  const watchdog = setInterval(() => {
+    const state = crashStates.get(win.id);
+    if (!state || state.recovering || Date.now() - state.lastHeartbeat < 20_000) return;
+    void recoverRenderer({ type: "renderer-hang", at: Date.now(), activePlugins: [...state.activePlugins] });
+  }, 5_000);
 
   // External-link navigation hard guard (defense in depth behind the
   // renderer-side interceptor in src/renderer/app.ts). The main window must
@@ -522,10 +585,12 @@ function createWindow() {
   });
 
   win.on("closed", () => {
+    clearInterval(watchdog);
     const session = sessions.get(win.id);
     session?.watcher?.close();
     if (session?.indexer) void session.indexer.shutdown();
     sessions.delete(win.id);
+    crashStates.delete(win.id);
   });
   return win;
 }

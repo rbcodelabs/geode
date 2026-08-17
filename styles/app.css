@@ -257,6 +257,27 @@ button.mod-cta:hover {
   height: 100%;
 }
 
+/* Infrastructure-only recovery chrome: covered by the Electron recovery E2E;
+   no pure logic is introduced by these presentation rules. */
+.crash-recovery-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  color: var(--text-normal);
+  background: var(--background-modifier-warning, #5c4515);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.crash-recovery-banner button {
+  flex: 0 0 auto;
+}
+
+.plugin-quarantine-item {
+  border-color: var(--text-warning, #e5b567);
+}
+
 .app-main {
   flex: 1;
   min-height: 0;

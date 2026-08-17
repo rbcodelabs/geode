@@ -15,6 +15,8 @@ export interface PluginCommand {
   checkCallback?: (checking: boolean) => boolean | void;
 }
 
+export type PluginErrorHandler = (boundary: string, error: unknown) => void | Promise<void>;
+
 /**
  * Base class for a Geode plugin, analogous to Obsidian's `Plugin`. Extends
  * `Component` so anything registered via `addCommand`/`registerView`/
@@ -25,6 +27,7 @@ export interface PluginCommand {
 export abstract class Plugin extends Component {
   app: App;
   manifest: PluginManifest;
+  private errorHandler?: PluginErrorHandler;
 
   constructor(app: App, manifest: PluginManifest) {
     super();
@@ -35,6 +38,30 @@ export abstract class Plugin extends Component {
   private prefixed(id: string): string {
     // Obsidian prefixes with "<plugin-id>:" unless the caller already did.
     return id.startsWith(`${this.manifest.id}:`) ? id : `${this.manifest.id}:${id}`;
+  }
+
+  /** @internal Installed by PluginManager before onload runs. */
+  setErrorHandler(handler: PluginErrorHandler): void {
+    this.errorHandler = handler;
+  }
+
+  private guard<T extends (...args: any[]) => any>(boundary: string, callback: T | undefined): T | undefined {
+    if (!callback) return undefined;
+    return ((...args: Parameters<T>) => {
+      try {
+        const result = callback(...args);
+        if (result && typeof result.then === "function") {
+          return Promise.resolve(result).catch((error) => {
+            void this.errorHandler?.(boundary, error);
+            return undefined;
+          });
+        }
+        return result;
+      } catch (error) {
+        void this.errorHandler?.(boundary, error);
+        return undefined;
+      }
+    }) as T;
   }
 
   /**
@@ -48,8 +75,8 @@ export abstract class Plugin extends Component {
       id: this.prefixed(command.id),
       name: `${this.manifest.name}: ${command.name}`,
       hotkey: command.hotkey,
-      callback: command.callback,
-      checkCallback: command.checkCallback,
+      callback: this.guard(`command:${command.id}`, command.callback),
+      checkCallback: this.guard(`command-check:${command.id}`, command.checkCallback),
     };
     this.app.commands.add(full);
     this.register(() => this.app.commands.remove(full.id));
@@ -68,8 +95,28 @@ export abstract class Plugin extends Component {
    * open leaves of this type detached) on `onunload()`.
    */
   registerView(viewType: string, factory: (leaf: WorkspaceLeaf) => View): void {
-    this.app.workspace.registerViewFactory(viewType, factory);
+    this.app.workspace.registerViewFactory(viewType, (leaf) => {
+      let view: View;
+      try {
+        view = factory(leaf);
+      } catch (error) {
+        void this.errorHandler?.(`view-factory:${viewType}`, error);
+        throw error;
+      }
+      view.onOpen = this.guard(`view-onOpen:${viewType}`, view.onOpen.bind(view))!;
+      view.onClose = this.guard(`view-onClose:${viewType}`, view.onClose.bind(view))!;
+      return view;
+    });
     this.register(() => this.app.workspace.unregisterViewFactory(viewType));
+  }
+
+  override registerDomEvent<K extends keyof HTMLElementEventMap>(
+    el: Window | Document | HTMLElement,
+    type: K,
+    callback: (ev: HTMLElementEventMap[K]) => any,
+    options?: boolean | AddEventListenerOptions
+  ): void {
+    super.registerDomEvent(el, type, this.guard(`dom-event:${String(type)}`, callback)!, options);
   }
 
   private dataPath(): string {
