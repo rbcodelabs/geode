@@ -62,9 +62,6 @@ the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
    Full Developer ID signing + notarization (no warning at all) is a
    follow-up that needs a paid Apple Developer account.
 
-> Note: this repo is currently **private**. You'll need collaborator access
-> to view the source or download release assets until it's made public.
-
 ## Develop
 
 ```bash
