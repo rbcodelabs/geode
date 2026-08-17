@@ -28,6 +28,14 @@ const builds = [
   },
   {
     ...common,
+    entryPoints: ["src/indexer/indexer-process.ts"],
+    outfile: "dist/indexer-process.js",
+    platform: "node",
+    format: "cjs",
+    external: ["electron"],
+  },
+  {
+    ...common,
     entryPoints: ["src/renderer/app.ts"],
     outfile: "dist/renderer.js",
     platform: "browser",

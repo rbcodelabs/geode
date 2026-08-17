@@ -21,14 +21,15 @@ type CacheFileOps = Pick<typeof fsp, "mkdir" | "writeFile" | "rename" | "rm">;
 export async function writeMetadataCache(
   root: string,
   data: unknown,
-  fileOps: CacheFileOps = fsp
+  fileOps: CacheFileOps = fsp,
+  alreadySerialized = false,
 ): Promise<void> {
   const target = path.join(root, METADATA_CACHE_RELATIVE_PATH);
   const dir = path.dirname(target);
   await fileOps.mkdir(dir, { recursive: true });
   const temporary = path.join(dir, `.cache.${process.pid}.${Date.now()}.tmp`);
   try {
-    await fileOps.writeFile(temporary, JSON.stringify(data), "utf8");
+    await fileOps.writeFile(temporary, alreadySerialized ? data as string : JSON.stringify(data), "utf8");
     await fileOps.rename(temporary, target);
   } catch (error) {
     await fileOps.rm(temporary, { force: true }).catch(() => {});

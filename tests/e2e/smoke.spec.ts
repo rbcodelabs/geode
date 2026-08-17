@@ -48,6 +48,14 @@ test("boots into test-vault, opens a note, and renders Live Preview with no cons
     const welcomeRow = window.locator('.nav-file-title[data-path="Welcome.md"]');
     await expect(welcomeRow).toBeVisible();
 
+    // Normal metadata indexing runs in an Electron utility process. This is
+    // the end-to-end guard that distinguishes the real background path from
+    // the renderer fallback exercised by unit tests.
+    const processTypes = await window.evaluate(async () =>
+      (await window.geode.getProcessMetrics()).map((metric) => metric.type)
+    );
+    expect(processTypes).toContain("Utility");
+
     // File explorer toolbar renders real Lucide SVG icons, not the old
     // emoji glyphs (📄+/📁+) or missing icons.
     const toolbarButtons = window.locator(".sidebar-view-actions .clickable-icon");

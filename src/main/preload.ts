@@ -3,6 +3,7 @@ import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-re
 import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 import type { ProcessMetric } from "./process-metrics";
+import type { MetadataIndexSnapshot } from "../indexer/metadata-indexer";
 
 export interface VaultFileEntry {
   path: string;
@@ -39,6 +40,10 @@ const api = {
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),
   readMetadataCache: (): Promise<unknown | null> => ipcRenderer.invoke("metadata-cache-read"),
   writeMetadataCache: (data: unknown): Promise<void> => ipcRenderer.invoke("metadata-cache-write", data),
+  startMetadataIndexer: (): Promise<MetadataIndexSnapshot | null> => ipcRenderer.invoke("metadata-indexer-start"),
+  onMetadataIndexerMessage: (cb: (message: any) => void) => {
+    ipcRenderer.on("metadata-indexer-message", (_e, message) => cb(message));
+  },
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),

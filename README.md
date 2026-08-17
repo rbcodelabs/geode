@@ -19,7 +19,9 @@ cloud, no lock-in.
   video), highlights, tags, tables, task lists, YAML properties
 - **Knowledge graph plumbing** — backlinks pane, outline, tag pane, unresolved
   link styling, link resolution by shortest path and alias, graph view;
-  metadata is cached across launches so unchanged notes do not need re-indexing
+  metadata is cached across launches so unchanged notes do not need re-indexing.
+  File reads, Markdown parsing, and debounced atomic cache writes run in a
+  background utility process, with automatic in-renderer fallback
 - **Search** — `tag:` `path:` `file:` operators, quoted phrases, negation, regex
 - **Workspace** — tabs, split panes, pinned tabs, collapsible sidebars,
   status-bar word count; tab bar and view header DOM/CSS match real Obsidian

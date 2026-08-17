@@ -3,6 +3,7 @@ import { FakeVault } from "../helpers/fake-vault";
 import {
   METADATA_CACHE_SCHEMA_VERSION,
   MetadataCache,
+  parseMetadata,
 } from "../../src/renderer/metadata-cache";
 
 type CacheApi = {
@@ -22,6 +23,56 @@ function installCacheApi(stored: unknown): CacheApi {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("MetadataCache persistence", () => {
+  it("hydrates from the utility-process snapshot and applies parsed deltas without renderer reads", async () => {
+    const fake = new FakeVault({ "A.md": "# Old" });
+    let deliver: (message: unknown) => void = () => {};
+    const api = {
+      readMetadataCache: vi.fn(async () => null),
+      writeMetadataCache: vi.fn(async () => {}),
+      startMetadataIndexer: vi.fn(async () => ({
+        schemaVersion: METADATA_CACHE_SCHEMA_VERSION,
+        entries: {
+          "A.md": { mtimeMs: 1, size: 5, content: "# Old", metadata: parseMetadata("# Old") },
+        },
+      })),
+      onMetadataIndexerMessage: vi.fn((cb: (message: unknown) => void) => { deliver = cb; }),
+    };
+    vi.stubGlobal("window", { geode: api });
+    const readSpy = vi.spyOn(fake, "cachedRead");
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(api.readMetadataCache).not.toHaveBeenCalled();
+    expect(api.writeMetadataCache).not.toHaveBeenCalled();
+
+    fake.setFile("A.md", "# New");
+    fake.trigger("modify", fake.getFileByPath("A.md"));
+    deliver({
+      type: "delta",
+      path: "A.md",
+      entry: { mtimeMs: 2, size: 5, content: "# New", metadata: parseMetadata("# New") },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(cache.getFileCache(fake.getFileByPath("A.md")!)?.headings[0].heading).toBe("New");
+  });
+
+  it("does not serialize or write the full cache from an incremental renderer flush", async () => {
+    const fake = new FakeVault({ "A.md": "old" });
+    const api = installCacheApi(null);
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    api.writeMetadataCache.mockClear();
+
+    fake.setFile("A.md", "new");
+    fake.trigger("modify", fake.getFileByPath("A.md"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(api.writeMetadataCache).not.toHaveBeenCalled();
+  });
+
   it("round-trips metadata and performs zero content reads on an unchanged warm start", async () => {
     const fake = new FakeVault({ "A.md": "# A\n[[B]]", "B.md": "# B" });
     const firstApi = installCacheApi(null);

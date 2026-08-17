@@ -4,6 +4,7 @@ import {
   getRecentMeasures,
   markEnd,
   markStart,
+  recordMeasure,
   withPerfMark,
 } from "../../src/renderer/perf-instrumentation";
 
@@ -61,6 +62,13 @@ describe("perf-instrumentation", () => {
 
     clearMeasures();
     expect(getRecentMeasures()).toEqual([]);
+  });
+
+  it("records a duration measured by the metadata utility process", () => {
+    recordMeasure("metadata-cache-disk-write", 12.5);
+    expect(getRecentMeasures()).toEqual([
+      expect.objectContaining({ op: "metadata-cache-disk-write", durationMs: 12.5 }),
+    ]);
   });
 
   it("withPerfMark records a measure for a sync happy path and returns the value unchanged", async () => {

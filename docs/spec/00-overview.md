@@ -58,6 +58,7 @@ branding were used. The name, icon, and styling are original.
 ```
 src/main/main.ts          Electron main: window, vault-scoped fs IPC, chokidar watcher
 src/main/preload.ts       contextBridge "geode" API (typed)
+src/indexer/              Background metadata reads/parsing/cache persistence
 src/renderer/app.ts       App: wiring, commands, modals, settings, notices, menus
 src/renderer/vault.ts     Vault: file tree model + CRUD + events
 src/renderer/metadata-cache.ts  Frontmatter/link/tag/heading parsing, backlinks
