@@ -34,6 +34,9 @@ cloud, no lock-in.
   auto-update; broad plugin-API compatibility (`EditorSuggest`, `Scope`,
   metadata cache with list items/sections + frontmatter tag helpers) so real
   plugins like **obsidian-tasks** load and render their query blocks
+- **Plugin crash recovery** — attributes and quarantines failures at plugin
+  boundaries, journals diagnostic context, and recovers a crashed renderer
+  once with community plugins suppressed and reversible restart controls
 - **Web Viewer** — open web pages in an in-app tab (`webview`-backed, its own
   session), plus a one-time "Import cookies from Chrome" option so viewer
   tabs open already logged in
