@@ -23,18 +23,20 @@ function installCacheApi(stored: unknown): CacheApi {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("MetadataCache persistence", () => {
-  it("hydrates from the utility-process snapshot and applies parsed deltas without renderer reads", async () => {
+  it("assembles ordered utility-process chunks and applies parsed deltas without renderer reads", async () => {
     const fake = new FakeVault({ "A.md": "# Old" });
     let deliver: (message: unknown) => void = () => {};
     const api = {
       readMetadataCache: vi.fn(async () => null),
       writeMetadataCache: vi.fn(async () => {}),
-      startMetadataIndexer: vi.fn(async () => ({
-        schemaVersion: METADATA_CACHE_SCHEMA_VERSION,
-        entries: {
+      startMetadataIndexer: vi.fn(async () => {
+        deliver({ type: "snapshot-start", schemaVersion: METADATA_CACHE_SCHEMA_VERSION, totalEntries: 1 });
+        deliver({ type: "snapshot-chunk", sequence: 0, entries: {
           "A.md": { mtimeMs: 1, size: 5, content: "# Old", metadata: parseMetadata("# Old") },
-        },
-      })),
+        } });
+        deliver({ type: "snapshot-complete", totalChunks: 1 });
+        return true;
+      }),
       onMetadataIndexerMessage: vi.fn((cb: (message: unknown) => void) => { deliver = cb; }),
     };
     vi.stubGlobal("window", { geode: api });
@@ -57,6 +59,54 @@ describe("MetadataCache persistence", () => {
 
     expect(readSpy).not.toHaveBeenCalled();
     expect(cache.getFileCache(fake.getFileByPath("A.md")!)?.headings[0].heading).toBe("New");
+  });
+
+  it("uses a safe cold fallback without transferring or rewriting a full cache", async () => {
+    const fake = new FakeVault({ "A.md": "# A" });
+    const api = {
+      readMetadataCache: vi.fn(async () => { throw new Error("must not read full cache"); }),
+      writeMetadataCache: vi.fn(async () => { throw new Error("must not write full cache"); }),
+      startMetadataIndexer: vi.fn(async () => null),
+      onMetadataIndexerMessage: vi.fn(),
+    };
+    vi.stubGlobal("window", { geode: api });
+    const readSpy = vi.spyOn(fake, "cachedRead");
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    expect(readSpy).toHaveBeenCalledOnce();
+    expect(api.readMetadataCache).not.toHaveBeenCalled();
+    expect(api.writeMetadataCache).not.toHaveBeenCalled();
+    expect(cache.getFileCache(fake.getFileByPath("A.md")!)).not.toBeNull();
+  });
+
+  it("does not lose a live delta delivered while snapshot chunks are arriving", async () => {
+    const fake = new FakeVault({ "A.md": "# Old" });
+    let deliver: (message: unknown) => void = () => {};
+    const api = {
+      readMetadataCache: vi.fn(),
+      writeMetadataCache: vi.fn(),
+      onMetadataIndexerMessage: vi.fn((cb: (message: unknown) => void) => { deliver = cb; }),
+      startMetadataIndexer: vi.fn(async () => {
+        deliver({ type: "snapshot-start", schemaVersion: 1, totalEntries: 1 });
+        deliver({ type: "snapshot-chunk", sequence: 0, entries: {
+          "A.md": { mtimeMs: 1, size: 5, content: "# Old", metadata: parseMetadata("# Old") },
+        } });
+        fake.setFile("A.md", "# New");
+        fake.trigger("modify", fake.getFileByPath("A.md"));
+        deliver({ type: "delta", path: "A.md", entry: {
+          mtimeMs: 2, size: 5, content: "# New", metadata: parseMetadata("# New"),
+        } });
+        deliver({ type: "snapshot-complete", totalChunks: 1 });
+        return true;
+      }),
+    };
+    vi.stubGlobal("window", { geode: api });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cache.getFileCache(fake.getFileByPath("A.md")!)?.headings[0].heading).toBe("New");
+    expect(api.readMetadataCache).not.toHaveBeenCalled();
+    expect(api.writeMetadataCache).not.toHaveBeenCalled();
   });
 
   it("does not serialize or write the full cache from an incremental renderer flush", async () => {

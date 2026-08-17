@@ -462,6 +462,10 @@ export class MetadataCache extends Events {
   /** Parsed entries delivered by the utility process, keyed by dirty path. */
   private workerMetadata = new Map<string, CachedMetadata>();
   private backgroundIndexerActive = false;
+  private backgroundSnapshot: PersistedMetadataCache | null = null;
+  private snapshotSequence = 0;
+  private snapshotReceiving = false;
+  private deferredIndexerMessages: any[] = [];
 
   private async loadPersistedCache(): Promise<PersistedMetadataCache | null> {
     try {
@@ -515,6 +519,33 @@ export class MetadataCache extends Events {
     if (message?.type === "unavailable") {
       this.backgroundIndexerActive = false;
       if (this.dirty.size) this.scheduleFlush();
+      return;
+    }
+    if (message?.type === "snapshot-start") {
+      this.backgroundSnapshot = { schemaVersion: message.schemaVersion, entries: {} };
+      this.snapshotSequence = 0;
+      this.snapshotReceiving = true;
+      return;
+    }
+    if (message?.type === "snapshot-chunk") {
+      if (!this.snapshotReceiving || message.sequence !== this.snapshotSequence || !message.entries) {
+        this.backgroundSnapshot = null;
+        this.snapshotReceiving = false;
+        return;
+      }
+      Object.assign(this.backgroundSnapshot!.entries, message.entries);
+      this.snapshotSequence += 1;
+      return;
+    }
+    if (message?.type === "snapshot-complete") {
+      if (message.totalChunks !== this.snapshotSequence) this.backgroundSnapshot = null;
+      this.snapshotReceiving = false;
+      const deferred = this.deferredIndexerMessages.splice(0);
+      for (const item of deferred) this.onIndexerMessage(item);
+      return;
+    }
+    if (this.snapshotReceiving && message?.type === "delta") {
+      this.deferredIndexerMessages.push(message);
       return;
     }
     if (message?.type !== "delta") return;
@@ -691,16 +722,17 @@ export class MetadataCache extends Events {
       const files = this.vault.getMarkdownFiles();
       const api = typeof window === "undefined" ? undefined : window.geode;
       let backgroundSnapshot: PersistedMetadataCache | null = null;
+      const attemptedBackground = !!api?.startMetadataIndexer;
       try {
         const candidate = await api?.startMetadataIndexer?.();
-        if (isPersistedMetadataCache(candidate)) {
-          backgroundSnapshot = candidate;
+        if (candidate === true && isPersistedMetadataCache(this.backgroundSnapshot)) {
+          backgroundSnapshot = this.backgroundSnapshot;
           this.backgroundIndexerActive = true;
         }
       } catch {
         // Automatic fallback below retains the in-renderer indexing path.
       }
-      const persisted = backgroundSnapshot ?? await this.loadPersistedCache();
+      const persisted = backgroundSnapshot ?? (attemptedBackground ? null : await this.loadPersistedCache());
       this.cache.clear();
       const toRead: TFile[] = [];
       for (const file of files) {
@@ -722,7 +754,7 @@ export class MetadataCache extends Events {
       });
       this.rebuildNameIndex();
       this.resolveAll();
-      if (!this.backgroundIndexerActive) await this.persistCache();
+      if (!this.backgroundIndexerActive && !attemptedBackground) await this.persistCache();
     });
     this.initialized = true;
     this.trigger("resolved");

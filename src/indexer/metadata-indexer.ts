@@ -20,6 +20,59 @@ export interface MetadataFileStat {
   size: number;
 }
 
+export const METADATA_SNAPSHOT_CHUNK_MAX_BYTES = 256 * 1024;
+export const METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES = 50;
+
+export type MetadataSnapshotMessage =
+  | { type: "snapshot-start"; schemaVersion: number; totalEntries: number }
+  | { type: "snapshot-chunk"; sequence: number; entries: Record<string, MetadataIndexEntry> }
+  | { type: "snapshot-complete"; totalChunks: number };
+
+/**
+ * Split the renderer compatibility snapshot into small structured-clone
+ * envelopes. An individual entry that cannot fit is intentionally omitted;
+ * the renderer detects the missing path and reads that file normally. The
+ * utility keeps the complete authoritative snapshot for disk persistence.
+ */
+export function chunkMetadataSnapshot(
+  snapshot: MetadataIndexSnapshot,
+  limits: { maxBytes?: number; maxEntries?: number } = {},
+): MetadataSnapshotMessage[] {
+  const maxBytes = limits.maxBytes ?? METADATA_SNAPSHOT_CHUNK_MAX_BYTES;
+  const maxEntries = limits.maxEntries ?? METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES;
+  const messages: MetadataSnapshotMessage[] = [{
+    type: "snapshot-start",
+    schemaVersion: snapshot.schemaVersion,
+    totalEntries: Object.keys(snapshot.entries).length,
+  }];
+  let entries: Record<string, MetadataIndexEntry> = {};
+  let entryCount = 0;
+  let conservativeBytes = 0;
+  let sequence = 0;
+  const flush = () => {
+    if (!entryCount) return;
+    messages.push({ type: "snapshot-chunk", sequence: sequence++, entries });
+    entries = {};
+    entryCount = 0;
+    conservativeBytes = 0;
+  };
+  for (const [path, entry] of Object.entries(snapshot.entries)) {
+    const singleMessage = { type: "snapshot-chunk", sequence, entries: { [path]: entry } };
+    const singleBytes = Buffer.byteLength(JSON.stringify(singleMessage));
+    // Summing individually enveloped sizes deliberately overestimates the
+    // combined message while avoiding repeated serialization of prior entries.
+    if (entryCount && (entryCount >= maxEntries || conservativeBytes + singleBytes > maxBytes)) flush();
+    if (singleBytes <= maxBytes) {
+      entries[path] = entry;
+      entryCount += 1;
+      conservativeBytes += singleBytes;
+    }
+  }
+  flush();
+  messages.push({ type: "snapshot-complete", totalChunks: sequence });
+  return messages;
+}
+
 export function isMetadataIndexSnapshot(value: unknown): value is MetadataIndexSnapshot {
   if (!value || typeof value !== "object") return false;
   const cache = value as Partial<MetadataIndexSnapshot>;
