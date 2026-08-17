@@ -683,7 +683,7 @@ Note: Obsidian 1.13 added a declarative settings system (`getSettingDefinitions(
 
 ```ts
 class Notice {
-  constructor(message: string | DocumentFragment, duration?: number); // ms; 0 = until clicked
+  constructor(message: string | DocumentFragment, duration?: number); // ms; 0 = persistent until dismissed
   noticeEl: HTMLElement;
   setMessage(message: string | DocumentFragment): this;
   hide(): void;
@@ -709,6 +709,8 @@ class MenuItem {
   onClick(callback: (evt: MouseEvent | KeyboardEvent) => any): this;
 }
 ```
+
+Notices auto-dismiss after their duration and can also be dismissed by clicking the notice or its accessible close button. Interactive descendants inside a `DocumentFragment` keep their normal click behavior.
 
 Icons: built-in set is Lucide; helpers `setIcon(el, iconId)`, `addIcon(iconId, svgContent)`, `getIconIds()`. Ribbon: `addRibbonIcon(icon, title, cb)` adds to left ribbon (user can remove/reorder; mobile exposes via menu). Status bar: `addStatusBarItem(): HTMLElement` (desktop only); returned element accepts children/classes (`setText` helper works on it).
 
