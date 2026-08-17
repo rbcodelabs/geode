@@ -23,7 +23,11 @@ abstract class SidebarView implements View {
     // file-open is a single discrete user action — render immediately.
     app.workspace.on("file-open", (file: TFile | null) => {
       this.file = file;
-      this.render();
+      // Inactive fixed sidebar views are detached from the sidebar content
+      // host. Keep their file state current, but defer potentially expensive
+      // rendering (notably Backlinks' vault-wide unlinked-mention scan) until
+      // Sidebar.show() calls onOpen() for the view again.
+      if (this.containerEl.isConnected) this.render();
     });
     // A metadata burst fires N synchronous `changed` events in one microtask;
     // coalesce them into a single re-render on the next microtask, mirroring
@@ -42,7 +46,9 @@ abstract class SidebarView implements View {
     this.renderScheduled = true;
     queueMicrotask(() => {
       this.renderScheduled = false;
-      this.render();
+      // The view can be hidden after this render was queued but before the
+      // microtask runs; avoid doing stale hidden-pane work in that race too.
+      if (this.containerEl.isConnected) this.render();
     });
   }
 
