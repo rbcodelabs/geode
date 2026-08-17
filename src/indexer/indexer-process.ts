@@ -1,4 +1,3 @@
-import { parentPort } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
@@ -16,6 +15,11 @@ import {
 type InitMessage = { type: "initialize"; root: string; files: MetadataFileStat[] };
 type VaultMessage = { type: "vault-event"; event: "create" | "modify" | "delete"; path: string };
 type ShutdownMessage = { type: "shutdown" };
+
+const parentPort = process.parentPort;
+if (!parentPort) {
+  throw new Error("Metadata indexer must run as an Electron utility process with a parent port");
+}
 
 let root = "";
 let snapshot: MetadataIndexSnapshot = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: {} };
