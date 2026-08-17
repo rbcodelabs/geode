@@ -1,9 +1,10 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import type { RendererIncident } from "./crash-diagnostics";
 
 export type CrashDiagnostic =
-  | { type: "renderer-gone"; at: number; reason: string; exitCode: number; activePlugins: string[] }
+  | RendererIncident
   | { type: "renderer-hang"; at: number; activePlugins: string[] }
   | { type: "plugin-error"; at: number; pluginId: string; boundary: string; message: string; stack?: string };
 
