@@ -1,9 +1,40 @@
 import { describe, expect, it } from "vitest";
 import {
   isExternalHref,
+  parseLocalFileHref,
   shouldInterceptAnchor,
   type AnchorSnapshot,
 } from "../../src/renderer/external-links";
+
+describe("parseLocalFileHref", () => {
+  it("parses a plugin-rendered absolute vault path with a line suffix", () => {
+    expect(
+      parseLocalFileHref(
+        "/Users/rickbowman/Documents/Personal/Products/Geode/Runs/geode-2026-08-16-dom-research-followup.md:382"
+      )
+    ).toEqual({
+      path: "/Users/rickbowman/Documents/Personal/Products/Geode/Runs/geode-2026-08-16-dom-research-followup.md",
+      line: 382,
+      column: undefined,
+    });
+  });
+
+  it("parses the browser-resolved file URL form and optional column", () => {
+    expect(parseLocalFileHref("file:///Users/rick/vault/Note%20One.md:12:4")).toEqual({
+      path: "/Users/rick/vault/Note One.md",
+      line: 12,
+      column: 4,
+    });
+  });
+
+  it("rejects malformed, non-local, and unsafe hrefs", () => {
+    expect(parseLocalFileHref("javascript:alert(1)")).toBeNull();
+    expect(parseLocalFileHref("https://example.com/file.md")).toBeNull();
+    expect(parseLocalFileHref("file://remote-host/share/file.md")).toBeNull();
+    expect(parseLocalFileHref("file:///Users/rick/vault/Note.md:0")).toBeNull();
+    expect(parseLocalFileHref("/Users/rick/vault/Note.md:12:0")).toBeNull();
+  });
+});
 
 /** Build an AnchorSnapshot with sane defaults; override per case. */
 function snap(partial: Partial<AnchorSnapshot>): AnchorSnapshot {
@@ -59,6 +90,30 @@ describe("shouldInterceptAnchor", () => {
         snap({ rawHref: "mailto:x@y.com", resolvedHref: "mailto:x@y.com" })
       )
     ).toBe(true);
+  });
+
+  it("intercepts plugin-rendered absolute and browser-resolved local file links", () => {
+    expect(
+      shouldInterceptAnchor(
+        snap({
+          rawHref: "/Users/rick/vault/Note.md:12",
+          resolvedHref: "file:///Users/rick/vault/Note.md:12",
+        })
+      )
+    ).toBe(true);
+    expect(
+      shouldInterceptAnchor(
+        snap({ rawHref: "file:///Users/rick/vault/Note.md", resolvedHref: "file:///Users/rick/vault/Note.md" })
+      )
+    ).toBe(true);
+  });
+
+  it("intercepts malformed local and active-content protocols so they cannot navigate", () => {
+    expect(
+      shouldInterceptAnchor(snap({ rawHref: "/Users/rick/vault/Note.md:0", resolvedHref: "file:///Users/rick/vault/Note.md:0" }))
+    ).toBe(true);
+    expect(shouldInterceptAnchor(snap({ rawHref: "javascript:alert(1)", resolvedHref: "javascript:alert(1)" }))).toBe(true);
+    expect(shouldInterceptAnchor(snap({ rawHref: "data:text/html,bad", resolvedHref: "data:text/html,bad" }))).toBe(true);
   });
 
   it("skips Live Preview external links (cm-live-extlink)", () => {

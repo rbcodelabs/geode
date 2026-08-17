@@ -43,6 +43,11 @@ const api = {
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
+  openLocalFile: (href: string): Promise<
+    | { kind: "vault"; path: string; line?: number; column?: number }
+    | { kind: "external" }
+    | { kind: "rejected" }
+  > => ipcRenderer.invoke("open-local-file", href),
   listPluginIds: (): Promise<string[]> => ipcRenderer.invoke("plugins-list-ids"),
   listThemes: (): Promise<string[]> => ipcRenderer.invoke("themes-list"),
   resolveCommunity: (spec: string, opts?: ResolveOpts): Promise<CommunityPreview> =>
