@@ -226,6 +226,7 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
   close.className = "workspace-tab-header-inner-close-button";
   close.setAttribute("aria-label", "Close");
   setIcon(close, "x");
+  close.addEventListener("mousedown", (e) => e.stopPropagation());
   close.addEventListener("click", (e) => {
     e.stopPropagation();
     leaf.detach();
@@ -261,9 +262,6 @@ export class TabGroup implements LeafContainer {
   leftToggleEl: HTMLElement;
   /** Right-sidebar toggle button, last child of `tabBarEl` (only meaningful/visible on the rightmost group). */
   rightToggleEl: HTMLElement;
-  private tabListIconEl: HTMLElement;
-  private overflowLeaves: WorkspaceLeaf[] = [];
-  private readonly tabResizeObserver: ResizeObserver;
 
   constructor(
     public workspace: Workspace,
@@ -290,13 +288,11 @@ export class TabGroup implements LeafContainer {
 
     const tabList = document.createElement("div");
     tabList.className = "workspace-tab-header-tab-list";
-    this.tabListIconEl = document.createElement("div");
-    this.tabListIconEl.className = "clickable-icon";
-    this.tabListIconEl.title = "Hidden tabs";
-    this.tabListIconEl.setAttribute("aria-label", "Hidden tabs");
-    setIcon(this.tabListIconEl, "chevron-down");
-    this.tabListIconEl.addEventListener("click", (event) => this.showOverflowMenu(event));
-    tabList.appendChild(this.tabListIconEl);
+    const tabListIcon = document.createElement("div");
+    tabListIcon.className = "clickable-icon";
+    tabListIcon.title = "All tabs";
+    setIcon(tabListIcon, "chevron-down");
+    tabList.appendChild(tabListIcon);
     this.tabBarEl.appendChild(tabList);
 
     const newTab = document.createElement("div");
@@ -323,43 +319,7 @@ export class TabGroup implements LeafContainer {
     this.containerEl.addEventListener("mousedown", () => {
       this.workspace.setActiveGroup(this);
     });
-    this.tabResizeObserver = new ResizeObserver(() => this.updateTabOverflow());
-    this.tabResizeObserver.observe(this.tabHeaderInnerEl);
     this.installDropTarget();
-  }
-
-  private showOverflowMenu(event: MouseEvent) {
-    if (this.overflowLeaves.length === 0) return;
-    const rect = this.tabListIconEl.getBoundingClientRect();
-    this.app.showMenu(
-      { clientX: rect.left, clientY: rect.bottom } as MouseEvent,
-      this.overflowLeaves.map((leaf) => ({
-        title: leaf.getDisplayText(),
-        action: () => this.setActiveLeaf(leaf),
-      }))
-    );
-    event.stopPropagation();
-  }
-
-  /** Keep a usable tab width and move the remainder into the tab-list menu. */
-  private updateTabOverflow() {
-    const minimumTabWidth = 96;
-    const availableWidth = this.tabHeaderInnerEl.clientWidth;
-    if (availableWidth <= 0 || this.leaves.length === 0) return;
-
-    const visibleCapacity = Math.max(1, Math.floor(availableWidth / minimumTabWidth));
-    const visible = new Set(this.leaves.slice(0, visibleCapacity));
-    if (this.active && !visible.has(this.active)) {
-      const lastVisible = [...visible].at(-1);
-      if (lastVisible) visible.delete(lastVisible);
-      visible.add(this.active);
-    }
-
-    this.overflowLeaves = this.leaves.filter((leaf) => !visible.has(leaf));
-    for (const leaf of this.leaves) {
-      leaf.tabEl.classList.toggle("is-tab-overflow-hidden", !visible.has(leaf));
-    }
-    this.tabListIconEl.parentElement?.classList.toggle("has-hidden-tabs", this.overflowLeaves.length > 0);
   }
 
   /** Accept a dragged leaf: dropping over the tab bar inserts at a position; over the body appends. */
@@ -493,8 +453,6 @@ export class TabGroup implements LeafContainer {
     const spacer = document.createElement("div");
     spacer.className = "workspace-tab-header-spacer";
     this.tabHeaderInnerEl.appendChild(spacer);
-    this.updateTabOverflow();
-    requestAnimationFrame(() => this.updateTabOverflow());
   }
 }
 
