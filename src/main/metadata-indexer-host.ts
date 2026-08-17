@@ -1,4 +1,4 @@
-import type { MetadataFileStat, MetadataIndexSnapshot } from "../indexer/metadata-indexer";
+import type { MetadataFileStat } from "../indexer/metadata-indexer";
 
 interface UtilityChild {
   postMessage(message: unknown): void;
@@ -8,8 +8,8 @@ interface UtilityChild {
 }
 
 export class MetadataIndexerHost {
-  private ready: Promise<MetadataIndexSnapshot | null> | null = null;
-  private resolveReady: ((snapshot: MetadataIndexSnapshot | null) => void) | null = null;
+  private ready: Promise<true | null> | null = null;
+  private resolveReady: ((available: true | null) => void) | null = null;
   private exited = false;
   private resolveShutdown: ((graceful: boolean) => void) | null = null;
 
@@ -18,8 +18,9 @@ export class MetadataIndexerHost {
     private readonly forward: (message: unknown) => void,
   ) {
     child.on("message", (message) => {
-      if (message?.type === "snapshot" && this.resolveReady) {
-        this.resolveReady(message.snapshot);
+      if (message?.type === "snapshot-complete" && this.resolveReady) {
+        this.forward(message);
+        this.resolveReady(true);
         this.resolveReady = null;
       } else if (message?.type === "error" && message.fatal && this.resolveReady) {
         this.resolveReady(null);
@@ -42,7 +43,7 @@ export class MetadataIndexerHost {
     });
   }
 
-  initialize(root: string, files: MetadataFileStat[]): Promise<MetadataIndexSnapshot | null> {
+  initialize(root: string, files: MetadataFileStat[]): Promise<true | null> {
     if (!this.ready) {
       this.ready = new Promise((resolve) => { this.resolveReady = resolve; });
       this.child.postMessage({ type: "initialize", root, files });
