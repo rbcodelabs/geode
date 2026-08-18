@@ -57,6 +57,11 @@ abstract class SidebarView implements View {
     this.render();
   }
 
+  onReveal(): void {
+    this.file = this.app.workspace.getActiveFile();
+    this.render();
+  }
+
   onClose(): void {}
 
   protected empty(message: string) {

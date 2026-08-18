@@ -93,8 +93,12 @@ test("pins a hosted plugin tab from its context menu, protects navigation, and r
     await expect.poll(() => {
       const file = path.join(vaultDir, ".geode", "workspace.json");
       if (!fs.existsSync(file)) return false;
-      return JSON.parse(fs.readFileSync(file, "utf8")).groups
-        .flatMap((group: any) => group.leaves)
+      const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+      const groups = saved.version === 2
+        ? (saved.center.root.type === "split" ? saved.center.root.children : [saved.center.root])
+        : saved.groups;
+      return groups
+        .flatMap((group: any) => group.leaves ?? [])
         .some((leaf: any) => leaf.type === "pinned-probe" && leaf.pinned === true);
     }, { timeout: 4000 }).toBe(true);
     await app.close();

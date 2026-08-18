@@ -11,6 +11,8 @@ export interface View {
   getIcon(): string;
   onOpen(): void | Promise<void>;
   onClose(): void | Promise<void>;
+  /** Optional visibility callback; unlike onOpen, may run whenever a tab is revealed. */
+  onReveal?(): void;
   /** Views showing a file implement this. */
   getFile?(): TFile | null;
 }
@@ -55,6 +57,7 @@ export class WorkspaceLeaf {
   leafEl: HTMLElement;
   contentEl: HTMLElement;
   pinned = false;
+  private opened = false;
 
   constructor(
     public group: LeafContainer,
@@ -72,12 +75,14 @@ export class WorkspaceLeaf {
   async setView(view: View): Promise<void> {
     markStart("view-mount");
     try {
-      if (this.view) await this.view.onClose();
+      if (this.view && this.opened) await this.view.onClose();
       this.view = view;
+      this.opened = false;
       this.contentEl.innerHTML = "";
       this.contentEl.dataset.type = view.viewType;
       this.contentEl.appendChild(view.containerEl);
       await view.onOpen();
+      this.opened = true;
       this.group.renderTabs();
       if (view.getFile?.()) {
         this.app.workspace.trigger("file-open", view.getFile!());
@@ -90,6 +95,13 @@ export class WorkspaceLeaf {
 
   getDisplayText(): string {
     return this.view?.getDisplayText() ?? "New tab";
+  }
+
+  /** Lazily open built-in leaves the first time they become visible. */
+  async ensureOpen(): Promise<void> {
+    if (!this.view || this.opened) return;
+    await this.view.onOpen();
+    this.opened = true;
   }
 
   private viewState: { type: string; state?: unknown } = { type: "empty" };
@@ -173,7 +185,8 @@ export class WorkspaceLeaf {
     // the full user-facing cost of closing a tab, including view teardown.
     markStart("leaf-detach");
     try {
-      await this.view?.onClose();
+      if (this.opened) await this.view?.onClose();
+      this.opened = false;
       this.group.removeLeaf(this);
     } finally {
       markEnd("leaf-detach");
@@ -262,7 +275,7 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
 
 /** A group of tabs sharing one content area. */
 export class TabGroup implements LeafContainer {
-  readonly isSidebar = false;
+  readonly isSidebar: boolean;
   leaves: WorkspaceLeaf[] = [];
   active: WorkspaceLeaf | null = null;
   containerEl: HTMLElement;
@@ -275,13 +288,17 @@ export class TabGroup implements LeafContainer {
   leftToggleEl: HTMLElement;
   /** Right-sidebar toggle button, last child of `tabBarEl` (only meaningful/visible on the rightmost group). */
   rightToggleEl: HTMLElement;
+  private bodyDropEdge: "left" | "right" | "top" | "bottom" | null = null;
 
   constructor(
     public workspace: Workspace,
-    public app: App
+    public app: App,
+    public sidebar?: Sidebar
   ) {
+    this.isSidebar = !!sidebar;
     this.containerEl = document.createElement("div");
     this.containerEl.className = "workspace-tabs mod-top";
+    if (sidebar) this.containerEl.classList.add("sidebar-tab-group");
     this.tabBarEl = document.createElement("div");
     this.tabBarEl.className = "workspace-tab-header-container";
     this.tabHeaderInnerEl = document.createElement("div");
@@ -329,6 +346,12 @@ export class TabGroup implements LeafContainer {
     this.contentHostEl.className = "workspace-tab-container";
     this.containerEl.appendChild(this.tabBarEl);
     this.containerEl.appendChild(this.contentHostEl);
+    if (sidebar) {
+      this.leftToggleEl.hidden = true;
+      this.rightToggleEl.hidden = true;
+      tabList.hidden = true;
+      newTab.hidden = true;
+    }
     this.containerEl.addEventListener("mousedown", () => {
       this.workspace.setActiveGroup(this);
     });
@@ -351,13 +374,37 @@ export class TabGroup implements LeafContainer {
       e.preventDefault();
       this.workspace.moveLeaf(draggingLeaf, this, this.dropIndex(e.clientX));
     });
-    this.contentHostEl.addEventListener("dragover", (e) => over(e, this.containerEl));
-    this.contentHostEl.addEventListener("dragleave", () => leave(this.containerEl));
+    this.contentHostEl.addEventListener("dragover", (e) => {
+      over(e, this.containerEl);
+      const rect = this.contentHostEl.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / Math.max(1, rect.width);
+      const y = (e.clientY - rect.top) / Math.max(1, rect.height);
+      this.bodyDropEdge = x < 0.2 ? "left" : x > 0.8 ? "right" : y < 0.2 ? "top" : y > 0.8 ? "bottom" : null;
+      this.containerEl.dataset.dropTarget = this.bodyDropEdge ?? "tabs";
+    });
+    this.contentHostEl.addEventListener("dragleave", () => {
+      leave(this.containerEl);
+      delete this.containerEl.dataset.dropTarget;
+    });
     this.contentHostEl.addEventListener("drop", (e) => {
       leave(this.containerEl);
       if (!draggingLeaf) return;
       e.preventDefault();
-      this.workspace.moveLeaf(draggingLeaf, this);
+      if (this.bodyDropEdge) {
+        if (this.sidebar) {
+          const placeholder = this.sidebar.addSplitGroup(this.bodyDropEdge === "top" ? "top" : "bottom");
+          const target = placeholder.group;
+          target.extractLeaf(placeholder);
+          this.workspace.moveLeaf(draggingLeaf, target);
+        } else {
+          const target = this.workspace.addGroup(this.bodyDropEdge === "left" || this.bodyDropEdge === "top" ? undefined : this);
+          this.workspace.moveLeaf(draggingLeaf, target);
+        }
+      } else {
+        this.workspace.moveLeaf(draggingLeaf, this);
+      }
+      this.bodyDropEdge = null;
+      delete this.containerEl.dataset.dropTarget;
     });
   }
 
@@ -416,8 +463,9 @@ export class TabGroup implements LeafContainer {
       this.active = leaf;
       this.contentHostEl.innerHTML = "";
       this.contentHostEl.appendChild(leaf.leafEl);
+      void leaf.ensureOpen();
       this.renderTabs();
-      this.workspace.activeGroup = this;
+      if (!this.sidebar) this.workspace.activeGroup = this;
       this.workspace.trigger("active-leaf-change", leaf);
       const file = leaf.view?.getFile?.();
       if (file) this.workspace.trigger("file-open", file);
@@ -495,10 +543,15 @@ export class Sidebar implements LeafContainer {
   resizeHandleEl: HTMLElement;
   views: View[] = [];
   leaves: WorkspaceLeaf[] = [];
+  /** Vertically stacked leaf containers; the legacy sidebar itself is the first group. */
+  groups: LeafContainer[] = [this];
+  groupSizes: number[] = [1];
+  private groupDividers: HTMLElement[] = [];
   active: SidebarItem | null = null;
   collapsed = false;
   width: number = SIDEBAR_DEFAULT_WIDTH;
   private dragging = false;
+  private splitDrop: "top" | "bottom" | null = null;
   private dragStartX = 0;
   private dragStartWidth = 0;
 
@@ -520,6 +573,7 @@ export class Sidebar implements LeafContainer {
     this.tabHeaderContainerEl.appendChild(this.tabHeaderInnerEl);
     this.contentEl = document.createElement("div");
     this.contentEl.className = "sidebar-content";
+    this.tabHeaderContainerEl.parentElement?.classList.add("sidebar-tab-group");
     this.containerEl.appendChild(this.tabHeaderContainerEl);
     this.containerEl.appendChild(this.contentEl);
     // Accept leaves dragged in from tab groups or the other sidebar.
@@ -527,22 +581,37 @@ export class Sidebar implements LeafContainer {
       if (!draggingLeaf) return;
       e.preventDefault();
       this.containerEl.classList.add("drag-over");
+      const rect = this.containerEl.getBoundingClientRect();
+      const relative = (e.clientY - rect.top) / Math.max(1, rect.height);
+      this.splitDrop = relative < 0.25 ? "top" : relative > 0.75 ? "bottom" : null;
+      this.containerEl.dataset.dropTarget = this.splitDrop ?? "tabs";
     });
     this.containerEl.addEventListener("dragleave", (e) => {
       if (!this.containerEl.contains(e.relatedTarget as Node)) {
         this.containerEl.classList.remove("drag-over");
+        delete this.containerEl.dataset.dropTarget;
       }
     });
     this.containerEl.addEventListener("drop", (e) => {
       this.containerEl.classList.remove("drag-over");
       if (!draggingLeaf) return;
       e.preventDefault();
-      this.app.workspace.moveLeaf(draggingLeaf, this);
+      if (this.splitDrop) {
+        const placeholder = this.addSplitGroup(this.splitDrop);
+        const target = placeholder.group;
+        target.extractLeaf(placeholder);
+        this.app.workspace.moveLeaf(draggingLeaf, target);
+      } else {
+        this.app.workspace.moveLeaf(draggingLeaf, this);
+      }
+      this.splitDrop = null;
+      delete this.containerEl.dataset.dropTarget;
     });
     this.resizeHandleEl = document.createElement("div");
     this.resizeHandleEl.className = "sidebar-resize-handle";
     this.containerEl.appendChild(this.resizeHandleEl);
     this.attachResizeHandle();
+    this.containerEl.classList.add("sidebar-tab-group");
   }
 
   private endDrag(): void {
@@ -606,10 +675,91 @@ export class Sidebar implements LeafContainer {
     return { icon: item.getIcon(), title: item.getDisplayText(), el: item.containerEl };
   }
 
+  get defaultGroup(): LeafContainer {
+    return this.groups[0];
+  }
+
   addView(view: View) {
     this.views.push(view);
+    const leaf = new WorkspaceLeaf(this, this.app);
+    leaf.view = view;
+    leaf.contentEl.dataset.type = view.viewType;
+    leaf.contentEl.appendChild(view.containerEl);
+    this.leaves.push(leaf);
     this.renderIcons();
-    if (!this.active) this.show(view);
+    if (!this.active) this.setActiveLeaf(leaf);
+  }
+
+  /** Create a vertically stacked tab group and its first reusable empty leaf. */
+  addSplitGroup(position: "top" | "bottom" = "bottom"): WorkspaceLeaf {
+    const group = new TabGroup(this.app.workspace, this.app, this);
+    const divider = document.createElement("div");
+    divider.className = "workspace-split-resize-handle";
+    this.containerEl.insertBefore(divider, this.resizeHandleEl);
+    this.containerEl.insertBefore(group.containerEl, this.resizeHandleEl);
+    const index = position === "top" ? 0 : this.groups.length;
+    this.groups.splice(index, 0, group);
+    this.groupDividers.push(divider);
+    this.groupSizes = this.groups.map(() => 1 / this.groups.length);
+    this.layoutGroups();
+    this.attachGroupResize(divider);
+    return group.createLeaf();
+  }
+
+  private groupContentElement(group: LeafContainer): HTMLElement {
+    return group === this ? this.contentEl : (group as TabGroup).containerEl;
+  }
+
+  private layoutGroups(): void {
+    this.groups.forEach((group, index) => {
+      if (group === this) {
+        this.tabHeaderContainerEl.style.order = `${index * 2}`;
+        this.contentEl.style.order = `${index * 2}`;
+      } else {
+        (group as TabGroup).containerEl.style.order = `${index * 2}`;
+      }
+    });
+    this.groupDividers.forEach((divider, index) => { divider.style.order = `${index * 2 + 1}`; });
+  }
+
+  private attachGroupResize(handle: HTMLElement): void {
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const dividerIndex = this.groupDividers.indexOf(handle);
+      const upper = this.groupContentElement(this.groups[dividerIndex]);
+      const lower = this.groupContentElement(this.groups[dividerIndex + 1]);
+      const startY = event.clientY;
+      const upperStart = upper.getBoundingClientRect().height;
+      const lowerStart = lower.getBoundingClientRect().height;
+      const total = upperStart + lowerStart;
+      const move = (e: PointerEvent) => {
+        const upperPx = Math.max(120, Math.min(total - 120, upperStart + e.clientY - startY));
+        upper.style.flex = `0 0 ${upperPx}px`;
+        lower.style.flex = `0 0 ${total - upperPx}px`;
+        this.groupSizes[dividerIndex] = upperPx / total;
+        this.groupSizes[dividerIndex + 1] = (total - upperPx) / total;
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        this.app.workspace.trigger("layout-change");
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+  }
+
+  removeSplitGroup(group: TabGroup): void {
+    const index = this.groups.indexOf(group);
+    if (index < 0) return;
+    const dividerIndex = Math.min(index, this.groupDividers.length - 1);
+    this.groupDividers.splice(dividerIndex, 1)[0]?.remove();
+    this.groups.splice(index, 1);
+    this.groupSizes.splice(index, 1);
+    const total = this.groupSizes.reduce((sum, size) => sum + size, 0) || 1;
+    this.groupSizes = this.groupSizes.map((size) => size / total);
+    group.containerEl.remove();
+    this.layoutGroups();
   }
 
   /**
@@ -687,25 +837,28 @@ export class Sidebar implements LeafContainer {
     this.tabHeaderContainerEl.innerHTML = "";
     this.tabHeaderInnerEl.innerHTML = "";
     this.tabHeaderContainerEl.appendChild(this.tabHeaderInnerEl);
-    for (const item of [...this.views, ...this.leaves] as SidebarItem[]) {
+    for (const item of this.leaves as SidebarItem[]) {
       if (this.isLeaf(item) && !item.view) continue; // no tab until a view is mounted
       this.tabHeaderInnerEl.appendChild(this.buildSidebarTab(item, item === this.active));
     }
   }
 
   show(item: SidebarItem) {
-    this.active = item;
+    const resolved = this.isLeaf(item) ? item : this.leaves.find((leaf) => leaf.view === item);
+    if (!resolved) return;
+    this.active = resolved;
     this.contentEl.innerHTML = "";
-    const { el } = this.metaOf(item);
+    const { el } = this.metaOf(resolved);
     if (el) this.contentEl.appendChild(el);
-    if (!this.isLeaf(item)) item.onOpen(); // fixed views (re)render on show; leaf views already opened via setView
+    void resolved.ensureOpen();
+    resolved.view?.onReveal?.();
     this.renderIcons();
     if (this.collapsed) this.toggle();
     this.app.workspace.trigger("layout-change");
   }
 
   getView(viewType: string): View | null {
-    return this.views.find((v) => v.viewType === viewType) ?? null;
+    return this.app.workspace.getLeavesOfType(viewType)[0]?.view ?? null;
   }
 
   // --- LeafContainer (docked plugin leaves) --------------------------------
@@ -732,7 +885,7 @@ export class Sidebar implements LeafContainer {
     if (this.active === leaf) {
       this.active = null;
       this.contentEl.innerHTML = "";
-      const fallback = this.views[0] ?? this.leaves[0];
+      const fallback = this.leaves[0];
       if (fallback) this.show(fallback);
     }
     this.renderIcons();
@@ -779,7 +932,7 @@ export interface PersistedLeaf {
   pinned?: boolean;
 }
 
-interface PersistedSidebar {
+export interface PersistedSidebarV1 {
   leaves: PersistedLeaf[];
   activeType: string | null;
   collapsed: boolean;
@@ -787,12 +940,83 @@ interface PersistedSidebar {
 }
 
 /** The whole persisted workspace layout, stored per-vault in `.geode/workspace.json`. */
-export interface PersistedWorkspace {
+export interface PersistedWorkspaceV1 {
   version: 1;
   groups: { leaves: PersistedLeaf[]; active: number }[];
   activeGroup: number;
-  left: PersistedSidebar;
-  right: PersistedSidebar;
+  left: PersistedSidebarV1;
+  right: PersistedSidebarV1;
+}
+
+export interface PersistedTabNode {
+  type: "tabs";
+  leaves: PersistedLeaf[];
+  active: number;
+}
+
+export interface PersistedSplitNode {
+  type: "split";
+  direction: "horizontal" | "vertical";
+  sizes: number[];
+  children: WorkspaceTreeNode[];
+}
+
+export type WorkspaceTreeNode = PersistedTabNode | PersistedSplitNode;
+
+interface PersistedRegionV2 {
+  root: WorkspaceTreeNode | null;
+  collapsed?: boolean;
+  width?: number;
+  activeGroup?: number;
+}
+
+export interface PersistedWorkspaceV2 {
+  version: 2;
+  center: PersistedRegionV2;
+  left: PersistedRegionV2;
+  right: PersistedRegionV2;
+}
+
+export type PersistedWorkspace = PersistedWorkspaceV1 | PersistedWorkspaceV2;
+
+/** Remove empty branches and redundant one-child splits after moves/closes. */
+export function normalizeWorkspaceNode(node: WorkspaceTreeNode, keepEmptyRoot = false): WorkspaceTreeNode | null {
+  if (node.type === "tabs") return node.leaves.length || keepEmptyRoot ? node : null;
+  const children = node.children
+    .map((child) => normalizeWorkspaceNode(child, false))
+    .filter((child): child is WorkspaceTreeNode => child !== null);
+  if (!children.length) return keepEmptyRoot ? { type: "tabs", leaves: [], active: 0 } : null;
+  if (children.length === 1) return children[0];
+  const equal = 1 / children.length;
+  const sizes = children.map((child) => {
+    const original = node.children.indexOf(child);
+    return original >= 0 ? (node.sizes[original] ?? equal) : equal;
+  });
+  const total = sizes.reduce((sum, size) => sum + size, 0) || 1;
+  return { ...node, children, sizes: sizes.map((size) => size / total) };
+}
+
+/** Upgrade the old flat v1 layout without dropping any user-visible state. */
+export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWorkspaceV2 {
+  if (state.version === 2) return state;
+  const tabs = (leaves: PersistedLeaf[], activeType?: string | null): PersistedTabNode => ({
+    type: "tabs",
+    leaves,
+    active: Math.max(0, activeType ? leaves.findIndex((leaf) => leaf.type === activeType) : 0),
+  });
+  const centerChildren = state.groups.map((group) => tabs(group.leaves)).map((node, index) => ({
+    ...node,
+    active: state.groups[index]?.active ?? 0,
+  }));
+  const centerRoot: WorkspaceTreeNode = centerChildren.length <= 1
+    ? (centerChildren[0] ?? tabs([]))
+    : { type: "split", direction: "horizontal", sizes: centerChildren.map(() => 1 / centerChildren.length), children: centerChildren };
+  return {
+    version: 2,
+    center: { root: centerRoot, activeGroup: state.activeGroup },
+    left: { root: tabs(state.left.leaves, state.left.activeType), collapsed: state.left.collapsed, width: state.left.width },
+    right: { root: tabs(state.right.leaves, state.right.activeType), collapsed: state.right.collapsed, width: state.right.width },
+  };
 }
 
 /**
@@ -864,6 +1088,11 @@ export class Workspace extends Events {
   }
 
   groupEmptied(group: TabGroup) {
+    if (group.sidebar) {
+      group.sidebar.removeSplitGroup(group);
+      this.trigger("layout-change");
+      return;
+    }
     if (this.groups.length <= 1) {
       this.app.openEmptyTab(group);
       return;
@@ -950,8 +1179,12 @@ export class Workspace extends Events {
     for (const group of this.groups) for (const leaf of group.leaves) cb(leaf);
     // Docked plugin leaves count too, so getLeavesOfType/findLeafByViewType
     // see sidebar panes and plugins don't reopen a view they already docked.
-    for (const leaf of this.leftSidebar.leaves) cb(leaf);
-    for (const leaf of this.rightSidebar.leaves) cb(leaf);
+    for (const sidebar of [this.leftSidebar, this.rightSidebar]) {
+      for (const group of sidebar.groups) {
+        const leaves = group instanceof Sidebar ? group.leaves : (group as TabGroup).leaves;
+        for (const leaf of leaves) cb(leaf);
+      }
+    }
   }
 
   // --- Plugin view registration -------------------------------------------
@@ -1022,11 +1255,11 @@ export class Workspace extends Events {
    * is hosted by the sidebar; mounting a view via `leaf.setViewState` makes
    * its icon appear, and `revealLeaf` shows it.
    */
-  getRightLeaf(_split: boolean): WorkspaceLeaf {
-    return this.rightSidebar.addLeaf();
+  getRightLeaf(split: boolean): WorkspaceLeaf {
+    return split ? this.rightSidebar.addSplitGroup() : this.rightSidebar.addLeaf();
   }
-  getLeftLeaf(_split: boolean): WorkspaceLeaf {
-    return this.leftSidebar.addLeaf();
+  getLeftLeaf(split: boolean): WorkspaceLeaf {
+    return split ? this.leftSidebar.addSplitGroup() : this.leftSidebar.addLeaf();
   }
 
   /** Focus/activate a leaf (Obsidian `revealLeaf`); expands its sidebar if collapsed. */
@@ -1133,38 +1366,37 @@ export class Workspace extends Events {
     return { type: v.viewType, state: leaf.getViewState().state, pinned: leaf.pinned };
   }
 
-  private serializeSidebar(sb: Sidebar): PersistedSidebar {
-    return {
-      leaves: sb.leaves
-        .map((l) => this.serializeLeaf(l))
-        .filter((l): l is PersistedLeaf => !!l && l.type !== "empty"),
-      activeType: sb.active instanceof WorkspaceLeaf ? (sb.active.view?.viewType ?? null) : null,
-      collapsed: sb.collapsed,
-      width: sb.width,
-    };
-  }
-
   /** Snapshot the current layout for persistence. Empty tabs/groups are dropped. */
-  serialize(): PersistedWorkspace {
-    const groups: { leaves: PersistedLeaf[]; active: number }[] = [];
-    let activeGroup = 0;
-    for (const g of this.groups) {
-      // Keep leaves and their persisted form paired so the active index maps
-      // correctly after empties are filtered out.
-      const kept = g.leaves
-        .map((l) => ({ leaf: l, ser: this.serializeLeaf(l) }))
-        .filter((x): x is { leaf: WorkspaceLeaf; ser: PersistedLeaf } => !!x.ser);
-      if (!kept.length) continue; // skip all-empty groups
-      if (g === this.activeGroup) activeGroup = groups.length;
-      const activeIdx = Math.max(0, kept.findIndex((x) => x.leaf === g.active));
-      groups.push({ leaves: kept.map((x) => x.ser), active: activeIdx });
-    }
+  serialize(): PersistedWorkspaceV2 {
+    const activeGroup = Math.max(0, this.groups.indexOf(this.activeGroup));
+    const nodeFor = (container: Sidebar | TabGroup): PersistedTabNode => {
+      const leaves = container.leaves
+        .map((leaf) => ({ leaf, persisted: this.serializeLeaf(leaf) }))
+        .filter((item): item is { leaf: WorkspaceLeaf; persisted: PersistedLeaf } => !!item.persisted);
+      const active = container.active instanceof WorkspaceLeaf
+        ? Math.max(0, leaves.findIndex((item) => item.leaf === container.active))
+        : 0;
+      return { type: "tabs", leaves: leaves.map((item) => item.persisted), active };
+    };
+    const regionRoot = (containers: (Sidebar | TabGroup)[], direction: "horizontal" | "vertical", sizes?: number[]): WorkspaceTreeNode => {
+      const children = containers.map(nodeFor);
+      return children.length === 1 ? children[0] : {
+        type: "split", direction, sizes: sizes?.length === children.length ? sizes : children.map(() => 1 / children.length), children,
+      };
+    };
     return {
-      version: 1,
-      groups,
-      activeGroup,
-      left: this.serializeSidebar(this.leftSidebar),
-      right: this.serializeSidebar(this.rightSidebar),
+      version: 2,
+      center: { root: regionRoot(this.groups, "horizontal"), activeGroup },
+      left: {
+        root: regionRoot(this.leftSidebar.groups as (Sidebar | TabGroup)[], "vertical", this.leftSidebar.groupSizes),
+        collapsed: this.leftSidebar.collapsed,
+        width: this.leftSidebar.width,
+      },
+      right: {
+        root: regionRoot(this.rightSidebar.groups as (Sidebar | TabGroup)[], "vertical", this.rightSidebar.groupSizes),
+        collapsed: this.rightSidebar.collapsed,
+        width: this.rightSidebar.width,
+      },
     };
   }
 
@@ -1189,16 +1421,35 @@ export class Workspace extends Events {
     if (ls.pinned) leaf.setPinned(true);
   }
 
-  private async restoreSidebar(sb: Sidebar, ps: PersistedSidebar): Promise<void> {
-    for (const ls of ps.leaves) {
-      if (!this.getViewFactory(ls.type)) continue; // plugin absent
-      const leaf = sb.addLeaf();
-      await leaf.setViewState({ type: ls.type, state: ls.state });
-      if (ls.pinned) leaf.setPinned(true);
+  private async restoreSidebar(sb: Sidebar, ps: PersistedRegionV2): Promise<void> {
+    const nodes = ps.root?.type === "split" ? ps.root.children : ps.root ? [ps.root] : [];
+    for (let index = 0; index < nodes.length; index++) {
+      const node = nodes[index];
+      if (node.type !== "tabs") continue;
+      const target = index === 0 ? sb : (sb.addSplitGroup().group as TabGroup);
+      for (const ls of node.leaves) {
+        const factory = this.getViewFactory(ls.type);
+        const existingBuiltin = !factory ? this.getLeavesOfType(ls.type)[0] : undefined;
+        if (existingBuiltin) {
+          if (existingBuiltin.group !== target) this.moveLeaf(existingBuiltin, target);
+          if (ls.pinned) existingBuiltin.setPinned(true);
+        } else if (factory) {
+          const leaf = target instanceof Sidebar
+            ? target.addLeaf()
+            : (target.leaves.find((candidate) => !candidate.view) ?? target.createLeaf());
+          await leaf.setViewState({ type: ls.type, state: ls.state });
+          if (ls.pinned) leaf.setPinned(true);
+        }
+      }
+      const leaves = target instanceof Sidebar ? target.leaves : target.leaves;
+      if (leaves[node.active]) target.setActiveLeaf(leaves[node.active]);
     }
-    if (ps.activeType) {
-      const l = sb.leaves.find((x) => x.view?.viewType === ps.activeType);
-      if (l) sb.setActiveLeaf(l);
+    if (ps.root?.type === "split") {
+      sb.groupSizes = [...ps.root.sizes];
+      sb.groups.forEach((group, index) => {
+        const element = group instanceof Sidebar ? group.contentEl : (group as TabGroup).containerEl;
+        element.style.flex = `1 1 ${Math.max(0, sb.groupSizes[index] ?? 0) * 100}%`;
+      });
     }
     // Must run before the collapsed-toggle below so the correct expanded
     // width is recorded even if the sidebar restores collapsed.
@@ -1211,11 +1462,12 @@ export class Workspace extends Events {
    * nothing beyond sidebar chrome) if the snapshot has no real tab/leaf
    * content, so the caller can fall back to opening an empty tab.
    */
-  async deserialize(state: PersistedWorkspace): Promise<boolean> {
+  async deserialize(input: PersistedWorkspace): Promise<boolean> {
+    const state = migrateWorkspaceLayout(input);
+    const centerNodes = state.center.root?.type === "split" ? state.center.root.children : state.center.root ? [state.center.root] : [];
     const hasContent =
-      (state?.groups?.some((g) => g.leaves.length) ?? false) ||
-      !!state?.left?.leaves.length ||
-      !!state?.right?.leaves.length;
+      centerNodes.some((node) => node.type === "tabs" && node.leaves.length) ||
+      !!state.left.root || !!state.right.root;
 
     // Restore sidebar chrome (width/collapsed/docked leaves) unconditionally,
     // even when there's no tab/leaf content at all — a sidebar the user
@@ -1229,25 +1481,34 @@ export class Workspace extends Events {
     // Rebuild the (non-empty) tab groups. Groups the snapshot didn't include
     // are added as needed; a restored group that ends up empty gets exactly
     // one placeholder tab (never accumulating empties across launches).
-    const targetGroups = Math.max(1, state.groups.length);
+    const targetGroups = Math.max(1, centerNodes.length);
     while (this.groups.length < targetGroups) this.addGroup();
     for (let gi = 0; gi < this.groups.length; gi++) {
       const group = this.groups[gi];
-      const gs = state.groups[gi];
-      if (gs) {
+      const gs = centerNodes[gi];
+      if (gs?.type === "tabs") {
         for (const ls of gs.leaves) {
-          const leaf = group.createLeaf();
-          await this.restoreLeafView(leaf, ls);
+          const factory = this.getViewFactory(ls.type);
+          const existingBuiltin = ls.type !== "markdown" && ls.type !== "empty" && !factory
+            ? this.getLeavesOfType(ls.type)[0]
+            : undefined;
+          if (existingBuiltin) {
+            this.moveLeaf(existingBuiltin, group);
+            if (ls.pinned) existingBuiltin.setPinned(true);
+          } else {
+            const leaf = group.createLeaf();
+            await this.restoreLeafView(leaf, ls);
+          }
         }
       }
       if (group.leaves.length === 0) {
         const leaf = group.createLeaf();
         await leaf.setView(this.app.createEmptyView());
       }
-      const active = (gs && group.leaves[gs.active]) || group.leaves[0];
+      const active = (gs?.type === "tabs" && group.leaves[gs.active]) || group.leaves[0];
       if (active) group.setActiveLeaf(active);
     }
-    const ag = this.groups[state.activeGroup] ?? this.groups[0];
+    const ag = this.groups[state.center.activeGroup ?? 0] ?? this.groups[0];
     if (ag?.active) ag.setActiveLeaf(ag.active);
     return true;
   }
