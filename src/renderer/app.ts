@@ -1008,6 +1008,15 @@ export class App {
   // --- File opening -------------------------------------------------------
 
   async openFile(file: TFile, newTab: boolean): Promise<void> {
+    if (file.extension === "html" || file.extension === "htm") {
+      const leaf = this.workspace.getLeaf(newTab);
+      await leaf.setViewState({
+        type: "webviewer",
+        active: true,
+        state: { url: this.vault.adapter.getResourcePath(file.path) },
+      });
+      return;
+    }
     if (file.extension === "base") {
       const existing = this.workspace.findLeafForFile(file.path);
       if (existing && !newTab) {
