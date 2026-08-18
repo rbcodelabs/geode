@@ -34,6 +34,7 @@ import {
 import type { Command } from "./commands";
 import moment from "moment";
 import type { PluginSettingTab } from "./api/obsidian";
+import { setIcon } from "./api/icons";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -54,6 +55,7 @@ const DEFAULT_WEB_VIEWER_SETTINGS: WebViewerSettings = {
 interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
+  showRibbon: boolean;
   /** Selected community theme name ("" = built-in default). */
   cssTheme: string;
   webViewer: WebViewerSettings;
@@ -284,6 +286,11 @@ class SettingsModal extends Modal {
     this.addToggle(container, "Readable line length", s.readableLineLength, (v) => {
       s.readableLineLength = v;
       this.geodeApp.applySettings();
+    });
+    this.addToggle(container, "Show ribbon", s.showRibbon, (v) => {
+      s.showRibbon = v;
+      this.geodeApp.applySettings();
+      this.geodeApp.saveSettings();
     });
     // Community theme picker: "Default" + any installed under .geode/themes/.
     this.addDropdown(
@@ -640,6 +647,7 @@ export class App {
   editorSuggests = new Set<unknown>();
   workspace!: Workspace;
   statusBar!: StatusBar;
+  private ribbonActionsEl!: HTMLElement;
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
   pluginManager!: PluginManager;
   themeManager = new ThemeManager(this);
@@ -647,6 +655,7 @@ export class App {
   settings: AppSettings = {
     theme: "dark",
     readableLineLength: true,
+    showRibbon: true,
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
   };
@@ -732,6 +741,11 @@ export class App {
     if (tabId) this.activeSettingsModal.activateTab(tabId);
   }
 
+  /** Mount the exact action element created by Plugin.addRibbonIcon(). */
+  addRibbonIcon(el: HTMLElement): void {
+    this.ribbonActionsEl.appendChild(el);
+  }
+
   async start() {
     this.installExternalLinkInterceptor();
     const rootEl = document.getElementById("app")!;
@@ -805,6 +819,24 @@ export class App {
     const main = document.createElement("div");
     main.className = "app-main";
     shell.appendChild(main);
+
+    const ribbon = document.createElement("div");
+    ribbon.className = "workspace-ribbon mod-left";
+    ribbon.setAttribute("aria-label", "Ribbon");
+    this.ribbonActionsEl = document.createElement("div");
+    this.ribbonActionsEl.className = "workspace-ribbon-actions";
+    const ribbonBottom = document.createElement("div");
+    ribbonBottom.className = "workspace-ribbon-bottom";
+    const settingsButton = document.createElement("button");
+    settingsButton.type = "button";
+    settingsButton.className = "side-dock-ribbon-action";
+    settingsButton.title = "Open settings";
+    settingsButton.setAttribute("aria-label", "Open settings");
+    setIcon(settingsButton, "settings");
+    settingsButton.addEventListener("click", () => this.setting.open());
+    ribbonBottom.appendChild(settingsButton);
+    ribbon.append(this.ribbonActionsEl, ribbonBottom);
+    main.appendChild(ribbon);
 
     this.workspace = new Workspace(this, main);
     this.statusBar = new StatusBar(this, shell);
@@ -1339,6 +1371,7 @@ export class App {
     document.body.classList.toggle("theme-dark", this.settings.theme === "dark");
     document.body.classList.toggle("theme-light", this.settings.theme === "light");
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
+    document.body.classList.toggle("show-ribbon", this.settings.showRibbon);
     // Real Obsidian hides .view-header entirely unless <body> has this class
     // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
     // Geode always shows it — there's no settings toggle for this yet.

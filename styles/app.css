@@ -284,6 +284,61 @@ button.mod-cta:hover {
   display: flex;
 }
 
+/* ---- Left ribbon ---- */
+
+.workspace-ribbon {
+  width: 44px;
+  min-width: 44px;
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--header-height) + var(--size-4-2)) 6px 8px;
+  box-sizing: border-box;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-right: 1px solid var(--background-modifier-border);
+}
+
+body:not(.show-ribbon) .workspace-ribbon.mod-left {
+  display: none;
+}
+
+.workspace-ribbon-actions,
+.workspace-ribbon-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.workspace-ribbon-actions {
+  flex: 1;
+}
+
+.side-dock-ribbon-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.side-dock-ribbon-action:hover,
+.side-dock-ribbon-action:focus-visible {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.side-dock-ribbon-action svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
 .workspace {
   display: flex;
   flex: 1;
