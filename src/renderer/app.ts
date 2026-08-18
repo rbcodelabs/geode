@@ -14,6 +14,7 @@ import {
 } from "./markdown/processor-registry";
 import { hasExternalChange, MarkdownView } from "./views/markdown-view";
 import { BaseView, defaultBaseYaml } from "./views/base-view";
+import { CanvasView } from "./views/canvas-view";
 import { FileExplorerView } from "./views/file-explorer";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
@@ -1096,6 +1097,25 @@ export class App {
   // --- File opening -------------------------------------------------------
 
   async openFile(file: TFile, newTab: boolean): Promise<void> {
+    if (file.extension === "canvas") {
+      const existing = this.workspace.findLeafForFile(file.path);
+      if (existing && !newTab) {
+        existing.group.setActiveLeaf(existing);
+        return;
+      }
+      const leaf = this.workspace.getLeaf(newTab);
+      const current = leaf.view;
+      if (current instanceof CanvasView) {
+        await current.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new CanvasView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
+      return;
+    }
     if (file.extension === "html" || file.extension === "htm") {
       const leaf = this.workspace.getLeaf(newTab);
       await leaf.setViewState({
@@ -1375,6 +1395,11 @@ export class App {
   /** Construct a fresh MarkdownView bound to this app (used by WorkspaceLeaf.openFile for hosted plugins). */
   createMarkdownView(): MarkdownView {
     return new MarkdownView(this);
+  }
+
+  /** Construct a fresh file-backed JSON Canvas view (used during workspace restore). */
+  createCanvasView(): CanvasView {
+    return new CanvasView(this);
   }
 
   /** Construct the "No file is open" placeholder view (used when restoring/cleaning up empty leaves). */
