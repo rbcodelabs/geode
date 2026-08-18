@@ -339,6 +339,60 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
   height: var(--icon-size);
 }
 
+/* ---- Manage vaults ---- */
+
+.mod-manage-vaults {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.vault-switcher-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 16px 0;
+}
+
+.vault-switcher-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 12px;
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.vault-switcher-row:hover,
+.vault-switcher-row:focus-visible {
+  background: var(--background-modifier-hover);
+}
+
+.vault-switcher-name {
+  font-weight: var(--font-semibold);
+}
+
+.vault-switcher-path {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-switcher-current {
+  color: var(--text-accent);
+  font-size: var(--font-ui-smaller);
+}
+
+.vault-switcher-error {
+  margin-top: 12px;
+  color: var(--text-error);
+}
+
 .workspace {
   display: flex;
   flex: 1;

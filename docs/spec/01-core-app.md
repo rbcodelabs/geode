@@ -41,6 +41,10 @@ Scope: vaults, files/folders, editor, Obsidian Flavored Markdown, properties, li
 - **Removing a vault only removes it from the vault list** — the folder stays on disk.
 - Moving a vault manually (close app, move folder, re-open via "Open folder as vault") is supported; community plugins must be re-enabled afterwards (restricted mode prompt).
 
+#### Current Geode behavior
+
+Geode opens the first usable recent vault on normal startup and shows its vault picker when no recent vault exists. From an open vault, the bottom-left **Manage vaults** action and Command palette → **Open another vault** open a list of the current and recent vaults plus **Open folder as vault**. A different vault opens in its own top-level window; choosing a vault that is already open restores and focuses that window. Create, rename, move, remove-from-list, and multi-window restoration after a full app restart are not implemented.
+
 ### Configuration folder override
 - Settings → Files and Links → **Override config folder**: use a different dotfolder name (e.g. `.obsidian-awesome`) as the vault's config profile; requires relaunch. Old config folder remains; settings do not auto-migrate.
 

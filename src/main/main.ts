@@ -30,6 +30,7 @@ import {
 } from "./crash-diagnostics";
 import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
+import { selectVaultWindowAction } from "./vault-window-selection";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -46,6 +47,8 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
+/** Explicit vault requested for a window that has not completed open-vault yet. */
+const launchTargets = new Map<number, string>();
 interface CrashState {
   suppressPlugins: boolean;
   activePlugins: string[];
@@ -296,6 +299,37 @@ function registerIpc() {
   ipcMain.handle("get-recent-vaults", () => {
     const cfg = loadConfig();
     return cfg.recentVaults.filter((v) => fs.existsSync(v));
+  });
+
+  ipcMain.handle("get-launch-vault", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    return win ? launchTargets.get(win.id) ?? null : null;
+  });
+
+  ipcMain.handle("open-vault-window", async (e, requestedPath: string) => {
+    const current = BrowserWindow.fromWebContents(e.sender);
+    if (!current) throw new Error("The current window is unavailable");
+    const root = path.resolve(requestedPath);
+    const stat = await fsp.stat(root).catch(() => null);
+    if (!stat?.isDirectory()) throw new Error(`Not a folder: ${root}`);
+
+    const knownWindows = BrowserWindow.getAllWindows().flatMap((win) => {
+      const vaultPath = sessions.get(win.id)?.root ?? launchTargets.get(win.id);
+      return vaultPath ? [{ windowId: win.id, vaultPath }] : [];
+    });
+    const action = selectVaultWindowAction(root, current.id, knownWindows);
+    if (action.kind === "current") return { action: "current" as const };
+    if (action.kind === "focus") {
+      const target = BrowserWindow.getAllWindows().find((win) => win.id === action.windowId);
+      if (target) {
+        if (target.isMinimized()) target.restore();
+        target.show();
+        target.focus();
+        return { action: "focused" as const };
+      }
+    }
+    createWindow(false, root);
+    return { action: "created" as const };
   });
 
   // Enterprise-managed plugin policy — machine-level, not vault-scoped (see
@@ -565,7 +599,7 @@ const isHeadless =
   process.env.GEODE_HEADLESS === "1" ||
   process.argv.includes("--headless");
 
-function createWindow(suppressPlugins = false) {
+function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
   const win = new BrowserWindow({
@@ -601,6 +635,7 @@ function createWindow(suppressPlugins = false) {
       webviewTag: true,
     },
   });
+  if (launchTarget) launchTargets.set(win.id, path.resolve(launchTarget));
   const state: CrashState = {
     suppressPlugins,
     activePlugins: [],
@@ -627,7 +662,7 @@ function createWindow(suppressPlugins = false) {
       // A crashed WebContents is not reliably reusable on every Electron/macOS
       // combination. Replace the window and carry recovery state forward.
       // Creating first avoids window-all-closed quitting the app on Windows/Linux.
-      createWindow(true);
+      createWindow(true, sessions.get(win.id)?.root ?? launchTargets.get(win.id));
       if (!win.isDestroyed()) win.destroy();
     }, 250);
   };
@@ -717,6 +752,7 @@ function createWindow(suppressPlugins = false) {
     session?.watcher?.close();
     if (session?.indexer) void session.indexer.shutdown();
     sessions.delete(win.id);
+    launchTargets.delete(win.id);
     crashStates.delete(win.id);
   });
   return win;
