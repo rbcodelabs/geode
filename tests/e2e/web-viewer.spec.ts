@@ -81,3 +81,42 @@ test("Search the web opens a viewer tab with the query appended to the configure
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript, and images", async () => {
+  const { app, window, userDataDir, consoleErrors } = await launch();
+
+  try {
+    const initialTabCount = await window.locator(".workspace-split.mod-root .workspace-tab-header").count();
+    await window.locator('.nav-file-title[data-path="Local page.html"]').click();
+
+    const webView = window.locator(".web-view");
+    const frame = webView.locator(".web-view-frame");
+    await expect(webView).toBeVisible();
+    await expect(frame).toHaveAttribute("partition", "persist:webviewer");
+    await expect(webView.locator(".web-view-address")).toHaveValue(/^file:\/\/.*Local%20page\.html$/);
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header")).toHaveCount(initialTabCount);
+
+    await expect
+      .poll(() =>
+        frame.evaluate((guest) =>
+          (guest as unknown as { executeJavaScript(script: string): Promise<unknown> }).executeJavaScript(`({
+            title: document.title,
+            scriptRan: document.body.dataset.scriptRan,
+            color: getComputedStyle(document.querySelector('h1')).color,
+            imageLoaded: document.querySelector('img').complete && document.querySelector('img').naturalWidth > 0
+          })`)
+        )
+      )
+      .toEqual({
+        title: "Local vault page",
+        scriptRan: "yes",
+        color: "rgb(35, 131, 226)",
+        imageLoaded: true,
+      });
+
+    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});

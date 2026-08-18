@@ -151,6 +151,79 @@ class CommandPaletteModal extends SuggestModal<Command> {
   }
 }
 
+class ManageVaultsModal extends Modal {
+  constructor(private geodeApp: App) {
+    super(geodeApp);
+    this.modalEl.classList.add("mod-manage-vaults");
+  }
+
+  async onOpen(): Promise<void> {
+    this.contentEl.empty();
+    const heading = document.createElement("h2");
+    heading.textContent = "Manage vaults";
+    this.contentEl.appendChild(heading);
+
+    const currentPath = this.geodeApp.vault.root;
+    const recents = await window.geode.getRecentVaults();
+    const paths = [currentPath, ...recents.filter((vaultPath) => vaultPath !== currentPath)];
+    const list = document.createElement("div");
+    list.className = "vault-switcher-list";
+    for (const vaultPath of paths) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "vault-switcher-row";
+      const name = document.createElement("span");
+      name.className = "vault-switcher-name";
+      name.textContent = vaultPath.split(/[\\/]/).filter(Boolean).pop() ?? vaultPath;
+      const pathEl = document.createElement("span");
+      pathEl.className = "vault-switcher-path";
+      pathEl.textContent = vaultPath;
+      row.append(name, pathEl);
+      if (vaultPath === currentPath) {
+        row.classList.add("is-current");
+        const marker = document.createElement("span");
+        marker.className = "vault-switcher-current";
+        marker.textContent = "Open in this window";
+        row.appendChild(marker);
+      }
+      row.addEventListener("click", () => void this.openVaultWindow(vaultPath));
+      list.appendChild(row);
+    }
+    this.contentEl.appendChild(list);
+
+    const openFolder = document.createElement("button");
+    openFolder.type = "button";
+    openFolder.className = "mod-cta vault-switcher-open-folder";
+    openFolder.textContent = "Open folder as vault";
+    openFolder.addEventListener("click", () => void this.chooseVault());
+    this.contentEl.appendChild(openFolder);
+  }
+
+  private async chooseVault(): Promise<void> {
+    const vaultPath = await window.geode.chooseVault();
+    if (vaultPath) await this.openVaultWindow(vaultPath);
+  }
+
+  private async openVaultWindow(vaultPath: string): Promise<void> {
+    if (vaultPath === this.geodeApp.vault.root) {
+      this.close();
+      return;
+    }
+    try {
+      await window.geode.openVaultWindow(vaultPath);
+      this.close();
+    } catch (error) {
+      let errorEl = this.contentEl.querySelector<HTMLElement>(".vault-switcher-error");
+      if (!errorEl) {
+        errorEl = document.createElement("div");
+        errorEl.className = "vault-switcher-error";
+        this.contentEl.appendChild(errorEl);
+      }
+      errorEl.textContent = error instanceof Error ? error.message : "Unable to open that vault";
+    }
+  }
+}
+
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
 type BuiltinTabId = "appearance" | "community-plugins" | "performance";
 const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "community-plugins", "performance"];
@@ -743,6 +816,10 @@ export class App {
     if (tabId) this.activeSettingsModal.activateTab(tabId);
   }
 
+  private openManageVaults(): void {
+    new ManageVaultsModal(this).open();
+  }
+
   /** Mount the exact action element created by Plugin.addRibbonIcon(). */
   addRibbonIcon(el: HTMLElement): void {
     this.ribbonActionsEl.appendChild(el);
@@ -751,9 +828,12 @@ export class App {
   async start() {
     this.installExternalLinkInterceptor();
     const rootEl = document.getElementById("app")!;
-    const recents = await window.geode.getRecentVaults();
-    if (recents.length) {
-      await this.openVault(recents[0], rootEl);
+    const [launchTarget, recents] = await Promise.all([
+      window.geode.getLaunchVault(),
+      window.geode.getRecentVaults(),
+    ]);
+    if (launchTarget || recents.length) {
+      await this.openVault(launchTarget ?? recents[0], rootEl);
     } else {
       this.showVaultPicker(rootEl, []);
     }
@@ -836,7 +916,14 @@ export class App {
     settingsButton.setAttribute("aria-label", "Open settings");
     setIcon(settingsButton, "settings");
     settingsButton.addEventListener("click", () => this.setting.open());
-    ribbonBottom.appendChild(settingsButton);
+    const manageVaultsButton = document.createElement("button");
+    manageVaultsButton.type = "button";
+    manageVaultsButton.className = "side-dock-ribbon-action";
+    manageVaultsButton.title = "Manage vaults";
+    manageVaultsButton.setAttribute("aria-label", "Manage vaults");
+    setIcon(manageVaultsButton, "vault");
+    manageVaultsButton.addEventListener("click", () => this.openManageVaults());
+    ribbonBottom.append(manageVaultsButton, settingsButton);
     ribbon.append(this.ribbonActionsEl, ribbonBottom);
     main.appendChild(ribbon);
 
@@ -975,6 +1062,7 @@ export class App {
       this.workspace.rightSidebar.toggle()
     );
     c("open-settings", "Open settings", "Mod+,", () => this.setting.open());
+    c("open-another-vault", "Open another vault", undefined, () => this.openManageVaults());
     c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
       new InstallFromGithubModal(this, this.communityManager).open()
     );
@@ -1026,6 +1114,15 @@ export class App {
         await view.setFile(file);
         await leaf.setView(view);
       }
+      return;
+    }
+    if (file.extension === "html" || file.extension === "htm") {
+      const leaf = this.workspace.getLeaf(newTab);
+      await leaf.setViewState({
+        type: "webviewer",
+        active: true,
+        state: { url: this.vault.adapter.getResourcePath(file.path) },
+      });
       return;
     }
     if (file.extension === "base") {
