@@ -1083,9 +1083,10 @@ export abstract class Plugin extends GeodePlugin {
     this.register(() => (this.app as any).unregisterSettingTab?.(this.manifest.id));
   }
 
-  /** Register an obsidian:// protocol handler (no-op host, stored for completeness). */
+  /** Register an Obsidian-compatible protocol handler, dispatched from geode:// links. */
   registerObsidianProtocolHandler(action: string, handler: (params: any) => any): void {
     (this.app as any).registerProtocolHandler?.(action, handler);
+    this.register(() => (this.app as any).unregisterProtocolHandler?.(action, handler));
   }
 
   /**

@@ -153,7 +153,7 @@ abstract class Plugin extends Component {
     sortOrder?: number): MarkdownPostProcessor;
   registerEditorExtension(extension: Extension): void;  // CM6 Extension
   registerObsidianProtocolHandler(action: string,
-    handler: (params: ObsidianProtocolData) => any): void; // obsidian://<action>
+    handler: (params: ObsidianProtocolData) => any): void; // obsidian:// in Obsidian; geode:// in Geode
   registerEditorSuggest(editorSuggest: EditorSuggest<any>): void;
 
   // Persistence — <plugin dir>/data.json
@@ -859,6 +859,8 @@ Key property: bypasses CORS entirely (routed through the privileged process on d
 ---
 
 ## 9. obsidian:// URI Protocol
+
+Geode registers the equivalent `geode://<action>?param=value` OS protocol and dispatches it through the same `registerObsidianProtocolHandler` plugin API. Plugins can explicitly detect Geode through `window.geode.host`, whose stable value is `{ name: "geode", protocolScheme: "geode" }`.
 
 App registers the `obsidian://` OS-level scheme. Form: `obsidian://<action>?param=value&...` (values strictly URI-encoded; `/`→`%2F`, space→`%20`). Built-in actions:
 
