@@ -23,6 +23,9 @@ cloud, no lock-in.
   File reads, Markdown parsing, and debounced atomic cache writes run in a
   background utility process, with automatic in-renderer fallback
 - **Search** — `tag:` `path:` `file:` operators, quoted phrases, negation, regex
+- **Canvas** — open and edit interoperable JSON Canvas 1.0 (`.canvas`) boards
+  with text, file, link, and group cards; labeled edges; pan/zoom; and
+  persistent drag/resize geometry
 - **Workspace** — tabs, split panes, pinned tabs, collapsible sidebars, a
   hideable left ribbon with persistent Settings and plugin-contributed actions,
   and status-bar word count; tab bar and view header DOM/CSS match real

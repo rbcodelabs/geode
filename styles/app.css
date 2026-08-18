@@ -2967,3 +2967,144 @@ select.dropdown:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* JSON Canvas ----------------------------------------------------------- */
+.canvas-view {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+}
+
+.canvas-surface {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  background-color: var(--background-primary);
+  background-image: radial-gradient(circle, var(--background-modifier-border-hover) 1px, transparent 1px);
+  background-size: 20px 20px;
+  user-select: none;
+}
+
+.canvas-surface:active { cursor: grabbing; }
+
+.canvas-viewport {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+}
+
+.canvas-edges {
+  position: absolute;
+  left: -100000px;
+  top: -100000px;
+  width: 200000px;
+  height: 200000px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.canvas-edge {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.canvas-edge-label {
+  fill: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-anchor: middle;
+}
+
+.canvas-edges marker path { fill: var(--text-muted); }
+
+.canvas-node {
+  --canvas-node-color: var(--background-modifier-border-hover);
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  padding: 12px;
+  color: var(--text-normal);
+  background: var(--background-primary-alt);
+  border: 2px solid var(--canvas-node-color);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  cursor: move;
+  white-space: pre-wrap;
+}
+
+.canvas-node.is-selected {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
+}
+
+.canvas-node-group {
+  z-index: 1;
+  padding: 0;
+  overflow: visible;
+  background-color: color-mix(in srgb, var(--canvas-node-color) 8%, transparent);
+  background-size: cover;
+  border-style: dashed;
+}
+
+.canvas-group-label {
+  position: absolute;
+  left: 8px;
+  top: -26px;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-muted);
+}
+
+.canvas-node-kind {
+  margin-bottom: 6px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.canvas-node-file,
+.canvas-node-link {
+  overflow-wrap: anywhere;
+  color: var(--text-accent);
+}
+
+.canvas-node-text-editor {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  color: var(--text-normal);
+  background: transparent;
+  font: inherit;
+}
+
+.canvas-node-resize-handle {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 14px;
+  height: 14px;
+  border: solid var(--text-muted);
+  border-width: 0 2px 2px 0;
+  cursor: nwse-resize;
+}
+
+.canvas-error {
+  width: 420px;
+  padding: 16px;
+  color: var(--text-error, #e05252);
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}

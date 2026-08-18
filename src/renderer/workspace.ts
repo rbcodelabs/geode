@@ -1126,9 +1126,9 @@ export class Workspace extends Events {
     // worth persisting — and persisting them caused empties to accumulate
     // across launches (restore recreated them, then a fresh one was added).
     if (v.viewType === "empty") return null;
-    if (v.viewType === "markdown") {
+    if (v.viewType === "markdown" || v.viewType === "canvas") {
       const file = v.getFile?.()?.path;
-      return file ? { type: "markdown", file, pinned: leaf.pinned } : null;
+      return file ? { type: v.viewType, file, pinned: leaf.pinned } : null;
     }
     return { type: v.viewType, state: leaf.getViewState().state, pinned: leaf.pinned };
   }
@@ -1173,6 +1173,15 @@ export class Workspace extends Events {
       const file = this.app.vault.getFileByPath(ls.file);
       if (file) {
         const view = this.app.createMarkdownView();
+        await view.setFile(file);
+        await leaf.setView(view);
+      } else {
+        await leaf.setView(this.app.createEmptyView());
+      }
+    } else if (ls.type === "canvas" && ls.file) {
+      const file = this.app.vault.getFileByPath(ls.file);
+      if (file) {
+        const view = this.app.createCanvasView();
         await view.setFile(file);
         await leaf.setView(view);
       } else {
