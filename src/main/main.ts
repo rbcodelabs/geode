@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -16,12 +16,26 @@ import { isAllowedAppNavigation } from "./navigation-policy";
 import { MetadataIndexerHost } from "./metadata-indexer-host";
 import type { MetadataFileStat } from "../indexer/metadata-indexer";
 import { CrashJournal, type CrashDiagnostic } from "./crash-journal";
+import {
+  BoundedBuffer,
+  DiagnosticLog,
+  buildRendererIncident,
+  exportDiagnostics,
+  listCrashDumps,
+  pruneCrashDumps,
+  sanitizeDiagnosticValue,
+  type CrashDumpFile,
+  type DiagnosticEntry,
+} from "./crash-diagnostics";
+import { randomUUID } from "node:crypto";
+import { buildApplicationMenuTemplate } from "./application-menu";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
 // Claude Agent SDK) can use it; Geode does the same for plugin
 // compatibility. Must be set before app 'ready'.
 app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
+crashReporter.start({ uploadToServer: false, companyName: "RBCodelabs", productName: "Geode" });
 
 interface VaultSession {
   root: string;
@@ -31,12 +45,39 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
-interface CrashState { suppressPlugins: boolean; activePlugins: string[]; lastHeartbeat: number; recovering: boolean }
+interface CrashState {
+  suppressPlugins: boolean;
+  activePlugins: string[];
+  lastHeartbeat: number;
+  recovering: boolean;
+  breadcrumbs: BoundedBuffer<DiagnosticEntry>;
+  consoleEntries: BoundedBuffer<DiagnosticEntry>;
+  knownDumps: CrashDumpFile[];
+  lastProcessMetrics: ReturnType<typeof getProcessMetricsSnapshot>;
+}
 const crashStates = new Map<number, CrashState>();
 let journal: CrashJournal | undefined;
+let diagnosticLog: DiagnosticLog | undefined;
 
 function crashJournal(): CrashJournal {
   return (journal ??= new CrashJournal(path.join(app.getPath("userData"), "crash-journal.json")));
+}
+
+function diagnostics(): DiagnosticLog {
+  return (diagnosticLog ??= new DiagnosticLog(path.join(app.getPath("userData"), "diagnostic.log")));
+}
+
+function recordDiagnostic(state: CrashState | undefined, entry: DiagnosticEntry, consoleEntry = false): void {
+  const safe: DiagnosticEntry = {
+    ...entry,
+    message: sanitizeDiagnosticValue(entry.message),
+    metadata: entry.metadata && Object.fromEntries(Object.entries(entry.metadata).map(([key, value]) => [
+      key,
+      typeof value === "string" ? sanitizeDiagnosticValue(value) : value,
+    ])),
+  };
+  (consoleEntry ? state?.consoleEntries : state?.breadcrumbs)?.push(safe);
+  void diagnostics().append(safe).catch(() => {});
 }
 
 function appConfigPath(): string {
@@ -470,11 +511,23 @@ function registerIpc() {
     const state = win ? crashStates.get(win.id) : undefined;
     return { suppressPlugins: state?.suppressPlugins ?? false, entries: crashJournal().read() };
   });
-  ipcMain.handle("crash-diagnostic", async (_e, entry: CrashDiagnostic) => crashJournal().append(entry));
+  ipcMain.handle("crash-diagnostic", async (e, entry: CrashDiagnostic) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    recordDiagnostic(win ? crashStates.get(win.id) : undefined, {
+      at: Date.now(), category: "renderer-diagnostic", message: entry.type,
+    });
+    return crashJournal().append(entry);
+  });
   ipcMain.handle("crash-active-plugins", (e, pluginIds: string[]) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const state = win ? crashStates.get(win.id) : undefined;
-    if (state) state.activePlugins = [...pluginIds];
+    if (state) {
+      state.activePlugins = [...pluginIds];
+      recordDiagnostic(state, {
+        at: Date.now(), category: "plugins", message: "active-plugins-updated",
+        metadata: { pluginIds: pluginIds.map((id) => sanitizeDiagnosticValue(id, { maxLength: 100 })).join(",") },
+      });
+    }
   });
   ipcMain.handle("crash-recovery-leave", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
@@ -528,13 +581,25 @@ function createWindow(suppressPlugins = false) {
       webviewTag: true,
     },
   });
-  crashStates.set(win.id, { suppressPlugins, activePlugins: [], lastHeartbeat: Date.now(), recovering: suppressPlugins });
+  const state: CrashState = {
+    suppressPlugins,
+    activePlugins: [],
+    lastHeartbeat: Date.now(),
+    recovering: suppressPlugins,
+    breadcrumbs: new BoundedBuffer(100),
+    consoleEntries: new BoundedBuffer(100),
+    knownDumps: [],
+    lastProcessMetrics: [],
+  };
+  crashStates.set(win.id, state);
+  void listCrashDumps(app.getPath("crashDumps")).then((dumps) => { state.knownDumps = dumps; }).catch(() => {});
+  recordDiagnostic(state, { at: Date.now(), category: "lifecycle", message: "window-created", metadata: { suppressPlugins } });
   win.loadFile(indexPath);
 
   const recoverRenderer = async (diagnostic: CrashDiagnostic) => {
     const state = crashStates.get(win.id);
     if (!state) return;
-    await crashJournal().append(diagnostic);
+    await crashJournal().append(diagnostic).catch(() => {});
     state.suppressPlugins = true;
     if (state.recovering || win.isDestroyed()) return;
     state.recovering = true;
@@ -550,16 +615,57 @@ function createWindow(suppressPlugins = false) {
   win.webContents.on("render-process-gone", (_event, details) => {
     const state = crashStates.get(win.id);
     if (!state || details.reason === "clean-exit") return;
-    void recoverRenderer({
-      type: "renderer-gone", at: Date.now(), reason: details.reason,
-      exitCode: details.exitCode, activePlugins: [...state.activePlugins],
-    });
+    void (async () => {
+      // Crashpad may finish the dump immediately after this event. A short wait
+      // improves correlation without delaying or blocking renderer recovery.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const dumps = await listCrashDumps(app.getPath("crashDumps")).catch(() => []);
+      const newDumps = dumps.filter((dump) => !state.knownDumps.some((known) => known.name === dump.name));
+      let processMetrics = state.lastProcessMetrics;
+      try { processMetrics = getProcessMetricsSnapshot(); } catch { /* retain the last pre-crash snapshot */ }
+      await recoverRenderer(buildRendererIncident({
+        incidentId: randomUUID(),
+        at: Date.now(),
+        reason: details.reason,
+        exitCode: details.exitCode,
+        activePlugins: [...state.activePlugins],
+        suppressPlugins: state.suppressPlugins,
+        recovering: state.recovering,
+        breadcrumbs: state.breadcrumbs.values(),
+        consoleEntries: state.consoleEntries.values(),
+        processMetrics,
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron,
+        platform: process.platform,
+        arch: process.arch,
+        uptimeSeconds: Math.round(process.uptime()),
+        windowUrl: sanitizeDiagnosticValue(win.webContents.getURL()),
+        dumpFiles: newDumps,
+      }));
+      void pruneCrashDumps(app.getPath("crashDumps"), 10).catch(() => {});
+    })();
+  });
+
+  win.webContents.on("console-message", (details) => {
+    recordDiagnostic(state, {
+      at: Date.now(),
+      category: "renderer-console",
+      level: details.level,
+      message: details.message,
+      metadata: { lineNumber: details.lineNumber, sourceId: details.sourceId },
+    }, true);
+  });
+  win.webContents.on("did-finish-load", () => {
+    recordDiagnostic(state, { at: Date.now(), category: "lifecycle", message: "did-finish-load" });
   });
 
   // Do not arm until the renderer has loaded once; this avoids treating normal
   // startup/build latency as a hang. One automatic recovery only prevents loops.
   const watchdog = setInterval(() => {
     const state = crashStates.get(win.id);
+    if (state) {
+      try { state.lastProcessMetrics = getProcessMetricsSnapshot(); } catch { /* diagnostics are best effort */ }
+    }
     if (!state || state.recovering || Date.now() - state.lastHeartbeat < 20_000) return;
     void recoverRenderer({ type: "renderer-hang", at: Date.now(), activePlugins: [...state.activePlugins] });
   }, 5_000);
@@ -575,6 +681,7 @@ function createWindow(suppressPlugins = false) {
   // src/renderer/views/web-view.ts), so in-app browsing follows links
   // normally and is unaffected by this guard.
   win.webContents.on("will-navigate", (e, url) => {
+    recordDiagnostic(state, { at: Date.now(), category: "navigation", message: "will-navigate", metadata: { url } });
     if (isAllowedAppNavigation(url, indexUrl)) return;
     e.preventDefault();
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -595,6 +702,35 @@ function createWindow(suppressPlugins = false) {
   return win;
 }
 
+function installApplicationMenu(): void {
+  const template = buildApplicationMenuTemplate(process.platform, async () => {
+      try {
+        const result = await dialog.showOpenDialog({
+          title: "Choose a folder for Geode diagnostics",
+          properties: ["openDirectory", "createDirectory"],
+        });
+        if (result.canceled || !result.filePaths[0]) return;
+        const exported = await exportDiagnostics({
+          destinationRoot: result.filePaths[0],
+          userDataDir: app.getPath("userData"),
+          crashDumpsDir: app.getPath("crashDumps"),
+          manifest: {
+            generatedAt: new Date().toISOString(),
+            appVersion: app.getVersion(),
+            electronVersion: process.versions.electron,
+            platform: process.platform,
+            arch: process.arch,
+            privacy: "Geode copies only allowlisted diagnostic artifacts and does not intentionally read vault files, config, environment variables, prompts, IPC payloads, or plugin source. Console output and minidumps may contain sensitive fragments; inspect before sharing.",
+          },
+        });
+        shell.showItemInFolder(exported.directory);
+      } catch (error) {
+        recordDiagnostic(undefined, { at: Date.now(), category: "diagnostics", level: "error", message: `export-failed: ${error}` });
+      }
+  });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(() => {
   if (isHeadless && process.platform === "darwin" && app.dock) {
     app.dock.hide();
@@ -606,6 +742,7 @@ app.whenReady().then(() => {
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
   }
   registerIpc();
+  installApplicationMenu();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

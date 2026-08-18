@@ -55,6 +55,8 @@ test("boots into test-vault, opens a note, and renders Live Preview with no cons
       (await window.geode.getProcessMetrics()).map((metric) => metric.type)
     );
     expect(processTypes).toContain("Utility");
+    const indexerReady = await window.evaluate(() => window.geode.startMetadataIndexer());
+    expect(indexerReady).toBe(true);
 
     // File explorer toolbar renders real Lucide SVG icons, not the old
     // emoji glyphs (📄+/📁+) or missing icons.

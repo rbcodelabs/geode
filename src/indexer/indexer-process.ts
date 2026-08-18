@@ -1,4 +1,3 @@
-import { parentPort } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
@@ -6,6 +5,7 @@ import { parseMetadata } from "../renderer/metadata-cache";
 import { readMetadataCache, writeMetadataCache } from "../main/metadata-cache-store";
 import {
   DebouncedMetadataCacheWriter,
+  chunkMetadataSnapshot,
   isMetadataIndexSnapshot,
   METADATA_INDEX_SCHEMA_VERSION,
   reconcileMetadataIndex,
@@ -17,8 +17,15 @@ type InitMessage = { type: "initialize"; root: string; files: MetadataFileStat[]
 type VaultMessage = { type: "vault-event"; event: "create" | "modify" | "delete"; path: string };
 type ShutdownMessage = { type: "shutdown" };
 
+const parentPort = process.parentPort;
+if (!parentPort) {
+  throw new Error("Metadata indexer must run as an Electron utility process with a parent port");
+}
+
 let root = "";
 let snapshot: MetadataIndexSnapshot = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: {} };
+let initializing = false;
+const pendingVaultEvents: VaultMessage[] = [];
 const timedWrite = async (value: MetadataIndexSnapshot) => {
   const serializeStart = performance.now();
   const serialized = JSON.stringify(value);
@@ -30,6 +37,7 @@ const timedWrite = async (value: MetadataIndexSnapshot) => {
 const writer = new DebouncedMetadataCacheWriter(timedWrite);
 
 async function initialize(message: InitMessage): Promise<void> {
+  initializing = true;
   root = message.root;
   const stored = await readMetadataCache(root);
   const started = performance.now();
@@ -41,7 +49,9 @@ async function initialize(message: InitMessage): Promise<void> {
   );
   parentPort.postMessage({ type: "performance", operation: "metadata-worker-read-parse", duration: performance.now() - started });
   writer.schedule(snapshot);
-  parentPort.postMessage({ type: "snapshot", snapshot });
+  for (const part of chunkMetadataSnapshot(snapshot)) parentPort.postMessage(part);
+  initializing = false;
+  for (const event of pendingVaultEvents.splice(0)) await applyVaultEvent(event);
 }
 
 async function applyVaultEvent(message: VaultMessage): Promise<void> {
@@ -72,7 +82,10 @@ async function applyVaultEvent(message: VaultMessage): Promise<void> {
 parentPort.on("message", (event) => {
   const message = event.data as InitMessage | VaultMessage | ShutdownMessage;
   if (message.type === "initialize") void initialize(message).catch((error) => parentPort.postMessage({ type: "error", message: String(error), fatal: true }));
-  else if (message.type === "vault-event") void applyVaultEvent(message);
+  else if (message.type === "vault-event") {
+    if (initializing) pendingVaultEvents.push(message);
+    else void applyVaultEvent(message);
+  }
   else if (message.type === "shutdown") void writer.flush().finally(() => {
     parentPort.postMessage({ type: "shutdown-complete" });
     process.exit(0);

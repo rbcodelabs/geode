@@ -868,7 +868,8 @@ export abstract class Plugin extends GeodePlugin {
 
   /** Add a clickable icon to the left ribbon. Returns the created element. */
   addRibbonIcon(icon: string, title: string, callback: (evt: MouseEvent) => any): HTMLElement {
-    const el = document.createElement("div");
+    const el = document.createElement("button");
+    el.type = "button";
     el.className = "side-dock-ribbon-action";
     setIcon(el, icon);
     setTooltip(el, title);

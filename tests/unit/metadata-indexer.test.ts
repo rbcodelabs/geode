@@ -1,11 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  chunkMetadataSnapshot,
   DebouncedMetadataCacheWriter,
   reconcileMetadataIndex,
   type MetadataIndexSnapshot,
 } from "../../src/indexer/metadata-indexer";
 
 describe("metadata utility-process indexer", () => {
+  it("serializes initialization as ordered byte- and entry-bounded chunks", () => {
+    const snapshot: MetadataIndexSnapshot = {
+      schemaVersion: 1,
+      entries: Object.fromEntries(Array.from({ length: 7 }, (_, index) => [
+        `Note ${index}.md`,
+        { mtimeMs: index, size: 80, content: "é".repeat(40), metadata: { links: [], embeds: [], tags: [], headings: [], aliases: [] } },
+      ])),
+    };
+
+    const messages = chunkMetadataSnapshot(snapshot, { maxBytes: 600, maxEntries: 2 });
+    expect(messages[0]).toEqual({ type: "snapshot-start", schemaVersion: 1, totalEntries: 7 });
+    expect(messages.at(-1)).toEqual(expect.objectContaining({ type: "snapshot-complete" }));
+    const chunks = messages.slice(1, -1);
+    expect(chunks.length).toBeGreaterThan(1);
+    chunks.forEach((message, sequence) => {
+      expect(message).toEqual(expect.objectContaining({ type: "snapshot-chunk", sequence }));
+      expect(Object.keys((message as any).entries).length).toBeGreaterThan(0);
+      expect(Object.keys((message as any).entries).length).toBeLessThanOrEqual(2);
+      expect(Buffer.byteLength(JSON.stringify(message))).toBeLessThanOrEqual(600);
+    });
+    expect(Object.assign({}, ...chunks.map((message: any) => message.entries))).toEqual(snapshot.entries);
+  });
   it("reuses unchanged warm entries, parses only changed/new files, and drops deleted entries", async () => {
     const persisted: MetadataIndexSnapshot = {
       schemaVersion: 1,
