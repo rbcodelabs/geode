@@ -34,6 +34,7 @@ import {
 import type { Command } from "./commands";
 import moment from "moment";
 import type { PluginSettingTab } from "./api/obsidian";
+import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
@@ -1327,17 +1328,7 @@ export class App {
   // --- UI helpers ---------------------------------------------------------
 
   notify(message: string, timeout = 4000) {
-    let host = document.querySelector(".notice-container") as HTMLElement | null;
-    if (!host) {
-      host = document.createElement("div");
-      host.className = "notice-container";
-      document.body.appendChild(host);
-    }
-    const notice = document.createElement("div");
-    notice.className = "notice";
-    notice.textContent = message;
-    host.appendChild(notice);
-    setTimeout(() => notice.remove(), timeout);
+    createDismissibleNotice(message, timeout);
   }
 
   showMenu(e: MouseEvent, items: { title: string; action: () => void }[]) {

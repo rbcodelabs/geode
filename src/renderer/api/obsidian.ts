@@ -19,6 +19,7 @@ import type {
   MarkdownPostProcessorContext,
 } from "../markdown/processor-registry";
 import { Scope, EditorSuggest } from "./suggest";
+import { createDismissibleNotice } from "../notice";
 import moment from "moment";
 
 // Ensure the DOM helpers exist the moment the compat module is first
@@ -175,34 +176,20 @@ export const Platform = {
 
 export class Notice {
   noticeEl: HTMLElement;
-  private hideTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly notice: ReturnType<typeof createDismissibleNotice>;
 
   constructor(message: string | DocumentFragment, duration = 4000) {
-    let host = document.querySelector(".notice-container") as HTMLElement | null;
-    if (!host) {
-      host = document.createElement("div");
-      host.className = "notice-container";
-      document.body.appendChild(host);
-    }
-    this.noticeEl = document.createElement("div");
-    this.noticeEl.className = "notice";
-    this.setMessage(message);
-    host.appendChild(this.noticeEl);
-    if (duration > 0) this.hideTimer = setTimeout(() => this.hide(), duration);
+    this.notice = createDismissibleNotice(message, duration);
+    this.noticeEl = this.notice.noticeEl;
   }
 
   setMessage(message: string | DocumentFragment): this {
-    if (typeof message === "string") this.noticeEl.textContent = message;
-    else {
-      this.noticeEl.textContent = "";
-      this.noticeEl.appendChild(message);
-    }
+    this.notice.setMessage(message);
     return this;
   }
 
   hide(): void {
-    if (this.hideTimer) clearTimeout(this.hideTimer);
-    this.noticeEl.remove();
+    this.notice.hide();
   }
 }
 
