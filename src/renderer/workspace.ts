@@ -116,6 +116,19 @@ export class WorkspaceLeaf {
     return { type: this.view?.viewType ?? this.viewState.type, state: this.viewState.state };
   }
 
+  /** Pin or unpin this leaf without recreating its view. */
+  setPinned(pinned: boolean): void {
+    if (this.pinned === pinned) return;
+    this.pinned = pinned;
+    this.group.renderTabs();
+    this.app.workspace.trigger("layout-change");
+  }
+
+  /** Toggle this leaf's pinned state (Obsidian-compatible plugin API). */
+  togglePinned(): void {
+    this.setPinned(!this.pinned);
+  }
+
   /**
    * Update this leaf's persisted view state in place, without recreating
    * the view (unlike calling `setViewState` again). For views whose state
@@ -439,6 +452,7 @@ export class TabGroup implements LeafContainer {
         if (e.button === 1) leaf.detach();
         else this.setActiveLeaf(leaf);
       };
+      tab.oncontextmenu = (e) => this.app.showTabContextMenu(e, leaf);
       tab.ondragstart = (e) => {
         draggingLeaf = leaf;
         e.dataTransfer?.setData("text/plain", leaf.id);
@@ -1172,7 +1186,7 @@ export class Workspace extends Events {
       // Plugin providing this view type isn't installed/enabled — leave empty.
       await leaf.setView(this.app.createEmptyView());
     }
-    if (ls.pinned) leaf.pinned = true;
+    if (ls.pinned) leaf.setPinned(true);
   }
 
   private async restoreSidebar(sb: Sidebar, ps: PersistedSidebar): Promise<void> {
@@ -1180,6 +1194,7 @@ export class Workspace extends Events {
       if (!this.getViewFactory(ls.type)) continue; // plugin absent
       const leaf = sb.addLeaf();
       await leaf.setViewState({ type: ls.type, state: ls.state });
+      if (ls.pinned) leaf.setPinned(true);
     }
     if (ps.activeType) {
       const l = sb.leaves.find((x) => x.view?.viewType === ps.activeType);

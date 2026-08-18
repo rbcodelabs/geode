@@ -2348,7 +2348,8 @@ select.dropdown:hover {
   color: var(--text-normal);
 }
 
-.context-menu {
+.context-menu,
+.menu {
   position: fixed;
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
@@ -2359,14 +2360,22 @@ select.dropdown:hover {
   min-width: 170px;
 }
 
-.context-menu-item {
+.context-menu-item,
+.menu-item {
   padding: 6px 12px;
   border-radius: 5px;
   font-size: 13.5px;
   cursor: pointer;
 }
 
-.context-menu-item:hover {
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-menu-item:hover,
+.menu-item:hover {
   background: var(--background-modifier-hover);
 }
 
