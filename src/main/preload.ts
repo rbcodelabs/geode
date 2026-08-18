@@ -19,6 +19,10 @@ export interface VaultEvent {
 }
 
 const api = {
+  acquirePowerSaveBlocker: (): Promise<string> =>
+    ipcRenderer.invoke("power-save-blocker-acquire"),
+  releasePowerSaveBlocker: (token: string): Promise<boolean> =>
+    ipcRenderer.invoke("power-save-blocker-release", token),
   chooseVault: (): Promise<string | null> => ipcRenderer.invoke("choose-vault"),
   openVault: (
     path: string
