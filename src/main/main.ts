@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerSaveBlocker, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -10,6 +10,7 @@ import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import { withPathLock } from "./path-lock";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { getProcessMetricsSnapshot } from "./process-metrics";
+import { PowerSaveBlockerRegistry } from "./power-save-blocker";
 import { readMetadataCache, writeMetadataCache } from "./metadata-cache-store";
 import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
@@ -56,6 +57,8 @@ interface CrashState {
   lastProcessMetrics: ReturnType<typeof getProcessMetricsSnapshot>;
 }
 const crashStates = new Map<number, CrashState>();
+const powerSaveBlockers = new PowerSaveBlockerRegistry(powerSaveBlocker);
+const powerSaveBlockerOwners = new Set<number>();
 let journal: CrashJournal | undefined;
 let diagnosticLog: DiagnosticLog | undefined;
 
@@ -231,6 +234,23 @@ function startWatcher(win: BrowserWindow, root: string): FSWatcher {
 }
 
 function registerIpc() {
+  ipcMain.handle("power-save-blocker-acquire", (e) => {
+    const ownerId = e.sender.id;
+    if (!powerSaveBlockerOwners.has(ownerId)) {
+      powerSaveBlockerOwners.add(ownerId);
+      e.sender.once("destroyed", () => {
+        powerSaveBlockers.releaseOwner(ownerId);
+        powerSaveBlockerOwners.delete(ownerId);
+      });
+    }
+    return powerSaveBlockers.acquire(ownerId);
+  });
+
+  ipcMain.handle("power-save-blocker-release", (e, token: unknown) => {
+    if (typeof token !== "string") return false;
+    return powerSaveBlockers.release(e.sender.id, token);
+  });
+
   ipcMain.handle("choose-vault", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const result = await dialog.showOpenDialog(win, {
