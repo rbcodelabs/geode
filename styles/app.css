@@ -413,6 +413,7 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
    final polish, matching the role Obsidian's base app.css plays. */
 
 .workspace-tabs.mod-top {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -693,6 +694,64 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
   transition: width 0.15s ease;
   overflow: hidden;
 }
+
+.workspace-sidebar > .sidebar-content,
+.workspace-sidebar > .workspace-tabs.sidebar-tab-group {
+  flex: 1 1 0;
+  min-height: 120px;
+}
+
+.workspace-sidebar > .workspace-tabs.sidebar-tab-group {
+  width: 100%;
+  overflow: hidden;
+}
+
+.workspace-sidebar .workspace-split-resize-handle {
+  flex: 0 0 5px;
+  height: 5px;
+  cursor: row-resize;
+  background: var(--background-modifier-border);
+  z-index: 2;
+  -webkit-app-region: no-drag;
+}
+
+.workspace-sidebar .workspace-split-resize-handle:hover {
+  background: var(--interactive-accent);
+}
+
+.workspace-sidebar[data-drop-target="top"]::after,
+.workspace-sidebar[data-drop-target="bottom"]::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: calc(25% - 6px);
+  border: 2px solid var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.workspace-sidebar[data-drop-target="top"]::after { top: 6px; }
+.workspace-sidebar[data-drop-target="bottom"]::after { bottom: 6px; }
+
+.workspace-tabs[data-drop-target="left"]::after,
+.workspace-tabs[data-drop-target="right"]::after,
+.workspace-tabs[data-drop-target="top"]::after,
+.workspace-tabs[data-drop-target="bottom"]::after {
+  content: "";
+  position: absolute;
+  border: 2px solid var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 20;
+}
+.workspace-tabs[data-drop-target="left"]::after { inset: 6px 50% 6px 6px; }
+.workspace-tabs[data-drop-target="right"]::after { inset: 6px 6px 6px 50%; }
+.workspace-tabs[data-drop-target="top"]::after { inset: 6px 6px 50% 6px; }
+.workspace-tabs[data-drop-target="bottom"]::after { inset: 50% 6px 6px 6px; }
 
 .workspace-sidebar.is-resizing {
   transition: none;

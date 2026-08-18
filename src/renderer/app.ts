@@ -1354,7 +1354,7 @@ export class App {
     let restored = false;
     try {
       const saved = (await window.geode.readConfig("workspace")) as PersistedWorkspace | null;
-      if (saved && saved.version === 1) {
+      if (saved && (saved.version === 1 || saved.version === 2)) {
         restored = await this.workspace.deserialize(saved);
       }
     } catch (err) {
@@ -1386,9 +1386,10 @@ export class App {
   }
 
   openSearch(query: string) {
-    const view = this.workspace.leftSidebar.getView("search") as SearchView | null;
-    if (!view) return;
-    this.workspace.leftSidebar.show(view);
+    const leaf = this.workspace.getLeavesOfType("search")[0];
+    const view = leaf?.view as SearchView | null;
+    if (!leaf || !view) return;
+    this.workspace.revealLeaf(leaf);
     view.setQuery(query);
   }
 

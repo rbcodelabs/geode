@@ -427,6 +427,13 @@ embed OR search
 - **Main area**: tab groups, splittable horizontally and vertically without limit.
 - **Status bar** (bottom-right): per-file/system info — backlink count, current editing mode, word & character count (Word count plugin); plugin items may be interactive (e.g. Sync status/log). Core and community plugins can add items.
 
+Geode implements built-in and plugin views as the same movable workspace-leaf
+type. Sidebar top/bottom drop targets create vertically stacked tab groups with
+resizable dividers. Layout persistence uses a versioned recursive split/tab
+tree and migrates the prior flat version-1 format. Obsidian-compatible
+`getLeftLeaf(true)` / `getRightLeaf(true)` calls create a new sidebar group;
+passing `false` reuses an available leaf in the default group.
+
 ### Tabs
 - New tab: `Ctrl/Cmd+T` or "+" button. Close: `Ctrl/Cmd+W`. Reopen closed: `Ctrl/Cmd+Shift+T`.
 - Open links: click = active tab; `Ctrl/Cmd`+click = new tab; `Ctrl/Cmd+Alt`+click = new tab group (split); `Ctrl/Cmd+Alt+Shift`+click = new window. (Source mode adds `Shift` to the modifier combos.)
