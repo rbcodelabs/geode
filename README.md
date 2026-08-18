@@ -5,14 +5,15 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.5). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.6). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.5)
+## Features (v0.6)
 
-- **Vaults** — open any folder; external edits are picked up live
+- **Vaults** — open any folder; external edits are picked up live; manage recent
+  vaults and open multiple vaults in isolated top-level windows
 - **Editor** — CodeMirror 6, markdown highlighting, `[[wikilink]]` autocomplete,
   Cmd/Ctrl+click to follow, autosave, rename-updates-links
 - **Reading view** — callouts (13 types, foldable), embeds (notes/images/audio/
@@ -26,10 +27,11 @@ cloud, no lock-in.
 - **Canvas** — open and edit interoperable JSON Canvas 1.0 (`.canvas`) boards
   with text, file, link, and group cards; labeled edges; pan/zoom; and
   persistent drag/resize geometry
-- **Workspace** — tabs, split panes, pinned tabs, collapsible sidebars, a
-  hideable left ribbon with persistent Settings and plugin-contributed actions,
-  and status-bar word count; tab bar and view header DOM/CSS match real
-  Obsidian so community themes and CSS snippets apply correctly
+- **Workspace** — movable built-in and plugin views, tabs, split panes, pinned
+  tabs, vertically stacked and independently resizable sidebar groups, recursive
+  layout persistence, a hideable left ribbon with persistent Settings and
+  plugin-contributed actions, and status-bar word count; tab bar and view header
+  DOM/CSS match real Obsidian so community themes and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
   dark/light themes via CSS variables
 - **Settings** — tabbed Settings window (Appearance, Community plugins &
