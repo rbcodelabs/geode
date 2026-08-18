@@ -23,9 +23,10 @@ cloud, no lock-in.
   File reads, Markdown parsing, and debounced atomic cache writes run in a
   background utility process, with automatic in-renderer fallback
 - **Search** — `tag:` `path:` `file:` operators, quoted phrases, negation, regex
-- **Workspace** — tabs, split panes, pinned tabs, collapsible sidebars,
-  status-bar word count; tab bar and view header DOM/CSS match real Obsidian
-  so community themes and CSS snippets apply correctly
+- **Workspace** — tabs, split panes, pinned tabs, collapsible sidebars, a
+  hideable left ribbon with persistent Settings and plugin-contributed actions,
+  and status-bar word count; tab bar and view header DOM/CSS match real
+  Obsidian so community themes and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
   dark/light themes via CSS variables
 - **Settings** — tabbed Settings window (Appearance, Community plugins &
