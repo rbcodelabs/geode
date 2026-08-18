@@ -29,6 +29,9 @@ const api = {
   ): Promise<{ root: string; name: string; files: VaultFileEntry[] }> =>
     ipcRenderer.invoke("open-vault", path),
   getRecentVaults: (): Promise<string[]> => ipcRenderer.invoke("get-recent-vaults"),
+  getLaunchVault: (): Promise<string | null> => ipcRenderer.invoke("get-launch-vault"),
+  openVaultWindow: (path: string): Promise<{ action: "current" | "focused" | "created" }> =>
+    ipcRenderer.invoke("open-vault-window", path),
   getPluginPolicy: (): Promise<ManagedPolicy | null> => ipcRenderer.invoke("get-plugin-policy"),
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
