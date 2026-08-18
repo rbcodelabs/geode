@@ -1,6 +1,6 @@
 import { Vault } from "./vault";
 import { MetadataCache } from "./metadata-cache";
-import { Workspace, TabGroup, View, type PersistedWorkspace } from "./workspace";
+import { Workspace, TabGroup, View, type PersistedWorkspace, type WorkspaceLeaf } from "./workspace";
 import { CommandRegistry } from "./commands";
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
@@ -33,7 +33,7 @@ import {
 } from "./daily-notes";
 import type { Command } from "./commands";
 import moment from "moment";
-import type { PluginSettingTab } from "./api/obsidian";
+import { Menu, type PluginSettingTab } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
 
@@ -995,10 +995,7 @@ export class App {
     c("search-web", "Search the web", undefined, () => this.searchWeb());
     c("pin-tab", "Toggle pin on current tab", undefined, () => {
       const leaf = this.workspace.getActiveLeaf();
-      if (leaf) {
-        leaf.pinned = !leaf.pinned;
-        leaf.group.renderTabs();
-      }
+      leaf?.togglePinned();
     });
     c("bases-create", "Bases: Create new base", undefined, () => {
       const activeFile = this.workspace.getActiveFile();
@@ -1356,6 +1353,18 @@ export class App {
       if (!menu.contains(ev.target as Node)) dismiss();
     };
     document.addEventListener("mousedown", onDown, true);
+  }
+
+  /** Open the Obsidian-compatible context menu for a main-area tab. */
+  showTabContextMenu(e: MouseEvent, leaf: WorkspaceLeaf): void {
+    e.preventDefault();
+    e.stopPropagation();
+    new Menu()
+      .addItem((item) => item
+        .setTitle(leaf.pinned ? "Unpin" : "Pin")
+        .setIcon("pin")
+        .onClick(() => leaf.togglePinned()))
+      .showAtMouseEvent(e);
   }
 
   applySettings() {
