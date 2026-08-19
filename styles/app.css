@@ -3290,6 +3290,7 @@ select.dropdown:hover {
 
 .canvas-node-resize-handle {
   position: absolute;
+  z-index: 5;
   right: -1px;
   bottom: -1px;
   width: 14px;
@@ -3298,6 +3299,33 @@ select.dropdown:hover {
   border-width: 0 2px 2px 0;
   cursor: nwse-resize;
 }
+
+.canvas-node-resize-edge {
+  position: absolute;
+  z-index: 3;
+}
+
+.canvas-node-resize-edge[data-direction="top"],
+.canvas-node-resize-edge[data-direction="bottom"] {
+  right: 14px;
+  left: 14px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.canvas-node-resize-edge[data-direction="top"] { top: 0; }
+.canvas-node-resize-edge[data-direction="bottom"] { bottom: 0; }
+
+.canvas-node-resize-edge[data-direction="left"],
+.canvas-node-resize-edge[data-direction="right"] {
+  top: 14px;
+  bottom: 14px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.canvas-node-resize-edge[data-direction="left"] { left: 0; }
+.canvas-node-resize-edge[data-direction="right"] { right: 0; }
 
 .canvas-controls {
   position: absolute;

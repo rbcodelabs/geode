@@ -25,6 +25,7 @@ const INVALID_MARKDOWN_FILE_NAME = /[\\/:#|^\[\]]/;
 
 type Point = { x: number; y: number };
 type Bounds = { left: number; top: number; right: number; bottom: number };
+type ResizeDirection = CanvasSide | "southeast";
 
 function normalizeWebUrl(raw: string): string | null {
   try {
@@ -398,6 +399,13 @@ export class CanvasView implements View {
     resize.className = "canvas-node-resize-handle";
     resize.addEventListener("pointerdown", (event) => this.beginResize(event, node));
     el.appendChild(resize);
+    for (const direction of ["top", "right", "bottom", "left"] as const) {
+      const edge = document.createElement("div");
+      edge.className = "canvas-node-resize-edge";
+      edge.dataset.direction = direction;
+      edge.addEventListener("pointerdown", (event) => this.beginResize(event, node, direction));
+      el.appendChild(edge);
+    }
     return el;
   }
 
@@ -1096,7 +1104,7 @@ export class CanvasView implements View {
   }
 
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-connection-handle")) return;
+    if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-edge, .canvas-node-connection-handle")) return;
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
     if (event.altKey && node.type !== "group") {
@@ -1228,7 +1236,7 @@ export class CanvasView implements View {
     return id;
   }
 
-  private beginResize(event: PointerEvent, node: CanvasNode): void {
+  private beginResize(event: PointerEvent, node: CanvasNode, direction: ResizeDirection = "southeast"): void {
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
@@ -1236,21 +1244,58 @@ export class CanvasView implements View {
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.updateSelectionClasses();
-    const start = { x: event.clientX, y: event.clientY, width: node.width, height: node.height };
+    const start = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      x: node.x,
+      y: node.y,
+      width: node.width,
+      height: node.height,
+    };
     const move = (next: PointerEvent) => {
-      const dx = (next.clientX - start.x) / this.scale;
-      const dy = (next.clientY - start.y) / this.scale;
-      if (next.shiftKey) {
+      const dx = (next.clientX - start.pointerX) / this.scale;
+      const dy = (next.clientY - start.pointerY) / this.scale;
+      const minimumScale = Math.max(MIN_WIDTH / start.width, MIN_HEIGHT / start.height);
+      if (direction === "southeast" && next.shiftKey) {
         const proportionalX = dx / start.width;
         const proportionalY = dy / start.height;
         const driver = Math.abs(proportionalX) >= Math.abs(proportionalY) ? proportionalX : proportionalY;
-        const minimumScale = Math.max(MIN_WIDTH / start.width, MIN_HEIGHT / start.height);
         const constrainedScale = Math.max(minimumScale, 1 + driver);
         node.width = start.width * constrainedScale;
         node.height = start.height * constrainedScale;
-      } else {
+        node.x = start.x;
+        node.y = start.y;
+      } else if (direction === "southeast") {
         node.width = Math.max(MIN_WIDTH, start.width + dx);
         node.height = Math.max(MIN_HEIGHT, start.height + dy);
+        node.x = start.x;
+        node.y = start.y;
+      } else if (direction === "left" || direction === "right") {
+        const rawWidth = direction === "left" ? start.width - dx : start.width + dx;
+        if (next.shiftKey) {
+          const constrainedScale = Math.max(minimumScale, rawWidth / start.width);
+          node.width = start.width * constrainedScale;
+          node.height = start.height * constrainedScale;
+          node.y = start.y + (start.height - node.height) / 2;
+        } else {
+          node.width = Math.max(MIN_WIDTH, rawWidth);
+          node.height = start.height;
+          node.y = start.y;
+        }
+        node.x = direction === "left" ? start.x + start.width - node.width : start.x;
+      } else {
+        const rawHeight = direction === "top" ? start.height - dy : start.height + dy;
+        if (next.shiftKey) {
+          const constrainedScale = Math.max(minimumScale, rawHeight / start.height);
+          node.width = start.width * constrainedScale;
+          node.height = start.height * constrainedScale;
+          node.x = start.x + (start.width - node.width) / 2;
+        } else {
+          node.width = start.width;
+          node.height = Math.max(MIN_HEIGHT, rawHeight);
+          node.x = start.x;
+        }
+        node.y = direction === "top" ? start.y + start.height - node.height : start.y;
       }
       this.render();
     };
