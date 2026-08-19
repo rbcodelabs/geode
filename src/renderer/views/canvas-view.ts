@@ -583,7 +583,7 @@ export class CanvasView implements View {
     return `text-${sequence}`;
   }
 
-  private addFileCardAt(file: TFile, worldPoint: Point): void {
+  private createFileCard(file: TFile, worldPoint: Point): CanvasNode {
     const kind = this.fileKind(file);
     const [width, height] = kind === "note"
       ? [NOTE_NODE_WIDTH, NOTE_NODE_HEIGHT]
@@ -592,7 +592,7 @@ export class CanvasView implements View {
         : kind === "other"
           ? [300, 120]
           : [360, 240];
-    const node: CanvasNode = {
+    return {
       id: this.nextFileNodeId(),
       type: "file",
       x: worldPoint.x - width / 2,
@@ -601,12 +601,28 @@ export class CanvasView implements View {
       height,
       file: file.path,
     };
-    this.document.nodes.push(node);
+  }
+
+  private addFileCardsAt(files: TFile[], worldPoint: Point): void {
+    if (files.length === 0) return;
+    const nodes: CanvasNode[] = [];
+    for (const [index, file] of files.entries()) {
+      const node = this.createFileCard(file, {
+        x: worldPoint.x + (index % 3) * 400,
+        y: worldPoint.y + Math.floor(index / 3) * 320,
+      });
+      nodes.push(node);
+      this.document.nodes.push(node);
+    }
     this.selectedEdgeId = null;
     this.selectedIds.clear();
-    this.selectedIds.add(node.id);
+    for (const node of nodes) this.selectedIds.add(node.id);
     this.render();
     void this.persist();
+  }
+
+  private addFileCardAt(file: TFile, worldPoint: Point): void {
+    this.addFileCardsAt([file], worldPoint);
   }
 
   private nextFileNodeId(): string {
@@ -1453,9 +1469,20 @@ export class CanvasView implements View {
         event.stopPropagation();
         const path = transfer.getData(VAULT_FILE_DRAG_MIME);
         if (!isValidVaultFileDragPath(path)) return;
-        const file = this.app.vault.getFileByPath(path);
-        if (!file || file.path === this.file?.path) return;
-        this.addFileCardAt(file, this.screenToWorld(event.clientX, event.clientY));
+        const item = this.app.vault.getAbstractFileByPath(path);
+        if (!item) return;
+        const worldPoint = this.screenToWorld(event.clientX, event.clientY);
+        if (item.kind === "file") {
+          if (item.path === this.file?.path) return;
+          this.addFileCardAt(item, worldPoint);
+          return;
+        }
+        if (!item.path) return;
+        const prefix = `${item.path}/`;
+        const files = this.app.vault.getFiles()
+          .filter((file) => file.path.startsWith(prefix) && file.path !== this.file?.path)
+          .sort((a, b) => a.path.localeCompare(b.path));
+        this.addFileCardsAt(files, worldPoint);
         return;
       }
       const canonicalUrl = normalizeDroppedWebUrl(transfer);

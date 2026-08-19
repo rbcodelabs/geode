@@ -136,6 +136,8 @@ export class FileExplorerView implements View {
       wrapper.classList.toggle("is-open", isOpen);
       const row = document.createElement("div");
       row.className = "nav-folder-title nav-item";
+      row.dataset.path = folder.path;
+      row.draggable = true;
       row.style.paddingLeft = "4px";
       const arrow = document.createElement("span");
       arrow.className = "nav-folder-arrow";
@@ -149,6 +151,11 @@ export class FileExplorerView implements View {
         if (this.expanded.has(folder.path)) this.expanded.delete(folder.path);
         else this.expanded.add(folder.path);
         this.render();
+      });
+      row.addEventListener("dragstart", (e) => {
+        if (!e.dataTransfer) return;
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(VAULT_FILE_DRAG_MIME, folder.path);
       });
       row.addEventListener("contextmenu", (e) => this.folderMenu(e, folder));
       wrapper.appendChild(row);
