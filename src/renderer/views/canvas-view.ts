@@ -1554,6 +1554,19 @@ export class CanvasView implements View {
       if (!this.surfaceEl.contains(event.relatedTarget as Node | null)) this.spacePressed = false;
     });
     this.surfaceEl.addEventListener("wheel", (event) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const scrollable = target?.closest<HTMLElement>(".canvas-node-text, .canvas-node-note");
+      const nodeId = scrollable?.closest<HTMLElement>(".canvas-node")?.dataset.nodeId;
+      if (
+        !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+        && !this.spacePressed
+        && scrollable
+        && nodeId
+        && this.selectedIds.has(nodeId)
+        && scrollable.scrollHeight > scrollable.clientHeight
+      ) return;
       event.preventDefault();
       if (event.ctrlKey || event.metaKey || this.spacePressed) {
         const rect = this.surfaceEl.getBoundingClientRect();
