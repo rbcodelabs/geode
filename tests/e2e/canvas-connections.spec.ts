@@ -57,7 +57,7 @@ test("authors, selects, and deletes directed Canvas connections at transformed c
     await source.click();
     await expect(source).toHaveClass(/is-selected/);
     await expect(source.locator(".canvas-node-connection-handle")).toHaveCount(4);
-    await expect(group.locator(".canvas-node-connection-handle")).toHaveCount(0);
+    await expect(group.locator(".canvas-node-connection-handle")).toHaveCount(4);
     await expect(source.getByRole("button", { name: "Connect from top" })).toBeVisible();
 
     const initialText = fs.readFileSync(canvasPath, "utf8");

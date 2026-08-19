@@ -181,7 +181,7 @@ test("empty connection drops transactionally create an attached text card", asyn
     expect(await camera(view)).toEqual(transformedCamera);
 
     // Dropping on any node body without a valid handle is a no-op, including
-    // the source itself and a group that cannot expose connection handles.
+    // the source itself and a group body away from its connection handles.
     for (const body of [source, view.locator('.canvas-node[data-node-id="group"]'), view.locator('.canvas-node[data-node-id="target"]')]) {
       const beforeBodyDrop = fs.readFileSync(canvasPath, "utf8");
       await surface.focus();

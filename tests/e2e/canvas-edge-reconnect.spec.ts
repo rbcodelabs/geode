@@ -168,7 +168,7 @@ test("reconnects selected Canvas edge endpoints and removes only on empty drop",
     await expect(reloaded.locator('.canvas-edge-label[data-edge-id="edge-2"]')).toHaveText("preserve me");
 
     // Reconnecting source to the current target would make a self edge. It is
-    // rejected unchanged, as is dropping onto a group.
+    // rejected unchanged, as is dropping onto a group body instead of a handle.
     await reloaded.locator('.canvas-edge-hit[data-edge-id="edge-2"]').dispatchEvent("click");
     await expect(reloaded.locator('.canvas-edge[data-edge-id="edge-2"]')).toHaveClass(/is-selected/);
     const reloadedCamera = {

@@ -397,17 +397,15 @@ export class CanvasView implements View {
       items.push({ title: "Delete", action: () => this.deleteSelection() });
       this.app.showMenu(event, items);
     });
-    if (node.type !== "group") {
-      for (const side of ["top", "right", "bottom", "left"] as const) {
-        const handle = document.createElement("button");
-        handle.type = "button";
-        handle.className = "canvas-node-connection-handle";
-        handle.dataset.nodeId = node.id;
-        handle.dataset.side = side;
-        handle.setAttribute("aria-label", `Connect from ${side}`);
-        handle.addEventListener("pointerdown", (event) => this.beginConnection(event, node, side));
-        el.appendChild(handle);
-      }
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+      const handle = document.createElement("button");
+      handle.type = "button";
+      handle.className = "canvas-node-connection-handle";
+      handle.dataset.nodeId = node.id;
+      handle.dataset.side = side;
+      handle.setAttribute("aria-label", `Connect from ${side}`);
+      handle.addEventListener("pointerdown", (event) => this.beginConnection(event, node, side));
+      el.appendChild(handle);
     }
     const resize = document.createElement("div");
     resize.className = "canvas-node-resize-handle";
@@ -1152,6 +1150,7 @@ export class CanvasView implements View {
     const from = this.sidePoint(fromNode, fromSide);
     const to = this.sidePoint(toNode, toSide);
     const preview = document.createElementNS(svg.namespaceURI, "path");
+    this.containerEl.classList.add("is-connecting");
     preview.classList.add("canvas-edge-preview");
     preview.setAttribute("d", this.edgePath(from, fromSide, to, toSide));
     svg.appendChild(preview);
@@ -1172,19 +1171,25 @@ export class CanvasView implements View {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       preview.remove();
+      this.containerEl.classList.remove("is-connecting");
+      const targetHandle = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
+      });
       const nodeEl = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node")].reverse().find((candidate) => {
         const rect = candidate.getBoundingClientRect();
         return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
       });
-      if (!nodeEl) {
+      if (!targetHandle && !nodeEl) {
         this.removeEdge(edgeId);
         return;
       }
-      const node = this.document.nodes.find((candidate) => candidate.id === nodeEl.dataset.nodeId);
-      if (!node || node.type === "group") return;
+      const node = this.document.nodes.find((candidate) => candidate.id === (targetHandle?.dataset.nodeId ?? nodeEl?.dataset.nodeId));
+      if (!node || (!targetHandle && node.type === "group")) return;
       const otherNodeId = endpoint === "source" ? edge.toNode : edge.fromNode;
-      if (node.id === otherNodeId) return;
-      const side = this.closestSide(node, toWorld(next));
+      const currentNodeId = endpoint === "source" ? edge.fromNode : edge.toNode;
+      if (node.id === otherNodeId || node.id === currentNodeId) return;
+      const side = (targetHandle?.dataset.side as CanvasSide | undefined) ?? this.closestSide(node, toWorld(next));
       if (endpoint === "source") {
         edge.fromNode = node.id;
         edge.fromSide = side;
@@ -1452,7 +1457,7 @@ export class CanvasView implements View {
       if (targetNodeId && targetSide) {
         if (targetNodeId === node.id) return;
         const targetNode = this.document.nodes.find((candidate) => candidate.id === targetNodeId);
-        if (!targetNode || targetNode.type === "group") return;
+        if (!targetNode) return;
         const edge: CanvasEdge = {
           id: this.nextEdgeId(),
           fromNode: node.id,
