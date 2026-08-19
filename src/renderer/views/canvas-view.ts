@@ -5,6 +5,7 @@ import { parseCanvas, serializeCanvas, type CanvasDocument, type CanvasEdge, typ
 import { setIcon } from "../api/icons";
 import { PromptModal, SuggestModal } from "../modals/modals";
 import { loadEmbedBlobUrl, resolveEmbed, type EmbedKind } from "../markdown/embed";
+import { isValidVaultFileDragPath, VAULT_FILE_DRAG_MIME } from "../file-drag";
 
 const MIN_WIDTH = 80;
 const MIN_HEIGHT = 50;
@@ -560,7 +561,7 @@ export class CanvasView implements View {
         : kind === "other"
           ? [300, 120]
           : [360, 240];
-    this.document.nodes.push({
+    const node: CanvasNode = {
       id: this.nextFileNodeId(),
       type: "file",
       x: worldPoint.x - width / 2,
@@ -568,7 +569,11 @@ export class CanvasView implements View {
       width,
       height,
       file: file.path,
-    });
+    };
+    this.document.nodes.push(node);
+    this.selectedEdgeId = null;
+    this.selectedIds.clear();
+    this.selectedIds.add(node.id);
     this.render();
     void this.persist();
   }
@@ -1352,6 +1357,23 @@ export class CanvasView implements View {
   }
 
   private installCameraControls(): void {
+    const isEmptyDropTarget = (target: EventTarget | null) => target === this.surfaceEl || target === this.viewportEl;
+    this.surfaceEl.addEventListener("dragover", (event) => {
+      if (!isEmptyDropTarget(event.target) || !event.dataTransfer?.types.includes(VAULT_FILE_DRAG_MIME)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    });
+    this.surfaceEl.addEventListener("drop", (event) => {
+      const transfer = event.dataTransfer;
+      if (!isEmptyDropTarget(event.target) || !transfer?.types.includes(VAULT_FILE_DRAG_MIME)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const path = transfer.getData(VAULT_FILE_DRAG_MIME);
+      if (!isValidVaultFileDragPath(path)) return;
+      const file = this.app.vault.getFileByPath(path);
+      if (!file || file.path === this.file?.path) return;
+      this.addFileCardAt(file, this.screenToWorld(event.clientX, event.clientY));
+    });
     this.surfaceEl.addEventListener("dblclick", (event) => {
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.addTextCardAt(this.screenToWorld(event.clientX, event.clientY));

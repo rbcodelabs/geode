@@ -2,6 +2,7 @@ import type { App } from "../app";
 import type { View } from "../workspace";
 import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
+import { VAULT_FILE_DRAG_MIME } from "../file-drag";
 
 export type SortOrder = "name-asc" | "name-desc";
 
@@ -165,6 +166,7 @@ export class FileExplorerView implements View {
       const row = document.createElement("div");
       row.className = "nav-file-title nav-item";
       row.dataset.path = file.path;
+      row.draggable = true;
       row.style.paddingLeft = "18px";
       const titleEl = document.createElement("span");
       titleEl.className = "nav-item-title";
@@ -178,6 +180,11 @@ export class FileExplorerView implements View {
       }
       row.addEventListener("click", (e) => {
         this.app.openFile(file, e.metaKey || e.ctrlKey);
+      });
+      row.addEventListener("dragstart", (e) => {
+        if (!e.dataTransfer) return;
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(VAULT_FILE_DRAG_MIME, file.path);
       });
       row.addEventListener("contextmenu", (e) => this.fileMenu(e, file));
       wrapper.appendChild(row);
