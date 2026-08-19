@@ -21,11 +21,13 @@ const LINK_NODE_HEIGHT = 180;
 const GROUP_PADDING = 40;
 const DEFAULT_GROUP_WIDTH = 400;
 const DEFAULT_GROUP_HEIGHT = 300;
+const ALIGNMENT_SNAP_TOLERANCE_PX = 6;
 const INVALID_MARKDOWN_FILE_NAME = /[\\/:#|^\[\]]/;
 
 type Point = { x: number; y: number };
 type Bounds = { left: number; top: number; right: number; bottom: number };
 type ResizeDirection = CanvasSide | "southeast";
+type ResizeStart = Point & { pointerX: number; pointerY: number; width: number; height: number };
 type SwappableFileKind = "note" | "image" | "audio" | "video";
 
 function normalizeWebUrl(raw: string): string | null {
@@ -1269,6 +1271,136 @@ export class CanvasView implements View {
     return distances[0][0];
   }
 
+  private alignmentTargets(excludedIds: Set<string>): { x: number[]; y: number[] } {
+    const x: number[] = [];
+    const y: number[] = [];
+    for (const peer of this.document.nodes) {
+      if (excludedIds.has(peer.id)) continue;
+      x.push(peer.x, peer.x + peer.width / 2, peer.x + peer.width);
+      y.push(peer.y, peer.y + peer.height / 2, peer.y + peer.height);
+    }
+    return { x, y };
+  }
+
+  private closestAlignmentDelta(moving: number[], targets: number[]): number {
+    const tolerance = ALIGNMENT_SNAP_TOLERANCE_PX / this.scale;
+    let best = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const value of moving) {
+      for (const target of targets) {
+        const delta = target - value;
+        const distance = Math.abs(delta);
+        if (distance <= tolerance && distance < bestDistance) {
+          best = delta;
+          bestDistance = distance;
+        }
+      }
+    }
+    return best;
+  }
+
+  private boundsFor(nodes: Array<{ node: CanvasNode; x: number; y: number }>): Bounds {
+    return {
+      left: Math.min(...nodes.map(({ x }) => x)),
+      top: Math.min(...nodes.map(({ y }) => y)),
+      right: Math.max(...nodes.map(({ node, x }) => x + node.width)),
+      bottom: Math.max(...nodes.map(({ node, y }) => y + node.height)),
+    };
+  }
+
+  private trackGestureSpaceBypass(): { pressed: () => boolean; dispose: () => void } {
+    let pressed = this.spacePressed;
+    const down = (event: KeyboardEvent) => { if (event.code === "Space") pressed = true; };
+    const up = (event: KeyboardEvent) => { if (event.code === "Space") pressed = false; };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return {
+      pressed: () => pressed,
+      dispose: () => {
+        window.removeEventListener("keydown", down);
+        window.removeEventListener("keyup", up);
+      },
+    };
+  }
+
+  private snapResize(
+    node: CanvasNode,
+    direction: ResizeDirection,
+    start: ResizeStart,
+    shiftKey: boolean,
+    targets: { x: number[]; y: number[] },
+    southeastDriver: "x" | "y" | null,
+  ): void {
+    const minimumScale = Math.max(MIN_WIDTH / start.width, MIN_HEIGHT / start.height);
+    if (shiftKey) {
+      if (direction === "southeast") {
+        if (southeastDriver === "x") {
+          const delta = this.closestAlignmentDelta([node.x + node.width], targets.x);
+          const scale = (node.width + delta) / start.width;
+          if (delta && scale >= minimumScale) {
+            node.width = start.width * scale;
+            node.height = start.height * scale;
+          }
+        } else {
+          const delta = this.closestAlignmentDelta([node.y + node.height], targets.y);
+          const scale = (node.height + delta) / start.height;
+          if (delta && scale >= minimumScale) {
+            node.width = start.width * scale;
+            node.height = start.height * scale;
+          }
+        }
+        return;
+      }
+      if (direction === "left" || direction === "right") {
+        const active = direction === "left" ? node.x : node.x + node.width;
+        const delta = this.closestAlignmentDelta([active], targets.x);
+        if (!delta) return;
+        const fixed = direction === "left" ? start.x + start.width : start.x;
+        const width = direction === "left" ? fixed - (active + delta) : active + delta - fixed;
+        const scale = width / start.width;
+        if (scale < minimumScale) return;
+        node.width = start.width * scale;
+        node.height = start.height * scale;
+        node.x = direction === "left" ? start.x + start.width - node.width : start.x;
+        node.y = start.y + (start.height - node.height) / 2;
+        return;
+      }
+      const active = direction === "top" ? node.y : node.y + node.height;
+      const delta = this.closestAlignmentDelta([active], targets.y);
+      if (!delta) return;
+      const fixed = direction === "top" ? start.y + start.height : start.y;
+      const height = direction === "top" ? fixed - (active + delta) : active + delta - fixed;
+      const scale = height / start.height;
+      if (scale < minimumScale) return;
+      node.width = start.width * scale;
+      node.height = start.height * scale;
+      node.x = start.x + (start.width - node.width) / 2;
+      node.y = direction === "top" ? start.y + start.height - node.height : start.y;
+      return;
+    }
+
+    if (direction === "southeast" || direction === "right") {
+      const delta = this.closestAlignmentDelta([node.x + node.width], targets.x);
+      if (node.width + delta >= MIN_WIDTH) node.width += delta;
+    } else if (direction === "left") {
+      const delta = this.closestAlignmentDelta([node.x], targets.x);
+      if (node.width - delta >= MIN_WIDTH) {
+        node.x += delta;
+        node.width -= delta;
+      }
+    }
+    if (direction === "southeast" || direction === "bottom") {
+      const delta = this.closestAlignmentDelta([node.y + node.height], targets.y);
+      if (node.height + delta >= MIN_HEIGHT) node.height += delta;
+    } else if (direction === "top") {
+      const delta = this.closestAlignmentDelta([node.y], targets.y);
+      if (node.height - delta >= MIN_HEIGHT) {
+        node.y += delta;
+        node.height -= delta;
+      }
+    }
+  }
+
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-edge, .canvas-node-connection-handle")) return;
     event.stopPropagation();
@@ -1298,6 +1430,12 @@ export class CanvasView implements View {
           .filter((candidate) => candidate.id !== node.id && candidate.type !== "group" && this.selectedIds.has(candidate.id))
           .map((candidate) => ({ node: candidate, x: candidate.x, y: candidate.y }))
         : [];
+    const moving = [{ node, x: start.nodeX, y: start.nodeY }, ...carried];
+    const movingBounds = this.boundsFor(moving);
+    const excludedIds = new Set(node.type === "group" || wasSelected ? this.selectedIds : [node.id]);
+    for (const member of moving) excludedIds.add(member.node.id);
+    const alignmentTargets = this.alignmentTargets(excludedIds);
+    const spaceBypass = this.trackGestureSpaceBypass();
     let didMove = false;
     const move = (next: PointerEvent) => {
       if (!didMove) {
@@ -1311,12 +1449,35 @@ export class CanvasView implements View {
       }
       let screenDx = next.clientX - start.x;
       let screenDy = next.clientY - start.y;
+      let snapX = true;
+      let snapY = true;
       if (node.type !== "group" && next.shiftKey) {
-        if (Math.abs(screenDx) >= Math.abs(screenDy)) screenDy = 0;
-        else screenDx = 0;
+        if (Math.abs(screenDx) >= Math.abs(screenDy)) {
+          screenDy = 0;
+          snapY = false;
+        } else {
+          screenDx = 0;
+          snapX = false;
+        }
       }
-      const dx = screenDx / this.scale;
-      const dy = screenDy / this.scale;
+      let dx = screenDx / this.scale;
+      let dy = screenDy / this.scale;
+      if (!spaceBypass.pressed()) {
+        if (snapX) {
+          dx += this.closestAlignmentDelta([
+            movingBounds.left + dx,
+            (movingBounds.left + movingBounds.right) / 2 + dx,
+            movingBounds.right + dx,
+          ], alignmentTargets.x);
+        }
+        if (snapY) {
+          dy += this.closestAlignmentDelta([
+            movingBounds.top + dy,
+            (movingBounds.top + movingBounds.bottom) / 2 + dy,
+            movingBounds.bottom + dy,
+          ], alignmentTargets.y);
+        }
+      }
       node.x = start.nodeX + dx;
       node.y = start.nodeY + dy;
       for (const member of carried) {
@@ -1328,6 +1489,7 @@ export class CanvasView implements View {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      spaceBypass.dispose();
       if (!didMove && node.type !== "group") {
         this.select(node, event.shiftKey);
         return;
@@ -1418,14 +1580,18 @@ export class CanvasView implements View {
       width: node.width,
       height: node.height,
     };
+    const alignmentTargets = this.alignmentTargets(new Set([node.id]));
+    const spaceBypass = this.trackGestureSpaceBypass();
     const move = (next: PointerEvent) => {
       const dx = (next.clientX - start.pointerX) / this.scale;
       const dy = (next.clientY - start.pointerY) / this.scale;
       const minimumScale = Math.max(MIN_WIDTH / start.width, MIN_HEIGHT / start.height);
+      let southeastDriver: "x" | "y" | null = null;
       if (direction === "southeast" && next.shiftKey) {
         const proportionalX = dx / start.width;
         const proportionalY = dy / start.height;
-        const driver = Math.abs(proportionalX) >= Math.abs(proportionalY) ? proportionalX : proportionalY;
+        southeastDriver = Math.abs(proportionalX) >= Math.abs(proportionalY) ? "x" : "y";
+        const driver = southeastDriver === "x" ? proportionalX : proportionalY;
         const constrainedScale = Math.max(minimumScale, 1 + driver);
         node.width = start.width * constrainedScale;
         node.height = start.height * constrainedScale;
@@ -1463,9 +1629,15 @@ export class CanvasView implements View {
         }
         node.y = direction === "top" ? start.y + start.height - node.height : start.y;
       }
+      if (!spaceBypass.pressed()) this.snapResize(node, direction, start, next.shiftKey, alignmentTargets, southeastDriver);
       this.render();
     };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); void this.persist(); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      spaceBypass.dispose();
+      void this.persist();
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }

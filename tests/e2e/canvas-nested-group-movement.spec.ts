@@ -139,6 +139,9 @@ test("moves fully-contained nested groups exactly once from a stable geometric s
     start = { x: box.x + 20, y: box.y + box.height - 26 };
     await window.mouse.move(start.x, start.y);
     await window.mouse.down();
+    // This membership-only drag intentionally preserves its exact raw delta;
+    // Space bypasses the peer-alignment snap introduced for node movement.
+    await window.keyboard.down("Space");
     await window.mouse.move(start.x - 24, start.y + 36);
     expect(await geometry(nestedAgain)).toEqual({ x: 250, y: 190 });
     expect(await geometry(view.locator('.canvas-node[data-node-id="deep"]'))).toEqual({ x: 290, y: 220 });
@@ -151,6 +154,7 @@ test("moves fully-contained nested groups exactly once from a stable geometric s
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(secondDiskBefore);
     expect(await window.evaluate(() => (window as any).__nestedGroupWrites)).toBe(0);
     await window.mouse.up();
+    await window.keyboard.up("Space");
 
     await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "nested")?.x ?? null).toBe(250);
     expect(await window.evaluate(() => (window as any).__nestedGroupWrites)).toBe(1);
