@@ -32,7 +32,7 @@ async function choosePromptResult(page: Page, name: string): Promise<void> {
   await page.locator(".prompt-result", { hasText: name }).click();
 }
 
-test("swaps only resolved Markdown Canvas file cards through the exact context action", async () => {
+test("swaps resolved Markdown Canvas file cards through the note-filtered context action", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-swap-file-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-swap-file-user-"));
   const canvasPath = path.join(vaultDir, "Swap file.canvas");
@@ -116,11 +116,13 @@ test("swaps only resolved Markdown Canvas file cards through the exact context a
     expect(await selectedIds(view)).toEqual(allIds);
     expect(await camera(view)).toEqual(transformedCamera);
 
-    // Media, unresolved Markdown, and other generic files expose only the
-    // existing node action, never Swap file.
+    // Resolved media now shares the exact Swap file position. Unresolved
+    // Markdown and other generic files remain excluded.
     await surface.click({ position: { x: 10, y: 10 } });
     await expect(view.locator(".canvas-node.is-selected")).toHaveCount(0);
-    for (const id of ["media", "missing", "other"]) {
+    await openNodeMenu(view.locator('.canvas-node[data-node-id="media"]'));
+    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file", "Create group", "Delete"]);
+    for (const id of ["missing", "other"]) {
       await openNodeMenu(view.locator(`.canvas-node[data-node-id="${id}"]`));
       await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Create group", "Delete"]);
     }

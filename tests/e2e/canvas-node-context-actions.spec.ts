@@ -101,7 +101,7 @@ test("exposes exact Canvas node actions and deletes the context selection", asyn
       ["text-a", ["Zoom to selection", "Edit", "Convert to file…", "Create group", "Delete"]],
       ["group", ["Zoom to selection", "Delete"]],
       ["note", ["Zoom to selection", "Swap file", "Create group", "Delete"]],
-      ["media", ["Zoom to selection", "Create group", "Delete"]],
+      ["media", ["Zoom to selection", "Swap file", "Create group", "Delete"]],
       ["web-valid", ["Zoom to selection", "Open in browser", "Create group", "Delete"]],
       ["web-invalid", ["Zoom to selection", "Create group", "Delete"]],
     ] as Array<[string, string[]]>) {

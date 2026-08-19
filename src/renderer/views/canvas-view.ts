@@ -26,6 +26,7 @@ const INVALID_MARKDOWN_FILE_NAME = /[\\/:#|^\[\]]/;
 type Point = { x: number; y: number };
 type Bounds = { left: number; top: number; right: number; bottom: number };
 type ResizeDirection = CanvasSide | "southeast";
+type SwappableFileKind = "note" | "image" | "audio" | "video";
 
 function normalizeWebUrl(raw: string): string | null {
   try {
@@ -48,6 +49,10 @@ function normalizeDroppedWebUrl(transfer: DataTransfer): string | null {
   if (!transfer.types.includes("text/plain")) return null;
   const plain = transfer.getData("text/plain").trim();
   return plain && !/[\r\n]/.test(plain) ? normalizeWebUrl(plain) : null;
+}
+
+function isSwappableFileKind(kind: EmbedKind): kind is SwappableFileKind {
+  return kind === "note" || kind === "image" || kind === "audio" || kind === "video";
 }
 
 class CanvasFileSuggestModal extends SuggestModal<TFile> {
@@ -369,8 +374,9 @@ export class CanvasView implements View {
       }
       if (node.type === "file") {
         const resolved = resolveEmbed(node.file + (node.subpath ?? ""), this.file?.path ?? "", this.app);
-        if (resolved.file && resolved.kind === "note") {
-          items.push({ title: "Swap file", action: () => this.openSwapFilePicker(node.id) });
+        if (resolved.file && isSwappableFileKind(resolved.kind)) {
+          const kind = resolved.kind;
+          items.push({ title: "Swap file", action: () => this.openSwapFilePicker(node.id, kind) });
         }
       }
       if (node.type === "link") {
@@ -770,15 +776,23 @@ export class CanvasView implements View {
     ).open();
   }
 
-  private openSwapFilePicker(nodeId: string): void {
-    this.openNotePicker((file) => {
-      const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
-      if (!node || node.type !== "file") return;
-      node.file = file.path;
-      delete node.subpath;
-      this.render();
-      void this.persist();
-    });
+  private openSwapFilePicker(nodeId: string, kind: SwappableFileKind): void {
+    const files = kind === "note"
+      ? this.app.vault.getMarkdownFiles()
+      : this.app.vault.getFiles().filter((file) => this.fileKind(file) === kind);
+    new CanvasFileSuggestModal(
+      this.app,
+      files,
+      kind === "note" ? "Search notes…" : `Search ${kind} files…`,
+      (file) => {
+        const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+        if (!node || node.type !== "file") return;
+        node.file = file.path;
+        delete node.subpath;
+        this.render();
+        void this.persist();
+      },
+    ).open();
   }
 
   private openConvertTextNodePrompt(nodeId: string): void {
