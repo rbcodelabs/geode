@@ -27,6 +27,8 @@ export type PluginErrorHandler = (boundary: string, error: unknown) => void | Pr
 export abstract class Plugin extends Component {
   app: App;
   manifest: PluginManifest;
+  /** Plugin-owned settings assigned from loadData() during onload(). */
+  settings?: unknown;
   private errorHandler?: PluginErrorHandler;
 
   constructor(app: App, manifest: PluginManifest) {
@@ -120,7 +122,7 @@ export abstract class Plugin extends Component {
   }
 
   private dataPath(): string {
-    return `.geode/plugins/${this.manifest.id}/data.json`;
+    return `${this.manifest.dir ?? `.geode/plugins/${this.manifest.id}`}/data.json`;
   }
 
   /** Load this plugin's persisted settings (`<plugin dir>/data.json`), or null if none saved yet. */

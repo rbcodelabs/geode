@@ -16,6 +16,52 @@
 
 import type { CachedMetadata } from "../types";
 
+export interface FrontMatterInfo {
+  exists: boolean;
+  frontmatter: string;
+  from: number;
+  to: number;
+  contentStart: number;
+}
+
+const NO_FRONTMATTER: FrontMatterInfo = {
+  exists: false,
+  frontmatter: "",
+  from: 0,
+  to: 0,
+  contentStart: 0,
+};
+
+/**
+ * Locate a leading YAML frontmatter block without parsing its contents.
+ * Offsets are JavaScript string offsets, matching the public Obsidian API.
+ */
+export function getFrontMatterInfo(content: string): FrontMatterInfo {
+  const opening = /^---(\r?\n)/u.exec(content);
+  if (!opening) return { ...NO_FRONTMATTER };
+
+  const from = opening[0].length;
+  const closingPattern = /^---(?:\r?\n|$)/gmu;
+  closingPattern.lastIndex = from;
+  const closing = closingPattern.exec(content);
+  if (!closing) return { ...NO_FRONTMATTER };
+
+  const closingStart = closing.index;
+  const to =
+    closingStart === from
+      ? from
+      : content.charCodeAt(closingStart - 2) === 13
+        ? closingStart - 2
+        : closingStart - 1;
+  return {
+    exists: true,
+    frontmatter: content.slice(from, to),
+    from,
+    to,
+    contentStart: closingStart + closing[0].length,
+  };
+}
+
 /**
  * Normalize one raw frontmatter tag value to Obsidian's `#tag` form.
  * Strips a single leading `#` if present, trims, then re-prefixes. Returns

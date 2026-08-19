@@ -50,6 +50,12 @@ function yieldToEventLoop(): Promise<void> {
 export const INDEX_CONCURRENCY = 16;
 export const METADATA_CACHE_SCHEMA_VERSION = 1;
 
+function toLinkRecord(counts: Map<string, number>): Record<string, number> {
+  const record: Record<string, number> = Object.create(null);
+  for (const [path, count] of counts) record[path] = count;
+  return record;
+}
+
 interface PersistedMetadataEntry {
   mtimeMs: number;
   size: number;
@@ -427,8 +433,8 @@ interface DirtyOp {
 
 /**
  * Vault-wide metadata index. Parses every markdown file, resolves links to
- * files, and maintains backlink/tag indices. Events: 'resolved' (initial
- * index complete), 'changed' (file: TFile[, oldPath]).
+ * files, and maintains backlink/tag indices. Public events mirror Obsidian's
+ * changed/deleted/resolve/resolved metadata lifecycle.
  *
  * Cold start (`initialize()`) does one batched full pass. Per-edit vault
  * events (create/modify/delete/rename) are coalesced into a dirty set and
@@ -444,10 +450,12 @@ export class MetadataCache extends Events {
   private byBasename = new Map<string, string[]>();
   /** alias (lowercase) -> file paths, path-sorted */
   private byAlias = new Map<string, string[]>();
-  /** source path -> resolved target path -> count */
-  resolvedLinks = new Map<string, Map<string, number>>();
-  /** source path -> unresolved link text -> count */
-  unresolvedLinks = new Map<string, Map<string, number>>();
+  /** Public Obsidian-compatible source path -> target path -> count records. */
+  resolvedLinks: Record<string, Record<string, number>> = Object.create(null);
+  unresolvedLinks: Record<string, Record<string, number>> = Object.create(null);
+  /** Collision-safe internal graphs used by Geode's index and backlink code. */
+  private resolvedLinkMap = new Map<string, Map<string, number>>();
+  private unresolvedLinkMap = new Map<string, Map<string, number>>();
   /** Reverse of resolvedLinks: target path -> source paths that resolve to it. */
   private resolvedBy = new Map<string, Set<string>>();
   /** Reverse of unresolvedLinks keys: lowercased dangling key -> source paths that use it. */
@@ -457,7 +465,9 @@ export class MetadataCache extends Events {
   /** Paths touched in the current burst, flushed once on a microtask. */
   private dirty = new Map<string, DirtyOp>();
   /** Files to fire `changed` for after the flush, keyed by (current) path. */
-  private pendingChanged = new Map<string, { file: TFile; oldPath?: string }>();
+  private pendingChanged = new Map<string, TFile>();
+  /** Deleted files and their best-effort cache snapshot for the public event. */
+  private pendingDeleted = new Map<string, { file: TFile; previous: CachedMetadata | null }>();
   private flushScheduled = false;
   /** Parsed entries delivered by the utility process, keyed by dirty path. */
   private workerMetadata = new Map<string, CachedMetadata>();
@@ -568,7 +578,13 @@ export class MetadataCache extends Events {
     const cur = this.dirty.get(f.path);
     if (cur) cur.present = present;
     else this.dirty.set(f.path, { existedBefore, present });
-    this.pendingChanged.set(f.path, { file: f });
+    if (f.extension === "md") {
+      if (present) this.pendingChanged.set(f.path, f);
+      else {
+        this.pendingChanged.delete(f.path);
+        this.pendingDeleted.set(f.path, { file: f, previous: this.cache.get(f.path) ?? null });
+      }
+    }
     if (schedule) this.scheduleFlush();
   }
 
@@ -581,9 +597,10 @@ export class MetadataCache extends Events {
     const nw = this.dirty.get(f.path);
     if (nw) nw.present = true;
     else this.dirty.set(f.path, { existedBefore: false, present: true });
-    // The file now lives at the new path — fire a single `changed(new, old)`.
+    // Obsidian explicitly does not emit MetadataCache `changed` on rename.
     this.pendingChanged.delete(oldPath);
-    this.pendingChanged.set(f.path, { file: f, oldPath });
+    this.pendingChanged.delete(f.path);
+    this.pendingDeleted.delete(oldPath);
     this.scheduleFlush();
   }
 
@@ -605,6 +622,8 @@ export class MetadataCache extends Events {
     this.dirty = new Map();
     const pendingChanged = this.pendingChanged;
     this.pendingChanged = new Map();
+    const pendingDeleted = this.pendingDeleted;
+    this.pendingDeleted = new Map();
     if (dirty.size === 0) return;
 
     // Paths whose content read failed this flush — excluded from the index
@@ -704,17 +723,23 @@ export class MetadataCache extends Events {
         if (failed.has(path)) continue;
         if (!op.present && isMdPath(path)) affected.add(path);
       }
-      for (const src of affected) this.resolveFile(src);
+      for (const src of affected) {
+        this.resolveFile(src);
+        const file = this.vault.getFileByPath(src);
+        if (file) this.trigger("resolve", file);
+      }
 
     });
 
     // Fire `changed` once per changed file (skipping reads that failed), so
     // BaseView per-file semantics + the public plugin contract are preserved.
-    for (const { file, oldPath } of pendingChanged.values()) {
+    for (const file of pendingChanged.values()) {
       if (failed.has(file.path)) continue;
-      if (oldPath !== undefined) this.trigger("changed", file, oldPath);
-      else this.trigger("changed", file);
+      const metadata = this.cache.get(file.path);
+      if (metadata) this.trigger("changed", file, this.vault.getCachedContent(file.path) ?? "", metadata);
     }
+    for (const { file, previous } of pendingDeleted.values()) this.trigger("deleted", file, previous);
+    this.trigger("resolved");
   }
 
   async initialize(): Promise<void> {
@@ -754,6 +779,7 @@ export class MetadataCache extends Events {
       });
       this.rebuildNameIndex();
       this.resolveAll();
+      for (const file of files) if (this.cache.has(file.path)) this.trigger("resolve", file);
       if (!this.backgroundIndexerActive && !attemptedBackground) await this.persistCache();
     });
     this.initialized = true;
@@ -833,8 +859,10 @@ export class MetadataCache extends Events {
    * equivalence oracle for the incremental `resolveFile`.
    */
   private resolveAll() {
-    this.resolvedLinks.clear();
-    this.unresolvedLinks.clear();
+    this.resolvedLinkMap.clear();
+    this.unresolvedLinkMap.clear();
+    this.resolvedLinks = Object.create(null);
+    this.unresolvedLinks = Object.create(null);
     this.resolvedBy.clear();
     this.unresolvedByKey.clear();
     for (const [path, meta] of this.cache) {
@@ -848,8 +876,10 @@ export class MetadataCache extends Events {
           if (key) unresolved.set(key, (unresolved.get(key) ?? 0) + 1);
         }
       }
-      this.resolvedLinks.set(path, resolved);
-      this.unresolvedLinks.set(path, unresolved);
+      this.resolvedLinkMap.set(path, resolved);
+      this.unresolvedLinkMap.set(path, unresolved);
+      this.resolvedLinks[path] = toLinkRecord(resolved);
+      this.unresolvedLinks[path] = toLinkRecord(unresolved);
       for (const target of resolved.keys()) addToSet(this.resolvedBy, target, path);
       for (const key of unresolved.keys()) addToSet(this.unresolvedByKey, key.toLowerCase(), path);
     }
@@ -865,19 +895,21 @@ export class MetadataCache extends Events {
   private resolveFile(path: string): void {
     withPerfMark("metadata-resolve-file", () => {
       // Retract this file's previous contributions to the reverse indices.
-      const prevResolved = this.resolvedLinks.get(path);
+      const prevResolved = this.resolvedLinkMap.get(path);
       if (prevResolved) {
         for (const target of prevResolved.keys()) removeFromSet(this.resolvedBy, target, path);
       }
-      const prevUnresolved = this.unresolvedLinks.get(path);
+      const prevUnresolved = this.unresolvedLinkMap.get(path);
       if (prevUnresolved) {
         for (const key of prevUnresolved.keys()) removeFromSet(this.unresolvedByKey, key.toLowerCase(), path);
       }
 
       const meta = this.cache.get(path);
       if (!meta) {
-        this.resolvedLinks.delete(path);
-        this.unresolvedLinks.delete(path);
+        this.resolvedLinkMap.delete(path);
+        this.unresolvedLinkMap.delete(path);
+        delete this.resolvedLinks[path];
+        delete this.unresolvedLinks[path];
         return;
       }
 
@@ -891,8 +923,10 @@ export class MetadataCache extends Events {
           if (key) unresolved.set(key, (unresolved.get(key) ?? 0) + 1);
         }
       }
-      this.resolvedLinks.set(path, resolved);
-      this.unresolvedLinks.set(path, unresolved);
+      this.resolvedLinkMap.set(path, resolved);
+      this.unresolvedLinkMap.set(path, unresolved);
+      this.resolvedLinks[path] = toLinkRecord(resolved);
+      this.unresolvedLinks[path] = toLinkRecord(unresolved);
       for (const target of resolved.keys()) addToSet(this.resolvedBy, target, path);
       for (const key of unresolved.keys()) addToSet(this.unresolvedByKey, key.toLowerCase(), path);
     });
@@ -902,10 +936,22 @@ export class MetadataCache extends Events {
     return this.cache.get(file.path) ?? null;
   }
 
+  getCache(path: string): CachedMetadata | null {
+    return this.cache.get(path) ?? null;
+  }
+
+  fileToLinktext(file: TFile, _sourcePath: string, omitMdExtension = false): string {
+    const duplicateName = this.vault
+      .getFiles()
+      .some((candidate) => candidate.path !== file.path && candidate.name === file.name);
+    const linktext = duplicateName ? file.path : file.name;
+    return omitMdExtension && file.extension === "md" ? linktext.slice(0, -3) : linktext;
+  }
+
   /** All files containing links that resolve to `file`. */
   getBacklinks(file: TFile): { source: TFile; count: number }[] {
     const out: { source: TFile; count: number }[] = [];
-    for (const [src, targets] of this.resolvedLinks) {
+    for (const [src, targets] of this.resolvedLinkMap) {
       const count = targets.get(file.path);
       if (count) {
         const srcFile = this.vault.getFileByPath(src);
@@ -924,7 +970,7 @@ export class MetadataCache extends Events {
     file: TFile
   ): { source: TFile; count: number; snippets: string[] }[] {
     const out: { source: TFile; count: number; snippets: string[] }[] = [];
-    for (const [src, targets] of this.resolvedLinks) {
+    for (const [src, targets] of this.resolvedLinkMap) {
       const count = targets.get(file.path);
       if (!count) continue;
       const srcFile = this.vault.getFileByPath(src);

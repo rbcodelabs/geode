@@ -1,0 +1,1007 @@
+{
+  "API-005c3c0b05aa": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "Observed filepath, heading subpath, block subpath, and same-file parsing through the require('obsidian') compatibility module."
+  },
+  "API-00dce6b00054": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "Observed lossless lowercase hexadecimal decoding, including an empty buffer."
+  },
+  "API-38353f28cb4a": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "Observed lowercase, two-digit, unprefixed hexadecimal encoding, including an empty buffer."
+  },
+  "API-444eff051265": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "Observed lossless binary base64 decoding, including an empty buffer."
+  },
+  "API-7c8591d44ba5": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "Observed binary-safe standard padded base64 encoding, including an empty buffer."
+  },
+  "API-fefdab316b45": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "Observed extraction of file-only, file-with-subpath, and same-file wikilink paths."
+  },
+  "DEV-5b6508277a49": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "The documented hexToArrayBuffer signature and behavior are observed by the named test."
+  },
+  "DEV-74822814e360": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "The documented base64ToArrayBuffer signature and behavior are observed by the named test."
+  },
+  "DEV-9fe9fdba665a": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "The documented parseLinktext filepath and subpath behavior is observed by the named test."
+  },
+  "DEV-d311bd95d311": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "The documented getLinkpath file-name extraction behavior is observed by the named test."
+  },
+  "DEV-e0d419ce960d": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "The documented arrayBufferToHex signature and behavior are observed by the named test."
+  },
+  "DEV-e83eb5c4a670": {
+    "status": "verified",
+    "evidence": ["tests/unit/obsidian-utility-contracts.test.ts"],
+    "notes": "The documented arrayBufferToBase64 signature and behavior are observed by the named test."
+  },
+  "API-6ff428784755": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "Observed frontmatter presence, raw contents, LF/CRLF offsets, content start, absent delimiters, and an unclosed opener through the public compatibility module."
+  },
+  "API-dc334ba108d1": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The exported FrontMatterInfo return shape and all documented fields are observed by the named test."
+  },
+  "API-fea044dfe5e9": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "Observed combined frontmatter and inline tags, de-duplication, null for no tags, and CommonJS plugin access."
+  },
+  "API-MEMBER-0a65781a38ff": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "Observed the exact raw frontmatter string excluding delimiters."
+  },
+  "API-MEMBER-0ddbf1481d39": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "Observed the exclusive end offset of frontmatter contents."
+  },
+  "API-MEMBER-8019f4fb0734": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "Observed the start offset after the opening frontmatter delimiter."
+  },
+  "API-MEMBER-b34f83bc287d": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "Observed the body-content offset after the complete frontmatter block for LF and CRLF input."
+  },
+  "API-MEMBER-c73394d00e78": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "Observed true for complete blocks and false for absent or unclosed blocks."
+  },
+  "DEV-26eb994fecb8": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented FrontMatterInfo.from property is observed by the named test."
+  },
+  "DEV-285cf34278c4": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented FrontMatterInfo shape is observed by the named test."
+  },
+  "DEV-4517f2fc71cd": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented FrontMatterInfo.contentStart property is observed by the named test."
+  },
+  "DEV-652a0953cee0": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented getAllTags combination and null behavior is observed by the named test."
+  },
+  "DEV-72b4d27352aa": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented FrontMatterInfo.frontmatter property is observed by the named test."
+  },
+  "DEV-9a99926d793f": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented FrontMatterInfo.exists property is observed by the named test."
+  },
+  "DEV-a4ba08a5793c": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented getFrontMatterInfo behavior and return shape is observed by the named test."
+  },
+  "DEV-be8a1bb437c6": {
+    "status": "verified",
+    "evidence": ["tests/unit/frontmatter-api-contracts.test.ts"],
+    "notes": "The documented FrontMatterInfo.to property is observed by the named test."
+  },
+  "API-4c53556d633b": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "Observed EventRef values returned by on and consumed by offref, tryTrigger, and Component.registerEvent; callable unsubscribe remains a compatible extension."
+  },
+  "API-d2052428ceb1": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "Observed the documented Events runtime surface through direct and CommonJS plugin access."
+  },
+  "API-MEMBER-0c178754cb6d": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "Observed removal and unloading of a child while its parent remains loaded."
+  },
+  "API-MEMBER-240dade5a876": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "Observed unloading of the component and its registered resources and children."
+  },
+  "API-MEMBER-2ca8f2742499": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "Observed detaching exactly the supplied active event reference."
+  },
+  "API-MEMBER-36469335cb5f": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "Observed the overridable teardown hook when the component unloads."
+  },
+  "API-MEMBER-4811bd2d0b0d": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "Observed registration, EventRef return, callback context, and triggered data."
+  },
+  "API-MEMBER-4877ae98a258": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "Observed invoking one active event reference with supplied arguments and context."
+  },
+  "API-MEMBER-5da8b5d17b95": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts", "tests/unit/events-contracts.test.ts"],
+    "notes": "Observed event-reference detachment on component unload, including through require('obsidian')."
+  },
+  "API-MEMBER-66fcaa190db7": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "Observed removal by event name and callback without affecting a different event name."
+  },
+  "API-MEMBER-c56aba3efab4": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "Observed loading a component and its attached children."
+  },
+  "API-MEMBER-c5759d5d3de9": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "Observed registered callbacks executing on unload."
+  },
+  "API-MEMBER-d554e5098f83": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "Observed returned child identity plus deferred and immediate child loading."
+  },
+  "API-MEMBER-ef9b42a83be4": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "Observed the overridable setup hook when the component loads."
+  },
+  "API-MEMBER-fa509a6fdab6": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "Observed named event dispatch with variadic data to active registrations."
+  },
+  "DEV-1f33fe02570e": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "The documented Events.trigger contract is observed by the named test."
+  },
+  "DEV-2b02948bf35e": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "The documented EventRef contract is observed by the named test."
+  },
+  "DEV-4f9174539fd4": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "The documented Component.load contract is observed by the named test."
+  },
+  "DEV-892f30841264": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "The documented Component.register contract is observed by the named test."
+  },
+  "DEV-95232abb6351": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "The documented Component.addChild contract is observed by the named test."
+  },
+  "DEV-9a8eee67e319": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "The documented Events.on contract is observed by the named test."
+  },
+  "DEV-ad9c755161f8": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "The documented Component.onunload contract is observed by the named test."
+  },
+  "DEV-b20498a70411": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "The documented Events.offref contract is observed by the named test."
+  },
+  "DEV-b427e50e7bd5": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "The documented Component.removeChild contract is observed by the named test."
+  },
+  "DEV-c0942465d91c": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "The documented Component.unload contract is observed by the named test."
+  },
+  "DEV-d7fbfd53cf64": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "The documented Events class runtime surface is observed by the named test."
+  },
+  "DEV-e29ed7594621": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts"],
+    "notes": "The documented Component.onload contract is observed by the named test."
+  },
+  "DEV-e33faa54ec58": {
+    "status": "verified",
+    "evidence": ["tests/unit/component.test.ts", "tests/unit/events-contracts.test.ts"],
+    "notes": "The documented Component.registerEvent contract is observed by the named tests."
+  },
+  "DEV-f288981f2bd6": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "The documented Events.tryTrigger contract is observed by the named test."
+  },
+  "DEV-f48df7d056e6": {
+    "status": "verified",
+    "evidence": ["tests/unit/events-contracts.test.ts"],
+    "notes": "The documented Events.off contract is observed by the named test."
+  },
+  "API-MEMBER-229303d93a9f": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed case-sensitive file/folder lookup, correct abstract type, root lookup, and null for missing paths."
+  },
+  "API-MEMBER-2b66bb25ec17": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed enumeration of every loaded file without folders."
+  },
+  "API-MEMBER-2f9753c90ff2": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed folder creation, returned TFolder identity, create event, and duplicate-folder rejection."
+  },
+  "API-MEMBER-6c720da3ade4": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed the opened vault name directly and through require('obsidian')."
+  },
+  "API-MEMBER-829910ef4ede": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed cached plaintext reads avoiding repeat disk I/O and refreshing after a direct read."
+  },
+  "API-MEMBER-88d536f2d2cb": {
+    "status": "partial",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+  },
+  "API-MEMBER-92ea17cba0a5": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed the current vault root folder and slash-path root lookup."
+  },
+  "API-MEMBER-a7295647b470": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts", "tests/unit/vault-rename-identity.test.ts"],
+    "notes": "Observed file and folder moves, in-place identity, descendant updates, and rename event with oldPath."
+  },
+  "API-MEMBER-c74efe5ec841": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed case-sensitive file-only lookup and null for folders or missing paths."
+  },
+  "API-MEMBER-d0c456f91ea9": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed direct disk plaintext reads on every call and subsequent cache refresh."
+  },
+  "API-MEMBER-d6f46bfd7d5d": {
+    "status": "partial",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+  },
+  "API-MEMBER-e8941e646790": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed folder-only lookup, slash-path root lookup, and null for files or missing paths."
+  },
+  "API-MEMBER-fbf3b41e2684": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed enumeration restricted to Markdown files."
+  },
+  "DEV-069676420c68": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts", "tests/unit/vault-rename-identity.test.ts"],
+    "notes": "The documented Vault.rename contract is observed by the named tests."
+  },
+  "DEV-26537d0bc30c": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.read direct-disk contract is observed by the named test."
+  },
+  "DEV-3a1c7b79b085": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.getFolderByPath contract is observed by the named test."
+  },
+  "DEV-40d47ca5d83d": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.getName contract is observed by the named test."
+  },
+  "DEV-4a4bb98047a6": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.getMarkdownFiles contract is observed by the named test."
+  },
+  "DEV-6943812b7e22": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.getFileByPath contract is observed by the named test."
+  },
+  "DEV-7c152555ec46": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed the documented rename event with the mutated file and its old path."
+  },
+  "DEV-b9a29aacd906": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.getFiles contract is observed by the named test."
+  },
+  "DEV-c81871b98d62": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed the documented modify event with the modified abstract file."
+  },
+  "DEV-c97ba05566a6": {
+    "status": "partial",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Default modification behavior is observed; optional write timestamps are not applied by current IPC."
+  },
+  "DEV-d24cd083513e": {
+    "status": "partial",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Default plaintext creation behavior is observed; optional write timestamps are not applied by current IPC."
+  },
+  "DEV-d95ef21facbc": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Observed create events for each loaded file/folder and newly created files/folders."
+  },
+  "DEV-d9aaebd65816": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.getRoot contract is observed by the named test."
+  },
+  "DEV-e3b26fb1ebc0": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.getAbstractFileByPath contract is observed by the named test."
+  },
+  "DEV-eaca3a1fe4cc": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.cachedRead display/cache contract is observed by the named test."
+  },
+  "DEV-f3956f2411f4": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The documented Vault.createFolder return and existing-folder error contracts are observed by the named test."
+  },
+  "API-fa99dec3e88c": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache.test.ts", "tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed every public MetadataCache method, link-map property, and event overload, including CommonJS plugin access. CachedMetadata completeness is tracked separately."
+  },
+  "API-MEMBER-8dc8cfb24960": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed unique-filename, duplicate-full-path, and optional Markdown-extension omission behavior."
+  },
+  "API-MEMBER-02e671ff2c16": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed path lookup identity and null for an uncached path."
+  },
+  "API-MEMBER-47d5eed254d5": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed file lookup identity for parsed cached metadata."
+  },
+  "API-MEMBER-7e86f1b11579": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache.test.ts"],
+    "notes": "Observed exact, relative, shortest basename, alias, self-link, case-insensitive, and missing-link resolution."
+  },
+  "API-MEMBER-f9f039eea547": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed all four documented MetadataCache event overload payloads and timing constraints."
+  },
+  "API-MEMBER-d31741113498": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed source-path to destination-path record access and repeated-link counts."
+  },
+  "API-MEMBER-214812ebf626": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed source-path to unknown-destination record access and counts."
+  },
+  "DEV-864eb49403c1": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache.test.ts", "tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "The documented MetadataCache surface is observed by the named tests; CachedMetadata completeness remains independently unknown."
+  },
+  "DEV-91df42082aac": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "The documented unique filename and duplicate full-path linktext behavior is observed."
+  },
+  "DEV-0f83b03c9afb": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "The documented path cache lookup signature and behavior is observed."
+  },
+  "DEV-9082929c437f": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "The documented file cache lookup signature and behavior is observed."
+  },
+  "DEV-59f0f1d65bdb": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache.test.ts"],
+    "notes": "The documented best-match linkpath destination behavior is observed across exact and fallback cases."
+  },
+  "DEV-9971c572a1fd": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed file, current source data, and current cache payloads, plus the documented absence on rename."
+  },
+  "DEV-6477f6a67b82": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed deleted file and best-effort previous cache payloads."
+  },
+  "DEV-427b72fa5ee5": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed per-file resolve events after the link maps are updated."
+  },
+  "DEV-0f4c1d0e0ca2": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed resolved after initial indexing and after each incremental modification burst."
+  },
+  "DEV-974407eba783": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed the documented nested source/destination record and link-count shape."
+  },
+  "DEV-431d48c0fb5f": {
+    "status": "verified",
+    "evidence": ["tests/unit/metadata-cache-public-contracts.test.ts"],
+    "notes": "Observed the documented nested source/unknown-destination record and count shape."
+  },
+  "API-15fbd8f20449": {
+    "status": "partial",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts", "tests/unit/plugin-manager.test.ts"],
+    "notes": "Constructor, app, manifest, settings, lifecycle, persistence, and inherited Component registrations are observed; UI contributions and newer host integrations remain incomplete."
+  },
+  "API-MEMBER-786925eb2e8c": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "Observed construction with the supplied App and PluginManifest through direct and CommonJS plugin access."
+  },
+  "API-MEMBER-d4c0d659cc08": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "Observed retained App identity."
+  },
+  "API-MEMBER-4080da92aaad": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "Observed retained PluginManifest identity and plugin-folder persistence routing."
+  },
+  "API-MEMBER-cfa36180186c": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "Observed plugin-owned settings assignment and use across lifecycle callbacks."
+  },
+  "API-MEMBER-a98bd88ca869": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts", "tests/unit/plugin-manager.test.ts"],
+    "notes": "Observed synchronous and asynchronous onload execution through Component.load and the PluginManager."
+  },
+  "API-MEMBER-7cb8b57b30a7": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "Observed null before data exists and parsed data loaded from data.json in manifest.dir."
+  },
+  "API-MEMBER-f40611ada9c3": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "Observed data persistence to data.json in manifest.dir and subsequent round-trip loading."
+  },
+  "API-MEMBER-22b655848c05": {
+    "status": "partial",
+    "evidence": ["tests/unit/plugin-manager.test.ts"],
+    "notes": "Global callback/checkCallback registration, prefixing, cleanup, and crash attribution are observed; editor callback variants and the complete Command shape are not supported."
+  },
+  "DEV-6a4f4ec9e63a": {
+    "status": "partial",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts", "tests/unit/plugin-manager.test.ts"],
+    "notes": "The selected non-visual lifecycle and data foundation is observed; the full documented Plugin surface is not complete."
+  },
+  "DEV-ec1cb436c967": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "The documented Plugin constructor is observed."
+  },
+  "DEV-ce8001a55e65": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "The documented Plugin.app property is observed."
+  },
+  "DEV-b5ce381f9038": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "The documented Plugin.manifest property is observed."
+  },
+  "DEV-22880acaee3d": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts", "tests/unit/plugin-manager.test.ts"],
+    "notes": "The documented Plugin.onload lifecycle is observed for synchronous and asynchronous implementations."
+  },
+  "DEV-cf0c1338d43b": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "The documented data.json plugin-folder loading behavior is observed."
+  },
+  "DEV-2417e1e9be2c": {
+    "status": "verified",
+    "evidence": ["tests/unit/plugin-public-contracts.test.ts"],
+    "notes": "The documented data.json plugin-folder writing behavior is observed."
+  },
+  "DEV-278f508d49c7": {
+    "status": "partial",
+    "evidence": ["tests/unit/plugin-manager.test.ts"],
+    "notes": "Global callback/checkCallback command behavior is observed; editor callback variants and the complete Command shape remain incomplete."
+  },
+  "API-0d4d7fe76b91": {
+    "status": "partial",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Active-leaf queries and deterministic all-leaf traversal/filter/detach methods are observed; popouts, splits, mobile, drag/drop, and the broader workspace surface remain incomplete."
+  },
+  "API-MEMBER-977e23ed0492": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed the active leaf property returning the focused leaf or null."
+  },
+  "API-MEMBER-9658cea6bc68": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed constructor-instance filtering of the active view and null for a different type, including require('obsidian')."
+  },
+  "API-MEMBER-b016dc5102e6": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed callback traversal across the available leaf collection."
+  },
+  "API-MEMBER-cab5de52d49c": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed exact view-type filtering, including require('obsidian')."
+  },
+  "API-MEMBER-aca5af78e25c": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed detaching every leaf of the requested type without detaching other types."
+  },
+  "API-1ac729cd0404": {
+    "status": "partial",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "View state, open, and pin operations are observed; deferred, group, hover, resize, and synchronous detach signature contracts remain incomplete."
+  },
+  "API-MEMBER-6ad623ad0a53": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed mounting and returning the supplied View."
+  },
+  "API-MEMBER-50222923fbc0": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed the mounted view type and current serialized state."
+  },
+  "API-MEMBER-b4b0b038376e": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed factory mounting and application of a falsey state value."
+  },
+  "API-MEMBER-e6a0f80c36cd": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed changing pinned state without recreating the view."
+  },
+  "API-MEMBER-badda12dab1b": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed toggling the leaf's pinned state."
+  },
+  "API-6bc62c09fa52": {
+    "status": "partial",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Core construction and persistent/ephemeral state hooks are observed; pane menus and broader visual lifecycle behavior remain incomplete."
+  },
+  "API-MEMBER-75f2603e3cbf": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed construction from a WorkspaceLeaf."
+  },
+  "API-MEMBER-d628a3ee3e52": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed app identity derived from the leaf."
+  },
+  "API-MEMBER-2b6bbddf3d59": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed a constructed view container element."
+  },
+  "API-MEMBER-f6e3e5d0743e": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed the mutable icon property and its default."
+  },
+  "API-MEMBER-b319dfc5d21c": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed the mutable navigation property and its default."
+  },
+  "API-MEMBER-976149ed0d99": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed retained WorkspaceLeaf identity."
+  },
+  "API-MEMBER-4d409ced1251": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed the assignable scope property with null default."
+  },
+  "API-MEMBER-ebf47a19f558": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed a subclass-provided stable view type."
+  },
+  "API-MEMBER-cce2661bec62": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed a subclass-provided display text."
+  },
+  "API-MEMBER-200ae2a05b18": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed icon lookup from the view icon property."
+  },
+  "API-MEMBER-c585e7c2f151": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed the default serializable state record."
+  },
+  "API-MEMBER-2f45c261f99b": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed the asynchronous base state setter accepting state and result values."
+  },
+  "API-MEMBER-aa050342fd39": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed default and updated ephemeral state records."
+  },
+  "API-MEMBER-d6ca9ac17373": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Observed setting an ephemeral state record."
+  },
+  "DEV-2d64b6ae58ea": {
+    "status": "partial",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The selected non-visual active-leaf query and traversal foundation is observed; the full Workspace contract is not complete."
+  },
+  "DEV-0b41d6add1b2": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented activeLeaf property is observed."
+  },
+  "DEV-7fa2d44746c8": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented active-view constructor query is observed."
+  },
+  "DEV-d8f2f56838a0": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented all-leaf traversal is observed."
+  },
+  "DEV-2309b277c9c2": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented view-type leaf filtering is observed."
+  },
+  "DEV-f33101ccf327": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented removal of all leaves of a view type is observed."
+  },
+  "DEV-a985c396a293": {
+    "status": "partial",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Open, state, and pin operations are observed; the full WorkspaceLeaf contract is incomplete."
+  },
+  "DEV-5bf1380e377f": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented open-and-return behavior is observed."
+  },
+  "DEV-d9d1fda857bf": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented current view state is observed."
+  },
+  "DEV-c06d04094d17": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented view state application is observed with a falsey state value."
+  },
+  "DEV-6b9e132cf22c": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented pinned-state setter is observed."
+  },
+  "DEV-fd1039894e40": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented pinned-state toggle is observed."
+  },
+  "DEV-a09def8b1475": {
+    "status": "partial",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "Construction and persistent/ephemeral state foundations are observed; the complete View contract is not."
+  },
+  "DEV-768bd1c4b380": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented ephemeral state getter is observed."
+  },
+  "DEV-76e38b54613e": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented ephemeral state setter is observed."
+  },
+  "DEV-feadcecdc68a": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented persistent state getter is observed."
+  },
+  "DEV-803d1cefeacd": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented asynchronous state setter signature is observed."
+  },
+  "DEV-e1cf0f548e12": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented View constructor is observed."
+  },
+  "DEV-a985c1f89ed2": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented View.app property is observed."
+  },
+  "DEV-fb64dd6f1d23": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented View.containerEl property is observed."
+  },
+  "DEV-ea1eefac2880": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented display text override is observed."
+  },
+  "DEV-d225b6a219fa": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented icon lookup is observed."
+  },
+  "DEV-46cdc86617c6": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented stable view type override is observed."
+  },
+  "DEV-83dcef4cc8d0": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented icon property is observed."
+  },
+  "DEV-b4c3737543e6": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented leaf property is observed."
+  },
+  "DEV-911e1e5f97d3": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented navigation property is observed."
+  },
+  "DEV-c83800a299e0": {
+    "status": "verified",
+    "evidence": ["tests/unit/workspace-public-contracts.test.ts"],
+    "notes": "The documented nullable view scope property is observed."
+  },
+  "API-24e109c6c498": {
+    "status": "partial",
+    "evidence": ["tests/unit/app-public-contracts.test.ts", "tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "Vault, workspace, metadata cache, FileManager wiring, theme query, and vault-scoped local storage are observed; Keymap, lastEvent, RenderContext, and SecretStorage remain incomplete or absent."
+  },
+  "API-MEMBER-c613fd3b77c4": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "Observed a stable Vault instance owned by App."
+  },
+  "API-MEMBER-ae69cbf0eafd": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "Observed the App workspace property retaining the active Workspace identity."
+  },
+  "API-MEMBER-29464d7dc3d3": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "Observed the MetadataCache instance bound to App's Vault."
+  },
+  "API-MEMBER-4bc074b5191e": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "Observed true and false from the active dark/light body theme."
+  },
+  "API-MEMBER-0668d8cf5c70": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "Observed absent null, JSON value round trips, falsey values, and isolation by vault root."
+  },
+  "API-MEMBER-2075066ba152": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "Observed serializable vault-scoped writes and null deletion without affecting other keys or vaults."
+  },
+  "DEV-452f310af736": {
+    "status": "partial",
+    "evidence": ["tests/unit/app-public-contracts.test.ts", "tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "The selected non-visual App property, theme, and vault-scoped storage foundation is observed; the complete App surface is not."
+  },
+  "DEV-ba914f18b5d3": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "The documented App.vault property is observed."
+  },
+  "DEV-bfe19465e0b1": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "The documented App.workspace property is observed."
+  },
+  "DEV-df24eb681a34": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "The documented App.metadataCache property is observed."
+  },
+  "DEV-318e85642578": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "The documented active theme query is observed for dark and light modes."
+  },
+  "DEV-1a27c826c90c": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "The documented vault-scoped local storage retrieval behavior is observed."
+  },
+  "DEV-d53b94981ed3": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts"],
+    "notes": "The documented vault-scoped save and null-clear behavior is observed."
+  },
+  "API-MEMBER-18368370d583": {
+    "status": "verified",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "Observed App.fileManager as a live FileManager instance wired to the App's services."
+  },
+  "DEV-c026747942bd": {
+    "status": "verified",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "The documented App.fileManager property is observed as a runtime FileManager instance."
+  },
+  "API-cc5deb1c26a9": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "Rename, trash, and Markdown-link foundations are observed; frontmatter atomicity, attachment placement, deletion prompts, and preference configuration remain incomplete."
+  },
+  "API-MEMBER-5a6dc8a939b9": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts", "tests/unit/rename.test.ts"],
+    "notes": "File renames update supported wikilinks and folder renames delegate to Vault; user preference selection and every Obsidian link form are not complete."
+  },
+  "API-MEMBER-a3d3669313aa": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts", "tests/unit/vault-public-contracts.test.ts"],
+    "notes": "Files and folders delegate to the working Vault trash path; selectable vault/OS trash preferences are not implemented."
+  },
+  "API-MEMBER-44cf9b779727": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "Wikilinks with source-aware linktext, subpaths, and aliases are observed; Markdown-link preference modes are not implemented."
+  },
+  "DEV-3dbcaa46d20b": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "The selected non-visual rename, trash, and link-generation foundation is observed; the full FileManager contract is incomplete."
+  },
+  "DEV-c182199bb662": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts", "tests/unit/rename.test.ts"],
+    "notes": "Link-aware file and folder rename behavior is observed under Geode's fixed update-links policy; preference parity remains incomplete."
+  },
+  "DEV-c17e34308aaa": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "File and folder trash delegation is observed under Geode's fixed trash policy; preference parity remains incomplete."
+  },
+  "DEV-2395f42349dd": {
+    "status": "partial",
+    "evidence": ["tests/unit/file-manager-public-contracts.test.ts"],
+    "notes": "Wikilink subpath and alias generation is observed; preference-selected Markdown link formats remain incomplete."
+  }
+}

@@ -58,11 +58,11 @@ class Driver {
 
 // --- Canonicalizers so comparisons are independent of Map insertion order ---
 
-function normLinks(m: Map<string, Map<string, number>>): Record<string, Record<string, number>> {
+function normLinks(m: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
   const out: Record<string, Record<string, number>> = {};
-  for (const [k, inner] of [...m.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [k, inner] of Object.entries(m).sort(([a], [b]) => a.localeCompare(b))) {
     const o: Record<string, number> = {};
-    for (const [ik, iv] of [...inner.entries()].sort(([a], [b]) => a.localeCompare(b))) o[ik] = iv;
+    for (const [ik, iv] of Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))) o[ik] = iv;
     out[k] = o;
   }
   return out;
@@ -95,11 +95,11 @@ describe("MetadataCache incremental — targeted behaviours", () => {
 
   it("create resolves a previously dangling [[F]]", async () => {
     const d = await withCache({ "Home.md": "See [[Target]]." });
-    expect(d.cache.unresolvedLinks.get("Home.md")?.get("Target")).toBe(1);
+    expect(d.cache.unresolvedLinks["Home.md"]?.["Target"]).toBe(1);
 
     await d.create("Target.md", "");
-    expect(d.cache.unresolvedLinks.get("Home.md")?.get("Target")).toBeUndefined();
-    expect(d.cache.resolvedLinks.get("Home.md")?.get("Target.md")).toBe(1);
+    expect(d.cache.unresolvedLinks["Home.md"]?.["Target"]).toBeUndefined();
+    expect(d.cache.resolvedLinks["Home.md"]?.["Target.md"]).toBe(1);
     expect(d.cache.getBacklinks(d.fake.getFileByPath("Target.md")!).map((b) => b.source.path)).toEqual([
       "Home.md",
     ]);
@@ -108,29 +108,29 @@ describe("MetadataCache incremental — targeted behaviours", () => {
   it("delete re-resolves a backlink to a same-basename sibling, then to unresolved", async () => {
     const d = await withCache({ "A/Note.md": "", "B/Note.md": "", "Home.md": "[[Note]]" });
     // Shortest-path (tie broken by path sort) → "A/Note.md".
-    expect(d.cache.resolvedLinks.get("Home.md")?.get("A/Note.md")).toBe(1);
+    expect(d.cache.resolvedLinks["Home.md"]?.["A/Note.md"]).toBe(1);
 
     await d.delete("A/Note.md");
     // Falls back to the surviving sibling.
-    expect(d.cache.resolvedLinks.get("Home.md")?.get("B/Note.md")).toBe(1);
+    expect(d.cache.resolvedLinks["Home.md"]?.["B/Note.md"]).toBe(1);
 
     await d.delete("B/Note.md");
     // No sibling left → dangling again.
-    expect(d.cache.resolvedLinks.get("Home.md")?.size ?? 0).toBe(0);
-    expect(d.cache.unresolvedLinks.get("Home.md")?.get("Note")).toBe(1);
+    expect(Object.keys(d.cache.resolvedLinks["Home.md"] ?? {})).toHaveLength(0);
+    expect(d.cache.unresolvedLinks["Home.md"]?.["Note"]).toBe(1);
   });
 
   it("rename (folder move, basename unchanged) updates backlinks AND preserves the renamed file's own outgoing links", async () => {
     const d = await withCache({ "Note.md": "[[Target]]", "Target.md": "", "Home.md": "[[Note]]" });
-    expect(d.cache.resolvedLinks.get("Home.md")?.get("Note.md")).toBe(1);
+    expect(d.cache.resolvedLinks["Home.md"]?.["Note.md"]).toBe(1);
 
     await d.rename("Note.md", "sub/Note.md");
 
     // Backlink from Home now points at the moved file.
-    expect(d.cache.resolvedLinks.get("Home.md")?.get("sub/Note.md")).toBe(1);
-    expect(d.cache.resolvedLinks.has("Note.md")).toBe(false);
+    expect(d.cache.resolvedLinks["Home.md"]?.["sub/Note.md"]).toBe(1);
+    expect(Object.hasOwn(d.cache.resolvedLinks, "Note.md")).toBe(false);
     // The moved file's own outgoing link is preserved under the new path.
-    expect(d.cache.resolvedLinks.get("sub/Note.md")?.get("Target.md")).toBe(1);
+    expect(d.cache.resolvedLinks["sub/Note.md"]?.["Target.md"]).toBe(1);
     expect(d.cache.getBacklinks(d.fake.getFileByPath("sub/Note.md")!).map((b) => b.source.path)).toEqual(
       ["Home.md"]
     );
@@ -138,15 +138,15 @@ describe("MetadataCache incremental — targeted behaviours", () => {
 
   it("frontmatter alias add resolves [[alias]], and removing it unresolves again", async () => {
     const d = await withCache({ "Home.md": "", "Note.md": "[[Start Here]]" });
-    expect(d.cache.unresolvedLinks.get("Note.md")?.get("Start Here")).toBe(1);
+    expect(d.cache.unresolvedLinks["Note.md"]?.["Start Here"]).toBe(1);
 
     await d.modify("Home.md", "---\naliases: [Start Here]\n---\n");
-    expect(d.cache.resolvedLinks.get("Note.md")?.get("Home.md")).toBe(1);
-    expect(d.cache.unresolvedLinks.get("Note.md")?.get("Start Here")).toBeUndefined();
+    expect(d.cache.resolvedLinks["Note.md"]?.["Home.md"]).toBe(1);
+    expect(d.cache.unresolvedLinks["Note.md"]?.["Start Here"]).toBeUndefined();
 
     await d.modify("Home.md", "no alias anymore");
-    expect(d.cache.resolvedLinks.get("Note.md")?.size ?? 0).toBe(0);
-    expect(d.cache.unresolvedLinks.get("Note.md")?.get("Start Here")).toBe(1);
+    expect(Object.keys(d.cache.resolvedLinks["Note.md"] ?? {})).toHaveLength(0);
+    expect(d.cache.unresolvedLinks["Note.md"]?.["Start Here"]).toBe(1);
   });
 
   it("shortest-path basename tiebreak still holds after incremental delete/create", async () => {
@@ -155,29 +155,29 @@ describe("MetadataCache incremental — targeted behaviours", () => {
       "Sub/Target.md": "",
       "Welcome.md": "[[Target]]",
     });
-    expect(d.cache.resolvedLinks.get("Welcome.md")?.get("Sub/Target.md")).toBe(1);
+    expect(d.cache.resolvedLinks["Welcome.md"]?.["Sub/Target.md"]).toBe(1);
 
     await d.delete("Sub/Target.md");
-    expect(d.cache.resolvedLinks.get("Welcome.md")?.get("Deep/Nested/Folder/Target.md")).toBe(1);
+    expect(d.cache.resolvedLinks["Welcome.md"]?.["Deep/Nested/Folder/Target.md"]).toBe(1);
 
     await d.create("Target.md", "");
     // A brand-new, shorter path wins the tiebreak.
-    expect(d.cache.resolvedLinks.get("Welcome.md")?.get("Target.md")).toBe(1);
+    expect(d.cache.resolvedLinks["Welcome.md"]?.["Target.md"]).toBe(1);
   });
 
   it("resolves a non-md file by both full name and basename on create, and re-dangles on delete", async () => {
     const d = await withCache({ "Home.md": "[[image.png]] and [[image]]" });
-    expect(d.cache.unresolvedLinks.get("Home.md")?.get("image.png")).toBe(1);
-    expect(d.cache.unresolvedLinks.get("Home.md")?.get("image")).toBe(1);
+    expect(d.cache.unresolvedLinks["Home.md"]?.["image.png"]).toBe(1);
+    expect(d.cache.unresolvedLinks["Home.md"]?.["image"]).toBe(1);
 
     await d.create("image.png", "");
-    expect(d.cache.resolvedLinks.get("Home.md")?.get("image.png")).toBe(2);
-    expect(d.cache.unresolvedLinks.get("Home.md")?.size ?? 0).toBe(0);
+    expect(d.cache.resolvedLinks["Home.md"]?.["image.png"]).toBe(2);
+    expect(Object.keys(d.cache.unresolvedLinks["Home.md"] ?? {})).toHaveLength(0);
 
     await d.delete("image.png");
-    expect(d.cache.resolvedLinks.get("Home.md")?.size ?? 0).toBe(0);
-    expect(d.cache.unresolvedLinks.get("Home.md")?.get("image.png")).toBe(1);
-    expect(d.cache.unresolvedLinks.get("Home.md")?.get("image")).toBe(1);
+    expect(Object.keys(d.cache.resolvedLinks["Home.md"] ?? {})).toHaveLength(0);
+    expect(d.cache.unresolvedLinks["Home.md"]?.["image.png"]).toBe(1);
+    expect(d.cache.unresolvedLinks["Home.md"]?.["image"]).toBe(1);
   });
 });
 
@@ -220,9 +220,9 @@ describe("MetadataCache incremental — burst coalescing", () => {
     expect(fake.getMarkdownFiles().length).toBe(6);
 
     // And the resolution is correct afterwards.
-    expect(cache.resolvedLinks.get("A.md")?.get("T1.md")).toBe(1);
-    expect(cache.resolvedLinks.get("B.md")?.get("T2.md")).toBe(1);
-    expect(cache.resolvedLinks.get("C.md")?.get("T3.md")).toBe(1);
+    expect(cache.resolvedLinks["A.md"]?.["T1.md"]).toBe(1);
+    expect(cache.resolvedLinks["B.md"]?.["T2.md"]).toBe(1);
+    expect(cache.resolvedLinks["C.md"]?.["T3.md"]).toBe(1);
 
     flushSpy.mockRestore();
     resolveSpy.mockRestore();

@@ -137,7 +137,7 @@ describe("MetadataCache persistence", () => {
 
     expect(readSpy).not.toHaveBeenCalled();
     expect(warm.getFileCache(fake.getFileByPath("A.md")!)?.headings[0].heading).toBe("A");
-    expect(warm.resolvedLinks.get("A.md")?.get("B.md")).toBe(1);
+    expect(warm.resolvedLinks["A.md"]?.["B.md"]).toBe(1);
     expect(warmApi.writeMetadataCache).toHaveBeenCalledOnce();
   });
 

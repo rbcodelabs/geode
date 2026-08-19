@@ -11,6 +11,8 @@ export interface View {
   getIcon(): string;
   onOpen(): void | Promise<void>;
   onClose(): void | Promise<void>;
+  /** Serialized state for WorkspaceLeaf.getViewState(). */
+  getState?(): unknown;
   /** Optional visibility callback; unlike onOpen, may run whenever a tab is revealed. */
   onReveal?(): void;
   /** Views showing a file implement this. */
@@ -118,14 +120,23 @@ export class WorkspaceLeaf {
     if (!factory) throw new Error(`No view registered for type "${state.type}"`);
     const view = factory(this);
     await this.setView(view);
-    if (state.state && typeof (view as any).setState === "function") {
+    if ("state" in state && typeof (view as any).setState === "function") {
       await (view as any).setState(state.state, {});
     }
     if (state.active) this.group.setActiveLeaf(this);
   }
 
   getViewState(): { type: string; state?: unknown } {
-    return { type: this.view?.viewType ?? this.viewState.type, state: this.viewState.state };
+    return {
+      type: this.view?.viewType ?? this.viewState.type,
+      state: this.view?.getState?.() ?? this.viewState.state,
+    };
+  }
+
+  /** Mount an existing view in this leaf and return it after opening. */
+  async open(view: View): Promise<View> {
+    await this.setView(view);
+    return view;
   }
 
   /** Pin or unpin this leaf without recreating its view. */
@@ -1125,6 +1136,11 @@ export class Workspace extends Events {
   /** Active file in the workspace (from the active leaf's view). */
   getActiveFile(): TFile | null {
     return this.getActiveLeaf()?.view?.getFile?.() ?? null;
+  }
+
+  getActiveViewOfType<T extends View>(type: new (...args: any[]) => T): T | null {
+    const view = this.activeLeaf?.view;
+    return view instanceof type ? view : null;
   }
 
   /** Get a leaf for opening a file: reuse active unless newTab/pinned. */

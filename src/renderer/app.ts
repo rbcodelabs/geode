@@ -37,6 +37,7 @@ import moment from "moment";
 import { Menu, type PluginSettingTab } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
+import { FileManager } from "./file-manager";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -701,6 +702,7 @@ class StatusBar {
 export class App {
   vault = new Vault();
   metadataCache = new MetadataCache(this.vault);
+  fileManager = new FileManager(this);
   commands = new CommandRegistry();
   markdownRenderer = new MarkdownRenderer(this);
   /** Reading-view code-block + post processors registered by plugins (see `Plugin.registerMarkdownCodeBlockProcessor`). */
@@ -739,6 +741,35 @@ export class App {
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+  isDarkMode(): boolean {
+    return document.body.classList.contains("theme-dark");
+  }
+
+  private localStorageKey(key: string): string {
+    return `geode:vault:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(key)}`;
+  }
+
+  loadLocalStorage(key: string): any | null {
+    const stored = localStorage.getItem(this.localStorageKey(key));
+    if (stored === null) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
+  }
+
+  saveLocalStorage(key: string, data: unknown | null): void {
+    const storageKey = this.localStorageKey(key);
+    if (data === null) {
+      localStorage.removeItem(storageKey);
+      return;
+    }
+    const serialized = JSON.stringify(data);
+    if (serialized === undefined) throw new TypeError("App local storage data must be JSON-serializable");
+    localStorage.setItem(storageKey, serialized);
+  }
 
   // --- Plugin settings tabs -----------------------------------------------
 
@@ -1535,6 +1566,8 @@ export class App {
   }
 }
 
-const app = new App();
-app.start();
-(window as any).app = app;
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  const app = new App();
+  void app.start();
+  (window as any).app = app;
+}

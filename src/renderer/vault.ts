@@ -12,6 +12,11 @@ import {
 } from "./types";
 import type { VaultFileEntry } from "../main/preload";
 
+export interface DataWriteOptions {
+  ctime?: number;
+  mtime?: number;
+}
+
 /**
  * Renderer-side vault model. Mirrors the on-disk file tree, performs file
  * operations over IPC, and emits events: create, modify, delete, rename
@@ -35,6 +40,12 @@ export class Vault extends Events {
     this.folders.set("", { kind: "folder", path: "", name: name, parent: "", children: [] });
     for (const entry of files) this.indexEntry(entry);
     this.rebuildChildren();
+    // Obsidian emits `create` while initially loading each existing abstract
+    // file. Listeners that need to ignore this phase register after layout is
+    // ready; listeners already attached to the Vault receive the loaded tree.
+    for (const entry of files) {
+      this.trigger("create", this.getAbstractFileByPath(entry.path));
+    }
     window.geode.onVaultEvent(async (ev) => {
       if (ev.event === "create") {
         if (this.files.has(ev.path)) return;
@@ -185,6 +196,10 @@ export class Vault extends Events {
     return this.folders.get("")!;
   }
 
+  getName(): string {
+    return this.name;
+  }
+
   /**
    * Obsidian's `vault.getConfig(key)` reads a raw value out of the vault's
    * `.obsidian/app.json` (things like `"defaultViewMode"`,
@@ -256,7 +271,7 @@ export class Vault extends Events {
     return window.geode.readBinary(file.path);
   }
 
-  async create(path: string, data: string): Promise<TFile> {
+  async create(path: string, data: string, _options?: DataWriteOptions): Promise<TFile> {
     if (this.files.has(path)) throw new Error(`File already exists: ${path}`);
     const { mtime, ctime, size } = await window.geode.write(path, data);
     this.indexEntry({ path, isFolder: false, mtime, ctime, size });
@@ -267,14 +282,19 @@ export class Vault extends Events {
     return file;
   }
 
-  async createFolder(path: string): Promise<void> {
+  async createFolder(path: string): Promise<TFolder> {
+    if (this.files.has(path) || this.folders.has(path)) {
+      throw new Error(`Folder already exists: ${path}`);
+    }
     await window.geode.mkdir(path);
     this.indexEntry({ path, isFolder: true, mtime: Date.now(), ctime: Date.now(), size: 0 });
     this.rebuildChildren();
-    this.trigger("create", this.folders.get(path));
+    const folder = this.folders.get(path)!;
+    this.trigger("create", folder);
+    return folder;
   }
 
-  async modify(file: TFile, data: string): Promise<void> {
+  async modify(file: TFile, data: string, _options?: DataWriteOptions): Promise<void> {
     const { mtime, size } = await window.geode.write(file.path, data);
     file.mtime = mtime;
     file.size = size;

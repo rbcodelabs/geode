@@ -23,6 +23,15 @@ export interface GraphData {
   edges: GraphEdge[];
 }
 
+/** Stable identity for layout-relevant graph topology, independent of input ordering. */
+export function graphTopologyKey(data: GraphData): string {
+  const nodes = data.nodes.map((node) => node.id).sort();
+  const edges = data.edges
+    .map(({ source, target, weight }) => [source, target, weight] as const)
+    .sort(([as, at], [bs, bt]) => as.localeCompare(bs) || at.localeCompare(bt));
+  return JSON.stringify([nodes, edges]);
+}
+
 /**
  * Build graph-view nodes/edges from the vault's markdown files and
  * `MetadataCache.resolvedLinks` (source path -> target path -> link count).
@@ -33,14 +42,16 @@ export interface GraphData {
  */
 export function buildGraph(
   files: TFile[],
-  resolvedLinks: Map<string, Map<string, number>>
+  resolvedLinks: Record<string, Record<string, number>> | Map<string, Map<string, number>>
 ): GraphData {
   const nodeIds = new Set(files.map((f) => f.path));
   const edges: GraphEdge[] = [];
   const degree = new Map<string, number>();
-  for (const [source, targets] of resolvedLinks) {
+  const sources = resolvedLinks instanceof Map ? resolvedLinks : Object.entries(resolvedLinks);
+  for (const [source, targets] of sources) {
     if (!nodeIds.has(source)) continue;
-    for (const [target, weight] of targets) {
+    const destinations = targets instanceof Map ? targets : Object.entries(targets);
+    for (const [target, weight] of destinations) {
       if (target === source) continue; // self-links don't produce an edge
       if (!nodeIds.has(target)) continue;
       edges.push({ source, target, weight });
