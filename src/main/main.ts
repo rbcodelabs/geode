@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerSaveBlocker, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -31,6 +31,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
 import { selectVaultWindowAction } from "./vault-window-selection";
+import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-watchdog";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -721,7 +722,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     if (state) {
       try { state.lastProcessMetrics = getProcessMetricsSnapshot(); } catch { /* diagnostics are best effort */ }
     }
-    if (!state || state.recovering || Date.now() - state.lastHeartbeat < 20_000) return;
+    if (!state || state.recovering || !isRendererHeartbeatStale(state.lastHeartbeat, Date.now(), 20_000)) return;
     void recoverRenderer({ type: "renderer-hang", at: Date.now(), activePlugins: [...state.activePlugins] });
   }, 5_000);
 
@@ -798,6 +799,12 @@ app.whenReady().then(() => {
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
   }
   registerIpc();
+  powerMonitor.on("suspend", () => {
+    handleWatchdogPowerEvent(crashStates, "suspend", Date.now(), recordDiagnostic);
+  });
+  powerMonitor.on("resume", () => {
+    handleWatchdogPowerEvent(crashStates, "resume", Date.now(), recordDiagnostic);
+  });
   installApplicationMenu();
   createWindow();
   app.on("activate", () => {
