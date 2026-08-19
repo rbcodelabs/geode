@@ -405,6 +405,17 @@ export class CanvasView implements View {
       if (node.type === "text") {
         items.push({ title: "Convert to file…", action: () => this.openConvertTextNodePrompt(node.id) });
       }
+      if (node.type === "group") {
+        const menuPoint = { x: event.clientX, y: event.clientY };
+        items.push({ title: "Set background", action: () => this.openGroupBackgroundPicker(node.id, menuPoint) });
+        if (node.background) {
+          items.push({
+            title: "Set background style",
+            action: () => this.openGroupBackgroundStyleMenu(node.id, node.background!, menuPoint),
+          });
+          items.push({ title: "Remove background", action: () => this.removeGroupBackground(node.id) });
+        }
+      }
       if (node.type !== "group") {
         items.push({ title: "Create group", action: () => this.openGroupPrompt() });
       }
@@ -856,6 +867,45 @@ export class CanvasView implements View {
       "Search notes…",
       choose,
     ).open();
+  }
+
+  private openGroupBackgroundPicker(nodeId: string, menuPoint: Point): void {
+    new CanvasFileSuggestModal(
+      this.app,
+      this.app.vault.getFiles().filter((file) => IMAGE_EXTENSIONS.has(file.extension)),
+      "Search images…",
+      (file) => this.openGroupBackgroundStyleMenu(nodeId, file.path, menuPoint),
+    ).open();
+  }
+
+  private openGroupBackgroundStyleMenu(nodeId: string, background: string, menuPoint: Point): void {
+    this.app.showMenu({ clientX: menuPoint.x, clientY: menuPoint.y } as MouseEvent, [
+      { title: "Cover", action: () => this.setGroupBackground(nodeId, background, "cover") },
+      { title: "Ratio", action: () => this.setGroupBackground(nodeId, background, "ratio") },
+      { title: "Repeat", action: () => this.setGroupBackground(nodeId, background, "repeat") },
+    ]);
+  }
+
+  private setGroupBackground(
+    nodeId: string,
+    background: string,
+    backgroundStyle: "cover" | "ratio" | "repeat",
+  ): void {
+    const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type !== "group") return;
+    node.background = background;
+    node.backgroundStyle = backgroundStyle;
+    this.render();
+    void this.persist();
+  }
+
+  private removeGroupBackground(nodeId: string): void {
+    const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type !== "group" || !node.background) return;
+    delete node.background;
+    delete node.backgroundStyle;
+    this.render();
+    void this.persist();
   }
 
   private openSwapFilePicker(nodeId: string, kind: SwappableFileKind): void {
