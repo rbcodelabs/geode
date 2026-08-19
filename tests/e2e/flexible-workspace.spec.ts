@@ -130,3 +130,35 @@ test("dragging a built-in tab to a center body edge creates a split", async () =
     await window.screenshot({ path: path.join(screenshotDir, "flexible-workspace-file-explorer-center.png") });
   }
 });
+
+test("dragging an external file over a center body edge does not target or create a split", async () => {
+  const target = window.locator(".workspace-center .workspace-tab-container").first();
+  const groupsBefore = await window.locator(".workspace-center > .workspace-tabs").count();
+
+  const result = await target.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["external"], "external.md", { type: "text/markdown" }));
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.right - 2,
+      clientY: rect.top + rect.height / 2,
+      dataTransfer: transfer,
+    };
+    el.dispatchEvent(new DragEvent("dragover", eventInit));
+    const dropTarget = el.closest<HTMLElement>(".workspace-tabs")?.dataset.dropTarget ?? null;
+    return { dropTarget };
+  });
+
+  expect(result.dropTarget).toBeNull();
+  if (screenshotDir) {
+    await window.screenshot({ path: path.join(screenshotDir, "flexible-workspace-external-file-no-split.png") });
+  }
+  await target.evaluate((el) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["external"], "external.md", { type: "text/markdown" }));
+    el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+  });
+  await expect(window.locator(".workspace-center > .workspace-tabs")).toHaveCount(groupsBefore);
+});
