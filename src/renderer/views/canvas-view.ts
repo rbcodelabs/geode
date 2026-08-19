@@ -589,7 +589,7 @@ export class CanvasView implements View {
     return `link-${sequence}`;
   }
 
-  private openWebPagePrompt(): void {
+  private openWebPagePrompt(worldPoint?: Point): void {
     new PromptModal(this.app, {
       placeholder: "Enter web page URL…",
       allowEmptySubmit: true,
@@ -599,21 +599,23 @@ export class CanvasView implements View {
           this.app.notify("Enter a valid http:// or https:// URL.");
           return;
         }
-        this.addLinkCardAt(canonical, this.viewportCenter());
+        this.addLinkCardAt(canonical, worldPoint ?? this.viewportCenter());
       },
     }).open();
   }
 
-  private openGroupPrompt(): void {
-    const selectedCards = this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id));
+  private openGroupPrompt(worldPoint?: Point): void {
+    const selectedCards = worldPoint
+      ? []
+      : this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id));
     new PromptModal(this.app, {
       placeholder: "Group label…",
       allowEmptySubmit: true,
-      onSubmit: (label) => this.addGroup(selectedCards, label),
+      onSubmit: (label) => this.addGroup(selectedCards, label, worldPoint),
     }).open();
   }
 
-  private addGroup(selectedCards: CanvasNode[], label: string): void {
+  private addGroup(selectedCards: CanvasNode[], label: string, worldPoint?: Point): void {
     let x: number;
     let y: number;
     let width: number;
@@ -628,7 +630,7 @@ export class CanvasView implements View {
       width = right - left + GROUP_PADDING * 2;
       height = bottom - top + GROUP_PADDING * 2;
     } else {
-      const center = this.viewportCenter();
+      const center = worldPoint ?? this.viewportCenter();
       x = center.x - DEFAULT_GROUP_WIDTH / 2;
       y = center.y - DEFAULT_GROUP_HEIGHT / 2;
       width = DEFAULT_GROUP_WIDTH;
@@ -692,16 +694,24 @@ export class CanvasView implements View {
     };
   }
 
-  private openFilePicker(kind: "note" | "media"): void {
+  private screenToWorld(clientX: number, clientY: number): Point {
+    const rect = this.surfaceEl.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left - this.pan.x) / this.scale,
+      y: (clientY - rect.top - this.pan.y) / this.scale,
+    };
+  }
+
+  private openFilePicker(kind: "note" | "media", worldPoint?: Point): void {
     if (kind === "note") {
-      this.openNotePicker((file) => this.addFileCardAt(file, this.viewportCenter()));
+      this.openNotePicker((file) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()));
       return;
     }
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getFiles().filter((file) => file.extension !== "md"),
       "Search media…",
-      (file) => this.addFileCardAt(file, this.viewportCenter()),
+      (file) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()),
     ).open();
   }
 
@@ -1186,15 +1196,24 @@ export class CanvasView implements View {
   private installCameraControls(): void {
     this.surfaceEl.addEventListener("dblclick", (event) => {
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
-      const rect = this.surfaceEl.getBoundingClientRect();
-      this.addTextCardAt({
-        x: (event.clientX - rect.left - this.pan.x) / this.scale,
-        y: (event.clientY - rect.top - this.pan.y) / this.scale,
-      });
+      this.addTextCardAt(this.screenToWorld(event.clientX, event.clientY));
+    });
+    this.surfaceEl.addEventListener("contextmenu", (event) => {
+      if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const worldPoint = this.screenToWorld(event.clientX, event.clientY);
+      this.app.showMenu(event, [
+        { title: "Add note from vault", action: () => this.openFilePicker("note", worldPoint) },
+        { title: "Add media from vault", action: () => this.openFilePicker("media", worldPoint) },
+        { title: "Add web page", action: () => this.openWebPagePrompt(worldPoint) },
+        { title: "Create group", action: () => this.openGroupPrompt(worldPoint) },
+      ]);
     });
     this.surfaceEl.addEventListener("pointerdown", (event) => {
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.surfaceEl.focus({ preventScroll: true });
+      if (event.button !== 0 && event.button !== 1) return;
       const selectionSnapshot = new Set(this.selectedIds);
       this.clearSelection();
       const isPan = event.button === 1 || (event.button === 0 && this.spacePressed);

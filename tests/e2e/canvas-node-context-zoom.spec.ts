@@ -128,7 +128,16 @@ test("Canvas node context menu zooms to the preserved or newly selected nodes", 
     await expect(window.locator(".context-menu-item")).toHaveText(["Edit label", "Go to target", "Go to source", "Remove"]);
     await window.locator(".context-menu-item", { hasText: "Go to source" }).dispatchEvent("click");
     await expect(window.locator(".context-menu-item")).toHaveCount(0);
+    const diskBeforeEmptyMenu = fs.readFileSync(canvasPath, "utf8");
     await surface.click({ button: "right", position: { x: 10, y: 10 } });
+    await expect(window.locator(".context-menu-item")).toHaveText([
+      "Add note from vault",
+      "Add media from vault",
+      "Add web page",
+      "Create group",
+    ]);
+    expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeEmptyMenu);
+    await view.locator(".view-header").click();
     await expect(window.locator(".context-menu-item")).toHaveCount(0);
 
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBefore);
