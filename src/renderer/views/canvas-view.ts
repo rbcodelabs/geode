@@ -35,6 +35,20 @@ function normalizeWebUrl(raw: string): string | null {
   }
 }
 
+function normalizeDroppedWebUrl(transfer: DataTransfer): string | null {
+  if (transfer.types.includes("text/uri-list")) {
+    for (const rawLine of transfer.getData("text/uri-list").split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const canonical = normalizeWebUrl(line);
+      if (canonical) return canonical;
+    }
+  }
+  if (!transfer.types.includes("text/plain")) return null;
+  const plain = transfer.getData("text/plain").trim();
+  return plain && !/[\r\n]/.test(plain) ? normalizeWebUrl(plain) : null;
+}
+
 class CanvasFileSuggestModal extends SuggestModal<TFile> {
   constructor(
     app: App,
@@ -596,6 +610,7 @@ export class CanvasView implements View {
       url: canonicalUrl,
     };
     this.document.nodes.push(node);
+    this.selectedEdgeId = null;
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.render();
@@ -1359,20 +1374,33 @@ export class CanvasView implements View {
   private installCameraControls(): void {
     const isEmptyDropTarget = (target: EventTarget | null) => target === this.surfaceEl || target === this.viewportEl;
     this.surfaceEl.addEventListener("dragover", (event) => {
-      if (!isEmptyDropTarget(event.target) || !event.dataTransfer?.types.includes(VAULT_FILE_DRAG_MIME)) return;
+      const types = event.dataTransfer?.types;
+      if (
+        !isEmptyDropTarget(event.target)
+        || !types
+        || ![VAULT_FILE_DRAG_MIME, "text/uri-list", "text/plain"].some((type) => types.includes(type))
+      ) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
     });
     this.surfaceEl.addEventListener("drop", (event) => {
       const transfer = event.dataTransfer;
-      if (!isEmptyDropTarget(event.target) || !transfer?.types.includes(VAULT_FILE_DRAG_MIME)) return;
+      if (!isEmptyDropTarget(event.target) || !transfer) return;
+      if (transfer.types.includes(VAULT_FILE_DRAG_MIME)) {
+        event.preventDefault();
+        event.stopPropagation();
+        const path = transfer.getData(VAULT_FILE_DRAG_MIME);
+        if (!isValidVaultFileDragPath(path)) return;
+        const file = this.app.vault.getFileByPath(path);
+        if (!file || file.path === this.file?.path) return;
+        this.addFileCardAt(file, this.screenToWorld(event.clientX, event.clientY));
+        return;
+      }
+      const canonicalUrl = normalizeDroppedWebUrl(transfer);
+      if (!canonicalUrl) return;
       event.preventDefault();
       event.stopPropagation();
-      const path = transfer.getData(VAULT_FILE_DRAG_MIME);
-      if (!isValidVaultFileDragPath(path)) return;
-      const file = this.app.vault.getFileByPath(path);
-      if (!file || file.path === this.file?.path) return;
-      this.addFileCardAt(file, this.screenToWorld(event.clientX, event.clientY));
+      this.addLinkCardAt(canonicalUrl, this.screenToWorld(event.clientX, event.clientY));
     });
     this.surfaceEl.addEventListener("dblclick", (event) => {
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
