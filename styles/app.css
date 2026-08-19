@@ -3552,3 +3552,23 @@ select.dropdown:hover {
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
 }
+
+.canvas-error-title {
+  margin-bottom: 8px;
+  font-weight: var(--font-weight-bold);
+}
+
+.canvas-error-message {
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.canvas-error-retry {
+  min-width: 72px;
+}
+
+.canvas-view.has-error .canvas-toolbar,
+.canvas-view.has-error .canvas-selection-controls {
+  display: none;
+}

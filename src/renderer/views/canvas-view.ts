@@ -103,6 +103,8 @@ export class CanvasView implements View {
   private colorPaletteEl: HTMLElement | null = null;
   private edgeLabelEditorEl: HTMLInputElement | null = null;
   private edgeLabelEditorCancel: (() => void) | null = null;
+  private recoveryError: string | null = null;
+  private loadGeneration = 0;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -136,9 +138,10 @@ export class CanvasView implements View {
 
   async setFile(file: TFile): Promise<void> {
     this.file = file;
+    this.lastKnownText = null;
     this.titleEl.textContent = file.basename;
     if (this.containerEl.classList.contains("canvas-embed-view")) this.containerEl.dataset.canvasPath = file.path;
-    await this.load(await this.app.vault.read(file), true);
+    await this.reloadFromFile(true);
   }
 
   /** Mount the real Canvas surface without its normal workspace-tab header. */
@@ -152,6 +155,7 @@ export class CanvasView implements View {
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
   onClose(): void {
     this.app.vault.off("modify", this.onVaultModify);
+    this.loadGeneration += 1;
     this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
     this.disposeMarkdownContents();
@@ -160,28 +164,69 @@ export class CanvasView implements View {
 
   private readonly onVaultModify = async (file?: TFile) => {
     if (!file || file.path !== this.file?.path) return;
-    const text = await this.app.vault.read(file);
-    if (text !== this.lastKnownText) await this.load(text, true);
+    await this.reloadFromFile(true);
   };
 
-  private async load(text: string, resetHistory = false): Promise<void> {
+  private async reloadFromFile(resetHistory = false): Promise<void> {
+    const file = this.file;
+    if (!file) return;
+    const generation = ++this.loadGeneration;
+    const text = await this.app.vault.read(file);
+    if (generation !== this.loadGeneration || file !== this.file || text === this.lastKnownText) return;
+    this.load(text, resetHistory);
+  }
+
+  private load(text: string, resetHistory = false): void {
     this.lastKnownText = text;
     if (resetHistory) this.clearHistory();
     try {
-      this.document = parseCanvas(text);
+      const document = parseCanvas(text);
+      this.document = document;
+      this.recoveryError = null;
       this.containerEl.classList.remove("has-error");
       this.render();
     } catch (error) {
-      this.viewportEl.innerHTML = "";
-      this.containerEl.classList.add("has-error");
-      const message = document.createElement("div");
-      message.className = "canvas-error";
-      message.textContent = `Could not open canvas: ${(error as Error).message}`;
-      this.viewportEl.appendChild(message);
+      this.enterRecoveryMode((error as Error).message);
     }
   }
 
+  private enterRecoveryMode(detail: string): void {
+    this.recoveryError = detail;
+    this.containerEl.classList.add("has-error");
+    this.document = { nodes: [], edges: [] };
+    this.selectedIds.clear();
+    this.selectedEdgeIds.clear();
+    this.spacePressed = false;
+    this.edgeLabelEditorCancel?.();
+    this.renderVersion += 1;
+    this.disposeMarkdownContents();
+    this.revokeObjectUrls();
+    this.selectionControlsEl?.remove();
+    this.selectionControlsEl = null;
+    this.colorPaletteEl?.remove();
+    this.colorPaletteEl = null;
+    this.viewportEl.replaceChildren();
+
+    const error = document.createElement("div");
+    error.className = "canvas-error";
+    error.setAttribute("role", "alert");
+    const title = document.createElement("div");
+    title.className = "canvas-error-title";
+    title.textContent = "Could not open canvas.";
+    const message = document.createElement("div");
+    message.className = "canvas-error-message";
+    message.textContent = detail;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "canvas-error-retry";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => { void this.reloadFromFile(true); });
+    error.append(title, message, retry);
+    this.viewportEl.appendChild(error);
+  }
+
   private render(): void {
+    if (this.recoveryError !== null) return;
     this.edgeLabelEditorCancel?.();
     const version = ++this.renderVersion;
     this.disposeMarkdownContents();
@@ -652,6 +697,7 @@ export class CanvasView implements View {
   }
 
   private addTextCardAt(worldPoint: Point): void {
+    if (this.recoveryError !== null) return;
     const node: CanvasTextNode = {
       id: this.nextTextNodeId(),
       type: "text",
@@ -698,6 +744,7 @@ export class CanvasView implements View {
   }
 
   private addFileCardsAt(files: TFile[], worldPoint: Point): void {
+    if (this.recoveryError !== null) return;
     if (files.length === 0) return;
     const nodes: CanvasNode[] = [];
     for (const [index, file] of files.entries()) {
@@ -739,6 +786,7 @@ export class CanvasView implements View {
   }
 
   private addLinkCardAt(canonicalUrl: string, worldPoint: Point): void {
+    if (this.recoveryError !== null) return;
     const node = this.createLinkCard(canonicalUrl, worldPoint);
     this.document.nodes.push(node);
     this.selectedEdgeIds.clear();
@@ -756,6 +804,7 @@ export class CanvasView implements View {
   }
 
   private openWebPagePrompt(worldPoint?: Point, choose?: (canonicalUrl: string) => void): void {
+    if (this.recoveryError !== null) return;
     new PromptModal(this.app, {
       placeholder: "Enter web page URL…",
       allowEmptySubmit: true,
@@ -772,6 +821,7 @@ export class CanvasView implements View {
   }
 
   private openGroupPrompt(worldPoint?: Point): void {
+    if (this.recoveryError !== null) return;
     const selectedCards = worldPoint
       ? []
       : this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id));
@@ -783,6 +833,7 @@ export class CanvasView implements View {
   }
 
   private addGroup(selectedCards: CanvasNode[], label: string, worldPoint?: Point): void {
+    if (this.recoveryError !== null) return;
     let x: number;
     let y: number;
     let width: number;
@@ -870,6 +921,7 @@ export class CanvasView implements View {
   }
 
   private openFilePicker(kind: "note" | "media", worldPoint?: Point, choose?: (file: TFile) => void): void {
+    if (this.recoveryError !== null) return;
     const onChoose = choose ?? ((file: TFile) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()));
     if (kind === "note") {
       this.openNotePicker(onChoose);
@@ -884,6 +936,7 @@ export class CanvasView implements View {
   }
 
   private openNotePicker(choose: (file: TFile) => void): void {
+    if (this.recoveryError !== null) return;
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getMarkdownFiles(),
@@ -893,6 +946,7 @@ export class CanvasView implements View {
   }
 
   private openGroupBackgroundPicker(nodeId: string, menuPoint: Point): void {
+    if (this.recoveryError !== null) return;
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getFiles().filter((file) => IMAGE_EXTENSIONS.has(file.extension)),
@@ -920,6 +974,7 @@ export class CanvasView implements View {
     background: string,
     backgroundStyle: "cover" | "ratio" | "repeat",
   ): void {
+    if (this.recoveryError !== null) return;
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
     if (!node || node.type !== "group") return;
     node.background = background;
@@ -929,6 +984,7 @@ export class CanvasView implements View {
   }
 
   private removeGroupBackground(nodeId: string): void {
+    if (this.recoveryError !== null) return;
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
     if (!node || node.type !== "group" || !node.background) return;
     delete node.background;
@@ -938,6 +994,7 @@ export class CanvasView implements View {
   }
 
   private openSwapFilePicker(nodeId: string, kind: SwappableFileKind): void {
+    if (this.recoveryError !== null) return;
     const files = kind === "note"
       ? this.app.vault.getMarkdownFiles()
       : this.app.vault.getFiles().filter((file) => this.fileKind(file) === kind);
@@ -975,6 +1032,7 @@ export class CanvasView implements View {
   }
 
   private openConvertTextNodePrompt(nodeId: string): void {
+    if (this.recoveryError !== null) return;
     new PromptModal(this.app, {
       placeholder: "File name…",
       initialValue: "Untitled",
@@ -984,6 +1042,7 @@ export class CanvasView implements View {
   }
 
   private async convertTextNodeToFile(nodeId: string, rawName: string): Promise<void> {
+    if (this.recoveryError !== null) return;
     const base = rawName.trim().replace(/\.md$/i, "").trim();
     if (!base || INVALID_MARKDOWN_FILE_NAME.test(base)) {
       this.app.notify("Enter a valid file name.");
@@ -1146,6 +1205,7 @@ export class CanvasView implements View {
   }
 
   private openColorPalette(): void {
+    if (this.recoveryError !== null) return;
     const controls = this.selectionControlsEl;
     if (!controls) return;
     this.colorPaletteEl?.remove();
@@ -1173,6 +1233,7 @@ export class CanvasView implements View {
   }
 
   private openCustomColorPrompt(): void {
+    if (this.recoveryError !== null) return;
     this.colorPaletteEl?.remove();
     this.colorPaletteEl = null;
     new PromptModal(this.app, {
@@ -1199,6 +1260,7 @@ export class CanvasView implements View {
   }
 
   private applySelectionColor(color: string): void {
+    if (this.recoveryError !== null) return;
     if (this.selectedEdgeIds.size > 0) {
       let changed = false;
       for (const edge of this.document.edges) {
@@ -1330,6 +1392,7 @@ export class CanvasView implements View {
   }
 
   private removeEdge(edgeId: string): void {
+    if (this.recoveryError !== null) return;
     const length = this.document.edges.length;
     this.document.edges = this.document.edges.filter((edge) => edge.id !== edgeId);
     if (this.document.edges.length === length) return;
@@ -1339,6 +1402,7 @@ export class CanvasView implements View {
   }
 
   private beginEdgeReconnect(event: PointerEvent, edgeId: string, endpoint: "source" | "target"): void {
+    if (this.recoveryError !== null) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1565,6 +1629,7 @@ export class CanvasView implements View {
   }
 
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
+    if (this.recoveryError !== null) return;
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-edge, .canvas-node-connection-handle")) return;
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
@@ -1679,6 +1744,7 @@ export class CanvasView implements View {
   }
 
   private beginNodeDuplication(event: PointerEvent, draggedNode: CanvasNode): void {
+    if (this.recoveryError !== null) return;
     event.preventDefault();
     const sourceNodes = this.selectedIds.has(draggedNode.id)
       ? this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id))
@@ -1743,6 +1809,7 @@ export class CanvasView implements View {
   }
 
   private beginResize(event: PointerEvent, node: CanvasNode, direction: ResizeDirection = "southeast"): void {
+    if (this.recoveryError !== null) return;
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
@@ -1833,6 +1900,7 @@ export class CanvasView implements View {
   }
 
   private beginConnection(event: PointerEvent, node: CanvasNode, side: CanvasSide): void {
+    if (this.recoveryError !== null) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1918,6 +1986,7 @@ export class CanvasView implements View {
   }
 
   private addConnectedTextCard(source: CanvasNode, sourceSide: CanvasSide, worldPoint: Point): void {
+    if (this.recoveryError !== null) return;
     const node: CanvasTextNode = {
       id: this.nextTextNodeId(),
       type: "text",
@@ -1954,14 +2023,17 @@ export class CanvasView implements View {
   }
 
   private addConnectedFileCard(source: CanvasNode, sourceSide: CanvasSide, file: TFile, worldPoint: Point): void {
+    if (this.recoveryError !== null) return;
     this.addConnectedCard(source, sourceSide, this.createFileCard(file, worldPoint));
   }
 
   private addConnectedLinkCard(source: CanvasNode, sourceSide: CanvasSide, url: string, worldPoint: Point): void {
+    if (this.recoveryError !== null) return;
     this.addConnectedCard(source, sourceSide, this.createLinkCard(url, worldPoint));
   }
 
   private addConnectedCard(source: CanvasNode, sourceSide: CanvasSide, node: CanvasNode): void {
+    if (this.recoveryError !== null) return;
     if (!this.document.nodes.includes(source)) return;
     const edge: CanvasEdge = {
       id: this.nextEdgeId(),
@@ -1991,6 +2063,7 @@ export class CanvasView implements View {
   private installCameraControls(): void {
     const isEmptyDropTarget = (target: EventTarget | null) => target === this.surfaceEl || target === this.viewportEl;
     this.surfaceEl.addEventListener("dragover", (event) => {
+      if (this.recoveryError !== null) return;
       const types = event.dataTransfer?.types;
       if (
         !isEmptyDropTarget(event.target)
@@ -2001,6 +2074,7 @@ export class CanvasView implements View {
       event.dataTransfer.dropEffect = "copy";
     });
     this.surfaceEl.addEventListener("drop", (event) => {
+      if (this.recoveryError !== null) return;
       const transfer = event.dataTransfer;
       if (!isEmptyDropTarget(event.target) || !transfer) return;
       if (transfer.types.includes(VAULT_FILE_DRAG_MIME)) {
@@ -2031,10 +2105,12 @@ export class CanvasView implements View {
       this.addLinkCardAt(canonicalUrl, this.screenToWorld(event.clientX, event.clientY));
     });
     this.surfaceEl.addEventListener("dblclick", (event) => {
+      if (this.recoveryError !== null) return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.addTextCardAt(this.screenToWorld(event.clientX, event.clientY));
     });
     this.surfaceEl.addEventListener("contextmenu", (event) => {
+      if (this.recoveryError !== null) return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       event.preventDefault();
       event.stopPropagation();
@@ -2149,6 +2225,7 @@ export class CanvasView implements View {
   }
 
   private handleKeyDown(event: KeyboardEvent): void {
+    if (this.recoveryError !== null) return;
     const target = event.target as HTMLElement;
     if (target.matches("textarea, input, [contenteditable=true]")) return;
     const modifier = event.ctrlKey || event.metaKey;
@@ -2187,6 +2264,7 @@ export class CanvasView implements View {
   }
 
   private deleteSelection(): void {
+    if (this.recoveryError !== null) return;
     if (this.selectedEdgeIds.size > 0) {
       this.document.edges = this.document.edges.filter((edge) => !this.selectedEdgeIds.has(edge.id));
     } else if (this.selectedIds.size > 0) {
@@ -2235,7 +2313,9 @@ export class CanvasView implements View {
       const icon = document.createElement("span");
       setIcon(icon, iconName);
       button.appendChild(icon);
-      button.addEventListener("click", run);
+      button.addEventListener("click", () => {
+        if (this.recoveryError === null) run();
+      });
       toolbar.appendChild(button);
     };
     action("Add text card", "file-plus", () => this.addTextCardAt(this.viewportCenter()));
@@ -2318,7 +2398,7 @@ export class CanvasView implements View {
   }
 
   private async persist(): Promise<void> {
-    if (!this.file) return;
+    if (!this.file || this.recoveryError !== null) return;
     const text = serializeCanvas(this.document);
     if (text === this.lastKnownText) return;
     if (this.lastKnownText !== null) this.pushHistory(this.undoStack, this.lastKnownText);
@@ -2338,7 +2418,7 @@ export class CanvasView implements View {
   }
 
   private async restoreHistory(direction: "undo" | "redo"): Promise<void> {
-    if (!this.file) return;
+    if (!this.file || this.recoveryError !== null) return;
     const source = direction === "undo" ? this.undoStack : this.redoStack;
     const target = direction === "undo" ? this.redoStack : this.undoStack;
     const snapshot = source[source.length - 1];
