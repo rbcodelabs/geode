@@ -87,6 +87,7 @@ export class CanvasView implements View {
   private spacePressed = false;
   private lastKnownText: string | null = null;
   private readonly objectUrls = new Set<string>();
+  private readonly markdownContentEls = new Set<HTMLElement>();
   private renderVersion = 0;
   private selectionControlsEl: HTMLElement | null = null;
   private colorPaletteEl: HTMLElement | null = null;
@@ -126,7 +127,16 @@ export class CanvasView implements View {
   async setFile(file: TFile): Promise<void> {
     this.file = file;
     this.titleEl.textContent = file.basename;
+    if (this.containerEl.classList.contains("canvas-embed-view")) this.containerEl.dataset.canvasPath = file.path;
     await this.load(await this.app.vault.read(file));
+  }
+
+  /** Mount the real Canvas surface without its normal workspace-tab header. */
+  markEmbedded(): void {
+    this.containerEl.classList.add("canvas-embed-view");
+    const header = this.containerEl.querySelector<HTMLElement>(":scope > .view-header");
+    if (header) header.style.display = "none";
+    if (this.file) this.containerEl.dataset.canvasPath = this.file.path;
   }
 
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
@@ -134,6 +144,7 @@ export class CanvasView implements View {
     this.app.vault.off("modify", this.onVaultModify);
     this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
+    this.disposeMarkdownContents();
     this.revokeObjectUrls();
   }
 
@@ -162,6 +173,7 @@ export class CanvasView implements View {
   private render(): void {
     this.edgeLabelEditorCancel?.();
     const version = ++this.renderVersion;
+    this.disposeMarkdownContents();
     this.revokeObjectUrls();
     this.viewportEl.innerHTML = "";
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -465,10 +477,18 @@ export class CanvasView implements View {
       content.className = "canvas-node-file canvas-node-note";
       content.textContent = "Loading…";
       el.appendChild(content);
+      this.markdownContentEls.add(content);
       void this.app.markdownRenderer
         .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content)
+        .then(() => {
+          if (version === this.renderVersion && content.isConnected) return;
+          this.app.markdownRenderer.dispose(content);
+          this.markdownContentEls.delete(content);
+        })
         .catch(() => {
+          this.app.markdownRenderer.dispose(content);
           if (version === this.renderVersion && content.isConnected) this.renderFileFallback(el, target, "Could not load note");
+          this.markdownContentEls.delete(content);
         });
       return;
     }
@@ -497,6 +517,11 @@ export class CanvasView implements View {
     name.className = "canvas-node-file canvas-node-file-fallback";
     name.textContent = label;
     el.append(type, name);
+  }
+
+  private disposeMarkdownContents(): void {
+    for (const content of this.markdownContentEls) this.app.markdownRenderer.dispose(content);
+    this.markdownContentEls.clear();
   }
 
   private async loadFileMedia(file: TFile, media: HTMLImageElement | HTMLAudioElement | HTMLVideoElement, version: number): Promise<void> {

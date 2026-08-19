@@ -5,7 +5,7 @@ import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, TFile, VIDEO_EXTENSIONS } from "../
  * Embed resolution shared by Reading view (render.ts) and Live Preview
  * (live-preview.ts's EmbedWidget) so both render `![[target]]` the same way.
  */
-export type EmbedKind = "image" | "audio" | "video" | "note" | "unresolved" | "other";
+export type EmbedKind = "image" | "audio" | "video" | "note" | "canvas" | "unresolved" | "other";
 
 export interface ResolvedEmbed {
   kind: EmbedKind;
@@ -26,6 +26,7 @@ export function resolveEmbed(target: string, sourcePath: string, app: App): Reso
   if (AUDIO_EXTENSIONS.has(file.extension)) return { kind: "audio", file, subpath };
   if (VIDEO_EXTENSIONS.has(file.extension)) return { kind: "video", file, subpath };
   if (file.extension === "md") return { kind: "note", file, subpath };
+  if (file.extension === "canvas") return { kind: "canvas", file, subpath };
   return { kind: "other", file, subpath };
 }
 
