@@ -161,6 +161,7 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
     expect(saved.nodes.find((node: { id: string }) => node.id === "file-1").vendorNode).toBe("keep");
 
     await window.reload();
+    await expect.poll(() => window.evaluate(() => (window as any).app?.workspace?.layoutReady ?? false)).toBe(true);
     await window.locator('.nav-file-title[data-path="Files.canvas"]').click();
     await expect(window.locator('.canvas-node[data-node-id="file-2"] .canvas-node-note h1')).toHaveText("Whole note");
     await expect(window.locator('.canvas-node[data-node-id="file-3"] img.canvas-node-media')).toHaveAttribute("src", /^blob:/);

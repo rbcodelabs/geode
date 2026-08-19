@@ -1052,6 +1052,12 @@ export class CanvasView implements View {
     const soleNode = soleNodeId ? this.document.nodes.find((node) => node.id === soleNodeId) : null;
     const soleGroup = soleNode?.type === "group" ? soleNode : null;
     const nodeCapability = soleNode && !soleGroup ? this.nodeActionCapability(soleNode) : null;
+    const selectedNodes = this.selectedEdgeIds.size === 0 && this.selectedIds.size >= 2
+      ? this.document.nodes.filter((node) => this.selectedIds.has(node.id))
+      : [];
+    const canGroupSelection = selectedNodes.length === this.selectedIds.size
+      && selectedNodes.length >= 2
+      && selectedNodes.every((node) => node.type !== "group");
     const selectionKind = soleEdgeId ? "edge" : this.selectedEdgeIds.size > 1 ? "edges" : soleGroup ? "group" : "nodes";
     const selectionKey = soleEdgeId
       ? `${selectionKind}:${soleEdgeId}`
@@ -1059,7 +1065,9 @@ export class CanvasView implements View {
         ? `${selectionKind}:${soleGroup.id}:${soleGroup.background ? "background" : "plain"}`
         : soleNode && nodeCapability
           ? `node:${soleNode.id}:${nodeCapability.signature}`
-          : selectionKind;
+          : selectionKind === "nodes" && this.selectedIds.size >= 2
+            ? `${selectionKind}:${canGroupSelection ? "groupable" : "mixed"}`
+            : selectionKind;
     if (this.selectionControlsEl?.isConnected && this.selectionControlsEl.dataset.selectionKey === selectionKey) return;
     this.selectionControlsEl?.remove();
     this.colorPaletteEl = null;
@@ -1106,6 +1114,7 @@ export class CanvasView implements View {
         action("Open in browser", () => { void window.geode.openExternal(nodeCapability.url); });
       }
     }
+    if (canGroupSelection) action("Create group", () => this.openGroupPrompt());
     if (soleGroup) {
       const menuPoint = () => {
         const rect = controls.getBoundingClientRect();
