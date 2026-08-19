@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.6). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.7). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.6)
+## Features (v0.7)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -24,9 +24,14 @@ cloud, no lock-in.
   File reads, Markdown parsing, and debounced atomic cache writes run in a
   background utility process, with automatic in-renderer fallback
 - **Search** — `tag:` `path:` `file:` operators, quoted phrases, negation, regex
-- **Canvas** — open and edit interoperable JSON Canvas 1.0 (`.canvas`) boards
-  with text, file, link, and group cards; labeled edges; pan/zoom; and
-  persistent drag/resize geometry
+- **Canvas** — author interoperable JSON Canvas 1.0 (`.canvas`) boards with
+  text, note, media, web, and group cards; create, label, reconnect, color, and
+  delete edges; drag vault files, folders, and browser URLs onto the board;
+  marquee/multi-select, duplicate, align, group, resize, pan/zoom, search, and
+  undo/redo. Canvas note cards contribute backlinks, Canvas files embed in
+  Markdown, web cards can show live previews, and malformed files open in a
+  non-destructive recovery view. Inline note editing, PDF previews, and some
+  broader context/action workflows are not implemented yet
 - **Workspace** — movable built-in and plugin views, tabs, split panes, pinned
   tabs, vertically stacked and independently resizable sidebar groups, recursive
   layout persistence, a hideable left ribbon with persistent Settings and
@@ -79,6 +84,7 @@ npm run build      # bundle main/preload/renderer with esbuild
 npm start          # launch Electron
 npm run dev        # esbuild watch mode
 npm run typecheck  # strict tsc
+npm run parity:check # verify the checked-in Obsidian compatibility ledger is current
 npm run dist        # package a local ad-hoc-signed macOS build (dmg + zip) into release/
 npm run release     # same, plus publish to GitHub Releases (requires GH_TOKEN)
 ```
@@ -98,7 +104,10 @@ a tag, useful for testing the pipeline.
 The full reverse-engineered specification of the target feature set lives in
 [`docs/spec/`](docs/spec/00-overview.md) — core app behavior, all 30 core
 plugins, the plugin API surface, and on-disk file formats. It doubles as the
-project roadmap.
+project roadmap. The generated
+[`docs/spec/parity-ledger.json`](docs/spec/parity-ledger.json) tracks individual
+public Obsidian requirements and their verification status; it is a coverage
+baseline, not a claim of complete compatibility.
 
 ## Legal
 
