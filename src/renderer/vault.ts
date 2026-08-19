@@ -11,6 +11,7 @@ import {
   isTFolder,
 } from "./types";
 import type { VaultFileEntry } from "../main/preload";
+import { measureOperation } from "./perf-instrumentation";
 
 export interface DataWriteOptions {
   ctime?: number;
@@ -31,7 +32,9 @@ export class Vault extends Events {
   private contents = new Map<string, string>();
 
   async open(vaultPath: string): Promise<void> {
-    const { root, name, files } = await window.geode.openVault(vaultPath);
+    const { root, name, files } = await measureOperation("vault-discovery-ipc", () =>
+      window.geode.openVault(vaultPath)
+    );
     this.root = root;
     this.name = name;
     this.files.clear();

@@ -4,6 +4,7 @@ import {
   getRecentMeasures,
   markEnd,
   markStart,
+  measureOperation,
   recordMeasure,
   withPerfMark,
 } from "../../src/renderer/perf-instrumentation";
@@ -69,6 +70,12 @@ describe("perf-instrumentation", () => {
     expect(getRecentMeasures()).toEqual([
       expect.objectContaining({ op: "metadata-cache-disk-write", durationMs: 12.5 }),
     ]);
+  });
+
+  it("measureOperation records concurrent-safe sync and async timings", async () => {
+    expect(measureOperation("startup-sync", () => 42)).toBe(42);
+    await expect(measureOperation("startup-async", async () => "ok")).resolves.toBe("ok");
+    expect(getRecentMeasures().map((item) => item.op)).toEqual(["startup-sync", "startup-async"]);
   });
 
   it("withPerfMark records a measure for a sync happy path and returns the value unchanged", async () => {

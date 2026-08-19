@@ -91,6 +91,13 @@ test("discovers, enables, and runs a real plugin from disk on vault open", async
     expect(ran).toBe(true);
     await expect(window.locator(".notice", { hasText: "hello from sample-plugin" })).toBeVisible();
 
+    await window.evaluate(() => (window as any).app.commands.execute("open-settings"));
+    await window.locator(".vertical-tab-nav-item", { hasText: "Performance" }).click();
+    const operations = window.locator(".performance-tab-table").first();
+    await expect(operations).toContainText("startup-plugins");
+    await expect(operations).toContainText("plugin-code-read:sample-plugin");
+    await expect(operations).toContainText("plugin-onload-sync:sample-plugin");
+
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
     await app.close();
