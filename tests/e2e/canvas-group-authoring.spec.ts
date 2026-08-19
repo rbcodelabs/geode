@@ -5,6 +5,10 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 test("authors labeled and viewport-centered Canvas groups with stable persistence", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-groups-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-groups-user-"));
@@ -50,7 +54,7 @@ test("authors labeled and viewport-centered Canvas groups with stable persistenc
     await cardA.click();
     await cardB.click({ modifiers: ["Shift"] });
     await expect(view.locator(".canvas-node.is-selected")).toHaveCount(2);
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.at(-1).id).toBe("card-b");
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.at(-1)?.id ?? null).toBe("card-b");
 
     // Escape cancels the prompt without inserting or persisting a group.
     const beforeCancel = fs.readFileSync(canvasPath, "utf8");
@@ -76,7 +80,7 @@ test("authors labeled and viewport-centered Canvas groups with stable persistenc
       width: Number.parseFloat((element as HTMLElement).style.width),
       height: Number.parseFloat((element as HTMLElement).style.height),
     }))).toEqual({ x: 60, y: 60, width: 540, height: 280 });
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.some((node: { id: string }) => node.id === "group-2")).toBe(true);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.some((node: { id: string }) => node.id === "group-2") ?? null).toBe(true);
     let saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     const group2 = saved.nodes.find((node: { id: string }) => node.id === "group-2");
     expect(Object.hasOwn(group2, "label")).toBe(false);
@@ -105,7 +109,10 @@ test("authors labeled and viewport-centered Canvas groups with stable persistenc
     await prompt.fill("   ");
     await prompt.press("Enter");
     await expect(label).toHaveText("Group");
-    await expect.poll(() => Object.hasOwn(JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "group-2"), "label")).toBe(false);
+    await expect.poll(() => {
+      const group = readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "group-2");
+      return group ? Object.hasOwn(group, "label") : null;
+    }).toBe(false);
     const beforeLabelCancel = fs.readFileSync(canvasPath, "utf8");
     await label.dblclick();
     await prompt.fill("Must not save");
@@ -152,10 +159,10 @@ test("authors labeled and viewport-centered Canvas groups with stable persistenc
     await window.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 40);
     await window.mouse.up();
     await expect.poll(() => defaultGroup.evaluate((element) => Number((element as HTMLElement).dataset.width))).toBeGreaterThan(400);
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "group-3")?.width).toBeGreaterThan(400);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "group-3")?.width ?? null).toBeGreaterThan(400);
     await window.keyboard.press("Delete");
     await expect(defaultGroup).toHaveCount(0);
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.some((node: { id: string }) => node.id === "group-3")).toBe(false);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.some((node: { id: string }) => node.id === "group-3") ?? null).toBe(false);
     expect({
       scale: await view.getAttribute("data-scale"),
       panX: await view.getAttribute("data-pan-x"),

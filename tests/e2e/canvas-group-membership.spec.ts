@@ -5,6 +5,10 @@ import { _electron as electron, expect, test, type Locator } from "@playwright/t
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 async function geometry(node: Locator): Promise<{ x: number; y: number }> {
   return node.evaluate((element) => ({
     x: Number.parseFloat((element as HTMLElement).style.left),
@@ -93,7 +97,8 @@ test("moves the stable geometric membership snapshot with a dragged Canvas group
     await window.mouse.up();
 
     await expect.poll(() => {
-      const doc = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
+      const doc = readCanvas(canvasPath);
+      if (!doc) return null;
       return Object.fromEntries(doc.nodes.map((node: { id: string; x: number; y: number }) => [node.id, [node.x, node.y]]));
     }).toEqual({
       outer: [150, 140],
@@ -158,7 +163,7 @@ test("moves the stable geometric membership snapshot with a dragged Canvas group
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(beforeSecond);
     await window.mouse.up();
 
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "outer").x).toBe(120);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "outer")?.x ?? null).toBe(120);
     saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(saved.nodes.map((node: { id: string }) => node.id)).toEqual(beforeSecondOrder);
     expect(saved.edges).toEqual(initial.edges);

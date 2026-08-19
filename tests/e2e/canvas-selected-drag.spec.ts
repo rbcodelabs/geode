@@ -7,6 +7,10 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 
 type Point = { x: number; y: number };
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 async function worldToScreen(view: Locator, surface: Locator, point: Point): Promise<Point> {
   const box = (await surface.boundingBox())!;
   const scale = Number(await view.getAttribute("data-scale"));
@@ -129,7 +133,7 @@ test("moves the selected non-group Canvas set with dynamic Shift axis constraint
     expect(await incidentEdge.getAttribute("d")).not.toBe(incidentPathBefore);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeDrag);
     await window.mouse.up();
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "beta").x).toBeCloseTo(320, 4);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "beta")?.x ?? null).toBeCloseTo(320, 4);
 
     // Shift uses the dominant displacement dynamically. From one drag origin,
     // the same selected set first constrains horizontally, then vertically.
@@ -151,7 +155,7 @@ test("moves the selected non-group Canvas set with dynamic Shift axis constraint
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeDrag);
     await window.mouse.up();
     await window.keyboard.up("Shift");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "alpha").y).toBeCloseTo(180, 4);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "alpha")?.y ?? null).toBeCloseTo(180, 4);
 
     // Dragging a card outside the selection replaces it and moves it alone.
     diskBeforeDrag = fs.readFileSync(canvasPath, "utf8");
@@ -167,7 +171,7 @@ test("moves the selected non-group Canvas set with dynamic Shift axis constraint
     expect(await geometry(group)).toEqual({ x: 50, y: 50 });
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeDrag);
     await window.mouse.up();
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "outside").x).toBeCloseTo(480, 4);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "outside")?.x ?? null).toBeCloseTo(480, 4);
 
     const persistedText = fs.readFileSync(canvasPath, "utf8");
     const saved = JSON.parse(persistedText);

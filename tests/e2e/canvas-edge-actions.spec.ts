@@ -5,6 +5,10 @@ import { _electron as electron, expect, test, type Locator, type Page } from "@p
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 async function pathPoint(pathLocator: Locator): Promise<{ x: number; y: number }> {
   return pathLocator.evaluate((element) => {
     const path = element as SVGPathElement;
@@ -80,7 +84,7 @@ test("edits Canvas edge labels and navigates or removes through exact context ac
     await prompt.fill("  supports  ");
     await prompt.press("Enter");
     await expect(view.locator('.canvas-edge-label[data-edge-id="edge-2"]')).toHaveText("supports");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.find((edge: { id: string }) => edge.id === "edge-2").label).toBe("supports");
+    await expect.poll(() => readCanvas(canvasPath)?.edges.find((edge: { id: string }) => edge.id === "edge-2")?.label ?? null).toBe("supports");
 
     // The exact context item edits and trims the current value.
     const cameraBeforeMenu = {
@@ -108,7 +112,10 @@ test("edits Canvas edge labels and navigates or removes through exact context ac
     await prompt.fill("   ");
     await prompt.press("Enter");
     await expect(view.locator('.canvas-edge-label[data-edge-id="edge-2"]')).toHaveCount(0);
-    await expect.poll(() => Object.hasOwn(JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.find((edge: { id: string }) => edge.id === "edge-2"), "label")).toBe(false);
+    await expect.poll(() => {
+      const edge = readCanvas(canvasPath)?.edges.find((candidate: { id: string }) => candidate.id === "edge-2");
+      return edge ? Object.hasOwn(edge, "label") : null;
+    }).toBe(false);
     const beforeCancel = fs.readFileSync(canvasPath, "utf8");
     await openEdgeMenu(window, hit);
     await menuItem(window, "Edit label").click();
@@ -161,7 +168,7 @@ test("edits Canvas edge labels and navigates or removes through exact context ac
       panX: await view.getAttribute("data-pan-x"),
       panY: await view.getAttribute("data-pan-y"),
     }).toEqual(beforeRemoveCamera);
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.map((edge: { id: string }) => edge.id)).toEqual(["edge-1"]);
+    await expect.poll(() => readCanvas(canvasPath)?.edges.map((edge: { id: string }) => edge.id) ?? null).toEqual(["edge-1"]);
 
     await window.reload();
     await window.locator('.nav-file-title[data-path="Edge actions.canvas"]').click();

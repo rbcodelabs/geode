@@ -5,6 +5,10 @@ import { _electron as electron, expect, test, type Locator, type Page } from "@p
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 async function pathPoint(pathLocator: Locator): Promise<{ x: number; y: number }> {
   return pathLocator.evaluate((element) => {
     const path = element as SVGPathElement;
@@ -108,7 +112,7 @@ test("reconnects selected Canvas edge endpoints and removes only on empty drop",
       x: replacementBox.x + 6,
       y: replacementBox.y + replacementBox.height / 2,
     });
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.find((edge: { id: string }) => edge.id === "edge-2"))
+    await expect.poll(() => readCanvas(canvasPath)?.edges.find((edge: { id: string }) => edge.id === "edge-2") ?? null)
       .toEqual({
         id: "edge-2",
         fromNode: "source",
@@ -136,7 +140,7 @@ test("reconnects selected Canvas edge endpoints and removes only on empty drop",
       x: originalTargetBox.x + originalTargetBox.width - 6,
       y: originalTargetBox.y + originalTargetBox.height / 2,
     });
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.find((edge: { id: string }) => edge.id === "edge-2"))
+    await expect.poll(() => readCanvas(canvasPath)?.edges.find((edge: { id: string }) => edge.id === "edge-2") ?? null)
       .toEqual({
         id: "edge-2",
         fromNode: "target",
@@ -204,7 +208,7 @@ test("reconnects selected Canvas edge endpoints and removes only on empty drop",
       panX: await reloaded.getAttribute("data-pan-x"),
       panY: await reloaded.getAttribute("data-pan-y"),
     }).toEqual(reloadedCamera);
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.map((edge: { id: string }) => edge.id)).toEqual(["edge-1"]);
+    await expect.poll(() => readCanvas(canvasPath)?.edges.map((edge: { id: string }) => edge.id) ?? null).toEqual(["edge-1"]);
     const saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(saved.vendorCanvas).toEqual({ keep: true });
     expect(saved.nodes.find((node: { id: string }) => node.id === "source").vendorSource).toBe("keep");

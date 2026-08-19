@@ -5,6 +5,10 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 test("opens and edits a JSON Canvas from the file explorer", async () => {
   const screenshotDir = process.env.GEODE_QA_SCREENSHOT_DIR;
   if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true });
@@ -74,8 +78,8 @@ test("opens and edits a JSON Canvas from the file explorer", async () => {
     await textNode.click();
     await expect(textNode).toHaveClass(/is-selected/);
     await expect.poll(() => {
-      const doc = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
-      return doc.nodes.at(-1)?.id;
+      const doc = readCanvas(canvasPath);
+      return doc?.nodes.at(-1)?.id ?? null;
     }).toBe("text");
 
     const fileNode = view.locator('.canvas-node[data-node-id="file"]');
@@ -183,15 +187,16 @@ test("opens and edits a JSON Canvas from the file explorer", async () => {
     await expect(view.locator(".canvas-edge")).toHaveCount(0);
 
     await expect.poll(() => {
-      const doc = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
-      return doc.nodes.find((node: { id: string }) => node.id === "text")?.width;
+      const doc = readCanvas(canvasPath);
+      return doc?.nodes.find((node: { id: string }) => node.id === "text")?.width ?? null;
     }).toBeGreaterThan(220);
     await expect.poll(() => {
-      const doc = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
-      return doc.nodes.find((node: { id: string; text?: string }) => node.id === "text")?.text;
+      const doc = readCanvas(canvasPath);
+      return doc?.nodes.find((node: { id: string; text?: string }) => node.id === "text")?.text ?? null;
     }).toBe("Revised idea");
     await expect.poll(() => {
-      const doc = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
+      const doc = readCanvas(canvasPath);
+      if (!doc) return null;
       return { file: doc.nodes.some((node: { id: string }) => node.id === "file"), edges: doc.edges.length };
     }).toEqual({ file: false, edges: 0 });
     const saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));

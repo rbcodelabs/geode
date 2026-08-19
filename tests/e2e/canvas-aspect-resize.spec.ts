@@ -5,6 +5,10 @@ import { _electron as electron, expect, test, type Locator, type Page } from "@p
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 type Geometry = { x: number; y: number; width: number; height: number };
 
 async function geometry(node: Locator): Promise<Geometry> {
@@ -116,7 +120,7 @@ test("Shift-resizes Canvas cards with a dynamically preserved aspect ratio", asy
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeDrag);
     await window.mouse.up();
     await window.keyboard.up("Shift");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "text").width).toBeCloseTo(360, 4);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "text")?.width ?? null).toBeCloseTo(360, 4);
 
     // A dominant negative width driver would underflow both minimums. The
     // shared scale clamps at height 50, yielding width 100 without ratio drift.
@@ -128,7 +132,7 @@ test("Shift-resizes Canvas cards with a dynamically preserved aspect ratio", asy
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeDrag);
     await window.mouse.up();
     await window.keyboard.up("Shift");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((node: { id: string }) => node.id === "text").height).toBeCloseTo(50, 4);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "text")?.height ?? null).toBeCloseTo(50, 4);
 
     // The same generic Shift-resize path applies to every remaining node type.
     const expectedFinal: Record<string, Geometry> = { text: { x: 50, y: 40, width: 100, height: 50 } };
@@ -147,7 +151,7 @@ test("Shift-resizes Canvas cards with a dynamically preserved aspect ratio", asy
       expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeDrag);
       await window.mouse.up();
       await window.keyboard.up("Shift");
-      await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.find((candidate: { id: string }) => candidate.id === id).width).toBeCloseTo(before.width + 30, 4);
+      await expect.poll(() => readCanvas(canvasPath)?.nodes.find((candidate: { id: string }) => candidate.id === id)?.width ?? null).toBeCloseTo(before.width + 30, 4);
       expectedFinal[id] = resized;
     }
 

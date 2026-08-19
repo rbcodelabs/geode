@@ -5,6 +5,10 @@ import { _electron as electron, expect, test, type Locator, type Page } from "@p
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 type Point = { x: number; y: number };
 
 async function worldToScreen(view: Locator, surface: Locator, point: Point): Promise<Point> {
@@ -155,7 +159,7 @@ test("Alt-drag duplicates selected non-group Canvas nodes and their internal edg
 
     await window.mouse.up();
     await window.keyboard.up("Alt");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.length).toBe(initial.nodes.length + 2);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.length ?? null).toBe(initial.nodes.length + 2);
     const persistedText = fs.readFileSync(canvasPath, "utf8");
     const saved = JSON.parse(persistedText);
 
@@ -222,7 +226,7 @@ test("Alt-drag duplicates selected non-group Canvas nodes and their internal edg
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(beforeSingleCopy);
     await window.mouse.up();
     await window.keyboard.up("Alt");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.length).toBe(initial.nodes.length + 3);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.length ?? null).toBe(initial.nodes.length + 3);
     const afterSingleCopy = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(afterSingleCopy.nodes.find((node: { id: string }) => node.id === singleCloneIds[0]).vendorOccupied).toBe(true);
     expect(afterSingleCopy.edges).toHaveLength(initial.edges.length + 1);

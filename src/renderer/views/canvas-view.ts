@@ -266,6 +266,13 @@ export class CanvasView implements View {
     return { x: node.x + node.width / 2, y: node.y + node.height };
   }
 
+  private oppositeSide(side: CanvasSide): CanvasSide {
+    if (side === "left") return "right";
+    if (side === "right") return "left";
+    if (side === "top") return "bottom";
+    return "top";
+  }
+
   private edgePath(from: Point, fromSide: CanvasSide, to: Point, toSide: CanvasSide): string {
     const distance = Math.max(40, Math.hypot(to.x - from.x, to.y - from.y) * 0.35);
     const control = (point: Point, side: CanvasSide): Point => {
@@ -454,7 +461,7 @@ export class CanvasView implements View {
     this.objectUrls.clear();
   }
 
-  private editTextNode(el: HTMLElement, node: CanvasTextNode, isNew = false): void {
+  private editTextNode(el: HTMLElement, node: CanvasTextNode, isNew = false, rollbackNew?: () => void): void {
     if (el.querySelector("textarea")) return;
     const originalText = node.text;
     const editor = document.createElement("textarea");
@@ -469,6 +476,7 @@ export class CanvasView implements View {
         if (isNew) {
           this.document.nodes = this.document.nodes.filter((candidate) => candidate !== node);
           this.selectedIds.delete(node.id);
+          rollbackNew?.();
         } else {
           node.text = originalText;
         }
@@ -1040,7 +1048,10 @@ export class CanvasView implements View {
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
-    this.select(node);
+    this.selectedEdgeId = null;
+    this.selectedIds.clear();
+    this.selectedIds.add(node.id);
+    this.updateSelectionClasses();
     this.containerEl.classList.add("is-connecting");
     const svg = this.viewportEl.querySelector<SVGSVGElement>(".canvas-edges");
     if (!svg) return;
@@ -1057,7 +1068,7 @@ export class CanvasView implements View {
       };
     };
     const move = (next: PointerEvent) => {
-      preview.setAttribute("d", this.edgePath(from, side, toWorld(next), side === "left" ? "right" : side === "right" ? "left" : side === "top" ? "bottom" : "top"));
+      preview.setAttribute("d", this.edgePath(from, side, toWorld(next), this.oppositeSide(side)));
     };
     const up = (next: PointerEvent) => {
       window.removeEventListener("pointermove", move);
@@ -1070,26 +1081,71 @@ export class CanvasView implements View {
       this.containerEl.classList.remove("is-connecting");
       const targetNodeId = target?.dataset.nodeId;
       const targetSide = target?.dataset.side as CanvasSide | undefined;
-      if (!targetNodeId || !targetSide || targetNodeId === node.id) return;
-      const targetNode = this.document.nodes.find((candidate) => candidate.id === targetNodeId);
-      if (!targetNode || targetNode.type === "group") return;
-      const edge: CanvasEdge = {
-        id: this.nextEdgeId(),
-        fromNode: node.id,
-        fromSide: side,
-        fromEnd: "none",
-        toNode: targetNode.id,
-        toSide: targetSide,
-        toEnd: "arrow",
-      };
-      this.document.edges.push(edge);
-      this.selectedIds.clear();
-      this.selectedEdgeId = edge.id;
-      this.render();
-      void this.persist();
+      if (targetNodeId && targetSide) {
+        if (targetNodeId === node.id) return;
+        const targetNode = this.document.nodes.find((candidate) => candidate.id === targetNodeId);
+        if (!targetNode || targetNode.type === "group") return;
+        const edge: CanvasEdge = {
+          id: this.nextEdgeId(),
+          fromNode: node.id,
+          fromSide: side,
+          fromEnd: "none",
+          toNode: targetNode.id,
+          toSide: targetSide,
+          toEnd: "arrow",
+        };
+        this.document.edges.push(edge);
+        this.selectedIds.clear();
+        this.selectedEdgeId = edge.id;
+        this.render();
+        void this.persist();
+        return;
+      }
+      const nodeBody = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node")].reverse().find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
+      });
+      if (nodeBody) return;
+      this.addConnectedTextCard(node, side, toWorld(next));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  }
+
+  private addConnectedTextCard(source: CanvasNode, sourceSide: CanvasSide, worldPoint: Point): void {
+    const node: CanvasTextNode = {
+      id: this.nextTextNodeId(),
+      type: "text",
+      x: worldPoint.x - TEXT_NODE_WIDTH / 2,
+      y: worldPoint.y - TEXT_NODE_HEIGHT / 2,
+      width: TEXT_NODE_WIDTH,
+      height: TEXT_NODE_HEIGHT,
+      text: "",
+    };
+    const targetSide = this.oppositeSide(sourceSide);
+    const edge: CanvasEdge = {
+      id: this.nextEdgeId(),
+      fromNode: source.id,
+      fromSide: sourceSide,
+      fromEnd: "none",
+      toNode: node.id,
+      toSide: targetSide,
+      toEnd: "arrow",
+    };
+    this.document.nodes.push(node);
+    this.document.edges.push(edge);
+    this.selectedEdgeId = null;
+    this.selectedIds.clear();
+    this.selectedIds.add(node.id);
+    this.render();
+    const el = this.viewportEl.querySelector<HTMLElement>(`.canvas-node[data-node-id="${CSS.escape(node.id)}"]`);
+    if (!el) return;
+    this.editTextNode(el, node, true, () => {
+      this.document.edges = this.document.edges.filter((candidate) => candidate !== edge);
+      this.selectedEdgeId = null;
+      this.selectedIds.clear();
+      if (this.document.nodes.includes(source)) this.selectedIds.add(source.id);
+    });
   }
 
   private nextEdgeId(): string {

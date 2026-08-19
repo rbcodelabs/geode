@@ -5,6 +5,10 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 test("creates normalized persistent web cards and routes activation without renderer navigation", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-web-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-web-user-"));
@@ -94,7 +98,7 @@ test("creates normalized persistent web cards and routes activation without rend
     expect(position.x + position.width / 2).toBeCloseTo(expectedCenter.x, 3);
     expect(position.y + position.height / 2).toBeCloseTo(expectedCenter.y, 3);
 
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.length).toBe(2);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.length ?? null).toBe(2);
     const saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(saved.vendorCanvas).toEqual({ keep: true });
     expect(saved.nodes.map((node: { id: string }) => node.id).sort()).toEqual(["link-1", "link-2"]);

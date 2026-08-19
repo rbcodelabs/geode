@@ -5,6 +5,10 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 test("authors text cards from empty space and the bottom toolbar with stable persistence", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-text-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-text-user-"));
@@ -83,7 +87,7 @@ test("authors text cards from empty space and the bottom toolbar with stable per
     await doubleClickEditor.fill("# Created at point");
     await doubleClickEditor.press("ControlOrMeta+Enter");
     await expect(doubleClickNode.locator(".canvas-node-text h1")).toHaveText("Created at point");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.length).toBe(2);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.length ?? null).toBe(2);
 
     // Toolbar placement uses the center of the current viewport. Escape on a
     // fresh empty editor cancels creation without writing a transient node.
@@ -129,7 +133,7 @@ test("authors text cards from empty space and the bottom toolbar with stable per
     await committedToolbarEditor.fill("Toolbar **card**");
     await window.mouse.click(surfaceBox.x + 20, surfaceBox.y + 20);
     await expect(committedToolbarNode.locator(".canvas-node-text strong")).toHaveText("card");
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).nodes.length).toBe(3);
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.length ?? null).toBe(3);
 
     const saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(saved.vendorCanvas).toEqual({ keep: true });

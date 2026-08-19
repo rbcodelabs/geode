@@ -5,6 +5,10 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+function readCanvas(file: string): Record<string, any> | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
 test("authors, selects, and deletes directed Canvas connections at transformed coordinates", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-connections-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-connections-user-"));
@@ -60,7 +64,8 @@ test("authors, selects, and deletes directed Canvas connections at transformed c
     const sourceRight = source.getByRole("button", { name: "Connect from right" });
     let sourceBox = (await sourceRight.boundingBox())!;
 
-    // Empty-space release shows a live preview but never mutates the document.
+    // Empty-space release starts the attached text transaction; Escape rolls
+    // it back so the remaining connection regressions retain their stable IDs.
     await window.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
     await window.mouse.down();
     const surfaceBox = (await surface.boundingBox())!;
@@ -68,6 +73,13 @@ test("authors, selects, and deletes directed Canvas connections at transformed c
     await expect(view.locator(".canvas-edge-preview")).toBeVisible();
     await window.mouse.up();
     await expect(view.locator(".canvas-edge-preview")).toHaveCount(0);
+    const pendingEditor = view.locator('.canvas-node[data-node-id="text-1"] .canvas-node-text-editor');
+    await expect(pendingEditor).toBeFocused();
+    await expect(view.locator('.canvas-edge[data-edge-id="edge-2"]')).toHaveCount(1);
+    expect(fs.readFileSync(canvasPath, "utf8")).toBe(initialText);
+    await pendingEditor.press("Escape");
+    await expect(view.locator('.canvas-node[data-node-id="text-1"]')).toHaveCount(0);
+    await expect(view.locator('.canvas-edge[data-edge-id="edge-2"]')).toHaveCount(0);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(initialText);
 
     // A handle on the source itself is not a valid target.
@@ -93,7 +105,7 @@ test("authors, selects, and deletes directed Canvas connections at transformed c
 
     await expect(view.locator('.canvas-edge[data-edge-id="edge-2"]')).toHaveCount(1);
     await expect(view.locator('.canvas-edge-hit[data-edge-id="edge-2"]')).toHaveCount(1);
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.length).toBe(2);
+    await expect.poll(() => readCanvas(canvasPath)?.edges.length ?? null).toBe(2);
     const created = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(created.edges.find((edge: { id: string }) => edge.id === "edge-2")).toEqual({
       id: "edge-2",
@@ -137,7 +149,7 @@ test("authors, selects, and deletes directed Canvas connections at transformed c
     await expect(view.locator('.canvas-edge[data-edge-id="edge-2"]')).toHaveCount(0);
     await expect(view.locator('.canvas-edge[data-edge-id="edge-1"]')).toHaveCount(1);
     await expect(view.locator(".canvas-node")).toHaveCount(3);
-    await expect.poll(() => JSON.parse(fs.readFileSync(canvasPath, "utf8")).edges.map((edge: { id: string }) => edge.id)).toEqual(["edge-1"]);
+    await expect.poll(() => readCanvas(canvasPath)?.edges.map((edge: { id: string }) => edge.id) ?? null).toEqual(["edge-1"]);
 
     // Background selection clears an edge selection without changing disk.
     const existingHit = view.locator('.canvas-edge-hit[data-edge-id="edge-1"]');
