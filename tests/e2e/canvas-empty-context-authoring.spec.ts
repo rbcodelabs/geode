@@ -94,7 +94,7 @@ test("authors Canvas cards and groups from the exact empty-surface context menu"
 
     // Node and edge context menus remain exact and never leak authoring actions.
     await view.locator('.canvas-node[data-node-id="source"]').dispatchEvent("contextmenu", { clientX: 120, clientY: 120 });
-    await expect(menuItems).toHaveText(["Zoom to selection", "Convert to file…", "Delete"]);
+    await expect(menuItems).toHaveText(["Zoom to selection", "Convert to file…", "Create group", "Delete"]);
     await window.keyboard.press("Escape");
     await view.locator('.canvas-edge-hit[data-edge-id="edge-1"]').dispatchEvent("contextmenu", { clientX: 300, clientY: 130 });
     await expect(menuItems).toHaveText(["Edit label", "Go to target", "Go to source", "Remove"]);

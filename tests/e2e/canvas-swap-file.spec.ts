@@ -106,7 +106,7 @@ test("swaps only resolved Markdown Canvas file cards through the exact context a
     const allIds = initial.nodes.map((node) => node.id).sort();
     expect(await selectedIds(view)).toEqual(allIds);
     await openNodeMenu(note);
-    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file", "Delete"]);
+    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file", "Create group", "Delete"]);
     await window.locator(".context-menu-item", { hasText: /^Swap file$/ }).click();
     const noteResults = await window.locator(".prompt-result").allInnerTexts();
     expect(noteResults).toEqual(expect.arrayContaining(["Old.md", "New.md"]));
@@ -122,7 +122,7 @@ test("swaps only resolved Markdown Canvas file cards through the exact context a
     await expect(view.locator(".canvas-node.is-selected")).toHaveCount(0);
     for (const id of ["media", "missing", "other"]) {
       await openNodeMenu(view.locator(`.canvas-node[data-node-id="${id}"]`));
-      await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Delete"]);
+      await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Create group", "Delete"]);
     }
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBefore);
 

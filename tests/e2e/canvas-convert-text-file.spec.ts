@@ -19,7 +19,7 @@ async function camera(view: Locator): Promise<{ scale: string | null; panX: stri
 
 async function openConvert(view: Locator, page: Page): Promise<Locator> {
   await view.locator('.canvas-node[data-node-id="convert-me"]').click({ button: "right", position: { x: 30, y: 30 } });
-  await expect(page.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Convert to file…", "Delete"]);
+  await expect(page.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Convert to file…", "Create group", "Delete"]);
   await page.locator(".context-menu-item", { hasText: /^Convert to file…$/ }).click();
   const prompt = page.locator(".prompt-input");
   await expect(prompt).toBeFocused();
@@ -76,8 +76,8 @@ test("converts a Canvas text card in place to a collision-safe sibling note", as
     // Only text cards expose the action, immediately before Delete.
     for (const [id, actions] of [
       ["group", ["Zoom to selection", "Delete"]],
-      ["existing-note", ["Zoom to selection", "Swap file", "Delete"]],
-      ["web", ["Zoom to selection", "Open in browser", "Delete"]],
+      ["existing-note", ["Zoom to selection", "Swap file", "Create group", "Delete"]],
+      ["web", ["Zoom to selection", "Open in browser", "Create group", "Delete"]],
     ] as Array<[string, string[]]>) {
       await view.locator(`.canvas-node[data-node-id="${id}"]`).click({ button: "right", position: { x: 30, y: 30 } });
       await expect(window.locator(".context-menu-item")).toHaveText(actions);
@@ -133,7 +133,7 @@ test("converts a Canvas text card in place to a collision-safe sibling note", as
     expect(saved.nodes.slice(1)).toEqual(initial.nodes.slice(1));
     expect(saved.edges).toEqual(initial.edges);
     await converted.click({ button: "right", position: { x: 30, y: 30 } });
-    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file", "Delete"]);
+    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file", "Create group", "Delete"]);
     await view.locator(".view-header").click();
 
     await window.reload();

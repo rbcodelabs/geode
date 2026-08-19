@@ -361,6 +361,9 @@ export class CanvasView implements View {
       if (node.type === "text") {
         items.push({ title: "Convert to file…", action: () => this.openConvertTextNodePrompt(node.id) });
       }
+      if (node.type !== "group") {
+        items.push({ title: "Create group", action: () => this.openGroupPrompt() });
+      }
       items.push({ title: "Delete", action: () => this.deleteSelection() });
       this.app.showMenu(event, items);
     });
