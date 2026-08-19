@@ -833,9 +833,13 @@ export class CanvasView implements View {
       this.colorPaletteEl = null;
       return;
     }
-    if (this.selectionControlsEl?.isConnected) return;
+    const selectionKind = this.selectedEdgeId ? "edge" : "nodes";
+    if (this.selectionControlsEl?.isConnected && this.selectionControlsEl.dataset.selectionKind === selectionKind) return;
+    this.selectionControlsEl?.remove();
+    this.colorPaletteEl = null;
     const controls = document.createElement("div");
     controls.className = "canvas-selection-controls";
+    controls.dataset.selectionKind = selectionKind;
     const setColor = document.createElement("button");
     setColor.type = "button";
     setColor.textContent = "Set color";
@@ -848,7 +852,17 @@ export class CanvasView implements View {
     remove.setAttribute("aria-label", "Remove");
     setIcon(remove, "trash-2");
     remove.addEventListener("click", () => this.deleteSelection());
-    controls.append(setColor, remove);
+    controls.appendChild(setColor);
+    if (this.selectedEdgeId) {
+      const edgeId = this.selectedEdgeId;
+      const editLabel = document.createElement("button");
+      editLabel.type = "button";
+      editLabel.textContent = "Edit label";
+      editLabel.setAttribute("aria-label", "Edit label");
+      editLabel.addEventListener("click", () => this.editEdgeLabel(edgeId));
+      controls.appendChild(editLabel);
+    }
+    controls.appendChild(remove);
     this.surfaceEl.appendChild(controls);
     this.selectionControlsEl = controls;
   }
