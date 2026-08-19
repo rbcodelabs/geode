@@ -67,6 +67,8 @@ export class CanvasView implements View {
   private lastKnownText: string | null = null;
   private readonly objectUrls = new Set<string>();
   private renderVersion = 0;
+  private selectionControlsEl: HTMLElement | null = null;
+  private colorPaletteEl: HTMLElement | null = null;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -158,6 +160,7 @@ export class CanvasView implements View {
 
     this.viewportEl.appendChild(svg);
     for (const node of this.document.nodes) this.viewportEl.appendChild(this.renderNode(node, version));
+    this.updateSelectionControls();
   }
 
   private renderEdge(svg: SVGSVGElement, edge: CanvasEdge): void {
@@ -816,6 +819,99 @@ export class CanvasView implements View {
       el.setAttribute("aria-hidden", String(!selected));
       el.setAttribute("tabindex", selected ? "0" : "-1");
     }
+    this.updateSelectionControls();
+  }
+
+  private updateSelectionControls(): void {
+    const hasSelection = this.selectedIds.size > 0 || this.selectedEdgeId !== null;
+    if (!hasSelection) {
+      this.selectionControlsEl?.remove();
+      this.selectionControlsEl = null;
+      this.colorPaletteEl = null;
+      return;
+    }
+    if (this.selectionControlsEl?.isConnected) return;
+    const controls = document.createElement("div");
+    controls.className = "canvas-selection-controls";
+    const setColor = document.createElement("button");
+    setColor.type = "button";
+    setColor.textContent = "Set color";
+    setColor.setAttribute("aria-label", "Set color");
+    setColor.addEventListener("click", () => this.openColorPalette());
+    controls.appendChild(setColor);
+    this.surfaceEl.appendChild(controls);
+    this.selectionControlsEl = controls;
+  }
+
+  private openColorPalette(): void {
+    const controls = this.selectionControlsEl;
+    if (!controls) return;
+    this.colorPaletteEl?.remove();
+    const palette = document.createElement("div");
+    palette.className = "canvas-color-palette";
+    for (let index = 1; index <= 6; index += 1) {
+      const color = String(index);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "canvas-color-preset";
+      button.setAttribute("aria-label", `Color ${index}`);
+      button.title = `Color ${index}`;
+      button.style.backgroundColor = this.canvasColor(color);
+      button.addEventListener("click", () => this.applySelectionColor(color));
+      palette.appendChild(button);
+    }
+    const custom = document.createElement("button");
+    custom.type = "button";
+    custom.className = "canvas-color-custom";
+    custom.textContent = "Custom color…";
+    custom.addEventListener("click", () => this.openCustomColorPrompt());
+    palette.appendChild(custom);
+    controls.appendChild(palette);
+    this.colorPaletteEl = palette;
+  }
+
+  private openCustomColorPrompt(): void {
+    this.colorPaletteEl?.remove();
+    this.colorPaletteEl = null;
+    new PromptModal(this.app, {
+      placeholder: "CSS color…",
+      initialValue: this.commonSelectionColor(),
+      allowEmptySubmit: true,
+      onSubmit: (rawColor) => {
+        const color = rawColor.trim();
+        if (!color || !CSS.supports("color", color)) {
+          this.app.notify("Enter a valid CSS color.");
+          return;
+        }
+        this.applySelectionColor(color);
+      },
+    }).open();
+  }
+
+  private commonSelectionColor(): string {
+    const colors = this.selectedEdgeId
+      ? this.document.edges.filter((edge) => edge.id === this.selectedEdgeId).map((edge) => edge.color)
+      : this.document.nodes.filter((node) => this.selectedIds.has(node.id)).map((node) => node.color);
+    const first = colors[0];
+    return first && colors.every((color) => color === first) ? first : "";
+  }
+
+  private applySelectionColor(color: string): void {
+    if (this.selectedEdgeId) {
+      const edge = this.document.edges.find((candidate) => candidate.id === this.selectedEdgeId);
+      if (!edge) return;
+      edge.color = color;
+    } else if (this.selectedIds.size > 0) {
+      for (const node of this.document.nodes) {
+        if (this.selectedIds.has(node.id)) node.color = color;
+      }
+    } else {
+      return;
+    }
+    this.colorPaletteEl?.remove();
+    this.colorPaletteEl = null;
+    this.render();
+    void this.persist();
   }
 
   private clearSelection(): void {

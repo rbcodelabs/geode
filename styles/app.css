@@ -3341,6 +3341,54 @@ select.dropdown:hover {
   place-items: center;
 }
 
+.canvas-selection-controls {
+  position: absolute;
+  z-index: 1001;
+  bottom: 64px;
+  left: 50%;
+  padding: 4px;
+  transform: translateX(-50%);
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.canvas-selection-controls > button {
+  height: 30px;
+  padding: 0 10px;
+}
+
+.canvas-color-palette {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  transform: translateX(-50%);
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.canvas-color-preset {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: 50%;
+}
+
+.canvas-color-custom {
+  height: 28px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
 .canvas-node-text {
   height: 100%;
   overflow: auto;
