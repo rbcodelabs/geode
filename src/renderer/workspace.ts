@@ -375,6 +375,7 @@ export class TabGroup implements LeafContainer {
       this.workspace.moveLeaf(draggingLeaf, this, this.dropIndex(e.clientX));
     });
     this.contentHostEl.addEventListener("dragover", (e) => {
+      if (!draggingLeaf) return;
       over(e, this.containerEl);
       const rect = this.contentHostEl.getBoundingClientRect();
       const x = (e.clientX - rect.left) / Math.max(1, rect.width);
