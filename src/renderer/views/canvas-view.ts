@@ -994,11 +994,26 @@ export class CanvasView implements View {
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
-    this.select(node, event.shiftKey);
+    this.selectedEdgeId = null;
+    this.selectedIds.clear();
+    this.selectedIds.add(node.id);
+    this.updateSelectionClasses();
     const start = { x: event.clientX, y: event.clientY, width: node.width, height: node.height };
     const move = (next: PointerEvent) => {
-      node.width = Math.max(MIN_WIDTH, start.width + (next.clientX - start.x) / this.scale);
-      node.height = Math.max(MIN_HEIGHT, start.height + (next.clientY - start.y) / this.scale);
+      const dx = (next.clientX - start.x) / this.scale;
+      const dy = (next.clientY - start.y) / this.scale;
+      if (next.shiftKey) {
+        const proportionalX = dx / start.width;
+        const proportionalY = dy / start.height;
+        const driver = Math.abs(proportionalX) >= Math.abs(proportionalY) ? proportionalX : proportionalY;
+        const minimumScale = Math.max(MIN_WIDTH / start.width, MIN_HEIGHT / start.height);
+        const constrainedScale = Math.max(minimumScale, 1 + driver);
+        node.width = start.width * constrainedScale;
+        node.height = start.height * constrainedScale;
+      } else {
+        node.width = Math.max(MIN_WIDTH, start.width + dx);
+        node.height = Math.max(MIN_HEIGHT, start.height + dy);
+      }
       this.render();
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); void this.persist(); };
