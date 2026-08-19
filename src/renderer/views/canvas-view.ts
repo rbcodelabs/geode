@@ -90,6 +90,8 @@ export class CanvasView implements View {
   private renderVersion = 0;
   private selectionControlsEl: HTMLElement | null = null;
   private colorPaletteEl: HTMLElement | null = null;
+  private edgeLabelEditorEl: HTMLInputElement | null = null;
+  private edgeLabelEditorCancel: (() => void) | null = null;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -130,6 +132,7 @@ export class CanvasView implements View {
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
   onClose(): void {
     this.app.vault.off("modify", this.onVaultModify);
+    this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
     this.revokeObjectUrls();
   }
@@ -157,6 +160,7 @@ export class CanvasView implements View {
   }
 
   private render(): void {
+    this.edgeLabelEditorCancel?.();
     const version = ++this.renderVersion;
     this.revokeObjectUrls();
     this.viewportEl.innerHTML = "";
@@ -210,7 +214,8 @@ export class CanvasView implements View {
     hit.addEventListener("dblclick", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.editEdgeLabel(edge.id);
+      this.selectEdge(edge.id);
+      this.editEdgeLabelInline(edge.id, hit);
     });
     hit.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -1033,6 +1038,58 @@ export class CanvasView implements View {
         void this.persist();
       },
     }).open();
+  }
+
+  private editEdgeLabelInline(edgeId: string, hit: SVGPathElement): void {
+    const edge = this.document.edges.find((candidate) => candidate.id === edgeId);
+    if (!edge) return;
+    this.edgeLabelEditorCancel?.();
+    const point = hit.getPointAtLength(hit.getTotalLength() / 2);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "canvas-edge-label-editor";
+    input.dataset.edgeId = edgeId;
+    input.setAttribute("aria-label", `Edit connection label ${edgeId}`);
+    input.value = edge.label ?? "";
+    input.style.left = `${point.x}px`;
+    input.style.top = `${point.y}px`;
+    let finished = false;
+    const finish = (commit: boolean) => {
+      if (finished) return;
+      finished = true;
+      if (this.edgeLabelEditorEl === input) {
+        this.edgeLabelEditorEl = null;
+        this.edgeLabelEditorCancel = null;
+      }
+      input.remove();
+      if (!commit) return;
+      const current = this.document.edges.find((candidate) => candidate.id === edgeId);
+      if (!current) return;
+      const label = input.value.trim();
+      if (label) current.label = label;
+      else delete current.label;
+      this.render();
+      void this.persist();
+    };
+    this.edgeLabelEditorEl = input;
+    this.edgeLabelEditorCancel = () => finish(false);
+    input.addEventListener("pointerdown", (event) => event.stopPropagation());
+    input.addEventListener("dblclick", (event) => event.stopPropagation());
+    input.addEventListener("blur", () => finish(true), { once: true });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(true);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
+      }
+    });
+    this.viewportEl.appendChild(input);
+    input.focus();
+    input.select();
   }
 
   private focusEdgeEndpoint(edgeId: string, endpoint: "source" | "target"): void {

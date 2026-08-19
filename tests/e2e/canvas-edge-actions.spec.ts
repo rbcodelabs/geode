@@ -75,18 +75,19 @@ test("edits Canvas edge labels and navigates or removes through exact context ac
     const surface = view.locator(".canvas-surface");
     const hit = view.locator('.canvas-edge-hit[data-edge-id="edge-2"]');
 
-    // Double-click starts focused modal-backed label editing.
+    // Double-click starts focused inline-on-path label editing.
     const point = await pathPoint(hit);
     await window.mouse.dblclick(point.x, point.y);
-    const prompt = window.locator(".prompt-input");
-    await expect(prompt).toBeFocused();
-    await expect(prompt).toHaveValue("");
-    await prompt.fill("  supports  ");
-    await prompt.press("Enter");
+    const inline = window.locator(".canvas-edge-label-editor");
+    await expect(inline).toBeFocused();
+    await expect(inline).toHaveValue("");
+    await inline.fill("  supports  ");
+    await inline.press("Enter");
     await expect(view.locator('.canvas-edge-label[data-edge-id="edge-2"]')).toHaveText("supports");
     await expect.poll(() => readCanvas(canvasPath)?.edges.find((edge: { id: string }) => edge.id === "edge-2")?.label ?? null).toBe("supports");
 
-    // The exact context item edits and trims the current value.
+    // The exact context item retains modal-backed editing and trims the value.
+    const prompt = window.locator(".prompt-input");
     const cameraBeforeMenu = {
       scale: await view.getAttribute("data-scale"),
       panX: await view.getAttribute("data-pan-x"),

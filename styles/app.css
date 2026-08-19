@@ -3187,6 +3187,21 @@ select.dropdown:hover {
   text-anchor: middle;
 }
 
+.canvas-edge-label-editor {
+  position: absolute;
+  z-index: 20;
+  width: 180px;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  transform: translate(-50%, -50%);
+  color: var(--text-normal);
+  background: var(--background-primary);
+  border: 1px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  font: inherit;
+  text-align: center;
+}
+
 .canvas-edges marker path { fill: var(--text-muted); }
 
 .canvas-node {
