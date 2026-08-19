@@ -118,7 +118,7 @@ test("Canvas node context menu zooms to the preserved or newly selected nodes", 
     expect(await selectedIds(view)).toEqual(["file"]);
     await expect(view.locator(".canvas-edge.is-selected")).toHaveCount(0);
     expect(await camera(view)).toEqual(cameraBeforeUnselectedMenu);
-    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection"]);
+    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file"]);
     await window.locator(".context-menu-item", { hasText: "Zoom to selection" }).click();
     expect(await selectedIds(view)).toEqual(["file"]);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBefore);

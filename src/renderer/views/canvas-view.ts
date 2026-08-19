@@ -341,9 +341,16 @@ export class CanvasView implements View {
         this.selectedEdgeId = null;
         this.updateSelectionClasses();
       }
-      this.app.showMenu(event, [
+      const items = [
         { title: "Zoom to selection", action: () => this.fitToSelection() },
-      ]);
+      ];
+      if (node.type === "file") {
+        const resolved = resolveEmbed(node.file + (node.subpath ?? ""), this.file?.path ?? "", this.app);
+        if (resolved.file && resolved.kind === "note") {
+          items.push({ title: "Swap file", action: () => this.openSwapFilePicker(node.id) });
+        }
+      }
+      this.app.showMenu(event, items);
     });
     if (node.type !== "group") {
       for (const side of ["top", "right", "bottom", "left"] as const) {
@@ -686,15 +693,36 @@ export class CanvasView implements View {
   }
 
   private openFilePicker(kind: "note" | "media"): void {
-    const files = kind === "note"
-      ? this.app.vault.getMarkdownFiles()
-      : this.app.vault.getFiles().filter((file) => file.extension !== "md");
+    if (kind === "note") {
+      this.openNotePicker((file) => this.addFileCardAt(file, this.viewportCenter()));
+      return;
+    }
     new CanvasFileSuggestModal(
       this.app,
-      files,
-      kind === "note" ? "Search notes…" : "Search media…",
+      this.app.vault.getFiles().filter((file) => file.extension !== "md"),
+      "Search media…",
       (file) => this.addFileCardAt(file, this.viewportCenter()),
     ).open();
+  }
+
+  private openNotePicker(choose: (file: TFile) => void): void {
+    new CanvasFileSuggestModal(
+      this.app,
+      this.app.vault.getMarkdownFiles(),
+      "Search notes…",
+      choose,
+    ).open();
+  }
+
+  private openSwapFilePicker(nodeId: string): void {
+    this.openNotePicker((file) => {
+      const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+      if (!node || node.type !== "file") return;
+      node.file = file.path;
+      delete node.subpath;
+      this.render();
+      void this.persist();
+    });
   }
 
   private canvasColor(color: string): string {
