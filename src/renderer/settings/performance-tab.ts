@@ -26,7 +26,7 @@ function renderMeasuresTable(container: HTMLElement): void {
   if (!measures.length) {
     const empty = document.createElement("div");
     empty.className = "setting-item-description";
-    empty.textContent = "No operations recorded yet — switch tabs or open a note to generate data.";
+    empty.textContent = "No operations recorded yet. Startup, plugin loading, metadata, long tasks, and workspace interactions will appear here.";
     container.appendChild(empty);
     return;
   }

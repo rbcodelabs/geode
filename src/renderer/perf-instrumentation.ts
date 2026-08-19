@@ -18,6 +18,7 @@
 const MARK_PREFIX = "geode:";
 /** Ring buffer capacity. Within the 200-360 range used by the sibling telemetry sampler. */
 const RING_CAPACITY = 300;
+const STORAGE_KEY = "geode:performance-ring";
 
 export interface PerfMeasure {
   op: string;
@@ -25,11 +26,33 @@ export interface PerfMeasure {
   ts: number;
 }
 
-const ring: PerfMeasure[] = [];
+function loadPersistedRing(): PerfMeasure[] {
+  try {
+    const storage = globalThis.localStorage;
+    const value = JSON.parse(storage.getItem(STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is PerfMeasure =>
+      !!item && typeof item.op === "string" && Number.isFinite(item.durationMs) && Number.isFinite(item.ts)
+    ).slice(-RING_CAPACITY);
+  } catch {
+    return [];
+  }
+}
+
+const ring: PerfMeasure[] = loadPersistedRing();
+
+function persistRing(): void {
+  try {
+    globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(ring));
+  } catch {
+    // Telemetry must never affect application behavior (private mode/quota).
+  }
+}
 
 function pushMeasure(op: string, durationMs: number): void {
   ring.push({ op, durationMs, ts: Date.now() });
   while (ring.length > RING_CAPACITY) ring.shift();
+  persistRing();
 }
 
 /** Record a duration measured outside the renderer (for example by the metadata utility process). */
@@ -38,6 +61,7 @@ export function recordMeasure(op: string, durationMs: number): void {
 }
 
 let observer: PerformanceObserver | null = null;
+let longTaskObserver: PerformanceObserver | null = null;
 
 /**
  * Lazily create the module-level `PerformanceObserver` singleton. Guarded
@@ -60,6 +84,15 @@ function ensureObserver(): void {
     observer = instance;
   } catch {
     // entryTypes unsupported in this environment; leave observer unset.
+  }
+  const longTasks = new PO((list) => {
+    for (const entry of list.getEntries()) pushMeasure("renderer-long-task", entry.duration);
+  });
+  try {
+    longTasks.observe({ entryTypes: ["longtask"] });
+    longTaskObserver = longTasks;
+  } catch {
+    // Long Tasks API unavailable; operation timings still work normally.
   }
 }
 
@@ -104,6 +137,23 @@ export function getRecentMeasures(): PerfMeasure[] {
 /** Clear all recorded measures (used by tests and available for a future "clear" UI action). */
 export function clearMeasures(): void {
   ring.length = 0;
+  try { globalThis.localStorage?.removeItem(STORAGE_KEY); } catch { /* no-op */ }
+}
+
+/** Concurrent-safe timing helper (unlike named performance marks). */
+export function measureOperation<T>(op: string, fn: () => T): T {
+  const started = performance.now();
+  try {
+    const result = fn();
+    if (result instanceof Promise) {
+      return result.finally(() => recordMeasure(op, performance.now() - started)) as T;
+    }
+    recordMeasure(op, performance.now() - started);
+    return result;
+  } catch (error) {
+    recordMeasure(op, performance.now() - started);
+    throw error;
+  }
 }
 
 /**

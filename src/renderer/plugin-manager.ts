@@ -8,6 +8,7 @@ import {
 } from "./plugin-manifest";
 import * as GeodeAPI from "./api/obsidian";
 import { isPluginBlocked, type ManagedPolicy } from "./policy";
+import { measureOperation } from "./perf-instrumentation";
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
@@ -124,8 +125,10 @@ export class PluginManager {
    */
   async initialize(): Promise<void> {
     this.loadErrors.clear();
-    this.policy = (await window.geode.getPluginPolicy?.()) ?? null;
-    await this.rescan();
+    this.policy = await measureOperation("plugin-policy-read", async () =>
+      (await window.geode.getPluginPolicy?.()) ?? null
+    );
+    await measureOperation("plugin-discovery", () => this.rescan());
 
     this.quarantine =
       ((await window.geode.readConfig(QUARANTINE_KEY)) as Record<string, QuarantineEntry> | null) ?? {};
@@ -138,7 +141,7 @@ export class PluginManager {
       if (!this.manifests.has(id)) continue;
       if (this.quarantine[id]) continue;
       try {
-        await this.enable(id, { persist: false });
+        await measureOperation(`plugin-enable:${id}`, () => this.enable(id, { persist: false }));
       } catch (err) {
         this.loadErrors.set(id, (err as Error).message);
         console.error(`Failed to enable plugin "${id}"`, err);
@@ -223,7 +226,9 @@ export class PluginManager {
   }
 
   private async readManifest(id: string): Promise<PluginManifest> {
-    const raw = await window.geode.read(`${pluginDir(id)}/manifest.json`);
+    const raw = await measureOperation(`plugin-manifest-read:${id}`, () =>
+      window.geode.read(`${pluginDir(id)}/manifest.json`)
+    );
     const manifest = parseManifest(raw, id);
     // Stamp the plugin's own vault-relative folder onto the manifest, exactly
     // as Obsidian does at load time. `dir` is deliberately not part of the
@@ -273,17 +278,19 @@ export class PluginManager {
       );
     }
 
-    const code = await window.geode.read(`${pluginDir(id)}/main.js`);
+    const code = await measureOperation(`plugin-code-read:${id}`, () =>
+      window.geode.read(`${pluginDir(id)}/main.js`)
+    );
     const PluginClass = instantiatePluginClass(code, id);
     const instance = new PluginClass(this.app, manifest);
     instance.setErrorHandler((boundary, error) => this.containPluginError(id, boundary, error));
     this.loadErrors.delete(id);
     this.loaded.set(id, { manifest, instance });
-    await this.injectStyles(id);
+    await measureOperation(`plugin-style-load:${id}`, () => this.injectStyles(id));
 
     let onloadResult: void | Promise<unknown>;
     try {
-      instance.load(); // Component.load() -> onload() (may throw synchronously)
+      measureOperation(`plugin-onload-sync:${id}`, () => instance.load()); // Component.load() -> onload()
       onloadResult = instance.onloadResult;
     } catch (err) {
       this.removeStyles(id);
@@ -311,7 +318,7 @@ export class PluginManager {
 
       let outcome: unknown;
       try {
-        outcome = await Promise.race([onload, timeout]);
+        outcome = await measureOperation(`plugin-onload:${id}`, () => Promise.race([onload, timeout]));
       } catch (err) {
         // onload() genuinely rejected (a real load failure, not a hang) —
         // roll back exactly as before.

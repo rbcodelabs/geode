@@ -39,6 +39,7 @@ import { Menu, type PluginSettingTab } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
 import { FileManager } from "./file-manager";
+import { measureOperation } from "./perf-instrumentation";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -858,17 +859,19 @@ export class App {
   }
 
   async start() {
-    this.installExternalLinkInterceptor();
-    const rootEl = document.getElementById("app")!;
-    const [launchTarget, recents] = await Promise.all([
-      window.geode.getLaunchVault(),
-      window.geode.getRecentVaults(),
-    ]);
-    if (launchTarget || recents.length) {
-      await this.openVault(launchTarget ?? recents[0], rootEl);
-    } else {
-      this.showVaultPicker(rootEl, []);
-    }
+    return measureOperation("startup-total", async () => {
+      this.installExternalLinkInterceptor();
+      const rootEl = document.getElementById("app")!;
+      const [launchTarget, recents] = await measureOperation("startup-recent-vaults", () => Promise.all([
+        window.geode.getLaunchVault(),
+        window.geode.getRecentVaults(),
+      ]));
+      if (launchTarget || recents.length) {
+        await this.openVault(launchTarget ?? recents[0], rootEl);
+      } else {
+        this.showVaultPicker(rootEl, []);
+      }
+    });
   }
 
   private showVaultPicker(rootEl: HTMLElement, recents: string[]) {
@@ -900,6 +903,10 @@ export class App {
   }
 
   private async openVault(path: string, rootEl: HTMLElement) {
+    return measureOperation("startup-open-vault", () => this.openVaultMeasured(path, rootEl));
+  }
+
+  private async openVaultMeasured(path: string, rootEl: HTMLElement) {
     try {
       await this.vault.open(path);
     } catch (err) {
@@ -993,12 +1000,12 @@ export class App {
     this.themeManager.apply(this.settings.cssTheme);
 
     this.pluginManager = new PluginManager(this);
-    await this.pluginManager.initialize();
+    await measureOperation("startup-plugins", () => this.pluginManager.initialize());
     if (this.pluginManager.isRecoveryMode()) this.showCrashRecoveryBanner(shell);
 
     // Restore the saved workspace layout (tabs + docked plugin panes) now
     // that plugin view factories are registered; fall back to an empty tab.
-    await this.restoreWorkspaceLayout();
+    await measureOperation("startup-layout-restore", () => this.restoreWorkspaceLayout());
 
     // Subscribe to layout changes BEFORE firing onLayoutReady, so that the
     // initial layout — including panes a plugin opens in its onLayoutReady
@@ -1016,13 +1023,13 @@ export class App {
     // later `resolved` event. Warm starts retain Obsidian-style metadata
     // availability for plugin onLayoutReady callbacks; cold starts are
     // progressively populated instead of holding the entire workspace hostage.
-    await this.metadataCache.initialize();
+    await measureOperation("startup-metadata-warm", () => this.metadataCache.initialize());
 
     // Now that the layout is in place and warm metadata is available, fire plugins'
     // onLayoutReady callbacks — a plugin that opens its own view will find and
     // reuse the restored pane (via getLeavesOfType) instead of creating a
     // duplicate.
-    this.workspace.flushLayoutReady();
+    measureOperation("startup-layout-ready", () => this.workspace.flushLayoutReady());
 
     // Persist the initial layout (restored + any onLayoutReady-opened panes).
     this.scheduleSaveLayout();

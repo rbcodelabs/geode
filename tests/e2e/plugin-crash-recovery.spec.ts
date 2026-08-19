@@ -72,6 +72,9 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
 
     expect(await recoveredWindow.evaluate(() => (window as any).app.pluginManager.isRecoveryMode())).toBe(true);
     expect(await recoveredWindow.evaluate(() => (window as any).app.pluginManager.isEnabled("loaded-probe"))).toBe(false);
+    await recoveredWindow.evaluate(() => (window as any).app.commands.execute("open-settings"));
+    await recoveredWindow.locator(".vertical-tab-nav-item", { hasText: "Performance" }).click();
+    await expect(recoveredWindow.locator(".performance-tab-table").first()).toContainText("plugin-enable:loaded-probe");
     expect(JSON.parse(fs.readFileSync(path.join(vaultPath, ".geode", "plugins.json"), "utf8"))).toEqual(["loaded-probe"]);
     const journal = JSON.parse(fs.readFileSync(path.join(userDataDir, "crash-journal.json"), "utf8"));
     expect(journal.at(-1)).toMatchObject({
