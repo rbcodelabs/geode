@@ -1,8 +1,10 @@
 import type { App } from "../app";
-import type { TFile } from "../types";
+import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
 import { parseCanvas, serializeCanvas, type CanvasDocument, type CanvasEdge, type CanvasNode, type CanvasSide, type CanvasTextNode } from "../canvas/canvas-data";
 import { setIcon } from "../api/icons";
+import { PromptModal, SuggestModal } from "../modals/modals";
+import { loadEmbedBlobUrl, resolveEmbed, type EmbedKind } from "../markdown/embed";
 
 const MIN_WIDTH = 80;
 const MIN_HEIGHT = 50;
@@ -11,8 +13,37 @@ const MAX_SCALE = 4;
 const DEFAULT_PAN: Point = { x: 80, y: 80 };
 const TEXT_NODE_WIDTH = 250;
 const TEXT_NODE_HEIGHT = 140;
+const NOTE_NODE_WIDTH = 360;
+const NOTE_NODE_HEIGHT = 280;
+const LINK_NODE_WIDTH = 360;
+const LINK_NODE_HEIGHT = 180;
 
 type Point = { x: number; y: number };
+
+function normalizeWebUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+class CanvasFileSuggestModal extends SuggestModal<TFile> {
+  constructor(
+    app: App,
+    private readonly files: TFile[],
+    placeholder: string,
+    private readonly choose: (file: TFile) => void,
+  ) {
+    super(app);
+    this.inputEl.placeholder = placeholder;
+  }
+
+  getItems(): TFile[] { return this.files; }
+  getItemText(file: TFile): string { return file.path; }
+  onChooseItem(file: TFile): void { this.choose(file); }
+}
 
 export class CanvasView implements View {
   readonly viewType = "canvas";
@@ -24,10 +55,13 @@ export class CanvasView implements View {
   private readonly viewportEl: HTMLElement;
   private document: CanvasDocument = { nodes: [], edges: [] };
   private readonly selectedIds = new Set<string>();
+  private selectedEdgeId: string | null = null;
   private pan: Point = { ...DEFAULT_PAN };
   private scale = 1;
   private spacePressed = false;
   private lastKnownText: string | null = null;
+  private readonly objectUrls = new Set<string>();
+  private renderVersion = 0;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -66,7 +100,11 @@ export class CanvasView implements View {
   }
 
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
-  onClose(): void { this.app.vault.off("modify", this.onVaultModify); }
+  onClose(): void {
+    this.app.vault.off("modify", this.onVaultModify);
+    this.renderVersion += 1;
+    this.revokeObjectUrls();
+  }
 
   private readonly onVaultModify = async (file?: TFile) => {
     if (!file || file.path !== this.file?.path) return;
@@ -91,6 +129,8 @@ export class CanvasView implements View {
   }
 
   private render(): void {
+    const version = ++this.renderVersion;
+    this.revokeObjectUrls();
     this.viewportEl.innerHTML = "";
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("canvas-edges");
@@ -112,7 +152,7 @@ export class CanvasView implements View {
     for (const edge of this.document.edges) this.renderEdge(svg, edge);
 
     this.viewportEl.appendChild(svg);
-    for (const node of this.document.nodes) this.viewportEl.appendChild(this.renderNode(node));
+    for (const node of this.document.nodes) this.viewportEl.appendChild(this.renderNode(node, version));
   }
 
   private renderEdge(svg: SVGSVGElement, edge: CanvasEdge): void {
@@ -120,14 +160,32 @@ export class CanvasView implements View {
     const to = this.document.nodes.find((node) => node.id === edge.toNode)!;
     const a = this.edgePoint(from, edge.fromSide, to);
     const b = this.edgePoint(to, edge.toSide, from);
-    const bend = Math.max(40, Math.abs(b.x - a.x) * 0.45);
+    const d = this.edgePath(a, edge.fromSide ?? this.automaticSide(from, to), b, edge.toSide ?? this.automaticSide(to, from));
+    const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    hit.classList.add("canvas-edge-hit");
+    hit.dataset.edgeId = edge.id;
+    hit.setAttribute("d", d);
+    hit.setAttribute("tabindex", "0");
+    hit.setAttribute("role", "button");
+    hit.setAttribute("aria-label", `Select connection ${edge.id}`);
+    hit.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    hit.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.selectEdge(edge.id);
+      hit.focus();
+    });
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.classList.add("canvas-edge");
+    path.classList.toggle("is-selected", this.selectedEdgeId === edge.id);
     path.dataset.edgeId = edge.id;
-    path.setAttribute("d", `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`);
+    path.setAttribute("d", d);
     if (edge.color) path.style.stroke = this.canvasColor(edge.color);
     if (edge.toEnd !== "none") path.setAttribute("marker-end", "url(#canvas-arrow)");
-    svg.appendChild(path);
+    svg.append(hit, path);
     if (edge.label) {
       const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
       label.classList.add("canvas-edge-label");
@@ -139,14 +197,35 @@ export class CanvasView implements View {
   }
 
   private edgePoint(node: CanvasNode, explicit: CanvasSide | undefined, other: CanvasNode): Point {
-    const side = explicit ?? (other.x > node.x + node.width ? "right" : other.x + other.width < node.x ? "left" : other.y > node.y ? "bottom" : "top");
+    const side = explicit ?? this.automaticSide(node, other);
+    return this.sidePoint(node, side);
+  }
+
+  private automaticSide(node: CanvasNode, other: CanvasNode): CanvasSide {
+    return other.x > node.x + node.width ? "right" : other.x + other.width < node.x ? "left" : other.y > node.y ? "bottom" : "top";
+  }
+
+  private sidePoint(node: CanvasNode, side: CanvasSide): Point {
     if (side === "left") return { x: node.x, y: node.y + node.height / 2 };
     if (side === "right") return { x: node.x + node.width, y: node.y + node.height / 2 };
     if (side === "top") return { x: node.x + node.width / 2, y: node.y };
     return { x: node.x + node.width / 2, y: node.y + node.height };
   }
 
-  private renderNode(node: CanvasNode): HTMLElement {
+  private edgePath(from: Point, fromSide: CanvasSide, to: Point, toSide: CanvasSide): string {
+    const distance = Math.max(40, Math.hypot(to.x - from.x, to.y - from.y) * 0.35);
+    const control = (point: Point, side: CanvasSide): Point => {
+      if (side === "left") return { x: point.x - distance, y: point.y };
+      if (side === "right") return { x: point.x + distance, y: point.y };
+      if (side === "top") return { x: point.x, y: point.y - distance };
+      return { x: point.x, y: point.y + distance };
+    };
+    const a = control(from, fromSide);
+    const b = control(to, toSide);
+    return `M ${from.x} ${from.y} C ${a.x} ${a.y}, ${b.x} ${b.y}, ${to.x} ${to.y}`;
+  }
+
+  private renderNode(node: CanvasNode, version: number): HTMLElement {
     const el = document.createElement("div");
     el.className = `canvas-node canvas-node-${node.type}`;
     el.dataset.nodeId = node.id;
@@ -176,32 +255,130 @@ export class CanvasView implements View {
       void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "");
       el.addEventListener("dblclick", (event) => { event.stopPropagation(); this.editTextNode(el, node); });
     } else if (node.type === "file") {
-      const type = document.createElement("div");
-      type.className = "canvas-node-kind";
-      type.textContent = "File";
-      const name = document.createElement("div");
-      name.className = "canvas-node-file";
-      name.textContent = node.file + (node.subpath ?? "");
-      el.append(type, name);
+      el.dataset.filePath = node.file;
+      this.renderFileNode(el, node, version);
       el.addEventListener("dblclick", () => {
         const file = this.app.vault.getFileByPath(node.file);
         if (file) void this.app.openFile(file, true);
       });
     } else {
-      const type = document.createElement("div");
-      type.className = "canvas-node-kind";
-      type.textContent = "Link";
-      const link = document.createElement("div");
-      link.className = "canvas-node-link";
-      link.textContent = node.url;
-      el.append(type, link);
+      this.renderWebNode(el, node);
     }
     el.addEventListener("pointerdown", (event) => this.beginNodeDrag(event, node));
+    if (node.type !== "group") {
+      for (const side of ["top", "right", "bottom", "left"] as const) {
+        const handle = document.createElement("button");
+        handle.type = "button";
+        handle.className = "canvas-node-connection-handle";
+        handle.dataset.nodeId = node.id;
+        handle.dataset.side = side;
+        handle.setAttribute("aria-label", `Connect from ${side}`);
+        handle.addEventListener("pointerdown", (event) => this.beginConnection(event, node, side));
+        el.appendChild(handle);
+      }
+    }
     const resize = document.createElement("div");
     resize.className = "canvas-node-resize-handle";
     resize.addEventListener("pointerdown", (event) => this.beginResize(event, node));
     el.appendChild(resize);
     return el;
+  }
+
+  private renderWebNode(el: HTMLElement, node: Extract<CanvasNode, { type: "link" }>): void {
+    const canonical = normalizeWebUrl(node.url);
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "canvas-node-link canvas-node-web-link";
+    const host = document.createElement("div");
+    host.className = "canvas-node-web-host";
+    const url = document.createElement("div");
+    url.className = "canvas-node-web-url";
+    if (canonical) {
+      const parsed = new URL(canonical);
+      host.textContent = parsed.hostname;
+      url.textContent = canonical;
+      action.setAttribute("aria-label", canonical);
+      action.addEventListener("pointerdown", (event) => event.stopPropagation());
+      action.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.metaKey || event.ctrlKey) void window.geode.openExternal(canonical);
+        else this.app.openExternalLink(canonical);
+      });
+    } else {
+      host.textContent = "Invalid web address";
+      url.textContent = node.url;
+      action.disabled = true;
+      action.setAttribute("aria-label", "Invalid web address");
+    }
+    action.append(host, url);
+    el.appendChild(action);
+  }
+
+  private renderFileNode(el: HTMLElement, node: Extract<CanvasNode, { type: "file" }>, version: number): void {
+    const target = node.file + (node.subpath ?? "");
+    const resolved = resolveEmbed(target, this.file?.path ?? "", this.app);
+    if (!resolved.file) {
+      this.renderFileFallback(el, target, "Missing file");
+      return;
+    }
+    const file = resolved.file;
+    if (resolved.kind === "note") {
+      const content = document.createElement("div");
+      content.className = "canvas-node-file canvas-node-note";
+      content.textContent = "Loading…";
+      el.appendChild(content);
+      void this.app.markdownRenderer
+        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content)
+        .catch(() => {
+          if (version === this.renderVersion && content.isConnected) this.renderFileFallback(el, target, "Could not load note");
+        });
+      return;
+    }
+    if (resolved.kind === "image" || resolved.kind === "audio" || resolved.kind === "video") {
+      const media: HTMLImageElement | HTMLAudioElement | HTMLVideoElement = resolved.kind === "image"
+        ? document.createElement("img")
+        : resolved.kind === "audio"
+          ? document.createElement("audio")
+          : document.createElement("video");
+      media.className = "canvas-node-file canvas-node-media";
+      if (media instanceof HTMLImageElement) media.alt = file.name;
+      else media.controls = true;
+      el.appendChild(media);
+      void this.loadFileMedia(file, media, version);
+      return;
+    }
+    this.renderFileFallback(el, file.name, "File");
+  }
+
+  private renderFileFallback(el: HTMLElement, label: string, kind: string): void {
+    el.querySelector(".canvas-node-file")?.remove();
+    const type = document.createElement("div");
+    type.className = "canvas-node-kind";
+    type.textContent = kind;
+    const name = document.createElement("div");
+    name.className = "canvas-node-file canvas-node-file-fallback";
+    name.textContent = label;
+    el.append(type, name);
+  }
+
+  private async loadFileMedia(file: TFile, media: HTMLImageElement | HTMLAudioElement | HTMLVideoElement, version: number): Promise<void> {
+    try {
+      const url = await loadEmbedBlobUrl(this.app, file);
+      if (version !== this.renderVersion || !media.isConnected) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      this.objectUrls.add(url);
+      media.src = url;
+    } catch {
+      if (version === this.renderVersion && media.isConnected) this.renderFileFallback(media.parentElement!, file.name, "Could not load file");
+    }
+  }
+
+  private revokeObjectUrls(): void {
+    for (const url of this.objectUrls) URL.revokeObjectURL(url);
+    this.objectUrls.clear();
   }
 
   private editTextNode(el: HTMLElement, node: CanvasTextNode, isNew = false): void {
@@ -271,11 +448,107 @@ export class CanvasView implements View {
     return `text-${sequence}`;
   }
 
+  private addFileCardAt(file: TFile, worldPoint: Point): void {
+    const kind = this.fileKind(file);
+    const [width, height] = kind === "note"
+      ? [NOTE_NODE_WIDTH, NOTE_NODE_HEIGHT]
+      : kind === "audio"
+        ? [320, 100]
+        : kind === "other"
+          ? [300, 120]
+          : [360, 240];
+    this.document.nodes.push({
+      id: this.nextFileNodeId(),
+      type: "file",
+      x: worldPoint.x - width / 2,
+      y: worldPoint.y - height / 2,
+      width,
+      height,
+      file: file.path,
+    });
+    this.render();
+    void this.persist();
+  }
+
+  private nextFileNodeId(): string {
+    const ids = new Set(this.document.nodes.map((node) => node.id));
+    let sequence = 1;
+    while (ids.has(`file-${sequence}`)) sequence += 1;
+    return `file-${sequence}`;
+  }
+
+  private addLinkCardAt(canonicalUrl: string, worldPoint: Point): void {
+    const node = {
+      id: this.nextLinkNodeId(),
+      type: "link" as const,
+      x: worldPoint.x - LINK_NODE_WIDTH / 2,
+      y: worldPoint.y - LINK_NODE_HEIGHT / 2,
+      width: LINK_NODE_WIDTH,
+      height: LINK_NODE_HEIGHT,
+      url: canonicalUrl,
+    };
+    this.document.nodes.push(node);
+    this.selectedIds.clear();
+    this.selectedIds.add(node.id);
+    this.render();
+    void this.persist();
+  }
+
+  private nextLinkNodeId(): string {
+    const ids = new Set(this.document.nodes.map((node) => node.id));
+    let sequence = 1;
+    while (ids.has(`link-${sequence}`)) sequence += 1;
+    return `link-${sequence}`;
+  }
+
+  private openWebPagePrompt(): void {
+    new PromptModal(this.app, {
+      placeholder: "Enter web page URL…",
+      allowEmptySubmit: true,
+      onSubmit: (raw) => {
+        const canonical = normalizeWebUrl(raw);
+        if (!canonical) {
+          this.app.notify("Enter a valid http:// or https:// URL.");
+          return;
+        }
+        this.addLinkCardAt(canonical, this.viewportCenter());
+      },
+    }).open();
+  }
+
+  private fileKind(file: TFile): EmbedKind {
+    if (file.extension === "md") return "note";
+    if (IMAGE_EXTENSIONS.has(file.extension)) return "image";
+    if (AUDIO_EXTENSIONS.has(file.extension)) return "audio";
+    if (VIDEO_EXTENSIONS.has(file.extension)) return "video";
+    return "other";
+  }
+
+  private viewportCenter(): Point {
+    return {
+      x: (this.surfaceEl.clientWidth / 2 - this.pan.x) / this.scale,
+      y: (this.surfaceEl.clientHeight / 2 - this.pan.y) / this.scale,
+    };
+  }
+
+  private openFilePicker(kind: "note" | "media"): void {
+    const files = kind === "note"
+      ? this.app.vault.getMarkdownFiles()
+      : this.app.vault.getFiles().filter((file) => file.extension !== "md");
+    new CanvasFileSuggestModal(
+      this.app,
+      files,
+      kind === "note" ? "Search notes…" : "Search media…",
+      (file) => this.addFileCardAt(file, this.viewportCenter()),
+    ).open();
+  }
+
   private canvasColor(color: string): string {
     return /^[1-6]$/.test(color) ? `var(--canvas-color-${color})` : color;
   }
 
   private select(node: CanvasNode, additive = false): void {
+    this.selectedEdgeId = null;
     if (additive && this.selectedIds.has(node.id)) {
       this.selectedIds.delete(node.id);
     } else {
@@ -304,15 +577,25 @@ export class CanvasView implements View {
     for (const el of this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node")) {
       el.classList.toggle("is-selected", this.selectedIds.has(el.dataset.nodeId ?? ""));
     }
+    for (const el of this.viewportEl.querySelectorAll<SVGPathElement>(".canvas-edge")) {
+      el.classList.toggle("is-selected", this.selectedEdgeId === el.dataset.edgeId);
+    }
   }
 
   private clearSelection(): void {
     this.selectedIds.clear();
+    this.selectedEdgeId = null;
+    this.updateSelectionClasses();
+  }
+
+  private selectEdge(edgeId: string): void {
+    this.selectedIds.clear();
+    this.selectedEdgeId = edgeId;
     this.updateSelectionClasses();
   }
 
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle")) return;
+    if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-connection-handle")) return;
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
     this.select(node, event.shiftKey);
@@ -342,6 +625,70 @@ export class CanvasView implements View {
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); void this.persist(); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  }
+
+  private beginConnection(event: PointerEvent, node: CanvasNode, side: CanvasSide): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.surfaceEl.focus({ preventScroll: true });
+    this.select(node);
+    this.containerEl.classList.add("is-connecting");
+    const svg = this.viewportEl.querySelector<SVGSVGElement>(".canvas-edges");
+    if (!svg) return;
+    const preview = document.createElementNS(svg.namespaceURI, "path");
+    preview.classList.add("canvas-edge-preview");
+    const from = this.sidePoint(node, side);
+    preview.setAttribute("d", this.edgePath(from, side, from, side));
+    svg.appendChild(preview);
+    const toWorld = (pointer: PointerEvent): Point => {
+      const rect = this.surfaceEl.getBoundingClientRect();
+      return {
+        x: (pointer.clientX - rect.left - this.pan.x) / this.scale,
+        y: (pointer.clientY - rect.top - this.pan.y) / this.scale,
+      };
+    };
+    const move = (next: PointerEvent) => {
+      preview.setAttribute("d", this.edgePath(from, side, toWorld(next), side === "left" ? "right" : side === "right" ? "left" : side === "top" ? "bottom" : "top"));
+    };
+    const up = (next: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const target = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((handle) => {
+        const rect = handle.getBoundingClientRect();
+        return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
+      });
+      preview.remove();
+      this.containerEl.classList.remove("is-connecting");
+      const targetNodeId = target?.dataset.nodeId;
+      const targetSide = target?.dataset.side as CanvasSide | undefined;
+      if (!targetNodeId || !targetSide || targetNodeId === node.id) return;
+      const targetNode = this.document.nodes.find((candidate) => candidate.id === targetNodeId);
+      if (!targetNode || targetNode.type === "group") return;
+      const edge: CanvasEdge = {
+        id: this.nextEdgeId(),
+        fromNode: node.id,
+        fromSide: side,
+        fromEnd: "none",
+        toNode: targetNode.id,
+        toSide: targetSide,
+        toEnd: "arrow",
+      };
+      this.document.edges.push(edge);
+      this.selectedIds.clear();
+      this.selectedEdgeId = edge.id;
+      this.render();
+      void this.persist();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  private nextEdgeId(): string {
+    const ids = new Set(this.document.edges.map((edge) => edge.id));
+    let sequence = 1;
+    while (ids.has(`edge-${sequence}`)) sequence += 1;
+    return `edge-${sequence}`;
   }
 
   private installCameraControls(): void {
@@ -398,9 +745,19 @@ export class CanvasView implements View {
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
+      this.selectedEdgeId = null;
       this.selectedIds.clear();
       for (const node of this.document.nodes) this.selectedIds.add(node.id);
       this.updateSelectionClasses();
+      return;
+    }
+    if ((event.key === "Backspace" || event.key === "Delete") && this.selectedEdgeId) {
+      event.preventDefault();
+      const removed = this.selectedEdgeId;
+      this.document.edges = this.document.edges.filter((edge) => edge.id !== removed);
+      this.selectedEdgeId = null;
+      this.render();
+      void this.persist();
       return;
     }
     if ((event.key === "Backspace" || event.key === "Delete") && this.selectedIds.size > 0) {
@@ -439,20 +796,21 @@ export class CanvasView implements View {
   private buildCanvasToolbar(): HTMLElement {
     const toolbar = document.createElement("div");
     toolbar.className = "canvas-toolbar";
-    const addText = document.createElement("button");
-    addText.type = "button";
-    addText.title = "Add text card";
-    addText.setAttribute("aria-label", "Add text card");
-    const icon = document.createElement("span");
-    setIcon(icon, "file-plus");
-    addText.appendChild(icon);
-    addText.addEventListener("click", () => {
-      this.addTextCardAt({
-        x: (this.surfaceEl.clientWidth / 2 - this.pan.x) / this.scale,
-        y: (this.surfaceEl.clientHeight / 2 - this.pan.y) / this.scale,
-      });
-    });
-    toolbar.appendChild(addText);
+    const action = (title: string, iconName: string, run: () => void) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      const icon = document.createElement("span");
+      setIcon(icon, iconName);
+      button.appendChild(icon);
+      button.addEventListener("click", run);
+      toolbar.appendChild(button);
+    };
+    action("Add text card", "file-plus", () => this.addTextCardAt(this.viewportCenter()));
+    action("Add note from vault", "file-text", () => this.openFilePicker("note"));
+    action("Add media from vault", "image-plus", () => this.openFilePicker("media"));
+    action("Add web page", "globe", () => this.openWebPagePrompt());
     return toolbar;
   }
 
