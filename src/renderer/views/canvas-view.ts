@@ -350,6 +350,11 @@ export class CanvasView implements View {
           items.push({ title: "Swap file", action: () => this.openSwapFilePicker(node.id) });
         }
       }
+      if (node.type === "link") {
+        const canonical = normalizeWebUrl(node.url);
+        if (canonical) items.push({ title: "Open in browser", action: () => { void window.geode.openExternal(canonical); } });
+      }
+      items.push({ title: "Delete", action: () => this.deleteSelectedNodes() });
       this.app.showMenu(event, items);
     });
     if (node.type !== "group") {
@@ -1333,13 +1338,19 @@ export class CanvasView implements View {
     }
     if ((event.key === "Backspace" || event.key === "Delete") && this.selectedIds.size > 0) {
       event.preventDefault();
-      const removed = new Set(this.selectedIds);
-      this.document.nodes = this.document.nodes.filter((node) => !removed.has(node.id));
-      this.document.edges = this.document.edges.filter((edge) => !removed.has(edge.fromNode) && !removed.has(edge.toNode));
-      this.selectedIds.clear();
-      this.render();
-      void this.persist();
+      this.deleteSelectedNodes();
     }
+  }
+
+  private deleteSelectedNodes(): void {
+    if (this.selectedIds.size === 0) return;
+    const removed = new Set(this.selectedIds);
+    this.document.nodes = this.document.nodes.filter((node) => !removed.has(node.id));
+    this.document.edges = this.document.edges.filter((edge) => !removed.has(edge.fromNode) && !removed.has(edge.toNode));
+    this.selectedIds.clear();
+    this.selectedEdgeId = null;
+    this.render();
+    void this.persist();
   }
 
   private buildCameraControls(): HTMLElement {

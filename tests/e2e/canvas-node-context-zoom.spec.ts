@@ -100,7 +100,7 @@ test("Canvas node context menu zooms to the preserved or newly selected nodes", 
 
     const group = view.locator('.canvas-node[data-node-id="group"]');
     await group.click({ button: "right", position: { x: 40, y: 40 } });
-    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection"]);
+    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Delete"]);
     expect(await selectedIds(view)).toEqual(multiSelection);
     await window.locator(".context-menu-item", { hasText: "Zoom to selection" }).click();
     expect(await camera(view)).toEqual(shortcutCamera);
@@ -118,7 +118,7 @@ test("Canvas node context menu zooms to the preserved or newly selected nodes", 
     expect(await selectedIds(view)).toEqual(["file"]);
     await expect(view.locator(".canvas-edge.is-selected")).toHaveCount(0);
     expect(await camera(view)).toEqual(cameraBeforeUnselectedMenu);
-    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file"]);
+    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Swap file", "Delete"]);
     await window.locator(".context-menu-item", { hasText: "Zoom to selection" }).click();
     expect(await selectedIds(view)).toEqual(["file"]);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBefore);
