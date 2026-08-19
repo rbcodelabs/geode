@@ -861,12 +861,34 @@ export class CanvasView implements View {
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-connection-handle")) return;
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
-    this.select(node, event.shiftKey);
+    if (node.type === "group") {
+      this.selectedEdgeId = null;
+      this.selectedIds.clear();
+      this.selectedIds.add(node.id);
+      this.updateSelectionClasses();
+    } else {
+      this.select(node, event.shiftKey);
+    }
     if (!this.selectedIds.has(node.id)) return;
     const start = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
+    const carried = node.type === "group"
+      ? this.document.nodes
+        .filter((candidate) => candidate.type !== "group"
+          && candidate.x >= node.x
+          && candidate.y >= node.y
+          && candidate.x + candidate.width <= node.x + node.width
+          && candidate.y + candidate.height <= node.y + node.height)
+        .map((candidate) => ({ node: candidate, x: candidate.x, y: candidate.y }))
+      : [];
     const move = (next: PointerEvent) => {
-      node.x = start.nodeX + (next.clientX - start.x) / this.scale;
-      node.y = start.nodeY + (next.clientY - start.y) / this.scale;
+      const dx = (next.clientX - start.x) / this.scale;
+      const dy = (next.clientY - start.y) / this.scale;
+      node.x = start.nodeX + dx;
+      node.y = start.nodeY + dy;
+      for (const member of carried) {
+        member.node.x = member.x + dx;
+        member.node.y = member.y + dy;
+      }
       this.render();
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); void this.persist(); };
