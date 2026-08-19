@@ -3113,6 +3113,14 @@ select.dropdown:hover {
 
 .canvas-surface:active { cursor: grabbing; }
 
+.canvas-marquee {
+  position: absolute;
+  z-index: 999;
+  pointer-events: none;
+  border: 1px solid var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
 .canvas-viewport {
   position: absolute;
   inset: 0 auto auto 0;

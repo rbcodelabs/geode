@@ -988,8 +988,61 @@ export class CanvasView implements View {
     this.surfaceEl.addEventListener("pointerdown", (event) => {
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.surfaceEl.focus({ preventScroll: true });
+      const selectionSnapshot = new Set(this.selectedIds);
       this.clearSelection();
-      if (event.button !== 1 && !(event.button === 0 && this.spacePressed)) return;
+      const isPan = event.button === 1 || (event.button === 0 && this.spacePressed);
+      if (event.button === 0 && !isPan) {
+        event.preventDefault();
+        const rect = this.surfaceEl.getBoundingClientRect();
+        const start = { x: event.clientX, y: event.clientY };
+        let marqueeEl: HTMLElement | null = null;
+        const move = (next: PointerEvent) => {
+          if (!marqueeEl && Math.hypot(next.clientX - start.x, next.clientY - start.y) < 4) return;
+          if (!marqueeEl) {
+            marqueeEl = document.createElement("div");
+            marqueeEl.className = "canvas-marquee";
+            this.surfaceEl.appendChild(marqueeEl);
+          }
+          const left = Math.min(start.x, next.clientX);
+          const top = Math.min(start.y, next.clientY);
+          const right = Math.max(start.x, next.clientX);
+          const bottom = Math.max(start.y, next.clientY);
+          Object.assign(marqueeEl.style, {
+            left: `${left - rect.left}px`,
+            top: `${top - rect.top}px`,
+            width: `${right - left}px`,
+            height: `${bottom - top}px`,
+          });
+          const worldLeft = (left - rect.left - this.pan.x) / this.scale;
+          const worldTop = (top - rect.top - this.pan.y) / this.scale;
+          const worldRight = (right - rect.left - this.pan.x) / this.scale;
+          const worldBottom = (bottom - rect.top - this.pan.y) / this.scale;
+          this.selectedIds.clear();
+          if (event.shiftKey) {
+            for (const id of selectionSnapshot) this.selectedIds.add(id);
+          }
+          for (const node of this.document.nodes) {
+            if (
+              node.x <= worldRight
+              && node.x + node.width >= worldLeft
+              && node.y <= worldBottom
+              && node.y + node.height >= worldTop
+            ) this.selectedIds.add(node.id);
+          }
+          this.updateSelectionClasses();
+        };
+        const up = () => {
+          marqueeEl?.remove();
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+        return;
+      }
+      if (!isPan) return;
       event.preventDefault();
       const start = { x: event.clientX, y: event.clientY, panX: this.pan.x, panY: this.pan.y };
       const move = (next: PointerEvent) => { this.pan = { x: start.panX + next.clientX - start.x, y: start.panY + next.clientY - start.y }; this.updateTransform(); };
