@@ -325,6 +325,19 @@ export class CanvasView implements View {
       this.renderWebNode(el, node);
     }
     el.addEventListener("pointerdown", (event) => this.beginNodeDrag(event, node));
+    el.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!this.selectedIds.has(node.id)) {
+        this.selectedIds.clear();
+        this.selectedIds.add(node.id);
+        this.selectedEdgeId = null;
+        this.updateSelectionClasses();
+      }
+      this.app.showMenu(event, [
+        { title: "Zoom to selection", action: () => this.fitToSelection() },
+      ]);
+    });
     if (node.type !== "group") {
       for (const side of ["top", "right", "bottom", "left"] as const) {
         const handle = document.createElement("button");
