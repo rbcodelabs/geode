@@ -17,6 +17,9 @@ const NOTE_NODE_WIDTH = 360;
 const NOTE_NODE_HEIGHT = 280;
 const LINK_NODE_WIDTH = 360;
 const LINK_NODE_HEIGHT = 180;
+const GROUP_PADDING = 40;
+const DEFAULT_GROUP_WIDTH = 400;
+const DEFAULT_GROUP_HEIGHT = 300;
 
 type Point = { x: number; y: number };
 
@@ -297,6 +300,12 @@ export class CanvasView implements View {
       const label = document.createElement("div");
       label.className = "canvas-group-label";
       label.textContent = node.label ?? "Group";
+      label.addEventListener("pointerdown", (event) => event.stopPropagation());
+      label.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.editGroupLabel(node.id);
+      });
       el.appendChild(label);
     } else if (node.type === "text") {
       const text = document.createElement("div");
@@ -562,6 +571,79 @@ export class CanvasView implements View {
           return;
         }
         this.addLinkCardAt(canonical, this.viewportCenter());
+      },
+    }).open();
+  }
+
+  private openGroupPrompt(): void {
+    const selectedCards = this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id));
+    new PromptModal(this.app, {
+      placeholder: "Group label…",
+      allowEmptySubmit: true,
+      onSubmit: (label) => this.addGroup(selectedCards, label),
+    }).open();
+  }
+
+  private addGroup(selectedCards: CanvasNode[], label: string): void {
+    let x: number;
+    let y: number;
+    let width: number;
+    let height: number;
+    if (selectedCards.length > 0) {
+      const left = Math.min(...selectedCards.map((node) => node.x));
+      const top = Math.min(...selectedCards.map((node) => node.y));
+      const right = Math.max(...selectedCards.map((node) => node.x + node.width));
+      const bottom = Math.max(...selectedCards.map((node) => node.y + node.height));
+      x = left - GROUP_PADDING;
+      y = top - GROUP_PADDING;
+      width = right - left + GROUP_PADDING * 2;
+      height = bottom - top + GROUP_PADDING * 2;
+    } else {
+      const center = this.viewportCenter();
+      x = center.x - DEFAULT_GROUP_WIDTH / 2;
+      y = center.y - DEFAULT_GROUP_HEIGHT / 2;
+      width = DEFAULT_GROUP_WIDTH;
+      height = DEFAULT_GROUP_HEIGHT;
+    }
+    const group: CanvasNode = {
+      id: this.nextGroupNodeId(),
+      type: "group",
+      x,
+      y,
+      width,
+      height,
+      ...(label ? { label } : {}),
+    };
+    const firstCard = this.document.nodes.findIndex((node) => node.type !== "group");
+    this.document.nodes.splice(firstCard < 0 ? this.document.nodes.length : firstCard, 0, group);
+    this.selectedEdgeId = null;
+    this.selectedIds.clear();
+    this.selectedIds.add(group.id);
+    this.render();
+    void this.persist();
+  }
+
+  private nextGroupNodeId(): string {
+    const ids = new Set(this.document.nodes.map((node) => node.id));
+    let sequence = 1;
+    while (ids.has(`group-${sequence}`)) sequence += 1;
+    return `group-${sequence}`;
+  }
+
+  private editGroupLabel(groupId: string): void {
+    const group = this.document.nodes.find((node) => node.id === groupId);
+    if (!group || group.type !== "group") return;
+    new PromptModal(this.app, {
+      placeholder: "Group label…",
+      initialValue: group.label ?? "",
+      allowEmptySubmit: true,
+      onSubmit: (label) => {
+        const current = this.document.nodes.find((node) => node.id === groupId);
+        if (!current || current.type !== "group") return;
+        if (label) current.label = label;
+        else delete current.label;
+        this.render();
+        void this.persist();
       },
     }).open();
   }
@@ -992,6 +1074,7 @@ export class CanvasView implements View {
     action("Add note from vault", "file-text", () => this.openFilePicker("note"));
     action("Add media from vault", "image-plus", () => this.openFilePicker("media"));
     action("Add web page", "globe", () => this.openWebPagePrompt());
+    action("Add group", "group", () => this.openGroupPrompt());
     return toolbar;
   }
 
