@@ -3151,6 +3151,20 @@ select.dropdown:hover {
   stroke-width: 3;
 }
 
+.canvas-edge-endpoint-handle {
+  fill: var(--background-primary);
+  stroke: var(--interactive-accent);
+  stroke-width: 2;
+  opacity: 0;
+  pointer-events: none;
+  cursor: crosshair;
+}
+
+.canvas-edge-endpoint-handle.is-selected {
+  opacity: 1;
+  pointer-events: all;
+}
+
 .canvas-edge-preview {
   fill: none;
   stroke: var(--interactive-accent);

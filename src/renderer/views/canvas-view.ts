@@ -178,6 +178,22 @@ export class CanvasView implements View {
       this.selectEdge(edge.id);
       hit.focus();
     });
+    hit.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.editEdgeLabel(edge.id);
+    });
+    hit.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.selectEdge(edge.id);
+      this.app.showMenu(event, [
+        { title: "Edit label", action: () => this.editEdgeLabel(edge.id) },
+        { title: "Go to target", action: () => this.focusEdgeEndpoint(edge.id, "target") },
+        { title: "Go to source", action: () => this.focusEdgeEndpoint(edge.id, "source") },
+        { title: "Remove", action: () => this.removeEdge(edge.id) },
+      ]);
+    });
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.classList.add("canvas-edge");
     path.classList.toggle("is-selected", this.selectedEdgeId === edge.id);
@@ -186,14 +202,40 @@ export class CanvasView implements View {
     if (edge.color) path.style.stroke = this.canvasColor(edge.color);
     if (edge.toEnd !== "none") path.setAttribute("marker-end", "url(#canvas-arrow)");
     svg.append(hit, path);
+    this.renderEdgeEndpointHandle(svg, edge, "source", this.outsetPoint(a, edge.fromSide ?? this.automaticSide(from, to)));
+    this.renderEdgeEndpointHandle(svg, edge, "target", this.outsetPoint(b, edge.toSide ?? this.automaticSide(to, from)));
     if (edge.label) {
       const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
       label.classList.add("canvas-edge-label");
+      label.dataset.edgeId = edge.id;
       label.setAttribute("x", String((a.x + b.x) / 2));
       label.setAttribute("y", String((a.y + b.y) / 2 - 7));
       label.textContent = edge.label;
       svg.appendChild(label);
     }
+  }
+
+  private renderEdgeEndpointHandle(
+    svg: SVGSVGElement,
+    edge: CanvasEdge,
+    endpoint: "source" | "target",
+    point: Point,
+  ): void {
+    const handle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    const selected = this.selectedEdgeId === edge.id;
+    handle.classList.add("canvas-edge-endpoint-handle");
+    handle.classList.toggle("is-selected", selected);
+    handle.dataset.edgeId = edge.id;
+    handle.dataset.endpoint = endpoint;
+    handle.setAttribute("cx", String(point.x));
+    handle.setAttribute("cy", String(point.y));
+    handle.setAttribute("r", "8");
+    handle.setAttribute("role", "button");
+    handle.setAttribute("aria-label", `Reconnect ${endpoint} of ${edge.id}`);
+    handle.setAttribute("aria-hidden", String(!selected));
+    handle.setAttribute("tabindex", selected ? "0" : "-1");
+    handle.addEventListener("pointerdown", (event) => this.beginEdgeReconnect(event, edge.id, endpoint));
+    svg.appendChild(handle);
   }
 
   private edgePoint(node: CanvasNode, explicit: CanvasSide | undefined, other: CanvasNode): Point {
@@ -203,6 +245,14 @@ export class CanvasView implements View {
 
   private automaticSide(node: CanvasNode, other: CanvasNode): CanvasSide {
     return other.x > node.x + node.width ? "right" : other.x + other.width < node.x ? "left" : other.y > node.y ? "bottom" : "top";
+  }
+
+  private outsetPoint(point: Point, side: CanvasSide): Point {
+    const distance = 10;
+    if (side === "left") return { x: point.x - distance, y: point.y };
+    if (side === "right") return { x: point.x + distance, y: point.y };
+    if (side === "top") return { x: point.x, y: point.y - distance };
+    return { x: point.x, y: point.y + distance };
   }
 
   private sidePoint(node: CanvasNode, side: CanvasSide): Point {
@@ -580,6 +630,12 @@ export class CanvasView implements View {
     for (const el of this.viewportEl.querySelectorAll<SVGPathElement>(".canvas-edge")) {
       el.classList.toggle("is-selected", this.selectedEdgeId === el.dataset.edgeId);
     }
+    for (const el of this.viewportEl.querySelectorAll<SVGCircleElement>(".canvas-edge-endpoint-handle")) {
+      const selected = this.selectedEdgeId === el.dataset.edgeId;
+      el.classList.toggle("is-selected", selected);
+      el.setAttribute("aria-hidden", String(!selected));
+      el.setAttribute("tabindex", selected ? "0" : "-1");
+    }
   }
 
   private clearSelection(): void {
@@ -592,6 +648,131 @@ export class CanvasView implements View {
     this.selectedIds.clear();
     this.selectedEdgeId = edgeId;
     this.updateSelectionClasses();
+  }
+
+  private editEdgeLabel(edgeId: string): void {
+    const edge = this.document.edges.find((candidate) => candidate.id === edgeId);
+    if (!edge) return;
+    new PromptModal(this.app, {
+      placeholder: "Edge label…",
+      initialValue: edge.label ?? "",
+      allowEmptySubmit: true,
+      onSubmit: (label) => {
+        const current = this.document.edges.find((candidate) => candidate.id === edgeId);
+        if (!current) return;
+        if (label) current.label = label;
+        else delete current.label;
+        this.render();
+        void this.persist();
+      },
+    }).open();
+  }
+
+  private focusEdgeEndpoint(edgeId: string, endpoint: "source" | "target"): void {
+    const edge = this.document.edges.find((candidate) => candidate.id === edgeId);
+    if (!edge) return;
+    const nodeId = endpoint === "source" ? edge.fromNode : edge.toNode;
+    const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node) return;
+    this.selectedEdgeId = null;
+    this.selectedIds.clear();
+    this.selectedIds.add(node.id);
+    this.updateSelectionClasses();
+    const padding = 40;
+    const fitScale = Math.min(
+      (this.surfaceEl.clientWidth - padding * 2) / node.width,
+      (this.surfaceEl.clientHeight - padding * 2) / node.height,
+    );
+    this.scale = Math.max(MIN_SCALE, Math.min(this.scale, fitScale));
+    this.pan = {
+      x: this.surfaceEl.clientWidth / 2 - (node.x + node.width / 2) * this.scale,
+      y: this.surfaceEl.clientHeight / 2 - (node.y + node.height / 2) * this.scale,
+    };
+    this.updateTransform();
+  }
+
+  private removeEdge(edgeId: string): void {
+    const length = this.document.edges.length;
+    this.document.edges = this.document.edges.filter((edge) => edge.id !== edgeId);
+    if (this.document.edges.length === length) return;
+    if (this.selectedEdgeId === edgeId) this.selectedEdgeId = null;
+    this.render();
+    void this.persist();
+  }
+
+  private beginEdgeReconnect(event: PointerEvent, edgeId: string, endpoint: "source" | "target"): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.surfaceEl.focus({ preventScroll: true });
+    this.selectEdge(edgeId);
+    const edge = this.document.edges.find((candidate) => candidate.id === edgeId);
+    if (!edge) return;
+    const fromNode = this.document.nodes.find((node) => node.id === edge.fromNode);
+    const toNode = this.document.nodes.find((node) => node.id === edge.toNode);
+    const svg = this.viewportEl.querySelector<SVGSVGElement>(".canvas-edges");
+    if (!fromNode || !toNode || !svg) return;
+    const fromSide = edge.fromSide ?? this.automaticSide(fromNode, toNode);
+    const toSide = edge.toSide ?? this.automaticSide(toNode, fromNode);
+    const from = this.sidePoint(fromNode, fromSide);
+    const to = this.sidePoint(toNode, toSide);
+    const preview = document.createElementNS(svg.namespaceURI, "path");
+    preview.classList.add("canvas-edge-preview");
+    preview.setAttribute("d", this.edgePath(from, fromSide, to, toSide));
+    svg.appendChild(preview);
+    const toWorld = (pointer: PointerEvent): Point => {
+      const rect = this.surfaceEl.getBoundingClientRect();
+      return {
+        x: (pointer.clientX - rect.left - this.pan.x) / this.scale,
+        y: (pointer.clientY - rect.top - this.pan.y) / this.scale,
+      };
+    };
+    const move = (next: PointerEvent) => {
+      const point = toWorld(next);
+      preview.setAttribute("d", endpoint === "source"
+        ? this.edgePath(point, fromSide, to, toSide)
+        : this.edgePath(from, fromSide, point, toSide));
+    };
+    const up = (next: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      preview.remove();
+      const nodeEl = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node")].reverse().find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
+      });
+      if (!nodeEl) {
+        this.removeEdge(edgeId);
+        return;
+      }
+      const node = this.document.nodes.find((candidate) => candidate.id === nodeEl.dataset.nodeId);
+      if (!node || node.type === "group") return;
+      const otherNodeId = endpoint === "source" ? edge.toNode : edge.fromNode;
+      if (node.id === otherNodeId) return;
+      const side = this.closestSide(node, toWorld(next));
+      if (endpoint === "source") {
+        edge.fromNode = node.id;
+        edge.fromSide = side;
+      } else {
+        edge.toNode = node.id;
+        edge.toSide = side;
+      }
+      this.render();
+      void this.persist();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  private closestSide(node: CanvasNode, point: Point): CanvasSide {
+    const distances: Array<[CanvasSide, number]> = [
+      ["left", Math.abs(point.x - node.x)],
+      ["right", Math.abs(point.x - (node.x + node.width))],
+      ["top", Math.abs(point.y - node.y)],
+      ["bottom", Math.abs(point.y - (node.y + node.height))],
+    ];
+    distances.sort((a, b) => a[1] - b[1]);
+    return distances[0][0];
   }
 
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
