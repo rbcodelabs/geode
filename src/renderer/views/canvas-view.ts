@@ -1561,6 +1561,18 @@ export class CanvasView implements View {
           .map((candidate) => ({ node: candidate, x: candidate.x, y: candidate.y }))
         : [];
     const moving = [{ node, x: start.nodeX, y: start.nodeY }, ...carried];
+    const autoExpandGroups = node.type === "group"
+      ? []
+      : this.document.nodes.flatMap((candidate) => {
+        if (candidate.type !== "group") return [];
+        const members = moving
+          .filter((member) => member.x >= candidate.x
+            && member.y >= candidate.y
+            && member.x + member.node.width <= candidate.x + candidate.width
+            && member.y + member.node.height <= candidate.y + candidate.height)
+          .map((member) => member.node);
+        return members.length > 0 ? [{ group: candidate, members }] : [];
+      });
     const movingBounds = this.boundsFor(moving);
     const excludedIds = new Set(node.type === "group" || wasSelected ? this.selectedIds : [node.id]);
     for (const member of moving) excludedIds.add(member.node.id);
@@ -1613,6 +1625,19 @@ export class CanvasView implements View {
       for (const member of carried) {
         member.node.x = member.x + dx;
         member.node.y = member.y + dy;
+      }
+      for (const { group, members } of autoExpandGroups) {
+        const memberBounds = this.boundsFor(members.map((member) => ({ node: member, x: member.x, y: member.y })));
+        const previousRight = group.x + group.width;
+        const previousBottom = group.y + group.height;
+        const left = Math.min(group.x, memberBounds.left - GROUP_PADDING);
+        const top = Math.min(group.y, memberBounds.top - GROUP_PADDING);
+        const right = Math.max(previousRight, memberBounds.right + GROUP_PADDING);
+        const bottom = Math.max(previousBottom, memberBounds.bottom + GROUP_PADDING);
+        group.x = left;
+        group.y = top;
+        group.width = right - left;
+        group.height = bottom - top;
       }
       this.render();
     };
