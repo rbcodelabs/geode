@@ -115,7 +115,7 @@ test("creates padded Canvas groups from an eligible node context selection", asy
     await installWriteCounter(window);
     const a = view.locator('.canvas-node[data-node-id="a"]');
     await a.click({ button: "right", position: { x: 30, y: 30 } });
-    await expect(menuItems).toHaveText(["Zoom to selection", "Convert to file…", "Create group", "Delete"]);
+    await expect(menuItems).toHaveText(["Zoom to selection", "Edit", "Convert to file…", "Create group", "Delete"]);
     expect(await selectedIds(view)).toEqual(["a", "b", "group-1"]);
 
     // Cancel is byte-, selection-, write-, and camera-inert.
@@ -174,7 +174,7 @@ test("creates padded Canvas groups from an eligible node context selection", asy
     const keeper = view.locator('.canvas-node[data-node-id="keeper"]');
     await keeper.click({ button: "right", position: { x: 30, y: 30 } });
     expect(await selectedIds(view)).toEqual(["keeper"]);
-    await expect(menuItems).toHaveText(["Zoom to selection", "Convert to file…", "Create group", "Delete"]);
+    await expect(menuItems).toHaveText(["Zoom to selection", "Edit", "Convert to file…", "Create group", "Delete"]);
     await menuItems.filter({ hasText: /^Create group$/ }).click();
     await prompt.press("Enter");
     const group4 = view.locator('.canvas-node[data-node-id="group-4"]');

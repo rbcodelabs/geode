@@ -176,6 +176,7 @@ test("resizes every Canvas node type from directional border handles", async () 
     await expectGeometryClose(group, { x: 450, y: 340, width: 240, height: 210 });
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBefore);
     await window.mouse.up();
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: { id: string }) => node.id === "group")?.height ?? null).toBeCloseTo(210, 4);
 
     // Ratio-preserving left shrink clamps on both minimum dimensions without
     // moving the fixed right edge or drifting the original vertical center.

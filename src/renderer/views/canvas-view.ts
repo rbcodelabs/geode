@@ -364,6 +364,9 @@ export class CanvasView implements View {
       const items = [
         { title: "Zoom to selection", action: () => this.fitToSelection() },
       ];
+      if (node.type === "text") {
+        items.push({ title: "Edit", action: () => this.editTextNode(el, node) });
+      }
       if (node.type === "file") {
         const resolved = resolveEmbed(node.file + (node.subpath ?? ""), this.file?.path ?? "", this.app);
         if (resolved.file && resolved.kind === "note") {

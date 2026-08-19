@@ -19,7 +19,7 @@ async function camera(view: Locator): Promise<{ scale: string | null; panX: stri
 
 async function openConvert(view: Locator, page: Page): Promise<Locator> {
   await view.locator('.canvas-node[data-node-id="convert-me"]').click({ button: "right", position: { x: 30, y: 30 } });
-  await expect(page.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Convert to file…", "Create group", "Delete"]);
+  await expect(page.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Edit", "Convert to file…", "Create group", "Delete"]);
   await page.locator(".context-menu-item", { hasText: /^Convert to file…$/ }).click();
   const prompt = page.locator(".prompt-input");
   await expect(prompt).toBeFocused();
