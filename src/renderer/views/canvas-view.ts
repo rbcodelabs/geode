@@ -346,7 +346,7 @@ export class CanvasView implements View {
     if (node.color && /^[1-6]$/.test(node.color)) el.dataset.canvasColor = node.color;
     else if (node.color) el.style.setProperty("--canvas-node-color", node.color);
     if (node.type === "group") {
-      if (node.background) el.style.backgroundImage = `url(${JSON.stringify(node.background).slice(1, -1)})`;
+      if (node.background && node.backgroundStyle) void this.loadGroupBackground(node, el, version);
       const label = document.createElement("div");
       label.className = "canvas-group-label";
       label.textContent = node.label ?? "Group";
@@ -431,6 +431,35 @@ export class CanvasView implements View {
       el.appendChild(edge);
     }
     return el;
+  }
+
+  private async loadGroupBackground(
+    node: Extract<CanvasNode, { type: "group" }>,
+    el: HTMLElement,
+    version: number,
+  ): Promise<void> {
+    const resolved = resolveEmbed(node.background!, this.file?.path ?? "", this.app);
+    if (!resolved.file || resolved.kind !== "image") return;
+    try {
+      const url = await loadEmbedBlobUrl(this.app, resolved.file);
+      if (version !== this.renderVersion || !el.isConnected) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      this.objectUrls.add(url);
+      el.style.backgroundImage = `url(${JSON.stringify(url)})`;
+      if (node.backgroundStyle === "repeat") {
+        el.style.backgroundPosition = "left top";
+        el.style.backgroundSize = "auto";
+        el.style.backgroundRepeat = "repeat";
+      } else {
+        el.style.backgroundPosition = "center";
+        el.style.backgroundSize = node.backgroundStyle === "cover" ? "cover" : "contain";
+        el.style.backgroundRepeat = "no-repeat";
+      }
+    } catch {
+      // Missing and unreadable images leave the group background unset.
+    }
   }
 
   private renderWebNode(el: HTMLElement, node: Extract<CanvasNode, { type: "link" }>): void {
