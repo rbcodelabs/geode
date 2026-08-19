@@ -26,6 +26,13 @@ let root = "";
 let snapshot: MetadataIndexSnapshot = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: {} };
 let initializing = false;
 const pendingVaultEvents: VaultMessage[] = [];
+const injectedReadDelayMs = Number(process.env.GEODE_TEST_INDEXER_READ_DELAY_MS ?? 0);
+const readForIndex = async (relative: string): Promise<string> => {
+  if (injectedReadDelayMs > 0) {
+    await new Promise<void>((resolve) => setTimeout(resolve, injectedReadDelayMs));
+  }
+  return fsp.readFile(path.join(root, relative), "utf8");
+};
 const timedWrite = async (value: MetadataIndexSnapshot) => {
   const serializeStart = performance.now();
   const serialized = JSON.stringify(value);
@@ -41,13 +48,20 @@ async function initialize(message: InitMessage): Promise<void> {
   root = message.root;
   const stored = await readMetadataCache(root);
   const started = performance.now();
+  let reconcileStats;
   snapshot = await reconcileMetadataIndex(
     message.files,
     isMetadataIndexSnapshot(stored) ? stored : null,
-    (relative) => fsp.readFile(path.join(root, relative), "utf8"),
+    readForIndex,
     parseMetadata,
+    (stats) => { reconcileStats = stats; },
   );
-  parentPort.postMessage({ type: "performance", operation: "metadata-worker-read-parse", duration: performance.now() - started });
+  parentPort.postMessage({
+    type: "performance",
+    operation: "metadata-worker-read-parse",
+    duration: performance.now() - started,
+    counters: reconcileStats,
+  });
   writer.schedule(snapshot);
   for (const part of chunkMetadataSnapshot(snapshot)) parentPort.postMessage(part);
   initializing = false;

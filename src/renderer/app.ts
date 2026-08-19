@@ -1009,17 +1009,16 @@ export class App {
     this.workspace.on("active-leaf-change", scheduleSave);
     this.workspace.on("file-open", scheduleSave);
 
-    // Index the vault's metadata BEFORE firing onLayoutReady. Obsidian
-    // guarantees the metadata cache is resolved by the time layout-ready
-    // fires, and plugins rely on it: obsidian-tasks builds its task cache in
-    // an onLayoutReady callback by reading `getFileCache(f).listItems` for
-    // every file — if the metadata isn't indexed yet it finds nothing, caches
-    // an empty result, and a ```tasks query renders "0 tasks". `initialize()`
-    // also fires the "resolved" event plugins subscribe to.
+    // Hydrate metadata from the persisted warm cache before layout-ready, but
+    // never wait for the utility process's full vault reconciliation. On slow
+    // or endpoint-protected filesystems that can take minutes. The utility's
+    // authoritative result is merged incrementally after startup and emits a
+    // later `resolved` event. Warm starts retain Obsidian-style metadata
+    // availability for plugin onLayoutReady callbacks; cold starts are
+    // progressively populated instead of holding the entire workspace hostage.
     await this.metadataCache.initialize();
-    this.notify(`Indexed ${this.vault.getMarkdownFiles().length} notes`);
 
-    // Now that the layout is in place and metadata is indexed, fire plugins'
+    // Now that the layout is in place and warm metadata is available, fire plugins'
     // onLayoutReady callbacks — a plugin that opens its own view will find and
     // reuse the restored pane (via getLeavesOfType) instead of creating a
     // duplicate.

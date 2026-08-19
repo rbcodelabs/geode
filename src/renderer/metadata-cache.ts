@@ -510,6 +510,21 @@ export class MetadataCache extends Events {
   private snapshotSequence = 0;
   private snapshotReceiving = false;
   private deferredIndexerMessages: any[] = [];
+  private backgroundRefreshRunning = false;
+  private backgroundRefreshPending = false;
+  private backgroundUnavailable = false;
+  private backgroundTask: Promise<void> = Promise.resolve();
+
+  private scheduleBackground(task: () => Promise<void>): void {
+    this.backgroundTask = this.backgroundTask.then(task).catch((error) => {
+      console.error("Background metadata refresh failed", error);
+    });
+  }
+
+  /** Await currently queued background metadata work (primarily for lifecycle tests). */
+  waitForBackgroundIdle(): Promise<void> {
+    return this.backgroundTask;
+  }
 
   private async loadPersistedCache(): Promise<PersistedMetadataCache | null> {
     try {
@@ -587,6 +602,8 @@ export class MetadataCache extends Events {
       this.snapshotReceiving = false;
       const deferred = this.deferredIndexerMessages.splice(0);
       for (const item of deferred) this.onIndexerMessage(item);
+      if (this.initialized) this.scheduleBackground(() => this.applyBackgroundSnapshot());
+      else this.backgroundRefreshPending = true;
       return;
     }
     if (this.snapshotReceiving && message?.type === "delta") {
@@ -793,54 +810,134 @@ export class MetadataCache extends Events {
       const markdownFiles = this.vault.getMarkdownFiles();
       const canvasFiles = this.vault.getFiles().filter((file) => file.extension === "canvas");
       const api = typeof window === "undefined" ? undefined : window.geode;
-      let backgroundSnapshot: PersistedMetadataCache | null = null;
       const attemptedBackground = !!api?.startMetadataIndexer;
-      try {
-        const candidate = await api?.startMetadataIndexer?.();
-        if (candidate === true && isPersistedMetadataCache(this.backgroundSnapshot)) {
-          backgroundSnapshot = this.backgroundSnapshot;
-          this.backgroundIndexerActive = true;
-        }
-      } catch {
-        // Automatic fallback below retains the in-renderer indexing path.
-      }
-      const persisted = backgroundSnapshot ?? (attemptedBackground ? null : await this.loadPersistedCache());
-      this.cache.clear();
-      this.canvasLinkContexts.clear();
-      const toRead: TFile[] = [];
-      for (const file of markdownFiles) {
-        const entry = persisted?.entries[file.path];
-        if (entry && (this.backgroundIndexerActive || (entry.mtimeMs === file.mtime && entry.size === file.size))) {
-          this.cache.set(file.path, entry.metadata);
-          this.vault.primeCachedContent(file.path, entry.content);
-        } else {
-          toRead.push(file);
-        }
-      }
-      // Canvas projection is renderer-only and intentionally never enters the
-      // utility-process or persisted Markdown cache schema.
-      toRead.push(...canvasFiles);
-      await processInBatches(toRead, INDEX_CONCURRENCY, async (f) => {
-        try {
-          const text = await this.vault.cachedRead(f);
-          if (f.extension === "canvas") {
-            const parsed = parseCanvasLinkMetadata(text);
-            this.cache.set(f.path, parsed.metadata);
-            this.canvasLinkContexts.set(f.path, parsed.contexts);
-          } else {
-            this.cache.set(f.path, parseMetadata(text));
+      if (attemptedBackground) {
+        // Starting the worker must never make the renderer wait for a full
+        // vault reconciliation. On endpoint-protected filesystems that can
+        // take minutes. Hydrate from the last persisted snapshot below and
+        // merge the worker result when snapshot-complete arrives.
+        void api?.startMetadataIndexer?.().then((available) => {
+          if (available === true) this.backgroundIndexerActive = true;
+          else {
+            this.backgroundUnavailable = true;
+            if (this.initialized) this.scheduleBackground(() => this.applyRendererFallback());
           }
-        } catch (err) {
-          if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
+        }).catch(() => {
+          this.backgroundIndexerActive = false;
+          this.backgroundUnavailable = true;
+          if (this.initialized) this.scheduleBackground(() => this.applyRendererFallback());
+        });
+      }
+      const persisted = await this.loadPersistedCache();
+      await withPerfMark("metadata-renderer-apply", async () => {
+        this.cache.clear();
+        this.canvasLinkContexts.clear();
+        const toRead: TFile[] = [];
+        for (const file of markdownFiles) {
+          const entry = persisted?.entries[file.path];
+          if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
+            this.cache.set(file.path, entry.metadata);
+            this.vault.primeCachedContent(file.path, entry.content);
+          } else if (!attemptedBackground) {
+            toRead.push(file);
+          }
         }
+        // Canvas projection is renderer-only and intentionally never enters the
+        // utility-process or persisted Markdown cache schema.
+        toRead.push(...canvasFiles);
+        await processInBatches(toRead, INDEX_CONCURRENCY, async (f) => {
+          try {
+            const text = await this.vault.cachedRead(f);
+            if (f.extension === "canvas") {
+              const parsed = parseCanvasLinkMetadata(text);
+              this.cache.set(f.path, parsed.metadata);
+              this.canvasLinkContexts.set(f.path, parsed.contexts);
+            } else {
+              this.cache.set(f.path, parseMetadata(text));
+            }
+          } catch (err) {
+            if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
+          }
+        });
       });
-      this.rebuildNameIndex();
-      this.resolveAll();
+      withPerfMark("metadata-renderer-resolve", () => {
+        this.rebuildNameIndex();
+        this.resolveAll();
+      });
       for (const file of markdownFiles) if (this.cache.has(file.path)) this.trigger("resolve", file);
-      if (!this.backgroundIndexerActive && !attemptedBackground) await this.persistCache();
+      if (!attemptedBackground) await this.persistCache();
     });
     this.initialized = true;
     this.trigger("resolved");
+    if (this.backgroundRefreshPending) this.scheduleBackground(() => this.applyBackgroundSnapshot());
+    else if (this.backgroundUnavailable) this.scheduleBackground(() => this.applyRendererFallback());
+  }
+
+  /**
+   * Merge the utility process's authoritative snapshot after initial layout
+   * readiness. Work is deliberately chunked so a large work vault cannot turn
+   * a slow background reconciliation into one renderer-blocking completion
+   * burst. A newer live delta wins over the snapshot entry for the same path.
+   */
+  private async applyBackgroundSnapshot(): Promise<void> {
+    if (this.backgroundRefreshRunning) {
+      this.backgroundRefreshPending = true;
+      return;
+    }
+    const snapshot = this.backgroundSnapshot;
+    if (!snapshot || snapshot.schemaVersion !== METADATA_CACHE_SCHEMA_VERSION) return;
+    this.backgroundRefreshRunning = true;
+    this.backgroundRefreshPending = false;
+    this.backgroundIndexerActive = true;
+    try {
+      const currentMarkdown = new Map(this.vault.getMarkdownFiles().map((file) => [file.path, file]));
+      const entries = Object.entries(snapshot.entries);
+      await processInBatches(entries, 50, async ([path, snapshotEntry]) => {
+        const file = currentMarkdown.get(path);
+        if (!file) return;
+        const live = this.workerMetadata.get(path);
+        if (!live && (snapshotEntry.mtimeMs !== file.mtime || snapshotEntry.size !== file.size)) return;
+        const entry = live
+          ? { metadata: live, content: this.vault.getCachedContent(path) ?? snapshotEntry.content }
+          : snapshotEntry;
+        this.cache.set(path, entry.metadata);
+        this.vault.primeCachedContent(path, entry.content);
+      });
+      await yieldToEventLoop();
+      withPerfMark("metadata-background-resolve", () => {
+        this.rebuildNameIndex();
+        this.resolveAll();
+      });
+      const files = [...currentMarkdown.values()].filter((file) => this.cache.has(file.path));
+      await processInBatches(files, 50, async (file) => { this.trigger("resolve", file); });
+      this.trigger("resolved");
+    } finally {
+      this.backgroundRefreshRunning = false;
+      if (this.backgroundRefreshPending) this.scheduleBackground(() => this.applyBackgroundSnapshot());
+    }
+  }
+
+  /** Progressive safety net used only when the utility process is absent. */
+  private async applyRendererFallback(): Promise<void> {
+    if (!this.backgroundUnavailable) return;
+    this.backgroundUnavailable = false;
+    const files = this.vault.getMarkdownFiles();
+    await processInBatches(files, INDEX_CONCURRENCY, async (file) => {
+      try {
+        const content = await this.vault.cachedRead(file);
+        this.cache.set(file.path, parseMetadata(content));
+      } catch (err) {
+        if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
+      }
+    });
+    await yieldToEventLoop();
+    this.rebuildNameIndex();
+    this.resolveAll();
+    await processInBatches(files.filter((file) => this.cache.has(file.path)), 50, async (file) => {
+      this.trigger("resolve", file);
+    });
+    this.trigger("resolved");
+    await this.persistCache();
   }
 
   /** Add a present file's basename/name (+ alias) keys to the name index. */

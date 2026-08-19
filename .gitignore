@@ -6,3 +6,5 @@ release/
 test-vault/.geode/
 test-results/
 playwright-report/
+.benchmark-vault/
+.benchmark-results/

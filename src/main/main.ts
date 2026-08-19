@@ -182,35 +182,69 @@ function birthtimeOf(st: fs.Stats | null): number {
 async function listVaultFiles(
   root: string
 ): Promise<{ path: string; isFolder: boolean; mtime: number; ctime: number; size: number }[]> {
-  const out: { path: string; isFolder: boolean; mtime: number; ctime: number; size: number }[] = [];
-  async function walk(dir: string) {
+  const injectedDelayMs = Number(process.env.GEODE_TEST_VAULT_IO_DELAY_MS ?? 0);
+  const injectDelay = () => injectedDelayMs > 0
+    ? new Promise<void>((resolve) => setTimeout(resolve, injectedDelayMs))
+    : Promise.resolve();
+  type VaultEntry = { path: string; isFolder: boolean; mtime: number; ctime: number; size: number };
+  // Endpoint security can add material latency to every filesystem operation.
+  // Bound concurrency globally across the recursive walk so that latency is
+  // hidden without issuing an unbounded burst against a large vault.
+  const maxConcurrentOperations = 32;
+  let activeOperations = 0;
+  const waiters: Array<() => void> = [];
+  async function limited<T>(operation: () => Promise<T>): Promise<T> {
+    if (activeOperations >= maxConcurrentOperations) {
+      await new Promise<void>((resolve) => waiters.push(resolve));
+    }
+    activeOperations += 1;
+    try {
+      return await operation();
+    } finally {
+      activeOperations -= 1;
+      waiters.shift()?.();
+    }
+  }
+  async function walk(dir: string): Promise<VaultEntry[]> {
     let entries;
     try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
+      entries = await limited(async () => {
+        await injectDelay();
+        return fsp.readdir(dir, { withFileTypes: true });
+      });
     } catch {
-      return;
+      return [];
     }
-    for (const e of entries) {
-      if (e.name.startsWith(".")) continue; // hidden files incl. .geode config dir
+    const nested = await Promise.all(entries.map(async (e): Promise<VaultEntry[]> => {
+      if (e.name.startsWith(".")) return []; // hidden files incl. .geode config dir
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
-        const st = await fsp.stat(abs).catch(() => null);
-        out.push({ path: toRel(root, abs), isFolder: true, mtime: st?.mtimeMs ?? 0, ctime: birthtimeOf(st), size: 0 });
-        await walk(abs);
+        const [st, children] = await Promise.all([
+          limited(async () => {
+            await injectDelay();
+            return fsp.stat(abs).catch(() => null);
+          }),
+          walk(abs),
+        ]);
+        return [{ path: toRel(root, abs), isFolder: true, mtime: st?.mtimeMs ?? 0, ctime: birthtimeOf(st), size: 0 }, ...children];
       } else if (e.isFile()) {
-        const st = await fsp.stat(abs).catch(() => null);
-        out.push({
+        const st = await limited(async () => {
+          await injectDelay();
+          return fsp.stat(abs).catch(() => null);
+        });
+        return [{
           path: toRel(root, abs),
           isFolder: false,
           mtime: st?.mtimeMs ?? 0,
           ctime: birthtimeOf(st),
           size: st?.size ?? 0,
-        });
+        }];
       }
-    }
+      return [];
+    }));
+    return nested.flat();
   }
-  await walk(root);
-  return out;
+  return walk(root);
 }
 
 function startWatcher(win: BrowserWindow, root: string): FSWatcher {
@@ -717,14 +751,16 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
 
   // Do not arm until the renderer has loaded once; this avoids treating normal
   // startup/build latency as a hang. One automatic recovery only prevents loops.
+  const watchdogTimeoutMs = Number(process.env.GEODE_TEST_WATCHDOG_TIMEOUT_MS ?? 20_000);
+  const watchdogIntervalMs = Number(process.env.GEODE_TEST_WATCHDOG_INTERVAL_MS ?? 5_000);
   const watchdog = setInterval(() => {
     const state = crashStates.get(win.id);
     if (state) {
       try { state.lastProcessMetrics = getProcessMetricsSnapshot(); } catch { /* diagnostics are best effort */ }
     }
-    if (!state || state.recovering || !isRendererHeartbeatStale(state.lastHeartbeat, Date.now(), 20_000)) return;
+    if (!state || state.recovering || !isRendererHeartbeatStale(state.lastHeartbeat, Date.now(), watchdogTimeoutMs)) return;
     void recoverRenderer({ type: "renderer-hang", at: Date.now(), activePlugins: [...state.activePlugins] });
-  }, 5_000);
+  }, watchdogIntervalMs);
 
   // External-link navigation hard guard (defense in depth behind the
   // renderer-side interceptor in src/renderer/app.ts). The main window must

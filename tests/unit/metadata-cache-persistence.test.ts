@@ -23,8 +23,46 @@ function installCacheApi(stored: unknown): CacheApi {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("MetadataCache persistence", () => {
+  it("hydrates the warm cache without awaiting a slow utility reconciliation", async () => {
+    const fake = new FakeVault({ "A.md": "# Warm" });
+    const file = fake.getFileByPath("A.md")!;
+    const stored = {
+      schemaVersion: METADATA_CACHE_SCHEMA_VERSION,
+      entries: {
+        "A.md": { mtimeMs: file.mtime, size: file.size, content: "# Warm", metadata: parseMetadata("# Warm") },
+      },
+    };
+    let resolveWorker!: (available: true) => void;
+    let deliver: (message: unknown) => void = () => {};
+    const worker = new Promise<true>((resolve) => { resolveWorker = resolve; });
+    const api = {
+      readMetadataCache: vi.fn(async () => stored),
+      writeMetadataCache: vi.fn(async () => {}),
+      startMetadataIndexer: vi.fn(() => worker),
+      onMetadataIndexerMessage: vi.fn((cb: (message: unknown) => void) => { deliver = cb; }),
+    };
+    vi.stubGlobal("window", { geode: api });
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+
+    expect(cache.getFileCache(file)?.headings[0].heading).toBe("Warm");
+    expect(api.startMetadataIndexer).toHaveBeenCalledOnce();
+    let workerSettled = false;
+    void worker.then(() => { workerSettled = true; });
+    await Promise.resolve();
+    expect(workerSettled).toBe(false);
+
+    deliver({ type: "snapshot-start", schemaVersion: METADATA_CACHE_SCHEMA_VERSION, totalEntries: 1 });
+    deliver({ type: "snapshot-chunk", sequence: 0, entries: stored.entries });
+    deliver({ type: "snapshot-complete", totalChunks: 1 });
+    resolveWorker(true);
+    await cache.waitForBackgroundIdle();
+  });
+
   it("assembles ordered utility-process chunks and applies parsed deltas without renderer reads", async () => {
     const fake = new FakeVault({ "A.md": "# Old" });
+    const initial = fake.getFileByPath("A.md")!;
     let deliver: (message: unknown) => void = () => {};
     const api = {
       readMetadataCache: vi.fn(async () => null),
@@ -32,7 +70,7 @@ describe("MetadataCache persistence", () => {
       startMetadataIndexer: vi.fn(async () => {
         deliver({ type: "snapshot-start", schemaVersion: METADATA_CACHE_SCHEMA_VERSION, totalEntries: 1 });
         deliver({ type: "snapshot-chunk", sequence: 0, entries: {
-          "A.md": { mtimeMs: 1, size: 5, content: "# Old", metadata: parseMetadata("# Old") },
+          "A.md": { mtimeMs: initial.mtime, size: initial.size, content: "# Old", metadata: parseMetadata("# Old") },
         } });
         deliver({ type: "snapshot-complete", totalChunks: 1 });
         return true;
@@ -43,9 +81,10 @@ describe("MetadataCache persistence", () => {
     const readSpy = vi.spyOn(fake, "cachedRead");
     const cache = new MetadataCache(fake.asVault());
     await cache.initialize();
+    await cache.waitForBackgroundIdle();
 
     expect(readSpy).not.toHaveBeenCalled();
-    expect(api.readMetadataCache).not.toHaveBeenCalled();
+    expect(api.readMetadataCache).toHaveBeenCalledOnce();
     expect(api.writeMetadataCache).not.toHaveBeenCalled();
 
     fake.setFile("A.md", "# New");
@@ -61,11 +100,11 @@ describe("MetadataCache persistence", () => {
     expect(cache.getFileCache(fake.getFileByPath("A.md")!)?.headings[0].heading).toBe("New");
   });
 
-  it("uses a safe cold fallback without transferring or rewriting a full cache", async () => {
+  it("progressively rebuilds and persists when the utility process is unavailable", async () => {
     const fake = new FakeVault({ "A.md": "# A" });
     const api = {
       readMetadataCache: vi.fn(async () => { throw new Error("must not read full cache"); }),
-      writeMetadataCache: vi.fn(async () => { throw new Error("must not write full cache"); }),
+      writeMetadataCache: vi.fn(async () => {}),
       startMetadataIndexer: vi.fn(async () => null),
       onMetadataIndexerMessage: vi.fn(),
     };
@@ -73,9 +112,10 @@ describe("MetadataCache persistence", () => {
     const readSpy = vi.spyOn(fake, "cachedRead");
     const cache = new MetadataCache(fake.asVault());
     await cache.initialize();
+    await cache.waitForBackgroundIdle();
     expect(readSpy).toHaveBeenCalledOnce();
-    expect(api.readMetadataCache).not.toHaveBeenCalled();
-    expect(api.writeMetadataCache).not.toHaveBeenCalled();
+    expect(api.readMetadataCache).toHaveBeenCalledOnce();
+    expect(api.writeMetadataCache).toHaveBeenCalledOnce();
     expect(cache.getFileCache(fake.getFileByPath("A.md")!)).not.toBeNull();
   });
 
@@ -103,9 +143,10 @@ describe("MetadataCache persistence", () => {
     vi.stubGlobal("window", { geode: api });
     const cache = new MetadataCache(fake.asVault());
     await cache.initialize();
+    await cache.waitForBackgroundIdle();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(cache.getFileCache(fake.getFileByPath("A.md")!)?.headings[0].heading).toBe("New");
-    expect(api.readMetadataCache).not.toHaveBeenCalled();
+    expect(api.readMetadataCache).toHaveBeenCalledOnce();
     expect(api.writeMetadataCache).not.toHaveBeenCalled();
   });
 
