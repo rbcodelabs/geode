@@ -81,7 +81,7 @@ export class CanvasView implements View {
   private readonly viewportEl: HTMLElement;
   private document: CanvasDocument = { nodes: [], edges: [] };
   private readonly selectedIds = new Set<string>();
-  private selectedEdgeId: string | null = null;
+  private readonly selectedEdgeIds = new Set<string>();
   private pan: Point = { ...DEFAULT_PAN };
   private scale = 1;
   private spacePressed = false;
@@ -208,7 +208,7 @@ export class CanvasView implements View {
     hit.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.selectEdge(edge.id);
+      this.selectEdge(edge.id, event.shiftKey);
       hit.focus();
     });
     hit.addEventListener("dblclick", (event) => {
@@ -230,7 +230,7 @@ export class CanvasView implements View {
     });
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.classList.add("canvas-edge");
-    path.classList.toggle("is-selected", this.selectedEdgeId === edge.id);
+    path.classList.toggle("is-selected", this.selectedEdgeIds.has(edge.id));
     path.dataset.edgeId = edge.id;
     path.setAttribute("d", d);
     if (edge.color) path.style.stroke = this.canvasColor(edge.color);
@@ -256,7 +256,7 @@ export class CanvasView implements View {
     point: Point,
   ): void {
     const handle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    const selected = this.selectedEdgeId === edge.id;
+    const selected = this.selectedEdgeIds.size === 1 && this.selectedEdgeIds.has(edge.id);
     handle.classList.add("canvas-edge-endpoint-handle");
     handle.classList.toggle("is-selected", selected);
     handle.dataset.edgeId = edge.id;
@@ -368,7 +368,7 @@ export class CanvasView implements View {
       if (!this.selectedIds.has(node.id)) {
         this.selectedIds.clear();
         this.selectedIds.add(node.id);
-        this.selectedEdgeId = null;
+        this.selectedEdgeIds.clear();
         this.updateSelectionClasses();
       }
       const items = [
@@ -574,6 +574,7 @@ export class CanvasView implements View {
       text: "",
     };
     this.document.nodes.push(node);
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.render();
@@ -619,7 +620,7 @@ export class CanvasView implements View {
       nodes.push(node);
       this.document.nodes.push(node);
     }
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     for (const node of nodes) this.selectedIds.add(node.id);
     this.render();
@@ -652,7 +653,7 @@ export class CanvasView implements View {
   private addLinkCardAt(canonicalUrl: string, worldPoint: Point): void {
     const node = this.createLinkCard(canonicalUrl, worldPoint);
     this.document.nodes.push(node);
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.render();
@@ -725,7 +726,7 @@ export class CanvasView implements View {
     };
     const firstCard = this.document.nodes.findIndex((node) => node.type !== "group");
     this.document.nodes.splice(firstCard < 0 ? this.document.nodes.length : firstCard, 0, group);
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(group.id);
     this.render();
@@ -856,7 +857,7 @@ export class CanvasView implements View {
   }
 
   private select(node: CanvasNode, additive = false): void {
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     if (additive && this.selectedIds.has(node.id)) {
       this.selectedIds.delete(node.id);
     } else {
@@ -886,10 +887,10 @@ export class CanvasView implements View {
       el.classList.toggle("is-selected", this.selectedIds.has(el.dataset.nodeId ?? ""));
     }
     for (const el of this.viewportEl.querySelectorAll<SVGPathElement>(".canvas-edge")) {
-      el.classList.toggle("is-selected", this.selectedEdgeId === el.dataset.edgeId);
+      el.classList.toggle("is-selected", this.selectedEdgeIds.has(el.dataset.edgeId ?? ""));
     }
     for (const el of this.viewportEl.querySelectorAll<SVGCircleElement>(".canvas-edge-endpoint-handle")) {
-      const selected = this.selectedEdgeId === el.dataset.edgeId;
+      const selected = this.selectedEdgeIds.size === 1 && this.selectedEdgeIds.has(el.dataset.edgeId ?? "");
       el.classList.toggle("is-selected", selected);
       el.setAttribute("aria-hidden", String(!selected));
       el.setAttribute("tabindex", selected ? "0" : "-1");
@@ -898,20 +899,23 @@ export class CanvasView implements View {
   }
 
   private updateSelectionControls(): void {
-    const hasSelection = this.selectedIds.size > 0 || this.selectedEdgeId !== null;
+    const hasSelection = this.selectedIds.size > 0 || this.selectedEdgeIds.size > 0;
     if (!hasSelection) {
       this.selectionControlsEl?.remove();
       this.selectionControlsEl = null;
       this.colorPaletteEl = null;
       return;
     }
-    const selectionKind = this.selectedEdgeId ? "edge" : "nodes";
-    if (this.selectionControlsEl?.isConnected && this.selectionControlsEl.dataset.selectionKind === selectionKind) return;
+    const soleEdgeId = this.selectedEdgeIds.size === 1 ? [...this.selectedEdgeIds][0] : null;
+    const selectionKind = soleEdgeId ? "edge" : this.selectedEdgeIds.size > 1 ? "edges" : "nodes";
+    const selectionKey = soleEdgeId ? `${selectionKind}:${soleEdgeId}` : selectionKind;
+    if (this.selectionControlsEl?.isConnected && this.selectionControlsEl.dataset.selectionKey === selectionKey) return;
     this.selectionControlsEl?.remove();
     this.colorPaletteEl = null;
     const controls = document.createElement("div");
     controls.className = "canvas-selection-controls";
     controls.dataset.selectionKind = selectionKind;
+    controls.dataset.selectionKey = selectionKey;
     const setColor = document.createElement("button");
     setColor.type = "button";
     setColor.textContent = "Set color";
@@ -925,13 +929,12 @@ export class CanvasView implements View {
     setIcon(remove, "trash-2");
     remove.addEventListener("click", () => this.deleteSelection());
     controls.appendChild(setColor);
-    if (this.selectedEdgeId) {
-      const edgeId = this.selectedEdgeId;
+    if (soleEdgeId) {
       const editLabel = document.createElement("button");
       editLabel.type = "button";
       editLabel.textContent = "Edit label";
       editLabel.setAttribute("aria-label", "Edit label");
-      editLabel.addEventListener("click", () => this.editEdgeLabel(edgeId));
+      editLabel.addEventListener("click", () => this.editEdgeLabel(soleEdgeId));
       controls.appendChild(editLabel);
     }
     controls.appendChild(remove);
@@ -985,18 +988,22 @@ export class CanvasView implements View {
   }
 
   private commonSelectionColor(): string {
-    const colors = this.selectedEdgeId
-      ? this.document.edges.filter((edge) => edge.id === this.selectedEdgeId).map((edge) => edge.color)
+    const colors = this.selectedEdgeIds.size > 0
+      ? this.document.edges.filter((edge) => this.selectedEdgeIds.has(edge.id)).map((edge) => edge.color)
       : this.document.nodes.filter((node) => this.selectedIds.has(node.id)).map((node) => node.color);
     const first = colors[0];
     return first && colors.every((color) => color === first) ? first : "";
   }
 
   private applySelectionColor(color: string): void {
-    if (this.selectedEdgeId) {
-      const edge = this.document.edges.find((candidate) => candidate.id === this.selectedEdgeId);
-      if (!edge) return;
-      edge.color = color;
+    if (this.selectedEdgeIds.size > 0) {
+      let changed = false;
+      for (const edge of this.document.edges) {
+        if (!this.selectedEdgeIds.has(edge.id)) continue;
+        edge.color = color;
+        changed = true;
+      }
+      if (!changed) return;
     } else if (this.selectedIds.size > 0) {
       for (const node of this.document.nodes) {
         if (this.selectedIds.has(node.id)) node.color = color;
@@ -1012,13 +1019,17 @@ export class CanvasView implements View {
 
   private clearSelection(): void {
     this.selectedIds.clear();
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.updateSelectionClasses();
   }
 
-  private selectEdge(edgeId: string): void {
+  private selectEdge(edgeId: string, additive = false): void {
     this.selectedIds.clear();
-    this.selectedEdgeId = edgeId;
+    if (additive && this.selectedEdgeIds.has(edgeId)) this.selectedEdgeIds.delete(edgeId);
+    else {
+      if (!additive) this.selectedEdgeIds.clear();
+      this.selectedEdgeIds.add(edgeId);
+    }
     this.updateSelectionClasses();
   }
 
@@ -1098,7 +1109,7 @@ export class CanvasView implements View {
     const nodeId = endpoint === "source" ? edge.fromNode : edge.toNode;
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
     if (!node) return;
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.updateSelectionClasses();
@@ -1119,7 +1130,7 @@ export class CanvasView implements View {
     const length = this.document.edges.length;
     this.document.edges = this.document.edges.filter((edge) => edge.id !== edgeId);
     if (this.document.edges.length === length) return;
-    if (this.selectedEdgeId === edgeId) this.selectedEdgeId = null;
+    this.selectedEdgeIds.delete(edgeId);
     this.render();
     void this.persist();
   }
@@ -1209,7 +1220,7 @@ export class CanvasView implements View {
     }
     const wasSelected = this.selectedIds.has(node.id);
     if (node.type === "group") {
-      this.selectedEdgeId = null;
+      this.selectedEdgeIds.clear();
       this.selectedIds.clear();
       this.selectedIds.add(node.id);
       this.updateSelectionClasses();
@@ -1233,7 +1244,7 @@ export class CanvasView implements View {
       if (!didMove) {
         didMove = true;
         if (node.type !== "group" && !wasSelected) {
-          this.selectedEdgeId = null;
+          this.selectedEdgeIds.clear();
           this.selectedIds.clear();
           this.selectedIds.add(node.id);
           this.updateSelectionClasses();
@@ -1304,7 +1315,7 @@ export class CanvasView implements View {
         }
         this.selectedIds.clear();
         for (const { node } of clones) this.selectedIds.add(node.id);
-        this.selectedEdgeId = null;
+        this.selectedEdgeIds.clear();
       }
       const dx = screenDx / this.scale;
       const dy = screenDy / this.scale;
@@ -1336,7 +1347,7 @@ export class CanvasView implements View {
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.updateSelectionClasses();
@@ -1405,7 +1416,7 @@ export class CanvasView implements View {
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.updateSelectionClasses();
@@ -1453,7 +1464,8 @@ export class CanvasView implements View {
         };
         this.document.edges.push(edge);
         this.selectedIds.clear();
-        this.selectedEdgeId = edge.id;
+        this.selectedEdgeIds.clear();
+        this.selectedEdgeIds.add(edge.id);
         this.render();
         void this.persist();
         return;
@@ -1506,7 +1518,7 @@ export class CanvasView implements View {
     };
     this.document.nodes.push(node);
     this.document.edges.push(edge);
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.render();
@@ -1514,7 +1526,7 @@ export class CanvasView implements View {
     if (!el) return;
     this.editTextNode(el, node, true, () => {
       this.document.edges = this.document.edges.filter((candidate) => candidate !== edge);
-      this.selectedEdgeId = null;
+      this.selectedEdgeIds.clear();
       this.selectedIds.clear();
       if (this.document.nodes.includes(source)) this.selectedIds.add(source.id);
     });
@@ -1541,7 +1553,7 @@ export class CanvasView implements View {
     };
     this.document.nodes.push(node);
     this.document.edges.push(edge);
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.selectedIds.clear();
     this.selectedIds.add(node.id);
     this.render();
@@ -1732,22 +1744,21 @@ export class CanvasView implements View {
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
-      this.selectedEdgeId = null;
+      this.selectedEdgeIds.clear();
       this.selectedIds.clear();
       for (const node of this.document.nodes) this.selectedIds.add(node.id);
       this.updateSelectionClasses();
       return;
     }
-    if ((event.key === "Backspace" || event.key === "Delete") && (this.selectedEdgeId || this.selectedIds.size > 0)) {
+    if ((event.key === "Backspace" || event.key === "Delete") && (this.selectedEdgeIds.size > 0 || this.selectedIds.size > 0)) {
       event.preventDefault();
       this.deleteSelection();
     }
   }
 
   private deleteSelection(): void {
-    if (this.selectedEdgeId) {
-      const removedEdge = this.selectedEdgeId;
-      this.document.edges = this.document.edges.filter((edge) => edge.id !== removedEdge);
+    if (this.selectedEdgeIds.size > 0) {
+      this.document.edges = this.document.edges.filter((edge) => !this.selectedEdgeIds.has(edge.id));
     } else if (this.selectedIds.size > 0) {
       const removedNodes = new Set(this.selectedIds);
       this.document.nodes = this.document.nodes.filter((node) => !removedNodes.has(node.id));
@@ -1756,7 +1767,7 @@ export class CanvasView implements View {
       return;
     }
     this.selectedIds.clear();
-    this.selectedEdgeId = null;
+    this.selectedEdgeIds.clear();
     this.render();
     void this.persist();
   }
@@ -1827,12 +1838,14 @@ export class CanvasView implements View {
 
   private fitToSelection(): void {
     let nodes = this.document.nodes.filter((node) => this.selectedIds.has(node.id));
-    if (nodes.length === 0 && this.selectedEdgeId) {
-      const edge = this.document.edges.find((candidate) => candidate.id === this.selectedEdgeId);
-      if (edge) {
-        const endpointIds = new Set([edge.fromNode, edge.toNode]);
-        nodes = this.document.nodes.filter((node) => endpointIds.has(node.id));
+    if (nodes.length === 0 && this.selectedEdgeIds.size > 0) {
+      const endpointIds = new Set<string>();
+      for (const edge of this.document.edges) {
+        if (!this.selectedEdgeIds.has(edge.id)) continue;
+        endpointIds.add(edge.fromNode);
+        endpointIds.add(edge.toNode);
       }
+      nodes = this.document.nodes.filter((node) => endpointIds.has(node.id));
     }
     if (nodes.length > 0) this.fitToNodes(nodes);
   }
