@@ -70,10 +70,10 @@ test("edits the selected Canvas edge label through floating selection controls",
       };
     });
 
-    // Node selections retain the established exact two-button controls.
+    // Text-node selections retain their exact node-specific controls.
     await view.locator('.canvas-node[data-node-id="target"]').click({ position: { x: 40, y: 40 } });
     await expect(view.locator('.canvas-node[data-node-id="target"]')).toHaveClass(/is-selected/);
-    expect(await controlNames(view)).toEqual(["Set color", "Remove"]);
+    expect(await controlNames(view)).toEqual(["Set color", "Edit", "Convert to file…", "Remove"]);
     await expect(view.getByRole("button", { name: "Edit label", exact: true })).toHaveCount(0);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(initialText);
 

@@ -249,9 +249,9 @@ test("exposes exact group label and background actions in context and sole-selec
       nodes: [{ ...initial.nodes[0], label: "Renamed plain" }, initial.nodes[1], initial.nodes[2]],
     });
 
-    // Other node selection surfaces remain exact with no group actions.
+    // Other node selection surfaces retain their exact non-group actions.
     await view.locator('.canvas-node[data-node-id="text"]').click({ position: { x: 30, y: 30 } });
-    expect(await controlNames(view)).toEqual(["Set color", "Remove"]);
+    expect(await controlNames(view)).toEqual(["Set color", "Edit", "Convert to file…", "Remove"]);
 
     await window.reload();
     await window.locator('.nav-file-title[data-path="Group actions.canvas"]').click();

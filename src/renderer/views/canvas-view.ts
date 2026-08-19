@@ -29,6 +29,11 @@ type Bounds = { left: number; top: number; right: number; bottom: number };
 type ResizeDirection = CanvasSide | "southeast";
 type ResizeStart = Point & { pointerX: number; pointerY: number; width: number; height: number };
 type SwappableFileKind = "note" | "image" | "audio" | "video";
+type NodeActionCapability =
+  | { kind: "text"; signature: "text" }
+  | { kind: "swap"; signature: string; fileKind: SwappableFileKind }
+  | { kind: "external"; signature: string; url: string }
+  | { kind: "generic"; signature: string };
 
 function normalizeWebUrl(raw: string): string | null {
   try {
@@ -629,6 +634,13 @@ export class CanvasView implements View {
     editor.select();
   }
 
+  private editTextNodeById(nodeId: string): void {
+    const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type !== "text") return;
+    const el = this.viewportEl.querySelector<HTMLElement>(`.canvas-node[data-node-id="${CSS.escape(nodeId)}"]`);
+    if (el) this.editTextNode(el, node);
+  }
+
   private addTextCardAt(worldPoint: Point): void {
     const node: CanvasTextNode = {
       id: this.nextTextNodeId(),
@@ -934,6 +946,24 @@ export class CanvasView implements View {
     ).open();
   }
 
+  private nodeActionCapability(node: CanvasNode): NodeActionCapability {
+    if (node.type === "text") return { kind: "text", signature: "text" };
+    if (node.type === "file") {
+      const resolved = resolveEmbed(node.file + (node.subpath ?? ""), this.file?.path ?? "", this.app);
+      if (resolved.file && isSwappableFileKind(resolved.kind)) {
+        return { kind: "swap", signature: `swap:${resolved.kind}`, fileKind: resolved.kind };
+      }
+      return { kind: "generic", signature: "file:generic" };
+    }
+    if (node.type === "link") {
+      const url = normalizeWebUrl(node.url);
+      return url
+        ? { kind: "external", signature: `external:${url}`, url }
+        : { kind: "generic", signature: "link:generic" };
+    }
+    return { kind: "generic", signature: "group" };
+  }
+
   private openConvertTextNodePrompt(nodeId: string): void {
     new PromptModal(this.app, {
       placeholder: "File name…",
@@ -1019,15 +1049,17 @@ export class CanvasView implements View {
     }
     const soleEdgeId = this.selectedEdgeIds.size === 1 ? [...this.selectedEdgeIds][0] : null;
     const soleNodeId = this.selectedEdgeIds.size === 0 && this.selectedIds.size === 1 ? [...this.selectedIds][0] : null;
-    const soleGroup = soleNodeId
-      ? this.document.nodes.find((node) => node.id === soleNodeId && node.type === "group")
-      : null;
+    const soleNode = soleNodeId ? this.document.nodes.find((node) => node.id === soleNodeId) : null;
+    const soleGroup = soleNode?.type === "group" ? soleNode : null;
+    const nodeCapability = soleNode && !soleGroup ? this.nodeActionCapability(soleNode) : null;
     const selectionKind = soleEdgeId ? "edge" : this.selectedEdgeIds.size > 1 ? "edges" : soleGroup ? "group" : "nodes";
     const selectionKey = soleEdgeId
       ? `${selectionKind}:${soleEdgeId}`
       : soleGroup
         ? `${selectionKind}:${soleGroup.id}:${soleGroup.background ? "background" : "plain"}`
-        : selectionKind;
+        : soleNode && nodeCapability
+          ? `node:${soleNode.id}:${nodeCapability.signature}`
+          : selectionKind;
     if (this.selectionControlsEl?.isConnected && this.selectionControlsEl.dataset.selectionKey === selectionKey) return;
     this.selectionControlsEl?.remove();
     this.colorPaletteEl = null;
@@ -1048,6 +1080,14 @@ export class CanvasView implements View {
     setIcon(remove, "trash-2");
     remove.addEventListener("click", () => this.deleteSelection());
     controls.appendChild(setColor);
+    const action = (title: string, handler: () => void) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = title;
+      button.setAttribute("aria-label", title);
+      button.addEventListener("click", handler);
+      controls.appendChild(button);
+    };
     if (soleEdgeId) {
       const editLabel = document.createElement("button");
       editLabel.type = "button";
@@ -1056,6 +1096,16 @@ export class CanvasView implements View {
       editLabel.addEventListener("click", () => this.editEdgeLabel(soleEdgeId));
       controls.appendChild(editLabel);
     }
+    if (soleNode && nodeCapability) {
+      if (nodeCapability.kind === "text") {
+        action("Edit", () => this.editTextNodeById(soleNode.id));
+        action("Convert to file…", () => this.openConvertTextNodePrompt(soleNode.id));
+      } else if (nodeCapability.kind === "swap") {
+        action("Swap file", () => this.openSwapFilePicker(soleNode.id, nodeCapability.fileKind));
+      } else if (nodeCapability.kind === "external") {
+        action("Open in browser", () => { void window.geode.openExternal(nodeCapability.url); });
+      }
+    }
     if (soleGroup) {
       const menuPoint = () => {
         const rect = controls.getBoundingClientRect();
@@ -1063,14 +1113,6 @@ export class CanvasView implements View {
           x: Math.max(0, Math.min(rect.left, window.innerWidth - 1)),
           y: Math.max(0, Math.min(rect.bottom, window.innerHeight - 1)),
         };
-      };
-      const action = (title: string, handler: () => void) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = title;
-        button.setAttribute("aria-label", title);
-        button.addEventListener("click", handler);
-        controls.appendChild(button);
       };
       action("Edit label", () => this.editGroupLabel(soleGroup.id));
       action("Set background", () => this.openGroupBackgroundPicker(soleGroup.id, menuPoint()));
