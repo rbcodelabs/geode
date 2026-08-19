@@ -861,6 +861,10 @@ export class CanvasView implements View {
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-connection-handle")) return;
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
+    if (event.altKey && node.type !== "group") {
+      this.beginNodeDuplication(event, node);
+      return;
+    }
     if (node.type === "group") {
       this.selectedEdgeId = null;
       this.selectedIds.clear();
@@ -894,6 +898,70 @@ export class CanvasView implements View {
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); void this.persist(); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  }
+
+  private beginNodeDuplication(event: PointerEvent, draggedNode: CanvasNode): void {
+    event.preventDefault();
+    const sourceNodes = this.selectedIds.has(draggedNode.id)
+      ? this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id))
+      : [draggedNode];
+    const sourceEdges = [...this.document.edges];
+    const start = { x: event.clientX, y: event.clientY };
+    let clones: Array<{ node: CanvasNode; x: number; y: number }> | null = null;
+
+    const move = (next: PointerEvent) => {
+      const screenDx = next.clientX - start.x;
+      const screenDy = next.clientY - start.y;
+      if (!clones && Math.hypot(screenDx, screenDy) < 4) return;
+      if (!clones) {
+        const usedNodeIds = new Set(this.document.nodes.map((node) => node.id));
+        const idMap = new Map<string, string>();
+        clones = sourceNodes.map((source) => {
+          const clone = structuredClone(source) as CanvasNode;
+          clone.id = this.nextDuplicateNodeId(source.id, usedNodeIds);
+          idMap.set(source.id, clone.id);
+          return { node: clone, x: source.x, y: source.y };
+        });
+        this.document.nodes.push(...clones.map(({ node }) => node));
+        for (const edge of sourceEdges) {
+          const fromNode = idMap.get(edge.fromNode);
+          const toNode = idMap.get(edge.toNode);
+          if (!fromNode || !toNode) continue;
+          this.document.edges.push({
+            ...structuredClone(edge),
+            id: this.nextEdgeId(),
+            fromNode,
+            toNode,
+          });
+        }
+        this.selectedIds.clear();
+        for (const { node } of clones) this.selectedIds.add(node.id);
+        this.selectedEdgeId = null;
+      }
+      const dx = screenDx / this.scale;
+      const dy = screenDy / this.scale;
+      for (const clone of clones) {
+        clone.node.x = clone.x + dx;
+        clone.node.y = clone.y + dy;
+      }
+      this.render();
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (clones) void this.persist();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  private nextDuplicateNodeId(sourceId: string, usedIds: Set<string>): string {
+    const base = `${sourceId}-copy`;
+    let id = base;
+    let sequence = 2;
+    while (usedIds.has(id)) id = `${base}-${sequence++}`;
+    usedIds.add(id);
+    return id;
   }
 
   private beginResize(event: PointerEvent, node: CanvasNode): void {
