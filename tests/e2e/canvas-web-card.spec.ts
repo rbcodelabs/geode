@@ -86,7 +86,7 @@ test("creates normalized persistent web cards and routes activation without rend
     await expect(linkNode).toHaveClass(/is-selected/);
     await expect(linkNode.locator(".canvas-node-web-host")).toHaveText("example.com");
     await expect(linkNode.locator(".canvas-node-web-url")).toHaveText(canonicalUrl);
-    await expect(linkNode.locator("img, script, iframe")).toHaveCount(0);
+    await expect(linkNode.locator("webview.canvas-node-web-preview")).toHaveCount(1);
     const position = await linkNode.evaluate((element) => ({
       x: Number.parseFloat((element as HTMLElement).style.left),
       y: Number.parseFloat((element as HTMLElement).style.top),

@@ -496,6 +496,11 @@ export class CanvasView implements View {
     url.className = "canvas-node-web-url";
     if (canonical) {
       const parsed = new URL(canonical);
+      const preview = document.createElement("webview") as HTMLElement & { src: string };
+      preview.className = "canvas-node-web-preview";
+      preview.setAttribute("partition", "persist:webviewer");
+      preview.setAttribute("title", `Live preview of ${parsed.hostname}`);
+      preview.src = canonical;
       host.textContent = parsed.hostname;
       url.textContent = canonical;
       action.setAttribute("aria-label", canonical);
@@ -506,6 +511,7 @@ export class CanvasView implements View {
         if (event.metaKey || event.ctrlKey) void window.geode.openExternal(canonical);
         else this.app.openExternalLink(canonical);
       });
+      el.appendChild(preview);
     } else {
       host.textContent = "Invalid web address";
       url.textContent = node.url;
