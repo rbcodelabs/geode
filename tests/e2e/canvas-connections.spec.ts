@@ -64,8 +64,9 @@ test("authors, selects, and deletes directed Canvas connections at transformed c
     const sourceRight = source.getByRole("button", { name: "Connect from right" });
     let sourceBox = (await sourceRight.boundingBox())!;
 
-    // Empty-space release starts the attached text transaction; Escape rolls
-    // it back so the remaining connection regressions retain their stable IDs.
+    // Empty-space release offers the exact chooser; the text action starts the
+    // attached transaction and Escape rolls it back so the remaining
+    // connection regressions retain their stable IDs.
     await window.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
     await window.mouse.down();
     const surfaceBox = (await surface.boundingBox())!;
@@ -73,6 +74,10 @@ test("authors, selects, and deletes directed Canvas connections at transformed c
     await expect(view.locator(".canvas-edge-preview")).toBeVisible();
     await window.mouse.up();
     await expect(view.locator(".canvas-edge-preview")).toHaveCount(0);
+    await expect(window.locator(".context-menu-item")).toHaveText([
+      "Add text card", "Add note from vault", "Add media from vault", "Add web page",
+    ]);
+    await window.locator(".context-menu-item", { hasText: /^Add text card$/ }).click();
     const pendingEditor = view.locator('.canvas-node[data-node-id="text-1"] .canvas-node-text-editor');
     await expect(pendingEditor).toBeFocused();
     await expect(view.locator('.canvas-edge[data-edge-id="edge-2"]')).toHaveCount(1);

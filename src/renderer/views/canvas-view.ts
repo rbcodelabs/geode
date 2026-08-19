@@ -632,8 +632,8 @@ export class CanvasView implements View {
     return `file-${sequence}`;
   }
 
-  private addLinkCardAt(canonicalUrl: string, worldPoint: Point): void {
-    const node = {
+  private createLinkCard(canonicalUrl: string, worldPoint: Point): CanvasNode {
+    return {
       id: this.nextLinkNodeId(),
       type: "link" as const,
       x: worldPoint.x - LINK_NODE_WIDTH / 2,
@@ -642,6 +642,10 @@ export class CanvasView implements View {
       height: LINK_NODE_HEIGHT,
       url: canonicalUrl,
     };
+  }
+
+  private addLinkCardAt(canonicalUrl: string, worldPoint: Point): void {
+    const node = this.createLinkCard(canonicalUrl, worldPoint);
     this.document.nodes.push(node);
     this.selectedEdgeId = null;
     this.selectedIds.clear();
@@ -657,7 +661,7 @@ export class CanvasView implements View {
     return `link-${sequence}`;
   }
 
-  private openWebPagePrompt(worldPoint?: Point): void {
+  private openWebPagePrompt(worldPoint?: Point, choose?: (canonicalUrl: string) => void): void {
     new PromptModal(this.app, {
       placeholder: "Enter web page URL…",
       allowEmptySubmit: true,
@@ -667,7 +671,8 @@ export class CanvasView implements View {
           this.app.notify("Enter a valid http:// or https:// URL.");
           return;
         }
-        this.addLinkCardAt(canonical, worldPoint ?? this.viewportCenter());
+        if (choose) choose(canonical);
+        else this.addLinkCardAt(canonical, worldPoint ?? this.viewportCenter());
       },
     }).open();
   }
@@ -770,16 +775,17 @@ export class CanvasView implements View {
     };
   }
 
-  private openFilePicker(kind: "note" | "media", worldPoint?: Point): void {
+  private openFilePicker(kind: "note" | "media", worldPoint?: Point, choose?: (file: TFile) => void): void {
+    const onChoose = choose ?? ((file: TFile) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()));
     if (kind === "note") {
-      this.openNotePicker((file) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()));
+      this.openNotePicker(onChoose);
       return;
     }
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getFiles().filter((file) => file.extension !== "md"),
       "Search media…",
-      (file) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()),
+      onChoose,
     ).open();
   }
 
@@ -1400,7 +1406,22 @@ export class CanvasView implements View {
         return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
       });
       if (nodeBody) return;
-      this.addConnectedTextCard(node, side, toWorld(next));
+      const worldPoint = toWorld(next);
+      this.app.showMenu(next, [
+        { title: "Add text card", action: () => this.addConnectedTextCard(node, side, worldPoint) },
+        {
+          title: "Add note from vault",
+          action: () => this.openFilePicker("note", worldPoint, (file) => this.addConnectedFileCard(node, side, file, worldPoint)),
+        },
+        {
+          title: "Add media from vault",
+          action: () => this.openFilePicker("media", worldPoint, (file) => this.addConnectedFileCard(node, side, file, worldPoint)),
+        },
+        {
+          title: "Add web page",
+          action: () => this.openWebPagePrompt(worldPoint, (url) => this.addConnectedLinkCard(node, side, url, worldPoint)),
+        },
+      ]);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -1440,6 +1461,34 @@ export class CanvasView implements View {
       this.selectedIds.clear();
       if (this.document.nodes.includes(source)) this.selectedIds.add(source.id);
     });
+  }
+
+  private addConnectedFileCard(source: CanvasNode, sourceSide: CanvasSide, file: TFile, worldPoint: Point): void {
+    this.addConnectedCard(source, sourceSide, this.createFileCard(file, worldPoint));
+  }
+
+  private addConnectedLinkCard(source: CanvasNode, sourceSide: CanvasSide, url: string, worldPoint: Point): void {
+    this.addConnectedCard(source, sourceSide, this.createLinkCard(url, worldPoint));
+  }
+
+  private addConnectedCard(source: CanvasNode, sourceSide: CanvasSide, node: CanvasNode): void {
+    if (!this.document.nodes.includes(source)) return;
+    const edge: CanvasEdge = {
+      id: this.nextEdgeId(),
+      fromNode: source.id,
+      fromSide: sourceSide,
+      fromEnd: "none",
+      toNode: node.id,
+      toSide: this.oppositeSide(sourceSide),
+      toEnd: "arrow",
+    };
+    this.document.nodes.push(node);
+    this.document.edges.push(edge);
+    this.selectedEdgeId = null;
+    this.selectedIds.clear();
+    this.selectedIds.add(node.id);
+    this.render();
+    void this.persist();
   }
 
   private nextEdgeId(): string {

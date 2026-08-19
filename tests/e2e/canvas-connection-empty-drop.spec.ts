@@ -101,13 +101,21 @@ test("empty connection drops transactionally create an attached text card", asyn
       y: (drop.y - surfaceBox.y - Number(transformedCamera.panY)) / Number(transformedCamera.scale),
     };
 
-    // Empty drop creates a live card+edge transaction, selects its editor, and
-    // keeps disk byte-identical until that editor commits.
+    // Empty drop first offers the exact type chooser at the captured point;
+    // choosing text starts the existing live card+edge transaction and keeps
+    // disk byte-identical until that editor commits.
     await beginConnection(window, sourceRight);
     await window.mouse.move(drop.x, drop.y);
     await expect(view.locator(".canvas-edge-preview")).toBeVisible();
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(initialText);
     await window.mouse.up();
+    await expect(window.locator(".context-menu-item")).toHaveText([
+      "Add text card", "Add note from vault", "Add media from vault", "Add web page",
+    ]);
+    await expect(view.locator('.canvas-node[data-node-id="text-3"]')).toHaveCount(0);
+    expect(await selectedIds(view)).toEqual(["source"]);
+    expect(fs.readFileSync(canvasPath, "utf8")).toBe(initialText);
+    await window.locator(".context-menu-item", { hasText: /^Add text card$/ }).click();
     const pendingNode = view.locator('.canvas-node[data-node-id="text-3"]');
     const pendingEditor = pendingNode.locator(".canvas-node-text-editor");
     await expect(pendingEditor).toBeFocused();
@@ -140,6 +148,7 @@ test("empty connection drops transactionally create an attached text card", asyn
     await beginConnection(window, source.getByRole("button", { name: "Connect from right" }));
     await window.mouse.move(drop.x, drop.y);
     await window.mouse.up();
+    await window.locator(".context-menu-item", { hasText: /^Add text card$/ }).click();
     const committedNode = view.locator('.canvas-node[data-node-id="text-3"]');
     const committedEditor = committedNode.locator(".canvas-node-text-editor");
     await expect(committedEditor).toBeFocused();

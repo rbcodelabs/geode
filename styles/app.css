@@ -2469,7 +2469,7 @@ select.dropdown:hover {
   border-radius: 8px;
   box-shadow: 0 6px 24px var(--shadow);
   padding: 4px;
-  z-index: 150;
+  z-index: 1100;
   min-width: 170px;
 }
 
