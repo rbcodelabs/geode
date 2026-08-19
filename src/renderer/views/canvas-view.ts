@@ -1451,6 +1451,20 @@ export class CanvasView implements View {
     };
   }
 
+  private expandGroupToContain(group: Extract<CanvasNode, { type: "group" }>, members: CanvasNode[]): void {
+    const memberBounds = this.boundsFor(members.map((member) => ({ node: member, x: member.x, y: member.y })));
+    const previousRight = group.x + group.width;
+    const previousBottom = group.y + group.height;
+    const left = Math.min(group.x, memberBounds.left - GROUP_PADDING);
+    const top = Math.min(group.y, memberBounds.top - GROUP_PADDING);
+    const right = Math.max(previousRight, memberBounds.right + GROUP_PADDING);
+    const bottom = Math.max(previousBottom, memberBounds.bottom + GROUP_PADDING);
+    group.x = left;
+    group.y = top;
+    group.width = right - left;
+    group.height = bottom - top;
+  }
+
   private trackGestureSpaceBypass(): { pressed: () => boolean; dispose: () => void } {
     let pressed = this.spacePressed;
     const down = (event: KeyboardEvent) => { if (event.code === "Space") pressed = true; };
@@ -1640,17 +1654,7 @@ export class CanvasView implements View {
         member.node.y = member.y + dy;
       }
       for (const { group, members } of autoExpandGroups) {
-        const memberBounds = this.boundsFor(members.map((member) => ({ node: member, x: member.x, y: member.y })));
-        const previousRight = group.x + group.width;
-        const previousBottom = group.y + group.height;
-        const left = Math.min(group.x, memberBounds.left - GROUP_PADDING);
-        const top = Math.min(group.y, memberBounds.top - GROUP_PADDING);
-        const right = Math.max(previousRight, memberBounds.right + GROUP_PADDING);
-        const bottom = Math.max(previousBottom, memberBounds.bottom + GROUP_PADDING);
-        group.x = left;
-        group.y = top;
-        group.width = right - left;
-        group.height = bottom - top;
+        this.expandGroupToContain(group, members);
       }
       this.render();
     };
@@ -1749,6 +1753,15 @@ export class CanvasView implements View {
       height: node.height,
     };
     const alignmentTargets = this.alignmentTargets(new Set([node.id]));
+    const autoExpandGroups = node.type === "group"
+      ? []
+      : this.document.nodes.flatMap((candidate) => candidate.type === "group"
+        && node.x >= candidate.x
+        && node.y >= candidate.y
+        && node.x + node.width <= candidate.x + candidate.width
+        && node.y + node.height <= candidate.y + candidate.height
+        ? [candidate]
+        : []);
     const spaceBypass = this.trackGestureSpaceBypass();
     const move = (next: PointerEvent) => {
       const dx = (next.clientX - start.pointerX) / this.scale;
@@ -1797,7 +1810,10 @@ export class CanvasView implements View {
         }
         node.y = direction === "top" ? start.y + start.height - node.height : start.y;
       }
-      if (!spaceBypass.pressed()) this.snapResize(node, direction, start, next.shiftKey, alignmentTargets, southeastDriver);
+      if (!spaceBypass.pressed()) {
+        this.snapResize(node, direction, start, next.shiftKey, alignmentTargets, southeastDriver);
+        for (const group of autoExpandGroups) this.expandGroupToContain(group, [node]);
+      }
       this.render();
     };
     const up = () => {
