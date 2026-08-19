@@ -15,6 +15,7 @@ import {
 import { hasExternalChange, MarkdownView } from "./views/markdown-view";
 import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { CanvasView } from "./views/canvas-view";
+import { serializeCanvas } from "./canvas/canvas-data";
 import { FileExplorerView } from "./views/file-explorer";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
@@ -37,6 +38,7 @@ import moment from "moment";
 import { Menu, type PluginSettingTab } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
+import { FileManager } from "./file-manager";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -701,6 +703,7 @@ class StatusBar {
 export class App {
   vault = new Vault();
   metadataCache = new MetadataCache(this.vault);
+  fileManager = new FileManager(this);
   commands = new CommandRegistry();
   markdownRenderer = new MarkdownRenderer(this);
   /** Reading-view code-block + post processors registered by plugins (see `Plugin.registerMarkdownCodeBlockProcessor`). */
@@ -739,6 +742,35 @@ export class App {
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+  isDarkMode(): boolean {
+    return document.body.classList.contains("theme-dark");
+  }
+
+  private localStorageKey(key: string): string {
+    return `geode:vault:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(key)}`;
+  }
+
+  loadLocalStorage(key: string): any | null {
+    const stored = localStorage.getItem(this.localStorageKey(key));
+    if (stored === null) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
+  }
+
+  saveLocalStorage(key: string, data: unknown | null): void {
+    const storageKey = this.localStorageKey(key);
+    if (data === null) {
+      localStorage.removeItem(storageKey);
+      return;
+    }
+    const serialized = JSON.stringify(data);
+    if (serialized === undefined) throw new TypeError("App local storage data must be JSON-serializable");
+    localStorage.setItem(storageKey, serialized);
+  }
 
   // --- Plugin settings tabs -----------------------------------------------
 
@@ -907,6 +939,17 @@ export class App {
     ribbon.setAttribute("aria-label", "Ribbon");
     this.ribbonActionsEl = document.createElement("div");
     this.ribbonActionsEl.className = "workspace-ribbon-actions";
+    const createCanvasButton = document.createElement("button");
+    createCanvasButton.type = "button";
+    createCanvasButton.className = "side-dock-ribbon-action";
+    createCanvasButton.title = "Create new canvas";
+    createCanvasButton.setAttribute("aria-label", "Create new canvas");
+    setIcon(createCanvasButton, "layout-dashboard");
+    createCanvasButton.addEventListener("click", () => {
+      const activeFile = this.workspace.getActiveFile();
+      void this.createNewCanvas(activeFile?.parent ?? "");
+    });
+    this.ribbonActionsEl.appendChild(createCanvasButton);
     const ribbonBottom = document.createElement("div");
     ribbonBottom.className = "workspace-ribbon-bottom";
     const settingsButton = document.createElement("button");
@@ -1090,6 +1133,10 @@ export class App {
       const activeFile = this.workspace.getActiveFile();
       void this.createNewBase(activeFile?.parent ?? "");
     });
+    c("canvas-create", "Canvas: Create new canvas", undefined, () => {
+      const activeFile = this.workspace.getActiveFile();
+      void this.createNewCanvas(activeFile?.parent ?? "");
+    });
     c("bases-insert", "Bases: Insert new base", undefined, () => this.insertNewBase());
     c("bases-add-view", "Bases: Add view", undefined, () => this.getActiveBaseView()?.addView());
   }
@@ -1172,6 +1219,13 @@ export class App {
       ? this.vault.availablePath(folder ?? "", name, "base")
       : this.vault.availablePath(folder ?? "", "Untitled", "base");
     const file = await this.vault.create(path, defaultBaseYaml());
+    await this.openFile(file, false);
+  }
+
+  /** Create a valid empty JSON Canvas in the requested folder and open it. */
+  async createNewCanvas(folder?: string, name?: string): Promise<void> {
+    const path = this.vault.availablePath(folder ?? "", name ?? "Untitled", "canvas");
+    const file = await this.vault.create(path, serializeCanvas({ nodes: [], edges: [] }));
     await this.openFile(file, false);
   }
 
@@ -1535,6 +1589,8 @@ export class App {
   }
 }
 
-const app = new App();
-app.start();
-(window as any).app = app;
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  const app = new App();
+  void app.start();
+  (window as any).app = app;
+}

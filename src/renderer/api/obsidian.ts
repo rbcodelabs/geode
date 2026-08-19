@@ -43,22 +43,33 @@ if (typeof window !== "undefined") {
 export { Component } from "../component";
 export { Events } from "../events";
 export { Vault } from "../vault";
+export type { DataWriteOptions } from "../vault";
 export { Workspace, WorkspaceLeaf, TabGroup } from "../workspace";
 export { MetadataCache, parseMetadata } from "../metadata-cache";
+export { FileManager } from "../file-manager";
 export { MarkdownView } from "../views/markdown-view";
 export { isTFile, isTFolder, normalizePath } from "../types";
 // Frontmatter/tag helpers. Plugins call these module-level (not via app),
 // often inside cache-building loops — obsidian-tasks calls
 // `parseFrontMatterTags` per file while building its task cache, so an
 // undefined export throws mid-scan. See ./frontmatter.
-export { parseFrontMatterTags, getAllTags } from "./frontmatter";
-export type { App } from "../app";
+export { getAllTags, getFrontMatterInfo, parseFrontMatterTags } from "./frontmatter";
+export type { FrontMatterInfo } from "./frontmatter";
+export { App } from "../app";
 export type { TAbstractFile, CachedMetadata } from "../types";
 // Keymap + in-editor suggest primitives. `EditorSuggest` must be a real,
 // subclassable export (plugins do `class X extends EditorSuggest` at
 // module-eval time) and `Scope` backs `app.scope` (installed below). See
 // ./suggest for the PR-2a "loads, doesn't yet drive a popover" scope.
 export { Scope, EditorSuggest } from "./suggest";
+export {
+  arrayBufferToBase64,
+  arrayBufferToHex,
+  base64ToArrayBuffer,
+  getLinkpath,
+  hexToArrayBuffer,
+  parseLinktext,
+} from "./pure-utilities";
 export type {
   KeymapEventHandler,
   KeymapEventListener,
@@ -623,6 +634,8 @@ export class View extends Component implements GeodeView {
   containerEl: HTMLElement;
   icon = "document";
   navigation = false;
+  scope: Scope | null = null;
+  private ephemeralState: Record<string, unknown> = {};
 
   constructor(leaf: WorkspaceLeaf) {
     super();
@@ -649,10 +662,16 @@ export class View extends Component implements GeodeView {
   getViewType(): string {
     return "";
   }
-  getState(): unknown {
+  getState(): Record<string, unknown> {
     return {};
   }
-  async setState(_state: unknown): Promise<void> {}
+  async setState(_state: unknown, _result?: unknown): Promise<void> {}
+  getEphemeralState(): Record<string, unknown> {
+    return this.ephemeralState;
+  }
+  setEphemeralState(state: unknown): void {
+    this.ephemeralState = state && typeof state === "object" ? { ...(state as Record<string, unknown>) } : {};
+  }
   onResize(): void {}
 }
 

@@ -11,6 +11,7 @@ import { syntaxTree } from "@codemirror/language";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
 import { setIcon } from "../api/icons";
+import { CanvasView } from "../views/canvas-view";
 import { calloutMarkerLength, calloutMeta, parseCalloutHeader, type CalloutMeta } from "./callout";
 import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
 import { parseTable, serializeTable, type Align, type ParsedTable } from "./table";
@@ -652,6 +653,9 @@ class TableWidget extends WidgetType {
  * either (only `#Heading` subpaths), so there's nothing to match here.
  */
 class EmbedWidget extends WidgetType {
+  private canvasView: CanvasView | null = null;
+  private destroyed = false;
+
   constructor(
     private target: string,
     private param: string,
@@ -692,6 +696,36 @@ class EmbedWidget extends WidgetType {
     }
 
     const file = resolved.file!;
+
+    if (resolved.kind === "canvas") {
+      root.classList.add("canvas-embed-widget");
+      if (this.sourcePath === file.path) {
+        root.classList.add("canvas-embed-cycle");
+        root.textContent = `Recursive Canvas embed: ${file.basename}`;
+        return root;
+      }
+      const canvas = new CanvasView(this.app);
+      this.canvasView = canvas;
+      canvas.markEmbedded();
+      canvas.onOpen();
+      root.appendChild(canvas.containerEl);
+      void canvas.setFile(file).then(() => {
+        if (this.destroyed) {
+          canvas.onClose();
+          return;
+        }
+        view.requestMeasure();
+      }).catch(() => {
+        if (this.destroyed) return;
+        canvas.onClose();
+        if (this.canvasView === canvas) this.canvasView = null;
+        root.replaceChildren();
+        root.classList.add("is-unresolved");
+        root.textContent = `Unable to load Canvas: ${file.basename}`;
+        view.requestMeasure();
+      });
+      return root;
+    }
 
     if (resolved.kind === "image") {
       const img = document.createElement("img");
@@ -754,6 +788,12 @@ class EmbedWidget extends WidgetType {
     });
     root.appendChild(link);
     return root;
+  }
+
+  destroy(_dom: HTMLElement): void {
+    this.destroyed = true;
+    this.canvasView?.onClose();
+    this.canvasView = null;
   }
 }
 
@@ -1013,7 +1053,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
             // decoration spanning the full line, with CSS (.cm-embed-block)
             // giving it block layout — the same technique HRWidget already
             // uses for full-line widgets in this file.
-            const isBlock = resolved.kind === "note" && wholeLine;
+            const isBlock = (resolved.kind === "note" || resolved.kind === "canvas") && wholeLine;
             const widget = new EmbedWidget(target, param, sourcePath, app, isBlock);
             decos.push(
               Decoration.replace({ widget }).range(isBlock ? line.from : start, isBlock ? line.to : end)

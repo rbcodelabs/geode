@@ -74,7 +74,7 @@ export class PromptModal extends Modal {
 
   constructor(
     app: App,
-    private opts: { placeholder?: string; initialValue?: string; onSubmit: (value: string) => void }
+    private opts: { placeholder?: string; initialValue?: string; allowEmptySubmit?: boolean; onSubmit: (value: string) => void }
   ) {
     super(app);
     this.modalEl.classList.add("prompt");
@@ -89,7 +89,7 @@ export class PromptModal extends Modal {
         e.preventDefault();
         const value = this.inputEl.value.trim();
         this.close();
-        if (value) this.opts.onSubmit(value);
+        if (value || this.opts.allowEmptySubmit) this.opts.onSubmit(value);
       }
     });
   }

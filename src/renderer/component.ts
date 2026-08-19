@@ -1,3 +1,5 @@
+import type { EventRef } from "./events";
+
 /**
  * Resource-ownership primitive, mirroring Obsidian's `Component`. Anything
  * cleanable (event subscriptions, DOM listeners, intervals, child
@@ -97,7 +99,7 @@ export class Component {
    * Register an event subscription for automatic cleanup. `ref` is the
    * unsubscribe function returned by `Events.on()` (our `EventRef`).
    */
-  registerEvent(ref: () => void): void {
+  registerEvent(ref: EventRef): void {
     this.register(ref);
   }
 

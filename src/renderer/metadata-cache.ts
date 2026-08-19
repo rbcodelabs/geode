@@ -1,6 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import { Events } from "./events";
 import { Vault } from "./vault";
+import { projectCanvasFileLinks } from "./canvas/canvas-data";
 import { recordMeasure, withPerfMark } from "./perf-instrumentation";
 import {
   CachedMetadata,
@@ -49,6 +50,12 @@ function yieldToEventLoop(): Promise<void> {
  * each batch's synchronous-parse jank window bigger. */
 export const INDEX_CONCURRENCY = 16;
 export const METADATA_CACHE_SCHEMA_VERSION = 1;
+
+function toLinkRecord(counts: Map<string, number>): Record<string, number> {
+  const record: Record<string, number> = Object.create(null);
+  for (const [path, count] of counts) record[path] = count;
+  return record;
+}
 
 interface PersistedMetadataEntry {
   mtimeMs: number;
@@ -384,6 +391,37 @@ function isMdPath(path: string): boolean {
   return splitExt(pathName(path)).extension === "md";
 }
 
+function isCanvasPath(path: string): boolean {
+  return splitExt(pathName(path)).extension === "canvas";
+}
+
+function isMetadataSourcePath(path: string): boolean {
+  return isMdPath(path) || isCanvasPath(path);
+}
+
+function parseCanvasLinkMetadata(source: string): { metadata: CachedMetadata; contexts: string[] } {
+  const projected = projectCanvasFileLinks(source) ?? [];
+  let offset = 0;
+  const links = projected.map(({ link, context }, line) => {
+    const start = { line, ch: 0, offset };
+    offset += context.length;
+    const end = { line, ch: context.length, offset };
+    offset += 1;
+    return { link, displayText: link, position: { start, end }, isEmbed: false };
+  });
+  return {
+    metadata: {
+      frontmatterEndOffset: 0,
+      links,
+      embeds: [],
+      tags: [],
+      headings: [],
+      aliases: [],
+    },
+    contexts: projected.map(({ context }) => context),
+  };
+}
+
 /** Push `value` into the string[] at `key`, keeping the list de-duplicated and path-sorted. */
 function pushSorted(map: Map<string, string[]>, key: string, value: string): void {
   const list = map.get(key) ?? [];
@@ -427,8 +465,8 @@ interface DirtyOp {
 
 /**
  * Vault-wide metadata index. Parses every markdown file, resolves links to
- * files, and maintains backlink/tag indices. Events: 'resolved' (initial
- * index complete), 'changed' (file: TFile[, oldPath]).
+ * files, and maintains backlink/tag indices. Public events mirror Obsidian's
+ * changed/deleted/resolve/resolved metadata lifecycle.
  *
  * Cold start (`initialize()`) does one batched full pass. Per-edit vault
  * events (create/modify/delete/rename) are coalesced into a dirty set and
@@ -440,14 +478,18 @@ interface DirtyOp {
  */
 export class MetadataCache extends Events {
   private cache = new Map<string, CachedMetadata>();
+  /** Readable synthetic lines paired with Canvas file-card LinkCache entries. */
+  private canvasLinkContexts = new Map<string, string[]>();
   /** basename/name (lowercase) -> file paths, path-sorted */
   private byBasename = new Map<string, string[]>();
   /** alias (lowercase) -> file paths, path-sorted */
   private byAlias = new Map<string, string[]>();
-  /** source path -> resolved target path -> count */
-  resolvedLinks = new Map<string, Map<string, number>>();
-  /** source path -> unresolved link text -> count */
-  unresolvedLinks = new Map<string, Map<string, number>>();
+  /** Public Obsidian-compatible source path -> target path -> count records. */
+  resolvedLinks: Record<string, Record<string, number>> = Object.create(null);
+  unresolvedLinks: Record<string, Record<string, number>> = Object.create(null);
+  /** Collision-safe internal graphs used by Geode's index and backlink code. */
+  private resolvedLinkMap = new Map<string, Map<string, number>>();
+  private unresolvedLinkMap = new Map<string, Map<string, number>>();
   /** Reverse of resolvedLinks: target path -> source paths that resolve to it. */
   private resolvedBy = new Map<string, Set<string>>();
   /** Reverse of unresolvedLinks keys: lowercased dangling key -> source paths that use it. */
@@ -457,7 +499,9 @@ export class MetadataCache extends Events {
   /** Paths touched in the current burst, flushed once on a microtask. */
   private dirty = new Map<string, DirtyOp>();
   /** Files to fire `changed` for after the flush, keyed by (current) path. */
-  private pendingChanged = new Map<string, { file: TFile; oldPath?: string }>();
+  private pendingChanged = new Map<string, TFile>();
+  /** Deleted files and their best-effort cache snapshot for the public event. */
+  private pendingDeleted = new Map<string, { file: TFile; previous: CachedMetadata | null }>();
   private flushScheduled = false;
   /** Parsed entries delivered by the utility process, keyed by dirty path. */
   private workerMetadata = new Map<string, CachedMetadata>();
@@ -500,10 +544,11 @@ export class MetadataCache extends Events {
     super();
     vault.on("create", (f: TFile) => this.enqueue(f, false, true, !(this.backgroundIndexerActive && f?.extension === "md")));
     vault.on("modify", (f: TFile) => {
-      // Non-md modifies are content-only with an unchanged name — they touch
-      // neither the name index nor resolution, so they're ignored (matching
-      // prior behaviour). Only markdown modifies re-parse + re-resolve.
-      if (f?.kind === "file" && f.extension === "md") this.enqueue(f, true, true, !this.backgroundIndexerActive);
+      // Markdown and Canvas are renderer metadata sources. Other file
+      // modifies are content-only with unchanged names and remain ignored.
+      if (f?.kind === "file" && (f.extension === "md" || f.extension === "canvas")) {
+        this.enqueue(f, true, true, f.extension === "canvas" || !this.backgroundIndexerActive);
+      }
     });
     vault.on("delete", (f: TFile) => this.enqueue(f, true, false, !(this.backgroundIndexerActive && f?.extension === "md")));
     vault.on("rename", (f: TFile, oldPath: string) => this.enqueueRename(f, oldPath));
@@ -568,7 +613,13 @@ export class MetadataCache extends Events {
     const cur = this.dirty.get(f.path);
     if (cur) cur.present = present;
     else this.dirty.set(f.path, { existedBefore, present });
-    this.pendingChanged.set(f.path, { file: f });
+    if (f.extension === "md") {
+      if (present) this.pendingChanged.set(f.path, f);
+      else {
+        this.pendingChanged.delete(f.path);
+        this.pendingDeleted.set(f.path, { file: f, previous: this.cache.get(f.path) ?? null });
+      }
+    }
     if (schedule) this.scheduleFlush();
   }
 
@@ -581,9 +632,10 @@ export class MetadataCache extends Events {
     const nw = this.dirty.get(f.path);
     if (nw) nw.present = true;
     else this.dirty.set(f.path, { existedBefore: false, present: true });
-    // The file now lives at the new path — fire a single `changed(new, old)`.
+    // Obsidian explicitly does not emit MetadataCache `changed` on rename.
     this.pendingChanged.delete(oldPath);
-    this.pendingChanged.set(f.path, { file: f, oldPath });
+    this.pendingChanged.delete(f.path);
+    this.pendingDeleted.delete(oldPath);
     this.scheduleFlush();
   }
 
@@ -605,6 +657,8 @@ export class MetadataCache extends Events {
     this.dirty = new Map();
     const pendingChanged = this.pendingChanged;
     this.pendingChanged = new Map();
+    const pendingDeleted = this.pendingDeleted;
+    this.pendingDeleted = new Map();
     if (dirty.size === 0) return;
 
     // Paths whose content read failed this flush — excluded from the index
@@ -613,10 +667,11 @@ export class MetadataCache extends Events {
     const failed = new Set<string>();
 
     await withPerfMark("metadata-renderer-apply-resolve", async () => {
-      // Phase 1 — read + parse new content for every present markdown path.
+      // Phase 1 — read + parse every present renderer metadata source.
       const newMeta = new Map<string, CachedMetadata>();
+      const newCanvasContexts = new Map<string, string[]>();
       const toRead: string[] = [];
-      for (const [path, op] of dirty) if (op.present && isMdPath(path)) toRead.push(path);
+      for (const [path, op] of dirty) if (op.present && isMetadataSourcePath(path)) toRead.push(path);
       await processInBatches(toRead, INDEX_CONCURRENCY, async (path) => {
         const file = this.vault.getFileByPath(path);
         if (!file) {
@@ -624,10 +679,14 @@ export class MetadataCache extends Events {
           return;
         }
         try {
-          const fromWorker = this.workerMetadata.get(path);
+          const fromWorker = isMdPath(path) ? this.workerMetadata.get(path) : undefined;
           if (fromWorker) {
             newMeta.set(path, fromWorker);
             this.workerMetadata.delete(path);
+          } else if (isCanvasPath(path)) {
+            const parsed = parseCanvasLinkMetadata(await this.vault.cachedRead(file));
+            newMeta.set(path, parsed.metadata);
+            newCanvasContexts.set(path, parsed.contexts);
           } else {
             newMeta.set(path, parseMetadata(await this.vault.cachedRead(file)));
           }
@@ -643,6 +702,7 @@ export class MetadataCache extends Events {
       for (const [path, op] of dirty) {
         if (failed.has(path)) continue;
         const md = isMdPath(path);
+        const metadataSource = isMetadataSourcePath(path);
         const oldAliases = op.existedBefore ? this.cache.get(path)?.aliases ?? [] : [];
         const newAliases = op.present && md ? newMeta.get(path)?.aliases ?? [] : [];
         const oldProvided = op.existedBefore ? providedKeys(path, oldAliases) : new Set<string>();
@@ -674,23 +734,28 @@ export class MetadataCache extends Events {
             for (const src of this.resolvedBy.get(q) ?? []) affected.add(src);
           }
         }
-        // A present markdown file's own outgoing links must be (re)resolved.
-        if (op.present && md) affected.add(path);
+        // A present Markdown/Canvas source's outgoing links must be (re)resolved.
+        if (op.present && metadataSource) affected.add(path);
       }
 
       // Phase 3a — bring the name index + cache fully up to date.
       for (const [path, op] of dirty) {
         if (failed.has(path)) continue;
         const md = isMdPath(path);
+        const metadataSource = isMetadataSourcePath(path);
         if (op.existedBefore) {
           const oldAliases = this.cache.get(path)?.aliases ?? [];
           this.removeNameEntries(path, oldAliases);
         }
-        if (op.present && md) {
+        if (op.present && metadataSource) {
           const meta = newMeta.get(path);
           if (meta) this.cache.set(path, meta);
         } else {
           this.cache.delete(path);
+        }
+        this.canvasLinkContexts.delete(path);
+        if (op.present && isCanvasPath(path)) {
+          this.canvasLinkContexts.set(path, newCanvasContexts.get(path) ?? []);
         }
         if (op.present) {
           const newAliases = md ? this.cache.get(path)?.aliases ?? [] : [];
@@ -698,28 +763,35 @@ export class MetadataCache extends Events {
         }
       }
 
-      // Phase 3b — re-resolve the affected sources plus deleted markdown paths
+      // Phase 3b — re-resolve the affected sources plus deleted metadata paths
       // (the latter to purge their own forward + reverse entries).
       for (const [path, op] of dirty) {
         if (failed.has(path)) continue;
-        if (!op.present && isMdPath(path)) affected.add(path);
+        if (!op.present && isMetadataSourcePath(path)) affected.add(path);
       }
-      for (const src of affected) this.resolveFile(src);
+      for (const src of affected) {
+        this.resolveFile(src);
+        const file = this.vault.getFileByPath(src);
+        if (file?.extension === "md") this.trigger("resolve", file);
+      }
 
     });
 
     // Fire `changed` once per changed file (skipping reads that failed), so
     // BaseView per-file semantics + the public plugin contract are preserved.
-    for (const { file, oldPath } of pendingChanged.values()) {
+    for (const file of pendingChanged.values()) {
       if (failed.has(file.path)) continue;
-      if (oldPath !== undefined) this.trigger("changed", file, oldPath);
-      else this.trigger("changed", file);
+      const metadata = this.cache.get(file.path);
+      if (metadata) this.trigger("changed", file, this.vault.getCachedContent(file.path) ?? "", metadata);
     }
+    for (const { file, previous } of pendingDeleted.values()) this.trigger("deleted", file, previous);
+    this.trigger("resolved");
   }
 
   async initialize(): Promise<void> {
     await withPerfMark("metadata-initialize", async () => {
-      const files = this.vault.getMarkdownFiles();
+      const markdownFiles = this.vault.getMarkdownFiles();
+      const canvasFiles = this.vault.getFiles().filter((file) => file.extension === "canvas");
       const api = typeof window === "undefined" ? undefined : window.geode;
       let backgroundSnapshot: PersistedMetadataCache | null = null;
       const attemptedBackground = !!api?.startMetadataIndexer;
@@ -734,8 +806,9 @@ export class MetadataCache extends Events {
       }
       const persisted = backgroundSnapshot ?? (attemptedBackground ? null : await this.loadPersistedCache());
       this.cache.clear();
+      this.canvasLinkContexts.clear();
       const toRead: TFile[] = [];
-      for (const file of files) {
+      for (const file of markdownFiles) {
         const entry = persisted?.entries[file.path];
         if (entry && (this.backgroundIndexerActive || (entry.mtimeMs === file.mtime && entry.size === file.size))) {
           this.cache.set(file.path, entry.metadata);
@@ -744,16 +817,26 @@ export class MetadataCache extends Events {
           toRead.push(file);
         }
       }
+      // Canvas projection is renderer-only and intentionally never enters the
+      // utility-process or persisted Markdown cache schema.
+      toRead.push(...canvasFiles);
       await processInBatches(toRead, INDEX_CONCURRENCY, async (f) => {
         try {
           const text = await this.vault.cachedRead(f);
-          this.cache.set(f.path, parseMetadata(text));
+          if (f.extension === "canvas") {
+            const parsed = parseCanvasLinkMetadata(text);
+            this.cache.set(f.path, parsed.metadata);
+            this.canvasLinkContexts.set(f.path, parsed.contexts);
+          } else {
+            this.cache.set(f.path, parseMetadata(text));
+          }
         } catch (err) {
           if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
         }
       });
       this.rebuildNameIndex();
       this.resolveAll();
+      for (const file of markdownFiles) if (this.cache.has(file.path)) this.trigger("resolve", file);
       if (!this.backgroundIndexerActive && !attemptedBackground) await this.persistCache();
     });
     this.initialized = true;
@@ -833,23 +916,33 @@ export class MetadataCache extends Events {
    * equivalence oracle for the incremental `resolveFile`.
    */
   private resolveAll() {
-    this.resolvedLinks.clear();
-    this.unresolvedLinks.clear();
+    this.resolvedLinkMap.clear();
+    this.unresolvedLinkMap.clear();
+    this.resolvedLinks = Object.create(null);
+    this.unresolvedLinks = Object.create(null);
     this.resolvedBy.clear();
     this.unresolvedByKey.clear();
     for (const [path, meta] of this.cache) {
+      const canvasSource = isCanvasPath(path);
       const resolved = new Map<string, number>();
       const unresolved = new Map<string, number>();
       for (const link of [...meta.links, ...meta.embeds]) {
         const dest = this.getFirstLinkpathDest(link.link, path);
-        if (dest) resolved.set(dest.path, (resolved.get(dest.path) ?? 0) + 1);
+        if (dest) {
+          if (canvasSource && dest.extension !== "md") continue;
+          resolved.set(dest.path, (resolved.get(dest.path) ?? 0) + 1);
+        }
         else {
           const key = link.link.split("#")[0].trim();
-          if (key) unresolved.set(key, (unresolved.get(key) ?? 0) + 1);
+          if (key && (!canvasSource || isMdPath(key))) {
+            unresolved.set(key, (unresolved.get(key) ?? 0) + 1);
+          }
         }
       }
-      this.resolvedLinks.set(path, resolved);
-      this.unresolvedLinks.set(path, unresolved);
+      this.resolvedLinkMap.set(path, resolved);
+      this.unresolvedLinkMap.set(path, unresolved);
+      this.resolvedLinks[path] = toLinkRecord(resolved);
+      this.unresolvedLinks[path] = toLinkRecord(unresolved);
       for (const target of resolved.keys()) addToSet(this.resolvedBy, target, path);
       for (const key of unresolved.keys()) addToSet(this.unresolvedByKey, key.toLowerCase(), path);
     }
@@ -865,34 +958,44 @@ export class MetadataCache extends Events {
   private resolveFile(path: string): void {
     withPerfMark("metadata-resolve-file", () => {
       // Retract this file's previous contributions to the reverse indices.
-      const prevResolved = this.resolvedLinks.get(path);
+      const prevResolved = this.resolvedLinkMap.get(path);
       if (prevResolved) {
         for (const target of prevResolved.keys()) removeFromSet(this.resolvedBy, target, path);
       }
-      const prevUnresolved = this.unresolvedLinks.get(path);
+      const prevUnresolved = this.unresolvedLinkMap.get(path);
       if (prevUnresolved) {
         for (const key of prevUnresolved.keys()) removeFromSet(this.unresolvedByKey, key.toLowerCase(), path);
       }
 
       const meta = this.cache.get(path);
       if (!meta) {
-        this.resolvedLinks.delete(path);
-        this.unresolvedLinks.delete(path);
+        this.resolvedLinkMap.delete(path);
+        this.unresolvedLinkMap.delete(path);
+        delete this.resolvedLinks[path];
+        delete this.unresolvedLinks[path];
         return;
       }
 
       const resolved = new Map<string, number>();
       const unresolved = new Map<string, number>();
+      const canvasSource = isCanvasPath(path);
       for (const link of [...meta.links, ...meta.embeds]) {
         const dest = this.getFirstLinkpathDest(link.link, path);
-        if (dest) resolved.set(dest.path, (resolved.get(dest.path) ?? 0) + 1);
+        if (dest) {
+          if (canvasSource && dest.extension !== "md") continue;
+          resolved.set(dest.path, (resolved.get(dest.path) ?? 0) + 1);
+        }
         else {
           const key = link.link.split("#")[0].trim();
-          if (key) unresolved.set(key, (unresolved.get(key) ?? 0) + 1);
+          if (key && (!canvasSource || isMdPath(key))) {
+            unresolved.set(key, (unresolved.get(key) ?? 0) + 1);
+          }
         }
       }
-      this.resolvedLinks.set(path, resolved);
-      this.unresolvedLinks.set(path, unresolved);
+      this.resolvedLinkMap.set(path, resolved);
+      this.unresolvedLinkMap.set(path, unresolved);
+      this.resolvedLinks[path] = toLinkRecord(resolved);
+      this.unresolvedLinks[path] = toLinkRecord(unresolved);
       for (const target of resolved.keys()) addToSet(this.resolvedBy, target, path);
       for (const key of unresolved.keys()) addToSet(this.unresolvedByKey, key.toLowerCase(), path);
     });
@@ -902,10 +1005,22 @@ export class MetadataCache extends Events {
     return this.cache.get(file.path) ?? null;
   }
 
+  getCache(path: string): CachedMetadata | null {
+    return this.cache.get(path) ?? null;
+  }
+
+  fileToLinktext(file: TFile, _sourcePath: string, omitMdExtension = false): string {
+    const duplicateName = this.vault
+      .getFiles()
+      .some((candidate) => candidate.path !== file.path && candidate.name === file.name);
+    const linktext = duplicateName ? file.path : file.name;
+    return omitMdExtension && file.extension === "md" ? linktext.slice(0, -3) : linktext;
+  }
+
   /** All files containing links that resolve to `file`. */
   getBacklinks(file: TFile): { source: TFile; count: number }[] {
     const out: { source: TFile; count: number }[] = [];
-    for (const [src, targets] of this.resolvedLinks) {
+    for (const [src, targets] of this.resolvedLinkMap) {
       const count = targets.get(file.path);
       if (count) {
         const srcFile = this.vault.getFileByPath(src);
@@ -924,13 +1039,15 @@ export class MetadataCache extends Events {
     file: TFile
   ): { source: TFile; count: number; snippets: string[] }[] {
     const out: { source: TFile; count: number; snippets: string[] }[] = [];
-    for (const [src, targets] of this.resolvedLinks) {
+    for (const [src, targets] of this.resolvedLinkMap) {
       const count = targets.get(file.path);
       if (!count) continue;
       const srcFile = this.vault.getFileByPath(src);
       if (!srcFile) continue;
       const meta = this.cache.get(src);
-      const lines = this.vault.getCachedContent(src)?.split("\n") ?? [];
+      const lines = srcFile.extension === "canvas"
+        ? this.canvasLinkContexts.get(src) ?? []
+        : this.vault.getCachedContent(src)?.split("\n") ?? [];
       const snippets: string[] = [];
       for (const link of [...(meta?.links ?? []), ...(meta?.embeds ?? [])]) {
         if (this.getFirstLinkpathDest(link.link, src)?.path !== file.path) continue;
@@ -951,6 +1068,7 @@ export class MetadataCache extends Events {
     const out: { source: TFile; mentions: UnlinkedMention[] }[] = [];
     for (const src of this.cache.keys()) {
       if (src === file.path) continue;
+      if (!isMdPath(src)) continue;
       const content = this.vault.getCachedContent(src);
       if (content === undefined) continue;
       const mentions = findUnlinkedMentions(content, names);

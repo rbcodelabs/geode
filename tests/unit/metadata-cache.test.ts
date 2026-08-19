@@ -168,7 +168,7 @@ describe("MetadataCache backlinks and tag index", () => {
     expect(backlinks).toHaveLength(1);
     expect(backlinks[0].source.path).toBe("Welcome.md");
 
-    expect(cache.unresolvedLinks.get(welcome.path)?.get("Ghost Note")).toBe(1);
+    expect(cache.unresolvedLinks[welcome.path]?.["Ghost Note"]).toBe(1);
   });
 
   it("aggregates tag usage counts across the vault via getAllTags", async () => {
@@ -441,8 +441,8 @@ describe("MetadataCache.initialize batching", () => {
     const note0 = fake.getFileByPath("Note0.md")!;
     expect(cache.getFirstLinkpathDest("Note0", "Linker.md")?.path).toBe("Note0.md");
 
-    const resolved = cache.resolvedLinks.get("Linker.md");
-    expect(resolved?.get("Note0.md")).toBe(1);
+    const resolved = cache.resolvedLinks["Linker.md"];
+    expect(resolved?.["Note0.md"]).toBe(1);
 
     const backlinks = cache.getBacklinks(note0);
     expect(backlinks.map((bl) => bl.source.path)).toEqual(["Linker.md"]);

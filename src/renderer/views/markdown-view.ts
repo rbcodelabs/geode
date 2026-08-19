@@ -69,6 +69,7 @@ export class MarkdownView implements View {
   private titleEl: HTMLElement;
   private bodyEl: HTMLElement;
   private readingEl: HTMLElement;
+  private readingContentEl: HTMLElement | null = null;
   private editorHostEl: HTMLElement;
   private saveTimer: number | null = null;
   private lastSavedText = "";
@@ -335,6 +336,8 @@ export class MarkdownView implements View {
 
   private async renderReading() {
     await this.flush();
+    if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);
+    this.readingContentEl = null;
     this.readingEl.innerHTML = "";
     const inner = document.createElement("div");
     inner.className = "markdown-preview-sizer";
@@ -346,6 +349,7 @@ export class MarkdownView implements View {
       }
     }
     const contentEl = document.createElement("div");
+    this.readingContentEl = contentEl;
     inner.appendChild(contentEl);
     await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "");
   }
@@ -373,6 +377,8 @@ export class MarkdownView implements View {
     await this.flush();
     this.editor?.destroy();
     this.editor = null;
+    if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);
+    this.readingContentEl = null;
   }
 }
 

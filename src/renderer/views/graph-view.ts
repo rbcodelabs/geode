@@ -1,6 +1,6 @@
 import type { App } from "../app";
 import type { View } from "../workspace";
-import { buildGraph, type GraphData, type GraphNode } from "../graph/graph-data";
+import { buildGraph, graphTopologyKey, type GraphData, type GraphNode } from "../graph/graph-data";
 import { ForceSimulation } from "../graph/layout";
 
 /** Safety cap so a graph that never fully settles doesn't spin the RAF loop forever. */
@@ -25,9 +25,11 @@ export class GraphView implements View {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private data: GraphData = { nodes: [], edges: [] };
+  private topologyKey = "";
   private sim: ForceSimulation | null = null;
   private rafId: number | null = null;
   private tickCount = 0;
+  private positionsPublished = false;
   private resizeObserver: ResizeObserver;
 
   // Pan/zoom camera, in canvas pixels. World (0,0) renders at
@@ -105,16 +107,27 @@ export class GraphView implements View {
   }
 
   private rebuild(): void {
-    this.data = buildGraph(this.app.vault.getMarkdownFiles(), this.app.metadataCache.resolvedLinks);
+    const nextData = buildGraph(this.app.vault.getMarkdownFiles(), this.app.metadataCache.resolvedLinks);
+    const nextTopologyKey = graphTopologyKey(nextData);
+    // Metadata emits both per-file and all-resolved notifications. If link
+    // topology did not change, restarting the simulation only invalidates
+    // already-published click coordinates and wastes layout work.
+    if (nextTopologyKey === this.topologyKey) return;
+    this.data = nextData;
+    this.topologyKey = nextTopologyKey;
     this.sim = new ForceSimulation(this.data.nodes, this.data.edges);
     this.tickCount = 0;
+    this.positionsPublished = false;
     // Test hook: canvas contents aren't DOM-inspectable, so expose the
     // built graph's shape as dataset attributes for Playwright to assert
     // against without pixel-reading the canvas (see plugin-api-layer PR's
     // e2e approach for the same "expose an inspectable seam" pattern).
     this.containerEl.dataset.graphNodeCount = String(this.data.nodes.length);
     this.containerEl.dataset.graphEdgeCount = String(this.data.edges.length);
-    this.updateNodePositionsDataset(); // initial circle layout, before any tick has run
+    // Do not publish coordinates while the force layout is still moving.
+    // Consumers that click a published coordinate must be able to rely on it
+    // remaining current between reading the dataset and dispatching the click.
+    delete this.containerEl.dataset.graphNodePositions;
     this.startLoop();
   }
 
@@ -128,7 +141,15 @@ export class GraphView implements View {
       if (sim && this.tickCount < MAX_SETTLE_TICKS && (this.tickCount === 0 || !sim.isSettled())) {
         sim.tick();
         this.tickCount++;
+      }
+      if (
+        sim &&
+        !this.positionsPublished &&
+        this.tickCount > 0 &&
+        (sim.isSettled() || this.tickCount >= MAX_SETTLE_TICKS)
+      ) {
         this.updateNodePositionsDataset();
+        this.positionsPublished = true;
       }
       this.render();
       this.rafId = requestAnimationFrame(step);

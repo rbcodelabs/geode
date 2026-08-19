@@ -61,7 +61,7 @@ const nodeRequire: ((id: string) => unknown) | undefined = (
  * (the CSP allows this — see index.html). This is a deliberate trust
  * decision consistent with Obsidian: locally-installed plugins are trusted.
  */
-function instantiatePluginClass(code: string, pluginId: string): PluginConstructor {
+export function instantiatePluginClass(code: string, pluginId: string): PluginConstructor {
   const moduleObj: { exports: any } = { exports: {} };
   const requireShim = (specifier: string): unknown => {
     if (specifier === "obsidian" || specifier === "geode") return GeodeAPI;

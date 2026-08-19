@@ -2,6 +2,7 @@ import type { App } from "../app";
 import type { View } from "../workspace";
 import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
+import { VAULT_FILE_DRAG_MIME } from "../file-drag";
 
 export type SortOrder = "name-asc" | "name-desc";
 
@@ -135,6 +136,8 @@ export class FileExplorerView implements View {
       wrapper.classList.toggle("is-open", isOpen);
       const row = document.createElement("div");
       row.className = "nav-folder-title nav-item";
+      row.dataset.path = folder.path;
+      row.draggable = true;
       row.style.paddingLeft = "4px";
       const arrow = document.createElement("span");
       arrow.className = "nav-folder-arrow";
@@ -148,6 +151,11 @@ export class FileExplorerView implements View {
         if (this.expanded.has(folder.path)) this.expanded.delete(folder.path);
         else this.expanded.add(folder.path);
         this.render();
+      });
+      row.addEventListener("dragstart", (e) => {
+        if (!e.dataTransfer) return;
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(VAULT_FILE_DRAG_MIME, folder.path);
       });
       row.addEventListener("contextmenu", (e) => this.folderMenu(e, folder));
       wrapper.appendChild(row);
@@ -165,6 +173,7 @@ export class FileExplorerView implements View {
       const row = document.createElement("div");
       row.className = "nav-file-title nav-item";
       row.dataset.path = file.path;
+      row.draggable = true;
       row.style.paddingLeft = "18px";
       const titleEl = document.createElement("span");
       titleEl.className = "nav-item-title";
@@ -178,6 +187,11 @@ export class FileExplorerView implements View {
       }
       row.addEventListener("click", (e) => {
         this.app.openFile(file, e.metaKey || e.ctrlKey);
+      });
+      row.addEventListener("dragstart", (e) => {
+        if (!e.dataTransfer) return;
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(VAULT_FILE_DRAG_MIME, file.path);
       });
       row.addEventListener("contextmenu", (e) => this.fileMenu(e, file));
       wrapper.appendChild(row);
@@ -221,6 +235,10 @@ export class FileExplorerView implements View {
       {
         title: "New note",
         action: () => this.app.createNewNote(folder.path),
+      },
+      {
+        title: "New canvas",
+        action: () => this.app.createNewCanvas(folder.path),
       },
       {
         title: "New base",

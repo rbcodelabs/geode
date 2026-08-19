@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGraph } from "../../src/renderer/graph/graph-data";
+import { buildGraph, graphTopologyKey } from "../../src/renderer/graph/graph-data";
 import type { TFile } from "../../src/renderer/types";
 
 function file(path: string): TFile {
@@ -79,5 +79,15 @@ describe("buildGraph", () => {
     }
     const positions = nodes.map((n) => `${n.x},${n.y}`);
     expect(new Set(positions).size).toBe(nodes.length); // no two nodes start stacked
+  });
+
+  it("gives equivalent Map and null-prototype record inputs the same stable topology key", () => {
+    const files = [file("A.md"), file("B.md")];
+    const mapData = buildGraph(files, new Map([["A.md", new Map([["B.md", 1]])]]));
+    const record = Object.create(null) as Record<string, Record<string, number>>;
+    record["A.md"] = Object.assign(Object.create(null), { "B.md": 1 });
+    const recordData = buildGraph([...files].reverse(), record);
+
+    expect(graphTopologyKey(recordData)).toBe(graphTopologyKey(mapData));
   });
 });
