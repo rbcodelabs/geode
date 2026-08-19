@@ -3083,11 +3083,20 @@ select.dropdown:hover {
 
 /* JSON Canvas ----------------------------------------------------------- */
 .canvas-view {
+  --canvas-background: var(--background-primary);
+  --canvas-card-label-color: var(--text-muted);
+  --canvas-dot-pattern: radial-gradient(circle, var(--background-modifier-border-hover) 1px, transparent 1px);
+  --canvas-color-1: var(--color-red, #e05252);
+  --canvas-color-2: var(--color-orange, #e9973f);
+  --canvas-color-3: var(--color-yellow, #e0c24f);
+  --canvas-color-4: var(--color-green, #48a868);
+  --canvas-color-5: var(--color-cyan, #37a6b2);
+  --canvas-color-6: var(--color-purple, #9b6acb);
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--background-primary);
+  background: var(--canvas-background);
 }
 
 .canvas-surface {
@@ -3096,8 +3105,8 @@ select.dropdown:hover {
   min-height: 0;
   overflow: hidden;
   cursor: grab;
-  background-color: var(--background-primary);
-  background-image: radial-gradient(circle, var(--background-modifier-border-hover) 1px, transparent 1px);
+  background-color: var(--canvas-background);
+  background-image: var(--canvas-dot-pattern);
   background-size: 20px 20px;
   user-select: none;
 }
@@ -3152,6 +3161,13 @@ select.dropdown:hover {
   white-space: pre-wrap;
 }
 
+.canvas-node[data-canvas-color="1"] { --canvas-node-color: var(--canvas-color-1); }
+.canvas-node[data-canvas-color="2"] { --canvas-node-color: var(--canvas-color-2); }
+.canvas-node[data-canvas-color="3"] { --canvas-node-color: var(--canvas-color-3); }
+.canvas-node[data-canvas-color="4"] { --canvas-node-color: var(--canvas-color-4); }
+.canvas-node[data-canvas-color="5"] { --canvas-node-color: var(--canvas-color-5); }
+.canvas-node[data-canvas-color="6"] { --canvas-node-color: var(--canvas-color-6); }
+
 .canvas-node.is-selected {
   border-color: var(--interactive-accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
@@ -3172,12 +3188,12 @@ select.dropdown:hover {
   top: -26px;
   font-size: var(--font-ui-small);
   font-weight: var(--font-weight-bold);
-  color: var(--text-muted);
+  color: var(--canvas-card-label-color);
 }
 
 .canvas-node-kind {
   margin-bottom: 6px;
-  color: var(--text-faint);
+  color: var(--canvas-card-label-color);
   font-size: var(--font-ui-smaller);
   font-weight: var(--font-weight-bold);
   text-transform: uppercase;
@@ -3212,6 +3228,57 @@ select.dropdown:hover {
   border-width: 0 2px 2px 0;
   cursor: nwse-resize;
 }
+
+.canvas-controls {
+  position: absolute;
+  z-index: 1000;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.canvas-controls button {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+}
+
+.canvas-toolbar {
+  position: absolute;
+  z-index: 1000;
+  left: 50%;
+  bottom: 16px;
+  display: flex;
+  padding: 4px;
+  transform: translateX(-50%);
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.canvas-toolbar button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+}
+
+.canvas-node-text {
+  height: 100%;
+  overflow: auto;
+  user-select: text;
+}
+
+.canvas-node-text > :first-child { margin-top: 0; }
+.canvas-node-text > :last-child { margin-bottom: 0; }
 
 .canvas-error {
   width: 420px;

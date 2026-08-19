@@ -223,6 +223,10 @@ export class FileExplorerView implements View {
         action: () => this.app.createNewNote(folder.path),
       },
       {
+        title: "New canvas",
+        action: () => this.app.createNewCanvas(folder.path),
+      },
+      {
         title: "New base",
         action: () => this.app.createNewBase(folder.path),
       },
