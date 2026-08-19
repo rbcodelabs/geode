@@ -865,15 +865,13 @@ export class CanvasView implements View {
       this.beginNodeDuplication(event, node);
       return;
     }
+    const wasSelected = this.selectedIds.has(node.id);
     if (node.type === "group") {
       this.selectedEdgeId = null;
       this.selectedIds.clear();
       this.selectedIds.add(node.id);
       this.updateSelectionClasses();
-    } else {
-      this.select(node, event.shiftKey);
     }
-    if (!this.selectedIds.has(node.id)) return;
     const start = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
     const carried = node.type === "group"
       ? this.document.nodes
@@ -883,10 +881,30 @@ export class CanvasView implements View {
           && candidate.x + candidate.width <= node.x + node.width
           && candidate.y + candidate.height <= node.y + node.height)
         .map((candidate) => ({ node: candidate, x: candidate.x, y: candidate.y }))
-      : [];
+      : wasSelected
+        ? this.document.nodes
+          .filter((candidate) => candidate.id !== node.id && candidate.type !== "group" && this.selectedIds.has(candidate.id))
+          .map((candidate) => ({ node: candidate, x: candidate.x, y: candidate.y }))
+        : [];
+    let didMove = false;
     const move = (next: PointerEvent) => {
-      const dx = (next.clientX - start.x) / this.scale;
-      const dy = (next.clientY - start.y) / this.scale;
+      if (!didMove) {
+        didMove = true;
+        if (node.type !== "group" && !wasSelected) {
+          this.selectedEdgeId = null;
+          this.selectedIds.clear();
+          this.selectedIds.add(node.id);
+          this.updateSelectionClasses();
+        }
+      }
+      let screenDx = next.clientX - start.x;
+      let screenDy = next.clientY - start.y;
+      if (node.type !== "group" && next.shiftKey) {
+        if (Math.abs(screenDx) >= Math.abs(screenDy)) screenDy = 0;
+        else screenDx = 0;
+      }
+      const dx = screenDx / this.scale;
+      const dy = screenDy / this.scale;
       node.x = start.nodeX + dx;
       node.y = start.nodeY + dy;
       for (const member of carried) {
@@ -895,7 +913,15 @@ export class CanvasView implements View {
       }
       this.render();
     };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); void this.persist(); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (!didMove && node.type !== "group") {
+        this.select(node, event.shiftKey);
+        return;
+      }
+      void this.persist();
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
