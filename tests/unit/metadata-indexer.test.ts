@@ -43,6 +43,7 @@ describe("metadata utility-process indexer", () => {
       frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [content],
     }));
 
+    const stats = vi.fn();
     const result = await reconcileMetadataIndex(
       [
         { path: "same.md", mtimeMs: 1, size: 4 },
@@ -52,11 +53,13 @@ describe("metadata utility-process indexer", () => {
       persisted,
       read,
       parse,
+      stats,
     );
 
     expect(read.mock.calls.map(([path]) => path)).toEqual(["changed.md", "new.md"]);
     expect(Object.keys(result.entries).sort()).toEqual(["changed.md", "new.md", "same.md"]);
     expect(result.entries["same.md"]).toBe(persisted.entries["same.md"]);
+    expect(stats).toHaveBeenCalledWith({ totalFiles: 3, parsedFiles: 2, reusedFiles: 1, deletedFiles: 1 });
   });
 
   it("coalesces cache writes and flushes the latest snapshot on shutdown", async () => {

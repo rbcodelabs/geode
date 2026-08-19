@@ -20,6 +20,13 @@ export interface MetadataFileStat {
   size: number;
 }
 
+export interface MetadataReconcileStats {
+  totalFiles: number;
+  parsedFiles: number;
+  reusedFiles: number;
+  deletedFiles: number;
+}
+
 export const METADATA_SNAPSHOT_CHUNK_MAX_BYTES = 256 * 1024;
 export const METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES = 50;
 
@@ -91,12 +98,17 @@ export async function reconcileMetadataIndex(
   persisted: MetadataIndexSnapshot | null,
   read: (path: string) => Promise<string>,
   parse: (content: string) => CachedMetadata,
+  onComplete?: (stats: MetadataReconcileStats) => void,
 ): Promise<MetadataIndexSnapshot> {
   const entries: Record<string, MetadataIndexEntry> = {};
+  const currentPaths = new Set(files.map((file) => file.path));
+  let parsedFiles = 0;
+  let reusedFiles = 0;
   for (const file of files) {
     const previous = persisted?.entries[file.path];
     if (previous && previous.mtimeMs === file.mtimeMs && previous.size === file.size) {
       entries[file.path] = previous;
+      reusedFiles += 1;
       continue;
     }
     const content = await read(file.path);
@@ -106,7 +118,14 @@ export async function reconcileMetadataIndex(
       content,
       metadata: parse(content),
     };
+    parsedFiles += 1;
   }
+  onComplete?.({
+    totalFiles: files.length,
+    parsedFiles,
+    reusedFiles,
+    deletedFiles: Object.keys(persisted?.entries ?? {}).filter((path) => !currentPaths.has(path)).length,
+  });
   return { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries };
 }
 

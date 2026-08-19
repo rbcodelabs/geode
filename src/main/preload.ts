@@ -84,7 +84,8 @@ const api = {
 
 // A main-process watchdog can distinguish a wedged renderer from a merely
 // crashed one. backgroundThrottling is disabled for this window in main.ts.
-const heartbeat = setInterval(() => ipcRenderer.send("renderer-heartbeat"), 5_000);
+const heartbeatIntervalMs = Number(process.env.GEODE_TEST_HEARTBEAT_INTERVAL_MS ?? 5_000);
+const heartbeat = setInterval(() => ipcRenderer.send("renderer-heartbeat"), heartbeatIntervalMs);
 heartbeat.unref?.();
 ipcRenderer.send("renderer-heartbeat");
 

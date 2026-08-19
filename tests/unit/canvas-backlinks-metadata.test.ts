@@ -33,6 +33,7 @@ describe("MetadataCache Canvas note-card backlinks", () => {
       "Target.md": targetText,
       "Board.canvas": canvas(["Target.md"]),
     });
+    const targetFile = fake.getFileByPath("Target.md")!;
     let deliver: (message: unknown) => void = () => {};
     const api = {
       readMetadataCache: vi.fn(),
@@ -42,8 +43,8 @@ describe("MetadataCache Canvas note-card backlinks", () => {
         deliver({ type: "snapshot-start", schemaVersion: METADATA_CACHE_SCHEMA_VERSION, totalEntries: 1 });
         deliver({ type: "snapshot-chunk", sequence: 0, entries: {
           "Target.md": {
-            mtimeMs: 1,
-            size: targetText.length,
+            mtimeMs: targetFile.mtime,
+            size: targetFile.size,
             content: targetText,
             metadata: parseMetadata(targetText),
           },
@@ -56,9 +57,10 @@ describe("MetadataCache Canvas note-card backlinks", () => {
     const readSpy = vi.spyOn(fake, "cachedRead");
     const cache = new MetadataCache(fake.asVault());
     await cache.initialize();
+    await cache.waitForBackgroundIdle();
 
     expect(readSpy.mock.calls.map(([file]) => file.path)).toEqual(["Board.canvas"]);
-    expect(api.readMetadataCache).not.toHaveBeenCalled();
+    expect(api.readMetadataCache).toHaveBeenCalledOnce();
     expect(api.writeMetadataCache).not.toHaveBeenCalled();
     expect(cache.resolvedLinks["Board.canvas"]?.["Target.md"]).toBe(1);
   });
