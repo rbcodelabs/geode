@@ -151,6 +151,32 @@ export function projectCanvasForSearch(source: string): string | null {
   return values.join("\n");
 }
 
+export interface CanvasFileLinkProjection {
+  link: string;
+  context: string;
+}
+
+/**
+ * Project file cards for MetadataCache without interpreting text-card
+ * Markdown or exposing raw JSON as backlink context. Resolution remains the
+ * cache's responsibility because only targets that resolve to Markdown notes
+ * are backlinks; this helper deliberately preserves every file-card target.
+ */
+export function projectCanvasFileLinks(source: string): CanvasFileLinkProjection[] | null {
+  let canvas: CanvasDocument;
+  try {
+    canvas = parseCanvas(source);
+  } catch {
+    return null;
+  }
+  return canvas.nodes
+    .filter((node): node is CanvasFileNode => node.type === "file")
+    .map((node) => {
+      const link = node.file + (node.subpath ?? "");
+      return { link, context: `Note card: ${link}` };
+    });
+}
+
 export function serializeCanvas(canvas: CanvasDocument): string {
   return JSON.stringify(canvas, null, 2) + "\n";
 }
