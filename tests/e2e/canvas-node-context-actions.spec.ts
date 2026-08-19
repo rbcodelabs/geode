@@ -99,7 +99,7 @@ test("exposes exact Canvas node actions and deletes the context selection", asyn
     // and valid canonical web cards expose their respective middle actions.
     for (const [id, actions] of [
       ["text-a", ["Zoom to selection", "Edit", "Convert to file…", "Create group", "Delete"]],
-      ["group", ["Zoom to selection", "Set background", "Delete"]],
+      ["group", ["Zoom to selection", "Edit label", "Set background", "Delete"]],
       ["note", ["Zoom to selection", "Swap file", "Create group", "Delete"]],
       ["media", ["Zoom to selection", "Swap file", "Create group", "Delete"]],
       ["web-valid", ["Zoom to selection", "Open in browser", "Create group", "Delete"]],

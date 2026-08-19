@@ -75,7 +75,7 @@ test("converts a Canvas text card in place to a collision-safe sibling note", as
 
     // Only text cards expose the action, immediately before Delete.
     for (const [id, actions] of [
-      ["group", ["Zoom to selection", "Set background", "Delete"]],
+      ["group", ["Zoom to selection", "Edit label", "Set background", "Delete"]],
       ["existing-note", ["Zoom to selection", "Swap file", "Create group", "Delete"]],
       ["web", ["Zoom to selection", "Open in browser", "Create group", "Delete"]],
     ] as Array<[string, string[]]>) {

@@ -407,11 +407,12 @@ export class CanvasView implements View {
       }
       if (node.type === "group") {
         const menuPoint = { x: event.clientX, y: event.clientY };
+        items.push({ title: "Edit label", action: () => this.editGroupLabel(node.id) });
         items.push({ title: "Set background", action: () => this.openGroupBackgroundPicker(node.id, menuPoint) });
         if (node.background) {
           items.push({
             title: "Set background style",
-            action: () => this.openGroupBackgroundStyleMenu(node.id, node.background!, menuPoint),
+            action: () => this.openCurrentGroupBackgroundStyleMenu(node.id, menuPoint),
           });
           items.push({ title: "Remove background", action: () => this.removeGroupBackground(node.id) });
         }
@@ -886,6 +887,12 @@ export class CanvasView implements View {
     ]);
   }
 
+  private openCurrentGroupBackgroundStyleMenu(nodeId: string, menuPoint: Point): void {
+    const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type !== "group" || !node.background) return;
+    this.openGroupBackgroundStyleMenu(nodeId, node.background, menuPoint);
+  }
+
   private setGroupBackground(
     nodeId: string,
     background: string,
@@ -1011,8 +1018,16 @@ export class CanvasView implements View {
       return;
     }
     const soleEdgeId = this.selectedEdgeIds.size === 1 ? [...this.selectedEdgeIds][0] : null;
-    const selectionKind = soleEdgeId ? "edge" : this.selectedEdgeIds.size > 1 ? "edges" : "nodes";
-    const selectionKey = soleEdgeId ? `${selectionKind}:${soleEdgeId}` : selectionKind;
+    const soleNodeId = this.selectedEdgeIds.size === 0 && this.selectedIds.size === 1 ? [...this.selectedIds][0] : null;
+    const soleGroup = soleNodeId
+      ? this.document.nodes.find((node) => node.id === soleNodeId && node.type === "group")
+      : null;
+    const selectionKind = soleEdgeId ? "edge" : this.selectedEdgeIds.size > 1 ? "edges" : soleGroup ? "group" : "nodes";
+    const selectionKey = soleEdgeId
+      ? `${selectionKind}:${soleEdgeId}`
+      : soleGroup
+        ? `${selectionKind}:${soleGroup.id}:${soleGroup.background ? "background" : "plain"}`
+        : selectionKind;
     if (this.selectionControlsEl?.isConnected && this.selectionControlsEl.dataset.selectionKey === selectionKey) return;
     this.selectionControlsEl?.remove();
     this.colorPaletteEl = null;
@@ -1040,6 +1055,29 @@ export class CanvasView implements View {
       editLabel.setAttribute("aria-label", "Edit label");
       editLabel.addEventListener("click", () => this.editEdgeLabel(soleEdgeId));
       controls.appendChild(editLabel);
+    }
+    if (soleGroup) {
+      const menuPoint = () => {
+        const rect = controls.getBoundingClientRect();
+        return {
+          x: Math.max(0, Math.min(rect.left, window.innerWidth - 1)),
+          y: Math.max(0, Math.min(rect.bottom, window.innerHeight - 1)),
+        };
+      };
+      const action = (title: string, handler: () => void) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = title;
+        button.setAttribute("aria-label", title);
+        button.addEventListener("click", handler);
+        controls.appendChild(button);
+      };
+      action("Edit label", () => this.editGroupLabel(soleGroup.id));
+      action("Set background", () => this.openGroupBackgroundPicker(soleGroup.id, menuPoint()));
+      if (soleGroup.background) {
+        action("Set background style", () => this.openCurrentGroupBackgroundStyleMenu(soleGroup.id, menuPoint()));
+        action("Remove background", () => this.removeGroupBackground(soleGroup.id));
+      }
     }
     controls.appendChild(remove);
     this.surfaceEl.appendChild(controls);

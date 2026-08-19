@@ -127,7 +127,7 @@ test("swaps resolved Canvas media file cards only within their exact media kind"
       ["missing", ["Zoom to selection", "Create group", "Delete"]],
       ["text", ["Zoom to selection", "Edit", "Convert to file…", "Create group", "Delete"]],
       ["link", ["Zoom to selection", "Open in browser", "Create group", "Delete"]],
-      ["group", ["Zoom to selection", "Set background", "Delete"]],
+      ["group", ["Zoom to selection", "Edit label", "Set background", "Delete"]],
     ] as Array<[string, string[]]>) {
       await openMenu(window, view, id, menu);
       await window.keyboard.press("Escape");

@@ -100,7 +100,7 @@ test("Canvas node context menu zooms to the preserved or newly selected nodes", 
 
     const group = view.locator('.canvas-node[data-node-id="group"]');
     await group.click({ button: "right", position: { x: 40, y: 40 } });
-    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Set background", "Delete"]);
+    await expect(window.locator(".context-menu-item")).toHaveText(["Zoom to selection", "Edit label", "Set background", "Delete"]);
     expect(await selectedIds(view)).toEqual(multiSelection);
     await window.locator(".context-menu-item", { hasText: "Zoom to selection" }).click();
     expect(await camera(view)).toEqual(shortcutCamera);

@@ -95,7 +95,7 @@ test("creates padded Canvas groups from an eligible node context selection", asy
 
     // Group, edge, and true-empty menus retain their existing exact contracts.
     await view.locator('.canvas-node[data-node-id="group-1"]').click({ button: "right", position: { x: 20, y: 20 } });
-    await expect(menuItems).toHaveText(["Zoom to selection", "Set background", "Delete"]);
+    await expect(menuItems).toHaveText(["Zoom to selection", "Edit label", "Set background", "Delete"]);
     await view.locator(".view-header").click();
     await view.locator('.canvas-edge-hit[data-edge-id="edge-1"]').dispatchEvent("contextmenu", { clientX: 200, clientY: 150 });
     await expect(menuItems).toHaveText(["Edit label", "Go to target", "Go to source", "Remove"]);
@@ -156,7 +156,7 @@ test("creates padded Canvas groups from an eligible node context selection", asy
       id: "group-3", type: "group", x: 60, y: 60, width: 540, height: 280, label: "Context selection",
     });
     await group3.click({ button: "right", position: { x: 20, y: 20 } });
-    await expect(menuItems).toHaveText(["Zoom to selection", "Set background", "Delete"]);
+    await expect(menuItems).toHaveText(["Zoom to selection", "Edit label", "Set background", "Delete"]);
     await view.locator(".view-header").click();
 
     await window.reload();

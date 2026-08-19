@@ -78,7 +78,7 @@ test("edits only Canvas text cards through the exact context action", async () =
     await dismissMenu(window, view);
     await openMenu(window, view, "web", ["Zoom to selection", "Open in browser", "Create group", "Delete"]);
     await dismissMenu(window, view);
-    await openMenu(window, view, "group", ["Zoom to selection", "Set background", "Delete"]);
+    await openMenu(window, view, "group", ["Zoom to selection", "Edit label", "Set background", "Delete"]);
     await dismissMenu(window, view);
 
     await view.locator('.canvas-edge-hit[data-edge-id="edge-1"]').dispatchEvent("click");

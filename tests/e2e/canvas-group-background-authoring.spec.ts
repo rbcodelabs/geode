@@ -4,8 +4,8 @@ import * as path from "node:path";
 import { _electron as electron, expect, test, type Locator, type Page } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
-const noBackgroundMenu = ["Zoom to selection", "Set background", "Delete"];
-const backgroundMenu = ["Zoom to selection", "Set background", "Set background style", "Remove background", "Delete"];
+const noBackgroundMenu = ["Zoom to selection", "Edit label", "Set background", "Delete"];
+const backgroundMenu = ["Zoom to selection", "Edit label", "Set background", "Set background style", "Remove background", "Delete"];
 const styleMenu = ["Cover", "Ratio", "Repeat"];
 
 async function camera(view: Locator): Promise<Record<string, string | null>> {
