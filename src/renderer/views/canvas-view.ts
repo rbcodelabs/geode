@@ -20,6 +20,7 @@ const LINK_NODE_HEIGHT = 180;
 const GROUP_PADDING = 40;
 const DEFAULT_GROUP_WIDTH = 400;
 const DEFAULT_GROUP_HEIGHT = 300;
+const INVALID_MARKDOWN_FILE_NAME = /[\\/:#|^\[\]]/;
 
 type Point = { x: number; y: number };
 type Bounds = { left: number; top: number; right: number; bottom: number };
@@ -353,6 +354,9 @@ export class CanvasView implements View {
       if (node.type === "link") {
         const canonical = normalizeWebUrl(node.url);
         if (canonical) items.push({ title: "Open in browser", action: () => { void window.geode.openExternal(canonical); } });
+      }
+      if (node.type === "text") {
+        items.push({ title: "Convert to file…", action: () => this.openConvertTextNodePrompt(node.id) });
       }
       items.push({ title: "Delete", action: () => this.deleteSelectedNodes() });
       this.app.showMenu(event, items);
@@ -738,6 +742,35 @@ export class CanvasView implements View {
       this.render();
       void this.persist();
     });
+  }
+
+  private openConvertTextNodePrompt(nodeId: string): void {
+    new PromptModal(this.app, {
+      placeholder: "File name…",
+      initialValue: "Untitled",
+      allowEmptySubmit: true,
+      onSubmit: (name) => { void this.convertTextNodeToFile(nodeId, name); },
+    }).open();
+  }
+
+  private async convertTextNodeToFile(nodeId: string, rawName: string): Promise<void> {
+    const base = rawName.trim().replace(/\.md$/i, "").trim();
+    if (!base || INVALID_MARKDOWN_FILE_NAME.test(base)) {
+      this.app.notify("Enter a valid file name.");
+      return;
+    }
+    const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type !== "text") return;
+    const filePath = this.app.vault.availablePath(this.file?.parent ?? "", base, "md");
+    await this.app.vault.create(filePath, node.text);
+    if (!this.document.nodes.includes(node) || node.type !== "text") return;
+    const converted = node as unknown as Record<string, unknown>;
+    converted.type = "file";
+    converted.file = filePath;
+    delete converted.text;
+    delete converted.subpath;
+    this.render();
+    void this.persist();
   }
 
   private canvasColor(color: string): string {

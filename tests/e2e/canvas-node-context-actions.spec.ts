@@ -98,7 +98,7 @@ test("exposes exact Canvas node actions and deletes the context selection", asyn
     // Every representative node type ends with Delete. Only resolved Markdown
     // and valid canonical web cards expose their respective middle actions.
     for (const [id, actions] of [
-      ["text-a", ["Zoom to selection", "Delete"]],
+      ["text-a", ["Zoom to selection", "Convert to file…", "Delete"]],
       ["group", ["Zoom to selection", "Delete"]],
       ["note", ["Zoom to selection", "Swap file", "Delete"]],
       ["media", ["Zoom to selection", "Delete"]],
@@ -135,7 +135,7 @@ test("exposes exact Canvas node actions and deletes the context selection", asyn
     await marquee(view, surface, window, { x: -20, y: -20 }, { x: 420, y: 120 });
     expect(await selectedIds(view)).toEqual(["text-a", "text-b"]);
     const beforeMultiDelete = fs.readFileSync(canvasPath, "utf8");
-    await expectNodeMenu(view, window, "text-a", ["Zoom to selection", "Delete"]);
+    await expectNodeMenu(view, window, "text-a", ["Zoom to selection", "Convert to file…", "Delete"]);
     expect(await selectedIds(view)).toEqual(["text-a", "text-b"]);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(beforeMultiDelete);
     await window.locator(".context-menu-item", { hasText: /^Delete$/ }).click();
@@ -154,7 +154,7 @@ test("exposes exact Canvas node actions and deletes the context selection", asyn
     await marquee(view, surface, window, { x: 245, y: 485 }, { x: 455, y: 620 });
     expect(await selectedIds(view)).toEqual(["keeper"]);
     const beforeSoleDelete = fs.readFileSync(canvasPath, "utf8");
-    await expectNodeMenu(view, window, "sole", ["Zoom to selection", "Delete"]);
+    await expectNodeMenu(view, window, "sole", ["Zoom to selection", "Convert to file…", "Delete"]);
     expect(await selectedIds(view)).toEqual(["sole"]);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(beforeSoleDelete);
     await window.locator(".context-menu-item", { hasText: /^Delete$/ }).click();
