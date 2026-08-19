@@ -91,7 +91,7 @@ test("moves the stable geometric membership snapshot with a dragged Canvas group
     expect(await geometry(insideB)).toEqual({ x: 300, y: 260 });
     expect(await geometry(partial)).toEqual({ x: 560, y: 180 });
     expect(await geometry(outside)).toEqual({ x: 650, y: 180 });
-    expect(await geometry(nested)).toEqual({ x: 420, y: 300 });
+    expect(await geometry(nested)).toEqual({ x: 470, y: 340 });
     expect(await edge.getAttribute("d")).not.toBe(edgePathBefore);
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBeforeDrag);
     await window.mouse.up();
@@ -102,7 +102,7 @@ test("moves the stable geometric membership snapshot with a dragged Canvas group
       return Object.fromEntries(doc.nodes.map((node: { id: string; x: number; y: number }) => [node.id, [node.x, node.y]]));
     }).toEqual({
       outer: [150, 140],
-      nested: [420, 300],
+      nested: [470, 340],
       "inside-a": [150, 140],
       "inside-b": [300, 260],
       partial: [560, 180],
@@ -160,6 +160,7 @@ test("moves the stable geometric membership snapshot with a dragged Canvas group
     expect(await geometry(view.locator('.canvas-node[data-node-id="inside-b"]'))).toEqual({ x: 270, y: 310 });
     expect(await geometry(view.locator('.canvas-node[data-node-id="outside"]'))).toEqual({ x: 420, y: 270 });
     expect(await geometry(view.locator('.canvas-node[data-node-id="partial"]'))).toEqual({ x: 560, y: 180 });
+    expect(await geometry(view.locator('.canvas-node[data-node-id="nested"]'))).toEqual({ x: 440, y: 390 });
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(beforeSecond);
     await window.mouse.up();
 

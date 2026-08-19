@@ -1233,7 +1233,7 @@ export class CanvasView implements View {
     const start = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
     const carried = node.type === "group"
       ? this.document.nodes
-        .filter((candidate) => candidate.type !== "group"
+        .filter((candidate) => candidate !== node
           && candidate.x >= node.x
           && candidate.y >= node.y
           && candidate.x + candidate.width <= node.x + node.width
