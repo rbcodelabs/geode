@@ -1,4 +1,5 @@
 import type { App } from "../app";
+import { projectCanvasForSearch } from "../canvas/canvas-data";
 import type { View } from "../workspace";
 import { TFile, TagCache } from "../types";
 
@@ -158,12 +159,16 @@ export class SearchView implements View {
       return;
     }
     const matches: SearchMatch[] = [];
-    for (const file of this.app.vault.getMarkdownFiles()) {
+    const markdownPaths = new Set(this.app.vault.getMarkdownFiles().map((file) => file.path));
+    const files = this.app.vault.getFiles().filter((file) => markdownPaths.has(file.path) || file.extension === "canvas");
+    for (const file of files) {
       let content: string | null = null;
       const needsContent = terms.some((t) => ["text", "content", "line"].includes(t.op) || t.regex);
       if (needsContent) {
         try {
-          content = await this.app.vault.cachedRead(file);
+          const source = await this.app.vault.cachedRead(file);
+          content = file.extension === "canvas" ? projectCanvasForSearch(source) : source;
+          if (file.extension === "canvas" && content == null) continue;
         } catch {
           continue;
         }
@@ -177,7 +182,9 @@ export class SearchView implements View {
   }
 
   private matchFile(file: TFile, content: string | null, terms: SearchTerm[]): SearchMatch | null {
-    const getTags = (f: TFile) => this.app.metadataCache.getFileCache(f)?.tags ?? [];
+    const getTags = (f: TFile) => f.extension === "canvas"
+      ? []
+      : this.app.metadataCache.getFileCache(f)?.tags ?? [];
     return matchFileAgainstTerms(file, content, terms, getTags);
   }
 

@@ -122,6 +122,35 @@ export function parseCanvas(source: string): CanvasDocument {
   return { ...raw, nodes, edges };
 }
 
+/**
+ * Build the content Search indexes for a JSON Canvas without exposing JSON
+ * syntax, geometry, IDs, colors, or vendor extension fields as false hits.
+ * Invalid documents have no semantic content rather than falling back to raw
+ * JSON, so malformed files cannot fabricate search results.
+ */
+export function projectCanvasForSearch(source: string): string | null {
+  let canvas: CanvasDocument;
+  try {
+    canvas = parseCanvas(source);
+  } catch {
+    return null;
+  }
+  const values: string[] = [];
+  for (const node of canvas.nodes) {
+    if (node.type === "text") values.push(node.text);
+    else if (node.type === "file") values.push(node.file + (node.subpath ?? ""));
+    else if (node.type === "link") values.push(node.url);
+    else {
+      if (node.label) values.push(node.label);
+      if (node.background) values.push(node.background);
+    }
+  }
+  for (const edge of canvas.edges) {
+    if (edge.label) values.push(edge.label);
+  }
+  return values.join("\n");
+}
+
 export function serializeCanvas(canvas: CanvasDocument): string {
   return JSON.stringify(canvas, null, 2) + "\n";
 }
