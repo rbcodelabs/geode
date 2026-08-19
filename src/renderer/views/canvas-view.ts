@@ -22,6 +22,7 @@ const DEFAULT_GROUP_WIDTH = 400;
 const DEFAULT_GROUP_HEIGHT = 300;
 
 type Point = { x: number; y: number };
+type Bounds = { left: number; top: number; right: number; bottom: number };
 
 function normalizeWebUrl(raw: string): string | null {
   try {
@@ -1185,6 +1186,13 @@ export class CanvasView implements View {
   private handleKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement;
     if (target.matches("textarea, input, [contenteditable=true]")) return;
+    if (event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.code === "Digit1") this.fitToContent();
+      else this.fitToSelection();
+      return;
+    }
     if (event.code === "Space") {
       this.spacePressed = true;
       event.preventDefault();
@@ -1279,10 +1287,31 @@ export class CanvasView implements View {
       this.resetCamera();
       return;
     }
-    const left = Math.min(...this.document.nodes.map((node) => node.x));
-    const top = Math.min(...this.document.nodes.map((node) => node.y));
-    const right = Math.max(...this.document.nodes.map((node) => node.x + node.width));
-    const bottom = Math.max(...this.document.nodes.map((node) => node.y + node.height));
+    this.fitToNodes(this.document.nodes);
+  }
+
+  private fitToSelection(): void {
+    let nodes = this.document.nodes.filter((node) => this.selectedIds.has(node.id));
+    if (nodes.length === 0 && this.selectedEdgeId) {
+      const edge = this.document.edges.find((candidate) => candidate.id === this.selectedEdgeId);
+      if (edge) {
+        const endpointIds = new Set([edge.fromNode, edge.toNode]);
+        nodes = this.document.nodes.filter((node) => endpointIds.has(node.id));
+      }
+    }
+    if (nodes.length > 0) this.fitToNodes(nodes);
+  }
+
+  private fitToNodes(nodes: CanvasNode[]): void {
+    this.fitToBounds({
+      left: Math.min(...nodes.map((node) => node.x)),
+      top: Math.min(...nodes.map((node) => node.y)),
+      right: Math.max(...nodes.map((node) => node.x + node.width)),
+      bottom: Math.max(...nodes.map((node) => node.y + node.height)),
+    });
+  }
+
+  private fitToBounds({ left, top, right, bottom }: Bounds): void {
     const padding = 80;
     const width = Math.max(1, right - left);
     const height = Math.max(1, bottom - top);
