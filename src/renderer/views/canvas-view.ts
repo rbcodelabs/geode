@@ -361,7 +361,7 @@ export class CanvasView implements View {
       if (node.type === "text") {
         items.push({ title: "Convert to file…", action: () => this.openConvertTextNodePrompt(node.id) });
       }
-      items.push({ title: "Delete", action: () => this.deleteSelectedNodes() });
+      items.push({ title: "Delete", action: () => this.deleteSelection() });
       this.app.showMenu(event, items);
     });
     if (node.type !== "group") {
@@ -838,7 +838,14 @@ export class CanvasView implements View {
     setColor.textContent = "Set color";
     setColor.setAttribute("aria-label", "Set color");
     setColor.addEventListener("click", () => this.openColorPalette());
-    controls.appendChild(setColor);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "canvas-selection-remove";
+    remove.title = "Remove";
+    remove.setAttribute("aria-label", "Remove");
+    setIcon(remove, "trash-2");
+    remove.addEventListener("click", () => this.deleteSelection());
+    controls.append(setColor, remove);
     this.surfaceEl.appendChild(controls);
     this.selectionControlsEl = controls;
   }
@@ -1456,26 +1463,23 @@ export class CanvasView implements View {
       this.updateSelectionClasses();
       return;
     }
-    if ((event.key === "Backspace" || event.key === "Delete") && this.selectedEdgeId) {
+    if ((event.key === "Backspace" || event.key === "Delete") && (this.selectedEdgeId || this.selectedIds.size > 0)) {
       event.preventDefault();
-      const removed = this.selectedEdgeId;
-      this.document.edges = this.document.edges.filter((edge) => edge.id !== removed);
-      this.selectedEdgeId = null;
-      this.render();
-      void this.persist();
-      return;
-    }
-    if ((event.key === "Backspace" || event.key === "Delete") && this.selectedIds.size > 0) {
-      event.preventDefault();
-      this.deleteSelectedNodes();
+      this.deleteSelection();
     }
   }
 
-  private deleteSelectedNodes(): void {
-    if (this.selectedIds.size === 0) return;
-    const removed = new Set(this.selectedIds);
-    this.document.nodes = this.document.nodes.filter((node) => !removed.has(node.id));
-    this.document.edges = this.document.edges.filter((edge) => !removed.has(edge.fromNode) && !removed.has(edge.toNode));
+  private deleteSelection(): void {
+    if (this.selectedEdgeId) {
+      const removedEdge = this.selectedEdgeId;
+      this.document.edges = this.document.edges.filter((edge) => edge.id !== removedEdge);
+    } else if (this.selectedIds.size > 0) {
+      const removedNodes = new Set(this.selectedIds);
+      this.document.nodes = this.document.nodes.filter((node) => !removedNodes.has(node.id));
+      this.document.edges = this.document.edges.filter((edge) => !removedNodes.has(edge.fromNode) && !removedNodes.has(edge.toNode));
+    } else {
+      return;
+    }
     this.selectedIds.clear();
     this.selectedEdgeId = null;
     this.render();
