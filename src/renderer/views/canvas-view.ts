@@ -22,6 +22,7 @@ const GROUP_PADDING = 40;
 const DEFAULT_GROUP_WIDTH = 400;
 const DEFAULT_GROUP_HEIGHT = 300;
 const ALIGNMENT_SNAP_TOLERANCE_PX = 6;
+const HISTORY_LIMIT = 100;
 const INVALID_MARKDOWN_FILE_NAME = /[\\/:#|^\[\]]/;
 
 type Point = { x: number; y: number };
@@ -93,6 +94,8 @@ export class CanvasView implements View {
   private scale = 1;
   private spacePressed = false;
   private lastKnownText: string | null = null;
+  private readonly undoStack: string[] = [];
+  private readonly redoStack: string[] = [];
   private readonly objectUrls = new Set<string>();
   private readonly markdownContentEls = new Set<HTMLElement>();
   private renderVersion = 0;
@@ -135,7 +138,7 @@ export class CanvasView implements View {
     this.file = file;
     this.titleEl.textContent = file.basename;
     if (this.containerEl.classList.contains("canvas-embed-view")) this.containerEl.dataset.canvasPath = file.path;
-    await this.load(await this.app.vault.read(file));
+    await this.load(await this.app.vault.read(file), true);
   }
 
   /** Mount the real Canvas surface without its normal workspace-tab header. */
@@ -158,11 +161,12 @@ export class CanvasView implements View {
   private readonly onVaultModify = async (file?: TFile) => {
     if (!file || file.path !== this.file?.path) return;
     const text = await this.app.vault.read(file);
-    if (text !== this.lastKnownText) await this.load(text);
+    if (text !== this.lastKnownText) await this.load(text, true);
   };
 
-  private async load(text: string): Promise<void> {
+  private async load(text: string, resetHistory = false): Promise<void> {
     this.lastKnownText = text;
+    if (resetHistory) this.clearHistory();
     try {
       this.document = parseCanvas(text);
       this.containerEl.classList.remove("has-error");
@@ -2125,6 +2129,15 @@ export class CanvasView implements View {
   private handleKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement;
     if (target.matches("textarea, input, [contenteditable=true]")) return;
+    const modifier = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    if (modifier && (key === "z" || key === "y")) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (key === "y" || event.shiftKey) void this.restoreHistory("redo");
+      else void this.restoreHistory("undo");
+      return;
+    }
     if (event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
       event.preventDefault();
       event.stopPropagation();
@@ -2285,7 +2298,43 @@ export class CanvasView implements View {
   private async persist(): Promise<void> {
     if (!this.file) return;
     const text = serializeCanvas(this.document);
+    if (text === this.lastKnownText) return;
+    if (this.lastKnownText !== null) this.pushHistory(this.undoStack, this.lastKnownText);
+    this.redoStack.length = 0;
     this.lastKnownText = text;
     await this.app.vault.modify(this.file, text);
+  }
+
+  private clearHistory(): void {
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+  }
+
+  private pushHistory(stack: string[], snapshot: string): void {
+    stack.push(snapshot);
+    if (stack.length > HISTORY_LIMIT) stack.splice(0, stack.length - HISTORY_LIMIT);
+  }
+
+  private async restoreHistory(direction: "undo" | "redo"): Promise<void> {
+    if (!this.file) return;
+    const source = direction === "undo" ? this.undoStack : this.redoStack;
+    const target = direction === "undo" ? this.redoStack : this.undoStack;
+    const snapshot = source[source.length - 1];
+    const current = this.lastKnownText;
+    if (snapshot === undefined || current === null) return;
+    let restored: CanvasDocument;
+    try {
+      restored = parseCanvas(snapshot);
+    } catch {
+      return;
+    }
+    source.pop();
+    this.pushHistory(target, current);
+    this.document = restored;
+    this.lastKnownText = snapshot;
+    this.selectedIds.clear();
+    this.selectedEdgeIds.clear();
+    this.render();
+    await this.app.vault.modify(this.file, snapshot);
   }
 }
