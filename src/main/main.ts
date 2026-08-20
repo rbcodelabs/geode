@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
 import { selectVaultWindowAction } from "./vault-window-selection";
 import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-watchdog";
+import { listVaultFiles } from "./vault-files";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -177,74 +178,6 @@ function toRel(root: string, abs: string): string {
 function birthtimeOf(st: fs.Stats | null): number {
   if (!st) return 0;
   return st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs;
-}
-
-async function listVaultFiles(
-  root: string
-): Promise<{ path: string; isFolder: boolean; mtime: number; ctime: number; size: number }[]> {
-  const injectedDelayMs = Number(process.env.GEODE_TEST_VAULT_IO_DELAY_MS ?? 0);
-  const injectDelay = () => injectedDelayMs > 0
-    ? new Promise<void>((resolve) => setTimeout(resolve, injectedDelayMs))
-    : Promise.resolve();
-  type VaultEntry = { path: string; isFolder: boolean; mtime: number; ctime: number; size: number };
-  // Endpoint security can add material latency to every filesystem operation.
-  // Bound concurrency globally across the recursive walk so that latency is
-  // hidden without issuing an unbounded burst against a large vault.
-  const maxConcurrentOperations = 32;
-  let activeOperations = 0;
-  const waiters: Array<() => void> = [];
-  async function limited<T>(operation: () => Promise<T>): Promise<T> {
-    if (activeOperations >= maxConcurrentOperations) {
-      await new Promise<void>((resolve) => waiters.push(resolve));
-    }
-    activeOperations += 1;
-    try {
-      return await operation();
-    } finally {
-      activeOperations -= 1;
-      waiters.shift()?.();
-    }
-  }
-  async function walk(dir: string): Promise<VaultEntry[]> {
-    let entries;
-    try {
-      entries = await limited(async () => {
-        await injectDelay();
-        return fsp.readdir(dir, { withFileTypes: true });
-      });
-    } catch {
-      return [];
-    }
-    const nested = await Promise.all(entries.map(async (e): Promise<VaultEntry[]> => {
-      if (e.name.startsWith(".")) return []; // hidden files incl. .geode config dir
-      const abs = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        const [st, children] = await Promise.all([
-          limited(async () => {
-            await injectDelay();
-            return fsp.stat(abs).catch(() => null);
-          }),
-          walk(abs),
-        ]);
-        return [{ path: toRel(root, abs), isFolder: true, mtime: st?.mtimeMs ?? 0, ctime: birthtimeOf(st), size: 0 }, ...children];
-      } else if (e.isFile()) {
-        const st = await limited(async () => {
-          await injectDelay();
-          return fsp.stat(abs).catch(() => null);
-        });
-        return [{
-          path: toRel(root, abs),
-          isFolder: false,
-          mtime: st?.mtimeMs ?? 0,
-          ctime: birthtimeOf(st),
-          size: st?.size ?? 0,
-        }];
-      }
-      return [];
-    }));
-    return nested.flat();
-  }
-  return walk(root);
 }
 
 function startWatcher(win: BrowserWindow, root: string): FSWatcher {
