@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginManager } from "../../src/renderer/plugin-manager";
 import type { App } from "../../src/renderer/app";
 import { GEODE_API_VERSION } from "../../src/renderer/plugin-manifest";
+import { clearMeasures, getRecentMeasures } from "../../src/renderer/perf-instrumentation";
 
 /** Minimal manifest.json content, valid unless overridden. */
 function manifestJson(id: string, overrides: Record<string, unknown> = {}): string {
@@ -181,6 +182,7 @@ const fakeApp = {
 describe("PluginManager", () => {
   beforeEach(() => {
     (globalThis as any).__pluginLog = [];
+    clearMeasures();
   });
 
   afterEach(() => {
@@ -199,6 +201,57 @@ describe("PluginManager", () => {
     const ids = pm.listManifests().map((m) => m.id).sort();
     expect(ids).toEqual(["bar", "foo"]);
     expect(pm.getManifest("foo")?.name).toBe("Plugin foo");
+  });
+
+  it("reads manifests and activates independent startup plugins concurrently", async () => {
+    const ids = ["alpha", "beta", "gamma"];
+    const fs = installFakeGeode(ids);
+    for (const id of ids) {
+      fs.files.set(`.geode/plugins/${id}/manifest.json`, manifestJson(id));
+      fs.files.set(`.geode/plugins/${id}/main.js`, mainJsSource(id));
+    }
+    fs.config.set("plugins", ids);
+    const geode = (globalThis as any).window.geode;
+    const originalRead = geode.read.getMockImplementation();
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    geode.read.mockImplementation(async (path: string) => {
+      activeReads += 1;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      try {
+        return await originalRead(path);
+      } finally {
+        activeReads -= 1;
+      }
+    });
+
+    const pm = new PluginManager(fakeApp);
+    await pm.initialize();
+
+    expect(maxActiveReads).toBeGreaterThan(1);
+    expect(ids.every((id) => pm.isEnabled(id))).toBe(true);
+  });
+
+  it("records main queue, filesystem, and return IPC timing for plugin files", async () => {
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    const geode = (globalThis as any).window.geode;
+    geode.readPluginFile = vi.fn(async (path: string, rendererSentAt: number) => ({
+      ok: true,
+      content: fs.files.get(path),
+      mainReceivedAt: rendererSentAt + 2,
+      fsStartedAt: rendererSentAt + 3,
+      fsFinishedAt: rendererSentAt + 8,
+    }));
+
+    await new PluginManager(fakeApp).initialize();
+
+    expect(getRecentMeasures()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ op: "plugin-read-main-queue:foo:manifest.json", durationMs: 2 }),
+      expect.objectContaining({ op: "plugin-read-filesystem:foo:manifest.json", durationMs: 5 }),
+      expect.objectContaining({ op: "plugin-read-return-ipc:foo:manifest.json" }),
+    ]));
   });
 
   it("stamps manifest.dir with the plugin's vault-relative folder at load time (mirrors Obsidian)", async () => {

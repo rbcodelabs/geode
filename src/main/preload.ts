@@ -18,6 +18,15 @@ export interface VaultEvent {
   path: string;
 }
 
+export interface TimedPluginReadResult {
+  ok: boolean;
+  content?: string;
+  errorCode?: string;
+  mainReceivedAt: number;
+  fsStartedAt: number;
+  fsFinishedAt: number;
+}
+
 const api = {
   acquirePowerSaveBlocker: (): Promise<string> =>
     ipcRenderer.invoke("power-save-blocker-acquire"),
@@ -36,6 +45,8 @@ const api = {
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
   read: (path: string): Promise<string> => ipcRenderer.invoke("vault-read", path),
+  readPluginFile: (path: string, rendererSentAt: number): Promise<TimedPluginReadResult> =>
+    ipcRenderer.invoke("plugin-file-read", path, rendererSentAt),
   readBinary: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("vault-read-binary", path),
   write: (path: string, data: string): Promise<{ mtime: number; ctime: number; size: number }> =>

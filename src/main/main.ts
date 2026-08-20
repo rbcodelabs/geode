@@ -385,6 +385,26 @@ function registerIpc() {
     return fsp.readFile(resolveVaultPath(win, rel), "utf8");
   });
 
+  ipcMain.handle("plugin-file-read", async (e, rel: string, _rendererSentAt: number) => {
+    const mainReceivedAt = Date.now();
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const fsStartedAt = Date.now();
+    try {
+      const injectedDelayMs = Number(process.env.GEODE_TEST_PLUGIN_IO_DELAY_MS ?? 0);
+      if (injectedDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, injectedDelayMs));
+      const content = await fsp.readFile(resolveVaultPath(win, rel), "utf8");
+      return { ok: true, content, mainReceivedAt, fsStartedAt, fsFinishedAt: Date.now() };
+    } catch (error) {
+      return {
+        ok: false,
+        errorCode: (error as NodeJS.ErrnoException).code ?? "READ_FAILED",
+        mainReceivedAt,
+        fsStartedAt,
+        fsFinishedAt: Date.now(),
+      };
+    }
+  });
+
   ipcMain.handle("vault-read-binary", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const buf = await fsp.readFile(resolveVaultPath(win, rel));
@@ -497,16 +517,14 @@ function registerIpc() {
     } catch {
       return [];
     }
-    const ids: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const hasManifest = await fsp
-        .access(path.join(pluginsDir, entry.name, "manifest.json"))
+    const directories = entries.filter((entry) => entry.isDirectory());
+    const inspected = await Promise.all(directories.map(async (entry) => ({
+      id: entry.name,
+      hasManifest: await fsp.access(path.join(pluginsDir, entry.name, "manifest.json"))
         .then(() => true)
-        .catch(() => false);
-      if (hasManifest) ids.push(entry.name);
-    }
-    return ids;
+        .catch(() => false),
+    })));
+    return inspected.filter((entry) => entry.hasManifest).map((entry) => entry.id);
   });
 
   // Community themes: subdirectories of <vault>/.geode/themes/ that contain a
