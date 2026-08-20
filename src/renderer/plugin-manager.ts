@@ -8,7 +8,7 @@ import {
 } from "./plugin-manifest";
 import * as GeodeAPI from "./api/obsidian";
 import { isPluginBlocked, type ManagedPolicy } from "./policy";
-import { measureOperation } from "./perf-instrumentation";
+import { measureOperation, recordMeasure } from "./perf-instrumentation";
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
@@ -125,21 +125,22 @@ export class PluginManager {
    */
   async initialize(): Promise<void> {
     this.loadErrors.clear();
-    this.policy = await measureOperation("plugin-policy-read", async () =>
-      (await window.geode.getPluginPolicy?.()) ?? null
-    );
-    await measureOperation("plugin-discovery", () => this.rescan());
-
-    this.quarantine =
-      ((await window.geode.readConfig(QUARANTINE_KEY)) as Record<string, QuarantineEntry> | null) ?? {};
-    const recovery = await window.geode.getCrashRecoveryState?.();
+    const [policy, , quarantine, recovery, enabledConfig] = await Promise.all([
+      measureOperation("plugin-policy-read", async () => (await window.geode.getPluginPolicy?.()) ?? null),
+      measureOperation("plugin-discovery", () => this.rescan()),
+      window.geode.readConfig(QUARANTINE_KEY),
+      window.geode.getCrashRecoveryState?.(),
+      window.geode.readConfig(CONFIG_KEY),
+    ]);
+    this.policy = policy;
+    this.quarantine = (quarantine as Record<string, QuarantineEntry> | null) ?? {};
     this.recoveryMode = recovery?.suppressPlugins === true;
 
-    const enabledIds = ((await window.geode.readConfig(CONFIG_KEY)) as string[] | null) ?? [];
+    const enabledIds = (enabledConfig as string[] | null) ?? [];
     if (this.recoveryMode) return;
-    for (const id of enabledIds) {
-      if (!this.manifests.has(id)) continue;
-      if (this.quarantine[id]) continue;
+    await Promise.all(enabledIds.map(async (id) => {
+      if (!this.manifests.has(id)) return;
+      if (this.quarantine[id]) return;
       try {
         await measureOperation(`plugin-enable:${id}`, () => this.enable(id, { persist: false }));
       } catch (err) {
@@ -152,7 +153,7 @@ export class PluginManager {
           );
         }
       }
-    }
+    }));
   }
 
   isRecoveryMode(): boolean { return this.recoveryMode; }
@@ -193,14 +194,14 @@ export class PluginManager {
       return;
     }
     const present = new Set(ids);
-    for (const id of ids) {
+    await Promise.all(ids.map(async (id) => {
       try {
         this.manifests.set(id, await this.readManifest(id));
       } catch (err) {
         this.loadErrors.set(id, (err as Error).message);
         console.error(`Failed to read manifest for plugin "${id}"`, err);
       }
-    }
+    }));
     for (const id of [...this.manifests.keys()]) {
       if (!present.has(id) && !this.loaded.has(id)) this.manifests.delete(id);
     }
@@ -227,7 +228,7 @@ export class PluginManager {
 
   private async readManifest(id: string): Promise<PluginManifest> {
     const raw = await measureOperation(`plugin-manifest-read:${id}`, () =>
-      window.geode.read(`${pluginDir(id)}/manifest.json`)
+      this.readPluginFile(id, "manifest.json")
     );
     const manifest = parseManifest(raw, id);
     // Stamp the plugin's own vault-relative folder onto the manifest, exactly
@@ -279,7 +280,7 @@ export class PluginManager {
     }
 
     const code = await measureOperation(`plugin-code-read:${id}`, () =>
-      window.geode.read(`${pluginDir(id)}/main.js`)
+      this.readPluginFile(id, "main.js")
     );
     const PluginClass = instantiatePluginClass(code, id);
     const instance = new PluginClass(this.app, manifest);
@@ -364,7 +365,7 @@ export class PluginManager {
     if (typeof document === "undefined") return;
     let css: string;
     try {
-      css = await window.geode.read(`${pluginDir(id)}/styles.css`);
+      css = await this.readPluginFile(id, "styles.css");
     } catch {
       return; // no stylesheet
     }
@@ -373,6 +374,19 @@ export class PluginManager {
     styleEl.dataset.pluginId = id;
     styleEl.textContent = css;
     document.head.appendChild(styleEl);
+  }
+
+  private async readPluginFile(id: string, fileName: string): Promise<string> {
+    const api = window.geode;
+    if (!api.readPluginFile) return api.read(`${pluginDir(id)}/${fileName}`);
+    const rendererSentAt = Date.now();
+    const result = await api.readPluginFile(`${pluginDir(id)}/${fileName}`, rendererSentAt);
+    const rendererReceivedAt = Date.now();
+    recordMeasure(`plugin-read-main-queue:${id}:${fileName}`, Math.max(0, result.mainReceivedAt - rendererSentAt));
+    recordMeasure(`plugin-read-filesystem:${id}:${fileName}`, Math.max(0, result.fsFinishedAt - result.fsStartedAt));
+    recordMeasure(`plugin-read-return-ipc:${id}:${fileName}`, Math.max(0, rendererReceivedAt - result.fsFinishedAt));
+    if (!result.ok || result.content === undefined) throw new Error(`${result.errorCode ?? "READ_FAILED"}: ${fileName}`);
+    return result.content;
   }
 
   private removeStyles(id: string): void {
