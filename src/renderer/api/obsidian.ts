@@ -14,6 +14,7 @@ import type { App } from "../app";
 import { buildViewHeaderNavButtons, type WorkspaceLeaf, type View as GeodeView } from "../workspace";
 import { installObsidianDomExtensions } from "./obsidian-dom";
 import { addIcon, setIcon } from "./icons";
+import { computeAnchoredMenuPosition, type MenuHorizontalAlign } from "../menu-position";
 import type {
   MarkdownPostProcessor,
   MarkdownPostProcessorContext,
@@ -530,41 +531,66 @@ export abstract class PluginSettingTab {
 export class MenuItem {
   dom: HTMLElement;
   private clickCb?: (evt: MouseEvent | KeyboardEvent) => any;
+  private leadingIconEl: HTMLElement | null = null;
+  private checkedIconEl: HTMLElement | null = null;
   constructor(private menu: Menu) {
     this.dom = document.createElement("div");
-    this.dom.className = "menu-item";
+    this.dom.className = "menu-item tappable";
+    this.dom.tabIndex = -1;
     this.dom.addEventListener("click", (e) => {
-      this.clickCb?.(e);
+      if (this.dom.classList.contains("is-disabled") || this.dom.classList.contains("is-label")) return;
+      // Close (and restore the pre-menu focus target) before invoking the
+      // action. Actions commonly open a modal or inline editor; restoring
+      // focus after the callback would steal focus from that new surface.
       this.menu.hide();
+      this.clickCb?.(e);
     });
   }
-  setTitle(title: string): this {
+  setTitle(title: string | DocumentFragment): this {
     let titleEl = this.dom.querySelector(".menu-item-title") as HTMLElement | null;
     if (!titleEl) {
       titleEl = document.createElement("div");
       titleEl.className = "menu-item-title";
       this.dom.appendChild(titleEl);
     }
-    titleEl.textContent = title;
+    titleEl.replaceChildren();
+    if (typeof title === "string") titleEl.textContent = title;
+    else titleEl.appendChild(title);
     return this;
   }
   setIcon(icon: string | null): this {
+    this.leadingIconEl?.remove();
+    this.leadingIconEl = null;
     if (!icon) return this;
-    const iconEl = document.createElement("div");
-    iconEl.className = "menu-item-icon";
-    setIcon(iconEl, icon);
-    this.dom.prepend(iconEl);
+    this.leadingIconEl = document.createElement("div");
+    this.leadingIconEl.className = "menu-item-icon";
+    setIcon(this.leadingIconEl, icon);
+    this.dom.prepend(this.leadingIconEl);
     return this;
   }
-  setChecked(checked: boolean): this {
-    this.dom.classList.toggle("is-checked", checked);
+  setChecked(checked: boolean | null): this {
+    const enabled = checked === true;
+    this.dom.classList.toggle("mod-checked", enabled);
+    this.checkedIconEl?.remove();
+    this.checkedIconEl = null;
+    if (enabled) {
+      this.checkedIconEl = document.createElement("div");
+      this.checkedIconEl.className = "menu-item-icon mod-checked";
+      setIcon(this.checkedIconEl, "check");
+      this.dom.appendChild(this.checkedIconEl);
+    }
     return this;
   }
   setDisabled(disabled: boolean): this {
     this.dom.classList.toggle("is-disabled", disabled);
     return this;
   }
-  setSection(): this {
+  setIsLabel(isLabel: boolean): this {
+    this.dom.classList.toggle("is-label", isLabel);
+    return this;
+  }
+  setSection(section: string): this {
+    this.dom.dataset.section = section;
     return this;
   }
   onClick(cb: (evt: MouseEvent | KeyboardEvent) => any): this {
@@ -574,45 +600,189 @@ export class MenuItem {
 }
 
 export class Menu {
+  private static activeMenu: Menu | null = null;
   dom: HTMLElement;
   items: MenuItem[] = [];
+  private scrollEl: HTMLElement;
+  private entries: Array<MenuItem | "separator"> = [];
+  private hideCallbacks: Array<() => any> = [];
+  private ownerDocument: Document | null = null;
+  private previouslyFocused: HTMLElement | null = null;
+  private dismissMouseDown?: (event: MouseEvent) => void;
+  private keyDown?: (event: KeyboardEvent) => void;
   constructor() {
     this.dom = document.createElement("div");
     this.dom.className = "menu";
+    this.dom.tabIndex = -1;
+    const grabber = document.createElement("div");
+    grabber.className = "menu-grabber";
+    this.scrollEl = document.createElement("div");
+    this.scrollEl.className = "menu-scroll";
+    this.dom.append(grabber, this.scrollEl);
   }
   addItem(cb: (item: MenuItem) => any): this {
     const item = new MenuItem(this);
     this.items.push(item);
-    this.dom.appendChild(item.dom);
+    this.entries.push(item);
     cb(item);
     return this;
   }
   addSeparator(): this {
-    const sep = document.createElement("div");
-    sep.className = "menu-separator";
-    this.dom.appendChild(sep);
+    this.entries.push("separator");
+    return this;
+  }
+  setNoIcon(): this {
+    this.dom.classList.add("mod-no-icon");
     return this;
   }
   showAtMouseEvent(evt: MouseEvent): this {
-    return this.showAtPosition({ x: evt.clientX, y: evt.clientY });
+    const targetDoc = (evt.target as Node | null)?.ownerDocument ?? evt.view?.document ?? document;
+    return this.showAtPosition({ x: evt.clientX, y: evt.clientY }, targetDoc);
   }
-  showAtPosition(pos: { x: number; y: number }): this {
+  showAtPosition(pos: { x: number; y: number }, doc: Document = document): this {
+    return this.show(doc, (rect, viewport) => {
+      const margin = 8;
+      let left = pos.x;
+      let top = pos.y;
+      if (left + rect.width + margin > viewport.width) left = pos.x - rect.width;
+      if (top + rect.height + margin > viewport.height) top = pos.y - rect.height;
+      left = Math.max(margin, Math.min(left, viewport.width - rect.width - margin));
+      top = Math.max(margin, Math.min(top, viewport.height - rect.height - margin));
+      return { left, top };
+    });
+  }
+  showAtElement(
+    anchor: HTMLElement,
+    options: { horizontalAlign?: MenuHorizontalAlign; gap?: number } = {}
+  ): this {
+    const anchorRect = anchor.getBoundingClientRect();
+    return this.show(anchor.ownerDocument, (menuRect, viewport) => computeAnchoredMenuPosition({
+      anchor: anchorRect,
+      menu: menuRect,
+      viewport,
+      margin: 8,
+      gap: options.gap ?? 4,
+      horizontalAlign: options.horizontalAlign ?? "start",
+    }));
+  }
+  private show(
+    doc: Document,
+    position: (
+      menu: { width: number; height: number },
+      viewport: { width: number; height: number }
+    ) => { left: number; top: number }
+  ): this {
+    if (Menu.activeMenu && Menu.activeMenu !== this) Menu.activeMenu.hide();
+    this.hide();
+    this.renderGroups(doc);
+    this.ownerDocument = doc;
+    this.previouslyFocused = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
     this.dom.style.position = "fixed";
-    this.dom.style.left = `${pos.x}px`;
-    this.dom.style.top = `${pos.y}px`;
-    document.body.appendChild(this.dom);
-    const onDocClick = (e: MouseEvent) => {
+    this.dom.style.left = "0px";
+    this.dom.style.top = "0px";
+    doc.body.appendChild(this.dom);
+    Menu.activeMenu = this;
+    const view = doc.defaultView;
+    const viewportWidth = view?.innerWidth ?? doc.documentElement.clientWidth;
+    const viewportHeight = view?.innerHeight ?? doc.documentElement.clientHeight;
+    const rect = this.dom.getBoundingClientRect();
+    const { left, top } = position(
+      { width: rect.width, height: rect.height },
+      { width: viewportWidth, height: viewportHeight }
+    );
+    this.dom.style.left = `${left}px`;
+    this.dom.style.top = `${top}px`;
+    this.dismissMouseDown = (e: MouseEvent) => {
       if (!this.dom.contains(e.target as Node)) this.hide();
     };
-    setTimeout(() => document.addEventListener("click", onDocClick, { once: true }), 0);
+    this.keyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
+    doc.addEventListener("mousedown", this.dismissMouseDown, true);
+    doc.addEventListener("keydown", this.keyDown, true);
+    this.dom.focus({ preventScroll: true });
     return this;
   }
   hide(): this {
+    if (!this.dom.isConnected) return this;
+    const doc = this.ownerDocument;
+    if (doc && this.dismissMouseDown) doc.removeEventListener("mousedown", this.dismissMouseDown, true);
+    if (doc && this.keyDown) doc.removeEventListener("keydown", this.keyDown, true);
     this.dom.remove();
+    if (Menu.activeMenu === this) Menu.activeMenu = null;
+    this.ownerDocument = null;
+    this.dismissMouseDown = undefined;
+    this.keyDown = undefined;
+    if (this.previouslyFocused?.isConnected) this.previouslyFocused.focus({ preventScroll: true });
+    this.previouslyFocused = null;
+    for (const callback of this.hideCallbacks) callback();
     return this;
   }
-  onHide(_cb: () => any): this {
-    return this;
+  close(): void {
+    this.hide();
+  }
+  onHide(cb: () => any): void {
+    this.hideCallbacks.push(cb);
+  }
+
+  private renderGroups(doc: Document): void {
+    this.scrollEl.replaceChildren();
+    let group: HTMLElement | null = null;
+    let previousSection: string | undefined;
+    const appendSeparator = () => {
+      if (!this.scrollEl.lastElementChild || this.scrollEl.lastElementChild.classList.contains("menu-separator")) return;
+      const separator = doc.createElement("div");
+      separator.className = "menu-separator";
+      this.scrollEl.appendChild(separator);
+      group = null;
+    };
+    for (const entry of this.entries) {
+      if (entry === "separator") {
+        appendSeparator();
+        previousSection = undefined;
+        continue;
+      }
+      const section = entry.dom.dataset.section;
+      if (group && section !== previousSection) appendSeparator();
+      if (!group) {
+        group = doc.createElement("div");
+        group.className = "menu-group";
+        this.scrollEl.appendChild(group);
+      }
+      group.appendChild(entry.dom);
+      previousSection = section;
+    }
+    if (this.scrollEl.lastElementChild?.classList.contains("menu-separator")) {
+      this.scrollEl.lastElementChild.remove();
+    }
+  }
+
+  private selectableItems(): HTMLElement[] {
+    return this.items
+      .map((item) => item.dom)
+      .filter((el) => !el.classList.contains("is-disabled") && !el.classList.contains("is-label"));
+  }
+
+  private handleKeyDown(event: KeyboardEvent): void {
+    const selectable = this.selectableItems();
+    if (!selectable.length) return;
+    const selected = this.dom.querySelector<HTMLElement>(".menu-item.selected");
+    let index = selected ? selectable.indexOf(selected) : -1;
+    if (event.key === "ArrowDown") index = (index + 1) % selectable.length;
+    else if (event.key === "ArrowUp") index = index <= 0 ? selectable.length - 1 : index - 1;
+    else if (event.key === "Home") index = 0;
+    else if (event.key === "End") index = selectable.length - 1;
+    else if ((event.key === "Enter" || event.key === " ") && selected) {
+      event.preventDefault();
+      selected.click();
+      return;
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      this.hide();
+      return;
+    } else return;
+    event.preventDefault();
+    selected?.classList.remove("selected");
+    selectable[index]?.classList.add("selected");
+    selectable[index]?.scrollIntoView({ block: "nearest" });
   }
 }
 

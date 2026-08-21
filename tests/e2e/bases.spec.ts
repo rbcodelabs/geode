@@ -64,7 +64,7 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
     // --- Create a base via the file explorer's folder context menu ---
     const tasksFolderRow = window.locator(".nav-folder-title", { hasText: "Tasks" });
     await tasksFolderRow.click({ button: "right" });
-    await window.locator(".context-menu-item", { hasText: "New base" }).click();
+    await window.locator(".menu-item", { hasText: "New base" }).click();
 
     const tableContainer = window.locator(".bases-table-container");
     await expect(tableContainer).toBeVisible();
@@ -159,12 +159,12 @@ test("switch a base view to Cards, render cards, and persist the type to disk", 
     // --- Create a base (starts as a Table view) ---
     const tasksFolderRow = window.locator(".nav-folder-title", { hasText: "Tasks" });
     await tasksFolderRow.click({ button: "right" });
-    await window.locator(".context-menu-item", { hasText: "New base" }).click();
+    await window.locator(".menu-item", { hasText: "New base" }).click();
     await expect(window.locator(".bases-table-container")).toBeVisible();
 
     // --- View menu → Change type to Cards ---
     await window.locator(".bases-view-btn").click();
-    await window.locator(".context-menu-item", { hasText: "Change type to Cards" }).click();
+    await window.locator(".menu-item", { hasText: "Change type to Cards" }).click();
 
     // Table container hidden, cards grid visible with one card per markdown file (7).
     const cardsContainer = window.locator(".bases-cards-container");
@@ -290,7 +290,7 @@ test("Copy on the results menu puts the view on the clipboard as TSV", async () 
 
     const tasksFolderRow = window.locator(".nav-folder-title", { hasText: "Tasks" });
     await tasksFolderRow.click({ button: "right" });
-    await window.locator(".context-menu-item", { hasText: "New base" }).click();
+    await window.locator(".menu-item", { hasText: "New base" }).click();
     await expect(window.locator(".bases-table-container")).toBeVisible();
 
     // Filter to the single Done task so the copied output is deterministic.
@@ -307,7 +307,7 @@ test("Copy on the results menu puts the view on the clipboard as TSV", async () 
 
     // Results button → Copy.
     await window.locator(".bases-toolbar-results").click();
-    await window.locator(".context-menu-item", { hasText: "Copy" }).click();
+    await window.locator(".menu-item", { hasText: "Copy" }).click();
 
     // The menu action starts an async navigator.clipboard write. Poll the
     // main-process clipboard so the assertion cannot race that write.

@@ -333,6 +333,20 @@ export class TabGroup implements LeafContainer {
     tabListIcon.className = "clickable-icon";
     tabListIcon.title = "All tabs";
     setIcon(tabListIcon, "chevron-down");
+    tabListIcon.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.app.showMenu(
+        event,
+        this.leaves.map((leaf) => ({
+          title: leaf.getDisplayText(),
+          icon: leaf.view?.getIcon() ?? "file",
+          checked: leaf === this.active,
+          section: "tabs",
+          action: () => this.setActiveLeaf(leaf),
+        })),
+        { anchor: tabListIcon, horizontalAlign: "end", menuClass: "mod-tab-list" }
+      );
+    });
     tabList.appendChild(tabListIcon);
     this.tabBarEl.appendChild(tabList);
 
