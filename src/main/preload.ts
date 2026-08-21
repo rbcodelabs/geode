@@ -93,6 +93,8 @@ const api = {
     ipcRenderer.invoke("artifact-register", root),
   unregisterArtifact: (registrationId: string): Promise<boolean> =>
     ipcRenderer.invoke("artifact-unregister", registrationId),
+  getArtifactState: (registrationId: string) => ipcRenderer.invoke("artifact-state", registrationId),
+  captureArtifact: (root: string) => ipcRenderer.invoke("artifact-capture", root),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },

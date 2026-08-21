@@ -3,6 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { Session, WebContents, WebPreferences } from "electron";
 import { session } from "electron";
+import chokidar, { type FSWatcher } from "chokidar";
 import { parseArtifactManifestJson, type ArtifactManifestIssue } from "../artifacts/manifest";
 import { ARTIFACT_SCHEME, isArtifactUrlAllowed, STATIC_ARTIFACT_CSP } from "../artifacts/security-policy";
 import { resolveArtifactEntry, resolveArtifactFile } from "./artifact-paths";
@@ -16,6 +17,25 @@ export interface ArtifactRegistration {
   entryUrl: string;
   partition: string;
   viewport: { preset: "desktop" | "tablet" | "mobile" | "custom"; width: number; height: number };
+}
+
+export interface ArtifactDiagnostic {
+  level: "debug" | "info" | "warning" | "error";
+  message: string;
+  sourceId?: string;
+  line?: number;
+  at: number;
+}
+
+export interface ArtifactRuntimeState {
+  revision: number;
+  diagnostics: ArtifactDiagnostic[];
+}
+
+export interface ArtifactCaptureResult {
+  path: string;
+  width: number;
+  height: number;
 }
 
 export type ArtifactRegistrationResult =
@@ -33,6 +53,10 @@ interface ActiveArtifact extends ArtifactRegistration {
   ownerWebContentsId: number;
   root: string;
   artifactSession: Session;
+  revision: number;
+  diagnostics: ArtifactDiagnostic[];
+  watcher: FSWatcher;
+  guest?: WebContents;
 }
 
 export class ArtifactRegistrationError extends Error {
@@ -122,6 +146,10 @@ export class ArtifactRuntime {
     const registrationId = randomUUID();
     const partition = `geode-artifact-${registrationId}`;
     const artifactSession = session.fromPartition(partition, { cache: false });
+    const watcher = chokidar.watch(root, {
+      ignoreInitial: true,
+      ignored: (candidate) => path.relative(root, candidate).split(path.sep)[0] === "captures",
+    });
     const active: ActiveArtifact = {
       registrationId,
       artifactId: parsed.manifest.id,
@@ -132,9 +160,19 @@ export class ArtifactRuntime {
       ownerWebContentsId: owner.id,
       root,
       artifactSession,
+      revision: 0,
+      diagnostics: [],
+      watcher,
     };
 
-    await this.configureSession(active);
+    watcher.on("all", () => { active.revision += 1; });
+
+    try {
+      await this.configureSession(active);
+    } catch (error) {
+      await watcher.close();
+      throw error;
+    }
     this.registrations.set(registrationId, active);
     this.registrationsByPartition.set(partition, active);
     return {
@@ -202,16 +240,67 @@ export class ArtifactRuntime {
     return true;
   }
 
+  trackGuest(owner: WebContents, guest: WebContents): boolean {
+    const active = [...this.registrations.values()].find((candidate) =>
+      candidate.ownerWebContentsId === owner.id && candidate.artifactSession === guest.session);
+    if (!active) return false;
+    active.guest = guest;
+    guest.on("console-message", (details) => {
+      const detail = details as unknown as {
+        level?: "debug" | "info" | "warning" | "error";
+        message?: string;
+        sourceId?: string;
+        lineNumber?: number;
+      };
+      active.diagnostics.push({
+        level: detail.level ?? "info",
+        message: String(detail.message ?? "").slice(0, 2_000),
+        sourceId: detail.sourceId ? String(detail.sourceId).slice(0, 500) : undefined,
+        line: detail.lineNumber,
+        at: Date.now(),
+      });
+      if (active.diagnostics.length > 50) active.diagnostics.splice(0, active.diagnostics.length - 50);
+    });
+    guest.once("destroyed", () => {
+      if (active.guest === guest) active.guest = undefined;
+    });
+    return true;
+  }
+
+  getState(owner: WebContents, registrationId: string): ArtifactRuntimeState | null {
+    const active = this.registrations.get(registrationId);
+    if (!active || active.ownerWebContentsId !== owner.id) return null;
+    return { revision: active.revision, diagnostics: [...active.diagnostics] };
+  }
+
+  async capture(owner: WebContents, requestedRoot: string): Promise<ArtifactCaptureResult> {
+    const root = await fsp.realpath(path.resolve(requestedRoot));
+    const active = [...this.registrations.values()].find((candidate) =>
+      candidate.ownerWebContentsId === owner.id && candidate.root === root);
+    if (!active?.guest || active.guest.isDestroyed()) {
+      throw new ArtifactRegistrationError("registration_missing", "Open the artifact preview before capturing it.");
+    }
+    const image = await active.guest.capturePage();
+    const capturesRoot = path.join(active.root, "captures");
+    await fsp.mkdir(capturesRoot, { recursive: true });
+    const capturePath = path.join(capturesRoot, `capture-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
+    await fsp.writeFile(capturePath, image.toPNG());
+    const size = image.getSize();
+    return { path: capturePath, width: size.width, height: size.height };
+  }
+
+  private async dispose(active: ActiveArtifact): Promise<void> {
+    await active.watcher.close();
+    active.artifactSession.protocol.unhandle(ARTIFACT_SCHEME);
+    await Promise.allSettled([active.artifactSession.clearCache(), active.artifactSession.clearStorageData()]);
+  }
+
   async unregister(owner: WebContents, registrationId: string): Promise<boolean> {
     const active = this.registrations.get(registrationId);
     if (!active || active.ownerWebContentsId !== owner.id) return false;
     this.registrations.delete(registrationId);
     this.registrationsByPartition.delete(active.partition);
-    active.artifactSession.protocol.unhandle(ARTIFACT_SCHEME);
-    await Promise.allSettled([
-      active.artifactSession.clearCache(),
-      active.artifactSession.clearStorageData(),
-    ]);
+    await this.dispose(active);
     return true;
   }
 
@@ -220,8 +309,7 @@ export class ArtifactRuntime {
       if (active.ownerWebContentsId !== ownerWebContentsId) continue;
       this.registrations.delete(active.registrationId);
       this.registrationsByPartition.delete(active.partition);
-      active.artifactSession.protocol.unhandle(ARTIFACT_SCHEME);
-      await Promise.allSettled([active.artifactSession.clearCache(), active.artifactSession.clearStorageData()]);
+      await this.dispose(active);
     }
   }
 }

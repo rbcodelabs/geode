@@ -590,6 +590,10 @@ function registerIpc() {
   });
   ipcMain.handle("artifact-unregister", (e, registrationId: string) =>
     artifactRuntime.unregister(e.sender, registrationId));
+  ipcMain.handle("artifact-state", (e, registrationId: string) =>
+    artifactRuntime.getState(e.sender, registrationId));
+  ipcMain.handle("artifact-capture", (e, root: string) =>
+    artifactRuntime.capture(e.sender, root));
   ipcMain.on("renderer-heartbeat", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const state = win ? crashStates.get(win.id) : undefined;
@@ -659,6 +663,9 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
         !artifactRuntime.secureWebviewAttachment(win.webContents, webPreferences, params)) {
       event.preventDefault();
     }
+  });
+  win.webContents.on("did-attach-webview", (_event, guest) => {
+    artifactRuntime.trackGuest(win.webContents, guest);
   });
   const recoverRenderer = async (diagnostic: CrashDiagnostic) => {
     const state = crashStates.get(win.id);
