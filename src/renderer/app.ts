@@ -822,6 +822,29 @@ class SettingsModal extends Modal {
         this.renderCommunityList(listEl)
       ).open();
     });
+
+    // One-shot importer for users pointing Geode at a vault that already has an
+    // Obsidian `.obsidian/` folder of community plugins/themes.
+    const { control: importControl } = this.addRow(
+      container,
+      "Import from Obsidian",
+      "Copy community plugins & themes from this vault's .obsidian/ folder into Geode."
+    );
+    const importBtn = document.createElement("button");
+    importBtn.textContent = "Import from .obsidian/…";
+    importBtn.disabled = !this.geodeApp.host.capabilities.nodePlugins;
+    importBtn.title = importBtn.disabled ? "Community installation is available on desktop only" : "";
+    importBtn.addEventListener("click", async () => {
+      importBtn.disabled = true;
+      try {
+        await this.geodeApp.importFromObsidianVault();
+        await this.renderCommunityList(listEl);
+      } finally {
+        importBtn.disabled = false;
+      }
+    });
+    importControl.appendChild(importBtn);
+
     void this.renderCommunityList(listEl);
   }
 
@@ -2574,6 +2597,12 @@ export class App {
       c("community-check-updates", "Community: Check for updates", undefined, () =>
         void this.checkCommunityUpdates(true)
       );
+      c(
+        "community-import-obsidian",
+        "Community: Import plugins & themes from an Obsidian vault",
+        undefined,
+        () => void this.importFromObsidianVault()
+      );
     }
     c("toggle-theme", "Toggle dark/light theme", undefined, () => {
       this.settings.theme = this.settings.theme === "dark" ? "light" : "dark";
@@ -3677,6 +3706,30 @@ export class App {
       }
     } catch (err) {
       console.error("Community update check failed", err);
+    }
+  }
+
+  /**
+   * Import community plugins & themes from an existing Obsidian `.obsidian/`
+   * folder in the current vault into `.geode/`, then enable/apply what Obsidian
+   * had active. Surfaces the outcome as a notice — including "nothing to
+   * import" so the user isn't left wondering whether it ran.
+   */
+  async importFromObsidianVault(): Promise<void> {
+    try {
+      const sum = await this.communityManager.importFromObsidian();
+      const parts: string[] = [];
+      if (sum.plugins.length) parts.push(`${sum.plugins.length} plugin(s)`);
+      if (sum.themes.length) parts.push(`${sum.themes.length} theme(s)`);
+      if (parts.length) {
+        const themeNote = sum.activeTheme ? `, applied theme "${sum.activeTheme}"` : "";
+        this.notify(`Imported ${parts.join(" and ")} from Obsidian${themeNote}`);
+      } else {
+        this.notify("Nothing to import — no new Obsidian plugins or themes found");
+      }
+    } catch (err) {
+      console.error("Obsidian import failed", err);
+      this.notify(`Obsidian import failed: ${(err as Error).message}`);
     }
   }
 }
