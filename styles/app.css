@@ -2627,6 +2627,69 @@ select.dropdown:hover {
   display: flex;
 }
 
+.artifact-view {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--background-secondary);
+}
+
+.artifact-view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.artifact-view-toolbar-btn {
+  flex: 0 0 auto;
+}
+
+.artifact-view-status {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-view-stage {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+}
+
+.artifact-view-frame {
+  flex: 0 0 auto;
+  max-width: none;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.artifact-view-error {
+  max-width: 640px;
+  margin: auto;
+  padding: 16px 18px;
+  border: 1px solid var(--background-modifier-error);
+  border-radius: 8px;
+  color: var(--text-error);
+  background: var(--background-primary);
+  white-space: pre-wrap;
+}
+
 /* ---- Bases (Phase B: toolbar + Table view) ---- */
 
 .base-view {
