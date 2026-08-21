@@ -2461,35 +2461,117 @@ select.dropdown:hover {
   color: var(--text-normal);
 }
 
-.context-menu,
 .menu {
   position: fixed;
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
-  box-shadow: 0 6px 24px var(--shadow);
-  padding: 4px;
+  box-shadow: 0 3px 8px var(--shadow), 0 12px 28px var(--shadow);
+  color: var(--text-normal);
+  padding: 0;
   z-index: 1100;
   min-width: 170px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  outline: none;
 }
 
-.context-menu-item,
-.menu-item {
-  padding: 6px 12px;
-  border-radius: 5px;
-  font-size: 13.5px;
-  cursor: pointer;
+.menu-grabber {
+  display: none;
+}
+
+.menu-scroll {
+  max-height: inherit;
+  overflow: auto;
+  padding: 6px;
+}
+
+.menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 5px -6px;
+  background: var(--background-modifier-border);
 }
 
 .menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
 }
 
-.context-menu-item:hover,
-.menu-item:hover {
+.menu-item:hover,
+.menu-item.selected {
   background: var(--background-modifier-hover);
+}
+
+.menu-item.is-disabled {
+  color: var(--text-faint);
+  cursor: default;
+  opacity: 0.65;
+}
+
+.menu-item.is-disabled:hover,
+.menu-item.is-label:hover {
+  background: transparent;
+}
+
+.menu-item.is-label {
+  color: var(--text-muted);
+  cursor: default;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-weight-medium);
+}
+
+.menu-item.is-warning {
+  color: #e05252;
+}
+
+.menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.menu-item-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.menu-item-icon.mod-checked,
+.menu-item-icon.mod-submenu {
+  margin-left: auto;
+  color: var(--text-normal);
+}
+
+.menu.mod-no-icon .menu-item > .menu-item-icon:not(.mod-checked):not(.mod-submenu) {
+  display: none;
+}
+
+.menu.mod-tab-list {
+  min-width: 202px;
+}
+
+.menu.mod-tab-list .menu-item-title {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- Vault picker / empty state ---- */

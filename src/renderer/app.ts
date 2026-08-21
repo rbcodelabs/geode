@@ -1511,31 +1511,43 @@ export class App {
     createDismissibleNotice(message, timeout);
   }
 
-  showMenu(e: MouseEvent, items: { title: string; action: () => void }[]) {
-    document.querySelector(".context-menu")?.remove();
-    const menu = document.createElement("div");
-    menu.className = "context-menu";
-    menu.style.left = `${e.clientX}px`;
-    menu.style.top = `${e.clientY}px`;
+  showMenu(
+    e: MouseEvent,
+    items: Array<{
+      title: string | DocumentFragment;
+      action: () => void;
+      icon?: string | null;
+      checked?: boolean;
+      disabled?: boolean;
+      section?: string;
+      warning?: boolean;
+    }>,
+    options: { anchor?: HTMLElement; horizontalAlign?: "start" | "end"; menuClass?: string } = {}
+  ): Menu {
+    const menu = new Menu();
+    // Keep the pre-v0.8 selectors during the core-menu migration. The shared
+    // Obsidian-compatible DOM remains canonical (`.menu` / `.menu-item`).
+    menu.dom.classList.add("context-menu");
+    if (options.menuClass) menu.dom.classList.add(options.menuClass);
     for (const item of items) {
-      const el = document.createElement("div");
-      el.className = "context-menu-item";
-      el.textContent = item.title;
-      el.addEventListener("click", () => {
-        menu.remove();
-        item.action();
+      menu.addItem((menuItem) => {
+        menuItem.dom.classList.add("context-menu-item");
+        menuItem
+          .setTitle(item.title)
+          .setIcon(item.icon ?? null)
+          .setChecked(item.checked ?? false)
+          .setDisabled(item.disabled ?? false)
+          .setSection(item.section ?? "default")
+          .onClick(item.action);
+        menuItem.dom.classList.toggle("is-warning", item.warning ?? false);
       });
-      menu.appendChild(el);
     }
-    document.body.appendChild(menu);
-    const dismiss = () => {
-      menu.remove();
-      document.removeEventListener("mousedown", onDown, true);
-    };
-    const onDown = (ev: MouseEvent) => {
-      if (!menu.contains(ev.target as Node)) dismiss();
-    };
-    document.addEventListener("mousedown", onDown, true);
+    if (options.anchor) {
+      menu.showAtElement(options.anchor, { horizontalAlign: options.horizontalAlign });
+    } else {
+      menu.showAtMouseEvent(e);
+    }
+    return menu;
   }
 
   /** Open the Obsidian-compatible context menu for a main-area tab. */
