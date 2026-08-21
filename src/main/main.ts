@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import chokidar, { FSWatcher } from "chokidar";
 import { installCommunity, resolveCommunity } from "./community";
+import { importFromObsidianVault } from "./obsidian-import";
 import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import { withPathLock } from "./path-lock";
@@ -548,6 +549,17 @@ function registerIpc() {
     const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
     return installCommunity(session.root, spec, opts ?? {});
+  });
+
+  // Import community plugins & themes from an existing Obsidian `.obsidian/`
+  // folder in the same vault into `.geode/` (see src/main/obsidian-import.ts).
+  // Copies files only; the renderer persists the enabled list + applies the
+  // theme from the returned result.
+  ipcMain.handle("community-import-obsidian", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    return importFromObsidianVault(session.root);
   });
 
   // Web Viewer's "Import cookies from Chrome" (src/main/chrome-cookies.ts).
