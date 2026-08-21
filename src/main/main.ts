@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, protocol, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -33,12 +33,18 @@ import { buildApplicationMenuTemplate } from "./application-menu";
 import { selectVaultWindowAction } from "./vault-window-selection";
 import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-watchdog";
 import { listVaultFiles } from "./vault-files";
+import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
+import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
 // Claude Agent SDK) can use it; Geode does the same for plugin
 // compatibility. Must be set before app 'ready'.
 app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
+protocol.registerSchemesAsPrivileged([{
+  scheme: ARTIFACT_SCHEME,
+  privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false },
+}]);
 crashReporter.start({ uploadToServer: false, companyName: "RBCodelabs", productName: "Geode" });
 
 interface VaultSession {
@@ -64,6 +70,7 @@ interface CrashState {
 const crashStates = new Map<number, CrashState>();
 const powerSaveBlockers = new PowerSaveBlockerRegistry(powerSaveBlocker);
 const powerSaveBlockerOwners = new Set<number>();
+const artifactRuntime = new ArtifactRuntime();
 let journal: CrashJournal | undefined;
 let diagnosticLog: DiagnosticLog | undefined;
 
@@ -574,6 +581,19 @@ function registerIpc() {
     const state = win ? crashStates.get(win.id) : undefined;
     if (state) state.suppressPlugins = false;
   });
+  ipcMain.handle("artifact-register", async (e, root: string) => {
+    try {
+      return { ok: true, registration: await artifactRuntime.register(e.sender, root) } as const;
+    } catch (error) {
+      return serializeArtifactRegistrationError(error);
+    }
+  });
+  ipcMain.handle("artifact-unregister", (e, registrationId: string) =>
+    artifactRuntime.unregister(e.sender, registrationId));
+  ipcMain.handle("artifact-state", (e, registrationId: string) =>
+    artifactRuntime.getState(e.sender, registrationId));
+  ipcMain.handle("artifact-capture", (e, root: string) =>
+    artifactRuntime.capture(e.sender, root));
   ipcMain.on("renderer-heartbeat", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const state = win ? crashStates.get(win.id) : undefined;
@@ -621,6 +641,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
       webviewTag: true,
     },
   });
+  const ownerWebContentsId = win.webContents.id;
   if (launchTarget) launchTargets.set(win.id, path.resolve(launchTarget));
   const state: CrashState = {
     suppressPlugins,
@@ -637,6 +658,15 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   recordDiagnostic(state, { at: Date.now(), category: "lifecycle", message: "window-created", metadata: { suppressPlugins } });
   win.loadFile(indexPath);
 
+  win.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    if (params.partition?.startsWith("geode-artifact-") &&
+        !artifactRuntime.secureWebviewAttachment(win.webContents, webPreferences, params)) {
+      event.preventDefault();
+    }
+  });
+  win.webContents.on("did-attach-webview", (_event, guest) => {
+    artifactRuntime.trackGuest(win.webContents, guest);
+  });
   const recoverRenderer = async (diagnostic: CrashDiagnostic) => {
     const state = crashStates.get(win.id);
     if (!state) return;
@@ -736,6 +766,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
 
   win.on("closed", () => {
     clearInterval(watchdog);
+    void artifactRuntime.unregisterOwner(ownerWebContentsId);
     const session = sessions.get(win.id);
     session?.watcher?.close();
     if (session?.indexer) void session.indexer.shutdown();

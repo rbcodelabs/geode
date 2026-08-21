@@ -4,6 +4,7 @@ import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 import type { ProcessMetric } from "./process-metrics";
 import type { CrashDiagnostic } from "./crash-journal";
+import type { ArtifactRegistrationResult } from "./artifact-runtime";
 
 export interface VaultFileEntry {
   path: string;
@@ -88,6 +89,12 @@ const api = {
   reportActivePlugins: (pluginIds: string[]): Promise<void> =>
     ipcRenderer.invoke("crash-active-plugins", pluginIds),
   leaveCrashRecovery: (): Promise<void> => ipcRenderer.invoke("crash-recovery-leave"),
+  registerArtifact: (root: string): Promise<ArtifactRegistrationResult> =>
+    ipcRenderer.invoke("artifact-register", root),
+  unregisterArtifact: (registrationId: string): Promise<boolean> =>
+    ipcRenderer.invoke("artifact-unregister", registrationId),
+  getArtifactState: (registrationId: string) => ipcRenderer.invoke("artifact-state", registrationId),
+  captureArtifact: (root: string) => ipcRenderer.invoke("artifact-capture", root),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
   },

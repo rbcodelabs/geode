@@ -21,6 +21,7 @@ import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
 import { WebView } from "./views/web-view";
+import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
@@ -992,6 +993,7 @@ export class App {
     // obsidian_open_url) opens a tab here too. Must be registered before
     // restoreWorkspaceLayout() below, which resolves saved leaves by type.
     this.workspace.registerViewFactory("webviewer", (leaf) => new WebView(this, leaf));
+    this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
 
     this.registerCommands();
     this.commands.attach(document);
@@ -1272,6 +1274,12 @@ export class App {
       active: true,
       state: { url: url ?? this.settings.webViewer.homeUrl },
     });
+  }
+
+  /** Open a validated static design artifact in an isolated guest session. */
+  async openArtifact(root: string): Promise<void> {
+    const leaf = this.workspace.getLeaf(true);
+    await leaf.setViewState({ type: "geode-artifact", active: true, state: { root } });
   }
 
   /** "Search the web" (Obsidian compat command `search-web`): prompts for a query, opens the results in a Web Viewer tab. */
