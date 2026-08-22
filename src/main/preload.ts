@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
+import type { ObsidianImportResult } from "./obsidian-import";
 import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 import type { ProcessMetric } from "./process-metrics";
@@ -78,6 +79,8 @@ const api = {
     ipcRenderer.invoke("community-resolve", spec, opts ?? {}),
   installCommunity: (spec: string, opts?: ResolveOpts): Promise<InstalledResult> =>
     ipcRenderer.invoke("community-install", spec, opts ?? {}),
+  importFromObsidian: (): Promise<ObsidianImportResult> =>
+    ipcRenderer.invoke("community-import-obsidian"),
   listChromeProfiles: (): Promise<ChromeProfile[]> => ipcRenderer.invoke("chrome-list-profiles"),
   importChromeCookies: (profileDir: string): Promise<ChromeCookieImportResult> =>
     ipcRenderer.invoke("chrome-import-cookies", profileDir),
