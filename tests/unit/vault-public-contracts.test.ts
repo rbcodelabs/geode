@@ -20,9 +20,10 @@ function installFakeGeode(
       return value;
     }),
     readBinary: vi.fn(async () => new ArrayBuffer(0)),
-    write: vi.fn(async (path: string, data: string) => {
+    write: vi.fn(async (path: string, data: string, options?: { mtime?: number; ctime?: number }) => {
       contents.set(path, data);
-      return { mtime: 20, ctime: 10, size: data.length };
+      // Mirror the real IPC: when a caller pins mtime it is reflected back.
+      return { mtime: options?.mtime ?? 20, ctime: options?.ctime ?? 10, size: data.length };
     }),
     mkdir: vi.fn(async (path: string) => {
       folders.add(path);
@@ -150,6 +151,19 @@ describe("Vault mutation and event contracts", () => {
     expect(file.size).toBe(7);
     await expect(vault.cachedRead(file)).resolves.toBe("updated");
     expect(modified).toEqual([file]);
+  });
+
+  it("forwards DataWriteOptions to the IPC write and reflects the pinned mtime on create and modify", async () => {
+    const { vault, geode } = await openVault();
+
+    const created = await vault.create("Stamped.md", "body", { mtime: 12345 });
+    expect(geode.write).toHaveBeenLastCalledWith("Stamped.md", "body", { mtime: 12345 });
+    expect(created.mtime).toBe(12345);
+
+    const existing = vault.getFileByPath("Docs/Note.md")!;
+    await vault.modify(existing, "updated", { mtime: 67890 });
+    expect(geode.write).toHaveBeenLastCalledWith("Docs/Note.md", "updated", { mtime: 67890 });
+    expect(existing.mtime).toBe(67890);
   });
 
   it("renames the held file object and emits its old path", async () => {

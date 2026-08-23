@@ -50,8 +50,12 @@ const api = {
     ipcRenderer.invoke("plugin-file-read", path, rendererSentAt),
   readBinary: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("vault-read-binary", path),
-  write: (path: string, data: string): Promise<{ mtime: number; ctime: number; size: number }> =>
-    ipcRenderer.invoke("vault-write", path, data),
+  write: (
+    path: string,
+    data: string,
+    options?: { mtime?: number; ctime?: number },
+  ): Promise<{ mtime: number; ctime: number; size: number }> =>
+    ipcRenderer.invoke("vault-write", path, data, options),
   mkdir: (path: string): Promise<void> => ipcRenderer.invoke("vault-mkdir", path),
   trash: (path: string): Promise<void> => ipcRenderer.invoke("vault-delete", path),
   rename: (path: string, newPath: string): Promise<void> =>

@@ -12,6 +12,7 @@ import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { getProcessMetricsSnapshot } from "./process-metrics";
 import { PowerSaveBlockerRegistry } from "./power-save-blocker";
 import { readMetadataCache, writeMetadataCache } from "./metadata-cache-store";
+import { writeVaultFile, type DataWriteOptions } from "./vault-write";
 import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
 import { MetadataIndexerHost } from "./metadata-indexer-host";
@@ -175,16 +176,6 @@ function resolveVaultPath(win: BrowserWindow, rel: string): string {
 
 function toRel(root: string, abs: string): string {
   return path.relative(root, abs).split(path.sep).join("/");
-}
-
-/**
- * `stats.birthtimeMs` is unreliable on some filesystems (e.g. some Linux
- * ext filesystems report it as 0, meaning "unavailable") — fall back to
- * mtime in that case so `file.ctime` never reports an epoch-zero date.
- */
-function birthtimeOf(st: fs.Stats | null): number {
-  if (!st) return 0;
-  return st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs;
 }
 
 function startWatcher(win: BrowserWindow, root: string): FSWatcher {
@@ -351,15 +342,10 @@ function registerIpc() {
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   });
 
-  ipcMain.handle("vault-write", async (e, rel: string, data: string) => {
+  ipcMain.handle("vault-write", async (e, rel: string, data: string, options?: DataWriteOptions) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    return withPathLock([abs], async () => {
-      await fsp.mkdir(path.dirname(abs), { recursive: true });
-      await fsp.writeFile(abs, data, "utf8");
-      const st = await fsp.stat(abs);
-      return { mtime: st.mtimeMs, ctime: birthtimeOf(st), size: st.size };
-    });
+    return withPathLock([abs], () => writeVaultFile(abs, data, options));
   });
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {

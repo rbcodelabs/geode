@@ -38,12 +38,12 @@
       "api-member": 1009
     },
     "byStatus": {
-      "verified": 178,
-      "partial": 25,
+      "verified": 184,
+      "partial": 23,
       "missing": 0,
       "intentionally-equivalent": 0,
-      "blocked": 0,
-      "unknown": 2647
+      "blocked": 2,
+      "unknown": 2641
     }
   },
   "requirements": [
@@ -5734,8 +5734,12 @@
       "title": "DataWriteOptions",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/DataWriteOptions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/DataWriteOptions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts",
+        "tests/unit/vault-public-contracts.test.ts"
+      ],
+      "notes": "DataWriteOptions is accepted on the Vault write path; mtime is applied to disk exactly, while ctime (birthtime) is not settable through Node fs."
     },
     {
       "id": "DEV-fcfe619427ae",
@@ -5744,8 +5748,11 @@
       "title": "ctime",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/DataWriteOptions/ctime.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/DataWriteOptions/ctime.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts"
+      ],
+      "notes": "The ctime write option maps to birthtime, which Node's fs cannot set independently; accepted for API compatibility but not applied on disk. Constraint: Node/Electron filesystem API."
     },
     {
       "id": "DEV-6eb570c2c343",
@@ -5754,8 +5761,12 @@
       "title": "mtime",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/DataWriteOptions/mtime.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/DataWriteOptions/mtime.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts",
+        "tests/unit/vault-public-contracts.test.ts"
+      ],
+      "notes": "The mtime write option is forwarded through the IPC write path and applied to disk via utimes; a real-file test observes it applied exactly."
     },
     {
       "id": "DEV-4db7997a6743",
@@ -13424,11 +13435,12 @@
       "title": "create",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Vault/create.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Vault/create.md",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/vault-public-contracts.test.ts"
+        "tests/unit/vault-public-contracts.test.ts",
+        "tests/unit/vault-write-options.test.ts"
       ],
-      "notes": "Default plaintext creation behavior is observed; optional write timestamps are not applied by current IPC."
+      "notes": "Default plaintext creation behavior is observed; the DataWriteOptions.mtime write timestamp is now forwarded through the IPC write path and applied to disk via utimes (observed exactly). ctime (birthtime) remains not settable through Node fs."
     },
     {
       "id": "DEV-6cd7f2682d9e",
@@ -13591,11 +13603,12 @@
       "title": "modify",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Vault/modify.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Vault/modify.md",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/vault-public-contracts.test.ts"
+        "tests/unit/vault-public-contracts.test.ts",
+        "tests/unit/vault-write-options.test.ts"
       ],
-      "notes": "Default modification behavior is observed; optional write timestamps are not applied by current IPC."
+      "notes": "Default modification behavior is observed; the DataWriteOptions.mtime write timestamp is now forwarded through the IPC write path and applied to disk via utimes (observed exactly). ctime (birthtime) remains not settable through Node fs."
     },
     {
       "id": "DEV-0b639f001a3b",
@@ -16404,8 +16417,12 @@
       "title": "DataWriteOptions",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts",
+        "tests/unit/vault-public-contracts.test.ts"
+      ],
+      "notes": "The DataWriteOptions interface is honored on the Vault write path: mtime is applied to disk exactly via utimes, but ctime (birthtime) cannot be set independently through Node fs, so the full interface is only partially satisfiable."
     },
     {
       "id": "API-e26c62e1b555",
@@ -21204,8 +21221,11 @@
       "title": "DataWriteOptions.ctime",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts"
+      ],
+      "notes": "DataWriteOptions.ctime maps to the file's birthtime, which Node's fs cannot set independently of the real creation instant. The write path accepts ctime for API compatibility but cannot honor it; a test observes a requested future ctime not being reflected on disk. Constraint: Node/Electron filesystem API."
     },
     {
       "id": "API-MEMBER-1a702f175420",
@@ -21214,8 +21234,12 @@
       "title": "DataWriteOptions.mtime",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts",
+        "tests/unit/vault-public-contracts.test.ts"
+      ],
+      "notes": "DataWriteOptions.mtime is forwarded from Vault.create/modify through the IPC write path and applied to disk via utimes; a real-file test observes the requested mtime applied exactly."
     },
     {
       "id": "API-MEMBER-a1b426194efd",
@@ -27814,11 +27838,12 @@
       "title": "Vault.create",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/vault-public-contracts.test.ts"
+        "tests/unit/vault-public-contracts.test.ts",
+        "tests/unit/vault-write-options.test.ts"
       ],
-      "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+      "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed; DataWriteOptions.mtime is now forwarded to the IPC write path and applied to disk via utimes (observed exactly), while DataWriteOptions.ctime (birthtime) is accepted but not settable through Node fs."
     },
     {
       "id": "API-MEMBER-58df74296269",
@@ -27981,11 +28006,12 @@
       "title": "Vault.modify",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/vault-public-contracts.test.ts"
+        "tests/unit/vault-public-contracts.test.ts",
+        "tests/unit/vault-write-options.test.ts"
       ],
-      "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+      "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed; DataWriteOptions.mtime is now forwarded to the IPC write path and applied to disk via utimes (observed exactly), while DataWriteOptions.ctime (birthtime) is accepted but not settable through Node fs."
     },
     {
       "id": "API-MEMBER-0b17a9910c07",

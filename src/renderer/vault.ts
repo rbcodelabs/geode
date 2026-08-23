@@ -274,9 +274,9 @@ export class Vault extends Events {
     return window.geode.readBinary(file.path);
   }
 
-  async create(path: string, data: string, _options?: DataWriteOptions): Promise<TFile> {
+  async create(path: string, data: string, options?: DataWriteOptions): Promise<TFile> {
     if (this.files.has(path)) throw new Error(`File already exists: ${path}`);
-    const { mtime, ctime, size } = await window.geode.write(path, data);
+    const { mtime, ctime, size } = await window.geode.write(path, data, options);
     this.indexEntry({ path, isFolder: false, mtime, ctime, size });
     this.contents.set(path, data);
     this.rebuildChildren();
@@ -297,8 +297,8 @@ export class Vault extends Events {
     return folder;
   }
 
-  async modify(file: TFile, data: string, _options?: DataWriteOptions): Promise<void> {
-    const { mtime, size } = await window.geode.write(file.path, data);
+  async modify(file: TFile, data: string, options?: DataWriteOptions): Promise<void> {
+    const { mtime, size } = await window.geode.write(file.path, data, options);
     file.mtime = mtime;
     file.size = size;
     this.contents.set(file.path, data);

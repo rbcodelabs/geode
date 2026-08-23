@@ -315,9 +315,9 @@
     "notes": "Observed cached plaintext reads avoiding repeat disk I/O and refreshing after a direct read."
   },
   "API-MEMBER-88d536f2d2cb": {
-    "status": "partial",
-    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
-    "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts", "tests/unit/vault-write-options.test.ts"],
+    "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed; DataWriteOptions.mtime is now forwarded to the IPC write path and applied to disk via utimes (observed exactly), while DataWriteOptions.ctime (birthtime) is accepted but not settable through Node fs."
   },
   "API-MEMBER-92ea17cba0a5": {
     "status": "verified",
@@ -340,9 +340,9 @@
     "notes": "Observed direct disk plaintext reads on every call and subsequent cache refresh."
   },
   "API-MEMBER-d6f46bfd7d5d": {
-    "status": "partial",
-    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
-    "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts", "tests/unit/vault-write-options.test.ts"],
+    "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed; DataWriteOptions.mtime is now forwarded to the IPC write path and applied to disk via utimes (observed exactly), while DataWriteOptions.ctime (birthtime) is accepted but not settable through Node fs."
   },
   "API-MEMBER-e8941e646790": {
     "status": "verified",
@@ -400,14 +400,14 @@
     "notes": "Observed the documented modify event with the modified abstract file."
   },
   "DEV-c97ba05566a6": {
-    "status": "partial",
-    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
-    "notes": "Default modification behavior is observed; optional write timestamps are not applied by current IPC."
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts", "tests/unit/vault-write-options.test.ts"],
+    "notes": "Default modification behavior is observed; the DataWriteOptions.mtime write timestamp is now forwarded through the IPC write path and applied to disk via utimes (observed exactly). ctime (birthtime) remains not settable through Node fs."
   },
   "DEV-d24cd083513e": {
-    "status": "partial",
-    "evidence": ["tests/unit/vault-public-contracts.test.ts"],
-    "notes": "Default plaintext creation behavior is observed; optional write timestamps are not applied by current IPC."
+    "status": "verified",
+    "evidence": ["tests/unit/vault-public-contracts.test.ts", "tests/unit/vault-write-options.test.ts"],
+    "notes": "Default plaintext creation behavior is observed; the DataWriteOptions.mtime write timestamp is now forwarded through the IPC write path and applied to disk via utimes (observed exactly). ctime (birthtime) remains not settable through Node fs."
   },
   "DEV-d95ef21facbc": {
     "status": "verified",
@@ -1013,5 +1013,35 @@
     "status": "verified",
     "evidence": ["tests/unit/canvas-style-contract.test.ts", "tests/e2e/canvas.spec.ts"],
     "notes": "All listed Canvas variables (--canvas-background, --canvas-card-label-color, --canvas-dot-pattern, and --canvas-color-1 through --canvas-color-6) are defined and consumed; runtime tests observe every value and all six preset node-color mappings."
+  },
+  "API-5c4c8dad9e1d": {
+    "status": "partial",
+    "evidence": ["tests/unit/vault-write-options.test.ts", "tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The DataWriteOptions interface is honored on the Vault write path: mtime is applied to disk exactly via utimes, but ctime (birthtime) cannot be set independently through Node fs, so the full interface is only partially satisfiable."
+  },
+  "API-MEMBER-1a702f175420": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-write-options.test.ts", "tests/unit/vault-public-contracts.test.ts"],
+    "notes": "DataWriteOptions.mtime is forwarded from Vault.create/modify through the IPC write path and applied to disk via utimes; a real-file test observes the requested mtime applied exactly."
+  },
+  "API-MEMBER-4a325cdd6867": {
+    "status": "blocked",
+    "evidence": ["tests/unit/vault-write-options.test.ts"],
+    "notes": "DataWriteOptions.ctime maps to the file's birthtime, which Node's fs cannot set independently of the real creation instant. The write path accepts ctime for API compatibility but cannot honor it; a test observes a requested future ctime not being reflected on disk. Constraint: Node/Electron filesystem API."
+  },
+  "DEV-1b227481f869": {
+    "status": "partial",
+    "evidence": ["tests/unit/vault-write-options.test.ts", "tests/unit/vault-public-contracts.test.ts"],
+    "notes": "DataWriteOptions is accepted on the Vault write path; mtime is applied to disk exactly, while ctime (birthtime) is not settable through Node fs."
+  },
+  "DEV-6eb570c2c343": {
+    "status": "verified",
+    "evidence": ["tests/unit/vault-write-options.test.ts", "tests/unit/vault-public-contracts.test.ts"],
+    "notes": "The mtime write option is forwarded through the IPC write path and applied to disk via utimes; a real-file test observes it applied exactly."
+  },
+  "DEV-fcfe619427ae": {
+    "status": "blocked",
+    "evidence": ["tests/unit/vault-write-options.test.ts"],
+    "notes": "The ctime write option maps to birthtime, which Node's fs cannot set independently; accepted for API compatibility but not applied on disk. Constraint: Node/Electron filesystem API."
   }
 }
