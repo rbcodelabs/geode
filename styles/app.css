@@ -2702,6 +2702,16 @@ select.dropdown:hover {
   border-color: var(--interactive-accent);
 }
 
+/* Positioned container so the crash/failure overlay can cover just the frame
+   surface while the toolbar (address bar + reload) stays interactive. */
+.web-view-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
 .web-view-frame {
   flex: 1;
   min-height: 0;
@@ -2799,6 +2809,70 @@ select.dropdown:hover {
 
 .artifact-view-diagnostic.is-error { color: var(--text-error); }
 .artifact-view-diagnostic.is-warning { color: var(--text-warning); }
+
+/* Crash / load-failure overlay. Covers the (possibly dead-gray) frame; the
+   frame stays mounted underneath so a reload can respawn the guest in place. */
+.web-view-error {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: var(--background-primary);
+}
+
+.web-view-error.is-hidden {
+  display: none;
+}
+
+.web-view-error-icon {
+  display: flex;
+  color: var(--text-error);
+}
+
+.web-view-error-icon svg {
+  width: 40px;
+  height: 40px;
+}
+
+.web-view-error-title {
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.web-view-error-detail {
+  max-width: 480px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.web-view-error-reload {
+  margin-top: 4px;
+  padding: 6px 16px;
+  font: inherit;
+  font-size: var(--font-ui-small);
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border: none;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.web-view-error-reload:hover {
+  background: var(--interactive-accent-hover);
+}
+
+/* Subtle hint while the guest is not responding (unresponsive event). */
+.web-view.is-web-view-unresponsive .web-view-address {
+  opacity: 0.6;
+}
 
 /* ---- Bases (Phase B: toolbar + Table view) ---- */
 

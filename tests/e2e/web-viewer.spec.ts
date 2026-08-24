@@ -82,6 +82,59 @@ test("Search the web opens a viewer tab with the query appended to the configure
   }
 });
 
+test("A main-frame load failure shows the recoverable error overlay instead of a silent gray screen, and reloading recovers", async () => {
+  const { app, window, userDataDir, consoleErrors } = await launch();
+
+  try {
+    await runCommand(window, "Open web viewer");
+
+    const webView = window.locator(".web-view");
+    await expect(webView).toBeVisible();
+
+    // Wait for the normal home page to load first, so the failure below is a
+    // real navigation away from a healthy guest, not a cold-start artifact.
+    const addressBar = webView.locator(".web-view-address");
+    await expect(addressBar).toHaveValue(/duckduckgo\.com/, { timeout: 20000 });
+
+    const overlay = webView.locator(".web-view-error");
+    await expect(overlay).toBeHidden();
+
+    // Drive the address bar to a guaranteed-fail URL (nothing listens on
+    // localhost:1). This exercises the did-fail-load path deterministically.
+    await addressBar.fill("http://localhost:1/");
+    await addressBar.press("Enter");
+
+    // The overlay appears with a non-empty, human-readable reason — the whole
+    // point of the fix: a visible error state instead of a dead gray surface.
+    await expect(overlay).toBeVisible({ timeout: 20000 });
+    await expect(webView.locator(".web-view-error-title")).toHaveText(/failed to load/i);
+    await expect(webView.locator(".web-view-error-detail")).not.toHaveText("");
+
+    // The toolbar stays interactive (the overlay covers only the frame), so the
+    // user can navigate to a working page and recover.
+    await addressBar.fill("duckduckgo.com");
+    await addressBar.press("Enter");
+
+    // Recovery: overlay clears and a real page loads again (title tracks the
+    // page's <title>, which only happens after a successful load).
+    await expect(overlay).toBeHidden({ timeout: 20000 });
+    await expect(addressBar).toHaveValue(/duckduckgo\.com/, { timeout: 20000 });
+    await expect(
+      window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")
+    ).not.toHaveText("", { timeout: 20000 });
+
+    // This test intentionally triggers a load failure, so the guest emits
+    // expected connection/navigation console noise. Tolerate that known noise
+    // (do NOT assert empty), but still fail on any UNEXPECTED console error.
+    const expectedNoise = /localhost:1|ERR_|net::|Failed to load resource|Not allowed to load|GUEST_VIEW_MANAGER/i;
+    const unexpected = consoleErrors.filter((msg) => !expectedNoise.test(msg));
+    expect(unexpected, `Unexpected console errors: ${unexpected.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript, and images", async () => {
   const { app, window, userDataDir, consoleErrors } = await launch();
 
