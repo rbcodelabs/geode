@@ -29,6 +29,7 @@ export interface TimedPluginReadResult {
 }
 
 const api = {
+  host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
   acquirePowerSaveBlocker: (): Promise<string> =>
     ipcRenderer.invoke("power-save-blocker-acquire"),
   releasePowerSaveBlocker: (token: string): Promise<boolean> =>
@@ -97,6 +98,9 @@ const api = {
   captureArtifact: (root: string) => ipcRenderer.invoke("artifact-capture", root),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
+  },
+  onDeepLink: (cb: (link: { action: string; params: Record<string, string> }) => void) => {
+    ipcRenderer.on("geode-deep-link", (_e, link) => cb(link));
   },
 };
 

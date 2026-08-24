@@ -703,6 +703,8 @@ class StatusBar {
 }
 
 export class App {
+  private protocolHandlers = new Map<string, (params: Record<string, string>) => unknown>();
+  private pendingProtocolLinks = new Map<string, Record<string, string>[]>();
   vault = new Vault();
   metadataCache = new MetadataCache(this.vault);
   fileManager = new FileManager(this);
@@ -772,6 +774,22 @@ export class App {
     const serialized = JSON.stringify(data);
     if (serialized === undefined) throw new TypeError("App local storage data must be JSON-serializable");
     localStorage.setItem(storageKey, serialized);
+  }
+
+  registerProtocolHandler(action: string, handler: (params: Record<string, string>) => unknown): void {
+    this.protocolHandlers.set(action, handler);
+    for (const params of this.pendingProtocolLinks.get(action) ?? []) void handler(params);
+    this.pendingProtocolLinks.delete(action);
+  }
+
+  unregisterProtocolHandler(action: string, handler: (params: Record<string, string>) => unknown): void {
+    if (this.protocolHandlers.get(action) === handler) this.protocolHandlers.delete(action);
+  }
+
+  private dispatchProtocolLink(action: string, params: Record<string, string>): void {
+    const handler = this.protocolHandlers.get(action);
+    if (handler) void handler(params);
+    else this.pendingProtocolLinks.set(action, [...(this.pendingProtocolLinks.get(action) ?? []), params]);
   }
 
   // --- Plugin settings tabs -----------------------------------------------
@@ -861,6 +879,7 @@ export class App {
 
   async start() {
     return measureOperation("startup-total", async () => {
+      window.geode.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params));
       this.installExternalLinkInterceptor();
       const rootEl = document.getElementById("app")!;
       const [launchTarget, recents] = await measureOperation("startup-recent-vaults", () => Promise.all([

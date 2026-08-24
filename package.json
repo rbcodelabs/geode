@@ -50,6 +50,12 @@
   "build": {
     "appId": "com.rbcodelabs.geode",
     "productName": "Geode",
+    "protocols": [
+      {
+        "name": "Geode deep links",
+        "schemes": ["geode"]
+      }
+    ],
     "directories": {
       "output": "release"
     },

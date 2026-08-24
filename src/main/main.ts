@@ -35,6 +35,7 @@ import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-w
 import { listVaultFiles } from "./vault-files";
 import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
+import { DeepLinkDispatcher } from "./deep-link";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -46,6 +47,27 @@ protocol.registerSchemesAsPrivileged([{
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false },
 }]);
 crashReporter.start({ uploadToServer: false, companyName: "RBCodelabs", productName: "Geode" });
+
+const isHeadless =
+  process.env.GEODE_HEADLESS === "1" ||
+  process.argv.includes("--headless");
+
+const deepLinks = new DeepLinkDispatcher();
+deepLinks.acceptArgv(process.argv);
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deepLinks.accept(url);
+});
+const hasSingleInstanceLock = isHeadless || app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
+app.on("second-instance", (_event, argv) => {
+  deepLinks.acceptArgv(argv);
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
 
 interface VaultSession {
   root: string;
@@ -601,10 +623,6 @@ function registerIpc() {
   });
 }
 
-const isHeadless =
-  process.env.GEODE_HEADLESS === "1" ||
-  process.argv.includes("--headless");
-
 function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
@@ -728,6 +746,9 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   });
   win.webContents.on("did-finish-load", () => {
     recordDiagnostic(state, { at: Date.now(), category: "lifecycle", message: "did-finish-load" });
+    deepLinks.attach((link) => {
+      if (!win.isDestroyed()) win.webContents.send("geode-deep-link", link);
+    });
   });
 
   // Do not arm until the renderer has loaded once; this avoids treating normal
@@ -807,6 +828,7 @@ function installApplicationMenu(): void {
 }
 
 app.whenReady().then(() => {
+  if (!isHeadless) app.setAsDefaultProtocolClient("geode");
   if (isHeadless && process.platform === "darwin" && app.dock) {
     app.dock.hide();
   } else if (process.platform === "darwin" && app.dock) {
