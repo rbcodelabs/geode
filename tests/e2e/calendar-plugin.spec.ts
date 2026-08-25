@@ -98,6 +98,17 @@ test("real Calendar plugin sees existing daily notes and opens (not recreates) t
     const calendarPane = window.locator(".workspace-sidebar.mod-right .sidebar-content");
     await expect(calendarPane.locator(".day").first()).toBeVisible();
 
+    // --- 0. No duplicate title bar ---------------------------------------
+    // Calendar is a real vendored obsidian.ItemView docked in the sidebar.
+    // Geode's generic per-leaf ItemView constructor always builds a
+    // `.view-header` (title-only bar) into every leaf's containerEl, sidebar
+    // or main pane. Real Obsidian never shows that generic bar in a sidebar
+    // dock — a docked ItemView plugin renders its own header UI inside its
+    // own contentEl instead. Assert none of the (possibly several, if other
+    // sidebar panes are also mounted) `.view-header` bars under
+    // `.workspace-sidebar` are visible.
+    await expect(window.locator(".workspace-sidebar .view-header:visible")).toHaveCount(0);
+
     // --- 1. Vault visibility -------------------------------------------
     // Days with an existing note are marked with Calendar's own "has-note"
     // class (confirmed against the real fixture's streakSource, which
