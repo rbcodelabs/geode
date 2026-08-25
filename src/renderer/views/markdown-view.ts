@@ -19,8 +19,9 @@ import { tags } from "@lezer/highlight";
 import type { App } from "../app";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
 import { setIcon } from "../api/icons";
-import type { TFile } from "../types";
+import type { HeadingCache, TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
+import { resolveBlockBoundary } from "../block-boundary";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, class: "cm-header-1" },
@@ -232,6 +233,24 @@ export class MarkdownView implements View {
             }
             return false;
           },
+          contextmenu(e, v) {
+            const file = view.file;
+            if (!file) return false;
+            const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+            if (pos == null) return false;
+            const line = v.state.doc.lineAt(pos).number - 1; // 0-based
+            const heading = view.headingAtLine(line);
+            if (!heading) return false;
+            e.preventDefault();
+            app.showMenu(e, [
+              {
+                title: "Bookmark this heading",
+                icon: "bookmark",
+                action: () => void app.addHeadingBookmark(file, heading),
+              },
+            ]);
+            return true;
+          },
         }),
       ],
     });
@@ -367,6 +386,76 @@ export class MarkdownView implements View {
       scrollIntoView: true,
     });
     this.editor.focus();
+  }
+
+  // --- Bookmarks (headings & blocks) --------------------------------------
+
+  /**
+   * The nearest heading at or above `line` (0-based) — the last `HeadingCache`
+   * whose start line is `<= line`. Headings are cache-ordered by position, so
+   * a single forward scan suffices.
+   */
+  headingAtLine(line: number): HeadingCache | null {
+    if (!this.file) return null;
+    const headings = this.app.metadataCache.getFileCache(this.file)?.headings ?? [];
+    let best: HeadingCache | null = null;
+    for (const h of headings) {
+      if (h.position.start.line <= line) best = h;
+      else break;
+    }
+    return best;
+  }
+
+  /** Command entry: bookmark the heading the cursor is under (spec: "Bookmark heading under cursor"). */
+  bookmarkHeadingUnderCursor(): void {
+    if (!this.file || !this.editor) {
+      this.app.notify("Open a note to bookmark a heading");
+      return;
+    }
+    const line = this.editor.state.doc.lineAt(this.editor.state.selection.main.head).number - 1;
+    const heading = this.headingAtLine(line);
+    if (!heading) {
+      this.app.notify("No heading found above the cursor");
+      return;
+    }
+    void this.app.addHeadingBookmark(this.file, heading);
+  }
+
+  /**
+   * Command entry: bookmark the block the cursor is in (spec: "Bookmark block
+   * under cursor"). Reuses an existing trailing `^id` on the block's last line,
+   * or generates a short one and appends it to that line (persisting the file),
+   * then stores a block bookmark.
+   */
+  async bookmarkBlockUnderCursor(): Promise<void> {
+    if (!this.file || !this.editor) {
+      this.app.notify("Open a note to bookmark a block");
+      return;
+    }
+    const doc = this.editor.state.doc;
+    const cursorLine0 = doc.lineAt(this.editor.state.selection.main.head).number - 1;
+    const cache = this.app.metadataCache.getFileCache(this.file);
+    const boundary = resolveBlockBoundary(cursorLine0, cache?.sections ?? [], cache?.listItems ?? []);
+    if (boundary.kind === "refuse") {
+      this.app.notify(boundary.reason);
+      return;
+    }
+    const cmLine = doc.line(boundary.line + 1);
+    const text = cmLine.text;
+    const existing = text.match(/(?:^|[ \t])\^([A-Za-z0-9-]+)\s*$/);
+    let blockId: string;
+    if (existing) {
+      blockId = existing[1];
+    } else {
+      blockId = crypto.randomUUID().slice(0, 6);
+      // Always emit a leading space before `^id`: the metadata parser's
+      // BLOCK_ID_RE requires a preceding space/tab, so `^id` written at column 0
+      // (on an empty line) would never be indexed as a block reference.
+      const prefix = /\s$/.test(text) ? "" : " ";
+      this.editor.dispatch({ changes: { from: cmLine.to, insert: `${prefix}^${blockId}` } });
+      await this.flush();
+    }
+    await this.app.addBlockBookmark(this.file, blockId);
   }
 
   onOpen(): void {

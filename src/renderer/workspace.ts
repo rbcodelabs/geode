@@ -335,17 +335,26 @@ export class TabGroup implements LeafContainer {
     setIcon(tabListIcon, "chevron-down");
     tabListIcon.addEventListener("click", (event) => {
       event.stopPropagation();
-      this.app.showMenu(
-        event,
-        this.leaves.map((leaf) => ({
-          title: leaf.getDisplayText(),
-          icon: leaf.view?.getIcon() ?? "file",
-          checked: leaf === this.active,
-          section: "tabs",
-          action: () => this.setActiveLeaf(leaf),
-        })),
-        { anchor: tabListIcon, horizontalAlign: "end", menuClass: "mod-tab-list" }
-      );
+      const items = this.leaves.map((leaf) => ({
+        title: leaf.getDisplayText(),
+        icon: leaf.view?.getIcon() ?? "file",
+        checked: leaf === this.active,
+        section: "tabs",
+        action: () => this.setActiveLeaf(leaf),
+      }));
+      // Spec: tab-group dropdown → "Bookmark [N] tabs".
+      items.push({
+        title: `Bookmark ${this.leaves.length} tab${this.leaves.length === 1 ? "" : "s"}`,
+        icon: "bookmark",
+        checked: false,
+        section: "bookmark",
+        action: () => void this.app.bookmarkLeaves(this.leaves),
+      });
+      this.app.showMenu(event, items, {
+        anchor: tabListIcon,
+        horizontalAlign: "end",
+        menuClass: "mod-tab-list",
+      });
     });
     tabList.appendChild(tabListIcon);
     this.tabBarEl.appendChild(tabList);

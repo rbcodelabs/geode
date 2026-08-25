@@ -333,5 +333,22 @@ export class GraphView implements View {
       },
       { passive: false }
     );
+
+    // Spec: Graph tab → right-click → Bookmark. This is intentionally
+    // DEGENERATE: Geode has no persistable graph config yet (see this file's
+    // header comment — graph.json is out of scope), so `addGraphBookmark`
+    // stores a config-less `{ type: "graph" }` and opening it just re-opens the
+    // global Graph view. Graph-config fidelity (filters, groups, zoom, …) is
+    // deferred until a persistable graph config exists — do not fake one here.
+    this.canvas.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      this.app.showMenu(e, [
+        {
+          title: "Bookmark graph",
+          icon: "git-fork",
+          action: () => void this.app.addGraphBookmark(),
+        },
+      ]);
+    });
   }
 }
