@@ -3,6 +3,7 @@ import type { View } from "../workspace";
 import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
 import { VAULT_FILE_DRAG_MIME } from "../file-drag";
+import { isBookmarked } from "../bookmarks";
 
 export type SortOrder = "name-asc" | "name-desc";
 
@@ -210,6 +211,11 @@ export class FileExplorerView implements View {
     this.app.showMenu(e, [
       { title: "Open in new tab", action: () => this.app.openFile(file, true) },
       {
+        title: isBookmarked(this.app.bookmarksRoot, file.path) ? "Un-bookmark" : "Bookmark",
+        icon: "bookmark",
+        action: () => void this.app.toggleBookmarkFile(file),
+      },
+      {
         title: "Rename…",
         action: async () => {
           const name = prompt("New name", file.basename);
@@ -252,6 +258,11 @@ export class FileExplorerView implements View {
           await this.app.vault.createFolder(`${folder.path}/${name}`);
           this.render();
         },
+      },
+      {
+        title: isBookmarked(this.app.bookmarksRoot, folder.path) ? "Un-bookmark" : "Bookmark",
+        icon: "bookmark",
+        action: () => void this.app.toggleBookmarkFolder(folder),
       },
       {
         title: "Rename…",

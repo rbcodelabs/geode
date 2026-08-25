@@ -848,6 +848,8 @@ export class View extends Component implements GeodeView {
 export abstract class ItemView extends View {
   contentEl: HTMLElement;
   private headerTitleEl: HTMLElement;
+  /** `.view-actions` container built in the constructor; `addAction()` appends into this. */
+  private headerActionsEl: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -871,10 +873,10 @@ export abstract class ItemView extends View {
     this.headerTitleEl.className = "view-header-title";
     titleContainer.append(this.headerTitleEl);
 
-    const actions = document.createElement("div");
-    actions.className = "view-actions";
+    this.headerActionsEl = document.createElement("div");
+    this.headerActionsEl.className = "view-actions";
 
-    header.append(left, titleContainer, actions);
+    header.append(left, titleContainer, this.headerActionsEl);
     this.contentEl = document.createElement("div");
     this.contentEl.className = "view-content";
     this.containerEl.append(header, this.contentEl);
@@ -889,6 +891,25 @@ export abstract class ItemView extends View {
   /** Refresh the header's title text from `getDisplayText()`. Also called by `WorkspaceLeaf.updateHeader()`. */
   refreshHeaderTitle(): void {
     this.headerTitleEl.textContent = this.getDisplayText();
+  }
+
+  /**
+   * Obsidian `ItemView.addAction()`: adds an icon button to the view
+   * header's `.view-actions` area, matching the markup/classes Geode's own
+   * built-in sidebar views use for their header icon buttons (see
+   * `views/file-explorer.ts`'s "New note"/"New folder"/etc. buttons —
+   * `button.clickable-icon` + `title` + `setIcon()`). Returns the created
+   * element so callers can further customize it, per the documented signature.
+   */
+  addAction(icon: string, title: string, callback: (evt: MouseEvent) => any): HTMLElement {
+    const action = document.createElement("button");
+    action.className = "clickable-icon view-action";
+    action.setAttribute("aria-label", title);
+    action.title = title;
+    setIcon(action, icon);
+    action.addEventListener("click", (evt) => callback(evt));
+    this.headerActionsEl.appendChild(action);
+    return action;
   }
 
   abstract getViewType(): string;

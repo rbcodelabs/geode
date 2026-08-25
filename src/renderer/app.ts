@@ -26,6 +26,14 @@ import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { TFile, isTFile, pathName } from "./types";
+import {
+  addBookmark,
+  createEmptyRoot,
+  findBookmarkByPath,
+  normalizeBookmarksRoot,
+  removeBookmark,
+  type BookmarksRoot,
+} from "./bookmarks";
 import { rewriteWikilinksForRename } from "./rename";
 import { anchorSnapshot, parseLocalFileHref, shouldInterceptAnchor } from "./external-links";
 import {
@@ -743,6 +751,8 @@ export class App {
   };
   /** Resolved "daily-notes" config (defaults until a vault is opened); also read by the internalPlugins compat shim. */
   dailyNoteSettings: DailyNoteSettings = resolveDailyNoteSettings(null);
+  /** In-memory Bookmarks core plugin model (defaults until a vault is opened), backed by ".geode/bookmarks.json". */
+  bookmarksRoot: BookmarksRoot = createEmptyRoot();
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -952,6 +962,12 @@ export class App {
     )) as Partial<DailyNoteSettings> | null;
     this.dailyNoteSettings = resolveDailyNoteSettings(savedDailyNotes);
 
+    // Same shape as daily-notes above: read the persisted Bookmarks tree
+    // before registerCommands()/pluginManager.initialize() so both see the
+    // real in-memory model rather than the empty-root default.
+    const savedBookmarks = await window.geode.readConfig("bookmarks");
+    this.bookmarksRoot = normalizeBookmarksRoot(savedBookmarks);
+
     rootEl.innerHTML = "";
     const shell = document.createElement("div");
     shell.className = "app-shell";
@@ -1006,6 +1022,24 @@ export class App {
     this.workspace.rightSidebar.addView(new BacklinksView(this));
     this.workspace.rightSidebar.addView(new OutlineView(this));
     this.workspace.rightSidebar.addView(new TagPaneView(this));
+
+    // Bookmarks is a real plugin-facing ItemView (unlike the other built-ins
+    // above, which draw their own .sidebar-view-header) so it needs a
+    // WorkspaceLeaf before it can be constructed. leftSidebar.addView(view)
+    // builds that leaf itself internally *after* the view already exists,
+    // so it can't be used here; leftSidebar.addLeaf() + leaf.setView(view)
+    // gets the leaf first, matching what ItemView's constructor needs.
+    //
+    // Imported dynamically (not at the top of this file) to break an
+    // init-time module cycle: api/obsidian.ts re-exports `App` from this
+    // module, so importing the plugin shim eagerly evaluates app.ts; a static
+    // `import { BookmarksView }` here would pull views/bookmarks-view.ts —
+    // whose `class BookmarksView extends ItemView` needs ItemView — back into
+    // that eval before api/obsidian.ts has defined ItemView (leaving it
+    // `undefined`). Deferring the import to boot lets ItemView exist first.
+    const { BookmarksView } = await import("./views/bookmarks-view");
+    const bookmarksLeaf = this.workspace.leftSidebar.addLeaf();
+    await bookmarksLeaf.setView(new BookmarksView(bookmarksLeaf));
 
     // Obsidian Web Viewer compat: viewType "webviewer" + { url } state, so
     // any hosted plugin targeting that view type (e.g. Threads'
@@ -1166,6 +1200,21 @@ export class App {
     });
     c("bases-insert", "Bases: Insert new base", undefined, () => this.insertNewBase());
     c("bases-add-view", "Bases: Add view", undefined, () => this.getActiveBaseView()?.addView());
+    c("bookmarks-open", "Bookmarks: Open Bookmarks pane", undefined, () => {
+      // Reveal the docked Bookmarks leaf the same way openSearch reveals the
+      // Search pane: find the leaf by view type, then revealLeaf (expands the
+      // sidebar if collapsed and activates the pane).
+      const leaf = this.workspace.getLeavesOfType("bookmarks")[0];
+      if (leaf) this.workspace.revealLeaf(leaf);
+    });
+    c("bookmarks-current-file", "Bookmarks: Bookmark current file", undefined, () => {
+      const file = this.workspace.getActiveFile();
+      if (!file) {
+        this.notify("No active file to bookmark");
+        return;
+      }
+      void this.toggleBookmarkFile(file);
+    });
   }
 
   // --- File opening -------------------------------------------------------
@@ -1428,6 +1477,50 @@ export class App {
       file = await this.vault.create(dailyNotePath(today, settings), `# ${key}\n\n`);
     }
     await this.openFile(file, false);
+  }
+
+  // --- Bookmarks -----------------------------------------------------------
+
+  /**
+   * Apply a pure mutation from `bookmarks.ts` to the in-memory model,
+   * persist it to ".geode/bookmarks.json", and notify any open
+   * `BookmarksView` (and other listeners, e.g. File Explorer's context menu
+   * label) to refresh. Every Bookmarks mutation — from the Bookmarks pane
+   * itself or from File Explorer's "Bookmark" menu item — goes through this
+   * single path so persistence and change notification never get missed.
+   */
+  async mutateBookmarks(fn: (root: BookmarksRoot) => BookmarksRoot): Promise<void> {
+    this.bookmarksRoot = fn(this.bookmarksRoot);
+    await window.geode.writeConfig("bookmarks", this.bookmarksRoot);
+    this.workspace.trigger("bookmarks-changed");
+  }
+
+  /** Toggle a file bookmark on/off (Obsidian's "Bookmark"/"Un-bookmark" File Explorer menu item). */
+  async toggleBookmarkFile(file: TFile): Promise<void> {
+    const existing = findBookmarkByPath(this.bookmarksRoot, file.path);
+    if (existing) {
+      await this.mutateBookmarks((root) => removeBookmark(root, existing.id));
+      this.notify(`Un-bookmarked "${file.name}"`);
+    } else {
+      await this.mutateBookmarks((root) =>
+        addBookmark(root, { type: "file", id: crypto.randomUUID(), path: file.path })
+      );
+      this.notify(`Bookmarked "${file.name}"`);
+    }
+  }
+
+  /** Toggle a folder bookmark on/off (Obsidian's "Bookmark"/"Un-bookmark" File Explorer folder menu item). */
+  async toggleBookmarkFolder(folder: { path: string; name: string }): Promise<void> {
+    const existing = findBookmarkByPath(this.bookmarksRoot, folder.path);
+    if (existing) {
+      await this.mutateBookmarks((root) => removeBookmark(root, existing.id));
+      this.notify(`Un-bookmarked "${folder.name}"`);
+    } else {
+      await this.mutateBookmarks((root) =>
+        addBookmark(root, { type: "folder", id: crypto.randomUUID(), path: folder.path })
+      );
+      this.notify(`Bookmarked "${folder.name}"`);
+    }
   }
 
   openEmptyTab(group: TabGroup) {

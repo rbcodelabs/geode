@@ -962,6 +962,18 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
   display: none;
 }
 
+/* Opt-in override for the rare sidebar-docked ItemView that DOES want the
+   generic header (title + addAction() icons) — real Obsidian's own
+   Bookmarks core plugin is the reference case: it shows a visible
+   .view-header with action icons when docked in the sidebar, unlike Geode's
+   built-in sidebar views (File Explorer, Search, …) which draw their own
+   .sidebar-view-header instead. A view opts in by adding `mod-show-generic-
+   header` to its own `containerEl`; higher specificity than the blanket
+   hide above wins this back on for that view only. */
+.workspace-sidebar .mod-show-generic-header .view-header {
+  display: flex;
+}
+
 .sidebar-content {
   flex: 1;
   min-width: 0;
