@@ -953,6 +953,15 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
   display: none;
 }
 
+/* A sidebar-docked ItemView renders its own title/actions inside its own
+   contentEl (matching real Obsidian); Geode's generic per-leaf
+   .view-header would duplicate that. Hidden here (not skipped in the
+   constructor) so it also covers a view dragged main-pane -> sidebar
+   after construction. */
+.workspace-sidebar .view-header {
+  display: none;
+}
+
 .sidebar-content {
   flex: 1;
   min-width: 0;
@@ -1000,7 +1009,6 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding-top: 36px;
 }
 
 .sidebar-view-header {
