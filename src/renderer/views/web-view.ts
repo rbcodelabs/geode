@@ -114,6 +114,22 @@ export class WebView implements View {
     toolbar.appendChild(this.forwardBtn);
     toolbar.appendChild(this.reloadBtn);
     toolbar.appendChild(this.addressInput);
+    // Spec: Web Viewer address-bar three-dot menu → Bookmark. A single "More
+    // options" affordance keeps room for future page actions.
+    const moreBtn = this.makeButton("more-horizontal", "More options", (e) => {
+      this.app.showMenu(
+        e,
+        [
+          {
+            title: "Bookmark this page",
+            icon: "bookmark",
+            action: () => void this.app.addLinkBookmark(this.currentUrl, this.title),
+          },
+        ],
+        { anchor: moreBtn, horizontalAlign: "end" }
+      );
+    });
+    toolbar.appendChild(moreBtn);
     this.containerEl.appendChild(toolbar);
 
     // The frame and the error overlay share a positioned body so the overlay
@@ -164,7 +180,7 @@ export class WebView implements View {
     return overlay;
   }
 
-  private makeButton(icon: string, title: string, onClick: () => void): HTMLButtonElement {
+  private makeButton(icon: string, title: string, onClick: (e: MouseEvent) => void): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "web-view-toolbar-btn clickable-icon";
     btn.title = title;

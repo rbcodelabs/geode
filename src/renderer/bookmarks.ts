@@ -23,12 +23,21 @@
  */
 
 /**
- * A single bookmarked target. Phase A covers `"file"` and `"folder"`; the
- * discriminated union is intentionally left open so Phase B can add
- * `"search" | "heading" | "block" | "link" | "graph"` variants without a
- * breaking refactor of existing items.
+ * A single bookmarked target. Phase A covered `"file"` and `"folder"`; Phase B
+ * adds the remaining Obsidian bookmarkable types — `"search" | "heading" |
+ * "block" | "link" | "graph"` (spec docs/spec/02-core-plugins.md §Bookmarks).
+ * The discriminated union stays open so future types slot in without a
+ * breaking refactor of existing items. Only file/folder/heading/block carry a
+ * `path`; search carries a `query`, link a `url`, graph nothing at all.
  */
-export type Bookmark = BookmarkFile | BookmarkFolder;
+export type Bookmark =
+  | BookmarkFile
+  | BookmarkFolder
+  | BookmarkSearch
+  | BookmarkHeading
+  | BookmarkBlock
+  | BookmarkLink
+  | BookmarkGraph;
 
 export interface BookmarkFile {
   type: "file";
@@ -43,6 +52,53 @@ export interface BookmarkFolder {
   type: "folder";
   id: string;
   path: string;
+  title?: string;
+}
+
+/** A saved Search query (spec: "Searches (queries)"). Opening it reveals the Search pane and re-runs `query`. */
+export interface BookmarkSearch {
+  type: "search";
+  id: string;
+  query: string;
+  title?: string;
+}
+
+/** A heading inside a note. `level`/`heading` mirror `HeadingCache`; opening scrolls the file to the heading. */
+export interface BookmarkHeading {
+  type: "heading";
+  id: string;
+  path: string;
+  heading: string;
+  level: number;
+  title?: string;
+}
+
+/** A block inside a note, keyed by its trailing `^blockId`. Opening scrolls the file to the line carrying `^blockId`. */
+export interface BookmarkBlock {
+  type: "block";
+  id: string;
+  path: string;
+  blockId: string;
+  title?: string;
+}
+
+/** A web URL (opened in the Web Viewer). */
+export interface BookmarkLink {
+  type: "link";
+  id: string;
+  url: string;
+  title?: string;
+}
+
+/**
+ * The global Graph view. Degenerate on purpose: Geode has no persistable graph
+ * config yet (see views/graph-view.ts's header comment — graph.json is out of
+ * scope), so this stores no settings and opening it just re-opens the global
+ * Graph view. Graph-config fidelity is deferred until a graph config exists.
+ */
+export interface BookmarkGraph {
+  type: "graph";
+  id: string;
   title?: string;
 }
 
@@ -127,7 +183,13 @@ function findByPath(items: BookmarkItem[], path: string): Bookmark | null {
     if (item.type === "group") {
       const found = findByPath(item.items, path);
       if (found) return found;
-    } else if (item.path === path) {
+    } else if ((item.type === "file" || item.type === "folder") && item.path === path) {
+      // Deliberately file/folder ONLY. Heading/block bookmarks also carry a
+      // `path`, but isBookmarked/findBookmarkByPath model the File-Explorer
+      // "is this file/folder bookmarked?" question — matching a heading/block
+      // here would let un-bookmarking note.md delete a heading bookmark. Their
+      // own dedup uses explicit type+path+heading/blockId predicates via
+      // `findBookmark`, so this restriction doesn't regress them.
       return item;
     }
   }
@@ -215,6 +277,30 @@ export function findItemById(root: BookmarksRoot, id: string): BookmarkItem | nu
 }
 
 /**
+ * The first leaf bookmark (at any depth, groups excluded) matching
+ * `predicate`, or null. Used by the App's typed add-helpers to dedupe
+ * identity-equal bookmarks (same search query, same URL, same heading, …)
+ * without re-implementing the tree walk each time.
+ */
+export function findBookmark(
+  root: BookmarksRoot,
+  predicate: (bm: Bookmark) => boolean
+): Bookmark | null {
+  const walk = (items: BookmarkItem[]): Bookmark | null => {
+    for (const item of items) {
+      if (item.type === "group") {
+        const found = walk(item.items);
+        if (found) return found;
+      } else if (predicate(item)) {
+        return item;
+      }
+    }
+    return null;
+  };
+  return walk(root.items);
+}
+
+/**
  * Move the sibling identified by `id` to `targetIndex` within its container
  * (the root, or `opts.groupId`'s items) — a same-container reorder only;
  * moving an item into a *different* container is Phase B (real drag/drop).
@@ -239,4 +325,134 @@ export function reorderSibling(
       return copy;
     }),
   };
+}
+
+/** True if the group `item` contains `id` anywhere in its subtree. Used to reject moving a group into its own descendant. */
+function groupContainsId(item: BookmarkItem, id: string): boolean {
+  if (item.type !== "group") return false;
+  return item.items.some((child) => child.id === id || groupContainsId(child, id));
+}
+
+/**
+ * Cross-container move: relocate the item identified by `id` into
+ * `targetGroupId`'s contents (or the root level when `targetGroupId` is
+ * `null`) at `targetIndex`. This is the drag-between-groups primitive Phase A
+ * deferred (see `reorderSibling`'s doc). Built on `removeFromItems` +
+ * `updateContainer`, so it stays immutable and returns a new root.
+ *
+ * No-ops (returns the input root unchanged) when: `id` isn't found; the target
+ * is a non-existent / non-group container; or the move would put a group
+ * inside itself or one of its own descendants (which would orphan the subtree).
+ * `targetIndex` is clamped to `[0, container.length]` (an out-of-range index
+ * appends).
+ */
+export function moveItem(
+  root: BookmarksRoot,
+  id: string,
+  targetGroupId: string | null,
+  targetIndex: number
+): BookmarksRoot {
+  const item = findById(root.items, id);
+  if (!item) return root;
+  if (targetGroupId !== null) {
+    const target = findById(root.items, targetGroupId);
+    if (!target || target.type !== "group") return root;
+    // Reject moving a group into itself or one of its descendants.
+    if (targetGroupId === id || groupContainsId(item, targetGroupId)) return root;
+  }
+  const without = removeFromItems(root.items, id);
+  return {
+    items: updateContainer(without, targetGroupId ?? undefined, (arr) => {
+      const clamped = Math.max(0, Math.min(targetIndex, arr.length));
+      const copy = [...arr];
+      copy.splice(clamped, 0, item);
+      return copy;
+    }),
+  };
+}
+
+/**
+ * The id of the group that directly contains `id`, or `null` when `id` is a
+ * top-level item (or isn't found). Used by the Edit-bookmark modal to preselect
+ * the item's current group in the group `<select>`.
+ */
+export function findParentGroupId(root: BookmarksRoot, id: string): string | null {
+  const walk = (items: BookmarkItem[], parentId: string | null): string | null => {
+    for (const item of items) {
+      if (item.id === id) return parentId;
+      if (item.type === "group") {
+        const found = walk(item.items, item.id);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  };
+  return walk(root.items, null);
+}
+
+/**
+ * Walk the tree and return every `type:"group"` node with its nesting `depth`
+ * (0 for a top-level group, 1 for a group nested one level in, …). Used to
+ * populate the Edit-bookmark modal's group `<select>` with indented labels.
+ */
+export function collectGroups(root: BookmarksRoot): { id: string; title: string; depth: number }[] {
+  const out: { id: string; title: string; depth: number }[] = [];
+  const walk = (items: BookmarkItem[], depth: number) => {
+    for (const item of items) {
+      if (item.type === "group") {
+        out.push({ id: item.id, title: item.title, depth });
+        walk(item.items, depth + 1);
+      }
+    }
+  };
+  walk(root.items, 0);
+  return out;
+}
+
+/**
+ * The ids of every group nested (at any depth) inside the group `groupId` —
+ * its descendant subtree, NOT including `groupId` itself. Used by the Edit
+ * modal to keep a group from being re-parented under one of its own
+ * descendants (which `moveItem` rejects, leaving a confusing partial result).
+ * Returns an empty set when `groupId` isn't a group.
+ */
+export function descendantGroupIds(root: BookmarksRoot, groupId: string): Set<string> {
+  const out = new Set<string>();
+  const group = findById(root.items, groupId);
+  if (!group || group.type !== "group") return out;
+  const walk = (items: BookmarkItem[]) => {
+    for (const item of items) {
+      if (item.type === "group") {
+        out.add(item.id);
+        walk(item.items);
+      }
+    }
+  };
+  walk(group.items);
+  return out;
+}
+
+/**
+ * Default display label for a bookmark, ignoring any custom `title` override.
+ * The view still special-cases file/folder to resolve the live vault name;
+ * this covers the non-path types (and gives a sane path-basename fallback for
+ * file/folder/heading/block) for callers without vault access — e.g. the Edit
+ * modal's title-input placeholder.
+ */
+export function bookmarkDefaultLabel(bm: Bookmark): string {
+  switch (bm.type) {
+    case "file":
+    case "folder":
+      return bm.path.split("/").pop() ?? bm.path;
+    case "heading":
+      return bm.heading;
+    case "block":
+      return `${bm.path.split("/").pop() ?? bm.path} ^${bm.blockId}`;
+    case "search":
+      return bm.query;
+    case "link":
+      return bm.url;
+    case "graph":
+      return "Graph";
+  }
 }

@@ -35,7 +35,15 @@ test("All tabs uses the shared menu renderer and activates a selected tab", asyn
     const menu = window.locator("body > .menu.mod-tab-list");
     await expect(menu).toBeVisible();
     await expect(menu.locator(":scope > .menu-grabber")).toHaveCount(1);
-    await expect(menu.locator(":scope > .menu-scroll > .menu-group > .menu-item.tappable")).toHaveCount(4);
+    // Count only the tab entries (their own "tabs" section) — the Bookmarks
+    // plugin adds a "Bookmark N tabs" item in a separate "bookmark" section.
+    await expect(
+      menu.locator(':scope > .menu-scroll > .menu-group > .menu-item.tappable[data-section="tabs"]')
+    ).toHaveCount(4);
+    // The Bookmarks entry point is present in its own section.
+    await expect(
+      menu.locator('.menu-item[data-section="bookmark"]').filter({ hasText: /Bookmark \d+ tabs?/ })
+    ).toHaveCount(1);
     await expect(menu.locator(".menu-item.mod-checked .menu-item-icon.mod-checked")).toHaveCount(1);
 
     await menu.locator(".menu-item", { hasText: "Alpha" }).click();

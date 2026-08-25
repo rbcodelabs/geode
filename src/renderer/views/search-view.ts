@@ -2,6 +2,7 @@ import type { App } from "../app";
 import { projectCanvasForSearch } from "../canvas/canvas-data";
 import type { View } from "../workspace";
 import { TFile, TagCache } from "../types";
+import { setIcon } from "../api/icons";
 
 export interface SearchTerm {
   op: "text" | "file" | "path" | "tag" | "content" | "line";
@@ -115,6 +116,29 @@ export class SearchView implements View {
     const header = document.createElement("div");
     header.className = "sidebar-view-header";
     header.innerHTML = `<span class="sidebar-view-title">Search</span>`;
+    // Three-dot actions affordance (spec: "Search pane: three-dot menu next to
+    // the result count → bookmark the search").
+    const actions = document.createElement("span");
+    actions.className = "sidebar-view-actions";
+    const moreBtn = document.createElement("button");
+    moreBtn.className = "clickable-icon";
+    moreBtn.title = "More options";
+    setIcon(moreBtn, "more-horizontal");
+    moreBtn.addEventListener("click", (e) => {
+      this.app.showMenu(
+        e,
+        [
+          {
+            title: "Bookmark search",
+            icon: "bookmark",
+            action: () => void this.app.addSearchBookmark(this.inputEl.value),
+          },
+        ],
+        { anchor: moreBtn, horizontalAlign: "end" }
+      );
+    });
+    actions.appendChild(moreBtn);
+    header.appendChild(actions);
     this.inputEl = document.createElement("input");
     this.inputEl.className = "search-input";
     this.inputEl.placeholder = "Search (tag:, path:, file:, \"phrase\", -not, /regex/)…";

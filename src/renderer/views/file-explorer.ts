@@ -30,6 +30,10 @@ export class FileExplorerView implements View {
   private expanded = new Set<string>();
   private activePath: string | null = null;
   private sortOrder: SortOrder = "name-asc";
+  /** Multi-selection state (spec: Alt+click toggles, Shift+click ranges) for "Bookmark all". */
+  private selected = new Set<string>();
+  /** Anchor for Shift-range selection: the last row clicked without Shift. */
+  private lastClicked: string | null = null;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -148,7 +152,18 @@ export class FileExplorerView implements View {
       titleEl.textContent = folder.name;
       row.appendChild(arrow);
       row.appendChild(titleEl);
-      row.addEventListener("click", () => {
+      row.addEventListener("click", (e) => {
+        if (e.shiftKey) {
+          e.preventDefault();
+          this.rangeSelectTo(folder.path);
+          return;
+        }
+        if (e.altKey) {
+          e.preventDefault();
+          this.toggleSelected(folder.path);
+          return;
+        }
+        this.setSingleSelection(folder.path);
         if (this.expanded.has(folder.path)) this.expanded.delete(folder.path);
         else this.expanded.add(folder.path);
         this.render();
@@ -187,6 +202,19 @@ export class FileExplorerView implements View {
         row.appendChild(tag);
       }
       row.addEventListener("click", (e) => {
+        if (e.shiftKey) {
+          e.preventDefault();
+          this.rangeSelectTo(file.path);
+          return;
+        }
+        if (e.altKey) {
+          e.preventDefault();
+          this.toggleSelected(file.path);
+          return;
+        }
+        // Plain / Cmd / Ctrl click: single-select and open (Cmd/Ctrl → new tab,
+        // preserving the existing open-in-new-tab affordance).
+        this.setSingleSelection(file.path);
         this.app.openFile(file, e.metaKey || e.ctrlKey);
       });
       row.addEventListener("dragstart", (e) => {
@@ -204,17 +232,77 @@ export class FileExplorerView implements View {
     for (const el of this.treeEl.querySelectorAll(".nav-file-title")) {
       el.classList.toggle("is-active", (el as HTMLElement).dataset.path === this.activePath);
     }
+    this.applySelection();
+  }
+
+  /** Reflect `this.selected` onto the rendered rows' `.is-selected` class. */
+  private applySelection() {
+    for (const el of this.treeEl.querySelectorAll<HTMLElement>(".nav-item[data-path]")) {
+      el.classList.toggle("is-selected", this.selected.has(el.dataset.path!));
+    }
+  }
+
+  /** The currently-rendered rows' paths, in visual (DOM) order — the axis for Shift-range selection. */
+  private flatPaths(): string[] {
+    return Array.from(this.treeEl.querySelectorAll<HTMLElement>(".nav-item[data-path]")).map(
+      (el) => el.dataset.path!
+    );
+  }
+
+  private setSingleSelection(path: string) {
+    this.selected.clear();
+    this.selected.add(path);
+    this.lastClicked = path;
+    this.applySelection();
+  }
+
+  private toggleSelected(path: string) {
+    if (this.selected.has(path)) this.selected.delete(path);
+    else this.selected.add(path);
+    this.lastClicked = path;
+    this.applySelection();
+  }
+
+  /** Select the inclusive range between the last non-Shift click and `path`, over the flat rendered order. */
+  private rangeSelectTo(path: string) {
+    const order = this.flatPaths();
+    const anchor = this.lastClicked ?? path;
+    const from = order.indexOf(anchor);
+    const to = order.indexOf(path);
+    if (from === -1 || to === -1) {
+      this.setSingleSelection(path);
+      return;
+    }
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    this.selected.clear();
+    for (let i = lo; i <= hi; i++) this.selected.add(order[i]);
+    this.applySelection();
+  }
+
+  /** Paths to act on for a context menu opened on `path`: the whole multi-selection if `path` is part of it, else just `path`. */
+  private menuTargetPaths(path: string): string[] {
+    if (this.selected.has(path) && this.selected.size > 1) return [...this.selected];
+    return [path];
   }
 
   private fileMenu(e: MouseEvent, file: TFile) {
     e.preventDefault();
+    const targets = this.menuTargetPaths(file.path);
+    const bookmarkItem =
+      targets.length > 1
+        ? {
+            title: `Bookmark all (${targets.length})`,
+            icon: "bookmark",
+            action: () => void this.app.bookmarkPaths(targets),
+          }
+        : {
+            title: isBookmarked(this.app.bookmarksRoot, file.path) ? "Un-bookmark" : "Bookmark",
+            icon: "bookmark",
+            action: () => void this.app.toggleBookmarkFile(file),
+          };
     this.app.showMenu(e, [
       { title: "Open in new tab", action: () => this.app.openFile(file, true) },
-      {
-        title: isBookmarked(this.app.bookmarksRoot, file.path) ? "Un-bookmark" : "Bookmark",
-        icon: "bookmark",
-        action: () => void this.app.toggleBookmarkFile(file),
-      },
+      bookmarkItem,
       {
         title: "Rename…",
         action: async () => {
@@ -259,11 +347,17 @@ export class FileExplorerView implements View {
           this.render();
         },
       },
-      {
-        title: isBookmarked(this.app.bookmarksRoot, folder.path) ? "Un-bookmark" : "Bookmark",
-        icon: "bookmark",
-        action: () => void this.app.toggleBookmarkFolder(folder),
-      },
+      this.menuTargetPaths(folder.path).length > 1
+        ? {
+            title: `Bookmark all (${this.menuTargetPaths(folder.path).length})`,
+            icon: "bookmark",
+            action: () => void this.app.bookmarkPaths(this.menuTargetPaths(folder.path)),
+          }
+        : {
+            title: isBookmarked(this.app.bookmarksRoot, folder.path) ? "Un-bookmark" : "Bookmark",
+            icon: "bookmark",
+            action: () => void this.app.toggleBookmarkFolder(folder),
+          },
       {
         title: "Rename…",
         action: async () => {

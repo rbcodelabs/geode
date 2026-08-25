@@ -29,9 +29,11 @@ import { TFile, isTFile, pathName } from "./types";
 import {
   addBookmark,
   createEmptyRoot,
+  findBookmark,
   findBookmarkByPath,
   normalizeBookmarksRoot,
   removeBookmark,
+  type Bookmark,
   type BookmarksRoot,
 } from "./bookmarks";
 import { rewriteWikilinksForRename } from "./rename";
@@ -1200,7 +1202,7 @@ export class App {
     });
     c("bases-insert", "Bases: Insert new base", undefined, () => this.insertNewBase());
     c("bases-add-view", "Bases: Add view", undefined, () => this.getActiveBaseView()?.addView());
-    c("bookmarks-open", "Bookmarks: Open Bookmarks pane", undefined, () => {
+    c("bookmarks-open", "Bookmarks: Show bookmarks", undefined, () => {
       // Reveal the docked Bookmarks leaf the same way openSearch reveals the
       // Search pane: find the leaf by view type, then revealLeaf (expands the
       // sidebar if collapsed and activates the pane).
@@ -1214,6 +1216,31 @@ export class App {
         return;
       }
       void this.toggleBookmarkFile(file);
+    });
+    c("bookmark-heading", "Bookmark heading under cursor", undefined, () => {
+      const view = this.getActiveMarkdownView();
+      if (!view) {
+        this.notify("Open a note to bookmark a heading");
+        return;
+      }
+      view.bookmarkHeadingUnderCursor();
+    });
+    c("bookmark-block", "Bookmark block under cursor", undefined, () => {
+      const view = this.getActiveMarkdownView();
+      if (!view) {
+        this.notify("Open a note to bookmark a block");
+        return;
+      }
+      void view.bookmarkBlockUnderCursor();
+    });
+    c("bookmark-webpage", "Bookmark current web page", undefined, () => {
+      const view = this.workspace.getActiveViewOfType(WebView);
+      if (!view) {
+        this.notify("No web page is open");
+        return;
+      }
+      const url = (view.getState() as { url?: string }).url ?? "";
+      void this.addLinkBookmark(url, view.getDisplayText());
     });
   }
 
@@ -1521,6 +1548,236 @@ export class App {
       );
       this.notify(`Bookmarked "${folder.name}"`);
     }
+  }
+
+  /**
+   * Bookmark a Search query (spec: Search pane three-dot menu). De-dupes on an
+   * exact query match so bookmarking the same search twice is a no-op notice.
+   */
+  async addSearchBookmark(query: string): Promise<void> {
+    const q = query.trim();
+    if (!q) {
+      this.notify("Enter a search query before bookmarking it");
+      return;
+    }
+    if (findBookmark(this.bookmarksRoot, (b) => b.type === "search" && b.query === q)) {
+      this.notify("That search is already bookmarked");
+      return;
+    }
+    await this.mutateBookmarks((root) =>
+      addBookmark(root, { type: "search", id: crypto.randomUUID(), query: q })
+    );
+    this.notify(`Bookmarked search "${q}"`);
+  }
+
+  /** Bookmark a heading in a file (spec: right-click heading / "Bookmark heading under cursor"). De-dupes on path+heading. */
+  async addHeadingBookmark(file: TFile, heading: { heading: string; level: number }): Promise<void> {
+    if (
+      findBookmark(
+        this.bookmarksRoot,
+        (b) => b.type === "heading" && b.path === file.path && b.heading === heading.heading
+      )
+    ) {
+      this.notify("That heading is already bookmarked");
+      return;
+    }
+    await this.mutateBookmarks((root) =>
+      addBookmark(root, {
+        type: "heading",
+        id: crypto.randomUUID(),
+        path: file.path,
+        heading: heading.heading,
+        level: heading.level,
+      })
+    );
+    this.notify(`Bookmarked heading "${heading.heading}"`);
+  }
+
+  /** Bookmark a block by its `^blockId` (spec: "Bookmark block under cursor"). De-dupes on path+blockId. */
+  async addBlockBookmark(file: TFile, blockId: string): Promise<void> {
+    if (
+      findBookmark(
+        this.bookmarksRoot,
+        (b) => b.type === "block" && b.path === file.path && b.blockId === blockId
+      )
+    ) {
+      this.notify("That block is already bookmarked");
+      return;
+    }
+    await this.mutateBookmarks((root) =>
+      addBookmark(root, { type: "block", id: crypto.randomUUID(), path: file.path, blockId })
+    );
+    this.notify(`Bookmarked block ^${blockId}`);
+  }
+
+  /** Bookmark a web URL (spec: Web Viewer three-dot menu). De-dupes on the exact URL. */
+  async addLinkBookmark(url: string, title?: string): Promise<void> {
+    const u = url.trim();
+    if (!u) {
+      this.notify("No URL to bookmark");
+      return;
+    }
+    if (findBookmark(this.bookmarksRoot, (b) => b.type === "link" && b.url === u)) {
+      this.notify("That page is already bookmarked");
+      return;
+    }
+    await this.mutateBookmarks((root) =>
+      addBookmark(root, {
+        type: "link",
+        id: crypto.randomUUID(),
+        url: u,
+        ...(title ? { title } : {}),
+      })
+    );
+    this.notify(`Bookmarked "${title || u}"`);
+  }
+
+  /** Bookmark the global Graph view (spec: Graph tab right-click). De-dupes so at most one graph bookmark exists. */
+  async addGraphBookmark(): Promise<void> {
+    if (findBookmark(this.bookmarksRoot, (b) => b.type === "graph")) {
+      this.notify("The graph is already bookmarked");
+      return;
+    }
+    await this.mutateBookmarks((root) => addBookmark(root, { type: "graph", id: crypto.randomUUID() }));
+    this.notify("Bookmarked graph");
+  }
+
+  /**
+   * Bulk-bookmark every leaf in a tab group (spec: tab-group dropdown →
+   * "Bookmark [N] tabs"). File leaves become file bookmarks, Web Viewer leaves
+   * become link bookmarks; anything else (empty tabs, settings, etc.) is
+   * skipped. All adds are batched through a single `mutateBookmarks` so the
+   * pane refreshes and persists once. Already-bookmarked paths/URLs are not
+   * duplicated.
+   */
+  async bookmarkLeaves(leaves: WorkspaceLeaf[]): Promise<void> {
+    const toAdd: Bookmark[] = [];
+    const seenPaths = new Set<string>();
+    const seenUrls = new Set<string>();
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      const file = view?.getFile?.() ?? null;
+      if (file) {
+        if (seenPaths.has(file.path) || findBookmarkByPath(this.bookmarksRoot, file.path)) continue;
+        seenPaths.add(file.path);
+        toAdd.push({ type: "file", id: crypto.randomUUID(), path: file.path });
+        continue;
+      }
+      if (view?.viewType === "webviewer") {
+        const url = (view.getState?.() as { url?: string } | undefined)?.url;
+        if (!url || seenUrls.has(url)) continue;
+        if (findBookmark(this.bookmarksRoot, (b) => b.type === "link" && b.url === url)) continue;
+        seenUrls.add(url);
+        toAdd.push({ type: "link", id: crypto.randomUUID(), url });
+      }
+    }
+    if (!toAdd.length) {
+      this.notify("No bookmarkable tabs to add");
+      return;
+    }
+    await this.mutateBookmarks((root) => toAdd.reduce((acc, bm) => addBookmark(acc, bm), root));
+    this.notify(`Bookmarked ${toAdd.length} tab${toAdd.length === 1 ? "" : "s"}`);
+  }
+
+  /**
+   * Open the target of a bookmark (spec: "Selecting a bookmark opens the
+   * item"). Dispatches per bookmark type — file/heading/block open the note and
+   * (for heading/block) scroll to the right spot; search reveals the Search
+   * pane and re-runs the query; link opens the Web Viewer; graph opens the
+   * global Graph view; folder reveals the File Explorer pane (Geode has no
+   * reveal-to-a-specific-folder affordance yet, so this is a pane reveal + a
+   * Notice — flagged for a later pass).
+   */
+  async openBookmark(bm: Bookmark, newTab = false): Promise<void> {
+    switch (bm.type) {
+      case "file": {
+        const file = this.vault.getFileByPath(bm.path);
+        if (file) await this.openFile(file, newTab);
+        else this.notify(`"${bm.path}" no longer exists in the vault`);
+        return;
+      }
+      case "folder": {
+        const folder = this.vault.getAbstractFileByPath(bm.path);
+        const leaf = this.workspace.getLeavesOfType("file-explorer")[0];
+        if (leaf) this.workspace.revealLeaf(leaf);
+        this.notify(folder ? `Folder: ${bm.path}` : `"${bm.path}" no longer exists in the vault`);
+        return;
+      }
+      case "search":
+        this.openSearch(bm.query);
+        return;
+      case "heading": {
+        const file = this.vault.getFileByPath(bm.path);
+        if (!file) {
+          this.notify(`"${bm.path}" no longer exists in the vault`);
+          return;
+        }
+        const headings = this.metadataCache.getFileCache(file)?.headings ?? [];
+        const match =
+          headings.find((h) => h.heading === bm.heading && h.level === bm.level) ??
+          headings.find((h) => h.heading === bm.heading);
+        this.revealOffsetInActiveMarkdownView(file, match?.position.start.offset ?? 0);
+        return;
+      }
+      case "block": {
+        const file = this.vault.getFileByPath(bm.path);
+        if (!file) {
+          this.notify(`"${bm.path}" no longer exists in the vault`);
+          return;
+        }
+        let offset = 0;
+        try {
+          const content = await this.vault.cachedRead(file);
+          let acc = 0;
+          for (const line of content.split("\n")) {
+            if (line.trimEnd().endsWith(`^${bm.blockId}`)) {
+              offset = acc;
+              break;
+            }
+            acc += line.length + 1;
+          }
+        } catch {
+          /* fall back to offset 0 */
+        }
+        this.revealOffsetInActiveMarkdownView(file, offset);
+        return;
+      }
+      case "link":
+        await this.openWebViewer(bm.url);
+        return;
+      case "graph":
+        await this.openGraphView();
+        return;
+      default:
+        // Unreachable for the known union, but a corrupt or newer-versioned
+        // config could carry an unknown type — notify and ignore rather than
+        // fall through silently.
+        this.notify(`Can't open bookmark of unknown type "${(bm as { type?: string }).type}"`);
+        return;
+    }
+  }
+
+  /**
+   * Bookmark a batch of vault paths (spec: File Explorer multi-select →
+   * "Bookmark all"). Each path becomes a file or folder bookmark depending on
+   * what it resolves to; already-bookmarked and missing paths are skipped. All
+   * adds go through a single `mutateBookmarks` so the pane refreshes once.
+   */
+  async bookmarkPaths(paths: string[]): Promise<void> {
+    const toAdd: Bookmark[] = [];
+    for (const path of paths) {
+      if (findBookmarkByPath(this.bookmarksRoot, path)) continue;
+      const abstractFile = this.vault.getAbstractFileByPath(path);
+      if (!abstractFile) continue;
+      const type = isTFile(abstractFile) ? "file" : "folder";
+      toAdd.push({ type, id: crypto.randomUUID(), path });
+    }
+    if (!toAdd.length) {
+      this.notify("All selected items are already bookmarked");
+      return;
+    }
+    await this.mutateBookmarks((root) => toAdd.reduce((acc, bm) => addBookmark(acc, bm), root));
+    this.notify(`Bookmarked ${toAdd.length} item${toAdd.length === 1 ? "" : "s"}`);
   }
 
   openEmptyTab(group: TabGroup) {

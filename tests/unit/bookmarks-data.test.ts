@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   addBookmark,
+  bookmarkDefaultLabel,
+  collectGroups,
   createEmptyRoot,
   createGroup,
+  descendantGroupIds,
   findBookmarkByPath,
   findItemById,
   isBookmarked,
+  moveItem,
   normalizeBookmarksRoot,
   removeBookmark,
   renameBookmark,
@@ -264,6 +268,224 @@ describe("reorderSibling", () => {
     root = addBookmark(root, file("2", "B.md"));
     const next = reorderSibling(root, "does-not-exist", 0);
     expect(next.items).toEqual(root.items);
+  });
+});
+
+describe("addBookmark — Phase B variants", () => {
+  it("adds a search bookmark", () => {
+    const root = addBookmark(createEmptyRoot(), { type: "search", id: "s1", query: "tag:#todo" });
+    expect(root.items).toEqual([{ type: "search", id: "s1", query: "tag:#todo" }]);
+  });
+
+  it("adds a heading bookmark", () => {
+    const bm: Bookmark = { type: "heading", id: "h1", path: "A.md", heading: "Intro", level: 2 };
+    const root = addBookmark(createEmptyRoot(), bm);
+    expect(root.items).toEqual([bm]);
+  });
+
+  it("adds a block bookmark", () => {
+    const bm: Bookmark = { type: "block", id: "b1", path: "A.md", blockId: "abc123" };
+    const root = addBookmark(createEmptyRoot(), bm);
+    expect(root.items).toEqual([bm]);
+  });
+
+  it("adds a link bookmark", () => {
+    const bm: Bookmark = { type: "link", id: "l1", url: "https://example.com", title: "Example" };
+    const root = addBookmark(createEmptyRoot(), bm);
+    expect(root.items).toEqual([bm]);
+  });
+
+  it("adds a graph bookmark", () => {
+    const root = addBookmark(createEmptyRoot(), { type: "graph", id: "gr1" });
+    expect(root.items).toEqual([{ type: "graph", id: "gr1" }]);
+  });
+
+  it("adds a Phase B variant inside a group", () => {
+    let root = createGroup(createEmptyRoot(), "Group", { id: "g1" });
+    root = addBookmark(root, { type: "link", id: "l1", url: "https://x.com" }, { groupId: "g1" });
+    expect((root.items[0] as BookmarkGroup).items).toEqual([
+      { type: "link", id: "l1", url: "https://x.com" },
+    ]);
+  });
+
+  it("isBookmarked ignores non-path variants (search/link/graph have no path)", () => {
+    let root = addBookmark(createEmptyRoot(), { type: "search", id: "s1", query: "foo" });
+    root = addBookmark(root, { type: "link", id: "l1", url: "https://x.com" });
+    root = addBookmark(root, { type: "graph", id: "gr1" });
+    expect(isBookmarked(root, "foo")).toBe(false);
+    expect(isBookmarked(root, "https://x.com")).toBe(false);
+    // A heading bookmark carries a path but is NOT a file/folder bookmark, so
+    // isBookmarked (the File-Explorer "is this file bookmarked?" query) ignores
+    // it — see FIX 2 and the dedicated "findByPath restriction" block below.
+    root = addBookmark(root, { type: "heading", id: "h1", path: "A.md", heading: "H", level: 1 });
+    expect(isBookmarked(root, "A.md")).toBe(false);
+    // A real file bookmark for the same path IS discoverable.
+    root = addBookmark(root, { type: "file", id: "f1", path: "A.md" });
+    expect(isBookmarked(root, "A.md")).toBe(true);
+  });
+});
+
+describe("moveItem", () => {
+  it("moves a top-level item into a group at the given index", () => {
+    let root = createGroup(createEmptyRoot(), "Group", { id: "g1" });
+    root = addBookmark(root, file("1", "A.md"));
+    root = addBookmark(root, file("2", "B.md"), { groupId: "g1" });
+    root = moveItem(root, "1", "g1", 0);
+    expect(root.items.map((i) => i.id)).toEqual(["g1"]);
+    expect((root.items[0] as BookmarkGroup).items.map((i) => i.id)).toEqual(["1", "2"]);
+  });
+
+  it("moves a nested item out to the root level (targetGroupId null)", () => {
+    let root = createGroup(createEmptyRoot(), "Group", { id: "g1" });
+    root = addBookmark(root, file("1", "A.md"), { groupId: "g1" });
+    root = moveItem(root, "1", null, 0);
+    expect(root.items.map((i) => i.id)).toEqual(["1", "g1"]);
+    expect((root.items[1] as BookmarkGroup).items).toEqual([]);
+  });
+
+  it("reorders across containers (out of one group into another)", () => {
+    let root = createGroup(createEmptyRoot(), "G1", { id: "g1" });
+    root = createGroup(root, "G2", { id: "g2" });
+    root = addBookmark(root, file("1", "A.md"), { groupId: "g1" });
+    root = addBookmark(root, file("2", "B.md"), { groupId: "g2" });
+    root = moveItem(root, "1", "g2", 1);
+    expect((root.items[0] as BookmarkGroup).items).toEqual([]);
+    expect((root.items[1] as BookmarkGroup).items.map((i) => i.id)).toEqual(["2", "1"]);
+  });
+
+  it("clamps an out-of-range target index (appends)", () => {
+    let root = createGroup(createEmptyRoot(), "Group", { id: "g1" });
+    root = addBookmark(root, file("1", "A.md"), { groupId: "g1" });
+    root = addBookmark(root, file("2", "B.md"), { groupId: "g1" });
+    root = moveItem(root, "1", "g1", 999);
+    expect((root.items[0] as BookmarkGroup).items.map((i) => i.id)).toEqual(["2", "1"]);
+  });
+
+  it("is a no-op when the id is missing", () => {
+    const root = addBookmark(createEmptyRoot(), file("1", "A.md"));
+    expect(moveItem(root, "nope", null, 0)).toEqual(root);
+  });
+
+  it("is a no-op when the target group does not exist (never orphans the item)", () => {
+    const root = addBookmark(createEmptyRoot(), file("1", "A.md"));
+    const next = moveItem(root, "1", "no-such-group", 0);
+    expect(next.items.map((i) => i.id)).toEqual(["1"]);
+  });
+
+  it("refuses to move a group into itself", () => {
+    let root = createGroup(createEmptyRoot(), "Group", { id: "g1" });
+    expect(moveItem(root, "g1", "g1", 0)).toEqual(root);
+  });
+
+  it("refuses to move a group into one of its own descendants", () => {
+    let root = createGroup(createEmptyRoot(), "Outer", { id: "outer" });
+    root = createGroup(root, "Inner", { id: "inner", groupId: "outer" });
+    expect(moveItem(root, "outer", "inner", 0)).toEqual(root);
+  });
+
+  it("does not mutate the input root", () => {
+    let root = createGroup(createEmptyRoot(), "Group", { id: "g1" });
+    root = addBookmark(root, file("1", "A.md"));
+    const before = JSON.parse(JSON.stringify(root));
+    moveItem(root, "1", "g1", 0);
+    expect(root).toEqual(before);
+  });
+});
+
+describe("findByPath restriction — file/folder only (FIX 2)", () => {
+  it("a heading bookmark does NOT make its note look file-bookmarked", () => {
+    const root = addBookmark(createEmptyRoot(), {
+      type: "heading",
+      id: "h1",
+      path: "note.md",
+      heading: "Intro",
+      level: 1,
+    });
+    expect(isBookmarked(root, "note.md")).toBe(false);
+    expect(findBookmarkByPath(root, "note.md")).toBeNull();
+  });
+
+  it("a block bookmark does NOT make its note look file-bookmarked", () => {
+    const root = addBookmark(createEmptyRoot(), { type: "block", id: "b1", path: "note.md", blockId: "abc123" });
+    expect(isBookmarked(root, "note.md")).toBe(false);
+    expect(findBookmarkByPath(root, "note.md")).toBeNull();
+  });
+
+  it("a file bookmark and a heading bookmark for the same path coexist; toggling the file one leaves the heading intact", () => {
+    let root = addBookmark(createEmptyRoot(), {
+      type: "heading",
+      id: "h1",
+      path: "note.md",
+      heading: "Intro",
+      level: 1,
+    });
+    root = addBookmark(root, { type: "file", id: "f1", path: "note.md" });
+    // findBookmarkByPath resolves the FILE bookmark, never the heading.
+    expect(findBookmarkByPath(root, "note.md")?.id).toBe("f1");
+    // "Un-bookmarking" the file removes only the file bookmark.
+    root = removeBookmark(root, "f1");
+    expect(findItemById(root, "h1")).not.toBeNull();
+    expect(findBookmarkByPath(root, "note.md")).toBeNull();
+  });
+});
+
+describe("descendantGroupIds (FIX 5)", () => {
+  it("returns the whole descendant subtree of a group (excluding itself)", () => {
+    let root = createGroup(createEmptyRoot(), "A", { id: "A" });
+    root = createGroup(root, "B", { id: "B", groupId: "A" });
+    root = createGroup(root, "C", { id: "C", groupId: "B" });
+    root = createGroup(root, "Sibling", { id: "S" });
+    expect(descendantGroupIds(root, "A")).toEqual(new Set(["B", "C"]));
+    expect(descendantGroupIds(root, "B")).toEqual(new Set(["C"]));
+    expect(descendantGroupIds(root, "C")).toEqual(new Set());
+  });
+
+  it("returns an empty set for a leaf bookmark or a missing id", () => {
+    let root = createGroup(createEmptyRoot(), "A", { id: "A" });
+    root = addBookmark(root, file("f1", "N.md"), { groupId: "A" });
+    expect(descendantGroupIds(root, "f1")).toEqual(new Set());
+    expect(descendantGroupIds(root, "missing")).toEqual(new Set());
+  });
+});
+
+describe("collectGroups", () => {
+  it("returns an empty array when there are no groups", () => {
+    const root = addBookmark(createEmptyRoot(), file("1", "A.md"));
+    expect(collectGroups(root)).toEqual([]);
+  });
+
+  it("lists flat groups at depth 0", () => {
+    let root = createGroup(createEmptyRoot(), "One", { id: "g1" });
+    root = createGroup(root, "Two", { id: "g2" });
+    expect(collectGroups(root)).toEqual([
+      { id: "g1", title: "One", depth: 0 },
+      { id: "g2", title: "Two", depth: 0 },
+    ]);
+  });
+
+  it("reports nesting depth for nested groups (pre-order)", () => {
+    let root = createGroup(createEmptyRoot(), "Outer", { id: "outer" });
+    root = createGroup(root, "Inner", { id: "inner", groupId: "outer" });
+    root = createGroup(root, "Deep", { id: "deep", groupId: "inner" });
+    root = createGroup(root, "Sibling", { id: "sib" });
+    expect(collectGroups(root)).toEqual([
+      { id: "outer", title: "Outer", depth: 0 },
+      { id: "inner", title: "Inner", depth: 1 },
+      { id: "deep", title: "Deep", depth: 2 },
+      { id: "sib", title: "Sibling", depth: 0 },
+    ]);
+  });
+});
+
+describe("bookmarkDefaultLabel", () => {
+  it("uses the basename for file/folder/heading/block and the raw value for search/link", () => {
+    expect(bookmarkDefaultLabel(file("1", "notes/A.md"))).toBe("A.md");
+    expect(bookmarkDefaultLabel(folder("1", "notes/Projects"))).toBe("Projects");
+    expect(bookmarkDefaultLabel({ type: "heading", id: "h", path: "A.md", heading: "Intro", level: 1 })).toBe("Intro");
+    expect(bookmarkDefaultLabel({ type: "block", id: "b", path: "notes/A.md", blockId: "abc" })).toBe("A.md ^abc");
+    expect(bookmarkDefaultLabel({ type: "search", id: "s", query: "tag:#todo" })).toBe("tag:#todo");
+    expect(bookmarkDefaultLabel({ type: "link", id: "l", url: "https://x.com" })).toBe("https://x.com");
+    expect(bookmarkDefaultLabel({ type: "graph", id: "g" })).toBe("Graph");
   });
 });
 
