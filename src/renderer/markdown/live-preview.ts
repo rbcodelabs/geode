@@ -358,22 +358,22 @@ class TableWidget extends WidgetType {
 
   constructor(
     private raw: string,
-    private table: ParsedTable,
-    private from: number,
-    private to: number
+    private table: ParsedTable
   ) {
     super();
   }
 
   eq(other: TableWidget): boolean {
     // Compare raw so CM6 reuses our DOM (and its focus) across the recompute
-    // our own commit triggers. Sync the fresh document coordinates from the
-    // incoming widget so the stored [from, to) range stays correct even when
-    // content above the table shifts it.
-    if (other.raw !== this.raw) return false;
-    this.from = other.from;
-    this.to = other.to;
-    return true;
+    // our own commit triggers. This is deliberately *pure*: it used to sync
+    // `from`/`to` from the incoming widget as a side effect, which was
+    // unsound. `RangeSet.compare` calls `oldWidget.eq(newWidget)` where "old"
+    // is the previous decoration set — from the second recompute onwards that
+    // is an orphan widget that never owned any DOM, so the live, DOM-owning
+    // widget stopped being synced and `commit()` wrote over the wrong slice
+    // of the document. `commit()` now derives the range from the DOM instead
+    // (see below), so there is nothing to sync here.
+    return other.raw === this.raw;
   }
 
   ignoreEvent(): boolean {
@@ -624,20 +624,31 @@ class TableWidget extends WidgetType {
 
   /**
    * Serializes the model and writes it over the table's `[from, to)` range in
-   * a single dispatch. `this.raw`/`this.to` are updated *before* dispatching
-   * so the recompute this triggers finds an equal widget (`eq`) and reuses
-   * this DOM. A no-op change (serialized text unchanged) is skipped so
-   * blurring an untouched cell doesn't churn the document.
+   * a single dispatch.
+   *
+   * The range is derived from the DOM at commit time rather than cached in
+   * the widget: `view.posAtDOM(this.root)` returns the document offset of
+   * this block widget's replaced range, and CM6 keeps that mapped through
+   * every edit above the table. Caching `from`/`to` in the constructor was
+   * unsound because only the *first* widget instance ever owns DOM (and all
+   * the cell listeners close over it), while `computeTables` allocates a
+   * fresh instance per recompute — so the live widget's cached coordinates
+   * went stale and `commit()` overwrote the wrong slice of the document.
+   *
+   * `this.raw` is still updated *before* dispatching so the recompute this
+   * triggers finds an equal widget (`eq`) and reuses this DOM — and its
+   * focus. A no-op change (serialized text unchanged) is skipped so blurring
+   * an untouched cell doesn't churn the document.
    */
   private commit(): void {
     const view = this.view;
-    if (!view) return;
+    const root = this.root;
+    if (!view || !root) return;
     const raw = serializeTable(this.table);
     if (raw === this.raw) return;
-    const from = this.from;
-    const to = this.to;
+    const from = view.posAtDOM(root);
+    const to = from + this.raw.length;
     this.raw = raw;
-    this.to = from + raw.length;
     view.dispatch({ changes: { from, to, insert: raw } });
   }
 }
@@ -839,9 +850,19 @@ export function livePreview(app: App, getPath: () => string): Extension {
     },
     update(value, tr) {
       // Tables are always rendered (the widget edits in place), so — unlike
-      // the inline decorations below — the decoration set only depends on the
-      // document, never the selection.
-      if (!tr.docChanged) return value;
+      // the inline decorations below — the decoration set never depends on the
+      // selection. It does depend on two things, though: the document *and*
+      // the syntax tree. CodeMirror only parses `Work.InitViewport` (3000)
+      // chars synchronously when the state is created; `ParseWorker` extends
+      // the tree afterwards during idle callbacks and publishes each new tree
+      // through a transaction with **no** document change. Recomputing on
+      // `docChanged` alone therefore discarded every late-parsed table
+      // forever — a table past ~3400 chars never rendered until something
+      // else forced a fresh `create()` (e.g. toggling source mode). Comparing
+      // tree identity is the same thing CM's own `TreeHighlighter.update`
+      // does, and `syntaxTree()` returns the immutable snapshot that
+      // `computeTables` reads, so guard and consumer stay coupled.
+      if (!tr.docChanged && syntaxTree(tr.state) === syntaxTree(tr.startState)) return value;
       return computeTables(tr.state);
     },
     provide: (f) => EditorView.decorations.from(f),
@@ -869,7 +890,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
         // markdown — editing goes through the widget's cell inputs instead.
         decos.push(
           Decoration.replace({
-            widget: new TableWidget(trimmed, table, nodeFrom, to),
+            widget: new TableWidget(trimmed, table),
             block: true,
           }).range(nodeFrom, to)
         );
@@ -1110,7 +1131,18 @@ export function livePreview(app: App, getPath: () => string): Extension {
       }
 
       update(update: ViewUpdate) {
-        if (update.docChanged || update.selectionSet || update.viewportChanged) {
+        // `buildInline` reads the syntax tree over `view.visibleRanges`, so —
+        // like `tableField` above — it also has to rebuild when the tree
+        // advances without the document changing (ParseWorker publishing a
+        // longer tree from an idle callback). Without this, scrolling fast
+        // into not-yet-parsed territory leaves `#`/`**`/etc. marks unhidden
+        // until the next keystroke.
+        if (
+          update.docChanged ||
+          update.selectionSet ||
+          update.viewportChanged ||
+          syntaxTree(update.state) !== syntaxTree(update.startState)
+        ) {
           this.decorations = buildInline(update.view);
         }
       }
