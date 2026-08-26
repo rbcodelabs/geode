@@ -480,6 +480,57 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
     expect(cache.getUnlinkedMentions(dailyPlan)).toEqual([]);
   });
+
+  it("memoizes the result: two calls with no intervening vault change return the same array by reference", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Remember to check the Daily Plan before lunch.",
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
+    const result1 = cache.getUnlinkedMentions(dailyPlan);
+    const result2 = cache.getUnlinkedMentions(dailyPlan);
+    expect(result1).toBe(result2);
+  });
+
+  it("recomputes after a vault change invalidates the cache via 'resolved'", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Nothing to see here.",
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
+    const before = cache.getUnlinkedMentions(dailyPlan);
+    expect(before).toEqual([]);
+
+    fake.setFile("Welcome.md", "Remember to check the Daily Plan before lunch.");
+    fake.trigger("modify", fake.getFileByPath("Welcome.md"));
+    // MetadataCache's flush is async; let it complete (and fire "resolved").
+    await new Promise((r) => setTimeout(r, 0));
+
+    const after = cache.getUnlinkedMentions(dailyPlan);
+    expect(after).not.toBe(before);
+    expect(after.map((m) => m.source.path)).toEqual(["Welcome.md"]);
+  });
+
+  it("peekUnlinkedMentions is a pure cache read: undefined before, then equals the computed result after", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Remember to check the Daily Plan before lunch.",
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
+    expect(cache.peekUnlinkedMentions(dailyPlan)).toBeUndefined();
+
+    const computed = cache.getUnlinkedMentions(dailyPlan);
+    expect(cache.peekUnlinkedMentions(dailyPlan)).toBe(computed);
+  });
 });
 
 describe("processInBatches", () => {
