@@ -9,6 +9,7 @@ import {
   LinkCache,
   ListItemCache,
   Loc,
+  Pos,
   SectionCache,
   TFile,
   TagCache,
@@ -111,17 +112,50 @@ export async function processInBatches<T>(
   }
 }
 
-function offsetToLoc(text: string, start: number, end: number): Loc {
-  // Line/ch computed lazily and cheaply: count newlines up to offset.
-  const before = text.slice(0, start);
-  const line = (before.match(/\n/g) ?? []).length;
-  const lineStart = before.lastIndexOf("\n") + 1;
-  const endBefore = text.slice(0, end);
-  const endLine = (endBefore.match(/\n/g) ?? []).length;
-  const endLineStart = endBefore.lastIndexOf("\n") + 1;
+/**
+ * Builds a sorted array of line-start character offsets for `text`:
+ * `lineStarts[i]` is the offset of the first character of (0-indexed) line
+ * `i`. `lineStarts[0]` is always `0`. A single O(n) forward scan — computed
+ * once per file so `offsetToLoc` can binary-search it instead of re-scanning
+ * the document from offset 0 on every call (which made parsing a file
+ * O(n²) in file size: one re-scan per heading/link/tag/section, each
+ * itself O(n)).
+ */
+export function buildLineStarts(text: string): number[] {
+  const lineStarts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10 /* "\n" */) lineStarts.push(i + 1);
+  }
+  return lineStarts;
+}
+
+/**
+ * Resolves a single character `offset` to a `{ line, ch }` position by
+ * binary-searching `lineStarts` (see `buildLineStarts`) for the largest
+ * line-start offset that is `<= offset` — O(log lines) instead of the O(n)
+ * re-scan-from-zero this replaced.
+ */
+function locFromOffset(lineStarts: number[], offset: number): Pos {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (lineStarts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return { line: lo, ch: offset - lineStarts[lo], offset };
+}
+
+/**
+ * Converts a `[start, end)` character-offset span into a `Loc`. `lineStarts`
+ * must come from `buildLineStarts(text)` for the same `text` these offsets
+ * were taken from — see that function's comment for why this is precomputed
+ * once per file rather than re-derived on every call.
+ */
+export function offsetToLoc(lineStarts: number[], start: number, end: number): Loc {
   return {
-    start: { line, ch: start - lineStart, offset: start },
-    end: { line: endLine, ch: end - endLineStart, offset: end },
+    start: locFromOffset(lineStarts, start),
+    end: locFromOffset(lineStarts, end),
   };
 }
 
@@ -207,6 +241,11 @@ export function parseMetadata(text: string): CachedMetadata {
     aliases: [],
   };
 
+  // Precomputed once per file (O(n)) so every offsetToLoc call below is an
+  // O(log lines) binary search instead of an O(n) re-scan from offset 0 —
+  // see offsetToLoc's comment for why this matters.
+  const lineStarts = buildLineStarts(text);
+
   let body = text;
   let bodyOffset = 0;
   const fmMatch = text.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
@@ -257,7 +296,7 @@ export function parseMetadata(text: string): CachedMetadata {
     const link: LinkCache = {
       link: target,
       displayText: display,
-      position: offsetToLoc(text, start, start + m[0].length),
+      position: offsetToLoc(lineStarts, start, start + m[0].length),
       isEmbed,
     };
     (isEmbed ? meta.embeds : meta.links).push(link);
@@ -267,7 +306,7 @@ export function parseMetadata(text: string): CachedMetadata {
     const tag = m[2];
     if (/^\d+$/.test(tag)) continue; // tags need a non-numeric character
     const start = bodyOffset + m.index! + m[1].length;
-    meta.tags.push({ tag, position: offsetToLoc(text, start, start + tag.length + 1) });
+    meta.tags.push({ tag, position: offsetToLoc(lineStarts, start, start + tag.length + 1) });
   }
 
   let offset = bodyOffset;
@@ -284,7 +323,7 @@ export function parseMetadata(text: string): CachedMetadata {
   let cur: { type: string; start: number; end: number } | null = null;
   const flush = () => {
     if (cur) {
-      sections.push({ type: cur.type, position: offsetToLoc(text, cur.start, cur.end) });
+      sections.push({ type: cur.type, position: offsetToLoc(lineStarts, cur.start, cur.end) });
       cur = null;
     }
   };
@@ -293,7 +332,7 @@ export function parseMetadata(text: string): CachedMetadata {
   if (meta.frontmatter && meta.frontmatterEndOffset > 0) {
     sections.push({
       type: "yaml",
-      position: offsetToLoc(text, 0, Math.max(0, meta.frontmatterEndOffset - 1)),
+      position: offsetToLoc(lineStarts, 0, Math.max(0, meta.frontmatterEndOffset - 1)),
     });
   }
 
@@ -330,9 +369,9 @@ export function parseMetadata(text: string): CachedMetadata {
         meta.headings.push({
           heading: h![2].trim(),
           level: h![1].length,
-          position: offsetToLoc(text, lineStart, lineEnd),
+          position: offsetToLoc(lineStarts, lineStart, lineEnd),
         });
-        sections.push({ type: "heading", position: offsetToLoc(text, lineStart, lineEnd) });
+        sections.push({ type: "heading", position: offsetToLoc(lineStarts, lineStart, lineEnd) });
       } else {
         // Extend the current same-type section, or start a new one.
         if (cur && cur.type === type) cur.end = lineEnd;
@@ -343,7 +382,7 @@ export function parseMetadata(text: string): CachedMetadata {
 
         if (type === "list") {
           const indent = li![1].length;
-          const pos = offsetToLoc(text, lineStart, lineEnd);
+          const pos = offsetToLoc(lineStarts, lineStart, lineEnd);
           const lineNo = pos.start.line;
           // Discard ancestors at this indent or deeper — they can't be parents.
           while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
