@@ -291,7 +291,7 @@ button.mod-cta:hover {
   min-width: 44px;
   display: flex;
   flex-direction: column;
-  padding: calc(var(--header-height) + var(--size-4-2)) 6px 8px;
+  padding: var(--size-4-2) 6px 8px;
   box-sizing: border-box;
   color: var(--text-muted);
   background: var(--background-secondary);
@@ -300,6 +300,14 @@ button.mod-cta:hover {
 
 body:not(.show-ribbon) .workspace-ribbon.mod-left {
   display: none;
+}
+
+/* Obsidian's macOS hidden-inset layout starts the ribbon below the native
+   traffic lights instead of keeping a full-height border and faking the
+   clearance with internal padding. Native fullscreen hides the traffic
+   lights, so the ribbon returns to the top there. */
+body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
+  margin-top: var(--header-height);
 }
 
 .workspace-ribbon-actions,
@@ -820,12 +828,13 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
   pointer-events: none;
 }
 
-/* Frameless-window traffic-light clearance: push the left sidebar's own tab
-   row right so its tabs clear the macOS traffic lights overlaid on the
-   top-left. Only relevant while the sidebar is visible/expanded — while
-   collapsed the sidebar is width:0 and this rule is moot. */
-.mod-left .workspace-tab-header-container {
-  padding-left: 78px;
+/* `hiddenInset` overlays the macOS traffic lights across the ribbon/sidebar
+   boundary. Clear only the portion that reaches into the sidebar; the old
+   78px inset counted from the sidebar edge and therefore left roughly a
+   second traffic-light gutter. Native fullscreen hides the controls, so its
+   state class deliberately removes the inset. */
+body.is-macos:not(.is-native-fullscreen) .mod-left .workspace-tab-header-container {
+  padding-left: 38px;
 }
 
 /* When the left sidebar is collapsed, it no longer occupies the top-left
@@ -834,8 +843,8 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
    instead. Gated on `mod-left-collapsed` (toggled on the workspace root by
    `Sidebar.toggle()`) so this never doubles up with the sidebar's own
    padding above when expanded. */
-.workspace.mod-left-collapsed .workspace-tabs:first-child > .workspace-tab-header-container {
-  padding-left: 78px;
+body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspace-tabs:first-child > .workspace-tab-header-container {
+  padding-left: 38px;
 }
 
 /* Reusable toggle button (left/right sidebar collapse-expand), now hosted in

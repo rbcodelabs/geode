@@ -51,6 +51,7 @@ import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
+import { applyWindowChromeState } from "./window-chrome";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -891,6 +892,10 @@ export class App {
 
   async start() {
     return measureOperation("startup-total", async () => {
+      const updateWindowChrome = (state: Awaited<ReturnType<typeof window.geode.getWindowChromeState>>) =>
+        applyWindowChromeState(document.body.classList, state);
+      window.geode.onWindowChromeState(updateWindowChrome);
+      updateWindowChrome(await window.geode.getWindowChromeState());
       window.geode.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params));
       this.installExternalLinkInterceptor();
       const rootEl = document.getElementById("app")!;
