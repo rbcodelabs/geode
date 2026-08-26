@@ -519,6 +519,15 @@ export class MetadataCache extends Events {
   private cache = new Map<string, CachedMetadata>();
   /** Readable synthetic lines paired with Canvas file-card LinkCache entries. */
   private canvasLinkContexts = new Map<string, string[]>();
+  /**
+   * Memoized `getUnlinkedMentions` results, keyed by target file path.
+   * `"resolved"` fires as the unconditional last step of every mutation path
+   * (flush/initialize/background snapshot/renderer fallback, including
+   * renames), so clearing the whole map on `"resolved"` is a complete
+   * invalidation signal — no need for separate `"changed"`/`"deleted"`
+   * listeners or per-entry version tracking.
+   */
+  private unlinkedMentionsCache = new Map<string, { source: TFile; mentions: UnlinkedMention[] }[]>();
   /** basename/name (lowercase) -> file paths, path-sorted */
   private byBasename = new Map<string, string[]>();
   /** alias (lowercase) -> file paths, path-sorted */
@@ -606,6 +615,8 @@ export class MetadataCache extends Events {
     });
     vault.on("delete", (f: TFile) => this.enqueue(f, true, false, !(this.backgroundIndexerActive && f?.extension === "md")));
     vault.on("rename", (f: TFile, oldPath: string) => this.enqueueRename(f, oldPath));
+    // See unlinkedMentionsCache's doc comment: "resolved" alone is sufficient invalidation.
+    this.on("resolved", () => this.unlinkedMentionsCache.clear());
     const api = typeof window === "undefined" ? undefined : window.geode;
     api?.onMetadataIndexerMessage?.((message) => this.onIndexerMessage(message));
   }
@@ -1200,6 +1211,9 @@ export class MetadataCache extends Events {
    * an actual `[[wikilink]]` to it — Obsidian's "unlinked mentions".
    */
   getUnlinkedMentions(file: TFile): { source: TFile; mentions: UnlinkedMention[] }[] {
+    const cached = this.unlinkedMentionsCache.get(file.path);
+    if (cached) return cached;
+
     const names = [file.basename, ...(this.cache.get(file.path)?.aliases ?? [])];
     const out: { source: TFile; mentions: UnlinkedMention[] }[] = [];
     for (const src of this.cache.keys()) {
@@ -1212,7 +1226,18 @@ export class MetadataCache extends Events {
       const srcFile = this.vault.getFileByPath(src);
       if (srcFile) out.push({ source: srcFile, mentions });
     }
-    return out.sort((a, b) => a.source.basename.localeCompare(b.source.basename));
+    out.sort((a, b) => a.source.basename.localeCompare(b.source.basename));
+    this.unlinkedMentionsCache.set(file.path, out);
+    return out;
+  }
+
+  /**
+   * Cache-only lookup for `getUnlinkedMentions` — never computes. Returns
+   * `undefined` until `getUnlinkedMentions` has been called at least once
+   * for this file since the last `"resolved"` invalidation.
+   */
+  peekUnlinkedMentions(file: TFile): { source: TFile; mentions: UnlinkedMention[] }[] | undefined {
+    return this.unlinkedMentionsCache.get(file.path);
   }
 
   /** tag (no '#') -> usage count, across the whole vault. */
