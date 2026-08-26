@@ -112,7 +112,6 @@ export { addIcon, setIcon };
 export { moment };
 export function setTooltip(el: HTMLElement, tooltip: string): void {
   el.setAttribute("aria-label", tooltip);
-  el.setAttribute("title", tooltip);
 }
 
 /** Sanitize an HTML string into a DocumentFragment (Obsidian uses this for untrusted HTML). */
@@ -1093,7 +1092,7 @@ export abstract class Plugin extends GeodePlugin {
   addStatusBarItem(): HTMLElement {
     const el = document.createElement("div");
     el.className = "status-bar-item plugin-" + this.manifest.id;
-    (this.app as any).addStatusBarItem?.(el);
+    this.app.addStatusBarItem(el);
     this.register(() => el.remove());
     return el;
   }

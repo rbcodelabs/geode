@@ -3,7 +3,10 @@ dist/
 release/
 *.log
 .DS_Store
-test-vault/.geode/
+test-vault/.geode/*
+!test-vault/.geode/plugins/
+test-vault/.geode/plugins/*
+!test-vault/.geode/plugins/status-probe/
 test-results/
 playwright-report/
 .benchmark-vault/

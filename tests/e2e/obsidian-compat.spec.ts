@@ -52,6 +52,16 @@ const MAIN_JS = `
         await leaf.setViewState({ type: VIEW_TYPE, active: true });
         this.app.workspace.revealLeaf(leaf);
       });
+
+      const status = this.addStatusBarItem();
+      status.addClass('probe-status');
+      status.classList.add('mod-clickable');
+      status.setAttribute('aria-label', 'Probe status');
+      const statusIcon = status.createSpan({ cls: 'status-bar-item-icon' });
+      obsidian.setIcon(statusIcon, 'check');
+      const statusLabel = status.createSpan({ cls: 'probe-status-text' });
+      statusLabel.setText('probe: idle');
+      status.addEventListener('click', () => statusLabel.setText('probe: clicked'));
     }
   };
 `;
@@ -96,7 +106,10 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
     const ribbonActions = ribbon.locator(".workspace-ribbon-actions");
     const probeAction = ribbonActions.getByRole("button", { name: "Open probe" });
     await expect(ribbon).toBeVisible();
-    await expect(probeAction).toHaveAttribute("title", "Open probe");
+    // setTooltip() sets aria-label only (see tooltip.ts) — the native `title`
+    // attribute was deliberately dropped to avoid a doubled custom+native
+    // tooltip once the global tooltip layer is installed.
+    await expect(probeAction).toHaveAttribute("aria-label", "Open probe");
 
     await window.evaluate(() => {
       const ws = (window as any).app.workspace;
@@ -166,12 +179,30 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
     );
     expect(leafCount).toBe(1);
 
+    // Plugin status bar items mount into the host-owned status bar
+    // (App.addStatusBarItem), styled and interactive to Obsidian parity.
+    const statusBar = window.locator(".status-bar");
+    const probeStatus = statusBar.locator(".status-bar-item.probe-status");
+    await expect(statusBar).toBeVisible();
+    await expect(probeStatus).toBeVisible();
+    await expect(probeStatus.locator(".probe-status-text")).toHaveText("probe: idle");
+    await expect(probeStatus.locator(".status-bar-item-icon svg")).toHaveCount(1);
+    // Plugin items append after the core readouts (word count / backlinks) —
+    // hidden `.mod-core:empty` spans stay in the DOM, so `last()` still
+    // resolves to the plugin's own item and proves append ordering.
+    await expect(statusBar.locator(".status-bar-item").last()).toHaveClass(/probe-status/);
+    await probeStatus.click();
+    await expect(probeStatus.locator(".probe-status-text")).toHaveText("probe: clicked");
+
     // Component cleanup registered by Plugin.addRibbonIcon removes the same
     // element from the host when the plugin is disabled.
     await window.evaluate(() =>
       (window as any).app.pluginManager.disable("obsidian-compat-probe", { persist: false })
     );
     await expect(probeAction).toHaveCount(0);
+    // Component cleanup registered by Plugin.addStatusBarItem removes the
+    // status bar item too.
+    await expect(probeStatus).toHaveCount(0);
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
@@ -243,6 +274,47 @@ test("hides and restores the ribbon without unloading plugin actions, and persis
     if (screenshotDir) {
       await window.screenshot({ path: path.join(screenshotDir, "left-ribbon-restored-setting.png") });
     }
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("hides and restores the status bar without unloading plugin status bar items", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-status-bar-settings-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-status-bar-settings-ud-"));
+  fs.writeFileSync(path.join(vaultDir, "Note.md"), "# Hello\n");
+  const pluginDir = path.join(vaultDir, ".geode", "plugins", "obsidian-compat-probe");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, "manifest.json"), JSON.stringify(MANIFEST));
+  fs.writeFileSync(path.join(pluginDir, "main.js"), MAIN_JS);
+  fs.writeFileSync(path.join(vaultDir, ".geode", "plugins.json"), JSON.stringify(["obsidian-compat-probe"]));
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    const statusBar = window.locator(".status-bar");
+    const probeStatus = statusBar.locator(".status-bar-item.probe-status");
+    await expect(statusBar).toBeVisible();
+    await expect(probeStatus).toHaveCount(1);
+
+    await window.evaluate(() => (window as any).app.setting.open());
+    const showStatusBarRow = window.locator(".setting-item", { hasText: "Show status bar" });
+    const showStatusBarToggle = showStatusBarRow.locator('input[type="checkbox"]');
+    await expect(showStatusBarToggle).toBeChecked();
+    await showStatusBarToggle.uncheck();
+
+    await expect(statusBar).toBeHidden();
+    await expect(probeStatus).toHaveCount(1);
+
+    await showStatusBarToggle.check();
+    await expect(statusBar).toBeVisible();
+    await expect(probeStatus).toHaveCount(1);
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
