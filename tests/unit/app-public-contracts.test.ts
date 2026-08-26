@@ -72,6 +72,16 @@ describe("App public foundation", () => {
     expect(first.loadLocalStorage("keep")).toBe(false);
     expect(second.loadLocalStorage("remove")).toBe(2);
   });
+
+  it("mounts the exact element created by Plugin.addStatusBarItem() into the status bar", () => {
+    installBrowser();
+    const app = new App();
+    const appended: unknown[] = [];
+    (app as any).statusBar = { containerEl: { appendChild: (el: unknown) => appended.push(el) } };
+    const el = { nodeName: "DIV" } as unknown as HTMLElement;
+    app.addStatusBarItem(el);
+    expect(appended).toEqual([el]);
+  });
 });
 
 describe("App through require('obsidian')", () => {

@@ -38,6 +38,7 @@ import {
 } from "./bookmarks";
 import { rewriteWikilinksForRename } from "./rename";
 import { anchorSnapshot, parseLocalFileHref, shouldInterceptAnchor } from "./external-links";
+import { initTooltips } from "./tooltip";
 import {
   resolveDailyNoteSettings,
   matchDailyNoteFile,
@@ -72,6 +73,7 @@ interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
   showRibbon: boolean;
+  showStatusBar: boolean;
   /** Selected community theme name ("" = built-in default). */
   cssTheme: string;
   webViewer: WebViewerSettings;
@@ -381,6 +383,11 @@ class SettingsModal extends Modal {
       this.geodeApp.applySettings();
       this.geodeApp.saveSettings();
     });
+    this.addToggle(container, "Show status bar", s.showStatusBar, (v) => {
+      s.showStatusBar = v;
+      this.geodeApp.applySettings();
+      this.geodeApp.saveSettings();
+    });
     // Community theme picker: "Default" + any installed under .geode/themes/.
     this.addDropdown(
       container,
@@ -685,9 +692,9 @@ class StatusBar {
     this.containerEl = document.createElement("div");
     this.containerEl.className = "status-bar";
     this.backlinksEl = document.createElement("span");
-    this.backlinksEl.className = "status-bar-item";
+    this.backlinksEl.className = "status-bar-item mod-core";
     this.wordCountEl = document.createElement("span");
-    this.wordCountEl.className = "status-bar-item";
+    this.wordCountEl.className = "status-bar-item mod-core";
     this.containerEl.appendChild(this.backlinksEl);
     this.containerEl.appendChild(this.wordCountEl);
     parentEl.appendChild(this.containerEl);
@@ -748,6 +755,7 @@ export class App {
     theme: "dark",
     readableLineLength: true,
     showRibbon: true,
+    showStatusBar: true,
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
   };
@@ -889,10 +897,16 @@ export class App {
     this.ribbonActionsEl.appendChild(el);
   }
 
+  /** Mount the exact element created by Plugin.addStatusBarItem(). */
+  addStatusBarItem(el: HTMLElement): void {
+    this.statusBar.containerEl.appendChild(el);
+  }
+
   async start() {
     return measureOperation("startup-total", async () => {
       window.geode.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params));
       this.installExternalLinkInterceptor();
+      initTooltips();
       const rootEl = document.getElementById("app")!;
       const [launchTarget, recents] = await measureOperation("startup-recent-vaults", () => Promise.all([
         window.geode.getLaunchVault(),
@@ -1944,6 +1958,7 @@ export class App {
     document.body.classList.toggle("theme-light", this.settings.theme === "light");
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
     document.body.classList.toggle("show-ribbon", this.settings.showRibbon);
+    document.body.classList.toggle("show-status-bar", this.settings.showStatusBar);
     // Real Obsidian hides .view-header entirely unless <body> has this class
     // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
     // Geode always shows it — there's no settings toggle for this yet.
