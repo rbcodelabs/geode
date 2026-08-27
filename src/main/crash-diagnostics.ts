@@ -42,6 +42,97 @@ export interface RendererIncident extends RendererIncidentInput {
   type: "renderer-gone";
 }
 
+/**
+ * How close to `RLIMIT_NOFILE` counts as trouble. Chromium needs a spare
+ * descriptor to hand a sandboxed renderer its seatbelt policy, so the table
+ * does not have to be completely full before `<webview>` guests start dying.
+ */
+export const FD_PRESSURE_RATIO = 0.85;
+
+export interface FdPressureSnapshot {
+  /**
+   * Approximate number of descriptors in use. `open()` always returns the
+   * lowest free descriptor, so opening (and immediately closing) the null
+   * device reports how far up the table allocation has reached — cheap, and
+   * accurate enough to tell "a few dozen" from "ten thousand".
+   */
+  openFileDescriptors: number | null;
+  /** Soft `RLIMIT_NOFILE`, when the runtime can report it. */
+  limit: number | null;
+  ratio: number | null;
+  underPressure: boolean;
+  /** The probe itself could not get a descriptor: the table is full. */
+  exhausted: boolean;
+}
+
+function defaultOpenProbe(): number {
+  const fd = fs.openSync(os.devNull, "r");
+  try {
+    return fd;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+let cachedFdLimit: number | null | undefined;
+
+/** Soft open-file limit, read once — `RLIMIT_NOFILE` does not change under us. */
+export function readFdLimit(report: () => unknown = () => process.report?.getReport()): number | null {
+  if (cachedFdLimit !== undefined) return cachedFdLimit;
+  let limit: number | null = null;
+  try {
+    const soft = (report() as { userLimits?: { open_files?: { soft?: unknown } } } | undefined)
+      ?.userLimits?.open_files?.soft;
+    if (typeof soft === "number" && Number.isFinite(soft) && soft > 0) limit = soft;
+  } catch {
+    limit = null;
+  }
+  cachedFdLimit = limit;
+  return limit;
+}
+
+/** Test seam — the cached limit would otherwise leak between cases. */
+export function resetFdLimitCache(): void {
+  cachedFdLimit = undefined;
+}
+
+/**
+ * Sample file-descriptor pressure. Exhausting the table is silent until
+ * something needs a *new* descriptor at an awkward moment (spawning a
+ * sandboxed renderer), which surfaces as an unactionable "exit code 6"
+ * crash, so this exists to name the real cause.
+ */
+export function probeFdPressure(options: {
+  openProbe?: () => number;
+  limit?: number | null;
+  threshold?: number;
+} = {}): FdPressureSnapshot {
+  const limit = options.limit !== undefined ? options.limit : readFdLimit();
+  // Reproducing genuine descriptor exhaustion in a test would mean opening
+  // ten thousand files; the same GEODE_TEST_* escape hatch the watchdog and
+  // heartbeat timings use lets a test reach the pressure branch instead.
+  const threshold = options.threshold
+    ?? Number(process.env.GEODE_TEST_FD_PRESSURE_RATIO ?? FD_PRESSURE_RATIO);
+  let openFileDescriptors: number;
+  try {
+    openFileDescriptors = (options.openProbe ?? defaultOpenProbe)();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EMFILE" || code === "ENFILE") {
+      return { openFileDescriptors: limit, limit, ratio: 1, underPressure: true, exhausted: true };
+    }
+    return { openFileDescriptors: null, limit, ratio: null, underPressure: false, exhausted: false };
+  }
+  const ratio = limit ? openFileDescriptors / limit : null;
+  return {
+    openFileDescriptors,
+    limit,
+    ratio,
+    underPressure: ratio !== null && ratio >= threshold,
+    exhausted: false,
+  };
+}
+
 export class BoundedBuffer<T> {
   private entries: T[] = [];
   constructor(private readonly capacity: number) {}
