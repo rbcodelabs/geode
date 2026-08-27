@@ -91,7 +91,8 @@ export class BacklinksView extends SidebarView {
     }
     const file = this.file;
     const linked = this.app.metadataCache.getBacklinksWithContext(file);
-    const unlinked = this.app.metadataCache.getUnlinkedMentions(file);
+    const unlinkedReady = this.app.metadataCache.isUnlinkedMentionsReady();
+    const unlinked = unlinkedReady ? this.app.metadataCache.getUnlinkedMentions(file) : [];
     this.bodyEl.innerHTML = "";
 
     this.renderSection(
@@ -100,8 +101,10 @@ export class BacklinksView extends SidebarView {
       linked.map((b) => ({ source: b.source, count: b.count, snippets: b.snippets }))
     );
     this.renderSection(
-      `Unlinked mentions (${unlinked.reduce((n, u) => n + u.mentions.length, 0)})`,
-      "No unlinked mentions found.",
+      unlinkedReady
+        ? `Unlinked mentions (${unlinked.reduce((n, u) => n + u.mentions.length, 0)})`
+        : "Unlinked mentions",
+      unlinkedReady ? "No unlinked mentions found." : "Indexing unlinked mentions…",
       unlinked.map((u) => ({
         source: u.source,
         count: u.mentions.length,

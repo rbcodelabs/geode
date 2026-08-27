@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { parseMetadata, MetadataCache } from "../src/renderer/metadata-cache.ts";
+import { extractMentionIndexKeys, parseMetadata, MetadataCache } from "../src/renderer/metadata-cache.ts";
 import { clearMeasures, getRecentMeasures } from "../src/renderer/perf-instrumentation.ts";
 import { reconcileMetadataIndex, type MetadataFileStat, type MetadataIndexSnapshot, type MetadataReconcileStats } from "../src/indexer/metadata-indexer.ts";
 import { FakeVault } from "../tests/helpers/fake-vault.ts";
@@ -78,8 +78,9 @@ async function measureRenderer(snapshot: MetadataIndexSnapshot): Promise<Pick<Be
     },
   } } });
   clearMeasures();
-  await new MetadataCache(vault.asVault()).initialize();
-  await new Promise((resolve) => setImmediate(resolve));
+  const cache = new MetadataCache(vault.asVault());
+  await cache.initialize();
+  await cache.waitForBackgroundIdle();
   const measures = getRecentMeasures();
   const duration = (op: string) => measures.find((item) => item.op === op)?.durationMs ?? 0;
   delete (globalThis as { window?: unknown }).window;
@@ -102,7 +103,8 @@ async function run(paths: string[], persisted: MetadataIndexSnapshot | null) {
       await simulateIoDelay();
       return fsp.readFile(path.join(root, relative), "utf8");
     }, parseMetadata,
-    (value) => { counters = value; });
+    (value) => { counters = value; },
+    extractMentionIndexKeys);
   const durationMs = performance.now() - started;
   const renderer = await measureRenderer(snapshot);
   const maxEventLoopLagMs = await stopLag();

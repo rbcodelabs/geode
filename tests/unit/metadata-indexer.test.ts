@@ -62,6 +62,35 @@ describe("metadata utility-process indexer", () => {
     expect(stats).toHaveBeenCalledWith({ totalFiles: 3, parsedFiles: 2, reusedFiles: 1, deletedFiles: 1 });
   });
 
+  it("upgrades unchanged legacy entries with mention keys off the read/parse path", async () => {
+    const persisted: MetadataIndexSnapshot = {
+      schemaVersion: 1,
+      entries: {
+        "same.md": {
+          mtimeMs: 1,
+          size: 4,
+          content: "same",
+          metadata: { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] },
+        },
+      },
+    };
+    const read = vi.fn(async () => "unexpected");
+    const extractMentionKeys = vi.fn(() => ["w:same"]);
+
+    const result = await reconcileMetadataIndex(
+      [{ path: "same.md", mtimeMs: 1, size: 4 }],
+      persisted,
+      read,
+      vi.fn(),
+      undefined,
+      extractMentionKeys,
+    );
+
+    expect(read).not.toHaveBeenCalled();
+    expect(extractMentionKeys).toHaveBeenCalledWith("same");
+    expect(result.entries["same.md"].mentionKeys).toEqual(["w:same"]);
+  });
+
   it("coalesces cache writes and flushes the latest snapshot on shutdown", async () => {
     vi.useFakeTimers();
     const write = vi.fn(async () => {});
