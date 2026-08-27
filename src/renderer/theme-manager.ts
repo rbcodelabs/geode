@@ -41,12 +41,16 @@ export class ThemeManager {
   async apply(name: string): Promise<void> {
     this.remove();
     this.current = "";
-    if (!name) return;
+    if (!name) {
+      this.app.syncWindowBackgroundColor();
+      return;
+    }
     let css: string;
     try {
       css = await window.geode.read(themePath(name));
     } catch (err) {
       console.error(`Failed to load theme "${name}"`, err);
+      this.app.syncWindowBackgroundColor();
       return;
     }
     const styleEl = document.createElement("style");
@@ -55,6 +59,7 @@ export class ThemeManager {
     styleEl.textContent = css;
     document.head.appendChild(styleEl); // after app.css → theme wins the cascade
     this.current = name;
+    this.app.syncWindowBackgroundColor();
   }
 
   private remove(): void {

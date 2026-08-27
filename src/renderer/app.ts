@@ -1953,6 +1953,14 @@ export class App {
     // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
     // Geode always shows it — there's no settings toggle for this yet.
     document.body.classList.add("show-view-header");
+    this.syncWindowBackgroundColor();
+  }
+
+  /** Keep macOS's rounded native window corners aligned with theme-owned chrome. */
+  syncWindowBackgroundColor(): void {
+    const color = getComputedStyle(document.querySelector(".workspace") ?? document.body)
+      .backgroundColor;
+    void window.geode.setWindowBackgroundColor(color);
   }
 
   saveSettings() {

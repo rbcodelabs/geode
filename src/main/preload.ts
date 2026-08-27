@@ -104,6 +104,8 @@ const api = {
   },
   getWindowChromeState: (): Promise<{ platform: NodeJS.Platform; isFullScreen: boolean }> =>
     ipcRenderer.invoke("window-chrome-state"),
+  setWindowBackgroundColor: (color: string): Promise<void> =>
+    ipcRenderer.invoke("window-background-color", color),
   onWindowChromeState: (
     cb: (state: { platform: NodeJS.Platform; isFullScreen: boolean }) => void,
   ) => {

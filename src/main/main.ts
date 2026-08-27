@@ -238,6 +238,11 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender);
     return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false };
   });
+  ipcMain.handle("window-background-color", (e, color: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || typeof color !== "string") return;
+    win.setBackgroundColor(color);
+  });
   ipcMain.handle("power-save-blocker-acquire", (e) => {
     const ownerId = e.sender.id;
     if (!powerSaveBlockerOwners.has(ownerId)) {

@@ -56,11 +56,18 @@ test("macOS titlebar clearance follows native fullscreen", async () => {
       probe.remove();
       return style.backgroundColor === expected;
     })).toBe(true);
+    const browserWindow = await app.browserWindow(window);
+    const themedChromeHex = await workspace.evaluate((el) => {
+      const match = getComputedStyle(el).backgroundColor.match(/\d+/g);
+      if (!match || match.length < 3) throw new Error("Workspace chrome did not resolve to RGB");
+      return `#${match.slice(0, 3).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")}`;
+    });
+    await expect.poll(() => browserWindow.evaluate((win: any) => win.getBackgroundColor().toLowerCase()))
+      .toBe(themedChromeHex);
     if (screenshotDir) {
       await window.screenshot({ path: path.join(screenshotDir, "titlebar-windowed.png") });
     }
 
-    const browserWindow = await app.browserWindow(window);
     await browserWindow.evaluate((win: any) => win.setFullScreen(true));
 
     await expect(window.locator("body")).toHaveClass(/\bis-native-fullscreen\b/, {
