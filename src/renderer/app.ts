@@ -47,7 +47,7 @@ import {
 } from "./daily-notes";
 import type { Command } from "./commands";
 import moment from "moment";
-import { Menu, type PluginSettingTab } from "./api/obsidian";
+import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
 import { FileManager } from "./file-manager";
@@ -904,6 +904,15 @@ export class App {
 
   async start() {
     return measureOperation("startup-total", async () => {
+      // Run first, before any vault is open or `pluginManager` exists, so
+      // `app.plugins`/`app.internalPlugins`/`app.secretStorage`/etc. are
+      // populated app-wide from the first tick — not just for plugins that
+      // happen to construct `obsidian.Plugin` (whose constructor also calls
+      // this, guarded, as a redundant safety net for `plugin-manager.test.ts`'s
+      // fake apps). A plugin built on the bare `GeodePlugin` base, or any
+      // code reading `app.plugins` at module-eval time, would otherwise see
+      // an undefined/empty registry if this only ran from that constructor.
+      installObsidianAppCompat(this);
       window.geode.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params));
       this.installExternalLinkInterceptor();
       initTooltips();
@@ -2001,6 +2010,10 @@ export class App {
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
   const app = new App();
-  void app.start();
+  // Assigned before `start()` is kicked off (rather than after) so a plugin
+  // whose main.js does module-eval-time work that reads `window.app` (or a
+  // Node-timer callback that resolves before `start()`'s first `await`)
+  // never observes `window.app === undefined`.
   (window as any).app = app;
+  void app.start();
 }

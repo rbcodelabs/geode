@@ -631,6 +631,57 @@ describe("PluginManager", () => {
     expect(geode.writeConfig).not.toHaveBeenCalled();
   });
 
+  describe("enabledIds()", () => {
+    it("is empty before anything is enabled, and reflects each enable() as it happens", async () => {
+      const fs = installFakeGeode(["foo", "bar"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+      fs.files.set(".geode/plugins/bar/manifest.json", manifestJson("bar"));
+      fs.files.set(".geode/plugins/bar/main.js", mainJsSource("bar"));
+
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+      expect(pm.enabledIds()).toEqual([]);
+
+      await pm.enable("foo");
+      expect(pm.enabledIds()).toEqual(["foo"]);
+
+      await pm.enable("bar");
+      expect(pm.enabledIds().sort()).toEqual(["bar", "foo"]);
+    });
+
+    it("drops an id from enabledIds() once disable() completes, keeping the rest", async () => {
+      const fs = installFakeGeode(["foo", "bar"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+      fs.files.set(".geode/plugins/bar/manifest.json", manifestJson("bar"));
+      fs.files.set(".geode/plugins/bar/main.js", mainJsSource("bar"));
+
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+      await pm.enable("foo");
+      await pm.enable("bar");
+      await pm.disable("foo");
+
+      expect(pm.enabledIds()).toEqual(["bar"]);
+    });
+
+    it("the ids persisted to config and reported to the host are exactly what enabledIds() returns", async () => {
+      const fs = installFakeGeode(["foo", "bar"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+      fs.files.set(".geode/plugins/bar/manifest.json", manifestJson("bar"));
+      fs.files.set(".geode/plugins/bar/main.js", mainJsSource("bar"));
+
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+      await pm.enable("foo");
+      await pm.enable("bar");
+
+      expect(fs.config.get("plugins")).toEqual(pm.enabledIds());
+    });
+  });
+
   describe("enterprise-managed plugin policy", () => {
     it("enable() throws for a blocked id and never calls the plugin's onload", async () => {
       const fs = installFakeGeode(["foo"], {

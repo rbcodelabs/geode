@@ -969,7 +969,7 @@ export { TFileClass as TFile, TFolderClass as TFolder } from "../types";
  * follow-up), and the `plugins`/`internalPlugins` registries. Idempotent;
  * runs when the first Obsidian-compat plugin is constructed.
  */
-function installObsidianAppCompat(app: App): void {
+export function installObsidianAppCompat(app: App): void {
   const a = app as any;
   if (!a.secretStorage) {
     // Obsidian's secretStorage.getSecret/setSecret are synchronous (plugins
@@ -993,10 +993,41 @@ function installObsidianAppCompat(app: App): void {
     };
   }
   if (!a.plugins) {
+    // `pluginManager` isn't assigned yet at the point this runs (it's the
+    // first statement of `App.start()`, before a vault is even open), so
+    // every field below reads it live through `a.pluginManager` rather than
+    // capturing it now — an empty/absent pluginManager just means "no
+    // plugins yet", not "throw" or "stay wrong forever".
+    //
+    // `enabledPlugins` is the one field that must survive a bare
+    // `const { enabledPlugins } = app.plugins` (real plugins do this):
+    // one Set instance, closed over here, whose contents are refreshed in
+    // place on every read rather than replaced — so an old reference to it
+    // is never a different object, and a fresh read is never stale.
+    const enabledSet = new Set<string>();
+    const syncEnabledSet = (): Set<string> => {
+      const current = a.pluginManager?.enabledIds?.() ?? [];
+      enabledSet.clear();
+      for (const id of current) enabledSet.add(id);
+      return enabledSet;
+    };
     a.plugins = {
-      plugins: {},
-      enabledPlugins: new Set<string>(),
-      manifests: {},
+      get manifests(): Record<string, unknown> {
+        const out: Record<string, unknown> = {};
+        for (const m of a.pluginManager?.listManifests?.() ?? []) out[m.id] = m;
+        return out;
+      },
+      get plugins(): Record<string, unknown> {
+        const out: Record<string, unknown> = {};
+        for (const id of a.pluginManager?.enabledIds?.() ?? []) {
+          const instance = a.pluginManager.getPlugin(id);
+          if (instance) out[id] = instance;
+        }
+        return out;
+      },
+      get enabledPlugins(): Set<string> {
+        return syncEnabledSet();
+      },
       getPlugin: (id: string) => a.pluginManager?.getPlugin?.(id) ?? null,
       enablePlugin: (id: string) => a.pluginManager?.enable?.(id),
       disablePlugin: (id: string) => a.pluginManager?.disable?.(id),
@@ -1018,14 +1049,25 @@ function installObsidianAppCompat(app: App): void {
       enabled: true,
       instance: { options: (app as any).dailyNoteSettings },
     });
+    // Obsidian's Web Viewer core plugin. Geode has no enable/disable toggle
+    // for it — `App.start()` registers the "webviewer" view factory
+    // unconditionally (see `workspace.registerViewFactory("webviewer", ...)`
+    // in app.ts) and `WebViewerSettings` has no enable flag — so reporting
+    // `enabled: true` here is accurate, not aspirational.
+    const webviewerDescriptor = () => ({ enabled: true, instance: {} });
+    const internalPluginDescriptor = (id: string) =>
+      id === "daily-notes" ? dailyNotesDescriptor() : id === "webviewer" ? webviewerDescriptor() : null;
     a.internalPlugins = {
       plugins: {
         get "daily-notes"() {
           return dailyNotesDescriptor();
         },
+        get webviewer() {
+          return webviewerDescriptor();
+        },
       },
-      getPluginById: (id: string) => (id === "daily-notes" ? dailyNotesDescriptor() : null),
-      getEnabledPluginById: (id: string) => (id === "daily-notes" ? dailyNotesDescriptor() : null),
+      getPluginById: internalPluginDescriptor,
+      getEnabledPluginById: internalPluginDescriptor,
     };
   }
   if (!a.scope) {
@@ -1068,6 +1110,14 @@ function installObsidianAppCompat(app: App): void {
     };
   }
 }
+
+// Re-exported so plugins that intentionally avoid the Obsidian-compat
+// wrapper (`require('geode').GeodePlugin` instead of `.Plugin`) can still
+// build on Geode's native plugin base. Also the sharpest regression probe
+// for the app.plugins install ordering: a plugin built on this class never
+// runs `Plugin`'s constructor below, so it only sees a populated
+// `app.plugins` if `installObsidianAppCompat` ran earlier, at `App.start()`.
+export { GeodePlugin };
 
 export abstract class Plugin extends GeodePlugin {
   constructor(app: App, manifest: import("../plugin-manifest").PluginManifest) {

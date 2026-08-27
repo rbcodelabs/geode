@@ -38,38 +38,76 @@ function run(cmd: Command): void {
 }
 
 export class CommandRegistry {
-  commands = new Map<string, Command>();
+  /**
+   * Obsidian's `app.commands.commands` is a plain object keyed by command
+   * id, not a Map — real plugins read/write it directly (e.g.
+   * `app.commands.commands[id].name = ...`), and the agent-facing host
+   * tools (`obsidian_list_commands`/`obsidian_execute_command`) expect
+   * Obsidian's `listCommands`/`executeCommandById` method names. A Record
+   * keeps live object/identity semantics (no snapshot to keep in sync) at
+   * zero cost: nothing outside this file ever read `commands` as a Map.
+   */
+  commands: Record<string, Command> = {};
   private byHotkey = new Map<string, Command>();
 
   add(command: Command) {
-    this.commands.set(command.id, command);
+    this.commands[command.id] = command;
     if (command.hotkey) this.byHotkey.set(command.hotkey, command);
+  }
+
+  /** Obsidian alias for `add`. */
+  addCommand(command: Command) {
+    this.add(command);
   }
 
   /** Unregister a command (and its hotkey binding, if any). Idempotent. */
   remove(id: string): void {
-    const cmd = this.commands.get(id);
+    const cmd = this.commands[id];
     if (!cmd) return;
-    this.commands.delete(id);
+    delete this.commands[id];
     if (cmd.hotkey && this.byHotkey.get(cmd.hotkey) === cmd) this.byHotkey.delete(cmd.hotkey);
   }
 
+  /** Obsidian alias for `remove`. */
+  removeCommand(id: string): void {
+    this.remove(id);
+  }
+
   has(id: string): boolean {
-    return this.commands.has(id);
+    return Object.prototype.hasOwnProperty.call(this.commands, id);
+  }
+
+  findCommand(id: string): Command | undefined {
+    return this.has(id) ? this.commands[id] : undefined;
   }
 
   execute(id: string): boolean {
-    const cmd = this.commands.get(id);
+    const cmd = this.has(id) ? this.commands[id] : undefined;
     if (!cmd || !isAvailable(cmd)) return false;
     run(cmd);
     return true;
   }
 
+  /** Obsidian alias for `execute`. */
+  executeCommandById(id: string): boolean {
+    return this.execute(id);
+  }
+
   /** Commands currently available, e.g. for the command palette. */
   list(): Command[] {
-    return [...this.commands.values()]
+    return Object.values(this.commands)
       .filter(isAvailable)
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Obsidian's `listCommands` — every registered command, unfiltered by
+   * `checkCallback` availability (unlike `list()`, which backs the command
+   * palette). Deliberate divergence: the palette should hide unavailable
+   * commands, but a host tool enumerating "what commands exist" shouldn't.
+   */
+  listCommands(): Command[] {
+    return Object.values(this.commands);
   }
 
   /** Install the global hotkey listener. */
