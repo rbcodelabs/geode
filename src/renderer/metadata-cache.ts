@@ -1079,6 +1079,22 @@ export class MetadataCache extends Events {
         this.vault.primeCachedContent(path, entry.content);
         this.setMentionSourceKeys(path, entry.mentionKeys ?? extractMentionIndexKeys(entry.content));
       });
+      // Oversized entries are deliberately omitted from utility snapshot IPC.
+      // Fill only those missing paths here, one file per yielded batch, so a
+      // legacy cache upgrade remains complete without recreating one giant
+      // renderer task over the whole vault.
+      const missing = [...currentMarkdown.values()].filter((file) =>
+        !this.cache.has(file.path) || !this.mentionKeysBySource.has(file.path)
+      );
+      await processInBatches(missing, 1, async (file) => {
+        try {
+          const content = await this.vault.cachedRead(file);
+          if (!this.cache.has(file.path)) this.cache.set(file.path, parseMetadata(content));
+          this.setMentionSourceKeys(file.path, extractMentionIndexKeys(content));
+        } catch (err) {
+          if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
+        }
+      });
       await yieldToEventLoop();
       withPerfMark("metadata-background-resolve", () => {
         this.rebuildNameIndex();

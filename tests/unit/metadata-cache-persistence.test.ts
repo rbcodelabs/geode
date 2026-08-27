@@ -98,6 +98,59 @@ describe("MetadataCache persistence", () => {
     resolveWorker(true);
   });
 
+  it("progressively fills mention keys for oversized paths omitted from the worker snapshot", async () => {
+    const fake = new FakeVault({
+      "Source.md": "Plain mention of Target.",
+      "Target.md": "# Target",
+    });
+    const source = fake.getFileByPath("Source.md")!;
+    const target = fake.getFileByPath("Target.md")!;
+    const stored = {
+      schemaVersion: METADATA_CACHE_SCHEMA_VERSION,
+      entries: {
+        "Source.md": {
+          mtimeMs: source.mtime,
+          size: source.size,
+          content: "Plain mention of Target.",
+          metadata: parseMetadata("Plain mention of Target."),
+        },
+        "Target.md": {
+          mtimeMs: target.mtime,
+          size: target.size,
+          content: "# Target",
+          metadata: parseMetadata("# Target"),
+        },
+      },
+    };
+    let deliver: (message: unknown) => void = () => {};
+    const api = {
+      readMetadataCache: vi.fn(async () => stored),
+      writeMetadataCache: vi.fn(async () => {}),
+      onMetadataIndexerMessage: vi.fn((cb: (message: unknown) => void) => { deliver = cb; }),
+      startMetadataIndexer: vi.fn(async () => {
+        deliver({ type: "snapshot-start", schemaVersion: METADATA_CACHE_SCHEMA_VERSION, totalEntries: 2 });
+        deliver({ type: "snapshot-chunk", sequence: 0, entries: {
+          "Target.md": {
+            ...stored.entries["Target.md"],
+            mentionKeys: extractMentionIndexKeys("# Target"),
+          },
+        } });
+        deliver({ type: "snapshot-complete", totalChunks: 1 });
+        return true;
+      }),
+    };
+    vi.stubGlobal("window", { geode: api });
+    const readSpy = vi.spyOn(fake, "cachedRead");
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+
+    expect(readSpy.mock.calls.map(([file]) => file.path)).toEqual(["Source.md"]);
+    expect(cache.isUnlinkedMentionsReady()).toBe(true);
+    expect(cache.getUnlinkedMentions(target).map((entry) => entry.source.path)).toEqual(["Source.md"]);
+  });
+
   it("assembles ordered utility-process chunks and applies parsed deltas without renderer reads", async () => {
     const fake = new FakeVault({ "A.md": "# Old" });
     const initial = fake.getFileByPath("A.md")!;
