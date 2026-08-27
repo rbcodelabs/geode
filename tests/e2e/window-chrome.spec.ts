@@ -31,6 +31,7 @@ test("macOS titlebar clearance follows native fullscreen", async () => {
       ".workspace-sidebar.mod-left > .workspace-tab-header-container",
     );
     const leftRibbon = window.locator(".workspace-ribbon.mod-left");
+    const workspace = window.locator(".workspace");
     await expect(leftHeader).toBeVisible();
     await expect(leftRibbon).toBeVisible();
     await expect(window.locator("body")).toHaveClass(/\bis-macos\b/);
@@ -43,6 +44,18 @@ test("macOS titlebar clearance follows native fullscreen", async () => {
       .toBe("40px");
     await expect.poll(() => leftRibbon.evaluate((el) => getComputedStyle(el).paddingTop))
       .toBe("8px");
+    await expect.poll(() => workspace.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const themedChrome = getComputedStyle(document.body)
+        .getPropertyValue("--background-secondary")
+        .trim();
+      const probe = document.createElement("div");
+      probe.style.color = themedChrome;
+      document.body.appendChild(probe);
+      const expected = getComputedStyle(probe).color;
+      probe.remove();
+      return style.backgroundColor === expected;
+    })).toBe(true);
     if (screenshotDir) {
       await window.screenshot({ path: path.join(screenshotDir, "titlebar-windowed.png") });
     }

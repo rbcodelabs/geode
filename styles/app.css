@@ -405,6 +405,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   display: flex;
   flex: 1;
   min-width: 0;
+  background: var(--background-secondary);
 }
 
 .workspace-center {
