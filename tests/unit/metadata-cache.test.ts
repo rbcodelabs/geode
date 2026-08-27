@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildLineStarts,
+  extractMentionIndexKeys,
   findUnlinkedMentions,
   INDEX_CONCURRENCY,
   MetadataCache,
@@ -390,6 +391,19 @@ describe("findUnlinkedMentions", () => {
   it("returns an empty array when there are no candidate names or no matches", () => {
     expect(findUnlinkedMentions("Some text.", [])).toEqual([]);
     expect(findUnlinkedMentions("Some text.", ["Nonexistent"])).toEqual([]);
+  });
+});
+
+describe("extractMentionIndexKeys", () => {
+  it("uses compact whole-word keys and punctuation grams while masking links and code", () => {
+    const keys = extractMentionIndexKeys("Plan Planner C++ [[Hidden]] `Code`");
+    expect(keys).toContain("w:plan");
+    expect(keys).toContain("w:planner");
+    expect(keys).toContain("w:c");
+    expect(keys).toContain("p:++");
+    expect(keys).not.toContain("w:hidden");
+    expect(keys).not.toContain("w:code");
+    expect(keys.length).toBeLessThan(10);
   });
 });
 

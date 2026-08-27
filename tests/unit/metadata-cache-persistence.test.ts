@@ -3,6 +3,7 @@ import { FakeVault } from "../helpers/fake-vault";
 import {
   METADATA_CACHE_SCHEMA_VERSION,
   MetadataCache,
+  extractMentionIndexKeys,
   parseMetadata,
 } from "../../src/renderer/metadata-cache";
 
@@ -47,6 +48,7 @@ describe("MetadataCache persistence", () => {
     await cache.initialize();
 
     expect(cache.getFileCache(file)?.headings[0].heading).toBe("Warm");
+    expect(cache.isUnlinkedMentionsReady()).toBe(false);
     expect(api.startMetadataIndexer).toHaveBeenCalledOnce();
     let workerSettled = false;
     void worker.then(() => { workerSettled = true; });
@@ -54,10 +56,46 @@ describe("MetadataCache persistence", () => {
     expect(workerSettled).toBe(false);
 
     deliver({ type: "snapshot-start", schemaVersion: METADATA_CACHE_SCHEMA_VERSION, totalEntries: 1 });
-    deliver({ type: "snapshot-chunk", sequence: 0, entries: stored.entries });
+    deliver({
+      type: "snapshot-chunk",
+      sequence: 0,
+      entries: {
+        "A.md": { ...stored.entries["A.md"], mentionKeys: extractMentionIndexKeys("# Warm") },
+      },
+    });
     deliver({ type: "snapshot-complete", totalChunks: 1 });
     resolveWorker(true);
     await cache.waitForBackgroundIdle();
+    expect(cache.isUnlinkedMentionsReady()).toBe(true);
+  });
+
+  it("does no mention-content processing on the synchronous warm-start path", async () => {
+    const content = "Plain mention of Target. ".repeat(100_000);
+    const fake = new FakeVault({ "Source.md": content, "Target.md": "# Target" });
+    const source = fake.getFileByPath("Source.md")!;
+    const target = fake.getFileByPath("Target.md")!;
+    const stored = {
+      schemaVersion: METADATA_CACHE_SCHEMA_VERSION,
+      entries: {
+        "Source.md": { mtimeMs: source.mtime, size: source.size, content, metadata: parseMetadata(content) },
+        "Target.md": { mtimeMs: target.mtime, size: target.size, content: "# Target", metadata: parseMetadata("# Target") },
+      },
+    };
+    let resolveWorker!: (available: true) => void;
+    const worker = new Promise<true>((resolve) => { resolveWorker = resolve; });
+    vi.stubGlobal("window", { geode: {
+      readMetadataCache: vi.fn(async () => stored),
+      writeMetadataCache: vi.fn(async () => {}),
+      startMetadataIndexer: vi.fn(() => worker),
+      onMetadataIndexerMessage: vi.fn(),
+    } });
+
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    expect(cache.isUnlinkedMentionsReady()).toBe(false);
+    expect(cache.getUnlinkedMentions(target)).toEqual([]);
+    resolveWorker(true);
   });
 
   it("assembles ordered utility-process chunks and applies parsed deltas without renderer reads", async () => {

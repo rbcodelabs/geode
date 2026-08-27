@@ -63,6 +63,8 @@ interface PersistedMetadataEntry {
   size: number;
   content: string;
   metadata: CachedMetadata;
+  /** Additive cache field; absent in snapshots written before v0.7.15. */
+  mentionKeys?: string[];
 }
 
 interface PersistedMetadataCache {
@@ -88,7 +90,9 @@ function isPersistedMetadataCache(value: unknown): value is PersistedMetadataCac
       Array.isArray(item.metadata.embeds) &&
       Array.isArray(item.metadata.tags) &&
       Array.isArray(item.metadata.headings) &&
-      Array.isArray(item.metadata.aliases)
+      Array.isArray(item.metadata.aliases) &&
+      (item.mentionKeys === undefined ||
+        (Array.isArray(item.mentionKeys) && item.mentionKeys.every((key) => typeof key === "string")))
     );
   });
 }
@@ -160,31 +164,41 @@ export function offsetToLoc(lineStarts: number[], start: number, end: number): L
 }
 
 /** Strip code fences and inline code so links/tags inside code are ignored. */
-function maskCode(text: string): string {
+export function maskCode(text: string): string {
   let masked = text.replace(/```[\s\S]*?(```|$)/g, (m) => m.replace(/[^\n]/g, " "));
   masked = masked.replace(/`[^`\n]*`/g, (m) => " ".repeat(m.length));
   return masked;
 }
 
 /** Blank out `[[wikilink]]`/`![[embed]]` spans (length-preserving) so unlinked-mention search skips text that's already a link. */
-function maskWikilinks(text: string): string {
+export function maskWikilinks(text: string): string {
   return text.replace(/!?\[\[[^\[\]\n]+\]\]/g, (m) => " ".repeat(m.length));
 }
 
 /**
- * Search keys for the unlinked-mention candidate index. Up-to-three-character
- * grams support punctuation and short or multi-word aliases. Uppercasing
- * before lowercasing approximates the Unicode simple case folding used by
- * RegExp `/iu` (notably final sigma, long s, and Kelvin sign), so this filter
- * remains a superset of the exact matcher rather than losing candidates.
+ * Compact search keys for the unlinked-mention candidate index. Word tokens
+ * eliminate substring false candidates ("Plan" does not select "Planner").
+ * Punctuation-only runs use up-to-three-character grams so names such as
+ * "C++" and aliases made entirely of punctuation remain discoverable.
+ *
+ * The utility process computes and persists these keys. The renderer only
+ * hydrates their reverse map in short, yielding slices after initial layout.
  */
-function mentionGrams(text: string): Set<string> {
-  const normalized = [...text].map((char) => char.toUpperCase().toLowerCase()).join("");
-  const grams = new Set<string>();
-  for (let width = 1; width <= Math.min(3, normalized.length); width++) {
-    for (let i = 0; i <= normalized.length - width; i++) grams.add(normalized.slice(i, i + width));
+export function extractMentionIndexKeys(text: string): string[] {
+  const normalized = [...maskWikilinks(maskCode(text))]
+    .map((char) => char.toUpperCase().toLowerCase())
+    .join("");
+  const keys = new Set<string>();
+  for (const token of normalized.match(/[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu) ?? []) {
+    if (/^[\p{L}\p{N}_]/u.test(token)) {
+      keys.add(`w:${token}`);
+      continue;
+    }
+    for (let width = 1; width <= Math.min(3, token.length); width++) {
+      for (let i = 0; i <= token.length - width; i++) keys.add(`p:${token.slice(i, i + width)}`);
+    }
   }
-  return grams;
+  return [...keys];
 }
 
 function escapeRegExp(s: string): string {
@@ -544,10 +558,12 @@ export class MetadataCache extends Events {
    * listeners or per-entry version tracking.
    */
   private unlinkedMentionsCache = new Map<string, { source: TFile; mentions: UnlinkedMention[] }[]>();
-  /** Masked-content n-gram -> Markdown source paths that contain it. */
-  private mentionSourcesByGram = new Map<string, Set<string>>();
-  /** Reverse membership used to update the n-gram index per file. */
-  private mentionGramsBySource = new Map<string, Set<string>>();
+  /** Compact token/punctuation key -> Markdown source paths that contain it. */
+  private mentionSourcesByKey = new Map<string, Set<string>>();
+  /** Authoritative per-file keys, persisted and computed by the utility process. */
+  private mentionKeysBySource = new Map<string, string[]>();
+  private mentionIndexReady = false;
+  private mentionIndexGeneration = 0;
   /** basename/name (lowercase) -> file paths, path-sorted */
   private byBasename = new Map<string, string[]>();
   /** alias (lowercase) -> file paths, path-sorted */
@@ -572,7 +588,7 @@ export class MetadataCache extends Events {
   private pendingDeleted = new Map<string, { file: TFile; previous: CachedMetadata | null }>();
   private flushScheduled = false;
   /** Parsed entries delivered by the utility process, keyed by dirty path. */
-  private workerMetadata = new Map<string, CachedMetadata>();
+  private workerEntries = new Map<string, PersistedMetadataEntry>();
   private backgroundIndexerActive = false;
   private backgroundSnapshot: PersistedMetadataCache | null = null;
   private snapshotSequence = 0;
@@ -614,7 +630,13 @@ export class MetadataCache extends Events {
         const metadata = this.cache.get(file.path);
         const content = this.vault.getCachedContent(file.path);
         if (metadata && content !== undefined) {
-          entries[file.path] = { mtimeMs: file.mtime, size: file.size, content, metadata };
+          entries[file.path] = {
+            mtimeMs: file.mtime,
+            size: file.size,
+            content,
+            metadata,
+            mentionKeys: this.mentionKeysBySource.get(file.path) ?? extractMentionIndexKeys(content),
+          };
         }
       }
       await api.writeMetadataCache({ schemaVersion: METADATA_CACHE_SCHEMA_VERSION, entries });
@@ -623,25 +645,59 @@ export class MetadataCache extends Events {
     }
   }
 
-  private removeMentionSource(path: string): void {
-    for (const gram of this.mentionGramsBySource.get(path) ?? []) {
-      const sources = this.mentionSourcesByGram.get(gram);
+  private removeMentionSourceFromReverseIndex(path: string, keys: string[]): void {
+    for (const key of keys) {
+      const sources = this.mentionSourcesByKey.get(key);
       sources?.delete(path);
-      if (sources?.size === 0) this.mentionSourcesByGram.delete(gram);
+      if (sources?.size === 0) this.mentionSourcesByKey.delete(key);
     }
-    this.mentionGramsBySource.delete(path);
   }
 
-  private indexMentionSource(path: string, content: string): void {
-    this.removeMentionSource(path);
-    if (!isMdPath(path)) return;
-    const grams = mentionGrams(maskWikilinks(maskCode(content)));
-    this.mentionGramsBySource.set(path, grams);
-    for (const gram of grams) {
-      let sources = this.mentionSourcesByGram.get(gram);
-      if (!sources) this.mentionSourcesByGram.set(gram, sources = new Set());
+  private addMentionSourceToReverseIndex(path: string, keys: string[]): void {
+    for (const key of keys) {
+      let sources = this.mentionSourcesByKey.get(key);
+      if (!sources) this.mentionSourcesByKey.set(key, sources = new Set());
       sources.add(path);
     }
+  }
+
+  private setMentionSourceKeys(path: string, keys: string[] | undefined): void {
+    const previous = this.mentionKeysBySource.get(path) ?? [];
+    if (this.mentionIndexReady) this.removeMentionSourceFromReverseIndex(path, previous);
+    if (keys && isMdPath(path)) this.mentionKeysBySource.set(path, keys);
+    else this.mentionKeysBySource.delete(path);
+    if (this.mentionIndexReady && keys && isMdPath(path)) this.addMentionSourceToReverseIndex(path, keys);
+    this.mentionIndexGeneration += 1;
+  }
+
+  /**
+   * Build the renderer's reverse map in <=8ms slices. A vault mutation that
+   * lands while a slice is yielded invalidates the local build and restarts
+   * from the current authoritative per-file keys, preventing stale entries.
+   */
+  private async rebuildMentionIndex(): Promise<void> {
+    this.mentionIndexReady = false;
+    do {
+      const generation = this.mentionIndexGeneration;
+      const next = new Map<string, Set<string>>();
+      let sliceStarted = performance.now();
+      for (const [path, keys] of this.mentionKeysBySource) {
+        for (const key of keys) {
+          let sources = next.get(key);
+          if (!sources) next.set(key, sources = new Set());
+          sources.add(path);
+          if (performance.now() - sliceStarted >= 8) {
+            await yieldToEventLoop();
+            sliceStarted = performance.now();
+          }
+        }
+      }
+      if (generation !== this.mentionIndexGeneration) continue;
+      this.mentionSourcesByKey = next;
+      this.mentionIndexReady = true;
+      if (this.initialized) this.trigger("resolved");
+      return;
+    } while (true);
   }
 
   constructor(private vault: Vault) {
@@ -703,7 +759,7 @@ export class MetadataCache extends Events {
     }
     if (message?.type !== "delta") return;
     if (message.entry) {
-      this.workerMetadata.set(message.path, message.entry.metadata);
+      this.workerEntries.set(message.path, message.entry);
       this.vault.primeCachedContent(message.path, message.entry.content);
     }
     // The raw vault event normally arrives first and records the public
@@ -777,6 +833,7 @@ export class MetadataCache extends Events {
     await withPerfMark("metadata-renderer-apply-resolve", async () => {
       // Phase 1 — read + parse every present renderer metadata source.
       const newMeta = new Map<string, CachedMetadata>();
+      const newMentionKeys = new Map<string, string[]>();
       const newCanvasContexts = new Map<string, string[]>();
       const toRead: string[] = [];
       for (const [path, op] of dirty) if (op.present && isMetadataSourcePath(path)) toRead.push(path);
@@ -787,16 +844,19 @@ export class MetadataCache extends Events {
           return;
         }
         try {
-          const fromWorker = isMdPath(path) ? this.workerMetadata.get(path) : undefined;
+          const fromWorker = isMdPath(path) ? this.workerEntries.get(path) : undefined;
           if (fromWorker) {
-            newMeta.set(path, fromWorker);
-            this.workerMetadata.delete(path);
+            newMeta.set(path, fromWorker.metadata);
+            newMentionKeys.set(path, fromWorker.mentionKeys ?? extractMentionIndexKeys(fromWorker.content));
+            this.workerEntries.delete(path);
           } else if (isCanvasPath(path)) {
             const parsed = parseCanvasLinkMetadata(await this.vault.cachedRead(file));
             newMeta.set(path, parsed.metadata);
             newCanvasContexts.set(path, parsed.contexts);
           } else {
-            newMeta.set(path, parseMetadata(await this.vault.cachedRead(file)));
+            const content = await this.vault.cachedRead(file);
+            newMeta.set(path, parseMetadata(content));
+            newMentionKeys.set(path, extractMentionIndexKeys(content));
           }
         } catch (err) {
           failed.add(path);
@@ -861,11 +921,7 @@ export class MetadataCache extends Events {
         } else {
           this.cache.delete(path);
         }
-        this.removeMentionSource(path);
-        if (op.present && md) {
-          const content = this.vault.getCachedContent(path);
-          if (content !== undefined) this.indexMentionSource(path, content);
-        }
+        this.setMentionSourceKeys(path, op.present && md ? newMentionKeys.get(path) : undefined);
         this.canvasLinkContexts.delete(path);
         if (op.present && isCanvasPath(path)) {
           this.canvasLinkContexts.set(path, newCanvasContexts.get(path) ?? []);
@@ -902,11 +958,13 @@ export class MetadataCache extends Events {
   }
 
   async initialize(): Promise<void> {
+    let attemptedBackground = false;
+    let completePersistedMentionIndex = false;
     await withPerfMark("metadata-initialize", async () => {
       const markdownFiles = this.vault.getMarkdownFiles();
       const canvasFiles = this.vault.getFiles().filter((file) => file.extension === "canvas");
       const api = typeof window === "undefined" ? undefined : window.geode;
-      const attemptedBackground = !!api?.startMetadataIndexer;
+      attemptedBackground = !!api?.startMetadataIndexer;
       if (attemptedBackground) {
         // Starting the worker must never make the renderer wait for a full
         // vault reconciliation. On endpoint-protected filesystems that can
@@ -928,15 +986,16 @@ export class MetadataCache extends Events {
       await withPerfMark("metadata-renderer-apply", async () => {
         this.cache.clear();
         this.canvasLinkContexts.clear();
-        this.mentionSourcesByGram.clear();
-        this.mentionGramsBySource.clear();
+        this.mentionSourcesByKey.clear();
+        this.mentionKeysBySource.clear();
+        this.mentionIndexReady = false;
         const toRead: TFile[] = [];
         for (const file of markdownFiles) {
           const entry = persisted?.entries[file.path];
           if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
             this.cache.set(file.path, entry.metadata);
             this.vault.primeCachedContent(file.path, entry.content);
-            this.indexMentionSource(file.path, entry.content);
+            if (entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
           } else if (!attemptedBackground) {
             toRead.push(file);
           }
@@ -953,24 +1012,31 @@ export class MetadataCache extends Events {
               this.canvasLinkContexts.set(f.path, parsed.contexts);
             } else {
               this.cache.set(f.path, parseMetadata(text));
-              this.indexMentionSource(f.path, text);
+              this.setMentionSourceKeys(f.path, extractMentionIndexKeys(text));
             }
           } catch (err) {
             if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
           }
         });
       });
+      completePersistedMentionIndex = this.mentionKeysBySource.size === markdownFiles.length;
       withPerfMark("metadata-renderer-resolve", () => {
         this.rebuildNameIndex();
         this.resolveAll();
       });
       for (const file of markdownFiles) if (this.cache.has(file.path)) this.trigger("resolve", file);
-      if (!attemptedBackground) await this.persistCache();
+      if (!attemptedBackground) {
+        await this.rebuildMentionIndex();
+        await this.persistCache();
+      }
     });
     this.initialized = true;
     this.trigger("resolved");
     if (this.backgroundRefreshPending) this.scheduleBackground(() => this.applyBackgroundSnapshot());
     else if (this.backgroundUnavailable) this.scheduleBackground(() => this.applyRendererFallback());
+    else if (attemptedBackground && completePersistedMentionIndex) {
+      this.scheduleBackground(() => this.rebuildMentionIndex());
+    }
   }
 
   /**
@@ -991,18 +1057,23 @@ export class MetadataCache extends Events {
     this.backgroundIndexerActive = true;
     try {
       const currentMarkdown = new Map(this.vault.getMarkdownFiles().map((file) => [file.path, file]));
+      this.mentionIndexReady = false;
+      this.mentionSourcesByKey.clear();
+      for (const path of this.mentionKeysBySource.keys()) {
+        if (!currentMarkdown.has(path)) this.setMentionSourceKeys(path, undefined);
+      }
       const entries = Object.entries(snapshot.entries);
       await processInBatches(entries, 50, async ([path, snapshotEntry]) => {
         const file = currentMarkdown.get(path);
         if (!file) return;
-        const live = this.workerMetadata.get(path);
+        const live = this.workerEntries.get(path);
         if (!live && (snapshotEntry.mtimeMs !== file.mtime || snapshotEntry.size !== file.size)) return;
         const entry = live
-          ? { metadata: live, content: this.vault.getCachedContent(path) ?? snapshotEntry.content }
+          ? live
           : snapshotEntry;
         this.cache.set(path, entry.metadata);
         this.vault.primeCachedContent(path, entry.content);
-        this.indexMentionSource(path, entry.content);
+        this.setMentionSourceKeys(path, entry.mentionKeys ?? extractMentionIndexKeys(entry.content));
       });
       await yieldToEventLoop();
       withPerfMark("metadata-background-resolve", () => {
@@ -1011,6 +1082,7 @@ export class MetadataCache extends Events {
       });
       const files = [...currentMarkdown.values()].filter((file) => this.cache.has(file.path));
       await processInBatches(files, 50, async (file) => { this.trigger("resolve", file); });
+      await this.rebuildMentionIndex();
       this.trigger("resolved");
     } finally {
       this.backgroundRefreshRunning = false;
@@ -1023,11 +1095,13 @@ export class MetadataCache extends Events {
     if (!this.backgroundUnavailable) return;
     this.backgroundUnavailable = false;
     const files = this.vault.getMarkdownFiles();
+    this.mentionIndexReady = false;
+    this.mentionSourcesByKey.clear();
     await processInBatches(files, INDEX_CONCURRENCY, async (file) => {
       try {
         const content = await this.vault.cachedRead(file);
         this.cache.set(file.path, parseMetadata(content));
-        this.indexMentionSource(file.path, content);
+        this.setMentionSourceKeys(file.path, extractMentionIndexKeys(content));
       } catch (err) {
         if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
       }
@@ -1038,6 +1112,7 @@ export class MetadataCache extends Events {
     await processInBatches(files.filter((file) => this.cache.has(file.path)), 50, async (file) => {
       this.trigger("resolve", file);
     });
+    await this.rebuildMentionIndex();
     this.trigger("resolved");
     await this.persistCache();
   }
@@ -1265,13 +1340,17 @@ export class MetadataCache extends Events {
   getUnlinkedMentions(file: TFile): { source: TFile; mentions: UnlinkedMention[] }[] {
     const cached = this.unlinkedMentionsCache.get(file.path);
     if (cached) return cached;
+    // Never fall back to a vault-wide synchronous scan. The Backlinks view
+    // exposes an explicit indexing state until the yielding reverse-map
+    // hydration completes, then rerenders on the resulting `resolved` event.
+    if (!this.mentionIndexReady) return [];
 
     const names = [file.basename, ...(this.cache.get(file.path)?.aliases ?? [])];
     const candidates = new Set<string>();
     for (const name of names) {
-      const grams = [...mentionGrams(name.trim())];
-      if (!grams.length) continue;
-      const sourceSets = grams.map((gram) => this.mentionSourcesByGram.get(gram) ?? new Set<string>());
+      const keys = extractMentionIndexKeys(name.trim());
+      if (!keys.length) continue;
+      const sourceSets = keys.map((key) => this.mentionSourcesByKey.get(key) ?? new Set<string>());
       sourceSets.sort((a, b) => a.size - b.size);
       for (const src of sourceSets[0]) {
         if (sourceSets.every((sources) => sources.has(src))) candidates.add(src);
@@ -1292,6 +1371,10 @@ export class MetadataCache extends Events {
     out.sort((a, b) => a.source.basename.localeCompare(b.source.basename));
     this.unlinkedMentionsCache.set(file.path, out);
     return out;
+  }
+
+  isUnlinkedMentionsReady(): boolean {
+    return this.mentionIndexReady;
   }
 
   /**

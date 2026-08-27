@@ -7,6 +7,8 @@ export interface MetadataIndexEntry {
   size: number;
   content: string;
   metadata: CachedMetadata;
+  /** Additive field populated off-renderer; absent in pre-v0.7.15 caches. */
+  mentionKeys?: string[];
 }
 
 export interface MetadataIndexSnapshot {
@@ -89,7 +91,9 @@ export function isMetadataIndexSnapshot(value: unknown): value is MetadataIndexS
     return !!item && typeof item.mtimeMs === "number" && typeof item.size === "number" &&
       typeof item.content === "string" && !!item.metadata && Array.isArray(item.metadata.links) &&
       Array.isArray(item.metadata.embeds) && Array.isArray(item.metadata.tags) &&
-      Array.isArray(item.metadata.headings) && Array.isArray(item.metadata.aliases);
+      Array.isArray(item.metadata.headings) && Array.isArray(item.metadata.aliases) &&
+      (item.mentionKeys === undefined ||
+        (Array.isArray(item.mentionKeys) && item.mentionKeys.every((key) => typeof key === "string")));
   });
 }
 
@@ -99,6 +103,7 @@ export async function reconcileMetadataIndex(
   read: (path: string) => Promise<string>,
   parse: (content: string) => CachedMetadata,
   onComplete?: (stats: MetadataReconcileStats) => void,
+  extractMentionKeys?: (content: string) => string[],
 ): Promise<MetadataIndexSnapshot> {
   const entries: Record<string, MetadataIndexEntry> = {};
   const currentPaths = new Set(files.map((file) => file.path));
@@ -107,7 +112,9 @@ export async function reconcileMetadataIndex(
   for (const file of files) {
     const previous = persisted?.entries[file.path];
     if (previous && previous.mtimeMs === file.mtimeMs && previous.size === file.size) {
-      entries[file.path] = previous;
+      entries[file.path] = previous.mentionKeys || !extractMentionKeys
+        ? previous
+        : { ...previous, mentionKeys: extractMentionKeys(previous.content) };
       reusedFiles += 1;
       continue;
     }
@@ -117,6 +124,7 @@ export async function reconcileMetadataIndex(
       size: file.size,
       content,
       metadata: parse(content),
+      mentionKeys: extractMentionKeys?.(content),
     };
     parsedFiles += 1;
   }
