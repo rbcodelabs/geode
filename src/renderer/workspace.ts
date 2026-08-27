@@ -955,6 +955,16 @@ export class Sidebar implements LeafContainer {
     // manual collapse/expand is persisted on its own.
     this.app.workspace.trigger("layout-change");
   }
+
+  /** Obsidian's `WorkspaceSidedock.collapse()` — idempotent; no-op if already collapsed. */
+  collapse(): void {
+    if (!this.collapsed) this.toggle();
+  }
+
+  /** Obsidian's `WorkspaceSidedock.expand()` — idempotent; no-op if already expanded. */
+  expand(): void {
+    if (this.collapsed) this.toggle();
+  }
 }
 
 /** One serialized leaf in the persisted workspace layout. */
@@ -1087,6 +1097,28 @@ export class Workspace extends Events {
     this.rootEl.appendChild(this.rightSidebar.containerEl);
     parentEl.appendChild(this.rootEl);
     this.activeGroup = this.addGroup();
+  }
+
+  /**
+   * Obsidian's `workspace.leftSplit`/`.rightSplit`. Getters (not fields) so
+   * identity always resolves live to the current `leftSidebar`/`rightSidebar`
+   * — a plugin that does `const { leftSplit } = app.workspace` and later
+   * reads `.collapsed` off it sees current state, not a stale snapshot.
+   *
+   * `rootSplit` (the main-pane `WorkspaceRoot`) is intentionally NOT shimmed:
+   * Obsidian's is a full `WorkspaceItem` (`getRoot()`/`getContainer()`/
+   * `parent`/`children`), and Geode's main area (`centerEl` + `groups`) can't
+   * answer that protocol. A half-shim would pass a plugin's
+   * `if (app.workspace.rootSplit)` feature-detect and then throw walking the
+   * tree — worse than leaving it `undefined` so the feature-detect fails
+   * honestly.
+   */
+  get leftSplit(): Sidebar {
+    return this.leftSidebar;
+  }
+
+  get rightSplit(): Sidebar {
+    return this.rightSidebar;
   }
 
   addGroup(after?: TabGroup): TabGroup {

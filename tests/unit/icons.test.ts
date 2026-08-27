@@ -37,4 +37,41 @@ describe("icon resolution (Lucide)", () => {
     addIcon("my-custom-icon", "<svg data-custom>x</svg>");
     expect(getIconSvg("my-custom-icon")).toBe("<svg data-custom>x</svg>");
   });
+
+  // Vitest runs these unit tests under `environment: "node"` (no jsdom/
+  // happy-dom installed), so nothing about `innerHTML` injection or actual
+  // rendering (setIcon's DOM side effects, computed styles, getBBox) is
+  // unit-testable here. Those are covered end-to-end instead, in
+  // tests/e2e/plugin-api-compat.spec.ts, against a real Electron/Chromium
+  // window. What IS unit-testable, and covered below, is the string-level
+  // contract addIcon/getIconSvg normalize to.
+
+  it("addIcon wraps a bare fragment in a complete <svg viewBox> with svg-icon + id classes", () => {
+    addIcon("bare-fragment-icon", '<path fill="currentColor" d="M0 0 L1 1" />');
+    const svg = getIconSvg("bare-fragment-icon");
+    expect(svg).toBe(
+      '<svg viewBox="0 0 100 100" class="svg-icon bare-fragment-icon">' +
+        '<path fill="currentColor" d="M0 0 L1 1" />' +
+        "</svg>"
+    );
+  });
+
+  it("addIcon passes a complete <svg> element through verbatim (no double-wrapping)", () => {
+    addIcon("full-svg-icon", '<svg viewBox="0 0 24 24"><circle r="1" /></svg>');
+    expect(getIconSvg("full-svg-icon")).toBe('<svg viewBox="0 0 24 24"><circle r="1" /></svg>');
+  });
+
+  it("resolves both the bare and lucide-prefixed spelling of the same icon identically", () => {
+    expect(getIconSvg("lucide-search")).toBe(getIconSvg("search"));
+    expect(getIconSvg("lucide-search")).not.toBeNull();
+  });
+
+  it("does not invent an icon: stripping the lucide- prefix from an unknown id still returns null", () => {
+    expect(getIconSvg("lucide-not-a-real-icon-xyz")).toBeNull();
+    // A custom icon that happens to be registered under a "lucide-"-prefixed
+    // id is NOT reachable by stripping the prefix — the custom map is keyed
+    // by exact id, matching Obsidian (no fuzzy custom-icon resolution).
+    addIcon("lucide-my-custom", "<svg data-custom-2>y</svg>");
+    expect(getIconSvg("my-custom")).toBeNull();
+  });
 });
