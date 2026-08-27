@@ -31,7 +31,7 @@ test("macOS titlebar clearance follows native fullscreen", async () => {
       ".workspace-sidebar.mod-left > .workspace-tab-header-container",
     );
     const leftRibbon = window.locator(".workspace-ribbon.mod-left");
-    const workspace = window.locator(".workspace");
+    const appMain = window.locator(".app-main");
     await expect(leftHeader).toBeVisible();
     await expect(leftRibbon).toBeVisible();
     await expect(window.locator("body")).toHaveClass(/\bis-macos\b/);
@@ -44,7 +44,7 @@ test("macOS titlebar clearance follows native fullscreen", async () => {
       .toBe("40px");
     await expect.poll(() => leftRibbon.evaluate((el) => getComputedStyle(el).paddingTop))
       .toBe("8px");
-    await expect.poll(() => workspace.evaluate((el) => {
+    await expect.poll(() => appMain.evaluate((el) => {
       const style = getComputedStyle(el);
       const themedChrome = getComputedStyle(document.body)
         .getPropertyValue("--background-secondary")
@@ -57,7 +57,7 @@ test("macOS titlebar clearance follows native fullscreen", async () => {
       return style.backgroundColor === expected;
     })).toBe(true);
     const browserWindow = await app.browserWindow(window);
-    const themedChromeHex = await workspace.evaluate((el) => {
+    const themedChromeHex = await appMain.evaluate((el) => {
       const match = getComputedStyle(el).backgroundColor.match(/\d+/g);
       if (!match || match.length < 3) throw new Error("Workspace chrome did not resolve to RGB");
       return `#${match.slice(0, 3).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")}`;

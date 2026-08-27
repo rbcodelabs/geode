@@ -1958,7 +1958,7 @@ export class App {
 
   /** Keep macOS's rounded native window corners aligned with theme-owned chrome. */
   syncWindowBackgroundColor(): void {
-    const color = getComputedStyle(document.querySelector(".workspace") ?? document.body)
+    const color = getComputedStyle(document.querySelector(".app-main") ?? document.body)
       .backgroundColor;
     void window.geode.setWindowBackgroundColor(color);
   }
