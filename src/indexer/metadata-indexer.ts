@@ -2,11 +2,25 @@ import type { CachedMetadata } from "../renderer/types";
 
 export const METADATA_INDEX_SCHEMA_VERSION = 1;
 
-export interface MetadataIndexEntry {
+/**
+ * The on-disk / persisted shape of a metadata index entry. Deliberately
+ * excludes `content` — persisting every file's raw content alongside its
+ * parsed metadata is what causes the full-snapshot JSON.stringify to blow
+ * past V8's max string length on large vaults (see toPersistedSnapshot).
+ */
+export interface PersistedMetadataIndexEntry {
   mtimeMs: number;
   size: number;
-  content: string;
   metadata: CachedMetadata;
+}
+
+export interface PersistedMetadataIndexSnapshot {
+  schemaVersion: number;
+  entries: Record<string, PersistedMetadataIndexEntry>;
+}
+
+export interface MetadataIndexEntry extends PersistedMetadataIndexEntry {
+  content: string;
 }
 
 export interface MetadataIndexSnapshot {
@@ -80,22 +94,50 @@ export function chunkMetadataSnapshot(
   return messages;
 }
 
-export function isMetadataIndexSnapshot(value: unknown): value is MetadataIndexSnapshot {
+/**
+ * Maps an in-memory snapshot (which carries full file content for renderer
+ * IPC / reconciliation) down to the on-disk shape. This is what must be
+ * serialized for disk persistence — never the raw in-memory snapshot — so
+ * the JSON payload scales with metadata size, not vault content size.
+ */
+export function toPersistedSnapshot(snapshot: MetadataIndexSnapshot): PersistedMetadataIndexSnapshot {
+  const entries: Record<string, PersistedMetadataIndexEntry> = {};
+  for (const [path, entry] of Object.entries(snapshot.entries)) {
+    entries[path] = { mtimeMs: entry.mtimeMs, size: entry.size, metadata: entry.metadata };
+  }
+  return { schemaVersion: snapshot.schemaVersion, entries };
+}
+
+export function isPersistedMetadataIndexSnapshot(value: unknown): value is PersistedMetadataIndexSnapshot {
   if (!value || typeof value !== "object") return false;
-  const cache = value as Partial<MetadataIndexSnapshot>;
+  const cache = value as Partial<PersistedMetadataIndexSnapshot>;
   if (cache.schemaVersion !== METADATA_INDEX_SCHEMA_VERSION || !cache.entries || Array.isArray(cache.entries)) return false;
   return Object.values(cache.entries).every((entry) => {
-    const item = entry as Partial<MetadataIndexEntry> | null;
+    const item = entry as Partial<PersistedMetadataIndexEntry> | null;
     return !!item && typeof item.mtimeMs === "number" && typeof item.size === "number" &&
-      typeof item.content === "string" && !!item.metadata && Array.isArray(item.metadata.links) &&
+      !!item.metadata && Array.isArray(item.metadata.links) &&
       Array.isArray(item.metadata.embeds) && Array.isArray(item.metadata.tags) &&
       Array.isArray(item.metadata.headings) && Array.isArray(item.metadata.aliases);
   });
 }
 
+/**
+ * A source entry for reconciliation may come either from the in-memory
+ * snapshot (full `content` present) or from a disk-persisted snapshot
+ * (`content` absent). Both MetadataIndexSnapshot and
+ * PersistedMetadataIndexSnapshot are structurally assignable to
+ * ReconcileSourceSnapshot below.
+ */
+export type ReconcileSourceEntry = PersistedMetadataIndexEntry & { content?: string };
+
+export interface ReconcileSourceSnapshot {
+  schemaVersion: number;
+  entries: Record<string, ReconcileSourceEntry>;
+}
+
 export async function reconcileMetadataIndex(
   files: MetadataFileStat[],
-  persisted: MetadataIndexSnapshot | null,
+  persisted: ReconcileSourceSnapshot | null,
   read: (path: string) => Promise<string>,
   parse: (content: string) => CachedMetadata,
   onComplete?: (stats: MetadataReconcileStats) => void,
@@ -107,7 +149,16 @@ export async function reconcileMetadataIndex(
   for (const file of files) {
     const previous = persisted?.entries[file.path];
     if (previous && previous.mtimeMs === file.mtimeMs && previous.size === file.size) {
-      entries[file.path] = previous;
+      if (typeof previous.content === "string") {
+        // Already in memory (e.g. a reused in-memory snapshot passed directly,
+        // not round-tripped through disk) — reuse by reference, zero I/O.
+        entries[file.path] = previous as MetadataIndexEntry;
+      } else {
+        // Loaded from disk: metadata was persisted but content wasn't, so a
+        // cheap re-read is needed to repopulate content — no re-parse though.
+        const content = await read(file.path);
+        entries[file.path] = { mtimeMs: previous.mtimeMs, size: previous.size, content, metadata: previous.metadata };
+      }
       reusedFiles += 1;
       continue;
     }
@@ -129,13 +180,17 @@ export async function reconcileMetadataIndex(
   return { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries };
 }
 
+const DEBOUNCED_WRITER_MAX_BACKOFF_MS = 5 * 60_000;
+
 export class DebouncedMetadataCacheWriter {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pending: MetadataIndexSnapshot | null = null;
+  private consecutiveFailures = 0;
 
   constructor(
     private readonly write: (snapshot: MetadataIndexSnapshot) => Promise<void>,
     private readonly delayMs = 2_000,
+    private readonly onError?: (error: unknown, consecutiveFailures: number) => void,
   ) {}
 
   schedule(snapshot: MetadataIndexSnapshot): void {
@@ -149,6 +204,20 @@ export class DebouncedMetadataCacheWriter {
     this.timer = null;
     const snapshot = this.pending;
     this.pending = null;
-    if (snapshot) await this.write(snapshot);
+    if (!snapshot) return;
+    try {
+      await this.write(snapshot);
+      this.consecutiveFailures = 0;
+    } catch (error) {
+      this.consecutiveFailures += 1;
+      this.onError?.(error, this.consecutiveFailures);
+      // A write failure must never be fatal to indexing — keep the snapshot
+      // pending and retry at a capped exponential backoff. A subsequent
+      // schedule() call (fresher data) always takes priority and resets
+      // the cadence back to the base delay.
+      this.pending = snapshot;
+      const backoffMs = Math.min(this.delayMs * 2 ** this.consecutiveFailures, DEBOUNCED_WRITER_MAX_BACKOFF_MS);
+      this.timer = setTimeout(() => void this.flush(), backoffMs);
+    }
   }
 }
