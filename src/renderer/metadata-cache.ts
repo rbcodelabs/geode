@@ -164,14 +164,14 @@ export function offsetToLoc(lineStarts: number[], start: number, end: number): L
 }
 
 /** Strip code fences and inline code so links/tags inside code are ignored. */
-export function maskCode(text: string): string {
+function maskCode(text: string): string {
   let masked = text.replace(/```[\s\S]*?(```|$)/g, (m) => m.replace(/[^\n]/g, " "));
   masked = masked.replace(/`[^`\n]*`/g, (m) => " ".repeat(m.length));
   return masked;
 }
 
 /** Blank out `[[wikilink]]`/`![[embed]]` spans (length-preserving) so unlinked-mention search skips text that's already a link. */
-export function maskWikilinks(text: string): string {
+function maskWikilinks(text: string): string {
   return text.replace(/!?\[\[[^\[\]\n]+\]\]/g, (m) => " ".repeat(m.length));
 }
 
@@ -681,14 +681,18 @@ export class MetadataCache extends Events {
       const generation = this.mentionIndexGeneration;
       const next = new Map<string, Set<string>>();
       let sliceStarted = performance.now();
+      let keysSinceYield = 0;
       for (const [path, keys] of this.mentionKeysBySource) {
         for (const key of keys) {
           let sources = next.get(key);
           if (!sources) next.set(key, sources = new Set());
           sources.add(path);
-          if (performance.now() - sliceStarted >= 8) {
+          keysSinceYield += 1;
+          if (keysSinceYield >= 1_000 ||
+              (keysSinceYield % 128 === 0 && performance.now() - sliceStarted >= 8)) {
             await yieldToEventLoop();
             sliceStarted = performance.now();
+            keysSinceYield = 0;
           }
         }
       }
@@ -1083,7 +1087,6 @@ export class MetadataCache extends Events {
       const files = [...currentMarkdown.values()].filter((file) => this.cache.has(file.path));
       await processInBatches(files, 50, async (file) => { this.trigger("resolve", file); });
       await this.rebuildMentionIndex();
-      this.trigger("resolved");
     } finally {
       this.backgroundRefreshRunning = false;
       if (this.backgroundRefreshPending) this.scheduleBackground(() => this.applyBackgroundSnapshot());
@@ -1113,7 +1116,6 @@ export class MetadataCache extends Events {
       this.trigger("resolve", file);
     });
     await this.rebuildMentionIndex();
-    this.trigger("resolved");
     await this.persistCache();
   }
 
