@@ -24,6 +24,16 @@
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-bold: 600;
+  --font-weight: var(--font-weight-normal);
+
+  /* Links — Obsidian's global contract is consumed by hosted plugin views as
+     well as Markdown surfaces. Community themes commonly override these. */
+  --link-decoration: underline;
+  --link-decoration-hover: underline;
+  --link-decoration-thickness: auto;
+  --link-weight: var(--font-weight);
+  --link-external-decoration: underline;
+  --link-external-decoration-hover: underline;
 
   /* Heading scale */
   --h1-size: 1.802em;
@@ -119,12 +129,16 @@
   --text-muted: var(--color-base-70);
   --text-faint: var(--color-base-50);
   --text-accent: hsl(var(--accent-h), var(--accent-s), 76%);
+  --text-accent-hover: hsl(var(--accent-h), var(--accent-s), 82%);
+  --link-color: var(--text-accent);
+  --link-color-hover: var(--text-accent-hover);
+  --link-external-color: var(--text-accent);
+  --link-external-color-hover: var(--text-accent-hover);
   --text-on-accent: #ffffff;
   --text-selection: hsla(var(--accent-h), var(--accent-s), 40%, 0.35);
   --interactive-accent: hsl(var(--accent-h), var(--accent-s), var(--accent-l));
   --interactive-accent-hover: hsl(var(--accent-h), var(--accent-s), 72%);
   --code-background: rgba(255, 255, 255, 0.06);
-  --link-color: var(--text-accent);
   --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow: rgba(0, 0, 0, 0.5);
@@ -164,12 +178,16 @@
   --text-muted: var(--color-base-60);
   --text-faint: var(--color-base-50);
   --text-accent: hsl(var(--accent-h), var(--accent-s), 48%);
+  --text-accent-hover: hsl(var(--accent-h), var(--accent-s), 40%);
+  --link-color: var(--text-accent);
+  --link-color-hover: var(--text-accent-hover);
+  --link-external-color: var(--text-accent);
+  --link-external-color-hover: var(--text-accent-hover);
   --text-on-accent: #ffffff;
   --text-selection: hsla(var(--accent-h), var(--accent-s), 62%, 0.28);
   --interactive-accent: hsl(var(--accent-h), var(--accent-s), 58%);
   --interactive-accent-hover: hsl(var(--accent-h), var(--accent-s), 50%);
   --code-background: rgba(0, 0, 0, 0.045);
-  --link-color: var(--text-accent);
   --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.14);
   --shadow: rgba(0, 0, 0, 0.15);
@@ -203,6 +221,35 @@ body {
   background: var(--background-primary);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+a {
+  --font-weight: var(--link-weight);
+  color: var(--link-color);
+  font-weight: var(--link-weight);
+  outline: none;
+  text-decoration-line: var(--link-decoration);
+  text-decoration-thickness: var(--link-decoration-thickness);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  a:hover {
+    color: var(--link-color-hover);
+    text-decoration-line: var(--link-decoration-hover);
+  }
+}
+
+.external-link {
+  color: var(--link-external-color);
+  text-decoration-line: var(--link-external-decoration);
+}
+
+@media (hover: hover) {
+  .external-link:hover {
+    color: var(--link-external-color-hover);
+    text-decoration-line: var(--link-external-decoration-hover);
+  }
 }
 
 button {
@@ -1828,15 +1875,6 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 .markdown-rendered li { margin: 0.15em 0; }
 .markdown-rendered li > ul,
 .markdown-rendered li > ol { margin-bottom: 0; }
-
-.markdown-rendered a {
-  color: var(--link-color);
-  text-decoration: none;
-}
-
-.markdown-rendered a:hover {
-  text-decoration: underline;
-}
 
 .markdown-rendered a.is-unresolved {
   color: var(--text-muted);
