@@ -104,6 +104,20 @@ const api = {
   onDeepLink: (cb: (link: { action: string; params: Record<string, string> }) => void) => {
     ipcRenderer.on("geode-deep-link", (_e, link) => cb(link));
   },
+  getWindowChromeState: (): Promise<{ platform: NodeJS.Platform; isFullScreen: boolean }> =>
+    ipcRenderer.invoke("window-chrome-state"),
+  setWindowBackgroundColor: (color: string): Promise<void> =>
+    ipcRenderer.invoke("window-background-color", color),
+  onWindowChromeState: (
+    cb: (state: { platform: NodeJS.Platform; isFullScreen: boolean }) => void,
+  ) => {
+    const listener = (
+      _e: Electron.IpcRendererEvent,
+      state: { platform: NodeJS.Platform; isFullScreen: boolean },
+    ) => cb(state);
+    ipcRenderer.on("window-chrome-state", listener);
+    return () => ipcRenderer.removeListener("window-chrome-state", listener);
+  },
 };
 
 // A main-process watchdog can distinguish a wedged renderer from a merely

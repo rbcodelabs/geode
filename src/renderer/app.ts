@@ -52,6 +52,7 @@ import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
+import { applyWindowChromeState } from "./window-chrome";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -913,6 +914,10 @@ export class App {
       // code reading `app.plugins` at module-eval time, would otherwise see
       // an undefined/empty registry if this only ran from that constructor.
       installObsidianAppCompat(this);
+      const updateWindowChrome = (state: Awaited<ReturnType<typeof window.geode.getWindowChromeState>>) =>
+        applyWindowChromeState(document.body.classList, state);
+      window.geode.onWindowChromeState(updateWindowChrome);
+      updateWindowChrome(await window.geode.getWindowChromeState());
       window.geode.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params));
       this.installExternalLinkInterceptor();
       initTooltips();
@@ -1972,6 +1977,14 @@ export class App {
     // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
     // Geode always shows it — there's no settings toggle for this yet.
     document.body.classList.add("show-view-header");
+    this.syncWindowBackgroundColor();
+  }
+
+  /** Keep macOS's rounded native window corners aligned with theme-owned chrome. */
+  syncWindowBackgroundColor(): void {
+    const color = getComputedStyle(document.querySelector(".app-main") ?? document.body)
+      .backgroundColor;
+    void window.geode.setWindowBackgroundColor(color);
   }
 
   saveSettings() {

@@ -24,6 +24,16 @@
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-bold: 600;
+  --font-weight: var(--font-weight-normal);
+
+  /* Links — Obsidian's global contract is consumed by hosted plugin views as
+     well as Markdown surfaces. Community themes commonly override these. */
+  --link-decoration: underline;
+  --link-decoration-hover: underline;
+  --link-decoration-thickness: auto;
+  --link-weight: var(--font-weight);
+  --link-external-decoration: underline;
+  --link-external-decoration-hover: underline;
 
   /* Heading scale */
   --h1-size: 1.802em;
@@ -119,12 +129,16 @@
   --text-muted: var(--color-base-70);
   --text-faint: var(--color-base-50);
   --text-accent: hsl(var(--accent-h), var(--accent-s), 76%);
+  --text-accent-hover: hsl(var(--accent-h), var(--accent-s), 82%);
+  --link-color: var(--text-accent);
+  --link-color-hover: var(--text-accent-hover);
+  --link-external-color: var(--text-accent);
+  --link-external-color-hover: var(--text-accent-hover);
   --text-on-accent: #ffffff;
   --text-selection: hsla(var(--accent-h), var(--accent-s), 40%, 0.35);
   --interactive-accent: hsl(var(--accent-h), var(--accent-s), var(--accent-l));
   --interactive-accent-hover: hsl(var(--accent-h), var(--accent-s), 72%);
   --code-background: rgba(255, 255, 255, 0.06);
-  --link-color: var(--text-accent);
   --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow: rgba(0, 0, 0, 0.5);
@@ -172,12 +186,16 @@
   --text-muted: var(--color-base-60);
   --text-faint: var(--color-base-50);
   --text-accent: hsl(var(--accent-h), var(--accent-s), 48%);
+  --text-accent-hover: hsl(var(--accent-h), var(--accent-s), 40%);
+  --link-color: var(--text-accent);
+  --link-color-hover: var(--text-accent-hover);
+  --link-external-color: var(--text-accent);
+  --link-external-color-hover: var(--text-accent-hover);
   --text-on-accent: #ffffff;
   --text-selection: hsla(var(--accent-h), var(--accent-s), 62%, 0.28);
   --interactive-accent: hsl(var(--accent-h), var(--accent-s), 58%);
   --interactive-accent-hover: hsl(var(--accent-h), var(--accent-s), 50%);
   --code-background: rgba(0, 0, 0, 0.045);
-  --link-color: var(--text-accent);
   --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.14);
   --shadow: rgba(0, 0, 0, 0.15);
@@ -219,6 +237,35 @@ body {
   background: var(--background-primary);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+a {
+  --font-weight: var(--link-weight);
+  color: var(--link-color);
+  font-weight: var(--link-weight);
+  outline: none;
+  text-decoration-line: var(--link-decoration);
+  text-decoration-thickness: var(--link-decoration-thickness);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  a:hover {
+    color: var(--link-color-hover);
+    text-decoration-line: var(--link-decoration-hover);
+  }
+}
+
+.external-link {
+  color: var(--link-external-color);
+  text-decoration-line: var(--link-external-decoration);
+}
+
+@media (hover: hover) {
+  .external-link:hover {
+    color: var(--link-external-color-hover);
+    text-decoration-line: var(--link-external-decoration-hover);
+  }
 }
 
 button {
@@ -298,6 +345,7 @@ button.mod-cta:hover {
   flex: 1;
   min-height: 0;
   display: flex;
+  background: var(--background-secondary);
 }
 
 /* ---- Left ribbon ---- */
@@ -307,7 +355,7 @@ button.mod-cta:hover {
   min-width: 44px;
   display: flex;
   flex-direction: column;
-  padding: calc(var(--header-height) + var(--size-4-2)) 6px 8px;
+  padding: var(--size-4-2) 6px 8px;
   box-sizing: border-box;
   color: var(--text-muted);
   background: var(--background-secondary);
@@ -316,6 +364,14 @@ button.mod-cta:hover {
 
 body:not(.show-ribbon) .workspace-ribbon.mod-left {
   display: none;
+}
+
+/* Obsidian's macOS hidden-inset layout starts the ribbon below the native
+   traffic lights instead of keeping a full-height border and faking the
+   clearance with internal padding. Native fullscreen hides the traffic
+   lights, so the ribbon returns to the top there. */
+body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
+  margin-top: var(--header-height);
 }
 
 .workspace-ribbon-actions,
@@ -836,12 +892,13 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
   pointer-events: none;
 }
 
-/* Frameless-window traffic-light clearance: push the left sidebar's own tab
-   row right so its tabs clear the macOS traffic lights overlaid on the
-   top-left. Only relevant while the sidebar is visible/expanded — while
-   collapsed the sidebar is width:0 and this rule is moot. */
-.mod-left .workspace-tab-header-container {
-  padding-left: 78px;
+/* `hiddenInset` overlays the macOS traffic lights across the ribbon/sidebar
+   boundary. Clear only the portion that reaches into the sidebar; the old
+   78px inset counted from the sidebar edge and therefore left roughly a
+   second traffic-light gutter. Native fullscreen hides the controls, so its
+   state class deliberately removes the inset. */
+body.is-macos:not(.is-native-fullscreen) .mod-left .workspace-tab-header-container {
+  padding-left: 38px;
 }
 
 /* When the left sidebar is collapsed, it no longer occupies the top-left
@@ -850,8 +907,8 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
    instead. Gated on `mod-left-collapsed` (toggled on the workspace root by
    `Sidebar.toggle()`) so this never doubles up with the sidebar's own
    padding above when expanded. */
-.workspace.mod-left-collapsed .workspace-tabs:first-child > .workspace-tab-header-container {
-  padding-left: 78px;
+body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspace-tabs:first-child > .workspace-tab-header-container {
+  padding-left: 38px;
 }
 
 /* Reusable toggle button (left/right sidebar collapse-expand), now hosted in
@@ -1835,15 +1892,6 @@ body:not(.show-ribbon) .workspace-ribbon.mod-left {
 .markdown-rendered li { margin: 0.15em 0; }
 .markdown-rendered li > ul,
 .markdown-rendered li > ol { margin-bottom: 0; }
-
-.markdown-rendered a {
-  color: var(--link-color);
-  text-decoration: none;
-}
-
-.markdown-rendered a:hover {
-  text-decoration: underline;
-}
 
 .markdown-rendered a.is-unresolved {
   color: var(--text-muted);
