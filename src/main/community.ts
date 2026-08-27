@@ -78,6 +78,29 @@ function assertSafeId(id: string): void {
   }
 }
 
+/**
+ * Carry plugin/theme-owned state into the replacement directory while leaving
+ * release assets under the installer's control. Community items commonly keep
+ * settings in data.json and may create additional state directories beside it.
+ */
+async function preserveItemState(sourceDir: string, stagingDir: string): Promise<void> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fsp.readdir(sourceDir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+
+  for (const entry of entries) {
+    if (ALLOWED_FILES.has(entry.name)) continue;
+    await fsp.cp(path.join(sourceDir, entry.name), path.join(stagingDir, entry.name), {
+      recursive: true,
+      preserveTimestamps: true,
+    });
+  }
+}
+
 /** Resolve `owner/repo` to install metadata (no download) — for the modal preview. */
 export async function resolveCommunity(
   specInput: string,
@@ -131,6 +154,7 @@ export async function installCommunity(
     if (!wroteManifest) throw new Error("Install failed: no manifest.json");
     if (!wroteEntry) throw new Error(`Install failed: no ${entryFile}`);
 
+    await preserveItemState(destDir, staging);
     await fsp.rm(destDir, { recursive: true, force: true });
     await fsp.rename(staging, destDir);
   } catch (err) {

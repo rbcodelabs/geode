@@ -65,6 +65,35 @@ describe("metadata utility-process indexer", () => {
     expect(stats).toHaveBeenCalledWith({ totalFiles: 3, parsedFiles: 2, reusedFiles: 1, deletedFiles: 1 });
   });
 
+  it("upgrades unchanged legacy entries with mention keys off the read/parse path", async () => {
+    const persisted: MetadataIndexSnapshot = {
+      schemaVersion: 1,
+      entries: {
+        "same.md": {
+          mtimeMs: 1,
+          size: 4,
+          content: "same",
+          metadata: { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] },
+        },
+      },
+    };
+    const read = vi.fn(async () => "unexpected");
+    const extractMentionKeys = vi.fn(() => ["w:same"]);
+
+    const result = await reconcileMetadataIndex(
+      [{ path: "same.md", mtimeMs: 1, size: 4 }],
+      persisted,
+      read,
+      vi.fn(),
+      undefined,
+      extractMentionKeys,
+    );
+
+    expect(read).not.toHaveBeenCalled();
+    expect(extractMentionKeys).toHaveBeenCalledWith("same");
+    expect(result.entries["same.md"].mentionKeys).toEqual(["w:same"]);
+  });
+
   it("re-reads (without re-parsing) unchanged entries reconciled from a content-less persisted snapshot", async () => {
     const metadata = { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: ["same"] };
     const persisted: PersistedMetadataIndexSnapshot = {
@@ -91,6 +120,52 @@ describe("metadata utility-process indexer", () => {
     expect(stats).toHaveBeenCalledWith({ totalFiles: 1, parsedFiles: 0, reusedFiles: 1, deletedFiles: 0 });
   });
 
+  it("reuses mention keys that survived the disk round-trip instead of recomputing them", async () => {
+    const metadata = { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] };
+    const persisted: PersistedMetadataIndexSnapshot = {
+      schemaVersion: 1,
+      entries: {
+        "same.md": { mtimeMs: 1, size: 4, metadata, mentionKeys: ["w:same"] },
+      },
+    };
+    const extractMentionKeys = vi.fn(() => ["w:recomputed"]);
+
+    const result = await reconcileMetadataIndex(
+      [{ path: "same.md", mtimeMs: 1, size: 4 }],
+      persisted,
+      vi.fn(async () => "same"),
+      vi.fn(),
+      undefined,
+      extractMentionKeys,
+    );
+
+    expect(extractMentionKeys).not.toHaveBeenCalled();
+    expect(result.entries["same.md"].mentionKeys).toEqual(["w:same"]);
+  });
+
+  it("recomputes mention keys from the re-read content for pre-v0.7.15 content-less caches", async () => {
+    const metadata = { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] };
+    const persisted: PersistedMetadataIndexSnapshot = {
+      schemaVersion: 1,
+      entries: {
+        "same.md": { mtimeMs: 1, size: 4, metadata },
+      },
+    };
+    const extractMentionKeys = vi.fn(() => ["w:same"]);
+
+    const result = await reconcileMetadataIndex(
+      [{ path: "same.md", mtimeMs: 1, size: 4 }],
+      persisted,
+      vi.fn(async () => "same"),
+      vi.fn(),
+      undefined,
+      extractMentionKeys,
+    );
+
+    expect(extractMentionKeys).toHaveBeenCalledWith("same");
+    expect(result.entries["same.md"].mentionKeys).toEqual(["w:same"]);
+  });
+
   describe("toPersistedSnapshot", () => {
     it("drops content, keeping only mtimeMs, size, and metadata", () => {
       const metadata = { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] };
@@ -104,6 +179,21 @@ describe("metadata utility-process indexer", () => {
       const persisted = toPersistedSnapshot(snapshot);
 
       expect(persisted).toEqual({ schemaVersion: 1, entries: { "a.md": { mtimeMs: 1, size: 4, metadata } } });
+      expect(persisted.entries["a.md"]).not.toHaveProperty("content");
+    });
+
+    it("preserves mentionKeys so the warm-start optimization survives persistence", () => {
+      const metadata = { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] };
+      const snapshot: MetadataIndexSnapshot = {
+        schemaVersion: 1,
+        entries: {
+          "a.md": { mtimeMs: 1, size: 4, content: "abcd", metadata, mentionKeys: ["w:abcd"] },
+        },
+      };
+
+      const persisted = toPersistedSnapshot(snapshot);
+
+      expect(persisted.entries["a.md"].mentionKeys).toEqual(["w:abcd"]);
       expect(persisted.entries["a.md"]).not.toHaveProperty("content");
     });
   });

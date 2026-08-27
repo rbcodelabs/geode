@@ -263,6 +263,11 @@ export class PluginManager {
     return this.loaded.get(id)?.instance;
   }
 
+  /** Ids of every currently-enabled (loaded) plugin. Backs `app.plugins.enabledPlugins` too. */
+  enabledIds(): string[] {
+    return [...this.loaded.keys()];
+  }
+
   /** Load a plugin's code, instantiate it, and call `onload()`. */
   async enable(id: string, opts: { persist?: boolean } = {}): Promise<void> {
     const { persist = true } = opts;
@@ -439,10 +444,10 @@ export class PluginManager {
   }
 
   private async persistEnabled(): Promise<void> {
-    await window.geode.writeConfig(CONFIG_KEY, [...this.loaded.keys()]);
+    await window.geode.writeConfig(CONFIG_KEY, this.enabledIds());
   }
 
   private async reportActivePlugins(): Promise<void> {
-    await window.geode.reportActivePlugins?.([...this.loaded.keys()]);
+    await window.geode.reportActivePlugins?.(this.enabledIds());
   }
 }

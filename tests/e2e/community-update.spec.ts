@@ -104,6 +104,7 @@ test("checks for updates and hot-reloads a plugin to a newer version", async () 
   const github = await startFakeGithub();
   const { app, window, userDataDir, vaultPath, consoleErrors } = await launchApp(github.url);
   const manifestPath = path.join(vaultPath, ".geode", "plugins", "e2e-updatable", "manifest.json");
+  const pluginDir = path.dirname(manifestPath);
   const communityPath = path.join(vaultPath, ".geode", "community.json");
 
   try {
@@ -129,6 +130,15 @@ test("checks for updates and hot-reloads a plugin to a newer version", async () 
       )
     ).toBe(true);
 
+    // Plugin-owned settings and nested state must survive replacement. A
+    // managed asset absent from the new release must not be restored.
+    const settings = Buffer.from('{"scheduledJobs":31,"token":"preserve-me"}\n');
+    const nestedState = Buffer.from([0, 1, 2, 3, 254, 255]);
+    fs.writeFileSync(path.join(pluginDir, "data.json"), settings);
+    fs.mkdirSync(path.join(pluginDir, "state", "backups"), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "state", "backups", "snapshot.bin"), nestedState);
+    fs.writeFileSync(path.join(pluginDir, "styles.css"), "/* obsolete */");
+
     // Publish 1.1.0 upstream, then run the update check.
     github.setVersion("1.1.0");
     await window.evaluate(() =>
@@ -142,6 +152,11 @@ test("checks for updates and hot-reloads a plugin to a newer version", async () 
     const cfg = JSON.parse(fs.readFileSync(communityPath, "utf8"));
     expect(cfg.items[0].installedVersion).toBe("1.1.0");
     expect(typeof cfg.items[0].lastChecked).toBe("number");
+    expect(fs.readFileSync(path.join(pluginDir, "data.json"))).toEqual(settings);
+    expect(fs.readFileSync(path.join(pluginDir, "state", "backups", "snapshot.bin"))).toEqual(
+      nestedState
+    );
+    expect(fs.existsSync(path.join(pluginDir, "styles.css"))).toBe(false);
 
     // Still enabled after the hot reload.
     expect(

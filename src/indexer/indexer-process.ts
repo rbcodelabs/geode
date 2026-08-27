@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { parseMetadata } from "../renderer/metadata-cache";
+import { extractMentionIndexKeys, parseMetadata } from "../renderer/metadata-cache";
 import { readMetadataCache, writeMetadataCache } from "../main/metadata-cache-store";
 import {
   DebouncedMetadataCacheWriter,
@@ -62,6 +62,7 @@ async function initialize(message: InitMessage): Promise<void> {
     readForIndex,
     parseMetadata,
     (stats) => { reconcileStats = stats; },
+    extractMentionIndexKeys,
   );
   parentPort.postMessage({
     type: "performance",
@@ -88,7 +89,13 @@ async function applyVaultEvent(message: VaultMessage): Promise<void> {
     const started = performance.now();
     const [content, stat] = await Promise.all([fsp.readFile(absolute, "utf8"), fsp.stat(absolute)]);
     const metadata = parseMetadata(content);
-    const entry = { mtimeMs: stat.mtimeMs, size: stat.size, content, metadata };
+    const entry = {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      content,
+      metadata,
+      mentionKeys: extractMentionIndexKeys(content),
+    };
     snapshot.entries[message.path] = entry;
     parentPort.postMessage({ type: "performance", operation: "metadata-worker-read-parse", duration: performance.now() - started });
     writer.schedule(snapshot);

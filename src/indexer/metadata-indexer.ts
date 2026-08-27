@@ -12,6 +12,8 @@ export interface PersistedMetadataIndexEntry {
   mtimeMs: number;
   size: number;
   metadata: CachedMetadata;
+  /** Additive field populated off-renderer; absent in pre-v0.7.15 caches. */
+  mentionKeys?: string[];
 }
 
 export interface PersistedMetadataIndexSnapshot {
@@ -99,11 +101,18 @@ export function chunkMetadataSnapshot(
  * IPC / reconciliation) down to the on-disk shape. This is what must be
  * serialized for disk persistence — never the raw in-memory snapshot — so
  * the JSON payload scales with metadata size, not vault content size.
+ *
+ * Only raw `content` is dropped. `mentionKeys` is metadata-sized rather than
+ * content-sized and is expensive to recompute, so it must survive the disk
+ * round-trip — dropping it would silently undo the warm-start optimization
+ * it exists for.
  */
 export function toPersistedSnapshot(snapshot: MetadataIndexSnapshot): PersistedMetadataIndexSnapshot {
   const entries: Record<string, PersistedMetadataIndexEntry> = {};
   for (const [path, entry] of Object.entries(snapshot.entries)) {
-    entries[path] = { mtimeMs: entry.mtimeMs, size: entry.size, metadata: entry.metadata };
+    entries[path] = entry.mentionKeys
+      ? { mtimeMs: entry.mtimeMs, size: entry.size, metadata: entry.metadata, mentionKeys: entry.mentionKeys }
+      : { mtimeMs: entry.mtimeMs, size: entry.size, metadata: entry.metadata };
   }
   return { schemaVersion: snapshot.schemaVersion, entries };
 }
@@ -117,7 +126,9 @@ export function isPersistedMetadataIndexSnapshot(value: unknown): value is Persi
     return !!item && typeof item.mtimeMs === "number" && typeof item.size === "number" &&
       !!item.metadata && Array.isArray(item.metadata.links) &&
       Array.isArray(item.metadata.embeds) && Array.isArray(item.metadata.tags) &&
-      Array.isArray(item.metadata.headings) && Array.isArray(item.metadata.aliases);
+      Array.isArray(item.metadata.headings) && Array.isArray(item.metadata.aliases) &&
+      (item.mentionKeys === undefined ||
+        (Array.isArray(item.mentionKeys) && item.mentionKeys.every((key) => typeof key === "string")));
   });
 }
 
@@ -141,6 +152,7 @@ export async function reconcileMetadataIndex(
   read: (path: string) => Promise<string>,
   parse: (content: string) => CachedMetadata,
   onComplete?: (stats: MetadataReconcileStats) => void,
+  extractMentionKeys?: (content: string) => string[],
 ): Promise<MetadataIndexSnapshot> {
   const entries: Record<string, MetadataIndexEntry> = {};
   const currentPaths = new Set(files.map((file) => file.path));
@@ -152,12 +164,23 @@ export async function reconcileMetadataIndex(
       if (typeof previous.content === "string") {
         // Already in memory (e.g. a reused in-memory snapshot passed directly,
         // not round-tripped through disk) — reuse by reference, zero I/O.
-        entries[file.path] = previous as MetadataIndexEntry;
+        const inMemory = previous as MetadataIndexEntry;
+        entries[file.path] = inMemory.mentionKeys || !extractMentionKeys
+          ? inMemory
+          : { ...inMemory, mentionKeys: extractMentionKeys(inMemory.content) };
       } else {
         // Loaded from disk: metadata was persisted but content wasn't, so a
         // cheap re-read is needed to repopulate content — no re-parse though.
+        // mentionKeys survives the disk round-trip, so it is only recomputed
+        // for pre-v0.7.15 caches written before that field existed.
         const content = await read(file.path);
-        entries[file.path] = { mtimeMs: previous.mtimeMs, size: previous.size, content, metadata: previous.metadata };
+        entries[file.path] = {
+          mtimeMs: previous.mtimeMs,
+          size: previous.size,
+          content,
+          metadata: previous.metadata,
+          mentionKeys: previous.mentionKeys ?? extractMentionKeys?.(content),
+        };
       }
       reusedFiles += 1;
       continue;
@@ -168,6 +191,7 @@ export async function reconcileMetadataIndex(
       size: file.size,
       content,
       metadata: parse(content),
+      mentionKeys: extractMentionKeys?.(content),
     };
     parsedFiles += 1;
   }
