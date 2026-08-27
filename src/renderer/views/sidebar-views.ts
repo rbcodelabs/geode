@@ -92,7 +92,7 @@ export class BacklinksView extends SidebarView {
     const file = this.file;
     const linked = this.app.metadataCache.getBacklinksWithContext(file);
     const unlinkedReady = this.app.metadataCache.isUnlinkedMentionsReady();
-    const unlinked = this.app.metadataCache.getUnlinkedMentions(file);
+    const unlinked = unlinkedReady ? this.app.metadataCache.getUnlinkedMentions(file) : [];
     this.bodyEl.innerHTML = "";
 
     this.renderSection(
