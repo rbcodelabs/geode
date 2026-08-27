@@ -495,6 +495,24 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     expect(result1).toBe(result2);
   });
 
+  it("first lookup reads only indexed candidates rather than every cached Markdown file", async () => {
+    const files: Record<string, string> = {
+      "Daily Plan.md": "# Daily Plan",
+      "Welcome.md": "Remember to check the Daily Plan before lunch.",
+    };
+    for (let i = 0; i < 200; i++) files[`Archive/Note ${i}.md`] = `Unrelated archive entry ${i}.`;
+    const fake = new FakeVault(files);
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const getCachedContent = vi.spyOn(fake, "getCachedContent");
+    const mentions = cache.getUnlinkedMentions(fake.getFileByPath("Daily Plan.md")!);
+
+    expect(mentions.map((entry) => entry.source.path)).toEqual(["Welcome.md"]);
+    expect(getCachedContent).toHaveBeenCalledTimes(1);
+    expect(getCachedContent).toHaveBeenCalledWith("Welcome.md");
+  });
+
   it("recomputes after a vault change invalidates the cache via 'resolved'", async () => {
     const fake = new FakeVault({
       "Welcome.md": "Nothing to see here.",
