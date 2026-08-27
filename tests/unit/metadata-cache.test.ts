@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildLineStarts,
+  extractMentionIndexKeys,
   findUnlinkedMentions,
   INDEX_CONCURRENCY,
   MetadataCache,
@@ -393,6 +394,19 @@ describe("findUnlinkedMentions", () => {
   });
 });
 
+describe("extractMentionIndexKeys", () => {
+  it("uses compact whole-word keys and punctuation grams while masking links and code", () => {
+    const keys = extractMentionIndexKeys("Plan Planner C++ [[Hidden]] `Code`");
+    expect(keys).toContain("w:plan");
+    expect(keys).toContain("w:planner");
+    expect(keys).toContain("w:c");
+    expect(keys).toContain("p:++");
+    expect(keys).not.toContain("w:hidden");
+    expect(keys).not.toContain("w:code");
+    expect(keys.length).toBeLessThan(10);
+  });
+});
+
 describe("MetadataCache.getBacklinksWithContext", () => {
   it("attaches a trimmed line snippet for each resolved link occurrence", async () => {
     const fake = new FakeVault({
@@ -493,6 +507,24 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     const result1 = cache.getUnlinkedMentions(dailyPlan);
     const result2 = cache.getUnlinkedMentions(dailyPlan);
     expect(result1).toBe(result2);
+  });
+
+  it("first lookup reads only indexed candidates rather than every cached Markdown file", async () => {
+    const files: Record<string, string> = {
+      "Daily Plan.md": "# Daily Plan",
+      "Welcome.md": "Remember to check the Daily Plan before lunch.",
+    };
+    for (let i = 0; i < 200; i++) files[`Archive/Note ${i}.md`] = `Unrelated archive entry ${i}.`;
+    const fake = new FakeVault(files);
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const getCachedContent = vi.spyOn(fake, "getCachedContent");
+    const mentions = cache.getUnlinkedMentions(fake.getFileByPath("Daily Plan.md")!);
+
+    expect(mentions.map((entry) => entry.source.path)).toEqual(["Welcome.md"]);
+    expect(getCachedContent).toHaveBeenCalledTimes(1);
+    expect(getCachedContent).toHaveBeenCalledWith("Welcome.md");
   });
 
   it("recomputes after a vault change invalidates the cache via 'resolved'", async () => {

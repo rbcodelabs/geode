@@ -1,6 +1,7 @@
 import type { App } from "../app";
 import type { View, WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
+import { describeGuestCrashCause } from "./web-view-crash-message";
 
 /** State shape matches Obsidian's Web Viewer exactly, so `leaf.setViewState({ type: "webviewer", state: { url } })` from any hosted plugin (e.g. Threads' `obsidian_open_url`) works unmodified. */
 export interface WebViewState {
@@ -273,12 +274,29 @@ export class WebView implements View {
 
     const exit = exitCode !== undefined ? ` (exit code ${exitCode})` : "";
     this.showError("This page crashed", `${reason}${exit} at ${this.currentUrl}`);
+    void this.explainResourceExhaustion(`${reason}${exit}`);
 
     if (reason !== "clean-exit" && !this.autoRecovered) {
       this.autoRecovered = true;
       this.clearRecoverTimer();
       this.recoverTimer = setTimeout(() => this.reloadCurrent(), AUTO_RECOVER_DELAY_MS);
     }
+  }
+
+  /**
+   * Refine the crash overlay when file-descriptor exhaustion is the real
+   * cause (see describeGuestCrashCause). Best effort and deliberately after
+   * the fact: the generic overlay is shown first so the user is never left
+   * staring at nothing while the probe resolves.
+   */
+  private async explainResourceExhaustion(summary: string): Promise<void> {
+    const probe = window.geode?.getFdPressure;
+    if (typeof probe !== "function") return;
+    const message = describeGuestCrashCause(summary, await probe().catch(() => null));
+    // A reload (manual or automatic) may have cleared the overlay while the
+    // probe was in flight; do not resurrect it.
+    if (!message || !this.crashHandled) return;
+    this.showError(message.title, message.detail);
   }
 
   private showError(title: string, detail: string): void {

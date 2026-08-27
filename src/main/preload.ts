@@ -4,6 +4,7 @@ import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 import type { ProcessMetric } from "./process-metrics";
 import type { CrashDiagnostic } from "./crash-journal";
+import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
 
 export interface VaultFileEntry {
@@ -83,6 +84,7 @@ const api = {
   importChromeCookies: (profileDir: string): Promise<ChromeCookieImportResult> =>
     ipcRenderer.invoke("chrome-import-cookies", profileDir),
   getProcessMetrics: (): Promise<ProcessMetric[]> => ipcRenderer.invoke("get-process-metrics"),
+  getFdPressure: (): Promise<FdPressureSnapshot> => ipcRenderer.invoke("get-fd-pressure"),
   getCrashRecoveryState: (): Promise<{ suppressPlugins: boolean; entries: CrashDiagnostic[] }> =>
     ipcRenderer.invoke("crash-recovery-state"),
   reportCrashDiagnostic: (entry: CrashDiagnostic): Promise<void> =>

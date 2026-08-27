@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import type { Stats } from "node:fs";
+import { isIgnoredSegment } from "./vault-ignore";
 
 export interface VaultFileEntry {
   path: string;
@@ -91,7 +92,9 @@ export async function listVaultFiles(
       return [];
     }
     const nested = await Promise.all(entries.map(async (entry): Promise<VaultFileEntry[]> => {
-      if (entry.name.startsWith(".")) return [];
+      // Pruning during traversal, so a segment test is enough here — but it
+      // must be the same rule the watcher applies (see ./vault-ignore).
+      if (isIgnoredSegment(entry.name)) return [];
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         const [st, children] = await Promise.all([

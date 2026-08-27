@@ -8,7 +8,10 @@ import {
   buildRendererIncident,
   exportDiagnostics,
   listCrashDumps,
+  probeFdPressure,
   pruneCrashDumps,
+  readFdLimit,
+  resetFdLimitCache,
   sanitizeDiagnosticValue,
 } from "../../src/main/crash-diagnostics";
 
@@ -109,5 +112,89 @@ describe("renderer crash diagnostics", () => {
     expect(exportedText.join("\n")).not.toContain("SUPER_SECRET");
     expect(names).not.toContain("geode.json");
     expect(await readdir(path.join(result.directory, "crash-dumps"))).toEqual(["one.dmp"]);
+  });
+});
+
+describe("probeFdPressure", () => {
+  it("reports the lowest free descriptor as the occupancy estimate", () => {
+    const snapshot = probeFdPressure({ openProbe: () => 42, limit: 1000 });
+    expect(snapshot).toEqual({
+      openFileDescriptors: 42,
+      limit: 1000,
+      ratio: 0.042,
+      underPressure: false,
+      exhausted: false,
+    });
+  });
+
+  it("flags pressure once occupancy reaches the threshold", () => {
+    // Chromium needs a spare descriptor for the sandbox handshake, so the
+    // table does not have to be completely full to break <webview>.
+    expect(probeFdPressure({ openProbe: () => 8_704, limit: 10_240 }).underPressure).toBe(true);
+    expect(probeFdPressure({ openProbe: () => 8_703, limit: 10_240 }).underPressure).toBe(false);
+    // The real observed failure: an 11k-file vault against a 10,240 ceiling.
+    expect(probeFdPressure({ openProbe: () => 9_999, limit: 10_240 })).toMatchObject({
+      underPressure: true,
+      exhausted: false,
+    });
+  });
+
+  it("treats an EMFILE from the probe itself as full exhaustion", () => {
+    const emfile = Object.assign(new Error("too many open files"), { code: "EMFILE" });
+    expect(probeFdPressure({
+      openProbe: () => { throw emfile; },
+      limit: 10_240,
+    })).toEqual({
+      openFileDescriptors: 10_240,
+      limit: 10_240,
+      ratio: 1,
+      underPressure: true,
+      exhausted: true,
+    });
+  });
+
+  it("degrades to an inconclusive answer rather than throwing", () => {
+    expect(probeFdPressure({
+      openProbe: () => { throw new Error("no such device"); },
+      limit: 10_240,
+    })).toEqual({
+      openFileDescriptors: null,
+      limit: 10_240,
+      ratio: null,
+      underPressure: false,
+      exhausted: false,
+    });
+    expect(probeFdPressure({ openProbe: () => 10, limit: null })).toMatchObject({
+      ratio: null,
+      underPressure: false,
+    });
+  });
+
+  it("measures a real descriptor count against the real limit", () => {
+    resetFdLimitCache();
+    const snapshot = probeFdPressure();
+    expect(snapshot.openFileDescriptors).toBeGreaterThan(0);
+    expect(snapshot.exhausted).toBe(false);
+    // A test process holds a handful of descriptors, nowhere near any limit.
+    expect(snapshot.underPressure).toBe(false);
+  });
+});
+
+describe("readFdLimit", () => {
+  it("reads the soft open-file limit and caches it", () => {
+    resetFdLimitCache();
+    let calls = 0;
+    const report = () => { calls += 1; return { userLimits: { open_files: { soft: 10_240, hard: "unlimited" } } }; };
+    expect(readFdLimit(report)).toBe(10_240);
+    expect(readFdLimit(report)).toBe(10_240);
+    expect(calls).toBe(1);
+  });
+
+  it("returns null when the runtime cannot report a usable limit", () => {
+    resetFdLimitCache();
+    expect(readFdLimit(() => ({ userLimits: { open_files: { soft: "unlimited" } } }))).toBeNull();
+    resetFdLimitCache();
+    expect(readFdLimit(() => { throw new Error("unavailable"); })).toBeNull();
+    resetFdLimitCache();
   });
 });

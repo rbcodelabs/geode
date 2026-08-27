@@ -3,7 +3,6 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import chokidar, { FSWatcher } from "chokidar";
 import { installCommunity, resolveCommunity } from "./community";
 import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
@@ -23,16 +22,19 @@ import {
   buildRendererIncident,
   exportDiagnostics,
   listCrashDumps,
+  probeFdPressure,
   pruneCrashDumps,
   sanitizeDiagnosticValue,
   type CrashDumpFile,
   type DiagnosticEntry,
+  type FdPressureSnapshot,
 } from "./crash-diagnostics";
 import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
 import { selectVaultWindowAction } from "./vault-window-selection";
 import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-watchdog";
-import { listVaultFiles } from "./vault-files";
+import { listVaultFiles, type VaultFileEntry } from "./vault-files";
+import { startVaultWatcher, type VaultWatcherHandle, type VaultWatchEventName } from "./vault-watcher";
 import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 import { DeepLinkDispatcher } from "./deep-link";
@@ -71,7 +73,7 @@ app.on("second-instance", (_event, argv) => {
 
 interface VaultSession {
   root: string;
-  watcher: FSWatcher | null;
+  watcher: VaultWatcherHandle | null;
   indexer: MetadataIndexerHost | null;
   indexerReady: Promise<unknown | null>;
 }
@@ -209,28 +211,23 @@ function birthtimeOf(st: fs.Stats | null): number {
   return st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs;
 }
 
-function startWatcher(win: BrowserWindow, root: string): FSWatcher {
-  const watcher = chokidar.watch(root, {
-    ignored: (p) => path.basename(p).startsWith("."),
-    ignoreInitial: true,
-    persistent: true,
-    awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-  });
-  const send = (event: string, abs: string) => {
+/**
+ * Watch `root` and forward vault changes to the renderer and the metadata
+ * indexer. See `./vault-watcher` for why this is not chokidar any more.
+ *
+ * `seed` is the `listVaultFiles()` result the caller already computed; the
+ * watcher needs it to tell "this file is new" from "this file changed".
+ */
+function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]): VaultWatcherHandle {
+  const send = (event: VaultWatchEventName, relative: string) => {
     if (win.isDestroyed()) return;
-    const relative = toRel(root, abs);
     win.webContents.send("vault-event", { event, path: relative });
+    // Folder events carry no content for the indexer to parse.
     if (event === "create" || event === "modify" || event === "delete") {
       sessions.get(win.id)?.indexer?.postVaultEvent(event, relative);
     }
   };
-  watcher
-    .on("add", (p) => send("create", p))
-    .on("change", (p) => send("modify", p))
-    .on("unlink", (p) => send("delete", p))
-    .on("addDir", (p) => send("create-folder", p))
-    .on("unlinkDir", (p) => send("delete-folder", p));
-  return watcher;
+  return startVaultWatcher({ root, seed, emit: send });
 }
 
 function registerIpc() {
@@ -293,7 +290,23 @@ function registerIpc() {
     } catch (error) {
       console.error("Metadata utility process unavailable; using renderer fallback", error);
     }
-    sessions.set(win.id, { root, watcher: startWatcher(win, root), indexer, indexerReady });
+    const watcher = startWatcher(win, root, files);
+    sessions.set(win.id, { root, watcher, indexer, indexerReady });
+    // The watcher backend and the descriptor count it costs are the first
+    // things worth knowing when a sandboxed child process later fails to
+    // spawn (see probeFdPressure).
+    const fdPressure = probeFdPressure();
+    recordDiagnostic(crashStates.get(win.id), {
+      at: Date.now(),
+      category: "vault",
+      message: "vault-watch-started",
+      metadata: {
+        backend: watcher.backend,
+        entries: files.length,
+        openFileDescriptors: fdPressure.openFileDescriptors,
+        fdLimit: fdPressure.limit,
+      },
+    });
     const cfg = loadConfig();
     cfg.recentVaults = [root, ...cfg.recentVaults.filter((v) => v !== root)].slice(0, 10);
     cfg.lastVault = root;
@@ -584,6 +597,29 @@ function registerIpc() {
   // (src/renderer/settings/performance-tab.ts). Polled from the renderer on
   // a timer, so no caching here -- always return a fresh snapshot.
   ipcMain.handle("get-process-metrics", () => getProcessMetricsSnapshot());
+
+  // Descriptor exhaustion is invisible until something needs a *new*
+  // descriptor at an awkward moment — spawning a sandboxed <webview>
+  // renderer, which then aborts with a bare "exit code 6". The Web Viewer's
+  // crash handler asks for this so it can say what actually went wrong.
+  ipcMain.handle("get-fd-pressure", (e): FdPressureSnapshot => {
+    const snapshot = probeFdPressure();
+    if (snapshot.underPressure) {
+      const win = BrowserWindow.fromWebContents(e.sender);
+      recordDiagnostic(win ? crashStates.get(win.id) : undefined, {
+        at: Date.now(),
+        category: "resources",
+        level: "warning",
+        message: "file-descriptor-pressure",
+        metadata: {
+          openFileDescriptors: snapshot.openFileDescriptors,
+          limit: snapshot.limit,
+          exhausted: snapshot.exhausted,
+        },
+      });
+    }
+    return snapshot;
+  });
   ipcMain.handle("crash-recovery-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const state = win ? crashStates.get(win.id) : undefined;
@@ -730,6 +766,22 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
       const newDumps = dumps.filter((dump) => !state.knownDumps.some((known) => known.name === dump.name));
       let processMetrics = state.lastProcessMetrics;
       try { processMetrics = getProcessMetricsSnapshot(); } catch { /* retain the last pre-crash snapshot */ }
+      // Recorded before the incident is built so it lands in the breadcrumbs
+      // the incident carries: a renderer that dies on launch under fd
+      // pressure looks identical to a normal crash without it.
+      const fdPressure = probeFdPressure();
+      recordDiagnostic(state, {
+        at: Date.now(),
+        category: "resources",
+        level: fdPressure.underPressure ? "warning" : "info",
+        message: "fd-pressure-at-renderer-crash",
+        metadata: {
+          openFileDescriptors: fdPressure.openFileDescriptors,
+          limit: fdPressure.limit,
+          underPressure: fdPressure.underPressure,
+          exhausted: fdPressure.exhausted,
+        },
+      });
       await recoverRenderer(buildRendererIncident({
         incidentId: randomUUID(),
         at: Date.now(),

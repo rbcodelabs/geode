@@ -1,14 +1,15 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { parseMetadata } from "../renderer/metadata-cache";
+import { extractMentionIndexKeys, parseMetadata } from "../renderer/metadata-cache";
 import { readMetadataCache, writeMetadataCache } from "../main/metadata-cache-store";
 import {
   DebouncedMetadataCacheWriter,
   chunkMetadataSnapshot,
-  isMetadataIndexSnapshot,
+  isPersistedMetadataIndexSnapshot,
   METADATA_INDEX_SCHEMA_VERSION,
   reconcileMetadataIndex,
+  toPersistedSnapshot,
   type MetadataFileStat,
   type MetadataIndexSnapshot,
 } from "./metadata-indexer";
@@ -35,13 +36,19 @@ const readForIndex = async (relative: string): Promise<string> => {
 };
 const timedWrite = async (value: MetadataIndexSnapshot) => {
   const serializeStart = performance.now();
-  const serialized = JSON.stringify(value);
+  // Serialize only the persisted shape (metadata, no raw content) — the raw
+  // in-memory snapshot can exceed V8's max string length on large vaults.
+  const serialized = JSON.stringify(toPersistedSnapshot(value));
   parentPort.postMessage({ type: "performance", operation: "metadata-cache-serialize", duration: performance.now() - serializeStart });
   const writeStart = performance.now();
   await writeMetadataCache(root, serialized, undefined, true);
   parentPort.postMessage({ type: "performance", operation: "metadata-cache-disk-write", duration: performance.now() - writeStart });
 };
-const writer = new DebouncedMetadataCacheWriter(timedWrite);
+const writer = new DebouncedMetadataCacheWriter(timedWrite, undefined, (error, consecutiveFailures) => {
+  // Non-fatal: a cache write failure must never stop indexing or rendering,
+  // which don't depend on the write succeeding. Just surface a diagnostic.
+  parentPort.postMessage({ type: "error", message: `metadata cache write failed (attempt ${consecutiveFailures}): ${String(error)}` });
+});
 
 async function initialize(message: InitMessage): Promise<void> {
   initializing = true;
@@ -51,10 +58,11 @@ async function initialize(message: InitMessage): Promise<void> {
   let reconcileStats;
   snapshot = await reconcileMetadataIndex(
     message.files,
-    isMetadataIndexSnapshot(stored) ? stored : null,
+    isPersistedMetadataIndexSnapshot(stored) ? stored : null,
     readForIndex,
     parseMetadata,
     (stats) => { reconcileStats = stats; },
+    extractMentionIndexKeys,
   );
   parentPort.postMessage({
     type: "performance",
@@ -81,7 +89,13 @@ async function applyVaultEvent(message: VaultMessage): Promise<void> {
     const started = performance.now();
     const [content, stat] = await Promise.all([fsp.readFile(absolute, "utf8"), fsp.stat(absolute)]);
     const metadata = parseMetadata(content);
-    const entry = { mtimeMs: stat.mtimeMs, size: stat.size, content, metadata };
+    const entry = {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      content,
+      metadata,
+      mentionKeys: extractMentionIndexKeys(content),
+    };
     snapshot.entries[message.path] = entry;
     parentPort.postMessage({ type: "performance", operation: "metadata-worker-read-parse", duration: performance.now() - started });
     writer.schedule(snapshot);

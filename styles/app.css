@@ -143,6 +143,14 @@
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow: rgba(0, 0, 0, 0.5);
 
+  /* Semantic colors (from Obsidian's theme API — used by Claude Threads and other plugins) */
+  --color-red: #ff4444;
+  --color-orange: #ff8c42;
+  --color-yellow: #ffd900;
+  --color-green: #4caf50;
+  --color-blue: #448aff;
+  --color-purple: #7c4dff;
+
   /* Theme-token-derived members of the tab-curve system (see :root). */
   --tab-background-active: var(--background-primary);
   --tab-container-background: var(--background-secondary);
@@ -191,6 +199,14 @@
   --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.14);
   --shadow: rgba(0, 0, 0, 0.15);
+
+  /* Semantic colors (from Obsidian's theme API — used by Claude Threads and other plugins) */
+  --color-red: #e05252;
+  --color-orange: #e9973f;
+  --color-yellow: #e0c24f;
+  --color-green: #48a868;
+  --color-blue: #4080ff;
+  --color-purple: #9b6acb;
 
   /* Theme-token-derived members of the tab-curve system (see :root). */
   --tab-background-active: var(--background-primary);
@@ -997,7 +1013,8 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 }
 /* Icons inside ribbon actions / menu items / status bar sit a touch smaller. */
 .side-dock-ribbon-action svg,
-.menu-item-icon svg {
+.menu-item-icon svg,
+.status-bar-item svg {
   width: 16px;
   height: 16px;
 }
@@ -2497,6 +2514,39 @@ select.dropdown:hover {
   color: var(--text-muted);
   background: var(--background-secondary);
   border-top: 1px solid var(--background-modifier-border);
+}
+
+body:not(.show-status-bar) .status-bar {
+  display: none;
+}
+
+.status-bar-item { display: flex; align-items: center; gap: 4px; line-height: 1; }
+
+/* Core readouts blank their text off a Markdown view. Scoped to .mod-core
+   deliberately: a blanket :empty rule would erase plugin items that are
+   intentionally empty boxes sized by their own styles.css. */
+.status-bar-item.mod-core:empty { display: none; }
+
+/* Obsidian's affordance for interactive items — plugins opt in via
+   classList.add("mod-clickable"). */
+.status-bar-item.mod-clickable { padding: 0 4px; border-radius: var(--radius-s); cursor: pointer; }
+.status-bar-item.mod-clickable:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+
+/* ---- Tooltips ---- */
+
+.tooltip {
+  position: fixed;
+  z-index: 200;
+  max-width: 300px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+  pointer-events: none;
+  box-shadow: 0 2px 8px var(--shadow);
 }
 
 /* ---- Notices / menus ---- */

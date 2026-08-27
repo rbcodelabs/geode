@@ -38,6 +38,7 @@ import {
 } from "./bookmarks";
 import { rewriteWikilinksForRename } from "./rename";
 import { anchorSnapshot, parseLocalFileHref, shouldInterceptAnchor } from "./external-links";
+import { initTooltips } from "./tooltip";
 import {
   resolveDailyNoteSettings,
   matchDailyNoteFile,
@@ -46,7 +47,7 @@ import {
 } from "./daily-notes";
 import type { Command } from "./commands";
 import moment from "moment";
-import { Menu, type PluginSettingTab } from "./api/obsidian";
+import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
 import { FileManager } from "./file-manager";
@@ -73,6 +74,7 @@ interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
   showRibbon: boolean;
+  showStatusBar: boolean;
   /** Selected community theme name ("" = built-in default). */
   cssTheme: string;
   webViewer: WebViewerSettings;
@@ -382,6 +384,11 @@ class SettingsModal extends Modal {
       this.geodeApp.applySettings();
       this.geodeApp.saveSettings();
     });
+    this.addToggle(container, "Show status bar", s.showStatusBar, (v) => {
+      s.showStatusBar = v;
+      this.geodeApp.applySettings();
+      this.geodeApp.saveSettings();
+    });
     // Community theme picker: "Default" + any installed under .geode/themes/.
     this.addDropdown(
       container,
@@ -686,9 +693,9 @@ class StatusBar {
     this.containerEl = document.createElement("div");
     this.containerEl.className = "status-bar";
     this.backlinksEl = document.createElement("span");
-    this.backlinksEl.className = "status-bar-item";
+    this.backlinksEl.className = "status-bar-item mod-core";
     this.wordCountEl = document.createElement("span");
-    this.wordCountEl.className = "status-bar-item";
+    this.wordCountEl.className = "status-bar-item mod-core";
     this.containerEl.appendChild(this.backlinksEl);
     this.containerEl.appendChild(this.wordCountEl);
     parentEl.appendChild(this.containerEl);
@@ -749,6 +756,7 @@ export class App {
     theme: "dark",
     readableLineLength: true,
     showRibbon: true,
+    showStatusBar: true,
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
   };
@@ -890,14 +898,29 @@ export class App {
     this.ribbonActionsEl.appendChild(el);
   }
 
+  /** Mount the exact element created by Plugin.addStatusBarItem(). */
+  addStatusBarItem(el: HTMLElement): void {
+    this.statusBar.containerEl.appendChild(el);
+  }
+
   async start() {
     return measureOperation("startup-total", async () => {
+      // Run first, before any vault is open or `pluginManager` exists, so
+      // `app.plugins`/`app.internalPlugins`/`app.secretStorage`/etc. are
+      // populated app-wide from the first tick — not just for plugins that
+      // happen to construct `obsidian.Plugin` (whose constructor also calls
+      // this, guarded, as a redundant safety net for `plugin-manager.test.ts`'s
+      // fake apps). A plugin built on the bare `GeodePlugin` base, or any
+      // code reading `app.plugins` at module-eval time, would otherwise see
+      // an undefined/empty registry if this only ran from that constructor.
+      installObsidianAppCompat(this);
       const updateWindowChrome = (state: Awaited<ReturnType<typeof window.geode.getWindowChromeState>>) =>
         applyWindowChromeState(document.body.classList, state);
       window.geode.onWindowChromeState(updateWindowChrome);
       updateWindowChrome(await window.geode.getWindowChromeState());
       window.geode.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params));
       this.installExternalLinkInterceptor();
+      initTooltips();
       const rootEl = document.getElementById("app")!;
       const [launchTarget, recents] = await measureOperation("startup-recent-vaults", () => Promise.all([
         window.geode.getLaunchVault(),
@@ -1949,6 +1972,7 @@ export class App {
     document.body.classList.toggle("theme-light", this.settings.theme === "light");
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
     document.body.classList.toggle("show-ribbon", this.settings.showRibbon);
+    document.body.classList.toggle("show-status-bar", this.settings.showStatusBar);
     // Real Obsidian hides .view-header entirely unless <body> has this class
     // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
     // Geode always shows it — there's no settings toggle for this yet.
@@ -1999,6 +2023,10 @@ export class App {
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
   const app = new App();
-  void app.start();
+  // Assigned before `start()` is kicked off (rather than after) so a plugin
+  // whose main.js does module-eval-time work that reads `window.app` (or a
+  // Node-timer callback that resolves before `start()`'s first `await`)
+  // never observes `window.app === undefined`.
   (window as any).app = app;
+  void app.start();
 }
