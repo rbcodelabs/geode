@@ -171,6 +171,22 @@ function maskWikilinks(text: string): string {
   return text.replace(/!?\[\[[^\[\]\n]+\]\]/g, (m) => " ".repeat(m.length));
 }
 
+/**
+ * Search keys for the unlinked-mention candidate index. Up-to-three-character
+ * grams support punctuation and short or multi-word aliases. Uppercasing
+ * before lowercasing approximates the Unicode simple case folding used by
+ * RegExp `/iu` (notably final sigma, long s, and Kelvin sign), so this filter
+ * remains a superset of the exact matcher rather than losing candidates.
+ */
+function mentionGrams(text: string): Set<string> {
+  const normalized = [...text].map((char) => char.toUpperCase().toLowerCase()).join("");
+  const grams = new Set<string>();
+  for (let width = 1; width <= Math.min(3, normalized.length); width++) {
+    for (let i = 0; i <= normalized.length - width; i++) grams.add(normalized.slice(i, i + width));
+  }
+  return grams;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -528,6 +544,10 @@ export class MetadataCache extends Events {
    * listeners or per-entry version tracking.
    */
   private unlinkedMentionsCache = new Map<string, { source: TFile; mentions: UnlinkedMention[] }[]>();
+  /** Masked-content n-gram -> Markdown source paths that contain it. */
+  private mentionSourcesByGram = new Map<string, Set<string>>();
+  /** Reverse membership used to update the n-gram index per file. */
+  private mentionGramsBySource = new Map<string, Set<string>>();
   /** basename/name (lowercase) -> file paths, path-sorted */
   private byBasename = new Map<string, string[]>();
   /** alias (lowercase) -> file paths, path-sorted */
@@ -600,6 +620,27 @@ export class MetadataCache extends Events {
       await api.writeMetadataCache({ schemaVersion: METADATA_CACHE_SCHEMA_VERSION, entries });
     } catch (error) {
       console.error("Failed to persist metadata cache", error);
+    }
+  }
+
+  private removeMentionSource(path: string): void {
+    for (const gram of this.mentionGramsBySource.get(path) ?? []) {
+      const sources = this.mentionSourcesByGram.get(gram);
+      sources?.delete(path);
+      if (sources?.size === 0) this.mentionSourcesByGram.delete(gram);
+    }
+    this.mentionGramsBySource.delete(path);
+  }
+
+  private indexMentionSource(path: string, content: string): void {
+    this.removeMentionSource(path);
+    if (!isMdPath(path)) return;
+    const grams = mentionGrams(maskWikilinks(maskCode(content)));
+    this.mentionGramsBySource.set(path, grams);
+    for (const gram of grams) {
+      let sources = this.mentionSourcesByGram.get(gram);
+      if (!sources) this.mentionSourcesByGram.set(gram, sources = new Set());
+      sources.add(path);
     }
   }
 
@@ -820,6 +861,11 @@ export class MetadataCache extends Events {
         } else {
           this.cache.delete(path);
         }
+        this.removeMentionSource(path);
+        if (op.present && md) {
+          const content = this.vault.getCachedContent(path);
+          if (content !== undefined) this.indexMentionSource(path, content);
+        }
         this.canvasLinkContexts.delete(path);
         if (op.present && isCanvasPath(path)) {
           this.canvasLinkContexts.set(path, newCanvasContexts.get(path) ?? []);
@@ -882,12 +928,15 @@ export class MetadataCache extends Events {
       await withPerfMark("metadata-renderer-apply", async () => {
         this.cache.clear();
         this.canvasLinkContexts.clear();
+        this.mentionSourcesByGram.clear();
+        this.mentionGramsBySource.clear();
         const toRead: TFile[] = [];
         for (const file of markdownFiles) {
           const entry = persisted?.entries[file.path];
           if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
             this.cache.set(file.path, entry.metadata);
             this.vault.primeCachedContent(file.path, entry.content);
+            this.indexMentionSource(file.path, entry.content);
           } else if (!attemptedBackground) {
             toRead.push(file);
           }
@@ -904,6 +953,7 @@ export class MetadataCache extends Events {
               this.canvasLinkContexts.set(f.path, parsed.contexts);
             } else {
               this.cache.set(f.path, parseMetadata(text));
+              this.indexMentionSource(f.path, text);
             }
           } catch (err) {
             if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
@@ -952,6 +1002,7 @@ export class MetadataCache extends Events {
           : snapshotEntry;
         this.cache.set(path, entry.metadata);
         this.vault.primeCachedContent(path, entry.content);
+        this.indexMentionSource(path, entry.content);
       });
       await yieldToEventLoop();
       withPerfMark("metadata-background-resolve", () => {
@@ -976,6 +1027,7 @@ export class MetadataCache extends Events {
       try {
         const content = await this.vault.cachedRead(file);
         this.cache.set(file.path, parseMetadata(content));
+        this.indexMentionSource(file.path, content);
       } catch (err) {
         if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
       }
@@ -1215,8 +1267,19 @@ export class MetadataCache extends Events {
     if (cached) return cached;
 
     const names = [file.basename, ...(this.cache.get(file.path)?.aliases ?? [])];
+    const candidates = new Set<string>();
+    for (const name of names) {
+      const grams = [...mentionGrams(name.trim())];
+      if (!grams.length) continue;
+      const sourceSets = grams.map((gram) => this.mentionSourcesByGram.get(gram) ?? new Set<string>());
+      sourceSets.sort((a, b) => a.size - b.size);
+      for (const src of sourceSets[0]) {
+        if (sourceSets.every((sources) => sources.has(src))) candidates.add(src);
+      }
+    }
+
     const out: { source: TFile; mentions: UnlinkedMention[] }[] = [];
-    for (const src of this.cache.keys()) {
+    for (const src of candidates) {
       if (src === file.path) continue;
       if (!isMdPath(src)) continue;
       const content = this.vault.getCachedContent(src);
