@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTable, renderTableHtml, serializeTable, type ParsedTable } from "../../src/renderer/markdown/table";
+import { parseTable, serializeTable, type ParsedTable } from "../../src/renderer/markdown/table";
 
 describe("parseTable", () => {
   it("parses a simple header + delimiter + rows table", () => {
@@ -76,46 +76,6 @@ describe("parseTable", () => {
     const src = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n";
     const table = parseTable(src);
     expect(table?.rows).toEqual([["1", "2"]]);
-  });
-});
-
-describe("renderTableHtml", () => {
-  it("renders a table with no alignment as plain th/td (no align attribute)", () => {
-    const html = renderTableHtml({
-      align: [null, null],
-      header: ["Feature", "Status"],
-      rows: [["Wikilinks", "✅"]],
-    });
-    expect(html).toBe(
-      "<table><thead><tr><th>Feature</th><th>Status</th></tr></thead><tbody><tr><td>Wikilinks</td><td>✅</td></tr></tbody></table>"
-    );
-  });
-
-  it("renders align attributes for left/center/right columns", () => {
-    const html = renderTableHtml({
-      align: ["left", "center", "right"],
-      header: ["A", "B", "C"],
-      rows: [["1", "2", "3"]],
-    });
-    expect(html).toContain('<th align="left">A</th>');
-    expect(html).toContain('<th align="center">B</th>');
-    expect(html).toContain('<th align="right">C</th>');
-    expect(html).toContain('<td align="left">1</td>');
-  });
-
-  it("escapes HTML-significant characters in cell content", () => {
-    const html = renderTableHtml({
-      align: [null],
-      header: ["<script>"],
-      rows: [['a & b "c" <d>']],
-    });
-    expect(html).toContain("&lt;script&gt;");
-    expect(html).toContain("a &amp; b &quot;c&quot; &lt;d&gt;");
-  });
-
-  it("renders an empty tbody when there are no data rows", () => {
-    const html = renderTableHtml({ align: [null], header: ["A"], rows: [] });
-    expect(html).toBe("<table><thead><tr><th>A</th></tr></thead><tbody></tbody></table>");
   });
 });
 

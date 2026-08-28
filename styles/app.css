@@ -1599,20 +1599,42 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 
 .cm-table-widget table {
   margin: 0;
+  /* Cells wrap rather than widen (see the cell rules below), so the table can
+     always be held inside the editor's content width. */
+  max-width: 100%;
 }
 
-/* Editable table: cells host borderless inputs that fill the cell, plus
-   hover-revealed structural controls. Keep all spacing as padding (block
-   widgets are measured by rect height, margins excluded — see the note
-   above), so no margins on the inner elements. */
+/* Editable table: every cell stacks two faces — rendered inline markdown and
+   a raw-source textarea — with `.is-editing` on the cell picking which one is
+   displayed. The cell itself carries no padding; both faces do, identically,
+   so swapping between them never shifts the layout.
+
+   `table-layout` stays `auto` (it is shared with Reading view via
+   `.markdown-rendered table`). Column sizing is bounded here instead, so one
+   long cell can't blow the table out past the editor's width. Keep all
+   spacing as padding — block widgets are measured by rect height with margins
+   excluded, see the note above. */
 .cm-table-widget td,
 .cm-table-widget th {
   position: relative;
   padding: 0;
+  min-width: 6em;
+  max-width: 28em;
+  vertical-align: top;
 }
 
+.cm-table-widget .cm-table-rowctl,
+.cm-table-widget .cm-table-addcol {
+  min-width: 0;
+}
+
+/* Both faces must be box-identical: same font metrics, same padding, same
+   border box. Any mismatch shows up as a visible jump when a cell is focused
+   or blurred. */
+.cm-table-cell-rendered,
 .cm-table-cell-input {
   font: inherit;
+  line-height: 1.5;
   color: inherit;
   background: transparent;
   border: 1px solid transparent;
@@ -1621,16 +1643,60 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   margin: 0;
   width: 100%;
   box-sizing: border-box;
-  outline: none;
+  overflow-wrap: anywhere;
 }
 
-.cm-table-cell-input:hover {
+.cm-table-cell-rendered {
+  display: block;
+  cursor: text;
+  /* Long prose wraps instead of forcing the column wider (symptom 1). */
+  white-space: normal;
+}
+
+/* An empty cell still needs a full line's worth of height, or it collapses
+   and becomes impossible to click into. */
+.cm-table-cell-rendered:empty::after {
+  content: "\200b";
+}
+
+.cm-table-cell-input {
+  display: none;
+  outline: none;
+  resize: none;
+  /* JS sets an exact pixel height from scrollHeight on every input; hiding
+     overflow keeps a scrollbar from appearing during that measurement. */
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+.cm-table-widget td.is-editing .cm-table-cell-rendered,
+.cm-table-widget th.is-editing .cm-table-cell-rendered {
+  display: none;
+}
+
+.cm-table-widget td.is-editing .cm-table-cell-input,
+.cm-table-widget th.is-editing .cm-table-cell-input {
+  display: block;
+}
+
+.cm-table-cell-rendered:hover {
   background: var(--background-modifier-hover);
 }
 
 .cm-table-cell-input:focus {
   border-color: var(--interactive-accent);
   background: var(--background-primary);
+}
+
+/* Inline markdown inside a cell renders exactly as it does in Reading view;
+   only the block-level margins that `.markdown-rendered` would apply need
+   zeroing out, since a cell is not a block context. */
+.cm-table-cell-rendered > :first-child {
+  margin-top: 0;
+}
+
+.cm-table-cell-rendered > :last-child {
+  margin-bottom: 0;
 }
 
 /* Per-column controls (alignment toggle + delete), revealed on header hover. */

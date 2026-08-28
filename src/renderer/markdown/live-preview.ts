@@ -334,13 +334,37 @@ class CalloutIconWidget extends WidgetType {
 const ALIGN_CYCLE: Align[] = [null, "left", "center", "right"];
 
 /**
+ * The two faces of one table cell. Exactly one is displayed at a time, chosen
+ * by the `is-editing` class on the owning `<td>`/`<th>` (see styles/app.css).
+ *
+ * An unfocused cell shows `rendered`: inline markdown resolved to real HTML
+ * (`**bold**`, `[[wikilinks]]`, `` `code` ``, `#tags`), in normal flow so it
+ * wraps like any other text. A focused cell shows `editor`: the raw markdown
+ * source in an auto-growing `<textarea>`.
+ *
+ * The `<textarea>` is load-bearing, not cosmetic. The previous implementation
+ * used a single `<input type="text">`, which is intrinsically single-line — no
+ * amount of CSS can make it wrap — and whose `.value` can only ever be a
+ * literal string, so markdown never rendered. Both symptoms had that one
+ * cause.
+ */
+interface CellDom {
+  /** The owning `<td>`/`<th>`; carries `is-editing` and the click target. */
+  cell: HTMLTableCellElement;
+  /** Rendered inline markdown, shown when the cell is not being edited. */
+  rendered: HTMLElement;
+  /** Raw markdown source, shown while the cell is being edited. */
+  editor: HTMLTextAreaElement;
+}
+
+/**
  * Renders a GFM pipe-table block as an always-on, in-place editable `<table>`
  * in Live Preview — mirroring PropertiesWidget's frontmatter editor. Unlike
  * the other Live Preview widgets, this one never reverts to raw markdown when
  * the cursor is near it (the block is added to `EditorView.atomicRanges` so
- * the cursor skips over it); editing happens entirely through the real
- * `<input>` elements it renders per cell, and every change is written back to
- * the document via a single `view.dispatch` over the table's `[from, to)`
+ * the cursor skips over it); editing happens entirely through the per-cell
+ * `<textarea>`s it renders (see `CellDom`), and every change is written back
+ * to the document via a single `view.dispatch` over the table's `[from, to)`
  * range (see `commit()`), exactly like `writeFrontmatter()`.
  *
  * The widget owns its DOM: it keeps an in-memory `ParsedTable` model and
@@ -349,16 +373,33 @@ const ALIGN_CYCLE: Align[] = [null, "left", "center", "right"];
  * kept true across the widget's own commits by updating `this.raw` *before*
  * dispatching) so CM6 reuses this DOM — and its focus — instead of throwing
  * it away mid-edit.
+ *
+ * Because cells grow and shrink as they are edited, every change that can
+ * alter the widget's height calls `view.requestMeasure()`. Nothing else
+ * schedules a measure pass when a widget resizes internally, and a stale
+ * height map puts every click and cursor motion below the table on the wrong
+ * line. `requestMeasure` coalesces into a single rAF, so calling it liberally
+ * costs nothing.
  */
 class TableWidget extends WidgetType {
   private root: HTMLElement | null = null;
   private view: EditorView | null = null;
-  /** Live per-cell inputs, indexed `[rowKey][col]` where rowKey 0 = header, 1.. = data rows. */
-  private cellInputs: HTMLInputElement[][] = [];
+  /** Live per-cell DOM, indexed `[rowKey][col]` where rowKey 0 = header, 1.. = data rows. */
+  private cellDoms: CellDom[][] = [];
 
+  /**
+   * `getPath` is deliberately a thunk rather than a resolved `sourcePath`.
+   * Cell contents are rendered lazily (and re-rendered after every edit), so
+   * resolving the host note's path at those moments keeps wikilink resolution
+   * correct across renames and across the same view being reused for a
+   * different file — *without* adding a field that `eq()` would then have to
+   * compare. `eq()` must stay a pure `raw` comparison (see above).
+   */
   constructor(
     private raw: string,
-    private table: ParsedTable
+    private table: ParsedTable,
+    private app: App,
+    private getPath: () => string
   ) {
     super();
   }
@@ -388,9 +429,41 @@ class TableWidget extends WidgetType {
     this.view = view;
     const root = document.createElement("div");
     root.className = "cm-table-widget markdown-rendered";
+    // Delegated from the root, not from each cell, so it survives `render()`
+    // replacing every child on a structural edit. This widget must route its
+    // own link clicks: CodeMirror's `eventBelongsToEditor` bails at any widget
+    // whose `ignoreEvent()` is true (ours does), so the editor-level
+    // `domEventHandlers` mousedown handler at the bottom of this file provably
+    // never fires for anything inside a table.
+    root.addEventListener("mousedown", (e) => this.onLinkMousedown(e));
     this.root = root;
     this.render();
     return root;
+  }
+
+  /**
+   * Routes clicks on the `internal-link` / `tag` anchors that rendered cells
+   * emit, matching Reading view's behavior in markdown/render.ts. Both classes
+   * are in `HANDLED_ANCHOR_CLASSES` (src/renderer/external-links.ts), so the
+   * global interceptor defers to this.
+   *
+   * Plain `[text](url)` anchors are deliberately not handled here: they carry
+   * neither class nor `data-href`, so the document-level interceptor already
+   * owns them on `click`. Consuming them here too would open them twice.
+   */
+  private onLinkMousedown(e: MouseEvent): void {
+    const target = e.target as HTMLElement;
+    const link = target.closest("a.internal-link") as HTMLElement | null;
+    if (link?.dataset.href) {
+      e.preventDefault();
+      this.app.openLink(link.dataset.href, this.getPath(), e.metaKey || e.ctrlKey);
+      return;
+    }
+    const tag = target.closest("a.tag") as HTMLElement | null;
+    if (tag?.dataset.tag) {
+      e.preventDefault();
+      this.app.openSearch(`tag:${tag.dataset.tag}`);
+    }
   }
 
   // --- Model → DOM -----------------------------------------------------------
@@ -400,43 +473,39 @@ class TableWidget extends WidgetType {
     const root = this.root;
     if (!root) return;
     root.replaceChildren();
-    this.cellInputs = [];
+    this.cellDoms = [];
     const cols = this.table.header.length;
 
     const tableEl = document.createElement("table");
 
     const thead = document.createElement("thead");
     const headTr = document.createElement("tr");
-    const headerInputs: HTMLInputElement[] = [];
+    const headerCells: CellDom[] = [];
     this.table.header.forEach((cell, c) => {
       const th = document.createElement("th");
       this.applyAlign(th, this.table.align[c]);
-      const input = this.buildCellInput(cell, 0, c);
-      th.appendChild(input);
+      headerCells.push(this.buildCell(th, cell, 0, c));
       th.appendChild(this.buildColControls(c));
-      headerInputs.push(input);
       headTr.appendChild(th);
     });
     headTr.appendChild(this.buildAddColCell());
     thead.appendChild(headTr);
     tableEl.appendChild(thead);
-    this.cellInputs.push(headerInputs);
+    this.cellDoms.push(headerCells);
 
     const tbody = document.createElement("tbody");
     this.table.rows.forEach((row, r) => {
       const tr = document.createElement("tr");
-      const rowInputs: HTMLInputElement[] = [];
+      const rowCells: CellDom[] = [];
       for (let c = 0; c < cols; c++) {
         const td = document.createElement("td");
         this.applyAlign(td, this.table.align[c]);
-        const input = this.buildCellInput(row[c] ?? "", r + 1, c);
-        td.appendChild(input);
-        rowInputs.push(input);
+        rowCells.push(this.buildCell(td, row[c] ?? "", r + 1, c));
         tr.appendChild(td);
       }
       tr.appendChild(this.buildRowControlCell(r));
       tbody.appendChild(tr);
-      this.cellInputs.push(rowInputs);
+      this.cellDoms.push(rowCells);
     });
     tableEl.appendChild(tbody);
     root.appendChild(tableEl);
@@ -454,15 +523,147 @@ class TableWidget extends WidgetType {
     cell.style.textAlign = align ?? "";
   }
 
-  private buildCellInput(value: string, rowKey: number, col: number): HTMLInputElement {
-    const input = document.createElement("input");
-    input.className = "cm-table-cell-input";
-    input.value = value;
-    input.style.textAlign = this.table.align[col] ?? "";
-    input.addEventListener("input", () => this.setCell(rowKey, col, input.value));
-    input.addEventListener("blur", () => this.commit());
-    input.addEventListener("keydown", (e) => this.onCellKeydown(e, rowKey, col));
-    return input;
+  /**
+   * Builds one cell's two faces into `cell` and wires up its editing
+   * lifecycle. See `CellDom` for why there are two.
+   */
+  private buildCell(
+    cell: HTMLTableCellElement,
+    value: string,
+    rowKey: number,
+    col: number
+  ): CellDom {
+    const align = this.table.align[col] ?? "";
+
+    const rendered = document.createElement("div");
+    rendered.className = "cm-table-cell-rendered";
+    rendered.style.textAlign = align;
+
+    const editor = document.createElement("textarea");
+    editor.className = "cm-table-cell-input";
+    editor.rows = 1;
+    editor.value = value;
+    editor.style.textAlign = align;
+    // A pipe table row is one document line by definition, so wrapping is
+    // purely visual and hard newlines are never valid content — see the
+    // `input` handler below.
+    editor.wrap = "soft";
+    editor.spellcheck = false;
+
+    const dom: CellDom = { cell, rendered, editor };
+
+    editor.addEventListener("input", () => {
+      // Load-bearing, not defensive. A GFM pipe table row *is* one document
+      // line, and Enter is intercepted below — but a `<textarea>` can still
+      // receive a hard newline by paste, which the old `<input>` could not.
+      // Left in place, `serializeTable` would emit a row split across two
+      // lines, the next `parseTable` would reject it, and the widget would
+      // silently vanish taking the table's structure with it.
+      if (/[\r\n]/.test(editor.value)) {
+        const caret = editor.selectionStart;
+        editor.value = editor.value.replace(/\r\n?|\n/g, " ");
+        const clamped = Math.min(caret, editor.value.length);
+        editor.setSelectionRange(clamped, clamped);
+      }
+      this.setCell(rowKey, col, editor.value);
+      this.autoGrow(editor);
+      this.view?.requestMeasure();
+    });
+    editor.addEventListener("blur", () => this.endEdit(dom));
+    editor.addEventListener("keydown", (e) => this.onCellKeydown(e, dom, rowKey, col));
+
+    // Clicking anywhere in the cell — including its padding, and including an
+    // empty cell with no rendered content — enters edit mode. The listener
+    // lives on the cell rather than the rendered div so those regions stay
+    // clickable, and bails on anything that owns its own click behavior.
+    cell.addEventListener("mousedown", (e) => {
+      if (cell.classList.contains("is-editing")) return;
+      const target = e.target as HTMLElement;
+      if (target.closest("a") || target.closest(".cm-table-col-controls")) return;
+      e.preventDefault();
+      this.beginEdit(dom, this.caretOffsetFromPoint(dom, e.clientX, e.clientY) ?? "end");
+    });
+
+    cell.appendChild(rendered);
+    cell.appendChild(editor);
+    this.renderCell(dom);
+    return dom;
+  }
+
+  /**
+   * Renders the cell's current raw source into its rendered face. Swapping
+   * `innerHTML` inside a widget is safe: CodeMirror's `DOMObserver` discards
+   * mutations that occur inside widget DOM, so this can never be misread as a
+   * document edit.
+   */
+  private renderCell(dom: CellDom): void {
+    this.app.markdownRenderer.renderInline(dom.editor.value, dom.rendered, this.getPath());
+  }
+
+  /**
+   * Sizes a `<textarea>` to its content. `scrollHeight` excludes borders under
+   * `box-sizing: border-box`, so they're measured and added back; without that
+   * the textarea would show a 2px scrollbar at rest.
+   */
+  private autoGrow(editor: HTMLTextAreaElement): void {
+    editor.style.height = "auto";
+    const style = getComputedStyle(editor);
+    const borders =
+      (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
+    editor.style.height = `${editor.scrollHeight + borders}px`;
+  }
+
+  /**
+   * Translates a click on the rendered face into a caret offset in the raw
+   * source, so clicking into a cell lands the caret where the user aimed.
+   *
+   * Only attempted when the two faces are character-for-character identical
+   * (`textContent === value`), which is the overwhelmingly common case: a cell
+   * with no inline markdown. When a cell *does* contain markdown the rendered
+   * glyphs and the source string have different lengths, so any mapping
+   * between them would put the caret somewhere visibly wrong — caret-at-end is
+   * the honest answer there. Returns null to mean "no usable offset".
+   */
+  private caretOffsetFromPoint(dom: CellDom, x: number, y: number): number | null {
+    if (dom.rendered.textContent !== dom.editor.value) return null;
+    const doc = dom.rendered.ownerDocument;
+    const range = doc.caretRangeFromPoint?.(x, y);
+    if (!range || !dom.rendered.contains(range.startContainer)) return null;
+    const upToCaret = doc.createRange();
+    upToCaret.selectNodeContents(dom.rendered);
+    upToCaret.setEnd(range.startContainer, range.startOffset);
+    return upToCaret.toString().length;
+  }
+
+  /**
+   * Shows the cell's raw source and puts the caret in it. `caret` is a
+   * character offset, `"all"` to select the whole cell (what keyboard
+   * navigation has always done), or `"end"` when a click couldn't be mapped
+   * to an offset.
+   *
+   * `is-editing` must be added *before* `autoGrow`: the textarea is
+   * `display: none` until then, and a hidden element's `scrollHeight` is 0,
+   * which would collapse the cell to a sliver on entry.
+   */
+  private beginEdit(dom: CellDom, caret: number | "all" | "end"): void {
+    dom.cell.classList.add("is-editing");
+    this.autoGrow(dom.editor);
+    dom.editor.focus();
+    if (caret === "all") {
+      dom.editor.select();
+    } else {
+      const offset = caret === "end" ? dom.editor.value.length : caret;
+      dom.editor.setSelectionRange(offset, offset);
+    }
+    this.view?.requestMeasure();
+  }
+
+  /** Returns the cell to its rendered face and writes any change to the document. */
+  private endEdit(dom: CellDom): void {
+    dom.cell.classList.remove("is-editing");
+    this.renderCell(dom);
+    this.commit();
+    this.view?.requestMeasure();
   }
 
   private buildColControls(col: number): HTMLElement {
@@ -528,17 +729,26 @@ class TableWidget extends WidgetType {
     else this.table.rows[rowKey - 1][col] = value;
   }
 
-  private onCellKeydown(e: KeyboardEvent, rowKey: number, col: number): void {
+  private onCellKeydown(e: KeyboardEvent, dom: CellDom, rowKey: number, col: number): void {
     if (e.key === "Tab") {
       e.preventDefault();
       this.moveCell(rowKey, col, e.shiftKey ? -1 : 1);
     } else if (e.key === "Enter") {
+      // A GFM pipe table cell cannot contain a literal newline, so Enter is
+      // always row movement — never an insertion — even in a <textarea>.
       e.preventDefault();
       this.moveRow(rowKey, col, e.shiftKey ? -1 : 1);
     } else if (e.key === "ArrowDown") {
+      // A wrapped cell is several visual lines, so the arrows are caret-guarded:
+      // only a caret already at the far edge of the value leaves the cell. Tab
+      // and Enter enter a cell with everything selected, which puts both
+      // offsets at the extremes — so keyboard row/column navigation behaves
+      // exactly as it did when cells were single-line inputs.
+      if (dom.editor.selectionEnd !== dom.editor.value.length) return;
       e.preventDefault();
       this.moveRow(rowKey, col, 1);
     } else if (e.key === "ArrowUp") {
+      if (dom.editor.selectionStart !== 0) return;
       e.preventDefault();
       this.moveRow(rowKey, col, -1);
     }
@@ -566,14 +776,12 @@ class TableWidget extends WidgetType {
     this.focusCell(Math.min(lastRowKey, Math.max(0, rowKey + dir)), col);
   }
 
+  /** Keyboard entry into a cell selects its whole contents, as it always has. */
   private focusCell(rowKey: number, col: number): void {
-    const row = this.cellInputs[rowKey];
+    const row = this.cellDoms[rowKey];
     if (!row) return;
-    const input = row[Math.min(col, row.length - 1)];
-    if (input) {
-      input.focus();
-      input.select();
-    }
+    const dom = row[Math.min(col, row.length - 1)];
+    if (dom) this.beginEdit(dom, "all");
   }
 
   private addRow(): void {
@@ -890,7 +1098,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
         // markdown — editing goes through the widget's cell inputs instead.
         decos.push(
           Decoration.replace({
-            widget: new TableWidget(trimmed, table),
+            widget: new TableWidget(trimmed, table, app, getPath),
             block: true,
           }).range(nodeFrom, to)
         );
