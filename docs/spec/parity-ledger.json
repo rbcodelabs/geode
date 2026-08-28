@@ -38,12 +38,12 @@
       "api-member": 1009
     },
     "byStatus": {
-      "verified": 178,
+      "verified": 180,
       "partial": 25,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 0,
-      "unknown": 2647
+      "unknown": 2645
     }
   },
   "requirements": [
@@ -28901,8 +28901,12 @@
       "title": "WorkspaceLeaf.isDeferred",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/workspace-deferred-views.test.ts",
+        "tests/e2e/deferred-panes.spec.ts"
+      ],
+      "notes": "Implemented with a deliberate semantic divergence: Obsidian's deferred leaf is lazy-but-always-loadable, Geode's means the provider for that view type is not currently loaded. Observed true for a leaf holding a DeferredView placeholder and false for a live view, including across a live plugin disable/re-enable cycle."
     },
     {
       "id": "API-MEMBER-d7b4dfdacc71",
@@ -28911,8 +28915,12 @@
       "title": "WorkspaceLeaf.loadIfDeferred",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/workspace-deferred-views.test.ts",
+        "tests/e2e/workspace-persist-dnd.spec.ts"
+      ],
+      "notes": "Observed loading the real view when a factory is registered, and resolving silently (never throwing, unlike setViewState) when no factory exists or the leaf is not deferred - an unavailable provider is a normal state in Geode. See docs/adr/0005-deferred-view-restore.md."
     },
     {
       "id": "API-MEMBER-03cf228d6193",

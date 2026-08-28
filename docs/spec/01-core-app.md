@@ -434,6 +434,18 @@ tree and migrates the prior flat version-1 format. Obsidian-compatible
 `getLeftLeaf(true)` / `getRightLeaf(true)` calls create a new sidebar group;
 passing `false` reuses an available leaf in the default group.
 
+A saved leaf whose view type cannot be resolved at restore time is **never
+discarded**. If the plugin providing it is disabled, quarantined, mid-update,
+suppressed by crash recovery, or simply slower to load than the plugin onload
+budget, the leaf is restored as a labelled placeholder that keeps the saved
+`type` and `state` through further save cycles, and hydrates into the real view
+as soon as the provider registers. Built-in view types (File explorer, Search,
+Backlinks, Outline, Tags, Bookmarks) are never turned into placeholders — they
+are constructed at startup and matched by leaf identity, so a placeholder for
+one would be a permanent duplicate. Layout saves are suppressed entirely while
+the app is in plugin-free crash-recovery mode, so a recovery launch cannot
+overwrite the real layout. See `docs/adr/0005-deferred-view-restore.md`.
+
 ### Tabs
 - New tab: `Ctrl/Cmd+T` or "+" button. Close: `Ctrl/Cmd+W`. Reopen closed: `Ctrl/Cmd+Shift+T`.
 - Open links: click = active tab; `Ctrl/Cmd`+click = new tab; `Ctrl/Cmd+Alt`+click = new tab group (split); `Ctrl/Cmd+Alt+Shift`+click = new window. (Source mode adds `Shift` to the modifier combos.)
