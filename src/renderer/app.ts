@@ -1080,6 +1080,7 @@ export class App {
 
     this.registerCommands();
     this.commands.attach(document);
+    this.attachGuestHotkeyBridge();
     this.applySettings();
     // Apply the selected community theme (if the vault has it installed).
     this.themeManager.apply(this.settings.cssTheme);
@@ -1165,6 +1166,30 @@ export class App {
     });
     banner.append(message, retry);
     shell.prepend(banner);
+  }
+
+  /**
+   * `commands.attach(document)` only sees keystrokes in the host document. A
+   * `<webview>` tab (Web Viewer, Artifact, canvas web card) runs in its own
+   * process, so main intercepts its keys and sends the matching combo back
+   * here. Main's interceptor is synchronous and cannot query this registry
+   * mid-keystroke, so the bound combos are published to it up front and
+   * republished whenever a plugin adds or removes a command.
+   */
+  private attachGuestHotkeyBridge() {
+    let pending = 0;
+    const publish = () => {
+      // registerCommands() alone fires ~40 times; coalesce into one IPC call.
+      window.clearTimeout(pending);
+      pending = window.setTimeout(() => {
+        void window.geode.publishHotkeys(this.commands.hotkeys());
+      }, 0);
+    };
+    this.commands.onChange(publish);
+    publish();
+    window.geode.onGuestHotkey((combo) => {
+      this.commands.dispatchHotkey(combo);
+    });
   }
 
   private registerCommands() {

@@ -1,3 +1,5 @@
+import { eventToHotkey } from "../shared/hotkey";
+
 export interface Command {
   id: string;
   name: string;
@@ -13,19 +15,14 @@ export interface Command {
   checkCallback?: (checking: boolean) => boolean | void;
 }
 
-/** Normalize a KeyboardEvent into "Mod+Shift+K" style strings (Mod = Cmd/Ctrl). */
-export function eventToHotkey(e: KeyboardEvent): string {
-  const parts: string[] = [];
-  if (e.metaKey || e.ctrlKey) parts.push("Mod");
-  if (e.altKey) parts.push("Alt");
-  if (e.shiftKey) parts.push("Shift");
-  let key = e.key;
-  if (key === " ") key = "Space";
-  if (key.length === 1) key = key.toUpperCase();
-  if (["Meta", "Control", "Alt", "Shift"].includes(key)) return "";
-  parts.push(key);
-  return parts.join("+");
-}
+/**
+ * Normalize a KeyboardEvent into "Mod+Shift+K" style strings (Mod = Cmd/Ctrl).
+ *
+ * Re-exported from `src/shared/hotkey.ts`, which the main process shares so a
+ * `<webview>` guest's keystrokes normalize to the same combo strings this
+ * registry is keyed by. Kept exported here for existing importers.
+ */
+export { eventToHotkey };
 
 /** True if a checkCallback-gated command is currently available. */
 function isAvailable(cmd: Command): boolean {
@@ -49,10 +46,12 @@ export class CommandRegistry {
    */
   commands: Record<string, Command> = {};
   private byHotkey = new Map<string, Command>();
+  private changeListeners = new Set<() => void>();
 
   add(command: Command) {
     this.commands[command.id] = command;
     if (command.hotkey) this.byHotkey.set(command.hotkey, command);
+    this.notifyChange();
   }
 
   /** Obsidian alias for `add`. */
@@ -66,6 +65,41 @@ export class CommandRegistry {
     if (!cmd) return;
     delete this.commands[id];
     if (cmd.hotkey && this.byHotkey.get(cmd.hotkey) === cmd) this.byHotkey.delete(cmd.hotkey);
+    this.notifyChange();
+  }
+
+  /**
+   * Every combo currently bound to a command, in the `"Mod+Shift+K"` format.
+   * Published to the main process so it can match a `<webview>` guest's
+   * keystrokes synchronously inside `before-input-event`.
+   */
+  hotkeys(): string[] {
+    return [...this.byHotkey.keys()];
+  }
+
+  /**
+   * Subscribe to binding changes, so a published combo list can be refreshed
+   * when a plugin registers or removes a command. Returns an unsubscribe fn.
+   */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private notifyChange(): void {
+    for (const listener of this.changeListeners) listener();
+  }
+
+  /**
+   * Run the command bound to `combo`, honoring `checkCallback` availability.
+   * Used for keystrokes that arrive from outside the host document (a
+   * `<webview>` guest), where there is no DOM event to inspect.
+   */
+  dispatchHotkey(combo: string): boolean {
+    const cmd = this.byHotkey.get(combo);
+    if (!cmd || !isAvailable(cmd)) return false;
+    run(cmd);
+    return true;
   }
 
   /** Obsidian alias for `remove`. */

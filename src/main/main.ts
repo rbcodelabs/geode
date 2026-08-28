@@ -31,6 +31,7 @@ import {
 } from "./crash-diagnostics";
 import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
+import { resolveGuestHotkey } from "../shared/hotkey";
 import { selectVaultWindowAction } from "./vault-window-selection";
 import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-watchdog";
 import { listVaultFiles, type VaultFileEntry } from "./vault-files";
@@ -81,6 +82,11 @@ interface VaultSession {
 const sessions = new Map<number, VaultSession>();
 /** Explicit vault requested for a window that has not completed open-vault yet. */
 const launchTargets = new Map<number, string>();
+/**
+ * Hotkey combos each window's renderer currently has bound, keyed by window
+ * id. See `bridgeGuestHotkeys` for why main needs its own copy.
+ */
+const guestHotkeys = new Map<number, Set<string>>();
 interface CrashState {
   suppressPlugins: boolean;
   activePlugins: string[];
@@ -661,12 +667,48 @@ function registerIpc() {
     artifactRuntime.getState(e.sender, registrationId));
   ipcMain.handle("artifact-capture", (e, root: string) =>
     artifactRuntime.capture(e.sender, root));
+  ipcMain.handle("hotkeys-publish", (e, combos: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return;
+    const list = Array.isArray(combos) ? combos.filter((c): c is string => typeof c === "string") : [];
+    guestHotkeys.set(win.id, new Set(list));
+  });
   ipcMain.on("renderer-heartbeat", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const state = win ? crashStates.get(win.id) : undefined;
     if (state) state.lastHeartbeat = Date.now();
   });
 }
+
+/**
+ * Route hotkeys pressed inside a `<webview>` guest back to the host renderer.
+ *
+ * Geode's hotkey system is one capture-phase keydown listener on the host
+ * document (src/renderer/commands.ts). A guest runs in its own process, so its
+ * keystrokes never reach that listener, nothing calls preventDefault(), and
+ * the key bubbles back unhandled, at which point macOS hands it to the
+ * application menu. That is how Cmd+W closed the whole window from a web tab while
+ * every other Geode hotkey did nothing at all.
+ *
+ * `before-input-event` fires in the browser process *before* the guest sees
+ * the key, and Electron only consults the main menu for events that bubble
+ * back unhandled from a renderer (see PlatformHandleKeyboardEvent in
+ * electron_api_web_contents_mac.mm). preventDefault() here therefore
+ * suppresses both the guest page event and the menu accelerator.
+ *
+ * Only combos the renderer has actually bound are intercepted, so ordinary
+ * page and OS shortcuts (Cmd+A, Cmd+C, and all plain typing) pass through.
+ */
+function bridgeGuestHotkeys(win: BrowserWindow, guest: Electron.WebContents): void {
+  guest.on("before-input-event", (event, input) => {
+    const combo = resolveGuestHotkey(input, guestHotkeys.get(win.id) ?? EMPTY_HOTKEYS);
+    if (!combo) return;
+    event.preventDefault();
+    if (!win.isDestroyed()) win.webContents.send("guest-hotkey", combo);
+  });
+}
+
+const EMPTY_HOTKEYS: ReadonlySet<string> = new Set();
 
 function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
@@ -738,6 +780,9 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   });
   win.webContents.on("did-attach-webview", (_event, guest) => {
     artifactRuntime.trackGuest(win.webContents, guest);
+    // Every guest, not just artifact guests: the Web Viewer and canvas
+    // web-preview cards are <webview>s too and have the same dead-hotkey bug.
+    bridgeGuestHotkeys(win, guest);
   });
   const recoverRenderer = async (diagnostic: CrashDiagnostic) => {
     const state = crashStates.get(win.id);
@@ -864,6 +909,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     sessions.delete(win.id);
     launchTargets.delete(win.id);
     crashStates.delete(win.id);
+    guestHotkeys.delete(win.id);
   });
   return win;
 }
