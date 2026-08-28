@@ -71,10 +71,10 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
     await expect(window.locator(".bases-table thead th").first()).toHaveText("file.name");
 
     // Fresh base has no filters: every markdown file in the vault is a row
-    // (7: Welcome, Daily Plan, Projects/Roadmap, Notes/Scratch, and the 3
-    // Tasks/*.md fixtures).
-    await expect(window.locator(".bases-data-row")).toHaveCount(7);
-    await expect(window.locator(".bases-toolbar-results")).toHaveText("7 results");
+    // (8: Welcome, Daily Plan, Projects/Roadmap, Notes/Scratch, Mermaid, and
+    // the 3 Tasks/*.md fixtures).
+    await expect(window.locator(".bases-data-row")).toHaveCount(8);
+    await expect(window.locator(".bases-toolbar-results")).toHaveText("8 results");
 
     // --- Sort by note.priority ASC: the 3 Tasks rows (the only ones with a
     // priority) should end up as the last 3 rows, in Alpha/Beta/Gamma order ---
@@ -86,7 +86,7 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
     await window.keyboard.press("Escape"); // close the panel; the sort itself already persisted on selectOption's change event
 
     const fileNameCells = window.locator(".bases-data-row td.bases-cell:first-child");
-    await expect(fileNameCells).toHaveCount(7);
+    await expect(fileNameCells).toHaveCount(8);
     const namesAfterSort = await fileNameCells.allInnerTexts();
     expect(namesAfterSort.slice(-3)).toEqual(["Alpha Task.md", "Beta Task.md", "Gamma Task.md"]);
 
@@ -166,11 +166,11 @@ test("switch a base view to Cards, render cards, and persist the type to disk", 
     await window.locator(".bases-view-btn").click();
     await window.locator(".menu-item", { hasText: "Change type to Cards" }).click();
 
-    // Table container hidden, cards grid visible with one card per markdown file (7).
+    // Table container hidden, cards grid visible with one card per markdown file (8).
     const cardsContainer = window.locator(".bases-cards-container");
     await expect(cardsContainer).toBeVisible();
     await expect(window.locator(".bases-table-container")).toBeHidden();
-    await expect(window.locator(".bases-card")).toHaveCount(7);
+    await expect(window.locator(".bases-card")).toHaveCount(8);
 
     // Card titles are the note basenames; the 3 Task fixtures should be present.
     const titles = await window.locator(".bases-card-title").allInnerTexts();

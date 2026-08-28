@@ -1674,5 +1674,21 @@
       "tests/e2e/workspace-persist-dnd.spec.ts"
     ],
     "notes": "Observed loading the real view when a factory is registered, and resolving silently (never throwing, unlike setViewState) when no factory exists or the leaf is not deferred - an unavailable provider is a normal state in Geode. See docs/adr/0005-deferred-view-restore.md."
+  },
+  "DEV-45053118ab68": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/mermaid.test.ts",
+      "tests/e2e/mermaid.spec.ts"
+    ],
+    "notes": "loadMermaid() is exported from the require('obsidian') compatibility module and resolves to the Mermaid library, loaded lazily on first use from the dist/mermaid.js chunk. The unit test observes the export identity and the memoization contract (concurrent callers share one injection; a failed load clears the memo so a later call retries); the e2e test observes the chunk being injected exactly once and diagrams rendering from it."
+  },
+  "API-875834c93581": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/mermaid.test.ts",
+      "tests/e2e/mermaid.spec.ts"
+    ],
+    "notes": "Matches Obsidian's `loadMermaid(): Promise<any>` declaration: a zero-argument function exported from the compatibility module returning a promise for the Mermaid library. Plugins receive the same memoized instance Geode's own Mermaid renderer uses, so a plugin's mermaid.initialize() and Geode's diagrams cannot diverge."
   }
 }

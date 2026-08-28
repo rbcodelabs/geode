@@ -46,13 +46,18 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
     await expect(graphView).toBeVisible();
     await expect(window.locator(".graph-view-canvas")).toBeVisible();
 
-    // test-vault has 4 markdown files (Welcome, Daily Plan, Projects/Roadmap, Notes/Scratch)
-    // and 4 resolved-link edges: Welcome->Daily Plan, Welcome->Roadmap,
-    // Daily Plan->Roadmap (via its ![[Projects/Roadmap#Q3]] embed), and
-    // Roadmap->Welcome (via "Linked from [[Welcome]]"). Daily Plan's other
+    // test-vault has 5 markdown files (Welcome, Daily Plan, Projects/Roadmap,
+    // Notes/Scratch, Mermaid) and 5 resolved-link edges: Welcome->Daily Plan,
+    // Welcome->Roadmap, Daily Plan->Roadmap (via its ![[Projects/Roadmap#Q3]]
+    // embed), Roadmap->Welcome (via "Linked from [[Welcome]]"), and
+    // Mermaid->Welcome (via its trailing [[Welcome]]). Daily Plan's other
     // wikilink, [[Welcome to Geode|the welcome note]], doesn't resolve —
     // "Welcome to Geode" isn't Welcome.md's basename or an alias — so it
-    // doesn't add a 5th edge.
+    // doesn't add a 6th edge.
+    //
+    // Mermaid.md carries that [[Welcome]] link deliberately: it keeps the
+    // node *linked* rather than edgeless, which is the condition the
+    // stability note below turns on.
     //
     // (Bases E2E fixtures deliberately do NOT live in the shared test-vault/
     // — bases.spec.ts writes its own Tasks/*.md fixtures into its own temp
@@ -63,8 +68,8 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
     // by the time the click actually lands, intermittently missing the
     // node. Confirmed via `--repeat-each=15`: ~1 in 15-20 runs failed with
     // 7 nodes; back to 4, 15/15 and 6/6 repeat runs were clean.)
-    await expect(graphView).toHaveAttribute("data-graph-node-count", "4");
-    await expect(graphView).toHaveAttribute("data-graph-edge-count", "4");
+    await expect(graphView).toHaveAttribute("data-graph-node-count", "5");
+    await expect(graphView).toHaveAttribute("data-graph-edge-count", "5");
 
     // Positions populate once the force sim has run at least one tick
     // (regression coverage for the "isSettled() is trivially true before
@@ -74,7 +79,7 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
         const raw = await graphView.getAttribute("data-graph-node-positions");
         return raw ? Object.keys(JSON.parse(raw)).length : 0;
       })
-      .toBe(4);
+      .toBe(5);
 
     // Open a second, unrelated tab, then re-invoke "Open graph view" — it
     // should switch back to the existing graph tab (singleton view)

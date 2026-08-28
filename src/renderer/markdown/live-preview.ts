@@ -14,6 +14,8 @@ import { setIcon } from "../api/icons";
 import { CanvasView } from "../views/canvas-view";
 import { calloutMarkerLength, calloutMeta, parseCalloutHeader, type CalloutMeta } from "./callout";
 import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
+import { isMermaidInfoString, parseFencedBlock } from "../internal-plugins/mermaid/fence";
+import { onThemeChange, renderMermaid } from "../internal-plugins/mermaid/render-mermaid";
 import { parseTable, serializeTable, type Align, type ParsedTable } from "./table";
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
@@ -1016,6 +1018,64 @@ class EmbedWidget extends WidgetType {
   }
 }
 
+/**
+ * Renders a ```mermaid block as a diagram while editing (Live Preview),
+ * through the same `renderMermaid()` Reading view's code-block processor uses
+ * so the two modes cannot drift.
+ *
+ * Modeled on `EmbedWidget` above: `eq()` keeps the widget alive across
+ * unrelated edits, and the async render calls `view.requestMeasure()` once the
+ * SVG lands so CodeMirror re-measures the now-taller line.
+ */
+class MermaidWidget extends WidgetType {
+  private destroyed = false;
+  private unsubscribeTheme: (() => void) | null = null;
+
+  constructor(
+    private source: string,
+    private sourcePath: string,
+    private app: App
+  ) {
+    super();
+  }
+
+  eq(other: MermaidWidget): boolean {
+    return other.source === this.source && other.sourcePath === this.sourcePath;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    // Clicks on an `internal-link` node are the widget's own — let its
+    // handler navigate. Everything else falls through to CodeMirror so
+    // clicking the diagram puts the cursor in the block and reveals the raw
+    // source, which is how the block gets edited.
+    const target = event.target as HTMLElement | null;
+    return !!target?.closest?.(".internal-link");
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement("div");
+    root.className = "cm-mermaid-widget";
+    const render = () => {
+      if (this.destroyed) return;
+      void renderMermaid(this.source, root, this.app, this.sourcePath).then(() => {
+        if (!this.destroyed) view.requestMeasure();
+      });
+    };
+    render();
+    // Defensive: CodeMirror normally calls toDOM once per widget instance,
+    // but a second call must not leave the first subscription dangling.
+    this.unsubscribeTheme?.();
+    this.unsubscribeTheme = onThemeChange(this.app, render);
+    return root;
+  }
+
+  destroy(_dom: HTMLElement): void {
+    this.destroyed = true;
+    this.unsubscribeTheme?.();
+    this.unsubscribeTheme = null;
+  }
+}
+
 // --- Live preview extension -------------------------------------------------
 
 export function livePreview(app: App, getPath: () => string): Extension {
@@ -1232,8 +1292,20 @@ export function livePreview(app: App, getPath: () => string): Extension {
               break;
             }
             case "FencedCode": {
+              const nodeTo = Math.min(node.to, doc.length);
+              // A mermaid block away from the cursor is replaced wholesale by
+              // `mermaidField`'s block widget, so skip the code-block line
+              // styling that would otherwise decorate lines nothing renders.
+              // Inside the block, the raw source is showing and should look
+              // like any other fenced code.
               const first = doc.lineAt(node.from).number;
-              const last = doc.lineAt(Math.min(node.to, doc.length)).number;
+              const last = doc.lineAt(nodeTo).number;
+              let blockActive = false;
+              for (let i = first; i <= last && !blockActive; i++) blockActive = active.has(i);
+              if (!blockActive) {
+                const fence = parseFencedBlock(doc.sliceString(node.from, nodeTo));
+                if (fence && isMermaidInfoString(fence.info) && fence.body.trim()) break;
+              }
               for (let i = first; i <= last; i++) {
                 decos.push(Decoration.line({ class: "cm-live-codeblock" }).range(doc.line(i).from));
               }
@@ -1330,6 +1402,62 @@ export function livePreview(app: App, getPath: () => string): Extension {
     return Decoration.set(decos, true);
   }
 
+  // Mermaid blocks span many lines, so — like frontmatter and tables above —
+  // their decorations must come from a StateField. CodeMirror rejects both
+  // `block: true` decorations *and* any replacement crossing a line break when
+  // they originate in a ViewPlugin ("Decorations that replace line breaks may
+  // not be specified via plugins"), which rules out building these alongside
+  // the other FencedCode handling in `buildInline`.
+  //
+  // Unlike `tableField`, this set *does* depend on the selection: a block
+  // containing the cursor stays as raw, editable source.
+  const mermaidField = StateField.define<DecorationSet>({
+    create(state) {
+      return computeMermaid(state);
+    },
+    update(value, tr) {
+      if (
+        !tr.docChanged &&
+        tr.state.selection === tr.startState.selection &&
+        syntaxTree(tr.state) === syntaxTree(tr.startState)
+      ) {
+        return value;
+      }
+      return computeMermaid(tr.state);
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+
+  function computeMermaid(state: EditorState): DecorationSet {
+    const doc = state.doc;
+    const decos: Range<Decoration>[] = [];
+    const sourcePath = getPath();
+    syntaxTree(state).iterate({
+      enter(node) {
+        if (node.name !== "FencedCode") return;
+        const to = Math.min(node.to, doc.length);
+        const raw = doc.sliceString(node.from, to);
+        const fence = parseFencedBlock(raw);
+        if (!fence || !isMermaidInfoString(fence.info)) return false;
+        // Cursor (or any selection range) inside the block: leave the raw
+        // source visible so it can be edited, matching how every other
+        // cursor-aware decoration in this file behaves.
+        for (const range of state.selection.ranges) {
+          if (range.to >= node.from && range.from <= to) return false;
+        }
+        if (!fence.body.trim()) return false;
+        decos.push(
+          Decoration.replace({
+            widget: new MermaidWidget(fence.body, sourcePath, app),
+            block: true,
+          }).range(node.from, to)
+        );
+        return false;
+      },
+    });
+    return Decoration.set(decos, true);
+  }
+
   const inlinePlugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
@@ -1380,6 +1508,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
   return [
     frontmatterField,
     tableField,
+    mermaidField,
     EditorView.atomicRanges.of(
       (view) => view.state.field(frontmatterField, false) ?? RangeSet.empty
     ),

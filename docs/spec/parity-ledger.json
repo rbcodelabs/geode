@@ -38,12 +38,12 @@
       "api-member": 1009
     },
     "byStatus": {
-      "verified": 180,
-      "partial": 25,
+      "verified": 203,
+      "partial": 27,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 0,
-      "unknown": 2645
+      "unknown": 2620
     }
   },
   "requirements": [
@@ -3165,8 +3165,12 @@
       "title": "addIcon",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/addIcon.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/addIcon.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts",
+        "tests/unit/icons.test.ts"
+      ],
+      "notes": "addIcon now normalizes a bare SVG fragment into a complete <svg viewBox=\"0 0 100 100\" class=\"svg-icon <id>\"> wrapper at registration time (pass-through if already a full <svg> element), so custom-icon registrations paint instead of silently rendering zero pixels."
     },
     {
       "id": "DEV-032005c3dc2d",
@@ -4669,8 +4673,11 @@
       "title": "setIcon",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/ButtonComponent/setIcon.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/ButtonComponent/setIcon.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "ButtonComponent.setIcon delegates to the shared setIcon(el, iconId) helper, which now paints normalized <svg> markup."
     },
     {
       "id": "DEV-223315a85ed1",
@@ -8728,8 +8735,12 @@
       "title": "loadMermaid",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/loadMermaid.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/loadMermaid.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/mermaid.test.ts",
+        "tests/e2e/mermaid.spec.ts"
+      ],
+      "notes": "loadMermaid() is exported from the require('obsidian') compatibility module and resolves to the Mermaid library, loaded lazily on first use from the dist/mermaid.js chunk. The unit test observes the export identity and the memoization contract (concurrent callers share one injection; a failed load clears the memo so a later call retries); the e2e test observes the chunk being injected exactly once and diagrams rendering from it."
     },
     {
       "id": "DEV-45c130e99c0f",
@@ -9628,8 +9639,11 @@
       "title": "setIcon",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/MenuItem/setIcon.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/MenuItem/setIcon.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "MenuItem.setIcon delegates to the shared setIcon(el, iconId) helper, which now paints normalized <svg> markup."
     },
     {
       "id": "DEV-ee9678d1dd10",
@@ -11871,8 +11885,12 @@
       "title": "setIcon",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/setIcon.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/setIcon.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts",
+        "tests/unit/icons.test.ts"
+      ],
+      "notes": "setIcon renders complete <svg> markup (via addIcon's normalization and a lucide-<name> prefix-stripping retry) with a svg-icon class added to the resulting element, and empties textContent for an unresolved identifier-shaped id while still falling back to text for a literal glyph (e.g. emoji)."
     },
     {
       "id": "DEV-b0b0c5d772f2",
@@ -14363,8 +14381,11 @@
       "title": "leftSplit",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Workspace/leftSplit.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Workspace/leftSplit.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "workspace.leftSplit/rightSplit are live getters returning leftSidebar/rightSidebar (identity-stable across reads, so a destructured reference stays live)."
     },
     {
       "id": "DEV-5fc44b01fd13",
@@ -14603,8 +14624,11 @@
       "title": "rightSplit",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Workspace/rightSplit.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Workspace/rightSplit.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "workspace.leftSplit/rightSplit are live getters returning leftSidebar/rightSidebar (identity-stable across reads, so a destructured reference stays live)."
     },
     {
       "id": "DEV-d9eb4d86d398",
@@ -15101,8 +15125,11 @@
       "title": "WorkspaceSidedock",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/WorkspaceSidedock.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/WorkspaceSidedock.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Geode's Sidebar implements collapse/expand/collapsed/toggle (verified) but is not a full WorkspaceItem (no getRoot/getContainer/parent/children), so the class-level WorkspaceSidedock contract is only partially met."
     },
     {
       "id": "DEV-01f48214b769",
@@ -15111,8 +15138,11 @@
       "title": "collapse",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/WorkspaceSidedock/collapse.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/WorkspaceSidedock/collapse.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "DEV-d223dc605f73",
@@ -15121,8 +15151,11 @@
       "title": "collapsed",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/WorkspaceSidedock/collapsed.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/WorkspaceSidedock/collapsed.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "DEV-468e5700a6e5",
@@ -15131,8 +15164,11 @@
       "title": "expand",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/WorkspaceSidedock/expand.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/WorkspaceSidedock/expand.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "DEV-783e96f4caac",
@@ -15141,8 +15177,11 @@
       "title": "toggle",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/WorkspaceSidedock/toggle.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/WorkspaceSidedock/toggle.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "DEV-63817a519bd7",
@@ -15871,8 +15910,12 @@
       "title": "addIcon",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts",
+        "tests/unit/icons.test.ts"
+      ],
+      "notes": "addIcon now normalizes a bare SVG fragment into a complete <svg viewBox=\"0 0 100 100\" class=\"svg-icon <id>\"> wrapper at registration time (pass-through if already a full <svg> element), so custom-icon registrations paint instead of silently rendering zero pixels."
     },
     {
       "id": "API-4f9bb3a63903",
@@ -17278,8 +17321,12 @@
       "title": "loadMermaid",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/mermaid.test.ts",
+        "tests/e2e/mermaid.spec.ts"
+      ],
+      "notes": "Matches Obsidian's `loadMermaid(): Promise<any>` declaration: a zero-argument function exported from the compatibility module returning a promise for the Mermaid library. Plugins receive the same memoized instance Geode's own Mermaid renderer uses, so a plugin's mermaid.initialize() and Geode's diagrams cannot diverge."
     },
     {
       "id": "API-fb37f6b1f8c6",
@@ -18129,8 +18176,12 @@
       "title": "setIcon",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts",
+        "tests/unit/icons.test.ts"
+      ],
+      "notes": "setIcon renders complete <svg> markup (via addIcon's normalization and a lucide-<name> prefix-stripping retry) with a svg-icon class added to the resulting element, and empties textContent for an unresolved identifier-shaped id while still falling back to text for a literal glyph (e.g. emoji)."
     },
     {
       "id": "API-d684c3bef759",
@@ -18848,8 +18899,11 @@
       "title": "WorkspaceSidedock",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Geode's Sidebar implements collapse/expand/collapsed/toggle (verified) but is not a full WorkspaceItem (no getRoot/getContainer/parent/children), so the class-level WorkspaceSidedock contract is only partially met."
     },
     {
       "id": "API-9ed8a73b57ef",
@@ -20199,8 +20253,11 @@
       "title": "ButtonComponent.setIcon",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "ButtonComponent.setIcon delegates to the shared setIcon(el, iconId) helper, which now paints normalized <svg> markup."
     },
     {
       "id": "API-MEMBER-91843a376aba",
@@ -24125,8 +24182,11 @@
       "title": "MenuItem.setIcon",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "MenuItem.setIcon delegates to the shared setIcon(el, iconId) helper, which now paints normalized <svg> markup."
     },
     {
       "id": "API-MEMBER-baaed9c0b1a6",
@@ -24741,7 +24801,9 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "partial",
       "evidence": [
-        "tests/unit/plugin-manager.test.ts"
+        "tests/unit/plugin-manager.test.ts",
+        "tests/e2e/plugin-api-compat.spec.ts",
+        "tests/unit/commands.test.ts"
       ],
       "notes": "Global callback/checkCallback registration, prefixing, cleanup, and crash attribution are observed; editor callback variants and the complete Command shape are not supported."
     },
@@ -24955,8 +25017,13 @@
       "title": "Plugin.removeCommand",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts",
+        "tests/unit/commands.test.ts",
+        "tests/unit/plugin-manager.test.ts"
+      ],
+      "notes": "Plugin.removeCommand unregisters via the registry's remove(), now backed by a Record with delete semantics (verified by unit + e2e); still only synchronous unregistration, no separate confirmation step (matches Obsidian)."
     },
     {
       "id": "API-MEMBER-f40611ada9c3",
@@ -28638,8 +28705,11 @@
       "title": "Workspace.leftSplit",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "workspace.leftSplit/rightSplit are live getters returning leftSidebar/rightSidebar (identity-stable across reads, so a destructured reference stays live)."
     },
     {
       "id": "API-MEMBER-681fe5e375f6",
@@ -28728,8 +28798,11 @@
       "title": "Workspace.rightSplit",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "workspace.leftSplit/rightSplit are live getters returning leftSidebar/rightSidebar (identity-stable across reads, so a destructured reference stays live)."
     },
     {
       "id": "API-MEMBER-9d5e7531d539",
@@ -29131,8 +29204,11 @@
       "title": "WorkspaceSidedock.collapse",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "API-MEMBER-5c12a964e1fd",
@@ -29141,8 +29217,11 @@
       "title": "WorkspaceSidedock.collapsed",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "API-MEMBER-ac3d41f96c55",
@@ -29151,8 +29230,11 @@
       "title": "WorkspaceSidedock.expand",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "API-MEMBER-66080f86ae72",
@@ -29161,8 +29243,11 @@
       "title": "WorkspaceSidedock.toggle",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/plugin-api-compat.spec.ts"
+      ],
+      "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
     },
     {
       "id": "API-MEMBER-a08519eda7c2",

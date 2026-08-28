@@ -109,6 +109,13 @@ export function debounce<T extends (...args: any[]) => any>(fn: T, timeout = 0, 
 
 // Icons resolve to real Lucide SVGs (Obsidian's icon set) — see api/icons.ts.
 export { addIcon, setIcon };
+/**
+ * Obsidian's `loadMermaid()`: resolves to the Mermaid library, loading it on
+ * first use. Geode serves the same lazily-injected instance its own internal
+ * Mermaid plugin renders with, so a plugin calling this shares one copy rather
+ * than bundling its own.
+ */
+export { loadMermaid } from "../internal-plugins/mermaid/load-mermaid";
 export { moment };
 export function setTooltip(el: HTMLElement, tooltip: string): void {
   el.setAttribute("aria-label", tooltip);

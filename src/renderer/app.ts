@@ -7,6 +7,7 @@ import { ThemeManager } from "./theme-manager";
 import { CommunityManager } from "./community/community-manager";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { MarkdownRenderer } from "./markdown/render";
+import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import {
   MarkdownProcessorRegistry,
   type MarkdownCodeBlockProcessor,
@@ -750,6 +751,12 @@ export class App {
   private ribbonActionsEl!: HTMLElement;
   /** Plugins live under this vault's `.geode/plugins/`; recreated per vault open. */
   pluginManager!: PluginManager;
+  /**
+   * Mermaid diagram rendering, shipped as an internal plugin so it goes
+   * through the same public `registerMarkdownCodeBlockProcessor` API a
+   * community plugin would. Created per vault open (see openVaultMeasured).
+   */
+  private mermaidPlugin?: MermaidPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -1089,6 +1096,17 @@ export class App {
     // `.base` file path across the restart; `GraphView` is stateless.
     this.workspace.registerViewFactory("graph", () => new GraphView(this));
     this.workspace.registerViewFactory("base", () => new BaseView(this));
+
+    // Internal plugins: features Geode ships that go through the *public*
+    // plugin API rather than being hardcoded into the renderer. Mermaid is
+    // the first, registering a ```mermaid code-block processor exactly as a
+    // community plugin would. Geode has no core-plugin registry yet, so this
+    // is a direct instantiation; a registry would slot in here.
+    // Reopening a vault re-runs this method, so drop the previous instance's
+    // registrations rather than leaking them.
+    this.mermaidPlugin?.unload();
+    this.mermaidPlugin = new MermaidPlugin(this);
+    this.mermaidPlugin.load();
 
     this.registerCommands();
     this.commands.attach(document);
@@ -2038,6 +2056,12 @@ export class App {
     // Geode always shows it — there's no settings toggle for this yet.
     document.body.classList.add("show-view-header");
     this.syncWindowBackgroundColor();
+    // Obsidian's own event name. Anything whose appearance was baked from
+    // theme CSS variables at build time — today, rendered Mermaid diagrams —
+    // re-derives it here instead of keeping the colors it was born with.
+    // Optional-chained defensively: `workspace` is only assigned once a vault
+    // is opened, and applySettings() is reachable from the settings tab.
+    this.workspace?.trigger("css-change");
   }
 
   /** Keep macOS's rounded native window corners aligned with theme-owned chrome. */
