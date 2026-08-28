@@ -233,6 +233,55 @@ function mountingLeaf(view: View, onMount?: () => void): WorkspaceLeaf & { seen:
   return leaf;
 }
 
+describe("WorkspaceLeaf.isDeferred / loadIfDeferred", () => {
+  function leafIn(workspace: Workspace, view: View): WorkspaceLeaf & { seen: unknown[] } {
+    const leaf = mountingLeaf(view);
+    Object.assign(leaf, { app: { workspace } });
+    return leaf;
+  }
+
+  it("reports whether the leaf is holding a placeholder", () => {
+    const workspace = fakeWorkspace([]);
+    const deferred = leafIn(workspace, new DeferredView({ type: "probe-pane" }));
+    const live = leafIn(workspace, { viewType: "probe-pane" } as View);
+
+    expect(deferred.isDeferred).toBe(true);
+    expect(live.isDeferred).toBe(false);
+  });
+
+  it("resolves silently when no factory is registered, rather than throwing like setViewState", async () => {
+    const workspace = fakeWorkspace([]);
+    const deferred = new DeferredView({ type: "probe-pane", state: { cursor: 2 } });
+    const leaf = leafIn(workspace, deferred);
+
+    await expect(leaf.loadIfDeferred()).resolves.toBeUndefined();
+
+    expect(leaf.seen).toEqual([]);
+    expect(leaf.view).toBe(deferred);
+    expect(leaf.isDeferred).toBe(true);
+  });
+
+  it("resolves silently on a leaf that is not deferred at all", async () => {
+    const workspace = fakeWorkspace([]);
+    const leaf = leafIn(workspace, { viewType: "probe-pane" } as View);
+    setFactory(workspace, "probe-pane");
+
+    await expect(leaf.loadIfDeferred()).resolves.toBeUndefined();
+    expect(leaf.seen).toEqual([]);
+  });
+
+  it("loads the real view when the factory is available", async () => {
+    const workspace = fakeWorkspace([]);
+    const leaf = leafIn(workspace, new DeferredView({ type: "probe-pane", state: { cursor: 2 } }));
+    setFactory(workspace, "probe-pane");
+
+    await leaf.loadIfDeferred();
+
+    expect(leaf.seen).toEqual([{ type: "probe-pane", state: { cursor: 2 } }]);
+    expect(leaf.isDeferred).toBe(false);
+  });
+});
+
 describe("unregisterViewFactory", () => {
   /** A leaf whose view can be swapped and which records detach attempts. */
   function detachableLeaf(view: View | null): WorkspaceLeaf & { detached: boolean } {

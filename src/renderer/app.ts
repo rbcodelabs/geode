@@ -1856,6 +1856,18 @@ export class App {
   /** Debounced persist of the current layout to `.geode/workspace.json`. */
   private scheduleSaveLayout(): void {
     if (this.restoringLayout) return;
+    // Belt and braces on top of deferred restore. In crash-recovery mode
+    // `PluginManager.initialize()` returns before enabling any plugin, so zero
+    // plugin view factories exist for the whole session. Deferral already makes
+    // the save lossless, but a recovery launch is precisely the moment a
+    // regression here would be unrecoverable — the user's real layout would be
+    // overwritten before they ever clicked "Restart with plugins". Not saving
+    // at all is strictly safer than saving a layout assembled without plugins.
+    //
+    // Tradeoff, accepted: layout tweaks made during a recovery session (moving
+    // a tab, resizing a sidebar) are not persisted. Recovery sessions are short
+    // and end in a reload.
+    if (this.pluginManager?.isRecoveryMode()) return;
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = setTimeout(() => {
       this.saveLayoutTimer = null;

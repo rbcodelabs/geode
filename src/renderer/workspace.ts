@@ -138,6 +138,28 @@ export class WorkspaceLeaf {
     };
   }
 
+  /**
+   * Obsidian's `WorkspaceLeaf.isDeferred` (1.7+). Deliberate divergence:
+   * Obsidian's deferred leaf is lazy-but-always-loadable — it just hasn't been
+   * rendered yet. Geode's means "the provider for this view type isn't
+   * currently loaded", which a `loadIfDeferred()` cannot always resolve.
+   * Plugin authors should therefore `instanceof`-check rather than cast
+   * `getLeavesOfType(type)[0].view` to their own view class.
+   */
+  get isDeferred(): boolean {
+    return isDeferredView(this.view);
+  }
+
+  /**
+   * Obsidian's `WorkspaceLeaf.loadIfDeferred()`. Resolves silently when the
+   * leaf isn't deferred, and also when no factory is registered for its type —
+   * plugins call this speculatively and an unavailable provider is a normal
+   * state in Geode, not an error. Contrast `setViewState`, which throws.
+   */
+  async loadIfDeferred(): Promise<void> {
+    await this.app.workspace.hydrateLeaf(this);
+  }
+
   /** Mount an existing view in this leaf and return it after opening. */
   async open(view: View): Promise<View> {
     await this.setView(view);

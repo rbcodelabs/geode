@@ -89,6 +89,7 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
     await expect
       .poll(() => (fs.existsSync(workspaceFile) ? fs.readFileSync(workspaceFile, "utf8") : ""), { timeout: 5000 })
       .toContain("probe-pane");
+    const preCrashLayout = fs.readFileSync(workspaceFile, "utf8");
 
     const replacementPromise = app.waitForEvent("window");
     await window.evaluate(() => {
@@ -118,10 +119,22 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
     expect(deferred.count).toBe(1);
     expect(deferred.constructorName).toBe("DeferredView");
     expect(deferred.state).toEqual({ cursor: 5 });
-    await recoveredWindow.waitForTimeout(900); // outlast the 400ms save debounce
-    const persisted = JSON.parse(fs.readFileSync(workspaceFile, "utf8"));
-    expect(JSON.stringify(persisted)).toContain('"probe-pane"');
-    expect(JSON.stringify(persisted)).toContain('"cursor":5');
+    // Make a layout change that WOULD be persisted (a distinctive sidebar
+    // width), then outlast the 400ms save debounce. Layout saves are
+    // suppressed entirely in recovery mode, so the pre-crash file must come
+    // back byte-identical — no 451 anywhere in it.
+    await recoveredWindow.evaluate(() => {
+      const workspace = (window as any).app.workspace;
+      workspace.rightSidebar.setWidth(451);
+      workspace.trigger("layout-change");
+    });
+    await recoveredWindow.waitForTimeout(900);
+    const persisted = fs.readFileSync(workspaceFile, "utf8");
+    const compact = JSON.stringify(JSON.parse(persisted));
+    expect(compact).toContain('"probe-pane"');
+    expect(compact).toContain('"cursor":5');
+    expect(compact).not.toContain("451");
+    expect(persisted).toBe(preCrashLayout);
     await recoveredWindow.evaluate(() => (window as any).app.commands.execute("open-settings"));
     await recoveredWindow.locator(".vertical-tab-nav-item", { hasText: "Performance" }).click();
     await expect(recoveredWindow.locator(".performance-tab-table").first()).toContainText("plugin-enable:loaded-probe");
