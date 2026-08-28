@@ -89,6 +89,60 @@ describe("CommandRegistry", () => {
     expect(registry.executeCommandById("nope")).toBe(false);
   });
 
+  // The <webview> hotkey bridge: main needs the combo list up front (its
+  // before-input-event handler is synchronous and cannot ask the renderer),
+  // and needs a way to run a command from a combo with no DOM event in hand.
+  it("hotkeys() lists every bound combo and drops them when the command is removed", () => {
+    const registry = new CommandRegistry();
+    registry.add(cmd("palette", { hotkey: "Mod+P" }));
+    registry.add(cmd("close-tab", { hotkey: "Mod+W" }));
+    registry.add(cmd("no-hotkey"));
+    expect(registry.hotkeys().sort()).toEqual(["Mod+P", "Mod+W"]);
+    registry.remove("close-tab");
+    expect(registry.hotkeys()).toEqual(["Mod+P"]);
+  });
+
+  it("onChange() fires on add and remove, and stops firing once unsubscribed", () => {
+    const registry = new CommandRegistry();
+    let changes = 0;
+    const unsubscribe = registry.onChange(() => changes++);
+    registry.add(cmd("a", { hotkey: "Mod+A" }));
+    expect(changes).toBe(1);
+    registry.remove("a");
+    expect(changes).toBe(2);
+    registry.remove("never-existed"); // no-op removals do not notify
+    expect(changes).toBe(2);
+    unsubscribe();
+    registry.add(cmd("b"));
+    expect(changes).toBe(2);
+  });
+
+  it("dispatchHotkey() runs the bound command and reports whether it did", () => {
+    const registry = new CommandRegistry();
+    let fired = 0;
+    registry.add(cmd("close-tab", { hotkey: "Mod+W", callback: () => fired++ }));
+    expect(registry.dispatchHotkey("Mod+W")).toBe(true);
+    expect(fired).toBe(1);
+    expect(registry.dispatchHotkey("Mod+Q")).toBe(false);
+    expect(fired).toBe(1);
+  });
+
+  it("dispatchHotkey() respects checkCallback availability, like the document listener does", () => {
+    const registry = new CommandRegistry();
+    let fired = 0;
+    registry.add(
+      cmd("gated", {
+        hotkey: "Mod+G",
+        checkCallback: (checking) => {
+          if (checking) return false;
+          fired++;
+        },
+      })
+    );
+    expect(registry.dispatchHotkey("Mod+G")).toBe(false);
+    expect(fired).toBe(0);
+  });
+
   it("execute() returns false and does not run a checkCallback-gated command that reports unavailable", () => {
     const registry = new CommandRegistry();
     let fired = 0;

@@ -118,6 +118,19 @@ const api = {
     ipcRenderer.on("window-chrome-state", listener);
     return () => ipcRenderer.removeListener("window-chrome-state", listener);
   },
+  /**
+   * Tell main which combos the CommandRegistry currently has bound. Main's
+   * `before-input-event` handler for `<webview>` guests is synchronous and
+   * cannot ask the renderer mid-keystroke, so it matches against this list.
+   */
+  publishHotkeys: (combos: string[]): Promise<void> =>
+    ipcRenderer.invoke("hotkeys-publish", combos),
+  /** A hotkey pressed inside a `<webview>` guest, forwarded back to the host. */
+  onGuestHotkey: (cb: (combo: string) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, combo: string) => cb(combo);
+    ipcRenderer.on("guest-hotkey", listener);
+    return () => ipcRenderer.removeListener("guest-hotkey", listener);
+  },
 };
 
 // A main-process watchdog can distinguish a wedged renderer from a merely
