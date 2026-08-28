@@ -2771,6 +2771,42 @@ body:not(.show-status-bar) .status-bar {
   font-size: 14px;
 }
 
+/* ---- Deferred view placeholder ----
+   Stands in for a pane whose provider (usually a community plugin) isn't
+   loaded right now. Deliberately quiet: it exists so the pane keeps its slot,
+   its title and its saved state, not to draw attention. */
+
+.deferred-view-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.deferred-view-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.deferred-view-message {
+  font-size: 13px;
+  color: var(--text-faint);
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+.deferred-view-error {
+  font-size: 12px;
+  color: var(--text-error, var(--text-muted));
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
 /* Scrollbars */
 
 ::-webkit-scrollbar {

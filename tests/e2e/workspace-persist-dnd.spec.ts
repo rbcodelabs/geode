@@ -21,7 +21,11 @@ const MAIN_JS = `
   class ProbeView extends obsidian.ItemView {
     getViewType() { return VIEW; }
     getDisplayText() { return 'Probe Pane'; }
-    getIcon() { return '★'; }
+    getIcon() { return 'star'; }
+    // Round-trip the view state the way a real plugin does; ItemView's default
+    // getState() returns {}, which would drop it at serialize time.
+    getState() { return this._state ?? {}; }
+    async setState(state) { this._state = state; }
     async onOpen() { this.contentEl.createEl('div', { cls: 'probe-pane-body', text: 'probe-pane-ok' }); }
   }
   module.exports.default = class extends obsidian.Plugin {
@@ -97,6 +101,147 @@ test("persists workspace layout (tabs + docked plugin pane) across a relaunch", 
   }
 });
 
+/**
+ * Every persisted leaf in `workspace.json`, flattened out of the nested split
+ * tree. Read from disk deliberately: the point of most of these assertions is
+ * what actually survived a save cycle, not what the renderer thinks it has.
+ * Returns [] before the first debounced save lands.
+ */
+function persistedLeaves(vaultDir: string): { type: string; state?: any; title?: string }[] {
+  const file = path.join(vaultDir, ".geode", "workspace.json");
+  if (!fs.existsSync(file)) return [];
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  const out: { type: string; state?: any; title?: string }[] = [];
+  const walk = (node: any) => {
+    if (!node) return;
+    if (node.type === "tabs") out.push(...node.leaves);
+    else if (node.type === "split") node.children.forEach(walk);
+  };
+  for (const region of ["center", "left", "right"]) walk(parsed[region]?.root);
+  return out;
+}
+
+test("keeps a docked plugin pane as a labelled placeholder when the plugin is disabled, and rehydrates it on re-enable", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const pluginsJson = path.join(vaultDir, ".geode", "plugins.json");
+  try {
+    // 1. Dock the pane with the plugin enabled and let the layout save.
+    let app = await launch(userDataDir);
+    let win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      const leaf = a.workspace.getRightLeaf(false);
+      await leaf.setViewState({ type: "probe-pane", active: true, state: { cursor: 42 } });
+      a.workspace.revealLeaf(leaf);
+    });
+    await expect(win.locator(".workspace-sidebar.mod-right .probe-pane-body")).toBeVisible();
+    await expect
+      .poll(() => persistedLeaves(vaultDir).filter((l) => l.type === "probe-pane").length, {
+        timeout: 5000,
+      })
+      .toBe(1);
+    await app.close();
+
+    // 2. Relaunch with the plugin disabled. Pre-fix, the docked leaf was never
+    // created (restoreSidebar had no `else`) and the next save dropped it.
+    fs.writeFileSync(pluginsJson, JSON.stringify([]));
+    app = await launch(userDataDir);
+    win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+
+    const deferredState = await win.evaluate(() => {
+      const a = (window as any).app;
+      const leaves = a.workspace.getLeavesOfType("probe-pane");
+      return {
+        count: leaves.length,
+        isDeferred: !!leaves[0] && leaves[0].view.constructor.name === "DeferredView",
+        title: leaves[0]?.view?.getDisplayText() ?? null,
+        state: leaves[0]?.getViewState()?.state ?? null,
+      };
+    });
+    expect(deferredState.count).toBe(1);
+    expect(deferredState.isDeferred).toBe(true);
+    // The persisted title, not the raw view type.
+    expect(deferredState.title).toBe("Probe Pane");
+    expect(deferredState.state).toEqual({ cursor: 42 });
+
+    // The placeholder is visible and labelled; the real view's body is not.
+    await expect(
+      win.locator(".workspace-sidebar.mod-right .deferred-view-placeholder")
+    ).toBeVisible();
+    await expect(win.locator(".deferred-view-title")).toHaveText("Probe Pane");
+    await expect(win.locator(".probe-pane-body")).toHaveCount(0);
+    // The sidebar strip entry must carry an icon, or the pane still looks gone.
+    await expect(
+      win.locator('.workspace-sidebar.mod-right .workspace-tab-header[data-type="probe-pane"] .workspace-tab-header-inner-icon')
+    ).toHaveCount(1);
+
+    // 3. The still-deferred leaf survives this launch's own save, read back
+    //    from disk with its type and state intact.
+    await win.waitForTimeout(900);
+    const onDisk = persistedLeaves(vaultDir).filter((l) => l.type === "probe-pane");
+    expect(onDisk).toHaveLength(1);
+    expect(onDisk[0].state).toEqual({ cursor: 42 });
+    expect(onDisk[0].title).toBe("Probe Pane");
+    await app.close();
+
+    // 4. Re-enable the plugin: the pane comes back live, still a singleton.
+    fs.writeFileSync(pluginsJson, JSON.stringify(["pane-probe"]));
+    app = await launch(userDataDir);
+    win = await app.firstWindow();
+    await expect(win.locator(".workspace-sidebar.mod-right .probe-pane-body")).toBeVisible();
+    expect(
+      await win.evaluate(() => (window as any).app.workspace.getLeavesOfType("probe-pane").length)
+    ).toBe(1);
+    await expect(win.locator(".deferred-view-placeholder")).toHaveCount(0);
+    await app.close();
+  } finally {
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("keeps two panes of the same unavailable type as two placeholders, in order", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const pluginsJson = path.join(vaultDir, ".geode", "plugins.json");
+  try {
+    let app = await launch(userDataDir);
+    let win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      for (const cursor of [1, 2]) {
+        const leaf = a.workspace.getRightLeaf(false);
+        await leaf.setViewState({ type: "probe-pane", active: true, state: { cursor } });
+      }
+    });
+    await expect
+      .poll(() => persistedLeaves(vaultDir).filter((l) => l.type === "probe-pane").length, {
+        timeout: 5000,
+      })
+      .toBe(2);
+    await app.close();
+
+    fs.writeFileSync(pluginsJson, JSON.stringify([]));
+    app = await launch(userDataDir);
+    win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    // Pre-fix, `getLeavesOfType(type)[0]` matched the placeholder built moments
+    // earlier in the same restore pass and collapsed the two into one.
+    const states = await win.evaluate(() =>
+      (window as any).app.workspace
+        .getLeavesOfType("probe-pane")
+        .map((l: any) => l.getViewState().state)
+    );
+    expect(states).toEqual([{ cursor: 1 }, { cursor: 2 }]);
+    await app.close();
+  } finally {
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 // A plugin that opens its own view on layout-ready, reusing an existing leaf
 // of that type — the standard Obsidian activateView pattern.
 const AUTO_OPEN_MAIN_JS = `
@@ -112,7 +257,14 @@ const AUTO_OPEN_MAIN_JS = `
     async onload() {
       this.registerView(VIEW, (leaf) => new AutoView(leaf));
       this.app.workspace.onLayoutReady(async () => {
-        if (this.app.workspace.getLeavesOfType(VIEW).length) return; // reuse restored leaf
+        // Record what onLayoutReady actually saw: if hydration hasn't run yet,
+        // the restored leaf is still a placeholder and this early-return leaves
+        // it dead for the whole session.
+        const existing = this.app.workspace.getLeavesOfType(VIEW);
+        globalThis.__autoPaneSawLive = existing.length
+          ? existing[0].view.constructor.name !== 'DeferredView'
+          : null;
+        if (existing.length) return; // reuse restored leaf
         const leaf = this.app.workspace.getRightLeaf(false);
         await leaf.setViewState({ type: VIEW, active: true });
       });
@@ -148,6 +300,11 @@ test("does not duplicate an auto-opening plugin's pane across relaunches", async
       counts.push(
         await win.evaluate(() => (window as any).app.workspace.getLeavesOfType("auto-pane").length)
       );
+      // Whatever onLayoutReady found, it must never have been a placeholder:
+      // the standard `if (getLeavesOfType(VIEW).length) return;` idiom would
+      // then early-return and leave the pane dead for the whole session.
+      expect(await win.evaluate(() => (globalThis as any).__autoPaneSawLive)).not.toBe(false);
+      await expect(win.locator(".auto-pane-body")).toBeVisible();
       await win.waitForTimeout(700); // let the debounced layout save flush
       if (i === 0) {
         // The initial auto-opened layout must be persisted WITHOUT any user
@@ -159,6 +316,115 @@ test("does not duplicate an auto-opening plugin's pane across relaunches", async
     }
     expect(counts).toEqual([1, 1, 1]);
   } finally {
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+// A plugin whose onload blows PLUGIN_ONLOAD_TIMEOUT_MS (10s) before it gets
+// around to registering its view — the real-world "slow plugin" case. The
+// synchronous part of onload runs immediately; `registerView` lands long after
+// workspace restore has already given up on finding a factory.
+const SLOW_MAIN_JS = `
+  const obsidian = require('obsidian');
+  const VIEW = 'probe-pane';
+  class ProbeView extends obsidian.ItemView {
+    getViewType() { return VIEW; }
+    getDisplayText() { return 'Probe Pane'; }
+    getIcon() { return 'star'; }
+    getState() { return this._state ?? {}; }
+    async setState(state) { this._state = state; }
+    async onOpen() { this.contentEl.createEl('div', { cls: 'probe-pane-body', text: 'probe-pane-ok' }); }
+  }
+  module.exports.default = class extends obsidian.Plugin {
+    async onload() {
+      await new Promise((r) => setTimeout(r, 12000));
+      this.registerView(VIEW, (leaf) => new ProbeView(leaf));
+    }
+  };
+`;
+
+test("restores a pane whose plugin registers its view after the onload timeout", async () => {
+  test.setTimeout(90_000);
+  const { vaultDir, userDataDir } = makeVault();
+  try {
+    let app = await launch(userDataDir);
+    let win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      const leaf = a.workspace.getRightLeaf(false);
+      await leaf.setViewState({ type: "probe-pane", active: true, state: { cursor: 9 } });
+      a.workspace.revealLeaf(leaf);
+    });
+    await expect
+      .poll(() => persistedLeaves(vaultDir).filter((l) => l.type === "probe-pane").length, {
+        timeout: 5000,
+      })
+      .toBe(1);
+    await app.close();
+
+    // Swap in the slow variant and relaunch.
+    fs.writeFileSync(path.join(vaultDir, ".geode", "plugins", "pane-probe", "main.js"), SLOW_MAIN_JS);
+    app = await launch(userDataDir);
+    win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible({ timeout: 30_000 });
+
+    // Immediately after restore the pane is a placeholder — and, crucially,
+    // this launch's own layout save keeps it rather than stripping it.
+    await expect
+      .poll(
+        () =>
+          win.evaluate(() => {
+            const leaf = (window as any).app.workspace.getLeavesOfType("probe-pane")[0];
+            return leaf ? leaf.view.constructor.name : null;
+          }),
+        { timeout: 20_000 }
+      )
+      .toBe("DeferredView");
+    await win.waitForTimeout(900);
+    expect(persistedLeaves(vaultDir).filter((l) => l.type === "probe-pane")[0]?.state).toEqual({
+      cursor: 9,
+    });
+
+    // The late registerView reclaims it.
+    await expect(win.locator(".workspace-sidebar.mod-right .probe-pane-body")).toBeVisible({
+      timeout: 25_000,
+    });
+    expect(
+      await win.evaluate(() => (window as any).app.workspace.getLeavesOfType("probe-pane").length)
+    ).toBe(1);
+    await app.close();
+  } finally {
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("awaits deferred-leaf hydration before firing onLayoutReady", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const app = await launch(userDataDir);
+  try {
+    const win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+
+    // The startup ordering is what makes deferral safe: a plugin's
+    // onLayoutReady must never observe a placeholder (see AUTO_OPEN_MAIN_JS).
+    // Assert it directly off the perf ring, which records each measure when it
+    // settles. The ring persists across launches, so compare last occurrences.
+    const order = await win.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem("geode:performance-ring") ?? "[]");
+      const ops = raw.map((m: any) => m.op);
+      return {
+        hydrate: ops.lastIndexOf("startup-deferred-hydrate"),
+        layoutReady: ops.lastIndexOf("startup-layout-ready"),
+      };
+    });
+    expect(order.hydrate).toBeGreaterThanOrEqual(0);
+    expect(order.layoutReady).toBeGreaterThanOrEqual(0);
+    expect(order.hydrate).toBeLessThan(order.layoutReady);
+  } finally {
+    await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }

@@ -3,6 +3,7 @@ import type { App } from "./app";
 import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
 import { markStart, markEnd } from "./perf-instrumentation";
+import { DeferredView, isDeferredView } from "./views/deferred-view";
 
 export interface View {
   readonly viewType: string;
@@ -82,6 +83,10 @@ export class WorkspaceLeaf {
       this.opened = false;
       this.contentEl.innerHTML = "";
       this.contentEl.dataset.type = view.viewType;
+      // A `DeferredView` impersonates its persisted `viewType`, so `data-type`
+      // alone can't tell a placeholder from the real thing. This class is the
+      // distinguishing hook (used by CSS and by E2E selectors).
+      this.contentEl.classList.toggle("mod-deferred", isDeferredView(view));
       this.contentEl.appendChild(view.containerEl);
       await view.onOpen();
       this.opened = true;
@@ -715,6 +720,12 @@ export class Sidebar implements LeafContainer {
   }
 
   addView(view: View) {
+    // Built-ins have no registered factory — they're constructed once here at
+    // boot and matched during restore by the `existingBuiltin` lookup. Record
+    // the type so restore never mints a deferred placeholder for it (see
+    // `Workspace.isDeferrableViewType`). Registering here rather than from a
+    // hardcoded list keeps the set authoritative as built-ins come and go.
+    this.app.workspace.registerBuiltinViewType(view.viewType);
     this.views.push(view);
     const leaf = new WorkspaceLeaf(this, this.app);
     leaf.view = view;
@@ -933,9 +944,21 @@ export class Sidebar implements LeafContainer {
     this.renderIcons();
   }
 
-  /** A docked leaf's view was (re)mounted — refresh its icon/title. */
+  /** A docked leaf's view was (re)mounted — refresh its icon/title and body. */
   renderTabs() {
     this.renderIcons();
+    // A docked leaf's body is hosted directly by the sidebar (`show()` moves
+    // the view's element into `contentEl`), not inside `leaf.contentEl` the
+    // way a tab group does it. So when a view is swapped *in place* — a
+    // deferred placeholder hydrating into the real view, or the reverse when a
+    // plugin unloads — `setView` alone leaves the sidebar still displaying the
+    // outgoing element. Re-attach the current one here.
+    const active = this.active;
+    if (!(active instanceof WorkspaceLeaf)) return;
+    const el = active.view?.containerEl;
+    if (!el || el.parentElement === this.contentEl) return;
+    this.contentEl.innerHTML = "";
+    this.contentEl.appendChild(el);
   }
 
   toggle() {
@@ -975,6 +998,88 @@ export interface PersistedLeaf {
   /** For plugin views: the view's serialized state (from `getViewState`). */
   state?: unknown;
   pinned?: boolean;
+  /**
+   * Last known tab/pane title. Optional and purely additive — older
+   * `workspace.json` files without it restore fine. Only used to label a
+   * deferred placeholder while its provider is unavailable.
+   */
+  title?: string;
+  /**
+   * Last known icon id. Also only used for placeholders, but load-bearing
+   * rather than cosmetic: sidebar tabs are icon-only, so a deferred pane
+   * without an icon is an invisible strip entry.
+   */
+  icon?: string;
+}
+
+/**
+ * Types that must never be replaced by a deferred placeholder, regardless of
+ * factory registration. `empty`/`markdown`/`canvas` have dedicated restore
+ * branches; `graph`/`base` are core app views whose factories are registered
+ * unconditionally at boot. Minting a placeholder for any of these would
+ * create a ghost leaf that persists forever and breaks callers that cast
+ * `getLeavesOfType(t)[0].view` to the concrete class.
+ */
+export const RESERVED_VIEW_TYPES: ReadonlySet<string> = new Set([
+  "empty",
+  "markdown",
+  "canvas",
+  "graph",
+  "base",
+]);
+
+/**
+ * Whether an unresolvable persisted `type` may be restored as a deferred
+ * placeholder. Pure so it stays unit-testable — `vitest.config.mts` runs in
+ * the `node` environment, so anything touching real DOM isn't.
+ *
+ * `builtins` is the live set of sidebar built-in view types (see
+ * `Sidebar.addView` / `Workspace.registerBuiltinViewType`). Those are
+ * constructed at boot and matched during restore by leaf identity, not by
+ * factory, so deferring them would mint a duplicate ghost pane *and* break
+ * e.g. `app.openSearch`, which does `getLeavesOfType("search")[0].view as
+ * SearchView` and then calls `setQuery` on it.
+ */
+export function isDeferrableViewType(type: string, builtins: ReadonlySet<string>): boolean {
+  if (!type) return false;
+  if (RESERVED_VIEW_TYPES.has(type)) return false;
+  return !builtins.has(type);
+}
+
+/**
+ * Resolve the "this built-in leaf already exists, move it instead of building
+ * a new one" case during restore, restricted to leaves that existed *before*
+ * this restore pass began.
+ *
+ * Without the `preExisting` filter this would match a `DeferredView` created
+ * earlier in the same pass (since a `DeferredView` impersonates its persisted
+ * type), which would either collapse two same-type panes into one or — because
+ * sidebars restore before the center — yank a docked sidebar pane into a
+ * center tab group.
+ */
+export function pickExistingBuiltinLeaf(
+  candidates: readonly WorkspaceLeaf[],
+  preExisting: ReadonlySet<WorkspaceLeaf>
+): WorkspaceLeaf | undefined {
+  return candidates.find((leaf) => preExisting.has(leaf));
+}
+
+/**
+ * Capture the label and icon a placeholder would need if this view's provider
+ * went away. Both accessors run arbitrary plugin code on every layout save, so
+ * a throwing one degrades to "no title/icon" rather than losing the save.
+ */
+export function describeViewForPlaceholder(view: View): { title?: string; icon?: string } {
+  const out: { title?: string; icon?: string } = {};
+  try {
+    const title = view.getDisplayText();
+    if (typeof title === "string" && title) out.title = title;
+  } catch { /* keep the leaf persistable even if the view's accessor throws */ }
+  try {
+    const icon = view.getIcon();
+    if (typeof icon === "string" && icon) out.icon = icon;
+  } catch { /* ditto */ }
+  return out;
 }
 
 export interface PersistedSidebarV1 {
@@ -1078,6 +1183,8 @@ export class Workspace extends Events {
   activeGroup: TabGroup;
   /** viewType -> factory, populated by `Plugin.registerView` (see plugin.ts). */
   private viewFactories = new Map<string, (leaf: WorkspaceLeaf) => View>();
+  /** Built-in sidebar view types, recorded by `Sidebar.addView`. Never deferred. */
+  private builtinViewTypes = new Set<string>();
 
   constructor(public app: App, parentEl: HTMLElement) {
     super();
@@ -1271,6 +1378,79 @@ export class Workspace extends Events {
       throw new Error(`View type "${viewType}" is already registered`);
     }
     this.viewFactories.set(viewType, factory);
+    // A plugin that registers *after* restore (slower than
+    // PLUGIN_ONLOAD_TIMEOUT_MS, re-enabled from Settings, or reloaded after an
+    // update) reclaims its placeholders here. Fire-and-forget: `registerView`
+    // is synchronous in Obsidian's API and a plugin's `onload` must not be
+    // made to wait on view mounting. The startup path additionally *awaits*
+    // `hydrateDeferredLeaves()` before `flushLayoutReady()` — see App.initialize.
+    void this.hydrateDeferredLeaves(viewType);
+  }
+
+  /**
+   * Record a view type as a built-in (constructed at boot by
+   * `Sidebar.addView`, never resolved through a factory). Built-ins are
+   * excluded from deferral — see `isDeferrableViewType`.
+   */
+  registerBuiltinViewType(viewType: string): void {
+    this.builtinViewTypes.add(viewType);
+  }
+
+  /** Whether an unresolvable persisted type may become a deferred placeholder. */
+  isDeferrableViewType(viewType: string): boolean {
+    return isDeferrableViewType(viewType, this.builtinViewTypes);
+  }
+
+  /**
+   * Replace every deferred placeholder whose factory is now available with the
+   * real view, handing back the persisted state verbatim.
+   *
+   * Each leaf is isolated in its own try/catch. A stale persisted state can
+   * make a plugin's `setState` reject, and this runs inside the awaited
+   * `onload` chain — an escaping rejection would reach
+   * `PluginManager.recordAndQuarantine` and disable the entire plugin over one
+   * bad pane. On failure the leaf stays deferred with its state intact, shows
+   * the error, and retries on the next launch.
+   */
+  async hydrateDeferredLeaves(viewType?: string): Promise<void> {
+    const targets: WorkspaceLeaf[] = [];
+    this.iterateLeaves((leaf) => {
+      if (!isDeferredView(leaf.view)) return;
+      if (viewType !== undefined && leaf.view.viewType !== viewType) return;
+      targets.push(leaf);
+    });
+    for (const leaf of targets) await this.hydrateLeaf(leaf);
+  }
+
+  /** Hydrate one deferred leaf. No-op (and never throws) if it isn't deferred or has no factory. */
+  async hydrateLeaf(leaf: WorkspaceLeaf): Promise<void> {
+    const deferred = leaf.view;
+    if (!isDeferredView(deferred)) return;
+    const type = deferred.viewType;
+    const factory = this.getViewFactory(type);
+    if (!factory) return;
+    try {
+      await leaf.setViewState({ type, state: deferred.getState() });
+    } catch (err) {
+      console.error(`Failed to restore deferred view "${type}"`, err);
+      deferred.setError(`Couldn't restore this pane: ${err instanceof Error ? err.message : String(err)}`);
+      // `setViewState` may have already swapped in a half-mounted view before
+      // throwing. Put the placeholder back so the state survives to the next
+      // attempt rather than being stranded behind a broken view.
+      if (leaf.view !== deferred) await leaf.setView(deferred);
+      return;
+    }
+    // Generation guard: `PluginManager.reload()` is disable-then-enable, so a
+    // second disable can land during the await above. If the factory we
+    // mounted from is no longer the registered one, that view is orphaned —
+    // revert to the placeholder rather than leaving a live view backed by an
+    // unloaded plugin.
+    if (this.getViewFactory(type) !== factory) await leaf.setView(deferred);
+  }
+
+  /** Build the placeholder for a persisted leaf whose provider isn't available. */
+  createDeferredView(ls: PersistedLeaf): DeferredView {
+    return new DeferredView({ type: ls.type, state: ls.state, title: ls.title, icon: ls.icon });
   }
 
   /** Unregister a view factory. Also detaches any currently-open leaves of that type. */
@@ -1432,10 +1612,21 @@ export class Workspace extends Events {
     // across launches (restore recreated them, then a fresh one was added).
     if (v.viewType === "empty") return null;
     if (v.viewType === "markdown" || v.viewType === "canvas") {
+      // No title/icon here: the file path is the source of truth for these,
+      // and they always have a restore branch, so they're never deferred.
       const file = v.getFile?.()?.path;
       return file ? { type: v.viewType, file, pinned: leaf.pinned } : null;
     }
-    return { type: v.viewType, state: leaf.getViewState().state, pinned: leaf.pinned };
+    // A `DeferredView` needs no special case: it impersonates its persisted
+    // type and returns its persisted state/title/icon, so a leaf that is still
+    // deferred re-serializes exactly as it was read. That is what makes a
+    // crash-recovery launch — where zero plugin factories exist — non-lossy.
+    return {
+      type: v.viewType,
+      state: leaf.getViewState().state,
+      pinned: leaf.pinned,
+      ...describeViewForPlaceholder(v),
+    };
   }
 
   /** Snapshot the current layout for persistence. Empty tabs/groups are dropped. */
@@ -1495,14 +1686,25 @@ export class Workspace extends Events {
       await leaf.setView(this.app.createEmptyView());
     } else if (this.getViewFactory(ls.type)) {
       await leaf.setViewState({ type: ls.type, state: ls.state });
+    } else if (this.isDeferrableViewType(ls.type)) {
+      // The provider for this view type isn't available right now (plugin
+      // disabled, quarantined, mid-update, suppressed by crash recovery, or
+      // still loading). Hold the leaf with a placeholder that keeps `type` and
+      // `state` intact. Falling back to an EmptyView here used to destroy
+      // both: `serializeLeaf` returns null for `empty`, so the next debounced
+      // save dropped the leaf from `workspace.json` outright.
+      await leaf.setView(this.createDeferredView(ls));
     } else {
-      // Plugin providing this view type isn't installed/enabled — leave empty.
       await leaf.setView(this.app.createEmptyView());
     }
     if (ls.pinned) leaf.setPinned(true);
   }
 
-  private async restoreSidebar(sb: Sidebar, ps: PersistedRegionV2): Promise<void> {
+  private async restoreSidebar(
+    sb: Sidebar,
+    ps: PersistedRegionV2,
+    preExisting: ReadonlySet<WorkspaceLeaf>
+  ): Promise<void> {
     const nodes = ps.root?.type === "split" ? ps.root.children : ps.root ? [ps.root] : [];
     for (let index = 0; index < nodes.length; index++) {
       const node = nodes[index];
@@ -1510,15 +1712,22 @@ export class Workspace extends Events {
       const target = index === 0 ? sb : (sb.addSplitGroup().group as TabGroup);
       for (const ls of node.leaves) {
         const factory = this.getViewFactory(ls.type);
-        const existingBuiltin = !factory ? this.getLeavesOfType(ls.type)[0] : undefined;
+        const existingBuiltin = !factory
+          ? pickExistingBuiltinLeaf(this.getLeavesOfType(ls.type), preExisting)
+          : undefined;
         if (existingBuiltin) {
           if (existingBuiltin.group !== target) this.moveLeaf(existingBuiltin, target);
           if (ls.pinned) existingBuiltin.setPinned(true);
-        } else if (factory) {
+        } else if (factory || this.isDeferrableViewType(ls.type)) {
+          // Note the `else` that used to be missing entirely: a docked pane
+          // whose factory wasn't registered yet was never created at all, and
+          // then dropped from the next save. This is the path that lost
+          // right-sidebar plugin panes after a crash-recovery restart.
           const leaf = target instanceof Sidebar
             ? target.addLeaf()
             : (target.leaves.find((candidate) => !candidate.view) ?? target.createLeaf());
-          await leaf.setViewState({ type: ls.type, state: ls.state });
+          if (factory) await leaf.setViewState({ type: ls.type, state: ls.state });
+          else await leaf.setView(this.createDeferredView(ls));
           if (ls.pinned) leaf.setPinned(true);
         }
       }
@@ -1545,6 +1754,14 @@ export class Workspace extends Events {
    */
   async deserialize(input: PersistedWorkspace): Promise<boolean> {
     const state = migrateWorkspaceLayout(input);
+    // Snapshot the leaves that exist *before* this pass. The `existingBuiltin`
+    // lookups below match on `leaf.view.viewType`, and a `DeferredView` created
+    // earlier in this same pass impersonates its persisted type — without this
+    // filter, two saved panes of one unavailable type would collapse into one,
+    // and (since sidebars restore first) a center tab could steal a docked
+    // sidebar pane.
+    const preExisting = new Set<WorkspaceLeaf>();
+    this.iterateLeaves((leaf) => preExisting.add(leaf));
     const centerNodes = state.center.root?.type === "split" ? state.center.root.children : state.center.root ? [state.center.root] : [];
     const hasContent =
       centerNodes.some((node) => node.type === "tabs" && node.leaves.length) ||
@@ -1554,8 +1771,8 @@ export class Workspace extends Events {
     // even when there's no tab/leaf content at all — a sidebar the user
     // resized (or collapsed) should keep that state even if they never
     // opened a note, so this must not be gated behind `hasContent` below.
-    if (state?.left) await this.restoreSidebar(this.leftSidebar, state.left);
-    if (state?.right) await this.restoreSidebar(this.rightSidebar, state.right);
+    if (state?.left) await this.restoreSidebar(this.leftSidebar, state.left, preExisting);
+    if (state?.right) await this.restoreSidebar(this.rightSidebar, state.right, preExisting);
 
     if (!hasContent) return false;
 
@@ -1571,7 +1788,7 @@ export class Workspace extends Events {
         for (const ls of gs.leaves) {
           const factory = this.getViewFactory(ls.type);
           const existingBuiltin = ls.type !== "markdown" && ls.type !== "empty" && !factory
-            ? this.getLeavesOfType(ls.type)[0]
+            ? pickExistingBuiltinLeaf(this.getLeavesOfType(ls.type), preExisting)
             : undefined;
           if (existingBuiltin) {
             this.moveLeaf(existingBuiltin, group);

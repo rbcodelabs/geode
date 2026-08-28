@@ -1068,6 +1068,10 @@ export class App {
     // that eval before api/obsidian.ts has defined ItemView (leaving it
     // `undefined`). Deferring the import to boot lets ItemView exist first.
     const { BookmarksView } = await import("./views/bookmarks-view");
+    // Bypassing `addView` also bypasses the built-in registration it performs,
+    // so do it explicitly — otherwise a persisted "bookmarks" leaf would be
+    // restored as a deferred placeholder *next to* the real one.
+    this.workspace.registerBuiltinViewType("bookmarks");
     const bookmarksLeaf = this.workspace.leftSidebar.addLeaf();
     await bookmarksLeaf.setView(new BookmarksView(bookmarksLeaf));
 
@@ -1099,6 +1103,17 @@ export class App {
     // Restore the saved workspace layout (tabs + docked plugin panes) now
     // that plugin view factories are registered; fall back to an empty tab.
     await measureOperation("startup-layout-restore", () => this.restoreWorkspaceLayout());
+
+    // Any leaf still holding a placeholder must be hydrated BEFORE
+    // flushLayoutReady() below. The standard plugin idiom is
+    // `if (getLeavesOfType(VIEW).length) return;` — a DeferredView satisfies
+    // that check, so a plugin whose onLayoutReady runs while its pane is still
+    // deferred would skip opening its view and leave a dead placeholder for
+    // the whole session. registerViewFactory also hydrates fire-and-forget,
+    // but only this awaited pass guarantees the ordering.
+    await measureOperation("startup-deferred-hydrate", () =>
+      this.workspace.hydrateDeferredLeaves()
+    );
 
     // Subscribe to layout changes BEFORE firing onLayoutReady, so that the
     // initial layout — including panes a plugin opens in its onLayoutReady
