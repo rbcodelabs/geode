@@ -41,6 +41,19 @@ const builds = [
     platform: "browser",
     format: "iife",
   },
+  // Mermaid ships as its own chunk, injected on demand by
+  // src/renderer/internal-plugins/mermaid/load-mermaid.ts. The renderer above
+  // is a single-outfile IIFE, so esbuild code-splitting is not available —
+  // a second entry point is what keeps several megabytes of mermaid/d3/dagre
+  // out of every cold start. electron-builder already globs dist/**/*, so the
+  // chunk ships with the packaged app without further config.
+  {
+    ...common,
+    entryPoints: ["src/renderer/vendor/mermaid-entry.ts"],
+    outfile: "dist/mermaid.js",
+    platform: "browser",
+    format: "iife",
+  },
 ];
 
 if (watch) {

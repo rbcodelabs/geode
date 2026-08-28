@@ -1547,6 +1547,61 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   padding-right: 12px !important;
 }
 
+/* --- Mermaid diagrams (internal-plugins/mermaid) -------------------------- */
+
+/*
+ * One block element per diagram, shared by Reading view (the code-block
+ * processor's container) and Live Preview (MermaidWidget's root), so both
+ * modes lay out identically.
+ */
+.mermaid-block {
+  display: block;
+  overflow-x: auto;
+  text-align: center;
+  margin: 0.75em 0;
+}
+
+/*
+ * Mermaid emits `width: 100%; max-width: <intrinsic>px` on the SVG. Capping
+ * max-width at the container keeps wide diagrams inside a narrow window
+ * instead of clipping, and height:auto stops them from squashing.
+ */
+.mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-block .internal-link.is-clickable {
+  cursor: pointer;
+}
+
+.mermaid-block.is-error {
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--text-error, #e05252);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.mermaid-error-title {
+  font-weight: 600;
+  color: var(--text-error, #e05252);
+  margin-bottom: 4px;
+}
+
+.mermaid-error-detail {
+  margin: 0;
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.cm-mermaid-widget {
+  display: block;
+}
+
 .cm-task-checkbox {
   vertical-align: middle;
   margin: 0 6px 2px 0;
