@@ -1078,6 +1078,14 @@ export class App {
     this.workspace.registerViewFactory("webviewer", (leaf) => new WebView(this, leaf));
     this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
 
+    // Graph and Bases tabs are normally constructed directly (`openGraphView`,
+    // `openFile` for `.base`), but restore resolves every saved leaf through
+    // the factory map — without these two, an open Graph or Bases tab was
+    // silently dropped on relaunch. `BaseView.getState()/setState()` carry the
+    // `.base` file path across the restart; `GraphView` is stateless.
+    this.workspace.registerViewFactory("graph", () => new GraphView(this));
+    this.workspace.registerViewFactory("base", () => new BaseView(this));
+
     this.registerCommands();
     this.commands.attach(document);
     this.applySettings();
