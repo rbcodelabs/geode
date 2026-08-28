@@ -233,6 +233,92 @@ function mountingLeaf(view: View, onMount?: () => void): WorkspaceLeaf & { seen:
   return leaf;
 }
 
+describe("unregisterViewFactory", () => {
+  /** A leaf whose view can be swapped and which records detach attempts. */
+  function detachableLeaf(view: View | null): WorkspaceLeaf & { detached: boolean } {
+    const leaf = fakeLeaf(view) as WorkspaceLeaf & { detached: boolean };
+    leaf.detached = false;
+    Object.assign(leaf, {
+      async detach() {
+        leaf.detached = true;
+      },
+    });
+    return leaf;
+  }
+
+  const liveView = (state: unknown): View => ({
+    viewType: "probe-pane",
+    containerEl: null as unknown as HTMLElement,
+    getDisplayText: () => "Probe Pane",
+    getIcon: () => "star",
+    getState: () => state,
+    onOpen() {},
+    onClose() {},
+  });
+
+  it("converts open panes to placeholders instead of detaching them", () => {
+    const state = { cursor: 3 };
+    const leaf = detachableLeaf(liveView(state));
+    const workspace = fakeWorkspace([leaf]);
+    setFactory(workspace, "probe-pane");
+
+    workspace.unregisterViewFactory("probe-pane");
+
+    expect(leaf.detached).toBe(false);
+    expect(isDeferredView(leaf.view)).toBe(true);
+    const deferred = leaf.view as DeferredView;
+    expect(deferred.viewType).toBe("probe-pane");
+    expect(deferred.getState()).toBe(state);
+    // Title and icon are captured before teardown so the placeholder is
+    // labelled and — for a docked pane — actually visible in the icon strip.
+    expect(deferred.getDisplayText()).toBe("Probe Pane");
+    expect(deferred.getIcon()).toBe("star");
+  });
+
+  it("falls back to the leaf's persisted state when the view's getState throws mid-teardown", () => {
+    const hostile = {
+      ...liveView(null),
+      getState() {
+        throw new Error("plugin already unloaded");
+      },
+    } as View;
+    const leaf = detachableLeaf(hostile);
+    (leaf as unknown as { viewState: { type: string; state?: unknown } }).viewState = {
+      type: "probe-pane",
+      state: { cursor: 11 },
+    };
+    const workspace = fakeWorkspace([leaf]);
+    setFactory(workspace, "probe-pane");
+
+    workspace.unregisterViewFactory("probe-pane");
+
+    expect((leaf.view as DeferredView).getState()).toEqual({ cursor: 11 });
+  });
+
+  it("leaves an already-deferred pane alone", () => {
+    const deferred = new DeferredView({ type: "probe-pane", state: { cursor: 1 } });
+    const leaf = detachableLeaf(deferred);
+    const workspace = fakeWorkspace([leaf]);
+    setFactory(workspace, "probe-pane");
+
+    workspace.unregisterViewFactory("probe-pane");
+
+    expect(leaf.view).toBe(deferred);
+    expect(leaf.detached).toBe(false);
+  });
+
+  it("still hard-detaches a non-deferrable type", () => {
+    const leaf = detachableLeaf({ ...liveView(null), viewType: "search" } as View);
+    const workspace = fakeWorkspace([leaf]);
+    workspace.registerBuiltinViewType("search");
+    setFactory(workspace, "search");
+
+    workspace.unregisterViewFactory("search");
+
+    expect(leaf.detached).toBe(true);
+  });
+});
+
 describe("hydrateDeferredLeaves", () => {
   it("replaces a placeholder with the real view, handing back the persisted state", async () => {
     const state = { boardId: 7 };

@@ -169,6 +169,15 @@ export class WorkspaceLeaf {
     this.viewState.state = state;
   }
 
+  /**
+   * The last state explicitly handed to `setViewState`/`setPersistedState`,
+   * bypassing the live view. The fallback when a view's own `getState()`
+   * throws during teardown — see `Workspace.captureLeafForDeferral`.
+   */
+  getPersistedState(): unknown {
+    return this.viewState.state;
+  }
+
   /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
   async openFile(file: TFile): Promise<void> {
     const view = this.app.createMarkdownView();
@@ -1453,10 +1462,47 @@ export class Workspace extends Events {
     return new DeferredView({ type: ls.type, state: ls.state, title: ls.title, icon: ls.icon });
   }
 
-  /** Unregister a view factory. Also detaches any currently-open leaves of that type. */
+  /**
+   * Unregister a view factory, converting its open leaves into deferred
+   * placeholders rather than destroying them.
+   *
+   * This runs from `Plugin.registerView`'s auto-unregister on `onunload` — so
+   * it fires on disable, on quarantine, and on the disable half of an
+   * *update* or `reload()`. Detaching here (the previous behaviour) meant a
+   * routine plugin update silently wiped the user's panes.
+   *
+   * Known limitation: a plugin that calls `detachLeavesOfType` in its own
+   * `onunload` still hard-detaches. The guarantee is "Geode won't destroy your
+   * panes", not "no plugin can".
+   */
   unregisterViewFactory(viewType: string): void {
     this.viewFactories.delete(viewType);
-    this.detachLeavesOfType(viewType);
+    if (!this.isDeferrableViewType(viewType)) {
+      this.detachLeavesOfType(viewType);
+      return;
+    }
+    for (const leaf of this.getLeavesOfType(viewType)) {
+      if (isDeferredView(leaf.view)) continue;
+      void leaf.setView(this.createDeferredView(this.captureLeafForDeferral(leaf, viewType)));
+    }
+  }
+
+  /**
+   * Snapshot everything a placeholder needs, reading it *before* any teardown.
+   * `setView` calls the outgoing view's `onClose()`, and `Plugin.unload()` may
+   * already have released whatever its `getState()` reads, so a throwing
+   * accessor here is expected rather than exceptional — fall back to the
+   * leaf's last explicitly-set view state.
+   */
+  private captureLeafForDeferral(leaf: WorkspaceLeaf, viewType: string): PersistedLeaf {
+    let state: unknown;
+    try {
+      state = leaf.getViewState().state;
+    } catch {
+      state = leaf.getPersistedState();
+    }
+    const view = leaf.view;
+    return { type: viewType, state, ...(view ? describeViewForPlaceholder(view) : {}) };
   }
 
   getViewFactory(viewType: string): ((leaf: WorkspaceLeaf) => View) | undefined {
