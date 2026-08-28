@@ -105,8 +105,8 @@ test("renders a table that starts past the initial parse frontier, with no user 
     const widget = window.locator(".cm-table-widget");
     const table = widget.locator("table");
     await expect(table).toBeVisible();
-    await expect(table.locator("thead th").nth(0).locator("input")).toHaveValue("Metric");
-    await expect(table.locator("thead th").nth(1).locator("input")).toHaveValue("Value");
+    await expect(table.locator("thead th").nth(0).locator("textarea")).toHaveValue("Metric");
+    await expect(table.locator("thead th").nth(1).locator("textarea")).toHaveValue("Value");
     await expect(table.locator("tbody tr")).toHaveCount(2);
 
     // The raw pipe markdown is replaced, not merely supplemented.
@@ -159,10 +159,12 @@ test("editing a cell after typing above the table does not corrupt the document"
     await expect.poll(() => docText(window)).toContain("Intro line.ABC");
 
     // --- Now edit a cell and blur it, forcing a commit --------------------
-    const alphaCell = table.locator("tbody tr").nth(0).locator("td").nth(0).locator("input");
+    // The raw-source textarea is hidden until the cell is clicked into — see
+    // `CellDom` in src/renderer/markdown/live-preview.ts.
+    const alphaCell = table.locator("tbody tr").nth(0).locator("td").nth(0);
     await alphaCell.click();
-    await alphaCell.fill("alphaX");
-    await table.locator("thead th").nth(0).locator("input").click(); // blur → commit
+    await alphaCell.locator("textarea").fill("alphaX");
+    await table.locator("thead th").nth(0).click(); // blur → commit
     await expect.poll(() => docText(window)).toContain("| alphaX | one |");
 
     // --- The rest of the document must be exactly as it was ---------------

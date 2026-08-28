@@ -1,7 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import {
+  _electron as electron,
+  expect,
+  test,
+  type ElectronApplication,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const testVaultPath = path.join(repoRoot, "test-vault");
@@ -42,6 +49,19 @@ function docText(window: Page): Promise<string> {
   );
 }
 
+/**
+ * Each cell has two faces (see `CellDom` in src/renderer/markdown/live-preview.ts):
+ * a rendered div, shown at rest, and a raw-source `<textarea>`, shown only
+ * while the cell is being edited. The textarea is `display: none` at rest, so
+ * a test must click the cell to enter edit mode before it can type.
+ */
+async function editCell(cell: Locator, value: string): Promise<void> {
+  await cell.click();
+  const editor = cell.locator("textarea.cm-table-cell-input");
+  await expect(editor).toBeVisible();
+  await editor.fill(value);
+}
+
 test("renders a GFM pipe table as an in-place editable <table> in Live Preview", async () => {
   // The Welcome.md table is edited in place, so this test restores the file's
   // original bytes afterwards to keep the checked-in test vault pristine.
@@ -56,16 +76,21 @@ test("renders a GFM pipe table as an in-place editable <table> in Live Preview",
     const table = widget.locator("table");
     await expect(table).toBeVisible();
 
-    // Header + data cells are real <input>s (not static text): 2 columns ×
-    // (1 header + 2 data rows) = 6 cell inputs, pre-filled from the markdown.
-    const inputs = window.locator(".cm-table-cell-input");
-    await expect(inputs).toHaveCount(6);
-    await expect(table.locator("thead th").nth(0).locator("input")).toHaveValue("Feature");
-    await expect(table.locator("thead th").nth(1).locator("input")).toHaveValue("Status");
-    await expect(table.locator("tbody tr")).toHaveCount(2);
-    await expect(table.locator("tbody tr").nth(0).locator("td").nth(0).locator("input")).toHaveValue(
-      "Wikilinks"
+    // Every cell carries both faces: 2 columns × (1 header + 2 data rows) = 6
+    // rendered divs and 6 raw-source textareas, pre-filled from the markdown.
+    await expect(window.locator("textarea.cm-table-cell-input")).toHaveCount(6);
+    await expect(window.locator(".cm-table-cell-rendered")).toHaveCount(6);
+    await expect(table.locator("thead th").nth(0).locator("textarea")).toHaveValue("Feature");
+    await expect(table.locator("thead th").nth(1).locator("textarea")).toHaveValue("Status");
+    // At rest the rendered face is what the user sees; the source is hidden.
+    await expect(table.locator("thead th").nth(0).locator(".cm-table-cell-rendered")).toHaveText(
+      "Feature"
     );
+    await expect(table.locator("thead th").nth(0).locator("textarea")).toBeHidden();
+    await expect(table.locator("tbody tr")).toHaveCount(2);
+    await expect(
+      table.locator("tbody tr").nth(0).locator("td").nth(0).locator("textarea")
+    ).toHaveValue("Wikilinks");
 
     // The raw pipe markdown is never shown as text — the widget stays.
     const editorTextBefore = await window.locator(".cm-editor").innerText();
@@ -84,13 +109,14 @@ test("renders a GFM pipe table as an in-place editable <table> in Live Preview",
     expect(await window.locator(".cm-editor").innerText()).not.toContain("| Feature | Status |");
 
     // --- Editing a cell writes back to the underlying markdown -------------
-    const wikilinksCell = table.locator("tbody tr").nth(0).locator("td").nth(0).locator("input");
-    await wikilinksCell.click();
-    await wikilinksCell.fill("Wikilinks!");
-    await wikilinksCell.press("Tab"); // Tab commits + moves to the next cell
+    const wikilinksCell = table.locator("tbody tr").nth(0).locator("td").nth(0);
+    await editCell(wikilinksCell, "Wikilinks!");
+    await wikilinksCell.locator("textarea").press("Tab"); // Tab commits + moves on
     await expect
       .poll(() => docText(window))
       .toContain("| Wikilinks! | ✅ |");
+    // Leaving the cell puts the rendered face back.
+    await expect(wikilinksCell.locator(".cm-table-cell-rendered")).toHaveText("Wikilinks!");
 
     // --- Per-column alignment toggle reflects in the delimiter row ---------
     const firstHeaderTh = table.locator("thead th").nth(0);
@@ -103,21 +129,21 @@ test("renders a GFM pipe table as an in-place editable <table> in Live Preview",
     await window.locator(".cm-table-addrow").click();
     await expect(table.locator("tbody tr")).toHaveCount(3);
     await expect.poll(() => docText(window)).toContain("|  |  |"); // empty row landed
-    // The new row is editable too: type into its first cell and commit.
-    const newRowCell = table.locator("tbody tr").nth(2).locator("td").nth(0).locator("input");
-    await newRowCell.click();
-    await newRowCell.fill("Sync");
-    await table.locator("thead th").nth(1).locator("input").click(); // blur → commit
+    // The new row is editable too: an empty cell still has a clickable rendered
+    // face, so it can be entered and typed into like any other.
+    const newRowCell = table.locator("tbody tr").nth(2).locator("td").nth(0);
+    await editCell(newRowCell, "Sync");
+    await table.locator("thead th").nth(1).click(); // blur → commit
     await expect.poll(() => docText(window)).toContain("| Sync |");
 
     // --- Add a column -----------------------------------------------------
     await widget.hover();
     await window.locator(".cm-table-addcol .cm-table-ctl-btn").click();
-    // 3 columns × (1 header + 3 data rows) = 12 cell inputs.
-    await expect(window.locator(".cm-table-cell-input")).toHaveCount(12);
-    const newHeaderCell = table.locator("thead th").nth(2).locator("input");
-    await newHeaderCell.fill("Notes");
-    await newHeaderCell.press("Tab");
+    // 3 columns × (1 header + 3 data rows) = 12 cells.
+    await expect(window.locator("textarea.cm-table-cell-input")).toHaveCount(12);
+    const newHeaderCell = table.locator("thead th").nth(2);
+    await editCell(newHeaderCell, "Notes");
+    await newHeaderCell.locator("textarea").press("Tab");
     await expect.poll(() => docText(window)).toContain("Notes");
 
     // --- Delete the added row --------------------------------------------
@@ -131,8 +157,8 @@ test("renders a GFM pipe table as an in-place editable <table> in Live Preview",
     const notesTh = table.locator("thead th").nth(2);
     await notesTh.hover();
     await notesTh.locator(".cm-table-del-btn").click();
-    // Back to 2 columns × (1 header + 2 data rows) = 6 cell inputs.
-    await expect(window.locator(".cm-table-cell-input")).toHaveCount(6);
+    // Back to 2 columns × (1 header + 2 data rows) = 6 cells.
+    await expect(window.locator("textarea.cm-table-cell-input")).toHaveCount(6);
     const afterDelete = await docText(window);
     expect(afterDelete).not.toContain("Notes");
     // Still valid GFM: a header row, a delimiter row, and the edits held.
