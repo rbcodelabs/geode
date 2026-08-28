@@ -27,6 +27,22 @@ npm run build      # bundle main/preload/renderer with esbuild
 npm start           # launch Electron
 npm run dev         # esbuild watch mode
 npm run typecheck   # strict tsc
+npm run e2e:kill    # reap orphaned e2e Electron processes + temp dirs
 ```
 
 A demo vault lives in `test-vault/`.
+
+## E2E tests are not headless
+
+`_electron.launch()` has no headless mode — Playwright's `headless` option
+applies to browsers, not Electron. The suite instead launches the real app with
+`GEODE_HEADLESS=1`, which makes `src/main/main.ts` create windows with
+`show: false` and set the macOS activation policy to `accessory` (hidden from
+Dock and menu bar, never steals focus). Anything that shows or focuses a window
+must be guarded by `isHeadless` or it will defeat this.
+
+Each spec holds a throwaway `--user-data-dir` under the OS temp dir. Interrupted
+runs orphan those processes and leak those dirs, so `playwright.config.ts` reaps
+before and after every run (`scripts/e2e-reap.mts`). If a run is hard-killed,
+`npm run e2e:kill` does it by hand — use that rather than `pkill -f electron`,
+which also kills unrelated Electron apps.
