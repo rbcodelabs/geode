@@ -5,19 +5,28 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.7). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.8). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.7)
+## Features (v0.8)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
 - **Editor** — CodeMirror 6, markdown highlighting, `[[wikilink]]` autocomplete,
   Cmd/Ctrl+click to follow, autosave, rename-updates-links
+- **Live Preview** — tables render in place and stay editable: cells render
+  their inline markdown (bold, italic, code, links) and wrap onto multiple
+  lines instead of forcing the row to overflow, while clicking into a cell
+  still reveals the raw source to edit
 - **Reading view** — callouts (13 types, foldable), embeds (notes/images/audio/
   video), highlights, tags, tables, task lists, YAML properties
+- **Mermaid diagrams** — ` ```mermaid ` blocks render as diagrams in both Live
+  Preview and Reading view, follow the active light/dark theme, support
+  `internal-link` nodes that navigate to notes, and show an inline error
+  instead of breaking the note when a diagram is malformed. The library is
+  loaded lazily on first use, so it costs nothing until a diagram is on screen
 - **Knowledge graph plumbing** — backlinks pane, outline, tag pane, unresolved
   link styling, link resolution by shortest path and alias, graph view;
   metadata is cached across launches so unchanged notes do not need re-indexing.
@@ -50,7 +59,9 @@ cloud, no lock-in.
   once with community plugins suppressed and reversible restart controls
 - **Web Viewer** — open web pages and local `.html`/`.htm` vault files in an
   in-app tab (`webview`-backed, its own session), plus a one-time "Import
-  cookies from Chrome" option so viewer tabs open already logged in
+  cookies from Chrome" option so viewer tabs open already logged in. App
+  hotkeys (command palette, quick switcher, tab switching) keep working while
+  focus is inside a viewer tab instead of being swallowed by the page
 
 ## Install
 
