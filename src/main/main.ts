@@ -65,7 +65,7 @@ if (!hasSingleInstanceLock) app.quit();
 app.on("second-instance", (_event, argv) => {
   deepLinks.acceptArgv(argv);
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
+  if (win && !isHeadless) {
     if (win.isMinimized()) win.restore();
     win.focus();
   }
@@ -341,9 +341,16 @@ function registerIpc() {
     if (action.kind === "focus") {
       const target = BrowserWindow.getAllWindows().find((win) => win.id === action.windowId);
       if (target) {
-        if (target.isMinimized()) target.restore();
-        target.show();
-        target.focus();
+        // In headless mode the window was deliberately created with
+        // `show: false`; showing and focusing it here would defeat that and
+        // pop a real, focus-stealing window mid-test-run. The action result is
+        // unchanged, so the IPC contract (and its assertions) still hold —
+        // only the native raise is suppressed.
+        if (!isHeadless) {
+          if (target.isMinimized()) target.restore();
+          target.show();
+          target.focus();
+        }
         return { action: "focused" as const };
       }
     }
@@ -899,8 +906,16 @@ function installApplicationMenu(): void {
 
 app.whenReady().then(() => {
   if (!isHeadless) app.setAsDefaultProtocolClient("geode");
-  if (isHeadless && process.platform === "darwin" && app.dock) {
-    app.dock.hide();
+  if (isHeadless && process.platform === "darwin") {
+    // `dock.hide()` removes the Dock tile but leaves the app a "regular"
+    // NSApplication — still in the menu bar, still able to become the active
+    // app and pull focus off whatever the user is doing. 'accessory' hides it
+    // from both the Dock and the menu bar while keeping it programmatically
+    // activatable, which is exactly what a test launch wants. ('prohibited'
+    // is the stronger option but forbids creating windows at all, so it would
+    // break the suite.)
+    app.setActivationPolicy("accessory");
+    app.dock?.hide();
   } else if (process.platform === "darwin" && app.dock) {
     // macOS ignores the per-window `icon` option, so set the dock icon
     // explicitly. This makes the Geode icon show during unpackaged dev runs;
