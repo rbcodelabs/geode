@@ -67,11 +67,21 @@ export function parsePsOutput(stdout: string): ProcessRow[] {
 
 /**
  * True when `command` is an app process launched against a throwaway e2e
- * user-data dir. Matching on the temp-dir path — not on the word "electron",
- * not on "geode" anywhere in the line — is what keeps a developer's real Geode
- * (and an unrelated Electron app) out of the blast radius.
+ * user-data dir *by this checkout*. Matching on the temp-dir path — not on the
+ * word "electron", not on "geode" anywhere in the line — is what keeps a
+ * developer's real Geode (and an unrelated Electron app) out of the blast
+ * radius.
+ *
+ * `repoRoot` narrows it further, and is not optional in practice. Temp dir
+ * names carry no hint of which checkout created them, so a reaper keyed only on
+ * the temp path will happily kill a *live* run belonging to a sibling git
+ * worktree. That is not hypothetical: this machine routinely has half a dozen
+ * worktrees of this repo with agents running the suite in parallel, and the
+ * first version of this file killed one of their in-flight tests. Electron's
+ * command line always contains the app path it was launched with, so requiring
+ * `repoRoot` scopes every kill to the checkout doing the reaping.
  */
-export function shouldReapProcess(command: string, tmpRoot: string): boolean {
+export function shouldReapProcess(command: string, tmpRoot: string, repoRoot?: string): boolean {
   const flag = "--user-data-dir=";
   const at = command.indexOf(flag);
   if (at === -1) return false;
@@ -79,7 +89,9 @@ export function shouldReapProcess(command: string, tmpRoot: string): boolean {
   // The value runs to the next argument boundary; test dirs never contain spaces.
   const value = rest.split(/\s+/, 1)[0]?.replace(/^["']|["']$/g, "") ?? "";
   if (!value) return false;
-  return isE2ETempDir(value, tmpRoot);
+  if (!isE2ETempDir(value, tmpRoot)) return false;
+  if (repoRoot && !command.includes(repoRoot)) return false;
+  return true;
 }
 
 /**
@@ -123,9 +135,31 @@ export interface ReapOptions {
    * first.
    */
   all?: boolean;
+  /**
+   * Only remove directories untouched for at least this many milliseconds.
+   *
+   * The companion to `repoRoot` on the process side. Directory names record
+   * nothing about which checkout created them, so there is no way to tell a
+   * sibling worktree's *live* temp dir from our own abandoned one — except by
+   * age. Anything a concurrent run is actively using was written to seconds
+   * ago; an orphan from an interrupted run was not.
+   *
+   * Defaults to 0 (remove regardless of age) so an explicit CLI invocation
+   * still cleans everything. The automated hooks pass a real threshold.
+   */
+  minAgeMs?: number;
+  /** Scope process kills to launches from this checkout. See shouldReapProcess. */
+  repoRoot?: string;
   /** Called with a human-readable line per action. */
   log?: (message: string) => void;
 }
+
+/**
+ * How stale a directory must be before the automated hooks will remove it.
+ * Long enough to clear any plausible single spec (the slowest in this suite
+ * takes ~15s), short enough that leftovers do not survive to the next session.
+ */
+export const AUTO_REAP_MIN_AGE_MS = 30 * 60 * 1000;
 
 export interface ReapResult {
   killedPids: number[];
@@ -133,17 +167,44 @@ export interface ReapResult {
   failed: string[];
 }
 
-function listE2EProcesses(tmpRoot: string): ProcessRow[] {
+function listE2EProcesses(tmpRoot: string, repoRoot?: string): ProcessRow[] {
   // `ps` is present on macOS and Linux; on an unexpected platform we simply
   // find nothing rather than throwing and failing an otherwise-green run.
   const ps = spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
   if (ps.status !== 0 || typeof ps.stdout !== "string") return [];
   return parsePsOutput(ps.stdout).filter(
-    (row) => row.pid !== process.pid && shouldReapProcess(row.command, tmpRoot),
+    (row) => row.pid !== process.pid && shouldReapProcess(row.command, tmpRoot, repoRoot),
   );
 }
 
-function listE2EDirs(tmpRoot: string, includeAll: boolean): string[] {
+/** True when nothing in `dir` has been modified for at least `minAgeMs`. */
+export function isStaleDir(dir: string, minAgeMs: number, now: number): boolean {
+  if (minAgeMs <= 0) return true;
+  try {
+    // The directory mtime only tracks entry add/remove, so a run writing *into*
+    // an existing file would look stale. Take the newest mtime of the dir and
+    // its immediate children instead.
+    let newest = fs.statSync(dir).mtimeMs;
+    for (const entry of fs.readdirSync(dir)) {
+      try {
+        newest = Math.max(newest, fs.statSync(path.join(dir, entry)).mtimeMs);
+      } catch {
+        // Vanished mid-scan: ignore this entry rather than abort the sweep.
+      }
+    }
+    return now - newest >= minAgeMs;
+  } catch {
+    // Unreadable: leave it alone rather than guess.
+    return false;
+  }
+}
+
+function listE2EDirs(
+  tmpRoot: string,
+  includeAll: boolean,
+  minAgeMs: number,
+  now: number,
+): string[] {
   let entries: string[];
   try {
     entries = fs.readdirSync(tmpRoot);
@@ -153,7 +214,8 @@ function listE2EDirs(tmpRoot: string, includeAll: boolean): string[] {
   const named = entries
     .filter((name) => isE2ETempDir(name, tmpRoot))
     .map((name) => path.join(tmpRoot, name));
-  return includeAll ? named : named.filter((dir) => hasAppArtifacts(dir));
+  const gated = includeAll ? named : named.filter((dir) => hasAppArtifacts(dir));
+  return gated.filter((dir) => isStaleDir(dir, minAgeMs, now));
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -169,7 +231,7 @@ export async function reapE2EArtifacts(options: ReapOptions = {}): Promise<ReapR
   const log = options.log ?? (() => {});
   const result: ReapResult = { killedPids: [], removedDirs: [], failed: [] };
 
-  const processes = listE2EProcesses(tmpRoot);
+  const processes = listE2EProcesses(tmpRoot, options.repoRoot);
   for (const { pid, command } of processes) {
     if (options.dryRun) {
       log(`would kill pid ${pid}: ${command.slice(0, 120)}`);
@@ -199,7 +261,8 @@ export async function reapE2EArtifacts(options: ReapOptions = {}): Promise<ReapR
     log(`killed ${result.killedPids.length} orphaned e2e app process(es)`);
   }
 
-  for (const dir of listE2EDirs(tmpRoot, options.all === true)) {
+  const now = Date.now();
+  for (const dir of listE2EDirs(tmpRoot, options.all === true, options.minAgeMs ?? 0, now)) {
     if (options.dryRun) {
       log(`would remove ${dir}`);
       result.removedDirs.push(dir);

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   hasAppArtifacts,
   isE2ETempDir,
+  isStaleDir,
   parsePsOutput,
   reapE2EArtifacts,
   shouldReapProcess,
@@ -120,6 +121,74 @@ describe("shouldReapProcess", () => {
   });
 });
 
+describe("shouldReapProcess — worktree scoping", () => {
+  // Regression guard. Without repoRoot this reaper killed a *live* test run
+  // belonging to a sibling git worktree, because temp dir names carry no hint
+  // of which checkout created them.
+  const mine = "/tmp/wt/alpha";
+  const theirs = "/tmp/wt/beta";
+  const command = (root: string) =>
+    `${root}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron ` +
+    `${root} --user-data-dir=${TMP}/geode-e2e-Ab12Cd`;
+
+  it("matches a launch from the reaping checkout", () => {
+    expect(shouldReapProcess(command(mine), TMP, mine)).toBe(true);
+  });
+
+  it("does not match an identical launch from a sibling worktree", () => {
+    expect(shouldReapProcess(command(theirs), TMP, mine)).toBe(false);
+  });
+
+  it("matches both when no repoRoot is given (explicit --force)", () => {
+    expect(shouldReapProcess(command(mine), TMP)).toBe(true);
+    expect(shouldReapProcess(command(theirs), TMP)).toBe(true);
+  });
+});
+
+describe("isStaleDir", () => {
+  const created: string[] = [];
+  afterEach(() => {
+    for (const dir of created.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const make = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stale-probe-"));
+    created.push(dir);
+    return dir;
+  };
+
+  it("treats a just-written directory as live", () => {
+    const dir = make();
+    fs.writeFileSync(path.join(dir, "geode.json"), "{}");
+    expect(isStaleDir(dir, 30 * 60 * 1000, Date.now())).toBe(false);
+  });
+
+  it("treats an untouched directory as stale once past the threshold", () => {
+    const dir = make();
+    fs.writeFileSync(path.join(dir, "geode.json"), "{}");
+    // Look at it from an hour in the future rather than faking timestamps.
+    expect(isStaleDir(dir, 30 * 60 * 1000, Date.now() + 60 * 60 * 1000)).toBe(true);
+  });
+
+  it("notices writes to files inside, not just to the directory entry", () => {
+    const dir = make();
+    const old = Date.now() - 60 * 60 * 1000;
+    const file = path.join(dir, "geode.json");
+    fs.writeFileSync(file, "{}");
+    // Age the directory entry but leave the file freshly written: a live run
+    // appending to an existing file must not read as stale.
+    fs.utimesSync(dir, new Date(old), new Date(old));
+    expect(isStaleDir(dir, 30 * 60 * 1000, Date.now())).toBe(false);
+  });
+
+  it("is a no-op gate when the threshold is zero", () => {
+    expect(isStaleDir(make(), 0, Date.now())).toBe(true);
+  });
+
+  it("refuses to claim a directory it cannot read", () => {
+    expect(isStaleDir("/nonexistent/nope", 1000, Date.now())).toBe(false);
+  });
+});
+
 describe("parsePsOutput", () => {
   it("splits pid from command and drops blank lines", () => {
     const rows = parsePsOutput(["  501 /bin/foo --flag", "", "1234 bar baz", "garbage"].join("\n"));
@@ -179,6 +248,17 @@ describe("reapE2EArtifacts", () => {
   it("is a no-op on an empty root", async () => {
     const result = await reapE2EArtifacts({ tmpRoot: makeRoot() });
     expect(result).toEqual({ killedPids: [], removedDirs: [], failed: [] });
+  });
+
+  it("minAgeMs spares a directory a concurrent run is still using", async () => {
+    const root = makeRoot();
+    const live = fs.mkdtempSync(path.join(root, "geode-e2e-"));
+    fs.writeFileSync(path.join(live, "geode.json"), "{}");
+
+    const result = await reapE2EArtifacts({ tmpRoot: root, minAgeMs: 30 * 60 * 1000 });
+
+    expect(result.removedDirs).toEqual([]);
+    expect(fs.existsSync(live)).toBe(true);
   });
 
   it("--all skips the artifact gate but still respects the name gate", async () => {
