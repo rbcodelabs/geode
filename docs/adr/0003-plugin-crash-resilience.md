@@ -77,3 +77,25 @@ Ordinary exceptions at owned boundaries disable one plugin without disrupting
 the rest. Catastrophic renderer failures produce durable evidence and a
 plugin-free recovery path. This materially improves diagnosis and recovery but
 does not claim process isolation that the architecture does not provide.
+
+### Amendment (2026-08-28) — the recovery launch destroyed workspace layout
+
+Suppressing plugins on the recovery reload had an unintended consequence that
+went unnoticed here for a year of use. Because `PluginManager.initialize()`
+returns before enabling any plugin in recovery mode, **zero** plugin view
+factories exist while the workspace layout is restored. Workspace restore then
+resolved each saved leaf against the factory map exactly once and discarded
+whatever it could not resolve — dropping docked sidebar panes entirely and
+degrading centre tabs to empty placeholders that the serializer then filtered
+out. `App.initialize()` unconditionally scheduled a layout save afterwards, so
+the recovery launch itself rewrote `workspace.json` with every plugin pane
+stripped. The data was already gone by the time the user clicked "Restart with
+plugins": the recovery path was *causing* permanent loss of user layout, not
+merely deferring it.
+
+Two changes close this, both described in ADR 0005: unresolvable leaves are now
+preserved as deferred placeholders that re-serialize losslessly, and layout
+saves are suppressed outright while in recovery mode. Recovery is now
+non-destructive to workspace state, which was always the intent — "your vault
+data was not changed" in the recovery banner is now true of layout as well as
+of notes.

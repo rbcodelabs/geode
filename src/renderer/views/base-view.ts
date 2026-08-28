@@ -192,6 +192,32 @@ export class BaseView implements View {
     return this.file;
   }
 
+  /**
+   * Serialized state for `WorkspaceLeaf.getViewState()` / workspace restore.
+   * The `.base` file path is the whole of this view's identity — everything
+   * else (active view name, filters, sort) lives in the file itself. Named
+   * `file` to match the `PersistedLeaf.file` convention used for markdown and
+   * canvas tabs. An *embedded* base has no tab of its own and is never
+   * serialized, so the host-note case doesn't need special handling here.
+   */
+  getState(): { file: string | null } {
+    return { file: this.file?.path ?? null };
+  }
+
+  /**
+   * Restore from `getState()`. Deliberately tolerant: a `.base` file that was
+   * deleted or renamed while Geode was closed leaves an empty Bases tab
+   * rather than throwing out of `setViewState` (which restore does not catch
+   * per-leaf).
+   */
+  async setState(state: unknown): Promise<void> {
+    const filePath = (state as { file?: unknown } | null)?.file;
+    if (typeof filePath !== "string") return;
+    const file = this.app.vault.getFileByPath(filePath);
+    if (!file) return;
+    await this.setFile(file);
+  }
+
   async setFile(file: TFile): Promise<void> {
     this.file = file;
     this.titleEl.textContent = file.basename;

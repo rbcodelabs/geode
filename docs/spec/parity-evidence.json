@@ -1658,5 +1658,21 @@
       "tests/e2e/plugin-api-compat.spec.ts"
     ],
     "notes": "Sidebar.collapse()/.expand() are new idempotent wrappers around the pre-existing toggle(); collapsed is the live boolean field; all four are exercised end-to-end including DOM class + idempotency."
+  },
+  "API-MEMBER-99870f350e32": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/workspace-deferred-views.test.ts",
+      "tests/e2e/deferred-panes.spec.ts"
+    ],
+    "notes": "Implemented with a deliberate semantic divergence: Obsidian's deferred leaf is lazy-but-always-loadable, Geode's means the provider for that view type is not currently loaded. Observed true for a leaf holding a DeferredView placeholder and false for a live view, including across a live plugin disable/re-enable cycle."
+  },
+  "API-MEMBER-d7b4dfdacc71": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/workspace-deferred-views.test.ts",
+      "tests/e2e/workspace-persist-dnd.spec.ts"
+    ],
+    "notes": "Observed loading the real view when a factory is registered, and resolving silently (never throwing, unlike setViewState) when no factory exists or the leaf is not deferred - an unavailable provider is a normal state in Geode. See docs/adr/0005-deferred-view-restore.md."
   }
 }

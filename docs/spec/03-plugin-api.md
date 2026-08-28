@@ -293,12 +293,40 @@ class WorkspaceLeaf extends WorkspaceItem {
   detach(): void;
   getDisplayText(): string; getIcon(): IconName;
   onResize(): void;
-  isDeferred: boolean;                        // lazy-loaded leaf (1.7+)
-  loadIfDeferred(): Promise<void>;
+  isDeferred: boolean;                        // lazy-loaded leaf (1.7+) — implemented, see note
+  loadIfDeferred(): Promise<void>;            // implemented, see note
   on(name: 'pinned-change', cb: (pinned: boolean) => any): EventRef;
   on(name: 'group-change', cb: (group: string) => any): EventRef;
 }
 ```
+
+> **`isDeferred` / `loadIfDeferred` — deliberate divergence.** Both are
+> implemented, but they mean something different here. In Obsidian a deferred
+> leaf is *lazy but always loadable*: the view exists, it just hasn't been
+> rendered. In Geode a deferred leaf means **the provider for this view type
+> isn't currently loaded** — the plugin is disabled, quarantined, mid-update,
+> suppressed by crash recovery, or slower to start than the onload budget. The
+> leaf holds a placeholder that preserves the saved `type` and `state` and
+> hydrates into the real view the moment the factory registers.
+>
+> Two consequences for plugin authors:
+>
+> - `loadIfDeferred()` resolves **silently** when no factory is registered. It
+>   never throws (unlike `setViewState`), because an unavailable provider is a
+>   normal state in Geode rather than an error. Do not treat a resolved promise
+>   as proof the view is live — check `isDeferred` after awaiting.
+> - A placeholder **impersonates** the persisted view type, so
+>   `getLeavesOfType('my-view')` returns it and the usual
+>   `if (getLeavesOfType(VIEW).length) return;` guard still finds the pane.
+>   That means `getLeavesOfType(VIEW)[0].view as MyView` is unsafe: prefer an
+>   `instanceof MyView` check (or `leaf.isDeferred`) before using the view.
+>   Geode awaits hydration before firing `onLayoutReady`, so the common case is
+>   safe, but a plugin that queries later — after its own reload, say — can
+>   legitimately see a placeholder.
+>
+> Built-in view types (`file-explorer`, `search`, `backlinks`, `outline`,
+> `tag-pane`, `bookmarks`) and the core `empty` / `markdown` / `canvas` /
+> `graph` / `base` types are never deferred.
 
 ### 2.6 View hierarchy
 

@@ -52,8 +52,22 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
     id: "loaded-probe", name: "Loaded Probe", version: "1.0.0", minAppVersion: "0.1.0", description: "test", author: "test",
   }));
   fs.writeFileSync(path.join(pluginDir, "main.js"), `
-    const { Plugin } = require('geode');
-    module.exports = class extends Plugin { onload(){ globalThis.__probeLoads = (globalThis.__probeLoads || 0) + 1; } };
+    const { Plugin, ItemView } = require('geode');
+    const VIEW = 'probe-pane';
+    class ProbeView extends ItemView {
+      getViewType(){ return VIEW; }
+      getDisplayText(){ return 'Probe Pane'; }
+      getIcon(){ return 'star'; }
+      getState(){ return this._state ?? {}; }
+      async setState(state){ this._state = state; }
+      async onOpen(){ this.contentEl.createEl('div', { cls: 'probe-pane-body', text: 'probe-pane-ok' }); }
+    }
+    module.exports = class extends Plugin {
+      onload(){
+        globalThis.__probeLoads = (globalThis.__probeLoads || 0) + 1;
+        this.registerView(VIEW, (leaf) => new ProbeView(leaf));
+      }
+    };
   `);
 
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
@@ -61,6 +75,21 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
   try {
     await expect(window.locator(".workspace")).toBeVisible();
     expect(await window.evaluate(() => (window as any).app.pluginManager.isEnabled("loaded-probe"))).toBe(true);
+
+    // Dock the plugin's pane and let the debounced layout save reach disk, so
+    // the crash below happens with a real plugin pane in `workspace.json`.
+    await window.evaluate(async () => {
+      const a = (window as any).app;
+      const leaf = a.workspace.getRightLeaf(false);
+      await leaf.setViewState({ type: "probe-pane", active: true, state: { cursor: 5 } });
+      a.workspace.revealLeaf(leaf);
+    });
+    await expect(window.locator(".workspace-sidebar.mod-right .probe-pane-body")).toBeVisible();
+    const workspaceFile = path.join(vaultPath, ".geode", "workspace.json");
+    await expect
+      .poll(() => (fs.existsSync(workspaceFile) ? fs.readFileSync(workspaceFile, "utf8") : ""), { timeout: 5000 })
+      .toContain("probe-pane");
+    const preCrashLayout = fs.readFileSync(workspaceFile, "utf8");
 
     const replacementPromise = app.waitForEvent("window");
     await window.evaluate(() => {
@@ -72,6 +101,40 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
 
     expect(await recoveredWindow.evaluate(() => (window as any).app.pluginManager.isRecoveryMode())).toBe(true);
     expect(await recoveredWindow.evaluate(() => (window as any).app.pluginManager.isEnabled("loaded-probe"))).toBe(false);
+
+    // The root cause this whole change exists for: in recovery mode zero
+    // plugin factories are registered, so restore could resolve nothing — and
+    // the recovery launch's own layout save then rewrote `workspace.json` with
+    // every plugin pane stripped, destroying the data before the user ever
+    // clicked "Restart with plugins". The pane must survive as a placeholder,
+    // and the file on disk must still describe it.
+    const deferred = await recoveredWindow.evaluate(() => {
+      const leaves = (window as any).app.workspace.getLeavesOfType("probe-pane");
+      return {
+        count: leaves.length,
+        constructorName: leaves[0]?.view?.constructor?.name ?? null,
+        state: leaves[0]?.getViewState()?.state ?? null,
+      };
+    });
+    expect(deferred.count).toBe(1);
+    expect(deferred.constructorName).toBe("DeferredView");
+    expect(deferred.state).toEqual({ cursor: 5 });
+    // Make a layout change that WOULD be persisted (a distinctive sidebar
+    // width), then outlast the 400ms save debounce. Layout saves are
+    // suppressed entirely in recovery mode, so the pre-crash file must come
+    // back byte-identical — no 451 anywhere in it.
+    await recoveredWindow.evaluate(() => {
+      const workspace = (window as any).app.workspace;
+      workspace.rightSidebar.setWidth(451);
+      workspace.trigger("layout-change");
+    });
+    await recoveredWindow.waitForTimeout(900);
+    const persisted = fs.readFileSync(workspaceFile, "utf8");
+    const compact = JSON.stringify(JSON.parse(persisted));
+    expect(compact).toContain('"probe-pane"');
+    expect(compact).toContain('"cursor":5');
+    expect(compact).not.toContain("451");
+    expect(persisted).toBe(preCrashLayout);
     await recoveredWindow.evaluate(() => (window as any).app.commands.execute("open-settings"));
     await recoveredWindow.locator(".vertical-tab-nav-item", { hasText: "Performance" }).click();
     await expect(recoveredWindow.locator(".performance-tab-table").first()).toContainText("plugin-enable:loaded-probe");
