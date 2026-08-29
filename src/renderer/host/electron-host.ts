@@ -55,7 +55,9 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       list: async () => openFiles,
       read: (path) => preload.read(path),
       readBinary: (path) => preload.readBinary(path),
-      write: (path, data) => preload.write(path, data),
+      // Electron IPC does not echo renderer-originated mutation IDs, so it's
+      // dropped here too — see the `settleMutation` no-op below.
+      write: (path, data, options) => preload.write(path, data, options),
       mkdir: (path) => preload.mkdir(path),
       trash: (path) => preload.trash(path),
       rename: (path, newPath) => preload.rename(path, newPath),

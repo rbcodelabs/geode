@@ -38,12 +38,12 @@
       "api-member": 1009
     },
     "byStatus": {
-      "verified": 183,
-      "partial": 54,
+      "verified": 188,
+      "partial": 52,
       "missing": 0,
       "intentionally-equivalent": 0,
-      "blocked": 0,
-      "unknown": 2615
+      "blocked": 1,
+      "unknown": 2611
     }
   },
   "requirements": [
@@ -6335,8 +6335,12 @@
       "title": "DataWriteOptions",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/DataWriteOptions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/DataWriteOptions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts",
+        "tests/unit/vault-public-contracts.test.ts"
+      ],
+      "notes": "The documented DataWriteOptions shape (mtime/ctime) is implemented end to end: mtime is validated, applied via fs.utimes in src/main/vault-write.ts's writeVaultFile(), and forwarded through the preload/IPC boundary and Vault.create/Vault.modify. ctime is accepted for shape compatibility but intentionally not applied (see API-MEMBER-4a325cdd6867)."
     },
     {
       "id": "DEV-fcfe619427ae",
@@ -18089,8 +18093,12 @@
       "title": "DataWriteOptions",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts",
+        "tests/unit/vault-public-contracts.test.ts"
+      ],
+      "notes": "src/renderer/vault.ts exports a DataWriteOptions interface matching the documented { ctime?: number; mtime?: number } shape, threaded through Vault.create/Vault.modify, window.geode.write, and the vault-write IPC handler into writeVaultFile()."
     },
     {
       "id": "API-e26c62e1b555",
@@ -23385,8 +23393,11 @@
       "title": "DataWriteOptions.ctime",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts"
+      ],
+      "notes": "Node/Electron's fs.utimes can only set atime/mtime, not birthtime, so a caller-requested ctime cannot be applied to a file's actual creation time on any platform this app ships on. writeVaultFile() accepts options.ctime for API shape compatibility and documents this as a deliberate gap rather than a defect; the test observes ctime being accepted without being reflected in the file's real birthtime."
     },
     {
       "id": "API-MEMBER-1a702f175420",
@@ -23396,8 +23407,12 @@
       "title": "DataWriteOptions.mtime",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/vault-write-options.test.ts",
+        "tests/unit/vault-public-contracts.test.ts"
+      ],
+      "notes": "writeVaultFile()'s validateMtime() rejects non-finite values (throwing before any mkdir/writeFile mutation runs, verified by asserting the target file was never created) and converts a valid ms-since-epoch value to the seconds fs.utimes expects; the applied mtime is observed exactly on disk via fsp.stat, and via the TFile returned by Vault.create/updated by Vault.modify."
     },
     {
       "id": "API-MEMBER-a1b426194efd",
@@ -30664,11 +30679,12 @@
       "title": "Vault.create",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/vault-public-contracts.test.ts"
+        "tests/unit/vault-public-contracts.test.ts",
+        "tests/unit/vault-write-options.test.ts"
       ],
-      "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+      "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed. DataWriteOptions.mtime is forwarded through the vault-write IPC call to writeVaultFile() and applied via fs.utimes, and the resulting TFile.mtime is observed pinned to the requested value; a rejected write (e.g. an invalid mtime) propagates and the file is never indexed into the vault."
     },
     {
       "id": "API-MEMBER-58df74296269",
@@ -30845,11 +30861,12 @@
       "title": "Vault.modify",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/vault-public-contracts.test.ts"
+        "tests/unit/vault-public-contracts.test.ts",
+        "tests/unit/vault-write-options.test.ts"
       ],
-      "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+      "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed. DataWriteOptions.mtime is forwarded through the vault-write IPC call to writeVaultFile() and applied via fs.utimes, and the resulting TFile.mtime is observed pinned to the requested value; a rejected write (e.g. an invalid mtime) propagates and leaves the file's cached content/metadata untouched."
     },
     {
       "id": "API-MEMBER-0b17a9910c07",

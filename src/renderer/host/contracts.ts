@@ -71,7 +71,12 @@ export interface VaultFilesService {
   list(): Promise<VaultFileEntry[]>;
   read(path: string): Promise<string>;
   readBinary(path: string): Promise<ArrayBuffer>;
-  write(path: string, data: string, mutationId?: string): Promise<{ mtime: number; ctime: number; size: number }>;
+  write(
+    path: string,
+    data: string,
+    options?: { mtime?: number; ctime?: number },
+    mutationId?: string,
+  ): Promise<{ mtime: number; ctime: number; size: number }>;
   mkdir(path: string, mutationId?: string): Promise<void>;
   trash(path: string, mutationId?: string): Promise<void>;
   rename(path: string, newPath: string, mutationId?: string): Promise<void>;
