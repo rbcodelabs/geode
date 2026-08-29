@@ -16,6 +16,11 @@ import {
   pathName,
   splitExt,
 } from "./types";
+import {
+  isPersistedMetadataIndexSnapshot,
+  type PersistedMetadataIndexEntry,
+  type PersistedMetadataIndexSnapshot,
+} from "../indexer/metadata-indexer";
 
 const WIKILINK_RE = /(!)?\[\[([^\[\]\n]+)\]\]/g;
 const TAG_RE = /(^|[\s(])#([\p{L}\p{N}_\/-]*[\p{L}_\/-][\p{L}\p{N}_\/-]*)/gu;
@@ -58,44 +63,14 @@ function toLinkRecord(counts: Map<string, number>): Record<string, number> {
   return record;
 }
 
-interface PersistedMetadataEntry {
-  mtimeMs: number;
-  size: number;
-  content: string;
-  metadata: CachedMetadata;
-  /** Additive cache field; absent in snapshots written before v0.7.15. */
-  mentionKeys?: string[];
-}
-
-interface PersistedMetadataCache {
-  schemaVersion: number;
-  entries: Record<string, PersistedMetadataEntry>;
-}
-
-function isPersistedMetadataCache(value: unknown): value is PersistedMetadataCache {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<PersistedMetadataCache>;
-  if (candidate.schemaVersion !== METADATA_CACHE_SCHEMA_VERSION) return false;
-  if (!candidate.entries || typeof candidate.entries !== "object" || Array.isArray(candidate.entries)) return false;
-  return Object.values(candidate.entries).every((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    const item = entry as Partial<PersistedMetadataEntry>;
-    return (
-      typeof item.mtimeMs === "number" &&
-      typeof item.size === "number" &&
-      typeof item.content === "string" &&
-      !!item.metadata &&
-      typeof item.metadata === "object" &&
-      Array.isArray(item.metadata.links) &&
-      Array.isArray(item.metadata.embeds) &&
-      Array.isArray(item.metadata.tags) &&
-      Array.isArray(item.metadata.headings) &&
-      Array.isArray(item.metadata.aliases) &&
-      (item.mentionKeys === undefined ||
-        (Array.isArray(item.mentionKeys) && item.mentionKeys.every((key) => typeof key === "string")))
-    );
-  });
-}
+// The persisted-cache entry/snapshot shape and its validator are imported
+// from ../indexer/metadata-indexer (PersistedMetadataIndexEntry,
+// PersistedMetadataIndexSnapshot, isPersistedMetadataIndexSnapshot) rather
+// than duplicated here. The old locally-duplicated version required a
+// `content` field that the indexer's real disk writes never populated —
+// silently rejecting every persisted cache the indexer actually wrote.
+type PersistedMetadataEntry = PersistedMetadataIndexEntry;
+type PersistedMetadataCache = PersistedMetadataIndexSnapshot;
 
 /**
  * Runs `fn` over `items` in fixed-size concurrent chunks of `concurrency`,
@@ -615,7 +590,7 @@ export class MetadataCache extends Events {
       const api = typeof window === "undefined" ? undefined : window.geode;
       if (!api?.readMetadataCache) return null;
       const value = await api.readMetadataCache();
-      return isPersistedMetadataCache(value) ? value : null;
+      return isPersistedMetadataIndexSnapshot(value) ? value : null;
     } catch {
       return null;
     }
@@ -628,14 +603,12 @@ export class MetadataCache extends Events {
       const entries: Record<string, PersistedMetadataEntry> = {};
       for (const file of this.vault.getMarkdownFiles()) {
         const metadata = this.cache.get(file.path);
-        const content = this.vault.getCachedContent(file.path);
-        if (metadata && content !== undefined) {
+        if (metadata) {
           entries[file.path] = {
             mtimeMs: file.mtime,
             size: file.size,
-            content,
             metadata,
-            mentionKeys: this.mentionKeysBySource.get(file.path) ?? extractMentionIndexKeys(content),
+            mentionKeys: this.mentionKeysBySource.get(file.path),
           };
         }
       }
@@ -764,7 +737,6 @@ export class MetadataCache extends Events {
     if (message?.type !== "delta") return;
     if (message.entry) {
       this.workerEntries.set(message.path, message.entry);
-      this.vault.primeCachedContent(message.path, message.entry.content);
     }
     // The raw vault event normally arrives first and records the public
     // changed-event payload. Be defensive if a platform delivers the worker
@@ -851,7 +823,9 @@ export class MetadataCache extends Events {
           const fromWorker = isMdPath(path) ? this.workerEntries.get(path) : undefined;
           if (fromWorker) {
             newMeta.set(path, fromWorker.metadata);
-            newMentionKeys.set(path, fromWorker.mentionKeys ?? extractMentionIndexKeys(fromWorker.content));
+            // mentionKeys is always populated by current indexer writes; the
+            // `?? []` guard is only defensive typing, not a real fallback path.
+            newMentionKeys.set(path, fromWorker.mentionKeys ?? []);
             this.workerEntries.delete(path);
           } else if (isCanvasPath(path)) {
             const parsed = parseCanvasLinkMetadata(await this.vault.cachedRead(file));
@@ -998,7 +972,6 @@ export class MetadataCache extends Events {
           const entry = persisted?.entries[file.path];
           if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
             this.cache.set(file.path, entry.metadata);
-            this.vault.primeCachedContent(file.path, entry.content);
             if (entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
           } else if (!attemptedBackground) {
             toRead.push(file);
@@ -1076,8 +1049,9 @@ export class MetadataCache extends Events {
           ? live
           : snapshotEntry;
         this.cache.set(path, entry.metadata);
-        this.vault.primeCachedContent(path, entry.content);
-        this.setMentionSourceKeys(path, entry.mentionKeys ?? extractMentionIndexKeys(entry.content));
+        // mentionKeys is always populated by current indexer writes; the
+        // `?? []` guard is only defensive typing, not a real fallback path.
+        this.setMentionSourceKeys(path, entry.mentionKeys ?? []);
       });
       // Oversized entries are deliberately omitted from utility snapshot IPC.
       // Fill only those missing paths here, one file per yielded batch, so a
@@ -1326,10 +1300,18 @@ export class MetadataCache extends Events {
    * Like `getBacklinks`, but each source file also carries a trimmed
    * snippet of the line surrounding each resolved link/embed occurrence,
    * for display as context in the Backlinks pane.
+   *
+   * Async: content is no longer pre-warmed for every file (the indexer's
+   * wire format and persisted cache no longer carry raw content — see the
+   * SQLite metadata-store migration), so a source file's text is fetched
+   * on demand via `vault.cachedRead()` (a single cheap IPC round trip,
+   * cached for subsequent reads). The candidate set here is bounded by
+   * `file`'s backlink sources, not the whole vault, so the added await is
+   * invisible in practice — this fires on navigation, not per-keystroke.
    */
-  getBacklinksWithContext(
+  async getBacklinksWithContext(
     file: TFile
-  ): { source: TFile; count: number; snippets: string[] }[] {
+  ): Promise<{ source: TFile; count: number; snippets: string[] }[]> {
     const out: { source: TFile; count: number; snippets: string[] }[] = [];
     for (const [src, targets] of this.resolvedLinkMap) {
       const count = targets.get(file.path);
@@ -1337,9 +1319,16 @@ export class MetadataCache extends Events {
       const srcFile = this.vault.getFileByPath(src);
       if (!srcFile) continue;
       const meta = this.cache.get(src);
-      const lines = srcFile.extension === "canvas"
-        ? this.canvasLinkContexts.get(src) ?? []
-        : this.vault.getCachedContent(src)?.split("\n") ?? [];
+      let lines: string[];
+      if (srcFile.extension === "canvas") {
+        lines = this.canvasLinkContexts.get(src) ?? [];
+      } else {
+        try {
+          lines = (await this.vault.cachedRead(srcFile)).split("\n");
+        } catch {
+          lines = [];
+        }
+      }
       const snippets: string[] = [];
       for (const link of [...(meta?.links ?? []), ...(meta?.embeds ?? [])]) {
         if (this.getFirstLinkpathDest(link.link, src)?.path !== file.path) continue;
@@ -1354,8 +1343,13 @@ export class MetadataCache extends Events {
   /**
    * Files that mention `file`'s basename or aliases as plain text without
    * an actual `[[wikilink]]` to it — Obsidian's "unlinked mentions".
+   *
+   * Async for the same reason as `getBacklinksWithContext`: candidate
+   * sources' content is fetched on demand via `vault.cachedRead()` rather
+   * than assumed pre-warmed. The candidate set is bounded by the mention-key
+   * index (not the whole vault), so this stays cheap.
    */
-  getUnlinkedMentions(file: TFile): { source: TFile; mentions: UnlinkedMention[] }[] {
+  async getUnlinkedMentions(file: TFile): Promise<{ source: TFile; mentions: UnlinkedMention[] }[]> {
     const cached = this.unlinkedMentionsCache.get(file.path);
     if (cached) return cached;
     // Never fall back to a vault-wide synchronous scan. The Backlinks view
@@ -1379,12 +1373,17 @@ export class MetadataCache extends Events {
     for (const src of candidates) {
       if (src === file.path) continue;
       if (!isMdPath(src)) continue;
-      const content = this.vault.getCachedContent(src);
-      if (content === undefined) continue;
+      const srcFile = this.vault.getFileByPath(src);
+      if (!srcFile) continue;
+      let content: string;
+      try {
+        content = await this.vault.cachedRead(srcFile);
+      } catch {
+        continue;
+      }
       const mentions = findUnlinkedMentions(content, names);
       if (!mentions.length) continue;
-      const srcFile = this.vault.getFileByPath(src);
-      if (srcFile) out.push({ source: srcFile, mentions });
+      out.push({ source: srcFile, mentions });
     }
     out.sort((a, b) => a.source.basename.localeCompare(b.source.basename));
     this.unlinkedMentionsCache.set(file.path, out);

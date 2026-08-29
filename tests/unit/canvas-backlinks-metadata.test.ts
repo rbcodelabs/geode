@@ -45,7 +45,6 @@ describe("MetadataCache Canvas note-card backlinks", () => {
           "Target.md": {
             mtimeMs: targetFile.mtime,
             size: targetFile.size,
-            content: targetText,
             metadata: parseMetadata(targetText),
           },
         } });
@@ -81,7 +80,7 @@ describe("MetadataCache Canvas note-card backlinks", () => {
     expect(cache.getBacklinks(target).map(({ source, count }) => ({ path: source.path, count }))).toEqual([
       { path: "Boards/Board.canvas", count: 2 },
     ]);
-    expect(cache.getBacklinksWithContext(target)[0]).toMatchObject({
+    expect((await cache.getBacklinksWithContext(target))[0]).toMatchObject({
       count: 2,
       snippets: [
         "Note card: Notes/Target.md#First",
@@ -93,7 +92,7 @@ describe("MetadataCache Canvas note-card backlinks", () => {
       headings: [],
       aliases: [],
     });
-    expect(cache.getUnlinkedMentions(target).map((entry) => entry.source.path)).not.toContain("Boards/Board.canvas");
+    expect((await cache.getUnlinkedMentions(target)).map((entry) => entry.source.path)).not.toContain("Boards/Board.canvas");
   });
 
   it("omits missing non-Markdown file cards from unresolved Canvas backlinks", async () => {

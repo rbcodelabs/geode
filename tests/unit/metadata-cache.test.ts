@@ -417,7 +417,7 @@ describe("MetadataCache.getBacklinksWithContext", () => {
     await cache.initialize();
 
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
-    const backlinks = cache.getBacklinksWithContext(dailyPlan);
+    const backlinks = await cache.getBacklinksWithContext(dailyPlan);
     expect(backlinks).toHaveLength(1);
     expect(backlinks[0]).toMatchObject({
       count: 1,
@@ -434,7 +434,7 @@ describe("MetadataCache.getBacklinksWithContext", () => {
     await cache.initialize();
 
     const b = fake.getFileByPath("B.md")!;
-    const backlinks = cache.getBacklinksWithContext(b);
+    const backlinks = await cache.getBacklinksWithContext(b);
     expect(backlinks[0].snippets).toEqual(["First [[B]] mention.", "Second [[B]] mention."]);
   });
 });
@@ -449,7 +449,7 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     await cache.initialize();
 
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
-    const mentions = cache.getUnlinkedMentions(dailyPlan);
+    const mentions = await cache.getUnlinkedMentions(dailyPlan);
     expect(mentions).toHaveLength(1);
     expect(mentions[0].source.path).toBe("Welcome.md");
     expect(mentions[0].mentions[0].snippet).toBe("Remember to check the Daily Plan before lunch.");
@@ -464,7 +464,7 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     await cache.initialize();
 
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
-    const mentions = cache.getUnlinkedMentions(dailyPlan);
+    const mentions = await cache.getUnlinkedMentions(dailyPlan);
     expect(mentions.map((m) => m.source.path)).toEqual(["Welcome.md"]); // not "Daily Plan.md" itself
     expect(mentions[0].mentions).toHaveLength(1); // the [[Daily Plan]] occurrence is excluded
     expect(mentions[0].mentions[0].snippet).toContain("Unlinked: Daily Plan mentioned again");
@@ -479,7 +479,7 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     await cache.initialize();
 
     const home = fake.getFileByPath("Home.md")!;
-    const mentions = cache.getUnlinkedMentions(home);
+    const mentions = await cache.getUnlinkedMentions(home);
     expect(mentions.map((m) => m.source.path)).toEqual(["Welcome.md"]);
   });
 
@@ -492,7 +492,7 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     await cache.initialize();
 
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
-    expect(cache.getUnlinkedMentions(dailyPlan)).toEqual([]);
+    expect(await cache.getUnlinkedMentions(dailyPlan)).toEqual([]);
   });
 
   it("memoizes the result: two calls with no intervening vault change return the same array by reference", async () => {
@@ -504,8 +504,8 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     await cache.initialize();
 
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
-    const result1 = cache.getUnlinkedMentions(dailyPlan);
-    const result2 = cache.getUnlinkedMentions(dailyPlan);
+    const result1 = await cache.getUnlinkedMentions(dailyPlan);
+    const result2 = await cache.getUnlinkedMentions(dailyPlan);
     expect(result1).toBe(result2);
   });
 
@@ -519,12 +519,17 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     const cache = new MetadataCache(fake.asVault());
     await cache.initialize();
 
-    const getCachedContent = vi.spyOn(fake, "getCachedContent");
-    const mentions = cache.getUnlinkedMentions(fake.getFileByPath("Daily Plan.md")!);
+    // Content is no longer pre-warmed for every file (the indexer's wire
+    // format and persisted cache no longer carry raw content), so
+    // getUnlinkedMentions now fetches a candidate's content on demand via
+    // vault.cachedRead() rather than reading an already-warm vault.contents
+    // entry via getCachedContent().
+    const cachedReadSpy = vi.spyOn(fake, "cachedRead");
+    const mentions = await cache.getUnlinkedMentions(fake.getFileByPath("Daily Plan.md")!);
 
     expect(mentions.map((entry) => entry.source.path)).toEqual(["Welcome.md"]);
-    expect(getCachedContent).toHaveBeenCalledTimes(1);
-    expect(getCachedContent).toHaveBeenCalledWith("Welcome.md");
+    expect(cachedReadSpy).toHaveBeenCalledTimes(1);
+    expect(cachedReadSpy.mock.calls[0][0].path).toBe("Welcome.md");
   });
 
   it("recomputes after a vault change invalidates the cache via 'resolved'", async () => {
@@ -536,7 +541,7 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     await cache.initialize();
 
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
-    const before = cache.getUnlinkedMentions(dailyPlan);
+    const before = await cache.getUnlinkedMentions(dailyPlan);
     expect(before).toEqual([]);
 
     fake.setFile("Welcome.md", "Remember to check the Daily Plan before lunch.");
@@ -544,7 +549,7 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     // MetadataCache's flush is async; let it complete (and fire "resolved").
     await new Promise((r) => setTimeout(r, 0));
 
-    const after = cache.getUnlinkedMentions(dailyPlan);
+    const after = await cache.getUnlinkedMentions(dailyPlan);
     expect(after).not.toBe(before);
     expect(after.map((m) => m.source.path)).toEqual(["Welcome.md"]);
   });
@@ -560,7 +565,7 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     const dailyPlan = fake.getFileByPath("Daily Plan.md")!;
     expect(cache.peekUnlinkedMentions(dailyPlan)).toBeUndefined();
 
-    const computed = cache.getUnlinkedMentions(dailyPlan);
+    const computed = await cache.getUnlinkedMentions(dailyPlan);
     expect(cache.peekUnlinkedMentions(dailyPlan)).toBe(computed);
   });
 });
