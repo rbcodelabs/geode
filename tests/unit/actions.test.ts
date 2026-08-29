@@ -57,6 +57,54 @@ describe("ActionRegistry", () => {
   });
 });
 
+/**
+ * `resolve()` evaluates label/icon/checked BEFORE availability and returns
+ * them together, so an action scoped to one kind of context (say, web tabs)
+ * is still asked for its label in every other context. A dynamic label that
+ * assumes its field is present therefore throws for every caller that
+ * enumerates actions: the command palette polls availability across every
+ * command, and each context menu composes whole specs.
+ *
+ * These two tests pin both halves of the contract in place.
+ */
+describe("ActionRegistry dynamic presentation contract", () => {
+  type ScopedContext = { page?: { title: string } | null };
+
+  /** Written total, the way every scoped label callback has to be. */
+  const scoped: ActionDefinition<ScopedContext> = {
+    id: "page.reload",
+    label: (ctx) => ctx.page?.title ?? "Reload",
+    icon: (ctx) => (ctx.page ? "rotate-cw" : null),
+    checked: (ctx) => !!ctx.page,
+    isAvailable: (ctx) => !!ctx.page,
+    run: vi.fn(),
+  };
+
+  it("survives a context missing the field its dynamic callbacks read", () => {
+    const registry = new ActionRegistry<ScopedContext>();
+    registry.register(scoped);
+    // Neither call may throw: this is the exact shape of context the command
+    // palette and a markdown tab's context menu hand to every action.
+    expect(() => composeMenu(registry, {}, [{ section: "page", actions: ["page.reload"] }])).not.toThrow();
+    const command = createActionCommand(registry, "page.reload", "Reload page", () => ({}));
+    expect(command.checkCallback?.(true)).toBe(false);
+  });
+
+  it("still resolves a real label for an unavailable action", () => {
+    const registry = new ActionRegistry<ScopedContext>();
+    registry.register({ ...scoped, label: (ctx) => ctx.page?.title ?? "Reload" });
+    // Menu specs opt into rendering unavailable items greyed out (TAB_MENU_SPEC's
+    // tab section does), and those items must read as themselves, not as their
+    // action id. Short-circuiting resolve() when unavailable would break that.
+    const items = composeMenu(registry, {}, [
+      { section: "page", actions: ["page.reload"], includeUnavailable: true },
+    ]);
+    expect(items).toEqual([
+      expect.objectContaining({ id: "page.reload", title: "Reload", disabled: true }),
+    ]);
+  });
+});
+
 describe("tabCloseTargets", () => {
   const leaf = (id: string, pinned = false) => ({ id, pinned });
 

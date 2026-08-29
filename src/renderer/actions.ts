@@ -33,6 +33,21 @@ export class ActionRegistry<TContext> {
     this.definitions.set(definition.id, definition);
   }
 
+  /**
+   * Resolve an action's presentation and availability against a context.
+   *
+   * `label`, `icon` and `checked` are evaluated BEFORE `available` and are
+   * returned alongside it. Two consequences worth stating out loud:
+   *
+   * 1. **Dynamic callbacks must be total.** A `label` that dereferences a
+   *    field only some contexts carry throws for every caller that enumerates
+   *    actions, including `commands.list()` (which polls availability across
+   *    every command to build the palette) and every context menu. Write them
+   *    defensively: `(c) => c.thing?.label ?? "Fallback"`.
+   * 2. **Do not "fix" (1) by short-circuiting when unavailable.** Menu specs
+   *    can pass `includeUnavailable`, and those greyed-out items still need
+   *    real labels rather than the id fallback.
+   */
   resolve(id: string, context: TContext): ResolvedAction<TContext> | null {
     const definition = this.definitions.get(id);
     if (!definition) return null;
@@ -68,8 +83,19 @@ export const DOCUMENT_MENU_SPEC: MenuSection[] = [
 ];
 
 export const TAB_MENU_SPEC: MenuSection[] = [
+  // Placed first rather than appended. On a web tab every DOCUMENT_MENU_SPEC
+  // section collapses (there is no file) while the tab section below renders
+  // four items unconditionally, so appending would bury Reload at the bottom
+  // of the menu. No `includeUnavailable`: on a markdown tab this section
+  // filters out entirely, leaving the existing menu text untouched.
+  { section: "web", actions: ["web.reload"] },
   ...DOCUMENT_MENU_SPEC,
   { section: "tab", actions: ["tab.pin", "tab.close", "tab.close-others", "tab.close-right"], includeUnavailable: true },
+];
+
+/** Page-scoped actions for the Web Viewer toolbar's "More options" button. */
+export const WEB_TAB_MENU_SPEC: MenuSection[] = [
+  { section: "page", actions: ["web.reload", "web.bookmark-page"] },
 ];
 
 export const FOLDER_MENU_SPEC: MenuSection[] = [

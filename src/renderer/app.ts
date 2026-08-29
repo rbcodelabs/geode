@@ -1,6 +1,6 @@
 import { Vault } from "./vault";
 import { MetadataCache } from "./metadata-cache";
-import { Workspace, TabGroup, View, type PersistedWorkspace, type WorkspaceLeaf } from "./workspace";
+import { Workspace, TabGroup, View, type PersistedWorkspace, type ReloadableView, type WorkspaceLeaf } from "./workspace";
 import { CommandRegistry } from "./commands";
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
@@ -43,6 +43,7 @@ import {
   DOCUMENT_MENU_SPEC,
   FOLDER_MENU_SPEC,
   TAB_MENU_SPEC,
+  WEB_TAB_MENU_SPEC,
   composeMenu,
   createActionCommand,
   tabCloseTargets,
@@ -129,6 +130,10 @@ export interface AppActionContext {
   resource?: TFile | TFolder | null;
   leaf?: WorkspaceLeaf | null;
   view?: MarkdownView | null;
+  /** Present on a Web Viewer tab. Gates the page-scoped actions (bookmark). */
+  webView?: WebView | null;
+  /** Present on any view that can reload itself in place (Web Viewer, Artifact). */
+  reloadable?: ReloadableView | null;
 }
 
 class QuickSwitcherModal extends SuggestModal<TFile> {
@@ -1128,7 +1133,7 @@ export class App {
 
     this.registerActions();
     this.registerCommands();
-    this.commands.attach(document);
+    this.attachCommandsOnce();
     this.attachGuestHotkeyBridge();
     this.applySettings();
     // Apply the selected community theme (if the vault has it installed).
@@ -1236,6 +1241,18 @@ export class App {
    * mid-keystroke, so the bound combos are published to it up front and
    * republished whenever a plugin adds or removes a command.
    */
+  /**
+   * openVaultMeasured re-runs on every vault switch, and both listeners
+   * installed here are additive: a second capture-phase keydown listener on
+   * the same node is NOT stopped by the first one's stopPropagation(), and
+   * onGuestHotkey returns an unsubscribe that used to be discarded. After N
+   * vault switches a single Cmd+R fired N+1 reloads. Drop the previous
+   * subscription, and attach the DOM listener exactly once.
+   */
+  private detachGuestHotkeys: (() => void) | null = null;
+  private detachHotkeyPublisher: (() => void) | null = null;
+  private commandsAttached = false;
+
   private attachGuestHotkeyBridge() {
     let pending = 0;
     const publish = () => {
@@ -1245,21 +1262,100 @@ export class App {
         void window.geode.publishHotkeys(this.commands.hotkeys());
       }, 0);
     };
-    this.commands.onChange(publish);
+    this.detachHotkeyPublisher?.();
+    this.detachHotkeyPublisher = this.commands.onChange(publish);
     publish();
-    window.geode.onGuestHotkey((combo) => {
-      this.commands.dispatchHotkey(combo);
+    this.detachGuestHotkeys?.();
+    this.detachGuestHotkeys = window.geode.onGuestHotkey((combo, guestId) => {
+      // Transient, and only readable for the duration of this dispatch:
+      // createActionCommand resolves its context synchronously, before any
+      // await, so activeActionContext() below always sees the right source.
+      this.guestHotkeySource = typeof guestId === "number" ? guestId : null;
+      try {
+        this.commands.dispatchHotkey(combo);
+      } finally {
+        this.guestHotkeySource = null;
+      }
     });
   }
 
+  /**
+   * The `<webview>` guest a hotkey currently being dispatched came from, or
+   * null for a host-document keystroke. See leafOwningGuest.
+   */
+  private guestHotkeySource: number | null = null;
+
+  /**
+   * The leaf whose subtree contains the guest with this WebContents id.
+   *
+   * Clicks inside a `<webview>` are consumed by the guest and never produce a
+   * host DOM mouse event, so the host's active leaf does not follow focus
+   * into one. In a split layout with a web tab active in one group and a
+   * canvas web card clicked in another, Cmd+R would otherwise reload a page
+   * in a pane the user is not looking at. Resolving through the DOM covers
+   * every guest host uniformly: web tabs, artifact tabs, canvas web cards and
+   * any plugin view that mounts a webview.
+   */
+  private leafOwningGuest(guestId: number): WorkspaceLeaf | null {
+    const guestEl = [...document.querySelectorAll("webview")].find((el) => {
+      // getWebContentsId() throws until the guest process is attached.
+      try {
+        return (el as unknown as { getWebContentsId(): number }).getWebContentsId() === guestId;
+      } catch {
+        return false;
+      }
+    });
+    if (!guestEl) return null;
+    let owner: WorkspaceLeaf | null = null;
+    this.workspace.iterateAllLeaves((leaf) => {
+      if (!owner && leaf.contentEl.contains(guestEl)) owner = leaf;
+    });
+    return owner;
+  }
+
+  /** Idempotent: see detachGuestHotkeys above for why re-attaching would double-fire. */
+  private attachCommandsOnce() {
+    if (this.commandsAttached) return;
+    this.commandsAttached = true;
+    this.commands.attach(document);
+  }
+
+  /**
+   * The view-scoped half of an action context.
+   *
+   * Resolved with `instanceof` against Geode's own view classes, never with a
+   * structural `typeof view.reload === "function"` check: that would bind
+   * Cmd+R to any plugin view that happens to expose a `reload` method, which
+   * is untrusted third-party code.
+   *
+   * No `isDeferred` branch is needed. The "webviewer" and "geode-artifact"
+   * factories are registered in openVaultMeasured before restoreWorkspaceLayout
+   * runs, so a restored background web tab already holds a real WebView rather
+   * than a DeferredView placeholder. That would stop being true if Web Viewer
+   * ever moved behind a core-plugin registry.
+   */
+  private viewActionContext(view: View | null | undefined): Pick<AppActionContext, "view" | "webView" | "reloadable"> {
+    const reloadable: ReloadableView | null =
+      view instanceof WebView || view instanceof ArtifactView ? view : null;
+    return {
+      view: view instanceof MarkdownView ? view : null,
+      webView: view instanceof WebView ? view : null,
+      reloadable,
+    };
+  }
+
   private activeActionContext(): AppActionContext {
-    const leaf = this.workspace.getActiveLeaf();
+    // A guest-sourced hotkey acts on the pane it was pressed in. Falling back
+    // to the active leaf when the guest cannot be placed keeps the previous
+    // behavior rather than turning an unlocatable guest into a dead key.
+    const source = this.guestHotkeySource;
+    const leaf = (source !== null ? this.leafOwningGuest(source) : null) ?? this.workspace.getActiveLeaf();
     const file = leaf?.view?.getFile?.() ?? null;
     return {
       leaf,
       file,
       resource: file,
-      view: leaf?.view instanceof MarkdownView ? leaf.view : null,
+      ...this.viewActionContext(leaf?.view),
     };
   }
 
@@ -1357,6 +1453,25 @@ export class App {
       isAvailable: (context) => !!context.view,
       run: (context) => context.view!.toggleSource(),
     });
+    this.actions.register({
+      id: "web.reload",
+      // Total by construction: resolve() evaluates the label in every context,
+      // including markdown tabs that carry no reloadable view at all.
+      label: (context) => context.reloadable?.reloadLabel ?? "Reload",
+      icon: "rotate-cw",
+      isAvailable: (context) => !!context.reloadable,
+      run: (context) => context.reloadable!.reload(),
+    });
+    this.actions.register({
+      id: "web.bookmark-page",
+      label: "Bookmark this page",
+      icon: "bookmark",
+      isAvailable: (context) => !!context.webView,
+      run: (context) => {
+        const view = context.webView!;
+        void this.addLinkBookmark(view.getState().url, view.pageTitle);
+      },
+    });
   }
 
   private registerCommands() {
@@ -1377,6 +1492,11 @@ export class App {
     this.commands.add(createActionCommand(this.actions, "resource.delete", "Delete current file", () => this.activeActionContext()));
     this.commands.add(createActionCommand(this.actions, "resource.bookmark", "Bookmark or un-bookmark current file", () => this.activeActionContext()));
     this.commands.add(createActionCommand(this.actions, "file.open-new-tab", "Open current file in new tab", () => this.activeActionContext()));
+    // Mod+R. Publishing this combo also makes main.ts's guest bridge swallow
+    // Cmd+R inside every <webview> guest, including canvas web-preview cards
+    // that have no reload path: there it becomes a silent no-op, which is
+    // strictly better than the whole-app reload it used to trigger.
+    this.commands.add(createActionCommand(this.actions, "web.reload", "Reload page", () => this.activeActionContext(), "Mod+R"));
     c("split-right", "Split right", undefined, () => {
       const group = this.workspace.addGroup(this.workspace.activeGroup);
       this.openEmptyTab(group);
@@ -1454,14 +1574,19 @@ export class App {
       }
       void view.bookmarkBlockUnderCursor();
     });
+    // Deliberately a plain callback delegating to the action, not a
+    // createActionCommand adapter. This command is unconditional today: it is
+    // always in the palette and notifies when no web page is open. An adapter
+    // would hide it from the palette and make
+    // executeCommandById("bookmark-webpage") silently return false, which is a
+    // visible change to the plugin and host-tooling surface.
     c("bookmark-webpage", "Bookmark current web page", undefined, () => {
-      const view = this.workspace.getActiveViewOfType(WebView);
-      if (!view) {
+      const context = this.activeActionContext();
+      if (!context.webView) {
         this.notify("No web page is open");
         return;
       }
-      const url = (view.getState() as { url?: string }).url ?? "";
-      void this.addLinkBookmark(url, view.getDisplayText());
+      void this.actions.execute("web.bookmark-page", context);
     });
   }
 
@@ -2220,6 +2345,11 @@ export class App {
     return composeMenu(this.actions, { resource: folder }, FOLDER_MENU_SPEC);
   }
 
+  /** Page actions for the Web Viewer toolbar's "More options" menu. */
+  webPageMenuItems(view: WebView) {
+    return composeMenu(this.actions, { webView: view, reloadable: view, leaf: null }, WEB_TAB_MENU_SPEC);
+  }
+
   // --- UI helpers ---------------------------------------------------------
 
   notify(message: string, timeout = 4000) {
@@ -2274,7 +2404,7 @@ export class App {
       leaf,
       file,
       resource: file,
-      view: leaf.view instanceof MarkdownView ? leaf.view : null,
+      ...this.viewActionContext(leaf.view),
     }, TAB_MENU_SPEC));
   }
 

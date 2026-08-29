@@ -737,7 +737,10 @@ function bridgeGuestHotkeys(win: BrowserWindow, guest: Electron.WebContents): vo
     const combo = resolveGuestHotkey(input, guestHotkeys.get(win.id) ?? EMPTY_HOTKEYS);
     if (!combo) return;
     event.preventDefault();
-    if (!win.isDestroyed()) win.webContents.send("guest-hotkey", combo);
+    // The guest's id travels with the combo so the renderer can act on the
+    // pane the key was actually pressed in, not on whatever the host still
+    // considers active. See preload's onGuestHotkey.
+    if (!win.isDestroyed()) win.webContents.send("guest-hotkey", combo, guest.id);
   });
 }
 
@@ -973,6 +976,14 @@ function installApplicationMenu(): void {
       } catch (error) {
         recordDiagnostic(undefined, { at: Date.now(), category: "diagnostics", level: "error", message: `export-failed: ${error}` });
       }
+  },
+  (window) => {
+    // Resolved at click time, never captured: the menu is application-global,
+    // several windows can be open, and crash recovery replaces a window
+    // outright, so a captured reference could target a dead one. Electron
+    // types the argument as BaseWindow; only a BrowserWindow has webContents.
+    const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow();
+    target?.webContents.reload();
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

@@ -1,5 +1,5 @@
 import type { App } from "../app";
-import type { View, WorkspaceLeaf } from "../workspace";
+import type { ReloadableView, View, WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import { describeGuestCrashCause } from "./web-view-crash-message";
 
@@ -59,8 +59,9 @@ const DEFAULT_URL = "https://duckduckgo.com/";
  * `webviewTag: true` and the `persist:webviewer` partition (its own,
  * cookie-jar-isolated session — the target for Chrome cookie import).
  */
-export class WebView implements View {
+export class WebView implements View, ReloadableView {
   readonly viewType = "webviewer";
+  readonly reloadLabel = "Reload page";
   containerEl: HTMLElement;
   private webview: WebviewElement;
   private addressInput: HTMLInputElement;
@@ -72,6 +73,14 @@ export class WebView implements View {
   private errorTitleEl!: HTMLElement;
   private errorDetailEl!: HTMLElement;
   private currentUrl: string;
+  /**
+   * The URL of the most recent failed main-frame load, or null while the
+   * guest is healthy. `did-navigate` deliberately does not fire on a failed
+   * load, so `currentUrl` still points at the *previous* page after one:
+   * reloading it would silently teleport the user backwards. This is the URL
+   * a reload should actually retry.
+   */
+  private failedUrl: string | null = null;
   private title = "";
   private cleanups: (() => void)[] = [];
   /**
@@ -98,7 +107,9 @@ export class WebView implements View {
     toolbar.className = "web-view-toolbar";
     this.backBtn = this.makeButton("arrow-left", "Back", () => this.webview.goBack());
     this.forwardBtn = this.makeButton("arrow-right", "Forward", () => this.webview.goForward());
-    this.reloadBtn = this.makeButton("rotate-cw", "Reload", () => this.webview.reload());
+    // Every reload affordance goes through the action, so the button, the
+    // error overlay, Cmd+R and the tab context menu can never drift apart.
+    this.reloadBtn = this.makeButton("rotate-cw", "Reload", () => this.runReload());
 
     this.addressInput = document.createElement("input");
     this.addressInput.type = "text";
@@ -116,19 +127,14 @@ export class WebView implements View {
     toolbar.appendChild(this.reloadBtn);
     toolbar.appendChild(this.addressInput);
     // Spec: Web Viewer address-bar three-dot menu → Bookmark. A single "More
-    // options" affordance keeps room for future page actions.
+    // options" affordance keeps room for future page actions. The items come
+    // from App rather than from a direct actions.ts import: views compose
+    // menus by asking App, the same way file-explorer.ts does.
     const moreBtn = this.makeButton("more-horizontal", "More options", (e) => {
-      this.app.showMenu(
-        e,
-        [
-          {
-            title: "Bookmark this page",
-            icon: "bookmark",
-            action: () => void this.app.addLinkBookmark(this.currentUrl, this.title),
-          },
-        ],
-        { anchor: moreBtn, horizontalAlign: "end" }
-      );
+      this.app.showMenu(e, this.app.webPageMenuItems(this), {
+        anchor: moreBtn,
+        horizontalAlign: "end",
+      });
     });
     toolbar.appendChild(moreBtn);
     this.containerEl.appendChild(toolbar);
@@ -170,15 +176,22 @@ export class WebView implements View {
     const reloadButton = document.createElement("button");
     reloadButton.className = "web-view-error-reload";
     reloadButton.textContent = "Reload";
-    // Manual reload: clear the single-shot guard so the user's attempt gets its
-    // own fresh auto-recovery budget if it, too, crashes.
-    reloadButton.addEventListener("click", () => this.reloadCurrent(true));
+    // Manual reload: reload() clears the single-shot guard so the user's
+    // attempt gets its own fresh auto-recovery budget if it, too, crashes,
+    // and retries the URL that actually failed rather than the last one that
+    // committed.
+    reloadButton.addEventListener("click", () => this.runReload());
 
     overlay.appendChild(icon);
     overlay.appendChild(this.errorTitleEl);
     overlay.appendChild(this.errorDetailEl);
     overlay.appendChild(reloadButton);
     return overlay;
+  }
+
+  /** Route a UI affordance through the action rather than calling reload() directly. */
+  private runReload(): void {
+    void this.app.actions.execute("web.reload", { reloadable: this, webView: this, leaf: this.leaf });
   }
 
   private makeButton(icon: string, title: string, onClick: (e: MouseEvent) => void): HTMLButtonElement {
@@ -231,9 +244,10 @@ export class WebView implements View {
       // Only surface real, top-level failures. Sub-frame errors and ERR_ABORTED
       // (normal for cancelled/redirected navigations) must not flash an overlay.
       if (!isMainFrame || errorCode === ERR_ABORTED) return;
+      this.failedUrl = validatedURL || this.currentUrl;
       this.showError(
         "This page failed to load",
-        `${errorDescription || "Load failed"} (${validatedURL || this.currentUrl})`
+        `${errorDescription || "Load failed"} (${this.failedUrl})`
       );
     };
 
@@ -308,7 +322,43 @@ export class WebView implements View {
   /** Hide the overlay and re-arm the crash de-dupe once the guest is healthy again. */
   private clearError(): void {
     this.crashHandled = false;
+    this.failedUrl = null;
     this.errorEl.classList.add("is-hidden");
+  }
+
+  /**
+   * What a reload should target: the URL that failed if one did, else the last
+   * URL that committed. See `failedUrl`.
+   */
+  private get targetUrl(): string {
+    return this.failedUrl ?? this.currentUrl;
+  }
+
+  /**
+   * User-initiated reload, driving the toolbar button, the error overlay's
+   * Reload, the tab context menu and Cmd+R (`web.reload`).
+   *
+   * Deliberately not `reloadCurrent()`: that assigns `src`, which is a
+   * browser-initiated *navigation*. Whether Chromium collapses it into a
+   * reload is version-dependent, so history state and POST resubmission are
+   * not guaranteed to behave — and on a never-navigated view `currentUrl` is
+   * still the default home page, so it would navigate somewhere the user
+   * never was. A real `reload()` has none of those problems. The one case
+   * that genuinely needs a respawn is a dead guest, handled first.
+   */
+  reload(): void {
+    if (this.crashHandled) {
+      // A crashed guest WebContents is not reliably reusable, so rebuild it.
+      this.reloadCurrent(true);
+      return;
+    }
+    // The user's attempt gets its own fresh auto-recovery budget.
+    this.autoRecovered = false;
+    this.clearRecoverTimer();
+    // Discard uncommitted address-bar typing: this is "reload what I'm
+    // looking at", not "go to what I half-typed".
+    this.addressInput.value = this.targetUrl;
+    this.webview.reload();
   }
 
   private clearRecoverTimer(): void {
@@ -329,11 +379,13 @@ export class WebView implements View {
    *   false so it can't re-arm itself into a loop.
    */
   private reloadCurrent(resetGuard = false): void {
+    // Read before the state reset below: this is the URL being respawned.
+    const url = this.targetUrl;
     this.clearRecoverTimer();
     if (resetGuard) this.autoRecovered = false;
     this.crashHandled = false;
     this.errorEl.classList.add("is-hidden");
-    this.webview.src = this.currentUrl;
+    this.webview.src = url;
   }
 
   private updateNavButtons(): void {
@@ -365,12 +417,22 @@ export class WebView implements View {
     this.clearRecoverTimer();
     this.autoRecovered = false;
     this.crashHandled = false;
+    this.failedUrl = null;
     this.errorEl.classList.add("is-hidden");
     this.webview.src = url;
     this.persistState();
   }
 
   // --- View / state-round-trip ---------------------------------------------
+
+  /**
+   * The page's own `<title>`, empty until one arrives. Deliberately not
+   * `getDisplayText()`, which falls back to the URL host: a bookmark made
+   * before the title lands should read as the URL, not as "example.com".
+   */
+  get pageTitle(): string {
+    return this.title;
+  }
 
   getDisplayText(): string {
     if (this.title) return this.title;
