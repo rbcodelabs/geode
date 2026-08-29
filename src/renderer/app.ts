@@ -43,6 +43,7 @@ import {
   DOCUMENT_MENU_SPEC,
   FOLDER_MENU_SPEC,
   TAB_MENU_SPEC,
+  WEB_TAB_MENU_SPEC,
   composeMenu,
   createActionCommand,
   tabCloseTargets,
@@ -1415,6 +1416,16 @@ export class App {
       isAvailable: (context) => !!context.reloadable,
       run: (context) => context.reloadable!.reload(),
     });
+    this.actions.register({
+      id: "web.bookmark-page",
+      label: "Bookmark this page",
+      icon: "bookmark",
+      isAvailable: (context) => !!context.webView,
+      run: (context) => {
+        const view = context.webView!;
+        void this.addLinkBookmark(view.getState().url, view.pageTitle);
+      },
+    });
   }
 
   private registerCommands() {
@@ -1517,14 +1528,19 @@ export class App {
       }
       void view.bookmarkBlockUnderCursor();
     });
+    // Deliberately a plain callback delegating to the action, not a
+    // createActionCommand adapter. This command is unconditional today: it is
+    // always in the palette and notifies when no web page is open. An adapter
+    // would hide it from the palette and make
+    // executeCommandById("bookmark-webpage") silently return false, which is a
+    // visible change to the plugin and host-tooling surface.
     c("bookmark-webpage", "Bookmark current web page", undefined, () => {
-      const view = this.workspace.getActiveViewOfType(WebView);
-      if (!view) {
+      const context = this.activeActionContext();
+      if (!context.webView) {
         this.notify("No web page is open");
         return;
       }
-      const url = (view.getState() as { url?: string }).url ?? "";
-      void this.addLinkBookmark(url, view.getDisplayText());
+      void this.actions.execute("web.bookmark-page", context);
     });
   }
 
@@ -2281,6 +2297,11 @@ export class App {
 
   folderMenuItems(folder: TFolder) {
     return composeMenu(this.actions, { resource: folder }, FOLDER_MENU_SPEC);
+  }
+
+  /** Page actions for the Web Viewer toolbar's "More options" menu. */
+  webPageMenuItems(view: WebView) {
+    return composeMenu(this.actions, { webView: view, reloadable: view, leaf: null }, WEB_TAB_MENU_SPEC);
   }
 
   // --- UI helpers ---------------------------------------------------------

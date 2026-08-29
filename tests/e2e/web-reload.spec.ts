@@ -240,6 +240,34 @@ test("Mod+R pressed inside a web viewer guest reloads that page exactly once", a
   }
 });
 
+test("web tab menus lead with Reload and share one Bookmark implementation", async () => {
+  const { app, window, vaultDir, cleanup } = await launch({ "page.html": PROBE_HTML });
+
+  try {
+    const url = pathToFileURL(path.join(vaultDir, "page.html")).href;
+    await window.evaluate((target) => (window as unknown as { app: { openWebViewer(u: string): void } }).app.openWebViewer(target), url);
+    await expect(window.locator(".web-view-frame")).toBeVisible();
+
+    // "More options" is composed from WEB_TAB_MENU_SPEC, so the toolbar menu
+    // and the tab menu can no longer disagree about what a page action is.
+    await window.locator('.web-view-toolbar button[title="More options"]').click();
+    await expect(window.locator(".menu-item")).toHaveText(["Reload page", "Bookmark this page"]);
+    await window.keyboard.press("Escape");
+    await expect(window.locator(".menu-item")).toHaveCount(0);
+
+    // Reload comes first in the tab menu: on a web tab the file sections all
+    // collapse and the tab section always renders four items, so appending
+    // would have buried it at the bottom.
+    await window.locator(".workspace-split.mod-root .workspace-tab-header.is-active").click({ button: "right" });
+    await expect(window.locator(".menu-item")).toHaveText([
+      "Reload page", "Pin", "Close", "Close others", "Close tabs to the right",
+    ]);
+  } finally {
+    await app.close();
+    cleanup();
+  }
+});
+
 test("an artifact tab reloads from its toolbar button and from Mod+R", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "geode-artifact-reload-e2e-"));
   const userDataDir = path.join(temp, "user-data");
@@ -295,6 +323,13 @@ test("an artifact tab reloads from its toolbar button and from Mod+R", async () 
     await window.keyboard.press(MOD_R);
     await expect.poll(() => guestMarker(window, ".artifact-view-frame"), { timeout: 15_000 }).toBe("undefined");
     expect(await window.evaluate(() => (window as unknown as { __sentinel?: number }).__sentinel)).toBe(1);
+
+    // The action's dynamic label follows the view: "Reload artifact" here,
+    // "Reload page" on a web tab. Bookmark is web-only, so it is absent.
+    await window.locator(".workspace-split.mod-root .workspace-tab-header.is-active").click({ button: "right" });
+    await expect(window.locator(".menu-item")).toHaveText([
+      "Reload artifact", "Pin", "Close", "Close others", "Close tabs to the right",
+    ]);
   } finally {
     await app.close();
     fs.rmSync(temp, { recursive: true, force: true });

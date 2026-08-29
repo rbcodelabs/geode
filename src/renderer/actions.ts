@@ -83,8 +83,19 @@ export const DOCUMENT_MENU_SPEC: MenuSection[] = [
 ];
 
 export const TAB_MENU_SPEC: MenuSection[] = [
+  // Placed first rather than appended. On a web tab every DOCUMENT_MENU_SPEC
+  // section collapses (there is no file) while the tab section below renders
+  // four items unconditionally, so appending would bury Reload at the bottom
+  // of the menu. No `includeUnavailable`: on a markdown tab this section
+  // filters out entirely, leaving the existing menu text untouched.
+  { section: "web", actions: ["web.reload"] },
   ...DOCUMENT_MENU_SPEC,
   { section: "tab", actions: ["tab.pin", "tab.close", "tab.close-others", "tab.close-right"], includeUnavailable: true },
+];
+
+/** Page-scoped actions for the Web Viewer toolbar's "More options" button. */
+export const WEB_TAB_MENU_SPEC: MenuSection[] = [
+  { section: "page", actions: ["web.reload", "web.bookmark-page"] },
 ];
 
 export const FOLDER_MENU_SPEC: MenuSection[] = [

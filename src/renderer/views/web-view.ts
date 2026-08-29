@@ -127,19 +127,14 @@ export class WebView implements View, ReloadableView {
     toolbar.appendChild(this.reloadBtn);
     toolbar.appendChild(this.addressInput);
     // Spec: Web Viewer address-bar three-dot menu → Bookmark. A single "More
-    // options" affordance keeps room for future page actions.
+    // options" affordance keeps room for future page actions. The items come
+    // from App rather than from a direct actions.ts import: views compose
+    // menus by asking App, the same way file-explorer.ts does.
     const moreBtn = this.makeButton("more-horizontal", "More options", (e) => {
-      this.app.showMenu(
-        e,
-        [
-          {
-            title: "Bookmark this page",
-            icon: "bookmark",
-            action: () => void this.app.addLinkBookmark(this.currentUrl, this.title),
-          },
-        ],
-        { anchor: moreBtn, horizontalAlign: "end" }
-      );
+      this.app.showMenu(e, this.app.webPageMenuItems(this), {
+        anchor: moreBtn,
+        horizontalAlign: "end",
+      });
     });
     toolbar.appendChild(moreBtn);
     this.containerEl.appendChild(toolbar);
@@ -429,6 +424,15 @@ export class WebView implements View, ReloadableView {
   }
 
   // --- View / state-round-trip ---------------------------------------------
+
+  /**
+   * The page's own `<title>`, empty until one arrives. Deliberately not
+   * `getDisplayText()`, which falls back to the URL host: a bookmark made
+   * before the title lands should read as the URL, not as "example.com".
+   */
+  get pageTitle(): string {
+    return this.title;
+  }
 
   getDisplayText(): string {
     if (this.title) return this.title;
