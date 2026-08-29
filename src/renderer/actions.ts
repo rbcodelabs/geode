@@ -33,6 +33,21 @@ export class ActionRegistry<TContext> {
     this.definitions.set(definition.id, definition);
   }
 
+  /**
+   * Resolve an action's presentation and availability against a context.
+   *
+   * `label`, `icon` and `checked` are evaluated BEFORE `available` and are
+   * returned alongside it. Two consequences worth stating out loud:
+   *
+   * 1. **Dynamic callbacks must be total.** A `label` that dereferences a
+   *    field only some contexts carry throws for every caller that enumerates
+   *    actions, including `commands.list()` (which polls availability across
+   *    every command to build the palette) and every context menu. Write them
+   *    defensively: `(c) => c.thing?.label ?? "Fallback"`.
+   * 2. **Do not "fix" (1) by short-circuiting when unavailable.** Menu specs
+   *    can pass `includeUnavailable`, and those greyed-out items still need
+   *    real labels rather than the id fallback.
+   */
   resolve(id: string, context: TContext): ResolvedAction<TContext> | null {
     const definition = this.definitions.get(id);
     if (!definition) return null;
