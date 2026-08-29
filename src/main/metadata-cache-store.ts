@@ -1,38 +1,152 @@
 import * as path from "node:path";
-import * as fsp from "node:fs/promises";
+import * as fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { METADATA_INDEX_SCHEMA_VERSION } from "../indexer/metadata-indexer";
+import type {
+  MetadataFileStat,
+  PersistedMetadataIndexEntry,
+  PersistedMetadataIndexSnapshot,
+} from "../indexer/metadata-indexer";
 
-export const METADATA_CACHE_RELATIVE_PATH = path.join(".geode", "metadata-cache", "cache.json");
+/**
+ * SQLite-backed replacement for the old `.geode/metadata-cache/cache.json`.
+ * A single table, one row per file, JSON-blob metadata column — see the plan
+ * for why this beats a normalized schema for this data shape. Shared by the
+ * indexer utility process (its primary writer) and the main process (the
+ * renderer-fallback reader/writer used only when the indexer is unavailable).
+ */
+export const METADATA_DB_RELATIVE_PATH = path.join(".geode", "metadata-cache", "index.sqlite");
 
-/** Read the renderer metadata cache. Missing/unreadable data is a cache miss. */
-export async function readMetadataCache(root: string): Promise<unknown | null> {
+/** Apply the metadata_entries schema/pragmas to an already-open handle. Idempotent — safe to call on every open. */
+export function initializeMetadataSchema(db: DatabaseSync): void {
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  db.exec(`PRAGMA user_version = ${METADATA_INDEX_SCHEMA_VERSION}`);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metadata_entries (
+      path              TEXT PRIMARY KEY,
+      mtime_ms          REAL    NOT NULL,
+      size              INTEGER NOT NULL,
+      metadata_json     TEXT    NOT NULL,
+      mention_keys_json TEXT
+    )
+  `);
+}
+
+/**
+ * Open (creating the file and parent directory if needed) a vault's metadata
+ * database. No migration from the old JSON cache: if this file doesn't exist
+ * yet, that's today's existing "no persisted match -> full reconcile" path.
+ */
+export function openMetadataDb(root: string): DatabaseSync {
+  const target = path.join(root, METADATA_DB_RELATIVE_PATH);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const db = new DatabaseSync(target);
+  initializeMetadataSchema(db);
+  return db;
+}
+
+/** Small, content-less (path, mtimeMs, size) projection used for reconcile's reuse-detection — no metadata JSON parsing. */
+export function readMetadataStats(db: DatabaseSync): MetadataFileStat[] {
+  const rows = db.prepare("SELECT path, mtime_ms AS mtimeMs, size FROM metadata_entries").all() as unknown as {
+    path: string;
+    mtimeMs: number;
+    size: number;
+  }[];
+  return rows.map((row) => ({ path: row.path, mtimeMs: row.mtimeMs, size: row.size }));
+}
+
+/** Full content-less snapshot of every row — the renderer's warm-start hydration read and the main-process fallback read. */
+export function readAllMetadataEntries(db: DatabaseSync): PersistedMetadataIndexSnapshot {
+  const rows = db
+    .prepare("SELECT path, mtime_ms AS mtimeMs, size, metadata_json, mention_keys_json FROM metadata_entries")
+    .all() as unknown as {
+    path: string;
+    mtimeMs: number;
+    size: number;
+    metadata_json: string;
+    mention_keys_json: string | null;
+  }[];
+  const entries: Record<string, PersistedMetadataIndexEntry> = {};
+  for (const row of rows) {
+    entries[row.path] = {
+      mtimeMs: row.mtimeMs,
+      size: row.size,
+      metadata: JSON.parse(row.metadata_json),
+      ...(row.mention_keys_json ? { mentionKeys: JSON.parse(row.mention_keys_json) } : {}),
+    };
+  }
+  return { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries };
+}
+
+function upsertStatement(db: DatabaseSync) {
+  return db.prepare(`
+    INSERT INTO metadata_entries (path, mtime_ms, size, metadata_json, mention_keys_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(path) DO UPDATE SET
+      mtime_ms = excluded.mtime_ms,
+      size = excluded.size,
+      metadata_json = excluded.metadata_json,
+      mention_keys_json = excluded.mention_keys_json
+  `);
+}
+
+/** Upsert a batch of entries in one transaction — avoids one commit per file and one all-or-nothing whole-vault transaction. */
+export function upsertMetadataEntries(db: DatabaseSync, entries: Record<string, PersistedMetadataIndexEntry>): void {
+  const paths = Object.keys(entries);
+  if (!paths.length) return;
+  const stmt = upsertStatement(db);
+  db.exec("BEGIN IMMEDIATE");
   try {
-    return JSON.parse(await fsp.readFile(path.join(root, METADATA_CACHE_RELATIVE_PATH), "utf8"));
-  } catch {
-    return null;
+    for (const path of paths) {
+      const entry = entries[path];
+      stmt.run(path, entry.mtimeMs, entry.size, JSON.stringify(entry.metadata), entry.mentionKeys ? JSON.stringify(entry.mentionKeys) : null);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Delete a single entry (e.g. one live vault-event delete). */
+export function deleteMetadataEntry(db: DatabaseSync, path: string): void {
+  db.prepare("DELETE FROM metadata_entries WHERE path = ?").run(path);
+}
+
+/** Delete multiple entries in one transaction (e.g. reconcile's removed-file sweep, or a debounced multi-path flush). */
+export function deleteMetadataEntries(db: DatabaseSync, paths: string[]): void {
+  if (!paths.length) return;
+  const stmt = db.prepare("DELETE FROM metadata_entries WHERE path = ?");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const path of paths) stmt.run(path);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 }
 
 /**
- * Replace the cache atomically. The temporary file lives beside the target,
- * ensuring rename is a same-volume atomic operation on every supported OS.
+ * Atomically replace the ENTIRE table with `snapshot`'s entries — matches the
+ * old JSON cache's whole-file-replace semantics. Used only by the
+ * main-process renderer-fallback write path (`persistCache()`/
+ * `applyRendererFallback()`), which always sends the complete current vault
+ * state, not a partial update — a plain upsert-merge would leak stale rows
+ * for since-deleted files forever.
  */
-type CacheFileOps = Pick<typeof fsp, "mkdir" | "writeFile" | "rename" | "rm">;
-
-export async function writeMetadataCache(
-  root: string,
-  data: unknown,
-  fileOps: CacheFileOps = fsp,
-  alreadySerialized = false,
-): Promise<void> {
-  const target = path.join(root, METADATA_CACHE_RELATIVE_PATH);
-  const dir = path.dirname(target);
-  await fileOps.mkdir(dir, { recursive: true });
-  const temporary = path.join(dir, `.cache.${process.pid}.${Date.now()}.tmp`);
+export function replaceAllMetadataEntries(db: DatabaseSync, snapshot: PersistedMetadataIndexSnapshot): void {
+  const stmt = upsertStatement(db);
+  db.exec("BEGIN IMMEDIATE");
   try {
-    await fileOps.writeFile(temporary, alreadySerialized ? data as string : JSON.stringify(data), "utf8");
-    await fileOps.rename(temporary, target);
+    db.exec("DELETE FROM metadata_entries");
+    for (const [path, entry] of Object.entries(snapshot.entries)) {
+      stmt.run(path, entry.mtimeMs, entry.size, JSON.stringify(entry.metadata), entry.mentionKeys ? JSON.stringify(entry.mentionKeys) : null);
+    }
+    db.exec("COMMIT");
   } catch (error) {
-    await fileOps.rm(temporary, { force: true }).catch(() => {});
+    db.exec("ROLLBACK");
     throw error;
   }
 }

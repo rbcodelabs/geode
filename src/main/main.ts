@@ -10,11 +10,12 @@ import { withPathLock } from "./path-lock";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { getProcessMetricsSnapshot } from "./process-metrics";
 import { PowerSaveBlockerRegistry } from "./power-save-blocker";
-import { readMetadataCache, writeMetadataCache } from "./metadata-cache-store";
+import { openMetadataDb, readAllMetadataEntries, replaceAllMetadataEntries } from "./metadata-cache-store";
 import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
 import { MetadataIndexerHost } from "./metadata-indexer-host";
-import type { MetadataFileStat } from "../indexer/metadata-indexer";
+import { isPersistedMetadataIndexSnapshot, type MetadataFileStat } from "../indexer/metadata-indexer";
+import type { DatabaseSync } from "node:sqlite";
 import { CrashJournal, type CrashDiagnostic } from "./crash-journal";
 import {
   BoundedBuffer,
@@ -77,6 +78,14 @@ interface VaultSession {
   watcher: VaultWatcherHandle | null;
   indexer: MetadataIndexerHost | null;
   indexerReady: Promise<unknown | null>;
+  /**
+   * Lazily opened on first `metadata-cache-read`/`metadata-cache-write` IPC
+   * call — the renderer's warm-start read fires on every vault open, but a
+   * WRITE from this connection only ever happens when the indexer utility
+   * process is unavailable (WAL supports concurrent multi-process readers
+   * safely; the two writers are kept mutually exclusive by construction).
+   */
+  metadataDb: DatabaseSync | null;
 }
 
 const sessions = new Map<number, VaultSession>();
@@ -280,12 +289,16 @@ function registerIpc() {
     const prev = sessions.get(win.id);
     if (prev?.watcher) await prev.watcher.close();
     if (prev?.indexer) await prev.indexer.shutdown();
+    prev?.metadataDb?.close();
     const root = path.resolve(vaultPath);
     const files = await listVaultFiles(root);
     let indexer: MetadataIndexerHost | null = null;
     let indexerReady: Promise<unknown | null> = Promise.resolve(null);
     try {
-      const child = utilityProcess.fork(path.join(__dirname, "indexer-process.js"));
+      const indexerInspectPort = process.env.GEODE_INDEXER_INSPECT_PORT;
+      const child = utilityProcess.fork(path.join(__dirname, "indexer-process.js"), [], {
+        execArgv: indexerInspectPort ? [`--inspect=${indexerInspectPort}`] : [],
+      });
       indexer = new MetadataIndexerHost(child, (message) => {
         if (!win.isDestroyed()) win.webContents.send("metadata-indexer-message", message);
       });
@@ -297,7 +310,7 @@ function registerIpc() {
       console.error("Metadata utility process unavailable; using renderer fallback", error);
     }
     const watcher = startWatcher(win, root, files);
-    sessions.set(win.id, { root, watcher, indexer, indexerReady });
+    sessions.set(win.id, { root, watcher, indexer, indexerReady, metadataDb: null });
     // The watcher backend and the descriptor count it costs are the first
     // things worth knowing when a sandboxed child process later fails to
     // spawn (see probeFdPressure).
@@ -456,13 +469,26 @@ function registerIpc() {
   ipcMain.handle("metadata-cache-read", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
-    return session ? readMetadataCache(session.root) : null;
+    if (!session) return null;
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      return readAllMetadataEntries(session.metadataDb);
+    } catch (error) {
+      console.error("Failed to read metadata cache", error);
+      return null;
+    }
   });
 
   ipcMain.handle("metadata-cache-write", async (e, data: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
-    if (session) await writeMetadataCache(session.root, data);
+    if (!session || !isPersistedMetadataIndexSnapshot(data)) return;
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      replaceAllMetadataEntries(session.metadataDb, data);
+    } catch (error) {
+      console.error("Failed to write metadata cache", error);
+    }
   });
 
   ipcMain.handle("metadata-indexer-start", async (e) => {
@@ -913,6 +939,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     const session = sessions.get(win.id);
     session?.watcher?.close();
     if (session?.indexer) void session.indexer.shutdown();
+    session?.metadataDb?.close();
     sessions.delete(win.id);
     launchTargets.delete(win.id);
     crashStates.delete(win.id);

@@ -19,6 +19,53 @@ export interface DataWriteOptions {
 }
 
 /**
+ * Bounded content cache with least-recently-used eviction. Backs
+ * `cachedRead`/`getCachedContent`/`primeCachedContent`: without a cap, this
+ * map re-accumulates the whole vault's text unboundedly — the indexer's own
+ * wire format no longer carries content (see the SQLite metadata-store
+ * migration), but `search-view.ts`'s full-text search independently
+ * re-warms every markdown file's content on a single plain-text query, which
+ * would otherwise reproduce the same unbounded-growth pattern here. `get`
+ * refreshes an entry's recency; `set` evicts the least-recently-used entry
+ * once the cap is exceeded.
+ */
+class LruContentCache {
+  private map = new Map<string, string>();
+
+  constructor(private readonly maxEntries: number) {}
+
+  get(path: string): string | undefined {
+    const value = this.map.get(path);
+    if (value === undefined) return undefined;
+    // Re-insert to mark as most-recently-used (Map iteration/insertion order).
+    this.map.delete(path);
+    this.map.set(path, value);
+    return value;
+  }
+
+  set(path: string, value: string): void {
+    this.map.delete(path);
+    this.map.set(path, value);
+    while (this.map.size > this.maxEntries) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+  }
+
+  delete(path: string): void {
+    this.map.delete(path);
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+}
+
+/** Cap on the number of files' content kept warm at once — see `LruContentCache`. */
+const CONTENT_CACHE_MAX_ENTRIES = 2_000;
+
+/**
  * Renderer-side vault model. Mirrors the on-disk file tree, performs file
  * operations over IPC, and emits events: create, modify, delete, rename
  * (all with TFile/TFolder args).
@@ -28,8 +75,8 @@ export class Vault extends Events {
   root = "";
   private files = new Map<string, TFile>();
   private folders = new Map<string, TFolder>();
-  /** Content cache for markdown files, kept warm for search/metadata. */
-  private contents = new Map<string, string>();
+  /** Content cache for markdown files, kept warm for search/metadata. LRU-capped — see `LruContentCache`. */
+  private contents = new LruContentCache(CONTENT_CACHE_MAX_ENTRIES);
 
   async open(vaultPath: string): Promise<void> {
     const { root, name, files } = await measureOperation("vault-discovery-ipc", () =>

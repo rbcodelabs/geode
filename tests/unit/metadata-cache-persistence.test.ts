@@ -30,7 +30,7 @@ describe("MetadataCache persistence", () => {
     const stored = {
       schemaVersion: METADATA_CACHE_SCHEMA_VERSION,
       entries: {
-        "A.md": { mtimeMs: file.mtime, size: file.size, content: "# Warm", metadata: parseMetadata("# Warm") },
+        "A.md": { mtimeMs: file.mtime, size: file.size, metadata: parseMetadata("# Warm") },
       },
     };
     let resolveWorker!: (available: true) => void;
@@ -77,8 +77,8 @@ describe("MetadataCache persistence", () => {
     const stored = {
       schemaVersion: METADATA_CACHE_SCHEMA_VERSION,
       entries: {
-        "Source.md": { mtimeMs: source.mtime, size: source.size, content, metadata: parseMetadata(content) },
-        "Target.md": { mtimeMs: target.mtime, size: target.size, content: "# Target", metadata: parseMetadata("# Target") },
+        "Source.md": { mtimeMs: source.mtime, size: source.size, metadata: parseMetadata(content) },
+        "Target.md": { mtimeMs: target.mtime, size: target.size, metadata: parseMetadata("# Target") },
       },
     };
     let resolveWorker!: (available: true) => void;
@@ -94,7 +94,7 @@ describe("MetadataCache persistence", () => {
     await cache.initialize();
 
     expect(cache.isUnlinkedMentionsReady()).toBe(false);
-    expect(cache.getUnlinkedMentions(target)).toEqual([]);
+    expect(await cache.getUnlinkedMentions(target)).toEqual([]);
     resolveWorker(true);
   });
 
@@ -111,13 +111,11 @@ describe("MetadataCache persistence", () => {
         "Source.md": {
           mtimeMs: source.mtime,
           size: source.size,
-          content: "Plain mention of Target.",
           metadata: parseMetadata("Plain mention of Target."),
         },
         "Target.md": {
           mtimeMs: target.mtime,
           size: target.size,
-          content: "# Target",
           metadata: parseMetadata("# Target"),
         },
       },
@@ -148,7 +146,7 @@ describe("MetadataCache persistence", () => {
 
     expect(readSpy.mock.calls.map(([file]) => file.path)).toEqual(["Source.md"]);
     expect(cache.isUnlinkedMentionsReady()).toBe(true);
-    expect(cache.getUnlinkedMentions(target).map((entry) => entry.source.path)).toEqual(["Source.md"]);
+    expect((await cache.getUnlinkedMentions(target)).map((entry) => entry.source.path)).toEqual(["Source.md"]);
   });
 
   it("assembles ordered utility-process chunks and applies parsed deltas without renderer reads", async () => {
@@ -161,7 +159,7 @@ describe("MetadataCache persistence", () => {
       startMetadataIndexer: vi.fn(async () => {
         deliver({ type: "snapshot-start", schemaVersion: METADATA_CACHE_SCHEMA_VERSION, totalEntries: 1 });
         deliver({ type: "snapshot-chunk", sequence: 0, entries: {
-          "A.md": { mtimeMs: initial.mtime, size: initial.size, content: "# Old", metadata: parseMetadata("# Old") },
+          "A.md": { mtimeMs: initial.mtime, size: initial.size, metadata: parseMetadata("# Old") },
         } });
         deliver({ type: "snapshot-complete", totalChunks: 1 });
         return true;
@@ -183,7 +181,7 @@ describe("MetadataCache persistence", () => {
     deliver({
       type: "delta",
       path: "A.md",
-      entry: { mtimeMs: 2, size: 5, content: "# New", metadata: parseMetadata("# New") },
+      entry: { mtimeMs: 2, size: 5, metadata: parseMetadata("# New") },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -220,12 +218,12 @@ describe("MetadataCache persistence", () => {
       startMetadataIndexer: vi.fn(async () => {
         deliver({ type: "snapshot-start", schemaVersion: 1, totalEntries: 1 });
         deliver({ type: "snapshot-chunk", sequence: 0, entries: {
-          "A.md": { mtimeMs: 1, size: 5, content: "# Old", metadata: parseMetadata("# Old") },
+          "A.md": { mtimeMs: 1, size: 5, metadata: parseMetadata("# Old") },
         } });
         fake.setFile("A.md", "# New");
         fake.trigger("modify", fake.getFileByPath("A.md"));
         deliver({ type: "delta", path: "A.md", entry: {
-          mtimeMs: 2, size: 5, content: "# New", metadata: parseMetadata("# New"),
+          mtimeMs: 2, size: 5, metadata: parseMetadata("# New"),
         } });
         deliver({ type: "snapshot-complete", totalChunks: 1 });
         return true;

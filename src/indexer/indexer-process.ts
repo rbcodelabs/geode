@@ -1,17 +1,19 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
+import type { DatabaseSync } from "node:sqlite";
 import { extractMentionIndexKeys, parseMetadata } from "../renderer/metadata-cache";
-import { readMetadataCache, writeMetadataCache } from "../main/metadata-cache-store";
+import { deleteMetadataEntries, openMetadataDb, readMetadataStats, upsertMetadataEntries } from "../main/metadata-cache-store";
 import {
   DebouncedMetadataCacheWriter,
-  chunkMetadataSnapshot,
-  isPersistedMetadataIndexSnapshot,
   METADATA_INDEX_SCHEMA_VERSION,
+  chunkMetadataSnapshot,
   reconcileMetadataIndex,
-  toPersistedSnapshot,
+  type MetadataDirtyOp,
   type MetadataFileStat,
-  type MetadataIndexSnapshot,
+  type MetadataReconcileStore,
+  type PersistedMetadataIndexEntry,
+  type PersistedMetadataIndexSnapshot,
 } from "./metadata-indexer";
 
 type InitMessage = { type: "initialize"; root: string; files: MetadataFileStat[] };
@@ -24,7 +26,9 @@ if (!parentPort) {
 }
 
 let root = "";
-let snapshot: MetadataIndexSnapshot = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: {} };
+// A DB handle, not vault-sized data — the indexer never holds a whole-vault
+// snapshot object in memory. Peak JS heap during reconcile is O(batch size).
+let db: DatabaseSync | null = null;
 let initializing = false;
 const pendingVaultEvents: VaultMessage[] = [];
 const injectedReadDelayMs = Number(process.env.GEODE_TEST_INDEXER_READ_DELAY_MS ?? 0);
@@ -34,17 +38,20 @@ const readForIndex = async (relative: string): Promise<string> => {
   }
   return fsp.readFile(path.join(root, relative), "utf8");
 };
-const timedWrite = async (value: MetadataIndexSnapshot) => {
-  const serializeStart = performance.now();
-  // Serialize only the persisted shape (metadata, no raw content) — the raw
-  // in-memory snapshot can exceed V8's max string length on large vaults.
-  const serialized = JSON.stringify(toPersistedSnapshot(value));
-  parentPort.postMessage({ type: "performance", operation: "metadata-cache-serialize", duration: performance.now() - serializeStart });
+
+const writer = new DebouncedMetadataCacheWriter(async (dirty) => {
+  if (!db) return;
+  const upserts: Record<string, PersistedMetadataIndexEntry> = {};
+  const deletes: string[] = [];
+  for (const [dirtyPath, op] of dirty) {
+    if (op === null) deletes.push(dirtyPath);
+    else upserts[dirtyPath] = op;
+  }
   const writeStart = performance.now();
-  await writeMetadataCache(root, serialized, undefined, true);
+  if (Object.keys(upserts).length) upsertMetadataEntries(db, upserts);
+  if (deletes.length) deleteMetadataEntries(db, deletes);
   parentPort.postMessage({ type: "performance", operation: "metadata-cache-disk-write", duration: performance.now() - writeStart });
-};
-const writer = new DebouncedMetadataCacheWriter(timedWrite, undefined, (error, consecutiveFailures) => {
+}, undefined, (error, consecutiveFailures) => {
   // Non-fatal: a cache write failure must never stop indexing or rendering,
   // which don't depend on the write succeeding. Just surface a diagnostic.
   parentPort.postMessage({ type: "error", message: `metadata cache write failed (attempt ${consecutiveFailures}): ${String(error)}` });
@@ -53,14 +60,27 @@ const writer = new DebouncedMetadataCacheWriter(timedWrite, undefined, (error, c
 async function initialize(message: InitMessage): Promise<void> {
   initializing = true;
   root = message.root;
-  const stored = await readMetadataCache(root);
+  db = openMetadataDb(root);
   const started = performance.now();
   let reconcileStats;
-  snapshot = await reconcileMetadataIndex(
+  // Accumulates only the CHANGED/NEW entries found during reconcile (small on
+  // a warm relaunch, same size as today's full metadata-only snapshot on a
+  // cold one — metadata-only data was never the memory problem, see plan).
+  // Unchanged entries are already correct in the DB and are picked up by the
+  // renderer's own independent warm-start read of the same database, so they
+  // never need to round-trip through this process's memory or the wire.
+  const changed: Record<string, PersistedMetadataIndexEntry> = {};
+  const store: MetadataReconcileStore = {
+    readStats: () => readMetadataStats(db!),
+    upsertBatch: (entries) => upsertMetadataEntries(db!, entries),
+    deletePaths: (paths) => deleteMetadataEntries(db!, paths),
+  };
+  await reconcileMetadataIndex(
     message.files,
-    isPersistedMetadataIndexSnapshot(stored) ? stored : null,
+    store,
     readForIndex,
     parseMetadata,
+    (batch) => { Object.assign(changed, batch); },
     (stats) => { reconcileStats = stats; },
     extractMentionIndexKeys,
   );
@@ -70,7 +90,7 @@ async function initialize(message: InitMessage): Promise<void> {
     duration: performance.now() - started,
     counters: reconcileStats,
   });
-  writer.schedule(snapshot);
+  const snapshot: PersistedMetadataIndexSnapshot = { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: changed };
   for (const part of chunkMetadataSnapshot(snapshot)) parentPort.postMessage(part);
   initializing = false;
   for (const event of pendingVaultEvents.splice(0)) await applyVaultEvent(event);
@@ -79,8 +99,7 @@ async function initialize(message: InitMessage): Promise<void> {
 async function applyVaultEvent(message: VaultMessage): Promise<void> {
   if (!message.path.toLowerCase().endsWith(".md")) return;
   if (message.event === "delete") {
-    delete snapshot.entries[message.path];
-    writer.schedule(snapshot);
+    writer.schedule(message.path, null satisfies MetadataDirtyOp);
     parentPort.postMessage({ type: "delta", path: message.path, deleted: true });
     return;
   }
@@ -89,16 +108,14 @@ async function applyVaultEvent(message: VaultMessage): Promise<void> {
     const started = performance.now();
     const [content, stat] = await Promise.all([fsp.readFile(absolute, "utf8"), fsp.stat(absolute)]);
     const metadata = parseMetadata(content);
-    const entry = {
+    const entry: PersistedMetadataIndexEntry = {
       mtimeMs: stat.mtimeMs,
       size: stat.size,
-      content,
       metadata,
       mentionKeys: extractMentionIndexKeys(content),
     };
-    snapshot.entries[message.path] = entry;
+    writer.schedule(message.path, entry);
     parentPort.postMessage({ type: "performance", operation: "metadata-worker-read-parse", duration: performance.now() - started });
-    writer.schedule(snapshot);
     parentPort.postMessage({ type: "delta", path: message.path, entry });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -115,6 +132,7 @@ parentPort.on("message", (event) => {
     else void applyVaultEvent(message);
   }
   else if (message.type === "shutdown") void writer.flush().finally(() => {
+    db?.close();
     parentPort.postMessage({ type: "shutdown-complete" });
     process.exit(0);
   });

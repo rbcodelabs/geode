@@ -39,7 +39,7 @@ abstract class SidebarView implements View {
 
   abstract getDisplayText(): string;
   abstract getIcon(): string;
-  abstract render(): void;
+  abstract render(): void | Promise<void>;
 
   private scheduleRender(): void {
     if (this.renderScheduled) return;
@@ -84,15 +84,19 @@ export class BacklinksView extends SidebarView {
     return "link";
   }
 
-  render(): void {
+  async render(): Promise<void> {
     if (!this.file || this.file.extension !== "md") {
       this.empty("No file is open.");
       return;
     }
     const file = this.file;
-    const linked = this.app.metadataCache.getBacklinksWithContext(file);
+    const linked = await this.app.metadataCache.getBacklinksWithContext(file);
     const unlinkedReady = this.app.metadataCache.isUnlinkedMentionsReady();
-    const unlinked = unlinkedReady ? this.app.metadataCache.getUnlinkedMentions(file) : [];
+    const unlinked = unlinkedReady ? await this.app.metadataCache.getUnlinkedMentions(file) : [];
+    // The active file (or its md-ness) may have changed while awaiting
+    // above (user navigated mid-render) — a subsequent render() is already
+    // queued for the new state, so bail rather than paint stale content.
+    if (this.file !== file) return;
     this.bodyEl.innerHTML = "";
 
     this.renderSection(
