@@ -1375,6 +1375,15 @@ export class Workspace extends Events {
     return null;
   }
 
+  /** Find the leaf hosting this exact view instance (safe when one file is open more than once). */
+  findLeafForView(view: View): WorkspaceLeaf | null {
+    let match: WorkspaceLeaf | null = null;
+    this.iterateLeaves((leaf) => {
+      if (!match && leaf.view === view) match = leaf;
+    });
+    return match;
+  }
+
   /** Find an open leaf whose view has the given `viewType` (e.g. reusing a singleton view like Graph). */
   findLeafByViewType(viewType: string): WorkspaceLeaf | null {
     for (const group of this.groups) {

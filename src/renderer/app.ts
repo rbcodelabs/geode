@@ -26,7 +26,7 @@ import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
-import { TFile, isTFile, pathName } from "./types";
+import { TFile, TFolder, isTFile, pathName } from "./types";
 import {
   addBookmark,
   createEmptyRoot,
@@ -37,7 +37,16 @@ import {
   type Bookmark,
   type BookmarksRoot,
 } from "./bookmarks";
-import { rewriteWikilinksForRename } from "./rename";
+import { renamePathForBasename, rewriteWikilinksForRename } from "./rename";
+import {
+  ActionRegistry,
+  DOCUMENT_MENU_SPEC,
+  FOLDER_MENU_SPEC,
+  TAB_MENU_SPEC,
+  composeMenu,
+  createActionCommand,
+  tabCloseTargets,
+} from "./actions";
 import { anchorSnapshot, parseLocalFileHref, shouldInterceptAnchor } from "./external-links";
 import { initTooltips } from "./tooltip";
 import {
@@ -113,6 +122,13 @@ class EmptyView implements View {
 
   onOpen(): void {}
   onClose(): void {}
+}
+
+export interface AppActionContext {
+  file?: TFile | null;
+  resource?: TFile | TFolder | null;
+  leaf?: WorkspaceLeaf | null;
+  view?: MarkdownView | null;
 }
 
 class QuickSwitcherModal extends SuggestModal<TFile> {
@@ -728,6 +744,8 @@ export class App {
   metadataCache = new MetadataCache(this.vault);
   fileManager = new FileManager(this);
   commands = new CommandRegistry();
+  /** Internal Geode actions. Kept separate from the public Obsidian-compatible CommandRegistry. */
+  actions = new ActionRegistry<AppActionContext>();
   markdownRenderer = new MarkdownRenderer(this);
   /** Reading-view code-block + post processors registered by plugins (see `Plugin.registerMarkdownCodeBlockProcessor`). */
   markdownProcessors = new MarkdownProcessorRegistry();
@@ -1108,6 +1126,7 @@ export class App {
     this.mermaidPlugin = new MermaidPlugin(this);
     this.mermaidPlugin.load();
 
+    this.registerActions();
     this.registerCommands();
     this.commands.attach(document);
     this.attachGuestHotkeyBridge();
@@ -1233,6 +1252,113 @@ export class App {
     });
   }
 
+  private activeActionContext(): AppActionContext {
+    const leaf = this.workspace.getActiveLeaf();
+    const file = leaf?.view?.getFile?.() ?? null;
+    return {
+      leaf,
+      file,
+      resource: file,
+      view: leaf?.view instanceof MarkdownView ? leaf.view : null,
+    };
+  }
+
+  private registerActions(): void {
+    this.actions = new ActionRegistry<AppActionContext>();
+    const file = (context: AppActionContext) => context.file ?? (isTFile(context.resource) ? context.resource : null);
+    this.actions.register({
+      id: "file.open-new-tab",
+      label: "Open in new tab",
+      isAvailable: (context) => !!file(context),
+      run: (context) => this.openFile(file(context)!, true),
+    });
+    this.actions.register({
+      id: "resource.bookmark",
+      label: (context) => {
+        const resource = context.resource ?? context.file;
+        return resource && findBookmarkByPath(this.bookmarksRoot, resource.path) ? "Un-bookmark" : "Bookmark";
+      },
+      icon: "bookmark",
+      isAvailable: (context) => !!(context.resource ?? context.file),
+      run: async (context) => {
+        const resource = context.resource ?? context.file;
+        if (!resource) return;
+        if (isTFile(resource)) await this.toggleBookmarkFile(resource);
+        else await this.toggleBookmarkFolder(resource);
+      },
+    });
+    this.actions.register({
+      id: "resource.rename",
+      label: "Rename…",
+      isAvailable: (context) => !!(context.resource ?? context.file),
+      run: (context) => this.promptRenameResource((context.resource ?? context.file)!),
+    });
+    this.actions.register({
+      id: "resource.delete",
+      label: "Delete",
+      icon: "trash-2",
+      warning: true,
+      isAvailable: (context) => !!(context.resource ?? context.file),
+      run: (context) => this.deleteResource((context.resource ?? context.file)!),
+    });
+    for (const [id, label, run] of [
+      ["folder.new-note", "New note", (folder: TFolder) => this.createNewNote(folder.path)],
+      ["folder.new-canvas", "New canvas", (folder: TFolder) => this.createNewCanvas(folder.path)],
+      ["folder.new-base", "New base", (folder: TFolder) => this.createNewBase(folder.path)],
+      ["folder.new-folder", "New folder", (folder: TFolder) => this.promptNewFolder(folder)],
+    ] as const) {
+      this.actions.register({
+        id,
+        label,
+        isAvailable: (context) => context.resource?.kind === "folder",
+        run: (context) => run(context.resource as TFolder),
+      });
+    }
+    this.actions.register({
+      id: "tab.pin",
+      label: (context) => context.leaf?.pinned ? "Unpin" : "Pin",
+      icon: "pin",
+      isAvailable: (context) => !!context.leaf,
+      run: (context) => context.leaf!.togglePinned(),
+    });
+    this.actions.register({
+      id: "tab.close",
+      label: "Close",
+      isAvailable: (context) => !!context.leaf,
+      run: (context) => context.leaf!.detach(),
+    });
+    for (const [id, label, mode] of [
+      ["tab.close-others", "Close others", "others"],
+      ["tab.close-right", "Close tabs to the right", "right"],
+    ] as const) {
+      this.actions.register({
+        id,
+        label,
+        isAvailable: (context) => {
+          const leaf = context.leaf;
+          return !!leaf && leaf.group instanceof TabGroup && tabCloseTargets(leaf.group.leaves, leaf, mode).length > 0;
+        },
+        run: async (context) => {
+          const leaf = context.leaf;
+          if (!leaf || !(leaf.group instanceof TabGroup)) return;
+          for (const target of tabCloseTargets([...leaf.group.leaves], leaf, mode)) await target.detach();
+        },
+      });
+    }
+    this.actions.register({
+      id: "view.toggle-reading",
+      label: "Toggle reading view",
+      isAvailable: (context) => !!context.view,
+      run: (context) => context.view!.toggleMode(),
+    });
+    this.actions.register({
+      id: "view.toggle-source",
+      label: "Toggle Live Preview/Source mode",
+      isAvailable: (context) => !!context.view,
+      run: (context) => context.view!.toggleSource(),
+    });
+  }
+
   private registerCommands() {
     const c = (id: string, name: string, hotkey: string | undefined, callback: () => void) =>
       this.commands.add({ id, name, hotkey, callback });
@@ -1240,16 +1366,17 @@ export class App {
     c("command-palette", "Open command palette", "Mod+P", () => this.openCommandPalette());
     c("quick-switcher", "Quick switcher: Open", "Mod+O", () => this.openQuickSwitcher());
     c("new-note", "Create new note", "Mod+N", () => this.createNewNote());
-    c("toggle-reading", "Toggle reading view", "Mod+E", () =>
-      this.getActiveMarkdownView()?.toggleMode()
-    );
-    c("toggle-source", "Toggle Live Preview/Source mode", undefined, () =>
-      this.getActiveMarkdownView()?.toggleSource()
-    );
+    this.commands.add(createActionCommand(this.actions, "view.toggle-reading", "Toggle reading view", () => this.activeActionContext(), "Mod+E", "toggle-reading"));
+    this.commands.add(createActionCommand(this.actions, "view.toggle-source", "Toggle Live Preview/Source mode", () => this.activeActionContext(), undefined, "toggle-source"));
     c("new-tab", "New tab", "Mod+T", () => this.openEmptyTab(this.workspace.activeGroup));
-    c("close-tab", "Close current tab", "Mod+W", () =>
-      this.workspace.getActiveLeaf()?.detach()
-    );
+    this.commands.add(createActionCommand(this.actions, "tab.close", "Close current tab", () => this.activeActionContext(), "Mod+W", "close-tab"));
+    this.commands.add(createActionCommand(this.actions, "tab.close-others", "Close other tabs", () => this.activeActionContext()));
+    this.commands.add(createActionCommand(this.actions, "tab.close-right", "Close tabs to the right", () => this.activeActionContext()));
+    this.commands.add(createActionCommand(this.actions, "tab.pin", "Pin or unpin current tab", () => this.activeActionContext()));
+    this.commands.add(createActionCommand(this.actions, "resource.rename", "Rename current file", () => this.activeActionContext()));
+    this.commands.add(createActionCommand(this.actions, "resource.delete", "Delete current file", () => this.activeActionContext()));
+    this.commands.add(createActionCommand(this.actions, "resource.bookmark", "Bookmark or un-bookmark current file", () => this.activeActionContext()));
+    this.commands.add(createActionCommand(this.actions, "file.open-new-tab", "Open current file in new tab", () => this.activeActionContext()));
     c("split-right", "Split right", undefined, () => {
       const group = this.workspace.addGroup(this.workspace.activeGroup);
       this.openEmptyTab(group);
@@ -1578,6 +1705,7 @@ export class App {
       : this.vault.availablePath(folder ?? "", "Untitled", "md");
     const file = await this.vault.create(path, "");
     await this.openFile(file, false);
+    if (!name) this.getActiveMarkdownView()?.beginTitleRename();
   }
 
   /**
@@ -1988,6 +2116,110 @@ export class App {
     }
   }
 
+  /** One validated rename path shared by inline title, menus, explorer, and commands. */
+  async renameFile(file: TFile, basename: string): Promise<boolean> {
+    const result = renamePathForBasename(file.path, basename);
+    if (!result.ok) {
+      this.notify(result.error);
+      return false;
+    }
+    if (result.path === file.path) return true;
+    if (this.vault.getAbstractFileByPath(result.path)) {
+      this.notify(`A file named "${basename.trim()}" already exists`);
+      return false;
+    }
+    try {
+      await this.renameFileWithLinkUpdate(file, result.path);
+      return true;
+    } catch (error) {
+      console.error("Failed to rename file", error);
+      this.notify(`Could not rename "${file.name}"`);
+      return false;
+    }
+  }
+
+  promptRenameResource(resource: TFile | TFolder): void {
+    new PromptModal(this, {
+      placeholder: "New name",
+      initialValue: isTFile(resource) ? resource.basename : resource.name,
+      onSubmit: async (name) => {
+        if (isTFile(resource)) {
+          await this.renameFile(resource, name);
+          return;
+        }
+        const trimmed = name.trim();
+        if (!trimmed || /[\\/:#|^\[\]]/.test(trimmed)) {
+          this.notify("Invalid folder name");
+          return;
+        }
+        const newPath = `${resource.parent ? resource.parent + "/" : ""}${trimmed}`;
+        if (this.vault.getAbstractFileByPath(newPath)) {
+          this.notify(`A folder named "${trimmed}" already exists`);
+          return;
+        }
+        try {
+          await this.vault.rename(resource, newPath);
+        } catch (error) {
+          console.error("Failed to rename folder", error);
+          this.notify(`Could not rename "${resource.name}"`);
+        }
+      },
+    }).open();
+  }
+
+  promptNewFolder(parent: TFolder): void {
+    new PromptModal(this, {
+      placeholder: "Folder name",
+      onSubmit: async (name) => {
+        const trimmed = name.trim();
+        if (!trimmed || /[\\/:#|^\[\]]/.test(trimmed)) {
+          this.notify("Invalid folder name");
+          return;
+        }
+        const path = `${parent.path}/${trimmed}`;
+        if (this.vault.getAbstractFileByPath(path)) {
+          this.notify(`A folder named "${trimmed}" already exists`);
+          return;
+        }
+        try {
+          await this.vault.createFolder(path);
+        } catch (error) {
+          console.error("Failed to create folder", error);
+          this.notify(`Could not create folder "${trimmed}"`);
+        }
+      },
+    }).open();
+  }
+
+  async deleteResource(resource: TFile | TFolder): Promise<void> {
+    const message = isTFile(resource)
+      ? `Delete "${resource.name}"? It will be moved to the system trash.`
+      : `Delete folder "${resource.name}" and all its contents?`;
+    if (confirm(message)) await this.vault.trash(resource);
+  }
+
+  showDocumentMenu(e: MouseEvent, leaf: WorkspaceLeaf, options: { anchor?: HTMLElement } = {}): void {
+    const file = leaf.view?.getFile?.() ?? null;
+    if (!file) return;
+    this.showMenu(e, composeMenu(this.actions, {
+      leaf,
+      file,
+      resource: file,
+      view: leaf.view instanceof MarkdownView ? leaf.view : null,
+    }, DOCUMENT_MENU_SPEC), options);
+  }
+
+  resourceMenuItems(resource: TFile | TFolder) {
+    return composeMenu(this.actions, {
+      file: isTFile(resource) ? resource : null,
+      resource,
+    }, DOCUMENT_MENU_SPEC);
+  }
+
+  folderMenuItems(folder: TFolder) {
+    return composeMenu(this.actions, { resource: folder }, FOLDER_MENU_SPEC);
+  }
+
   // --- UI helpers ---------------------------------------------------------
 
   notify(message: string, timeout = 4000) {
@@ -2037,12 +2269,13 @@ export class App {
   showTabContextMenu(e: MouseEvent, leaf: WorkspaceLeaf): void {
     e.preventDefault();
     e.stopPropagation();
-    new Menu()
-      .addItem((item) => item
-        .setTitle(leaf.pinned ? "Unpin" : "Pin")
-        .setIcon("pin")
-        .onClick(() => leaf.togglePinned()))
-      .showAtMouseEvent(e);
+    const file = leaf.view?.getFile?.() ?? null;
+    this.showMenu(e, composeMenu(this.actions, {
+      leaf,
+      file,
+      resource: file,
+      view: leaf.view instanceof MarkdownView ? leaf.view : null,
+    }, TAB_MENU_SPEC));
   }
 
   applySettings() {

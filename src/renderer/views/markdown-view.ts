@@ -110,14 +110,23 @@ export class MarkdownView implements View {
     sourceBtn.title = "Toggle Live Preview / Source mode";
     sourceBtn.setAttribute("aria-label", "Toggle Live Preview / Source mode");
     setIcon(sourceBtn, "code-2");
-    sourceBtn.addEventListener("click", () => this.toggleSource());
+    sourceBtn.addEventListener("click", () => void this.app.actions.execute("view.toggle-source", { view: this }));
     const modeBtn = document.createElement("button");
     modeBtn.className = "view-mode-toggle clickable-icon view-action";
     modeBtn.title = "Toggle reading view (Cmd/Ctrl+E)";
     modeBtn.setAttribute("aria-label", "Toggle reading view (Cmd/Ctrl+E)");
     setIcon(modeBtn, "book-open");
-    modeBtn.addEventListener("click", () => this.toggleMode());
-    actions.append(sourceBtn, modeBtn);
+    modeBtn.addEventListener("click", () => void this.app.actions.execute("view.toggle-reading", { view: this }));
+    const moreBtn = document.createElement("button");
+    moreBtn.className = "view-more-options clickable-icon view-action";
+    moreBtn.title = "More options";
+    moreBtn.setAttribute("aria-label", "More options");
+    setIcon(moreBtn, "more-vertical");
+    moreBtn.addEventListener("click", (event) => {
+      const leaf = this.app.workspace.findLeafForView(this);
+      if (leaf) this.app.showDocumentMenu(event, leaf, { anchor: moreBtn });
+    });
+    actions.append(sourceBtn, modeBtn, moreBtn);
 
     this.headerEl.append(left, titleContainer, actions);
 
@@ -158,6 +167,17 @@ export class MarkdownView implements View {
     this.buildEditor(text);
     if (this.mode === "reading") await this.renderReading();
     this.applyMode();
+  }
+
+  /** Enter the same title-editing flow used after creating an Untitled note. */
+  beginTitleRename(): void {
+    this.titleEl.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(this.titleEl);
+    selection.addRange(range);
   }
 
   private buildEditor(text: string) {
@@ -296,15 +316,14 @@ export class MarkdownView implements View {
   }
 
   private async commitTitleRename() {
-    const newName = this.titleEl.textContent?.trim();
-    if (!this.file || !newName || newName === this.file.basename) return;
-    if (/[\\/:#|^\[\]]/.test(newName)) {
+    const newName = this.titleEl.textContent?.trim() ?? "";
+    if (!this.file) return;
+    if (newName === this.file.basename) {
       this.titleEl.textContent = this.file.basename;
-      this.app.notify("Invalid characters in file name");
       return;
     }
-    const newPath = (this.file.parent ? this.file.parent + "/" : "") + newName + "." + this.file.extension;
-    await this.app.renameFileWithLinkUpdate(this.file, newPath);
+    const oldName = this.file.basename;
+    if (!(await this.app.renameFile(this.file, newName))) this.titleEl.textContent = oldName;
   }
 
   getText(): string {

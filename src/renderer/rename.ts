@@ -30,3 +30,16 @@ export function rewriteWikilinksForRename(
     return match;
   });
 }
+export type RenamePathResult = { ok: true; path: string } | { ok: false; error: string };
+
+/** Validate a user-entered basename and derive a same-folder, same-extension path. */
+export function renamePathForBasename(currentPath: string, rawName: string): RenamePathResult {
+  const name = rawName.trim();
+  if (!name || /[\\/:#|^\[\]]/.test(name)) return { ok: false, error: "Invalid file name" };
+  const slash = currentPath.lastIndexOf("/");
+  const parent = slash >= 0 ? currentPath.slice(0, slash + 1) : "";
+  const fileName = slash >= 0 ? currentPath.slice(slash + 1) : currentPath;
+  const dot = fileName.lastIndexOf(".");
+  const extension = dot >= 0 ? fileName.slice(dot) : "";
+  return { ok: true, path: `${parent}${name}${extension}` };
+}
