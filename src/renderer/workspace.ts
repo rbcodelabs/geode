@@ -269,8 +269,8 @@ export function buildViewHeaderNavButtons(): HTMLElement {
 /**
  * Build (or rebuild) `leaf.tabEl`'s contents to match real Obsidian's tab
  * header DOM: `.workspace-tab-header[data-type][aria-label]` >
- * `.workspace-tab-header-inner` (icon + title + close button) plus a sibling
- * `.workspace-tab-header-status-container` (pin icon). Shared by `TabGroup`
+ * `.workspace-tab-header-inner` > icon, title, `.workspace-tab-header-status-container`
+ * (pin icon), then the close button. Shared by `TabGroup`
  * and `Sidebar` so both main-area tabs and docked panes expose the same
  * class names for community themes to target. Caller wires up drag/drop and
  * click handlers afterward — this only builds the static structure.
@@ -305,8 +305,6 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
     leaf.detach();
   });
 
-  inner.append(icon, title, close);
-
   const status = document.createElement("div");
   status.className = "workspace-tab-header-status-container";
   if (leaf.pinned) {
@@ -316,7 +314,15 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
     status.appendChild(pin);
   }
 
-  tab.append(inner, status);
+  // Status sits INSIDE `inner`, immediately before the close button — the same
+  // child order real Obsidian builds. As a sibling of `inner` it was laid out
+  // by the tab's own flex box, so a pinned tab shrank `inner` by the pin's
+  // width: the pin escaped `inner`'s trailing padding, and the inactive-tab
+  // divider (`inner::after`, pinned to `inner`'s end edge) was drawn that far
+  // inside the tab's real edge instead of on it.
+  inner.append(icon, title, status, close);
+
+  tab.append(inner);
   return tab;
 }
 

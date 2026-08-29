@@ -38,6 +38,12 @@ test("sizes workspace tabs like Obsidian as the available space changes", async 
     const tabToClose = mainTabs.nth(1);
     const tabToCloseTitle = await tabToClose.locator(".workspace-tab-header-inner-title").textContent();
     const closeButton = tabToClose.locator(".workspace-tab-header-inner-close-button");
+    // An idle, non-active tab must not render its close button at all. Note that
+    // `toBeVisible()` alone would NOT catch a regression here: Playwright counts
+    // an `opacity: 0` element as visible, which is how the reserved-dead-space
+    // bug shipped past this very test.
+    await expect(closeButton).toBeHidden();
+    await tabToClose.hover();
     await expect(closeButton).toBeVisible();
     await closeButton.click();
     await expect(mainTabs).toHaveCount(2);
@@ -50,6 +56,33 @@ test("sizes workspace tabs like Obsidian as the available space changes", async 
     await expect(mainTabs).toHaveCount(3);
     const roomyWidths = await mainTabs.evaluateAll((tabs) => tabs.map((tab) => tab.getBoundingClientRect().width));
     expect(Math.max(...roomyWidths)).toBeLessThanOrEqual(240);
+
+    // Park the pointer well clear of the tab bar: the `closeButton.click()`
+    // above leaves it hovering whichever tab slid into that spot, which would
+    // legitimately reveal that tab's close button and skew the measurement.
+    await window.mouse.move(600, 500);
+    const idleInactive = await mainTabs.nth(1).evaluate((tab) => {
+      const inner = tab.querySelector<HTMLElement>(".workspace-tab-header-inner")!;
+      const title = tab.querySelector<HTMLElement>(".workspace-tab-header-inner-title")!;
+      const close = tab.querySelector<HTMLElement>(".workspace-tab-header-inner-close-button")!;
+      const innerRect = inner.getBoundingClientRect();
+      const paddingRight = parseFloat(getComputedStyle(inner).paddingRight);
+      return {
+        isActive: tab.classList.contains("is-active"),
+        closeWidth: close.getBoundingClientRect().width,
+        titleRight: title.getBoundingClientRect().right,
+        innerContentRight: innerRect.right - paddingRight,
+      };
+    });
+    // Guards the fixture assumption the two assertions below depend on.
+    expect(idleInactive.isActive).toBe(false);
+    // The close button is out of flow, not merely transparent.
+    expect(idleInactive.closeWidth).toBe(0);
+    // ...and nothing else is holding its place either. This states the
+    // user-visible requirement ("no reserved dead space") independently of how
+    // the hiding is implemented: the title, being `flex: 1 1 auto`, must grow
+    // all the way to the inner's content edge.
+    expect(Math.abs(idleInactive.titleRight - idleInactive.innerContentRight)).toBeLessThanOrEqual(1);
 
     const sidebarTabs = window.locator(".workspace-sidebar .workspace-tab-header");
     expect(await sidebarTabs.count()).toBeGreaterThan(0);
@@ -128,20 +161,181 @@ test("sizes workspace tabs like Obsidian as the available space changes", async 
       titles.filter((title) => title.getBoundingClientRect().width === 0).length
     );
     expect(hiddenLabels).toBeGreaterThan(0);
-    const compactedTabsWithoutIcons = await mainTabs.evaluateAll((tabs) =>
+    // These are all markdown tabs, so every one of them must have dropped its
+    // icon. This assertion used to demand the opposite (`toBe(0)`) — it was
+    // written before the icon rule landed, when a squeezed tab's icon was the
+    // only thing it rendered. That is precisely the bug: the icon is the same
+    // page glyph on every note, so it identifies nothing while consuming the
+    // whole tab. Inverted deliberately; see the `data-type` rule in app.css.
+    const compactedMarkdownTabsWithIcons = await mainTabs.evaluateAll((tabs) =>
       tabs.filter((tab) => {
         if (tab.getBoundingClientRect().width > 48) return false;
+        if (tab.dataset.type !== "markdown" && tab.dataset.type !== "empty") return false;
         const icon = tab.querySelector<HTMLElement>(".workspace-tab-header-inner-icon");
-        return !icon || icon.getBoundingClientRect().width === 0;
+        return !!icon && icon.getBoundingClientRect().width > 0;
       }).length
     );
-    expect(compactedTabsWithoutIcons).toBe(0);
+    expect(compactedMarkdownTabsWithIcons).toBe(0);
+
+    // A squeezed non-active tab has no room to spend on a close button, so it
+    // must not reserve one even while hovered. The active tab is deliberately
+    // exempt (it keeps its X down to minimum width, as real Obsidian does), and
+    // this asserts nothing about the title: Obsidian keeps a one-character
+    // ellipsised title at minimum width, so hiding it is explicitly not a goal.
+    await mainTabs.nth(1).hover();
+    const compactCloseWidths = await mainTabs.evaluateAll((tabs) =>
+      tabs
+        .filter((tab) => tab.getBoundingClientRect().width <= 48 && !tab.classList.contains("is-active"))
+        .map((tab) => tab.querySelector(".workspace-tab-header-inner-close-button")!.getBoundingClientRect().width)
+    );
+    expect(compactCloseWidths.length).toBeGreaterThan(0);
+    expect(compactCloseWidths.filter((width) => width !== 0)).toEqual([]);
+    await window.mouse.move(600, 500);
 
     const rightToggle = mainBar.locator(".sidebar-toggle-button.mod-right");
     const toggleBox = await rightToggle.boundingBox();
     expect(toggleBox).not.toBeNull();
     expect(toggleBox!.x + toggleBox!.width).toBeLessThanOrEqual(900);
     if (screenshotDir) await window.screenshot({ path: path.join(screenshotDir, "responsive-tabs-crowded.png") });
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("drops the tab icon only on note tabs, keeping it where it identifies the view", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-tab-icon-scope-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-tab-icon-scope-ud-"));
+  fs.writeFileSync(path.join(vaultDir, "Scoped note.md"), "# Scoped note\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await expect(window.locator(".workspace")).toBeVisible();
+    const browserWindow = await app.browserWindow(window);
+    await browserWindow.evaluate((win: any) => win.setSize(1280, 800));
+
+    await window.evaluate(async () => {
+      const geode = (window as any).app;
+      await geode.openFile(geode.vault.getFileByPath("Scoped note.md"), true);
+      // `about:blank` keeps this test off the network — the view type is what
+      // matters here, not what the page renders.
+      const leaf = geode.workspace.getLeaf(true);
+      await leaf.setViewState({ type: "webviewer", active: true, state: { url: "about:blank" } });
+    });
+
+    // Guards the fixture: the assertions below are only meaningful if all three
+    // view types are actually present in the strip.
+    for (const type of ["markdown", "empty", "webviewer"]) {
+      await expect(
+        window.locator(`.workspace-split.mod-root .workspace-tab-header[data-type="${type}"]`)
+      ).toHaveCount(1);
+    }
+
+    const iconWidthFor = (type: string) =>
+      window
+        .locator(`.workspace-split.mod-root .workspace-tab-header[data-type="${type}"]`)
+        .first()
+        .locator(".workspace-tab-header-inner-icon")
+        .evaluate((icon) => icon.getBoundingClientRect().width);
+
+    // Both halves of the rule's scope are pinned here on purpose. Asserting
+    // only that markdown loses its icon would still pass if the selector were
+    // over-broad and stripped every icon in the strip.
+    expect(await iconWidthFor("markdown")).toBe(0);
+    expect(await iconWidthFor("empty")).toBe(0);
+    expect(await iconWidthFor("webviewer")).toBeGreaterThan(0);
+
+    // The sidebar strip is icon-only — it hides title, close and status — so a
+    // leak of the rule out of the root split would leave blank pills.
+    const sidebarIcons = await window
+      .locator(".workspace-sidebar .workspace-tab-header .workspace-tab-header-inner-icon")
+      .evaluateAll((icons) => icons.map((icon) => icon.getBoundingClientRect().width));
+    expect(sidebarIcons.length).toBeGreaterThan(0);
+    expect(sidebarIcons.filter((width) => width === 0)).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("scrolls the root tab strip when it overflows instead of clipping it", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-tab-scroll-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-tab-scroll-ud-"));
+  const names = Array.from({ length: 12 }, (_, i) => `Scrollable tab ${i + 1}`);
+  for (const name of names) fs.writeFileSync(path.join(vaultDir, `${name}.md`), `# ${name}\n`);
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await expect(window.locator(".workspace")).toBeVisible();
+    const browserWindow = await app.browserWindow(window);
+    await browserWindow.evaluate((win: any) => win.setSize(900, 700));
+
+    await window.evaluate(async (noteNames) => {
+      const geode = (window as any).app;
+      for (const name of noteNames) await geode.openFile(geode.vault.getFileByPath(`${name}.md`), true);
+    }, names);
+
+    const innerSelector = ".workspace-split.mod-root .workspace-tab-header-container-inner";
+    await expect(window.locator(innerSelector).first()).toBeVisible();
+
+    const overflowX = await window
+      .locator(innerSelector)
+      .first()
+      .evaluate((el) => getComputedStyle(el).overflowX);
+    expect(overflowX).not.toBe("hidden");
+
+    // Tabs are `flex: 1 1 140px; min-width: 0`, so they shrink to fit and the
+    // strip does not actually overflow at any realistic tab count — which is
+    // exactly why `overflow: hidden` hid a latent trap rather than an obvious
+    // one. Give the tabs a floor so the strip genuinely overflows, then prove
+    // the user can reach the far end. `overflow: hidden` would still let
+    // `scrollLeft` be set programmatically, so this drives a real wheel event:
+    // that is the thing a clipping container refuses to do.
+    await window.addStyleTag({
+      content: `.workspace-split.mod-root .workspace-tab-header { flex: 0 0 150px !important; min-width: 150px !important; }`,
+    });
+
+    const geometry = await window
+      .locator(innerSelector)
+      .first()
+      .evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        offsetHeight: (el as HTMLElement).offsetHeight,
+        clientHeight: el.clientHeight,
+      }));
+    expect(geometry.scrollWidth).toBeGreaterThan(geometry.clientWidth);
+    // The horizontal scrollbar must stay invisible: a visible one would eat
+    // vertical space out of a fixed-height tab row.
+    expect(geometry.offsetHeight - geometry.clientHeight).toBe(0);
+
+    const stripBox = await window.locator(innerSelector).first().boundingBox();
+    expect(stripBox).not.toBeNull();
+    await window.mouse.move(stripBox!.x + stripBox!.width / 2, stripBox!.y + stripBox!.height / 2);
+    await window.mouse.wheel(300, 0);
+
+    await expect
+      .poll(
+        () =>
+          window
+            .locator(innerSelector)
+            .first()
+            .evaluate((el) => el.scrollLeft),
+        { message: "root tab strip should scroll horizontally on wheel input" }
+      )
+      .toBeGreaterThan(0);
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
