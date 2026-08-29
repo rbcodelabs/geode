@@ -126,8 +126,15 @@ const api = {
   publishHotkeys: (combos: string[]): Promise<void> =>
     ipcRenderer.invoke("hotkeys-publish", combos),
   /** A hotkey pressed inside a `<webview>` guest, forwarded back to the host. */
-  onGuestHotkey: (cb: (combo: string) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, combo: string) => cb(combo);
+  /**
+   * `guestId` is the WebContents id of the guest the keystroke came from. The
+   * host's active leaf does not follow focus into a `<webview>` (a click
+   * inside a guest never produces a host DOM mouse event), so without it a
+   * hotkey pressed in one guest would act on whichever pane the host last
+   * considered active.
+   */
+  onGuestHotkey: (cb: (combo: string, guestId: number) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, combo: string, guestId: number) => cb(combo, guestId);
     ipcRenderer.on("guest-hotkey", listener);
     return () => ipcRenderer.removeListener("guest-hotkey", listener);
   },

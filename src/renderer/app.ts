@@ -1266,9 +1266,51 @@ export class App {
     this.detachHotkeyPublisher = this.commands.onChange(publish);
     publish();
     this.detachGuestHotkeys?.();
-    this.detachGuestHotkeys = window.geode.onGuestHotkey((combo) => {
-      this.commands.dispatchHotkey(combo);
+    this.detachGuestHotkeys = window.geode.onGuestHotkey((combo, guestId) => {
+      // Transient, and only readable for the duration of this dispatch:
+      // createActionCommand resolves its context synchronously, before any
+      // await, so activeActionContext() below always sees the right source.
+      this.guestHotkeySource = typeof guestId === "number" ? guestId : null;
+      try {
+        this.commands.dispatchHotkey(combo);
+      } finally {
+        this.guestHotkeySource = null;
+      }
     });
+  }
+
+  /**
+   * The `<webview>` guest a hotkey currently being dispatched came from, or
+   * null for a host-document keystroke. See leafOwningGuest.
+   */
+  private guestHotkeySource: number | null = null;
+
+  /**
+   * The leaf whose subtree contains the guest with this WebContents id.
+   *
+   * Clicks inside a `<webview>` are consumed by the guest and never produce a
+   * host DOM mouse event, so the host's active leaf does not follow focus
+   * into one. In a split layout with a web tab active in one group and a
+   * canvas web card clicked in another, Cmd+R would otherwise reload a page
+   * in a pane the user is not looking at. Resolving through the DOM covers
+   * every guest host uniformly: web tabs, artifact tabs, canvas web cards and
+   * any plugin view that mounts a webview.
+   */
+  private leafOwningGuest(guestId: number): WorkspaceLeaf | null {
+    const guestEl = [...document.querySelectorAll("webview")].find((el) => {
+      // getWebContentsId() throws until the guest process is attached.
+      try {
+        return (el as unknown as { getWebContentsId(): number }).getWebContentsId() === guestId;
+      } catch {
+        return false;
+      }
+    });
+    if (!guestEl) return null;
+    let owner: WorkspaceLeaf | null = null;
+    this.workspace.iterateAllLeaves((leaf) => {
+      if (!owner && leaf.contentEl.contains(guestEl)) owner = leaf;
+    });
+    return owner;
   }
 
   /** Idempotent: see detachGuestHotkeys above for why re-attaching would double-fire. */
@@ -1303,7 +1345,11 @@ export class App {
   }
 
   private activeActionContext(): AppActionContext {
-    const leaf = this.workspace.getActiveLeaf();
+    // A guest-sourced hotkey acts on the pane it was pressed in. Falling back
+    // to the active leaf when the guest cannot be placed keeps the previous
+    // behavior rather than turning an unlocatable guest into a dead key.
+    const source = this.guestHotkeySource;
+    const leaf = (source !== null ? this.leafOwningGuest(source) : null) ?? this.workspace.getActiveLeaf();
     const file = leaf?.view?.getFile?.() ?? null;
     return {
       leaf,

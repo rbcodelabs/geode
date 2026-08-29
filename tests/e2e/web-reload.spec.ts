@@ -86,6 +86,25 @@ async function pressInGuest(app: ElectronApplication, key: string, modifiers: st
 const rootTabs = (window: Page) =>
   window.locator(".workspace-split.mod-root .workspace-tab-header");
 
+async function runCommand(window: Page, name: string) {
+  await window.keyboard.press(isMac ? "Meta+P" : "Control+P");
+  await window.locator(".prompt-input").fill(name);
+  await window.getByText(name, { exact: true }).click();
+}
+
+/**
+ * Run script inside the guest whose URL contains `urlPart`, selected in the
+ * main process. Deliberately not an index into the `webview` elements: with
+ * more than one guest alive, an index silently targets the wrong one.
+ */
+const guestEval = (app: ElectronApplication, urlPart: string, script: string) =>
+  app.evaluate(({ webContents }, payload) => {
+    const guest = webContents
+      .getAllWebContents()
+      .find((wc) => wc.getType() === "webview" && wc.getURL().includes(payload.urlPart));
+    return guest ? guest.executeJavaScript(payload.script) : null;
+  }, { urlPart, script });
+
 /** Count calls to the active view's reload() without changing what it does. */
 async function spyOnActiveViewReload(window: Page) {
   await window.evaluate(() => {
@@ -234,6 +253,50 @@ test("Mod+R pressed inside a web viewer guest reloads that page exactly once", a
     await window.waitForTimeout(1000);
     expect(await reloadCount(window)).toBe(1);
     expect(await window.evaluate(() => (window as unknown as { __sentinel?: number }).__sentinel)).toBe(1);
+  } finally {
+    await app.close();
+    cleanup();
+  }
+});
+
+test("Mod+R acts on the guest it was pressed in, not on the host's active tab", async () => {
+  const { app, window, vaultDir, cleanup } = await launch({
+    "one.html": PROBE_HTML,
+    "two.html": PROBE_HTML,
+  });
+
+  try {
+    const open = (name: string) =>
+      window.evaluate(
+        (target) => (window as unknown as { app: { openWebViewer(u: string): void } }).app.openWebViewer(target),
+        pathToFileURL(path.join(vaultDir, name)).href,
+      );
+    // A split, because a tab group keeps only its active leaf's guest alive.
+    // Two groups is also the layout where the misroute actually bites.
+    await open("one.html");
+    await waitForGuestUrl(app, "one.html");
+    await runCommand(window, "Split right");
+    // The second group's tab becomes the active leaf; the keystroke below
+    // goes to the first group's guest instead.
+    await open("two.html");
+    await waitForGuestUrl(app, "two.html");
+    await expect(window.locator(".web-view-frame")).toHaveCount(2);
+
+    const mark = (part: string) => guestEval(app, part, "window.__marker = 1; 'ok'");
+    const marker = (part: string) => guestEval(app, part, "typeof window.__marker");
+    expect(await mark("one.html")).toBe("ok");
+    expect(await mark("two.html")).toBe("ok");
+
+    expect(await pressInGuest(app, "r", [MOD], "one.html")).toBe(true);
+
+    // The pressed pane reloaded...
+    await expect.poll(() => marker("one.html"), { timeout: 15_000 }).toBe("undefined");
+    // ...and the merely-active one did not. A click inside a guest never
+    // reaches the host as a DOM event, so the host's active leaf does not
+    // follow focus into a webview: without the guest id the reload would have
+    // landed on the pane the user was not looking at.
+    await window.waitForTimeout(1000);
+    expect(await marker("two.html")).toBe("number");
   } finally {
     await app.close();
     cleanup();
