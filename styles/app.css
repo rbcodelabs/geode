@@ -533,8 +533,26 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
 
 /* Main-pane container: tinted bar with a 1px bottom border, and the tab row
    pulled down 1px so the active tab's bg bleeds over the border and merges
-   into the content pane below (the curve's counterpart). Overflow is allowed
-   to show so the corner-curve pseudo-elements aren't clipped at the row edge. */
+   into the content pane below (the curve's counterpart).
+
+   The inner row scrolls rather than clips. It used to say `overflow: hidden`
+   (under a comment that claimed the opposite), which gave a crowded strip no
+   escape hatch: past the point where tabs hit their minimum width, the
+   trailing ones were simply cut off with no way to reach them. `auto` matches
+   Obsidian's own base `.workspace-tab-header-container-inner`, and the
+   `scrollbar-width: none` + `::-webkit-scrollbar { display: none }` on that
+   base rule (above) still apply here, so the scrollbar stays invisible —
+   this buys reachability, not a visible bar.
+
+   The 15px inline padding is what keeps the active tab's corner-curve
+   pseudo-elements off the scroll box's edges; they paint within the padding
+   box, so `auto` does not clip them. Verified visually on a mid-strip active
+   tab — curve intact, no hairline.
+
+   `flex: 1 1 auto` on the base rule is deliberately left alone. Obsidian uses
+   `0 1 auto`, but it also has no `margin-left: auto` on the tab-list / new-tab
+   controls, so adopting `flex-grow: 0` here would relocate the `+` and chevron
+   buttons to hug the tabs instead of sitting at the far edge. */
 .workspace-split.mod-root .workspace-tab-header-container {
   background: var(--tab-container-background);
   border-bottom: 1px solid var(--tab-outline-color);
@@ -542,7 +560,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
 .workspace-split.mod-root .workspace-tab-header-container-inner {
   margin: 6px -5px calc(var(--tab-outline-width) * -1);
   padding: 1px 15px 0;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .workspace-tab-header {
