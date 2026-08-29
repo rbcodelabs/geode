@@ -566,6 +566,15 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   color: var(--text-muted);
 }
 
+/* Each main-pane tab is its own query container so a tab can restyle itself
+   based on how far it has been squeezed (see the `@container` block by the
+   close button). Scoped to the root split on purpose: sidebar tabs are
+   `flex: 0 0 auto` and size themselves from their content, which inline-size
+   containment would zero out. */
+.workspace-split.mod-root .workspace-tab-header {
+  container: tab-header / inline-size;
+}
+
 /* ---- Active-tab curve (ported verbatim from Obsidian 1.13.7's canonical tab
    CSS). Every tab carries two corner circles pinned to its bottom-outer
    corners; they're transparent until the active tab in the main root split
@@ -731,6 +740,21 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
 .workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-close-button {
   display: flex;
   opacity: 0.7;
+}
+
+/* Below ~3rem a tab has no room to spend on a close button, so hovering one
+   must not be able to reveal it (which would otherwise crush the title to
+   nothing on exactly the tabs that can least afford it). Ported from
+   Obsidian's own `@container tab-header (width < 3rem)` rule.
+
+   Container queries contribute no specificity of their own, so this selector
+   is written to tie the reveal rules above at (0,5,0) and win on source order.
+   Deliberately does NOT hide the title: real Obsidian keeps a one-character
+   ellipsised title at minimum width. */
+@container tab-header (width < 3rem) {
+  .workspace-split.mod-root .workspace-tab-header:not(.is-active) .workspace-tab-header-inner-close-button {
+    display: none;
+  }
 }
 
 .workspace-tab-header-inner-close-button:hover {

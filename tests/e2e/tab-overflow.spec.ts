@@ -170,6 +170,21 @@ test("sizes workspace tabs like Obsidian as the available space changes", async 
     );
     expect(compactedTabsWithoutIcons).toBe(0);
 
+    // A squeezed non-active tab has no room to spend on a close button, so it
+    // must not reserve one even while hovered. The active tab is deliberately
+    // exempt (it keeps its X down to minimum width, as real Obsidian does), and
+    // this asserts nothing about the title: Obsidian keeps a one-character
+    // ellipsised title at minimum width, so hiding it is explicitly not a goal.
+    await mainTabs.nth(1).hover();
+    const compactCloseWidths = await mainTabs.evaluateAll((tabs) =>
+      tabs
+        .filter((tab) => tab.getBoundingClientRect().width <= 48 && !tab.classList.contains("is-active"))
+        .map((tab) => tab.querySelector(".workspace-tab-header-inner-close-button")!.getBoundingClientRect().width)
+    );
+    expect(compactCloseWidths.length).toBeGreaterThan(0);
+    expect(compactCloseWidths.filter((width) => width !== 0)).toEqual([]);
+    await window.mouse.move(600, 500);
+
     const rightToggle = mainBar.locator(".sidebar-toggle-button.mod-right");
     const toggleBox = await rightToggle.boundingBox();
     expect(toggleBox).not.toBeNull();
