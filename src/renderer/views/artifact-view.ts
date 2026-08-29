@@ -1,5 +1,5 @@
 import type { App } from "../app";
-import type { View, WorkspaceLeaf } from "../workspace";
+import type { ReloadableView, View, WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import type { ArtifactDiagnostic, ArtifactRegistration } from "../../main/artifact-runtime";
 
@@ -14,8 +14,9 @@ const VIEWPORTS: Record<Exclude<ViewportPreset, "custom">, Viewport> = {
   mobile: { preset: "mobile", width: 390, height: 844 },
 };
 
-export class ArtifactView implements View {
+export class ArtifactView implements View, ReloadableView {
   readonly viewType = "geode-artifact";
+  readonly reloadLabel = "Reload artifact";
   readonly containerEl = document.createElement("div");
   private readonly stageEl = document.createElement("div");
   private readonly statusEl = document.createElement("div");
@@ -33,7 +34,11 @@ export class ArtifactView implements View {
     this.containerEl.className = "artifact-view";
     const toolbar = document.createElement("div");
     toolbar.className = "artifact-view-toolbar";
-    toolbar.append(this.iconButton("rotate-cw", "Reload artifact", () => this.webview?.reload()));
+    // Routed through the action so the button, Cmd+R and the tab context menu
+    // share one implementation.
+    toolbar.append(this.iconButton("rotate-cw", "Reload artifact", () => {
+      void this.app.actions.execute("web.reload", { reloadable: this, leaf: this.leaf });
+    }));
     for (const preset of ["desktop", "tablet", "mobile"] as const) {
       const button = document.createElement("button");
       button.className = "artifact-view-viewport-btn";
@@ -78,6 +83,17 @@ export class ArtifactView implements View {
   getDisplayText(): string { return this.registration?.title ?? "Artifact"; }
   getIcon(): string { return "layout-template"; }
   onOpen(): void {}
+
+  /**
+   * ReloadableView. `webview` is null exactly when `load()` bailed — a
+   * missing root, a manifest that failed validation, a thrown error — which
+   * is precisely when the user wants to retry, so fall back to re-running the
+   * load rather than doing nothing.
+   */
+  reload(): void {
+    if (this.webview) this.webview.reload();
+    else void this.load(this.root);
+  }
 
   async setState(state: ArtifactViewState): Promise<void> {
     if (!state || typeof state.root !== "string" || !state.root.trim()) {

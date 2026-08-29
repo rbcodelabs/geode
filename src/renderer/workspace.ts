@@ -21,6 +21,27 @@ export interface View {
 }
 
 /**
+ * A view whose content can be reloaded in place: the Web Viewer and Artifact
+ * views today. Implementing this is what makes the `web.reload` action (and
+ * so Cmd+R, the toolbar button and the tab context menu) apply to a view.
+ *
+ * Compile-time only. Nothing dispatches on this structurally: callers resolve
+ * it with `instanceof` against the concrete Geode view classes, because a
+ * `typeof view.reload === "function"` guard would happily bind Cmd+R to an
+ * arbitrary plugin view that happens to expose a `reload` method.
+ */
+export interface ReloadableView {
+  /**
+   * User-initiated reload. Distinct from a raw guest `reload()`: it also
+   * resets crash-recovery guards and respawns a dead guest, so the user's
+   * attempt gets a clean budget.
+   */
+  reload(): void;
+  /** Menu and command label, e.g. "Reload page" vs "Reload artifact". */
+  readonly reloadLabel: string;
+}
+
+/**
  * The minimal surface a `WorkspaceLeaf` needs from whatever hosts it. Both
  * `TabGroup` (main tab area) and `Sidebar` (docked panes) implement this, so
  * a leaf — and any plugin view mounted in it — can live in either place. This
