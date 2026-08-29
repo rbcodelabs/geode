@@ -15,7 +15,8 @@ cloud, no lock-in.
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
 - **Editor** — CodeMirror 6, markdown highlighting, `[[wikilink]]` autocomplete,
-  Cmd/Ctrl+click to follow, autosave, rename-updates-links
+  Cmd/Ctrl+click to follow, autosave, rename-updates-links, and immediate inline
+  naming for new notes with collision-safe validation
 - **Live Preview** — tables render in place and stay editable: cells render
   their inline markdown (bold, italic, code, links) and wrap onto multiple
   lines instead of forcing the row to overflow, while clicking into a cell
@@ -44,8 +45,10 @@ cloud, no lock-in.
 - **Workspace** — movable built-in and plugin views, tabs, split panes, pinned
   tabs, vertically stacked and independently resizable sidebar groups, recursive
   layout persistence, a hideable left ribbon with persistent Settings and
-  plugin-contributed actions, and status-bar word count; tab bar and view header
-  DOM/CSS match real Obsidian so community themes and CSS snippets apply correctly
+  plugin-contributed actions, shared document actions across tab, view, command,
+  and File Explorer menus, pinned-safe bulk tab closing, and status-bar word
+  count; tab bar and view header DOM/CSS match real Obsidian so community themes
+  and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
   dark/light themes via CSS variables
 - **Settings** — tabbed Settings window (Appearance, Community plugins &
