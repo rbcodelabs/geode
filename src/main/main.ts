@@ -973,6 +973,14 @@ function installApplicationMenu(): void {
       } catch (error) {
         recordDiagnostic(undefined, { at: Date.now(), category: "diagnostics", level: "error", message: `export-failed: ${error}` });
       }
+  },
+  (window) => {
+    // Resolved at click time, never captured: the menu is application-global,
+    // several windows can be open, and crash recovery replaces a window
+    // outright, so a captured reference could target a dead one. Electron
+    // types the argument as BaseWindow; only a BrowserWindow has webContents.
+    const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow();
+    target?.webContents.reload();
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
