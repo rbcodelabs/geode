@@ -10,7 +10,7 @@ import { PromptModal } from "../modals/modals";
 import type { TFile } from "../types";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
 import { openFilterEditor, type FilterEditorScope } from "./bases/filter-editor";
-import { patchFrontmatter } from "../frontmatter-io";
+import { patchFrontmatter, patchFrontmatterText } from "../frontmatter-io";
 import { openPropertiesMenu } from "./bases/properties-menu";
 import { openSortGroupMenu, type SortGroupValue } from "./bases/sort-group-menu";
 import { BasesTableView, type RowHeight } from "./bases/table-view";
@@ -92,6 +92,16 @@ export class BaseView implements View {
    * matches what we expect, there's nothing to reload.
    */
   private lastKnownText: string | null = null;
+  private pendingKnownText: string | null = null;
+  private vaultSwitching = false;
+  private persistRequestedWhileSuspended = false;
+  private suppressReconcileModify = false;
+  private sourceEdit: { file: TFile; columnPath: string; rawText: string; originalText: Promise<string> } | null = null;
+  private sourceWritePath: string | null = null;
+  private readonly sourcePersistsInFlight = new Set<Promise<void>>();
+  private sourceConflictReadOnly = false;
+  private readonly saveStatusEl: HTMLElement;
+  private readonly mobileCleanups: Array<() => void> = [];
 
   /**
    * When set, this base is an *embedded* base (a ```base code block in a
@@ -104,6 +114,10 @@ export class BaseView implements View {
 
   private readonly onVaultChange = (changedFile?: TFile) => {
     if (changedFile && this.file && changedFile.path === this.file.path) {
+      if (this.suppressReconcileModify) {
+        this.suppressReconcileModify = false;
+        return;
+      }
       // For an embedded base the host note's own changes must NOT be
       // re-parsed as base YAML — the inline text we hold is authoritative,
       // and our own persist writes back to that same host note (ignoring it
@@ -112,6 +126,7 @@ export class BaseView implements View {
       void this.reloadIfChangedExternally();
       return;
     }
+    if (changedFile && changedFile.path === this.sourceWritePath) return;
     // Some other file changed (a row's frontmatter was edited, a note was
     // created/deleted, etc.) — re-run the query against the current
     // (unchanged) `.base` definition, no need to re-parse it from disk.
@@ -121,8 +136,10 @@ export class BaseView implements View {
   /** Re-parse from disk only if the file's current content differs from what we last wrote/read — see `lastKnownText`'s doc comment. */
   private async reloadIfChangedExternally(): Promise<void> {
     if (!this.file) return;
+    const cached = this.app.vault.getCachedContent(this.file.path);
+    if (cached !== undefined && cached === this.lastKnownText) return;
     const text = await this.app.vault.read(this.file);
-    if (text === this.lastKnownText) return;
+    if (text === (this.pendingKnownText ?? this.lastKnownText)) return;
     await this.applyText(text);
   }
 
@@ -166,7 +183,10 @@ export class BaseView implements View {
 
     this.tableView = new BasesTableView(app, {
       onOpenFile: (file, newTab) => void this.app.openFile(file, newTab),
-      onEditCell: (file, columnPath, rawText) => void this.editCell(file, columnPath, rawText),
+      onEditCell: (file, columnPath, rawText) => this.editCell(file, columnPath, rawText),
+      onEditStart: (file, columnPath, rawText) => this.beginSourceEdit(file, columnPath, rawText),
+      onEditDraft: (rawText) => { if (this.sourceEdit) this.sourceEdit.rawText = rawText; },
+      onEditEnd: () => { this.sourceEdit = null; },
     });
 
     this.cardsView = new BasesCardsView(app, {
@@ -175,9 +195,28 @@ export class BaseView implements View {
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "base-view-body";
-    this.bodyEl.append(this.toolbar.containerEl, this.errorEl, this.tableView.containerEl, this.cardsView.containerEl);
+    this.saveStatusEl = document.createElement("div");
+    this.saveStatusEl.className = "bases-save-status";
+    this.saveStatusEl.setAttribute("role", "status");
+    this.saveStatusEl.setAttribute("aria-live", "polite");
+    this.bodyEl.append(this.toolbar.containerEl, this.saveStatusEl, this.errorEl, this.tableView.containerEl, this.cardsView.containerEl);
 
     this.containerEl.append(this.headerEl, this.bodyEl);
+    if (document.body.classList.contains("is-mobile") && window.visualViewport) {
+      const viewport = window.visualViewport;
+      const syncKeyboard = () => {
+        const offset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+        this.containerEl.style.setProperty("--bases-keyboard-offset", `${offset}px`);
+        this.containerEl.querySelector<HTMLElement>(".bases-cell-input:focus")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      };
+      viewport.addEventListener("resize", syncKeyboard);
+      viewport.addEventListener("scroll", syncKeyboard);
+      this.mobileCleanups.push(
+        () => viewport.removeEventListener("resize", syncKeyboard),
+        () => viewport.removeEventListener("scroll", syncKeyboard),
+      );
+      syncKeyboard();
+    }
   }
 
   getDisplayText(): string {
@@ -219,7 +258,29 @@ export class BaseView implements View {
   }
 
   async setFile(file: TFile): Promise<void> {
+    await this.persistQueue;
+    await Promise.all([...this.sourcePersistsInFlight]);
+    this.tableView.resetForFile();
+    this.cardsView.destroy();
+    this.sourceEdit = null;
+    this.sourceWritePath = null;
+    this.sourceConflictReadOnly = false;
+    this.vaultSwitching = false;
+    this.persistRequestedWhileSuspended = false;
+    this.suppressReconcileModify = false;
+    this.inlinePersist = null;
+    this.searchQuery = "";
+    this.currentViewName = "";
+    this.rowHeights.clear();
+    this.lastColumns = [];
+    this.lastResult = null;
+    this.containerEl.querySelector(".bases-conflict-state")?.remove();
+    delete this.containerEl.dataset.basesConflictPath;
+    this.setSaveStatus("", false);
     this.file = file;
+    this.containerEl.inert = false;
+    this.bodyEl.inert = false;
+    this.tableView.setReadOnly(false);
     this.titleEl.textContent = file.basename;
     await this.reloadFromDisk();
   }
@@ -273,10 +334,19 @@ export class BaseView implements View {
     }
     this.def = parsed.def;
     if (this.def.views.length === 0) this.def.views.push({ type: "table", name: "Table" });
+    if (document.body.classList.contains("is-mobile") && this.file) {
+      const saved = localStorage.getItem(`geode:bases-view:${encodeURIComponent(this.app.vault.root)}:${encodeURIComponent(this.file.path)}`);
+      if (saved && this.def.views.some((view) => view.name === saved)) this.currentViewName = saved;
+    }
     if (!this.def.views.some((v) => v.name === this.currentViewName)) {
       this.currentViewName = this.def.views[0].name;
     }
     this.runAndRender();
+  }
+
+  async acceptExternalText(text: string): Promise<void> {
+    await this.applyText(text);
+    this.suppressReconcileModify = true;
   }
 
   onOpen(): void {
@@ -286,12 +356,15 @@ export class BaseView implements View {
     this.app.metadataCache.on("changed", this.onVaultChange);
   }
 
-  onClose(): void {
+  async onClose(): Promise<void> {
+    await this.persistQueue;
     this.app.vault.off("modify", this.onVaultChange);
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
     this.cardsView.destroy();
+    this.sourceEdit = null;
+    for (const cleanup of this.mobileCleanups.splice(0)) cleanup();
   }
 
   private scheduleRerender(): void {
@@ -344,7 +417,10 @@ export class BaseView implements View {
     const columns = resolveColumns(view.order, knownKeys);
     this.lastColumns = columns;
 
-    const viewForQuery: BaseViewDefinition = { ...view, order: columns };
+    const queryColumns = view.type === "cards" && view.image && !columns.includes(view.image)
+      ? [...columns, view.image]
+      : columns;
+    const viewForQuery: BaseViewDefinition = { ...view, order: queryColumns };
     const defForQuery: BaseDefinition = {
       ...this.def,
       views: this.def.views.map((v) => (v === view ? viewForQuery : v)),
@@ -409,23 +485,62 @@ export class BaseView implements View {
 
   /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `lastKnownText`'s doc comment for why the resulting "modify" event(s) must not trigger a second, object-identity-breaking reload). */
   private persist(): Promise<void> {
-    this.persistQueue = this.persistQueue.then(() => this.doPersist());
+    if (this.vaultSwitching) {
+      this.persistRequestedWhileSuspended = true;
+      return Promise.resolve();
+    }
+    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist());
     return this.persistQueue;
   }
 
   private async doPersist(): Promise<void> {
     if (!this.def || !this.file) return;
     const text = stringifyBaseFile(this.def);
-    this.lastKnownText = text;
-    if (this.inlinePersist) await this.inlinePersist(text);
-    else await this.app.vault.modify(this.file, text);
+    this.pendingKnownText = text;
+    try {
+      if (this.inlinePersist) await this.inlinePersist(text);
+      else await this.app.vault.modify(this.file, text);
+      this.lastKnownText = text;
+    } finally {
+      if (this.pendingKnownText === text) this.pendingKnownText = null;
+    }
     this.runAndRender();
+  }
+
+  async prepareVaultSwitch(): Promise<void> {
+    this.vaultSwitching = true;
+    await this.persistQueue;
+  }
+
+  cancelVaultSwitch(): void {
+    this.vaultSwitching = false;
+    if (this.persistRequestedWhileSuspended) {
+      this.persistRequestedWhileSuspended = false;
+      void this.persist();
+    }
+  }
+
+  async pauseAutosave(): Promise<void> {
+    this.vaultSwitching = true;
+    this.containerEl.inert = true;
+    this.containerEl.setAttribute("aria-busy", "true");
+    await this.persistQueue;
+  }
+
+  resumeAutosave(): void {
+    this.containerEl.inert = false;
+    this.bodyEl.inert = this.sourceConflictReadOnly;
+    this.containerEl.removeAttribute("aria-busy");
+    if (!this.sourceConflictReadOnly) this.cancelVaultSwitch();
   }
 
   // --- View menu ------------------------------------------------------
 
   private switchView(name: string): void {
     this.currentViewName = name;
+    if (document.body.classList.contains("is-mobile") && this.file) {
+      localStorage.setItem(`geode:bases-view:${encodeURIComponent(this.app.vault.root)}:${encodeURIComponent(this.file.path)}`, name);
+    }
     this.runAndRender();
   }
 
@@ -574,14 +689,109 @@ export class BaseView implements View {
 
   // --- Cell editing ---------------------------------------------------------
 
-  private async editCell(file: TFile, columnPath: string, rawText: string): Promise<void> {
+  private editCell(file: TFile, columnPath: string, rawText: string): Promise<void> {
+    const operation = this.commitCellEdit(file, columnPath, rawText);
+    this.sourcePersistsInFlight.add(operation);
+    operation.then(
+      () => this.sourcePersistsInFlight.delete(operation),
+      () => this.sourcePersistsInFlight.delete(operation),
+    );
+    return operation;
+  }
+
+  private async commitCellEdit(file: TFile, columnPath: string, rawText: string): Promise<void> {
     const key = frontmatterKeyForColumn(columnPath);
     if (!key) return;
-    await patchFrontmatter(this.app.vault, file, (fm) => {
-      const value = parseEditedValue(rawText);
-      if (value === undefined) delete fm[key];
-      else fm[key] = value;
-    });
+    this.setSaveStatus("Saving Base…", false);
+    this.sourceWritePath = file.path;
+    try {
+      await patchFrontmatter(this.app.vault, file, (fm) => {
+        const value = parseEditedValue(rawText);
+        if (value === undefined) delete fm[key];
+        else fm[key] = value;
+      });
+      this.sourceEdit = null;
+      this.setSaveStatus("Base saved", false);
+      this.runAndRender();
+    } catch (error) {
+      this.setSaveStatus("Base save failed", true, async () => {
+        await this.editCell(file, columnPath, rawText);
+        this.tableView.acknowledgeEdit();
+      });
+      throw error;
+    } finally {
+      this.sourceWritePath = null;
+    }
+  }
+
+  private beginSourceEdit(file: TFile, columnPath: string, rawText: string): void {
+    this.sourceEdit = { file, columnPath, rawText, originalText: this.app.vault.read(file) };
+  }
+
+  async getDirtySourceConflict(path: string, folder = false): Promise<{ file: TFile; text: string } | null> {
+    const edit = this.sourceEdit;
+    if (!edit || (edit.file.path !== path && !(folder && edit.file.path.startsWith(`${path}/`)))) return null;
+    const key = frontmatterKeyForColumn(edit.columnPath);
+    if (!key) return null;
+    const original = await edit.originalText;
+    return {
+      file: edit.file,
+      text: patchFrontmatterText(original, (fm) => {
+        const value = parseEditedValue(edit.rawText);
+        if (value === undefined) delete fm[key];
+        else fm[key] = value;
+      }),
+    };
+  }
+
+  presentSourceConflict(conflictPath: string | null, recoveryOnly = false): void {
+    this.sourceConflictReadOnly = true;
+    this.tableView.setReadOnly(true);
+    this.bodyEl.inert = true;
+    this.containerEl.querySelector(".bases-conflict-state")?.remove();
+    const state = document.createElement("div");
+    state.className = "bases-conflict-state";
+    state.setAttribute("role", "status");
+    state.textContent = recoveryOnly ? "Local Base edit retained for recovery." : "Provider and local Base edits were both preserved.";
+    const providerPath = this.sourceEdit?.file.path;
+    if (providerPath) {
+      const provider = document.createElement("button");
+      provider.type = "button";
+      provider.textContent = "Open provider version";
+      provider.addEventListener("click", () => {
+        const file = this.app.vault.getFileByPath(providerPath);
+        if (file) void this.app.openFile(file, true);
+      });
+      state.appendChild(provider);
+    }
+    if (conflictPath) {
+      const local = document.createElement("button");
+      local.type = "button";
+      local.textContent = "Open local conflict copy";
+      local.addEventListener("click", () => {
+        const file = this.app.vault.getFileByPath(conflictPath);
+        if (file) void this.app.openFile(file, true);
+      });
+      state.appendChild(local);
+    }
+    this.containerEl.appendChild(state);
+    this.containerEl.dataset.basesConflictPath = conflictPath ?? "recovery";
+  }
+
+  private setSaveStatus(message: string, failed: boolean, retry?: () => Promise<void>): void {
+    this.saveStatusEl.replaceChildren();
+    this.saveStatusEl.setAttribute("role", failed ? "alert" : "status");
+    if (!message) return;
+    const text = document.createElement("span");
+    text.textContent = message;
+    this.saveStatusEl.appendChild(text);
+    if (retry) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Retry Base save";
+      button.addEventListener("click", () => { void retry().catch(() => {}); });
+      this.saveStatusEl.appendChild(button);
+    }
   }
 
   // --- Copy / CSV export ----------------------------------------------------

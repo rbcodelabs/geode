@@ -957,7 +957,7 @@ export class FileView {
  * already re-exports `Vault` from `vault.ts`. Re-exported here so plugins get
  * it from `require('obsidian').FileSystemAdapter`.
  */
-export { FileSystemAdapter } from "../types";
+export { DataAdapter, FileSystemAdapter } from "../types";
 
 // ---------------------------------------------------------------------------
 // TFile / TFolder classes (for `instanceof`)

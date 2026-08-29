@@ -1,5 +1,5 @@
 export interface WindowChromeState {
-  platform: NodeJS.Platform;
+  platform: string;
   isFullScreen: boolean;
 }
 

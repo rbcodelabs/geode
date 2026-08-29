@@ -42,6 +42,9 @@ function displayFor(row: QueryRow, path: string): string {
 export class BasesCardsView {
   containerEl: HTMLElement;
   private objectUrls: string[] = [];
+  private selectedFile: TFile | null = null;
+  private mobileActionsEl: HTMLElement | null = null;
+  private suppressTouchClickUntil = 0;
 
   constructor(
     private app: App,
@@ -67,22 +70,44 @@ export class BasesCardsView {
       return matchesSearch(strings, opts.searchQuery);
     };
 
+    const mobile = document.body.classList.contains("is-mobile");
+    const renderLimit = mobile ? 200 : Number.POSITIVE_INFINITY;
+    let remaining = renderLimit;
+    let total = 0;
+    let rendered = 0;
     if (result.groups) {
       for (const group of result.groups) {
         const rows = group.rows.filter(passesSearch);
+        total += rows.length;
         if (!rows.length) continue;
+        const visibleRows = rows.slice(0, remaining);
+        if (!visibleRows.length) continue;
         this.containerEl.appendChild(this.buildGroupHeader(group, rows.length));
-        this.containerEl.appendChild(this.buildGrid(rows, fieldColumns, opts));
+        this.containerEl.appendChild(this.buildGrid(visibleRows, fieldColumns, opts));
+        remaining -= visibleRows.length;
+        rendered += visibleRows.length;
       }
     } else {
       const rows = result.rows.filter(passesSearch);
-      this.containerEl.appendChild(this.buildGrid(rows, fieldColumns, opts));
+      total = rows.length;
+      const visibleRows = rows.slice(0, remaining);
+      rendered = visibleRows.length;
+      this.containerEl.appendChild(this.buildGrid(visibleRows, fieldColumns, opts));
+    }
+    if (mobile && rendered < total) {
+      const bounded = document.createElement("div");
+      bounded.className = "bases-result-limit";
+      bounded.textContent = `Showing ${rendered} of ${total} results`;
+      this.containerEl.appendChild(bounded);
     }
   }
 
   /** Free blob URLs created for cover images on the previous render. */
   destroy(): void {
     this.revokeObjectUrls();
+    this.selectedFile = null;
+    this.mobileActionsEl?.remove();
+    this.mobileActionsEl = null;
   }
 
   private revokeObjectUrls(): void {
@@ -107,7 +132,43 @@ export class BasesCardsView {
   private buildCard(row: QueryRow, fieldColumns: string[], opts: CardsViewOptions): HTMLElement {
     const card = document.createElement("div");
     card.className = "bases-card";
-    card.addEventListener("click", (e) => this.callbacks.onOpenFile(row.file, e.metaKey || e.ctrlKey));
+    if (document.body.classList.contains("is-mobile")) {
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", `Select ${row.file.basename}`);
+      card.setAttribute("aria-selected", "false");
+      let touch: { id: number; x: number; y: number; moved: boolean } | null = null;
+      card.addEventListener("pointerdown", (event) => {
+        if (event.pointerType !== "touch") {
+          this.suppressTouchClickUntil = 0;
+          return;
+        }
+        touch = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+      });
+      card.addEventListener("pointermove", (event) => {
+        if (!touch || touch.id !== event.pointerId) return;
+        if (Math.hypot(event.clientX - touch.x, event.clientY - touch.y) >= 8) touch.moved = true;
+      });
+      card.addEventListener("pointerup", (event) => {
+        if (!touch || touch.id !== event.pointerId) return;
+        const shouldSelect = !touch.moved;
+        touch = null;
+        this.suppressTouchClickUntil = performance.now() + 500;
+        if (shouldSelect) this.selectCard(row.file, card);
+      });
+      card.addEventListener("pointercancel", () => { touch = null; });
+      card.addEventListener("click", (event) => {
+        if (event.detail > 0 && performance.now() < this.suppressTouchClickUntil) return;
+        this.selectCard(row.file, card);
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        this.selectCard(row.file, card);
+      });
+    } else {
+      card.addEventListener("click", (e) => this.callbacks.onOpenFile(row.file, e.metaKey || e.ctrlKey));
+    }
 
     if (opts.imageProperty) {
       const cover = document.createElement("div");
@@ -151,6 +212,37 @@ export class BasesCardsView {
     }
 
     return card;
+  }
+
+  private selectCard(file: TFile, card: HTMLElement): void {
+    this.selectedFile = file;
+    this.containerEl.querySelectorAll<HTMLElement>(".bases-card").forEach((candidate) => {
+      const selected = candidate === card;
+      candidate.classList.toggle("is-selected", selected);
+      candidate.setAttribute("aria-selected", String(selected));
+    });
+    card.focus({ preventScroll: true });
+    this.renderMobileActions();
+  }
+
+  private renderMobileActions(): void {
+    this.mobileActionsEl?.remove();
+    if (!this.selectedFile) return;
+    const actions = document.createElement("div");
+    actions.className = "bases-mobile-card-actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "Open";
+    open.setAttribute("aria-label", "Open selected card");
+    open.addEventListener("click", () => this.selectedFile && this.callbacks.onOpenFile(this.selectedFile, false));
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit note";
+    edit.setAttribute("aria-label", "Edit selected card");
+    edit.addEventListener("click", () => this.selectedFile && this.callbacks.onOpenFile(this.selectedFile, false));
+    actions.append(open, edit);
+    this.containerEl.appendChild(actions);
+    this.mobileActionsEl = actions;
   }
 
   /**

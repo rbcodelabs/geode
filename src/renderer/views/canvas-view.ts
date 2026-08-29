@@ -6,6 +6,7 @@ import { setIcon } from "../api/icons";
 import { PromptModal, SuggestModal } from "../modals/modals";
 import { loadEmbedBlobUrl, resolveEmbed, type EmbedKind } from "../markdown/embed";
 import { isValidVaultFileDragPath, VAULT_FILE_DRAG_MIME } from "../file-drag";
+import { CanvasTouchGesture } from "../canvas/touch-gesture";
 
 const MIN_WIDTH = 80;
 const MIN_HEIGHT = 50;
@@ -94,6 +95,10 @@ export class CanvasView implements View {
   private scale = 1;
   private spacePressed = false;
   private lastKnownText: string | null = null;
+  private pendingKnownText: string | null = null;
+  private persistQueue: Promise<void> = Promise.resolve();
+  private vaultSwitching = false;
+  private persistRequestedWhileSuspended = false;
   private readonly undoStack: string[] = [];
   private readonly redoStack: string[] = [];
   private readonly objectUrls = new Set<string>();
@@ -105,6 +110,14 @@ export class CanvasView implements View {
   private edgeLabelEditorCancel: (() => void) | null = null;
   private recoveryError: string | null = null;
   private loadGeneration = 0;
+  private suppressReconcileModify = false;
+  private conflictReadOnly = false;
+  private transientGestureCancel: (() => void) | null = null;
+  private readonly saveStatusEl: HTMLElement;
+  private readonly touchGesture: CanvasTouchGesture;
+  private readonly capturedTouchPointers = new Set<number>();
+  private touchDragSnapshot: { id: string; x: number; y: number } | null = null;
+  private readonly touchCleanups: Array<() => void> = [];
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -127,7 +140,24 @@ export class CanvasView implements View {
     this.surfaceEl.appendChild(this.viewportEl);
     this.surfaceEl.appendChild(this.buildCameraControls());
     this.surfaceEl.appendChild(this.buildCanvasToolbar());
+    this.saveStatusEl = document.createElement("div");
+    this.saveStatusEl.className = "canvas-save-status";
+    this.saveStatusEl.setAttribute("role", "status");
+    this.saveStatusEl.setAttribute("aria-live", "polite");
+    this.surfaceEl.appendChild(this.saveStatusEl);
+    this.touchGesture = new CanvasTouchGesture({
+      hitTest: (x, y) => this.touchNodeAt(x, y),
+      canDrag: (id) => this.selectedIds.has(id),
+      select: (id) => this.selectTouchNode(id),
+      beginNodeDrag: (id) => this.beginTouchNodeDrag(id),
+      moveNode: (id, dx, dy) => this.moveTouchNode(id, dx, dy),
+      commitNode: () => this.commitTouchNodeDrag(),
+      rollbackNode: () => this.rollbackTouchNodeDrag(),
+      pan: (dx, dy) => { this.pan.x += dx; this.pan.y += dy; this.updateTransform(); },
+      zoom: (factor, x, y) => this.zoomAt(factor, { x, y }),
+    });
     this.installCameraControls();
+    this.installTouchControls();
     this.containerEl.append(header, this.surfaceEl);
     this.updateTransform();
   }
@@ -135,9 +165,25 @@ export class CanvasView implements View {
   getDisplayText(): string { return this.file?.basename ?? "Canvas"; }
   getIcon(): string { return "layout-dashboard"; }
   getFile(): TFile | null { return this.file; }
+  getText(): string { return serializeCanvas(this.document); }
+  getLastKnownText(): string { return this.lastKnownText ?? ""; }
+  hasUnacknowledgedChanges(): boolean {
+    return this.pendingKnownText !== null || this.touchDragSnapshot !== null || !this.matchesLastKnownDocument();
+  }
+
+  private matchesLastKnownDocument(): boolean {
+    if (this.lastKnownText === null) return false;
+    try {
+      return this.getText() === serializeCanvas(parseCanvas(this.lastKnownText));
+    } catch {
+      return false;
+    }
+  }
 
   async setFile(file: TFile): Promise<void> {
     this.file = file;
+    this.conflictReadOnly = false;
+    this.surfaceEl.inert = false;
     this.lastKnownText = null;
     this.titleEl.textContent = file.basename;
     if (this.containerEl.classList.contains("canvas-embed-view")) this.containerEl.dataset.canvasPath = file.path;
@@ -153,26 +199,69 @@ export class CanvasView implements View {
   }
 
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
-  onClose(): void {
+  async onClose(): Promise<void> {
+    this.cancelTouchGesture();
+    this.cancelTransientGesture();
+    await this.persistQueue;
     this.app.vault.off("modify", this.onVaultModify);
     this.loadGeneration += 1;
     this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
     this.disposeMarkdownContents();
     this.revokeObjectUrls();
+    for (const cleanup of this.touchCleanups.splice(0)) cleanup();
   }
 
   private readonly onVaultModify = async (file?: TFile) => {
     if (!file || file.path !== this.file?.path) return;
+    if (this.suppressReconcileModify) {
+      this.suppressReconcileModify = false;
+      return;
+    }
     await this.reloadFromFile(true);
   };
+
+  async acceptExternalText(text: string): Promise<void> {
+    this.load(text, true);
+    this.suppressReconcileModify = true;
+  }
+
+  presentConflict(externalText: string | null, conflictPath: string | null, recoveryOnly: boolean, _recoveryTier?: "memory" | "device"): void {
+    if (externalText !== null) this.load(externalText, true);
+    if (externalText === null) {
+      this.conflictReadOnly = true;
+      this.persistRequestedWhileSuspended = false;
+      this.surfaceEl.inert = true;
+    }
+    this.containerEl.querySelector(".canvas-conflict-state")?.remove();
+    const state = document.createElement("div");
+    state.className = "canvas-conflict-state";
+    state.setAttribute("role", "status");
+    state.textContent = recoveryOnly
+      ? "Local Canvas changes are retained for recovery."
+      : "External and local Canvas changes were both preserved.";
+    if (conflictPath) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = "Open local conflict copy";
+      open.addEventListener("click", () => {
+        const file = this.app.vault.getFileByPath(conflictPath);
+        if (file) void this.app.openFile(file, true);
+      });
+      state.appendChild(open);
+    }
+    this.containerEl.appendChild(state);
+    this.containerEl.dataset.canvasConflictPath = conflictPath ?? "recovery";
+  }
 
   private async reloadFromFile(resetHistory = false): Promise<void> {
     const file = this.file;
     if (!file) return;
+    const cached = this.app.vault.getCachedContent(file.path);
+    if (cached !== undefined && cached === this.lastKnownText) return;
     const generation = ++this.loadGeneration;
     const text = await this.app.vault.read(file);
-    if (generation !== this.loadGeneration || file !== this.file || text === this.lastKnownText) return;
+    if (generation !== this.loadGeneration || file !== this.file || text === (this.pendingKnownText ?? this.lastKnownText)) return;
     this.load(text, resetHistory);
   }
 
@@ -272,6 +361,7 @@ export class CanvasView implements View {
     hit.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if (event.pointerType === "touch") this.selectEdge(edge.id);
     });
     hit.addEventListener("click", (event) => {
       event.preventDefault();
@@ -338,6 +428,21 @@ export class CanvasView implements View {
     handle.setAttribute("tabindex", selected ? "0" : "-1");
     handle.addEventListener("pointerdown", (event) => this.beginEdgeReconnect(event, edge.id, endpoint));
     svg.appendChild(handle);
+    if (document.body.classList.contains("is-mobile")) {
+      const touchHit = document.createElementNS(svg.namespaceURI, "circle") as SVGCircleElement;
+      touchHit.classList.add("canvas-edge-endpoint-touch-hit");
+      touchHit.dataset.edgeId = edge.id;
+      touchHit.dataset.endpoint = endpoint;
+      touchHit.classList.toggle("is-selected", selected);
+      touchHit.setAttribute("cx", String(point.x));
+      touchHit.setAttribute("cy", String(point.y));
+      touchHit.setAttribute("r", String(22 / this.scale));
+      touchHit.setAttribute("role", "button");
+      touchHit.setAttribute("aria-label", `Reconnect ${endpoint} of ${edge.id}`);
+      touchHit.setAttribute("aria-hidden", String(!selected));
+      touchHit.addEventListener("pointerdown", (event) => this.beginEdgeReconnect(event as PointerEvent, edge.id, endpoint));
+      svg.appendChild(touchHit);
+    }
   }
 
   private edgePoint(node: CanvasNode, explicit: CanvasSide | undefined, other: CanvasNode): Point {
@@ -486,11 +591,27 @@ export class CanvasView implements View {
       handle.setAttribute("aria-label", `Connect from ${side}`);
       handle.addEventListener("pointerdown", (event) => this.beginConnection(event, node, side));
       el.appendChild(handle);
+      if (document.body.classList.contains("is-mobile")) {
+        const touchHit = document.createElement("div");
+        touchHit.className = "canvas-node-connection-touch-hit";
+        touchHit.dataset.nodeId = node.id;
+        touchHit.dataset.side = side;
+        touchHit.setAttribute("aria-hidden", "true");
+        touchHit.addEventListener("pointerdown", (event) => this.beginConnection(event, node, side));
+        el.appendChild(touchHit);
+      }
     }
     const resize = document.createElement("div");
     resize.className = "canvas-node-resize-handle";
     resize.addEventListener("pointerdown", (event) => this.beginResize(event, node));
     el.appendChild(resize);
+    if (document.body.classList.contains("is-mobile")) {
+      const resizeTouchHit = document.createElement("div");
+      resizeTouchHit.className = "canvas-node-resize-touch-hit";
+      resizeTouchHit.setAttribute("aria-hidden", "true");
+      resizeTouchHit.addEventListener("pointerdown", (event) => this.beginResize(event, node));
+      el.appendChild(resizeTouchHit);
+    }
     for (const direction of ["top", "right", "bottom", "left"] as const) {
       const edge = document.createElement("div");
       edge.className = "canvas-node-resize-edge";
@@ -1099,7 +1220,7 @@ export class CanvasView implements View {
     for (const el of this.viewportEl.querySelectorAll<SVGPathElement>(".canvas-edge")) {
       el.classList.toggle("is-selected", this.selectedEdgeIds.has(el.dataset.edgeId ?? ""));
     }
-    for (const el of this.viewportEl.querySelectorAll<SVGCircleElement>(".canvas-edge-endpoint-handle")) {
+    for (const el of this.viewportEl.querySelectorAll<SVGCircleElement>(".canvas-edge-endpoint-handle, .canvas-edge-endpoint-touch-hit")) {
       const selected = this.selectedEdgeIds.size === 1 && this.selectedEdgeIds.has(el.dataset.edgeId ?? "");
       el.classList.toggle("is-selected", selected);
       el.setAttribute("aria-hidden", String(!selected));
@@ -1157,12 +1278,13 @@ export class CanvasView implements View {
     setIcon(remove, "trash-2");
     remove.addEventListener("click", () => this.deleteSelection());
     controls.appendChild(setColor);
-    const action = (title: string, handler: () => void) => {
+    const action = (title: string, handler: () => void, mobileOnly = false) => {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = title;
       button.setAttribute("aria-label", title);
       button.addEventListener("click", handler);
+      if (mobileOnly) button.dataset.mobileOnly = "true";
       controls.appendChild(button);
     };
     if (soleEdgeId) {
@@ -1182,6 +1304,10 @@ export class CanvasView implements View {
       } else if (nodeCapability.kind === "external") {
         action("Open in browser", () => { void window.geode.openExternal(nodeCapability.url); });
       }
+      if (document.body.classList.contains("is-mobile")) action("Duplicate", () => this.duplicateSelection(), true);
+    }
+    if (selectedNodes.length === 2 && document.body.classList.contains("is-mobile")) {
+      action("Connect selected nodes", () => this.connectSelectedNodes(), true);
     }
     if (canGroupSelection) action("Create group", () => this.openGroupPrompt());
     if (soleGroup) {
@@ -1228,7 +1354,12 @@ export class CanvasView implements View {
     custom.textContent = "Custom color…";
     custom.addEventListener("click", () => this.openCustomColorPrompt());
     palette.appendChild(custom);
-    controls.appendChild(palette);
+    if (document.body.classList.contains("is-mobile")) {
+      palette.classList.add("is-canvas-surface-palette");
+      this.surfaceEl.appendChild(palette);
+    } else {
+      controls.appendChild(palette);
+    }
     this.colorPaletteEl = palette;
   }
 
@@ -1286,6 +1417,52 @@ export class CanvasView implements View {
     this.selectedIds.clear();
     this.selectedEdgeIds.clear();
     this.updateSelectionClasses();
+  }
+
+  private duplicateSelection(): void {
+    const sources = this.document.nodes.filter((node) => this.selectedIds.has(node.id) && node.type !== "group");
+    if (sources.length === 0) return;
+    const used = new Set(this.document.nodes.map((node) => node.id));
+    const usedEdges = new Set(this.document.edges.map((edge) => edge.id));
+    let edgeSequence = 1;
+    const duplicateEdgeId = () => {
+      while (usedEdges.has(`edge-${edgeSequence}`)) edgeSequence += 1;
+      const id = `edge-${edgeSequence++}`;
+      usedEdges.add(id);
+      return id;
+    };
+    const idMap = new Map<string, string>();
+    const clones = sources.map((source) => {
+      const clone = structuredClone(source) as CanvasNode;
+      clone.id = this.nextDuplicateNodeId(source.id, used);
+      clone.x += 32;
+      clone.y += 32;
+      idMap.set(source.id, clone.id);
+      return clone;
+    });
+    const edges = this.document.edges.flatMap((edge) => {
+      const fromNode = idMap.get(edge.fromNode);
+      const toNode = idMap.get(edge.toNode);
+      return fromNode && toNode ? [{ ...structuredClone(edge), id: duplicateEdgeId(), fromNode, toNode }] : [];
+    });
+    this.document.nodes.push(...clones);
+    this.document.edges.push(...edges);
+    this.selectedIds.clear();
+    for (const clone of clones) this.selectedIds.add(clone.id);
+    this.render();
+    void this.persist();
+  }
+
+  private connectSelectedNodes(): void {
+    const nodes = this.document.nodes.filter((node) => this.selectedIds.has(node.id));
+    if (nodes.length !== 2) return;
+    if (this.document.edges.some((edge) => edge.fromNode === nodes[0].id && edge.toNode === nodes[1].id)) return;
+    this.document.edges.push({
+      id: this.nextEdgeId(), fromNode: nodes[0].id, fromSide: "right", fromEnd: "none",
+      toNode: nodes[1].id, toSide: "left", toEnd: "arrow",
+    });
+    this.render();
+    void this.persist();
   }
 
   private selectEdge(edgeId: string, additive = false): void {
@@ -1410,6 +1587,7 @@ export class CanvasView implements View {
     this.selectEdge(edgeId);
     const edge = this.document.edges.find((candidate) => candidate.id === edgeId);
     if (!edge) return;
+    const edgeSnapshot = structuredClone(edge);
     const fromNode = this.document.nodes.find((node) => node.id === edge.fromNode);
     const toNode = this.document.nodes.find((node) => node.id === edge.toNode);
     const svg = this.viewportEl.querySelector<SVGSVGElement>(".canvas-edges");
@@ -1436,11 +1614,24 @@ export class CanvasView implements View {
         ? this.edgePath(point, fromSide, to, toSide)
         : this.edgePath(from, fromSide, point, toSide));
     };
-    const up = (next: PointerEvent) => {
+    let finished = false;
+    const cleanup = (rollback: boolean) => {
+      if (finished) return;
+      finished = true;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
       preview.remove();
       this.containerEl.classList.remove("is-connecting");
+      if (this.transientGestureCancel === cancel) this.transientGestureCancel = null;
+      if (rollback) {
+        Object.assign(edge, edgeSnapshot);
+        this.render();
+      }
+    };
+    const cancel = () => cleanup(true);
+    const up = (next: PointerEvent) => {
+      cleanup(false);
       const targetHandle = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((candidate) => {
         const rect = candidate.getBoundingClientRect();
         return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
@@ -1471,6 +1662,9 @@ export class CanvasView implements View {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    this.cancelTransientGesture();
+    this.transientGestureCancel = cancel;
   }
 
   private closestSide(node: CanvasNode, point: Point): CanvasSide {
@@ -1630,7 +1824,8 @@ export class CanvasView implements View {
 
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
     if (this.recoveryError !== null) return;
-    if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-edge, .canvas-node-connection-handle")) return;
+    if (event.pointerType === "touch") return;
+    if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge, .canvas-node-connection-handle, .canvas-node-connection-touch-hit")) return;
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
     if (event.altKey && node.type !== "group") {
@@ -1927,15 +2122,24 @@ export class CanvasView implements View {
     const move = (next: PointerEvent) => {
       preview.setAttribute("d", this.edgePath(from, side, toWorld(next), this.oppositeSide(side)));
     };
-    const up = (next: PointerEvent) => {
+    let finished = false;
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      preview.remove();
+      this.containerEl.classList.remove("is-connecting");
+      if (this.transientGestureCancel === cancel) this.transientGestureCancel = null;
+    };
+    const cancel = () => cleanup();
+    const up = (next: PointerEvent) => {
+      cleanup();
       const target = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((handle) => {
         const rect = handle.getBoundingClientRect();
         return next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
       });
-      preview.remove();
-      this.containerEl.classList.remove("is-connecting");
       const targetNodeId = target?.dataset.nodeId;
       const targetSide = target?.dataset.side as CanvasSide | undefined;
       if (targetNodeId && targetSide) {
@@ -1983,6 +2187,9 @@ export class CanvasView implements View {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    this.cancelTransientGesture();
+    this.transientGestureCancel = cancel;
   }
 
   private addConnectedTextCard(source: CanvasNode, sourceSide: CanvasSide, worldPoint: Point): void {
@@ -2060,6 +2267,139 @@ export class CanvasView implements View {
     return `edge-${sequence}`;
   }
 
+  private touchNodeAt(clientX: number, clientY: number): string | null {
+    const candidates = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node")].reverse();
+    return candidates.find((node) => {
+      const rect = node.getBoundingClientRect();
+      return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    })?.dataset.nodeId ?? null;
+  }
+
+  private selectTouchNode(id: string): void {
+    const node = this.document.nodes.find((candidate) => candidate.id === id);
+    if (!node) return;
+    this.selectedEdgeIds.clear();
+    this.selectedIds.clear();
+    this.selectedIds.add(id);
+    this.updateSelectionClasses();
+    this.containerEl.dataset.canvasSelected = id;
+  }
+
+  private beginTouchNodeDrag(id: string): void {
+    const node = this.document.nodes.find((candidate) => candidate.id === id);
+    if (!node) return;
+    this.touchDragSnapshot = { id, x: node.x, y: node.y };
+    this.containerEl.dataset.canvasGesture = "node-drag";
+    this.containerEl.dataset.canvasDirty = "true";
+  }
+
+  private moveTouchNode(id: string, screenDx: number, screenDy: number): void {
+    const snapshot = this.touchDragSnapshot;
+    const node = this.document.nodes.find((candidate) => candidate.id === id);
+    if (!snapshot || !node || snapshot.id !== id) return;
+    node.x = snapshot.x + screenDx / this.scale;
+    node.y = snapshot.y + screenDy / this.scale;
+    this.render();
+  }
+
+  private commitTouchNodeDrag(): void {
+    if (!this.touchDragSnapshot) return;
+    this.touchDragSnapshot = null;
+    this.containerEl.dataset.canvasGesture = "idle";
+    void this.persist();
+  }
+
+  private rollbackTouchNodeDrag(): void {
+    const snapshot = this.touchDragSnapshot;
+    if (!snapshot) return;
+    const node = this.document.nodes.find((candidate) => candidate.id === snapshot.id);
+    if (node) {
+      node.x = snapshot.x;
+      node.y = snapshot.y;
+    }
+    this.touchDragSnapshot = null;
+    this.containerEl.dataset.canvasGesture = "idle";
+    this.containerEl.dataset.canvasDirty = String(this.hasUnacknowledgedChanges());
+    this.render();
+  }
+
+  private releaseTouchCaptures(): void {
+    for (const id of this.capturedTouchPointers) {
+      if (this.surfaceEl.hasPointerCapture?.(id)) this.surfaceEl.releasePointerCapture(id);
+    }
+    this.capturedTouchPointers.clear();
+    this.containerEl.dataset.canvasCapturedPointers = "0";
+  }
+
+  private cancelTouchGesture(): void {
+    this.touchGesture.cancel();
+    this.releaseTouchCaptures();
+    this.containerEl.dataset.canvasGesture = "idle";
+  }
+
+  private cancelTransientGesture(): void {
+    const cancel = this.transientGestureCancel;
+    this.transientGestureCancel = null;
+    cancel?.();
+  }
+
+  private installTouchControls(): void {
+    const point = (event: PointerEvent) => ({ pointerId: event.pointerId, x: event.clientX, y: event.clientY });
+    this.surfaceEl.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "touch" || (event.target as HTMLElement).closest(
+        "button, textarea, input, .canvas-edge-hit, .canvas-edge-endpoint-handle, .canvas-edge-endpoint-touch-hit, .canvas-node-connection-handle, .canvas-node-connection-touch-hit, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge"
+      )) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.touchGesture.down(point(event));
+      this.capturedTouchPointers.add(event.pointerId);
+      try { this.surfaceEl.setPointerCapture(event.pointerId); } catch { /* cancellation owns cleanup */ }
+      this.containerEl.dataset.canvasCapturedPointers = String(this.capturedTouchPointers.size);
+      this.containerEl.dataset.canvasGesture = "touch";
+    }, { capture: true, passive: false });
+    this.surfaceEl.addEventListener("pointermove", (event) => {
+      if (event.pointerType !== "touch" || !this.capturedTouchPointers.has(event.pointerId)) return;
+      event.preventDefault();
+      this.touchGesture.move(point(event));
+    }, { capture: true, passive: false });
+    this.surfaceEl.addEventListener("pointerup", (event) => {
+      if (event.pointerType !== "touch" || !this.capturedTouchPointers.has(event.pointerId)) return;
+      event.preventDefault();
+      this.touchGesture.up(point(event));
+      if (this.surfaceEl.hasPointerCapture?.(event.pointerId)) this.surfaceEl.releasePointerCapture(event.pointerId);
+      this.capturedTouchPointers.delete(event.pointerId);
+      this.containerEl.dataset.canvasCapturedPointers = String(this.capturedTouchPointers.size);
+      if (this.capturedTouchPointers.size === 0) this.containerEl.dataset.canvasGesture = "idle";
+    }, { capture: true, passive: false });
+    this.surfaceEl.addEventListener("pointercancel", (event) => {
+      if (event.pointerType === "touch") this.cancelTouchGesture();
+    }, { capture: true });
+    const visibility = () => {
+      if (document.visibilityState !== "visible") {
+        this.cancelTouchGesture();
+        this.cancelTransientGesture();
+      }
+    };
+    document.addEventListener("visibilitychange", visibility);
+    this.touchCleanups.push(() => document.removeEventListener("visibilitychange", visibility));
+    const viewport = window.visualViewport;
+    if (viewport) {
+      const syncKeyboard = () => {
+        const offset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+        this.containerEl.style.setProperty("--canvas-keyboard-offset", `${offset}px`);
+        const editor = this.containerEl.querySelector<HTMLElement>(".canvas-node-text-editor:focus");
+        if (editor) editor.scrollIntoView({ block: "nearest" });
+      };
+      viewport.addEventListener("resize", syncKeyboard);
+      viewport.addEventListener("scroll", syncKeyboard);
+      this.touchCleanups.push(
+        () => viewport.removeEventListener("resize", syncKeyboard),
+        () => viewport.removeEventListener("scroll", syncKeyboard),
+      );
+      syncKeyboard();
+    }
+  }
+
   private installCameraControls(): void {
     const isEmptyDropTarget = (target: EventTarget | null) => target === this.surfaceEl || target === this.viewportEl;
     this.surfaceEl.addEventListener("dragover", (event) => {
@@ -2123,6 +2463,7 @@ export class CanvasView implements View {
       ]);
     });
     this.surfaceEl.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "touch") return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.surfaceEl.focus({ preventScroll: true });
       if (event.button !== 0 && event.button !== 1) return;
@@ -2305,7 +2646,7 @@ export class CanvasView implements View {
   private buildCanvasToolbar(): HTMLElement {
     const toolbar = document.createElement("div");
     toolbar.className = "canvas-toolbar";
-    const action = (title: string, iconName: string, run: () => void) => {
+    const action = (title: string, iconName: string, run: () => void, mobileOnly = false) => {
       const button = document.createElement("button");
       button.type = "button";
       button.title = title;
@@ -2316,13 +2657,25 @@ export class CanvasView implements View {
       button.addEventListener("click", () => {
         if (this.recoveryError === null) run();
       });
+      if (mobileOnly) button.dataset.mobileOnly = "true";
       toolbar.appendChild(button);
+      return button;
     };
     action("Add text card", "file-plus", () => this.addTextCardAt(this.viewportCenter()));
     action("Add note from vault", "file-text", () => this.openFilePicker("note"));
     action("Add media from vault", "image-plus", () => this.openFilePicker("media"));
     action("Add web page", "globe", () => this.openWebPagePrompt());
     action("Add group", "group", () => this.openGroupPrompt());
+    if (document.body.classList.contains("is-mobile")) {
+      action("Select all cards", "scan", () => {
+        this.selectedEdgeIds.clear();
+        this.selectedIds.clear();
+        for (const node of this.document.nodes) this.selectedIds.add(node.id);
+        this.updateSelectionClasses();
+      }, true);
+      action("Undo Canvas change", "undo-2", () => { void this.restoreHistory("undo").catch(() => {}); }, true);
+      action("Redo Canvas change", "redo-2", () => { void this.restoreHistory("redo").catch(() => {}); }, true);
+    }
     return toolbar;
   }
 
@@ -2392,19 +2745,97 @@ export class CanvasView implements View {
 
   private updateTransform(): void {
     this.viewportEl.style.transform = `translate(${this.pan.x}px, ${this.pan.y}px) scale(${this.scale})`;
+    this.viewportEl.style.setProperty("--canvas-scale", String(this.scale));
+    for (const hit of this.viewportEl.querySelectorAll<SVGCircleElement>(".canvas-edge-endpoint-touch-hit")) {
+      hit.setAttribute("r", String(22 / this.scale));
+    }
     this.containerEl.dataset.scale = String(this.scale);
     this.containerEl.dataset.panX = String(this.pan.x);
     this.containerEl.dataset.panY = String(this.pan.y);
   }
 
   private async persist(): Promise<void> {
+    if (this.conflictReadOnly) return;
+    if (this.vaultSwitching) {
+      this.persistRequestedWhileSuspended = true;
+      return;
+    }
+    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist());
+    // Most Canvas commands intentionally fire-and-forget; attach a rejection
+    // observer while preserving the rejected queue for pause/switch callers.
+    void this.persistQueue.catch(() => {});
+    return this.persistQueue;
+  }
+
+  private async doPersist(): Promise<void> {
     if (!this.file || this.recoveryError !== null) return;
     const text = serializeCanvas(this.document);
-    if (text === this.lastKnownText) return;
-    if (this.lastKnownText !== null) this.pushHistory(this.undoStack, this.lastKnownText);
-    this.redoStack.length = 0;
-    this.lastKnownText = text;
-    await this.app.vault.modify(this.file, text);
+    if (text === this.pendingKnownText || (this.pendingKnownText === null && this.matchesLastKnownDocument())) return;
+    const prior = this.lastKnownText;
+    this.pendingKnownText = text;
+    this.containerEl.dataset.canvasDirty = "true";
+    delete this.containerEl.dataset.canvasSaveError;
+    this.setSaveStatus("Saving Canvas…", false, false);
+    try {
+      await this.app.vault.modify(this.file, text);
+      if (prior !== null) this.pushHistory(this.undoStack, prior);
+      this.redoStack.length = 0;
+      this.lastKnownText = text;
+      this.containerEl.dataset.canvasDirty = "false";
+      this.containerEl.dataset.canvasSaved = text;
+      this.setSaveStatus("Canvas saved", false, false);
+    } catch (error) {
+      this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
+      this.containerEl.dataset.canvasDirty = "true";
+      this.setSaveStatus("Canvas save failed", true, true);
+      throw error;
+    } finally {
+      if (this.pendingKnownText === text) this.pendingKnownText = null;
+    }
+  }
+
+  private setSaveStatus(message: string, failed: boolean, retry: boolean): void {
+    this.saveStatusEl.replaceChildren();
+    this.saveStatusEl.setAttribute("role", failed ? "alert" : "status");
+    const text = document.createElement("span");
+    text.textContent = message;
+    this.saveStatusEl.appendChild(text);
+    if (retry) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Retry Canvas save";
+      button.addEventListener("click", () => { void this.persist(); });
+      this.saveStatusEl.appendChild(button);
+    }
+  }
+
+  async prepareVaultSwitch(): Promise<void> {
+    this.vaultSwitching = true;
+    await this.persistQueue;
+  }
+
+  cancelVaultSwitch(): void {
+    this.vaultSwitching = false;
+    if (this.persistRequestedWhileSuspended) {
+      this.persistRequestedWhileSuspended = false;
+      void this.persist();
+    }
+  }
+
+  async pauseAutosave(): Promise<void> {
+    this.vaultSwitching = true;
+    this.cancelTransientGesture();
+    this.touchGesture.finish();
+    this.releaseTouchCaptures();
+    this.containerEl.inert = true;
+    this.containerEl.setAttribute("aria-busy", "true");
+    await this.persistQueue;
+  }
+
+  resumeAutosave(): void {
+    this.containerEl.inert = false;
+    this.containerEl.removeAttribute("aria-busy");
+    this.cancelVaultSwitch();
   }
 
   private clearHistory(): void {
@@ -2430,13 +2861,25 @@ export class CanvasView implements View {
     } catch {
       return;
     }
-    source.pop();
-    this.pushHistory(target, current);
+    const currentDocument = this.document;
     this.document = restored;
-    this.lastKnownText = snapshot;
     this.selectedIds.clear();
     this.selectedEdgeIds.clear();
     this.render();
-    await this.app.vault.modify(this.file, snapshot);
+    this.containerEl.dataset.canvasDirty = "true";
+    try {
+      await this.app.vault.modify(this.file, snapshot);
+      source.pop();
+      this.pushHistory(target, current);
+      this.lastKnownText = snapshot;
+      this.containerEl.dataset.canvasDirty = "false";
+      this.containerEl.dataset.canvasSaved = snapshot;
+      delete this.containerEl.dataset.canvasSaveError;
+    } catch (error) {
+      this.document = currentDocument;
+      this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
+      this.render();
+      throw error;
+    }
   }
 }

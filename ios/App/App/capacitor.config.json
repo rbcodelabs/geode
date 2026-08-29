@@ -1,0 +1,6 @@
+{
+	"appId": "com.rbcodelabs.geode",
+	"appName": "Geode",
+	"webDir": "dist/mobile",
+	"packageClassList": []
+}

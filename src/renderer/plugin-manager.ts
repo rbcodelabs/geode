@@ -9,11 +9,19 @@ import {
 import * as GeodeAPI from "./api/obsidian";
 import { isPluginBlocked, type ManagedPolicy } from "./policy";
 import { measureOperation, recordMeasure } from "./perf-instrumentation";
+import {
+  classifyMobilePlugin,
+  compileMobilePluginModule,
+  instantiateMobilePluginClass,
+  type MobilePluginAdmission,
+} from "./mobile-plugin-runtime";
+import type { PluginFileSet } from "./host/contracts";
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
 const CONFIG_KEY = "plugins"; // <vault>/.geode/plugins.json — array of enabled plugin ids
 const QUARANTINE_KEY = "plugin-quarantine";
+const MOBILE_OPT_INS_KEY = "mobile-plugin-opt-ins";
 
 interface QuarantineEntry { at: number; boundary: string; message: string }
 
@@ -95,6 +103,8 @@ export function instantiatePluginClass(code: string, pluginId: string): PluginCo
 interface LoadedPlugin {
   manifest: PluginManifest;
   instance: Plugin;
+  code: string;
+  files: PluginFileSet;
 }
 
 /**
@@ -104,12 +114,14 @@ interface LoadedPlugin {
  */
 export class PluginManager {
   private manifests = new Map<string, PluginManifest>();
+  private manifestSources = new Map<string, string>();
   private loadErrors = new Map<string, string>();
   private loaded = new Map<string, LoadedPlugin>();
   private policy: ManagedPolicy | null = null;
   private quarantine: Record<string, QuarantineEntry> = {};
   private recoveryMode = false;
   private containing = new Set<string>();
+  private mobileOptIns = new Set<string>();
 
   constructor(
     private app: App,
@@ -125,16 +137,18 @@ export class PluginManager {
    */
   async initialize(): Promise<void> {
     this.loadErrors.clear();
-    const [policy, , quarantine, recovery, enabledConfig] = await Promise.all([
+    const [policy, , quarantine, recovery, enabledConfig, mobileOptIns] = await Promise.all([
       measureOperation("plugin-policy-read", async () => (await window.geode.getPluginPolicy?.()) ?? null),
       measureOperation("plugin-discovery", () => this.rescan()),
       window.geode.readConfig(QUARANTINE_KEY),
       window.geode.getCrashRecoveryState?.(),
       window.geode.readConfig(CONFIG_KEY),
+      window.geode.readConfig(MOBILE_OPT_INS_KEY),
     ]);
     this.policy = policy;
     this.quarantine = (quarantine as Record<string, QuarantineEntry> | null) ?? {};
     this.recoveryMode = recovery?.suppressPlugins === true;
+    this.mobileOptIns = new Set((mobileOptIns as string[] | null) ?? []);
 
     const enabledIds = (enabledConfig as string[] | null) ?? [];
     if (this.recoveryMode) return;
@@ -167,6 +181,12 @@ export class PluginManager {
     await this.enable(id);
   }
 
+  async disableQuarantined(id: string): Promise<void> {
+    delete this.quarantine[id];
+    await window.geode.writeConfig(QUARANTINE_KEY, this.quarantine);
+    await this.persistEnabled();
+  }
+
   async leaveRecoveryMode(): Promise<void> {
     await window.geode.leaveCrashRecovery?.();
     this.recoveryMode = false;
@@ -175,6 +195,23 @@ export class PluginManager {
   /** Whether plugin `id` is currently blocked by the enterprise-managed policy. */
   isBlocked(id: string): boolean {
     return isPluginBlocked(this.policy, id);
+  }
+
+  isMobileRuntime(): boolean {
+    const runtime = (this.app as App & { host?: App["host"] }).host?.runtime.runtime;
+    return runtime !== undefined && runtime !== "electron";
+  }
+
+  getMobileAdmission(id: string): MobilePluginAdmission | null {
+    const manifest = this.manifests.get(id);
+    return manifest ? classifyMobilePlugin(manifest, this.mobileOptIns.has(id)) : null;
+  }
+
+  async setMobileOptIn(id: string, allowed: boolean): Promise<void> {
+    if (!this.manifests.has(id)) throw new Error(`Unknown plugin: "${id}"`);
+    if (allowed) this.mobileOptIns.add(id);
+    else this.mobileOptIns.delete(id);
+    await window.geode.writeConfig(MOBILE_OPT_INS_KEY, [...this.mobileOptIns].sort());
   }
 
   /**
@@ -221,6 +258,39 @@ export class PluginManager {
    */
   async reload(id: string): Promise<void> {
     const wasEnabled = this.loaded.has(id);
+    if (wasEnabled && this.isMobileRuntime()) {
+      const previous = this.loaded.get(id)!;
+      let replacementManifestSource: string | undefined;
+      try {
+        const replacementManifest = await this.readManifest(id);
+        replacementManifestSource = this.manifestSources.get(id);
+        this.manifests.set(id, replacementManifest);
+        this.assertCanEnable(id, replacementManifest);
+        const nextCode = await this.readPluginFile(id, "main.js");
+        // Reject unsupported updates before the known-good instance is touched.
+        await compileMobilePluginModule(nextCode, id);
+      } catch (validationError) {
+        replacementManifestSource ??= this.manifestSources.get(id);
+        if (!replacementManifestSource) throw validationError;
+        await this.restorePluginFiles(id, replacementManifestSource, previous.files);
+        this.manifests.set(id, previous.manifest);
+        this.manifestSources.set(id, previous.files.manifest);
+        throw validationError;
+      }
+      await this.disable(id, { persist: false });
+      try {
+        await this.enable(id, { persist: false });
+      } catch (updateError) {
+        if (!replacementManifestSource) throw updateError;
+        await this.restorePluginFiles(id, replacementManifestSource, previous.files);
+        delete this.quarantine[id];
+        await window.geode.writeConfig(QUARANTINE_KEY, this.quarantine);
+        await this.rescan();
+        await this.enable(id, { persist: false });
+        throw updateError;
+      }
+      return;
+    }
     if (wasEnabled) await this.disable(id, { persist: false });
     await this.rescan();
     if (wasEnabled) await this.enable(id, { persist: false });
@@ -230,6 +300,7 @@ export class PluginManager {
     const raw = await measureOperation(`plugin-manifest-read:${id}`, () =>
       this.readPluginFile(id, "manifest.json")
     );
+    this.manifestSources.set(id, raw);
     const manifest = parseManifest(raw, id);
     // Stamp the plugin's own vault-relative folder onto the manifest, exactly
     // as Obsidian does at load time. `dir` is deliberately not part of the
@@ -275,30 +346,39 @@ export class PluginManager {
     const manifest = this.manifests.get(id);
     if (!manifest) throw new Error(`Unknown plugin: "${id}"`);
     if (this.quarantine[id]) throw new Error(`Plugin "${id}" is quarantined after an error`);
-    if (this.isBlocked(id)) {
-      throw new Error(`Plugin "${id}" is blocked by administrator policy`);
-    }
-    if (!isVersionAtLeast(GEODE_API_VERSION, manifest.minAppVersion)) {
-      throw new Error(
-        `Plugin "${id}" requires Geode ${manifest.minAppVersion}+ (running ${GEODE_API_VERSION})`
-      );
-    }
+    this.assertCanEnable(id, manifest);
 
-    const code = await measureOperation(`plugin-code-read:${id}`, () =>
-      this.readPluginFile(id, "main.js")
-    );
-    const PluginClass = instantiatePluginClass(code, id);
+    let PluginClass: PluginConstructor;
+    let code: string;
+    try {
+      code = await measureOperation(`plugin-code-read:${id}`, () =>
+        this.readPluginFile(id, "main.js")
+      );
+      PluginClass = this.isMobileRuntime()
+        ? await instantiateMobilePluginClass(code, id)
+        : instantiatePluginClass(code, id);
+    } catch (error) {
+      this.loadErrors.set(id, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
     const instance = new PluginClass(this.app, manifest);
     instance.setErrorHandler((boundary, error) => this.containPluginError(id, boundary, error));
+    instance.activateHostGeneration();
     this.loadErrors.delete(id);
-    this.loaded.set(id, { manifest, instance });
-    await measureOperation(`plugin-style-load:${id}`, () => this.injectStyles(id));
+    const styles = await measureOperation(`plugin-style-load:${id}`, () => this.injectStyles(id));
+    this.loaded.set(id, {
+      manifest,
+      instance,
+      code,
+      files: { manifest: this.manifestSources.get(id) ?? JSON.stringify(manifest), main: code, styles },
+    });
 
     let onloadResult: void | Promise<unknown>;
     try {
       measureOperation(`plugin-onload-sync:${id}`, () => instance.load()); // Component.load() -> onload()
       onloadResult = instance.onloadResult;
     } catch (err) {
+      await instance.unloadAndWait().catch((teardownError) => console.error(`Failed to tear down plugin "${id}"`, teardownError));
       this.removeStyles(id);
       this.loaded.delete(id);
       await this.recordAndQuarantine(id, "onload", err);
@@ -329,6 +409,7 @@ export class PluginManager {
         // onload() genuinely rejected (a real load failure, not a hang) —
         // roll back exactly as before.
         clearTimeout(timer);
+        await instance.unloadAndWait().catch((teardownError) => console.error(`Failed to tear down plugin "${id}"`, teardownError));
         this.removeStyles(id);
         this.loaded.delete(id);
         await this.recordAndQuarantine(id, "onload", err);
@@ -340,6 +421,18 @@ export class PluginManager {
         const note =
           `Plugin "${id}" onload() did not finish within ${this.onloadTimeoutMs}ms; ` +
           `it is enabled but may not have finished starting up.`;
+        if (this.isMobileRuntime()) {
+          // The promise may continue running after the timeout. Revoke this
+          // generation before cleanup so any post-await register* call fails
+          // closed, and attach a rejection handler so that failure is observed.
+          void onload.catch((error) => console.error(`Timed-out plugin "${id}" later rejected`, error));
+          await instance.unloadAndWait().catch((teardownError) => console.error(`Failed to tear down plugin "${id}"`, teardownError));
+          this.removeStyles(id);
+          this.loaded.delete(id);
+          const timeoutError = new Error(note.replace("; it is enabled but may not have finished starting up.", "."));
+          await this.recordAndQuarantine(id, "onload-timeout", timeoutError);
+          throw timeoutError;
+        }
         this.loadErrors.set(id, note);
         console.warn(note);
         // The onload promise is still live. Attach handlers so a later rejection
@@ -366,19 +459,19 @@ export class PluginManager {
    * which auto-loads each enabled plugin's stylesheet. Missing/empty
    * stylesheets are ignored. Removed on disable via `removeStyles`.
    */
-  private async injectStyles(id: string): Promise<void> {
-    if (typeof document === "undefined") return;
+  private async injectStyles(id: string): Promise<string | null> {
     let css: string;
     try {
       css = await this.readPluginFile(id, "styles.css");
     } catch {
-      return; // no stylesheet
+      return null; // no stylesheet
     }
-    if (!css.trim()) return;
+    if (typeof document === "undefined" || !css.trim()) return css;
     const styleEl = document.createElement("style");
     styleEl.dataset.pluginId = id;
     styleEl.textContent = css;
     document.head.appendChild(styleEl);
+    return css;
   }
 
   private async readPluginFile(id: string, fileName: string): Promise<string> {
@@ -405,7 +498,7 @@ export class PluginManager {
     const entry = this.loaded.get(id);
     if (!entry) return;
     try {
-      entry.instance.unload();
+      await entry.instance.unloadAndWait();
     } catch (error) {
       await this.recordAndQuarantine(id, "onunload", error);
     }
@@ -413,6 +506,10 @@ export class PluginManager {
     this.loaded.delete(id);
     if (persist) await this.persistEnabled();
     await this.reportActivePlugins();
+  }
+
+  async dispose(): Promise<void> {
+    for (const id of [...this.loaded.keys()]) await this.disable(id, { persist: false });
   }
 
   private async containPluginError(id: string, boundary: string, error: unknown): Promise<void> {
@@ -435,7 +532,7 @@ export class PluginManager {
       window.geode.writeConfig(QUARANTINE_KEY, this.quarantine),
       window.geode.reportCrashDiagnostic?.({
         type: "plugin-error", at: entry.at, pluginId: id, boundary,
-        message: normalized.message, stack: normalized.stack,
+        message: normalized.message, stack: this.isMobileRuntime() ? undefined : normalized.stack,
       }),
     ]);
     for (const result of results) {
@@ -447,7 +544,34 @@ export class PluginManager {
     await window.geode.writeConfig(CONFIG_KEY, this.enabledIds());
   }
 
+  private assertCanEnable(id: string, manifest: PluginManifest): void {
+    if (this.isBlocked(id)) throw new Error(`Plugin "${id}" is blocked by administrator policy`);
+    if (!isVersionAtLeast(GEODE_API_VERSION, manifest.minAppVersion)) {
+      throw new Error(`Plugin "${id}" requires Geode ${manifest.minAppVersion}+ (running ${GEODE_API_VERSION})`);
+    }
+    if (!this.isMobileRuntime()) return;
+    const admission = classifyMobilePlugin(manifest, this.mobileOptIns.has(id));
+    if (!admission.allowed) {
+      const message = `Plugin "${id}" is ${admission.label}: ${admission.reason}.`;
+      this.loadErrors.set(id, message);
+      throw new Error(message);
+    }
+  }
+
   private async reportActivePlugins(): Promise<void> {
     await window.geode.reportActivePlugins?.(this.enabledIds());
+  }
+
+  private async restorePluginFiles(id: string, expectedManifest: string, replacement: PluginFileSet): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await window.geode.replacePluginFiles(id, expectedManifest, replacement);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 }

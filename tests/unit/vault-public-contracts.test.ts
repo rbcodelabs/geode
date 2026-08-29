@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 import { Vault } from "../../src/renderer/vault";
 import type { VaultFileEntry } from "../../src/main/preload";
+import { createElectronHost } from "../../src/renderer/host/electron-host";
 
 const ROOT = "/fake/vault";
 
@@ -40,7 +41,7 @@ function installFakeGeode(
       eventCallback = callback;
     }),
   };
-  (globalThis as any).window = { geode };
+  (globalThis as any).window = { geode, hostServices: createElectronHost(geode as any) };
   return { contents, folders, geode, emit: (event: { event: string; path: string }) => eventCallback?.(event) };
 }
 
@@ -54,7 +55,7 @@ async function openVault() {
     "Docs/Note.md": "first",
     "image.png": "data",
   });
-  const vault = new Vault();
+  const vault = new Vault(createElectronHost(fake.geode as any));
   await vault.open(ROOT);
   return { vault, ...fake };
 }

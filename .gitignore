@@ -11,3 +11,4 @@ test-results/
 playwright-report/
 .benchmark-vault/
 .benchmark-results/
+ios/App/CapApp-SPM/.build/

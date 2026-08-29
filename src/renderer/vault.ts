@@ -3,6 +3,7 @@ import {
   TFile,
   TFolder,
   TAbstractFile,
+  DataAdapter,
   FileSystemAdapter,
   pathParent,
   pathName,
@@ -10,8 +11,16 @@ import {
   MARKDOWN_EXTENSIONS,
   isTFolder,
 } from "./types";
-import type { VaultFileEntry } from "../main/preload";
+import type { HostServices, VaultEvent, VaultFileEntry } from "./host/contracts";
+import { getHostServices } from "./host/registry";
 import { measureOperation } from "./perf-instrumentation";
+import {
+  buildVaultManifest,
+  diffVaultManifests,
+  reduceProviderEvents,
+  type ReconcileChange,
+  type VaultManifest,
+} from "./reconciliation";
 
 export interface DataWriteOptions {
   ctime?: number;
@@ -77,11 +86,27 @@ export class Vault extends Events {
   private folders = new Map<string, TFolder>();
   /** Content cache for markdown files, kept warm for search/metadata. LRU-capped — see `LruContentCache`. */
   private contents = new LruContentCache(CONTENT_CACHE_MAX_ENTRIES);
+  private stopHostChanges: (() => void) | null = null;
+  private mutationSequence = 0;
+  private ownMutationIds = new Set<string>();
+  private pendingHostEvents: VaultEvent[] = [];
+  private hostEventFlushScheduled = false;
+  private hasDurableReconcileBaseline = false;
+  private acknowledgedPathsSinceManifest = new Set<string>();
+
+  constructor(readonly host: HostServices = getHostServices()) {
+    super();
+  }
 
   async open(vaultPath: string): Promise<void> {
-    const { root, name, files } = await measureOperation("vault-discovery-ipc", () =>
-      window.geode.openVault(vaultPath)
+    this.stopHostChanges?.();
+    this.stopHostChanges = null;
+    this.ownMutationIds.clear();
+    this.acknowledgedPathsSinceManifest.clear();
+    const { root, name } = await measureOperation("vault-discovery-ipc", () =>
+      this.host.vaultRegistry.openVault(vaultPath)
     );
+    const files = await this.host.vaultFiles.list();
     this.root = root;
     this.name = name;
     this.files.clear();
@@ -90,13 +115,43 @@ export class Vault extends Events {
     this.folders.set("", { kind: "folder", path: "", name: name, parent: "", children: [] });
     for (const entry of files) this.indexEntry(entry);
     this.rebuildChildren();
+    let storedManifest: unknown = null;
+    try {
+      storedManifest = await this.host.config.read(this.reconcileManifestKey());
+    } catch {
+      // Legacy/third-party host fixtures without config persistence can still
+      // open. Reconciliation remains unavailable until the host supplies it.
+    }
+    this.hasDurableReconcileBaseline = this.isValidManifest(storedManifest);
+    try {
+      if (!this.hasDurableReconcileBaseline) {
+        await this.host.config.write(this.reconcileManifestKey(), buildVaultManifest(root, files));
+      }
+    } catch {
+      // The manifest is derived. A host without device-config persistence can
+      // still open safely; the next complete reconciliation retries it.
+    }
     // Obsidian emits `create` while initially loading each existing abstract
     // file. Listeners that need to ignore this phase register after layout is
     // ready; listeners already attached to the Vault receive the loaded tree.
     for (const entry of files) {
       this.trigger("create", this.getAbstractFileByPath(entry.path));
     }
-    window.geode.onVaultEvent(async (ev) => {
+    this.stopHostChanges = this.host.vaultFiles.onChange((ev) => {
+      if (ev.mutationId && this.ownMutationIds.has(ev.mutationId)) return;
+      this.pendingHostEvents.push(ev);
+      if (this.hostEventFlushScheduled) return;
+      this.hostEventFlushScheduled = true;
+      queueMicrotask(() => {
+        this.hostEventFlushScheduled = false;
+        const events = reduceProviderEvents(this.pendingHostEvents);
+        this.pendingHostEvents = [];
+        for (const event of events) this.applyHostChange(event);
+      });
+    });
+  }
+
+  private applyHostChange(ev: VaultEvent): void {
       if (ev.event === "create") {
         if (this.files.has(ev.path)) return;
         this.indexEntry({ path: ev.path, isFolder: false, mtime: Date.now(), ctime: Date.now(), size: 0 });
@@ -128,7 +183,149 @@ export class Vault extends Events {
         this.rebuildChildren();
         this.trigger("delete", f);
       }
+  }
+
+  private reconcileManifestKey(): string {
+    return `device-reconcile:${encodeURIComponent(this.root)}`;
+  }
+
+  private isValidManifest(value: unknown): value is VaultManifest {
+    if (!value || typeof value !== "object") return false;
+    const manifest = value as Partial<VaultManifest>;
+    return manifest.version === 1 && manifest.vaultId === this.root &&
+      !!manifest.entries && typeof manifest.entries === "object";
+  }
+
+  needsInitialReconcile(): boolean {
+    return this.hasDurableReconcileBaseline;
+  }
+
+  private currentManifest(): VaultManifest {
+    const entries: VaultFileEntry[] = [
+      ...[...this.folders.values()]
+        .filter((folder) => folder.path !== "")
+        .map((folder) => ({ path: folder.path, isFolder: true, mtime: 0, ctime: 0, size: 0 })),
+      ...[...this.files.values()].map((file) => ({
+        path: file.path,
+        isFolder: false,
+        mtime: file.mtime,
+        ctime: file.ctime,
+        size: file.size,
+      })),
+    ];
+    return buildVaultManifest(this.root, entries);
+  }
+
+  async reconcile(): Promise<{
+    status: "complete" | "partial" | "cancelled" | "unavailable";
+    changes: ReconcileChange[];
+    manifest?: VaultManifest;
+    errorCode?: string;
+  }> {
+    const stored = await this.host.config.read(this.reconcileManifestKey());
+    const previous = this.isValidManifest(stored)
+      ? stored
+      : this.currentManifest();
+    const scan = await this.host.vaultFiles.reconcileScan();
+    if (scan.status !== "complete") {
+      return { status: scan.status, changes: [], errorCode: scan.errorCode };
+    }
+    const manifest = buildVaultManifest(this.root, scan.entries);
+    const result = { status: "complete" as const, changes: diffVaultManifests(previous, manifest), manifest };
+    const changes = result.changes.filter((change) => {
+      if (!this.acknowledgedPathsSinceManifest.has(change.path)) return true;
+      const known = this.getAbstractFileByPath(change.path);
+      if (change.event === "create" || change.event === "create-folder") {
+        if (known === null) return true;
+        return (change.event === "create-folder") !== (known.kind === "folder");
+      }
+      if (change.event === "delete" || change.event === "delete-folder") return known !== null;
+      if (change.event !== "modify") return false;
+      return !known || known.kind !== "file" || known.mtime !== change.entry.mtime || known.size !== change.entry.size;
     });
+    return { status: result.status, changes, manifest };
+  }
+
+  async commitReconcileManifest(manifest: VaultManifest): Promise<void> {
+    if (manifest.vaultId !== this.root) throw new Error("Cannot commit a manifest for a different vault");
+    await this.host.config.write(this.reconcileManifestKey(), manifest);
+    this.hasDurableReconcileBaseline = true;
+    this.acknowledgedPathsSinceManifest.clear();
+  }
+
+  /** Apply one already-durable reconciliation decision to the live model. */
+  applyReconcileChange(change: ReconcileChange, content?: string): void {
+    if (change.event === "create" || change.event === "create-folder") {
+      if (this.getAbstractFileByPath(change.path)) return;
+      this.indexEntry(change.entry);
+      if (content !== undefined) this.contents.set(change.path, content);
+      this.rebuildChildren();
+      this.trigger("create", this.getAbstractFileByPath(change.path));
+      return;
+    }
+    if (change.event === "modify") {
+      const file = this.files.get(change.path);
+      if (!file) {
+        this.indexEntry(change.entry);
+        this.rebuildChildren();
+        this.trigger("create", this.files.get(change.path));
+        return;
+      }
+      file.mtime = change.entry.mtime;
+      file.ctime = change.entry.ctime;
+      file.size = change.entry.size;
+      if (content === undefined) this.contents.delete(change.path);
+      else this.contents.set(change.path, content);
+      this.trigger("modify", file);
+      return;
+    }
+    if (change.event === "delete") {
+      const file = this.files.get(change.path);
+      if (!file) return;
+      this.files.delete(change.path);
+      this.contents.delete(change.path);
+      this.rebuildChildren();
+      this.trigger("delete", file);
+      return;
+    }
+    const folder = this.folders.get(change.path);
+    if (!folder) return;
+    this.folders.delete(change.path);
+    for (const path of [...this.files.keys()]) {
+      if (path.startsWith(`${change.path}/`)) {
+        this.files.delete(path);
+        this.contents.delete(path);
+      }
+    }
+    for (const path of [...this.folders.keys()]) {
+      if (path.startsWith(`${change.path}/`)) this.folders.delete(path);
+    }
+    this.rebuildChildren();
+    this.trigger("delete", folder);
+  }
+
+  dispose(): void {
+    void this.close();
+  }
+
+  async close(): Promise<void> {
+    this.stopHostChanges?.();
+    this.stopHostChanges = null;
+    this.ownMutationIds.clear();
+    this.pendingHostEvents = [];
+    await this.host.vaultRegistry.closeVault();
+  }
+
+  private async withHostMutation<T>(operation: (mutationId: string) => Promise<T>): Promise<T> {
+    const id = `vault-${++this.mutationSequence}`;
+    this.ownMutationIds.add(id);
+    try {
+      const result = await operation(id);
+      await this.host.vaultFiles.settleMutation(id);
+      return result;
+    } finally {
+      this.ownMutationIds.delete(id);
+    }
   }
 
   private indexEntry(entry: VaultFileEntry) {
@@ -214,7 +411,7 @@ export class Vault extends Events {
   }
 
   /** Cached `FileSystemAdapter`, rebuilt only when `this.root` changes. */
-  private _adapter?: FileSystemAdapter;
+  private _adapter?: DataAdapter;
   private _adapterRoot?: string;
 
   /**
@@ -231,12 +428,15 @@ export class Vault extends Events {
    * injected as live closures, so they reflect the current vault name and
    * IPC `exists` at call time.
    */
-  get adapter(): FileSystemAdapter {
+  get adapter(): DataAdapter {
     if (!this._adapter || this._adapterRoot !== this.root) {
-      this._adapter = new FileSystemAdapter(this.root, {
+      const options = {
         getName: () => this.name,
-        exists: (p: string) => window.geode.exists(p),
-      });
+        exists: (p: string) => this.host.vaultFiles.exists(p),
+      };
+      this._adapter = this.host.capabilities.nodePlugins
+        ? new FileSystemAdapter(this.root, options)
+        : new DataAdapter(options);
       this._adapterRoot = this.root;
     }
     return this._adapter;
@@ -290,7 +490,7 @@ export class Vault extends Events {
   async cachedRead(file: TFile): Promise<string> {
     const cached = this.contents.get(file.path);
     if (cached !== undefined) return cached;
-    const data = await window.geode.read(file.path);
+    const data = await this.host.vaultFiles.read(file.path);
     this.contents.set(file.path, data);
     return data;
   }
@@ -312,19 +512,20 @@ export class Vault extends Events {
   }
 
   async read(file: TFile): Promise<string> {
-    const data = await window.geode.read(file.path);
+    const data = await this.host.vaultFiles.read(file.path);
     this.contents.set(file.path, data);
     return data;
   }
 
   async readBinary(file: TFile): Promise<ArrayBuffer> {
-    return window.geode.readBinary(file.path);
+    return this.host.vaultFiles.readBinary(file.path);
   }
 
   async create(path: string, data: string, _options?: DataWriteOptions): Promise<TFile> {
     if (this.files.has(path)) throw new Error(`File already exists: ${path}`);
-    const { mtime, ctime, size } = await window.geode.write(path, data);
+    const { mtime, ctime, size } = await this.withHostMutation((id) => this.host.vaultFiles.write(path, data, id));
     this.indexEntry({ path, isFolder: false, mtime, ctime, size });
+    this.acknowledgedPathsSinceManifest.add(path);
     this.contents.set(path, data);
     this.rebuildChildren();
     const file = this.files.get(path)!;
@@ -336,8 +537,9 @@ export class Vault extends Events {
     if (this.files.has(path) || this.folders.has(path)) {
       throw new Error(`Folder already exists: ${path}`);
     }
-    await window.geode.mkdir(path);
+    await this.withHostMutation((id) => this.host.vaultFiles.mkdir(path, id));
     this.indexEntry({ path, isFolder: true, mtime: Date.now(), ctime: Date.now(), size: 0 });
+    this.acknowledgedPathsSinceManifest.add(path);
     this.rebuildChildren();
     const folder = this.folders.get(path)!;
     this.trigger("create", folder);
@@ -345,15 +547,17 @@ export class Vault extends Events {
   }
 
   async modify(file: TFile, data: string, _options?: DataWriteOptions): Promise<void> {
-    const { mtime, size } = await window.geode.write(file.path, data);
+    const { mtime, size } = await this.withHostMutation((id) => this.host.vaultFiles.write(file.path, data, id));
     file.mtime = mtime;
     file.size = size;
+    this.acknowledgedPathsSinceManifest.add(file.path);
     this.contents.set(file.path, data);
     this.trigger("modify", file);
   }
 
   async trash(item: TFile | TFolder): Promise<void> {
-    await window.geode.trash(item.path);
+    await this.withHostMutation((id) => this.host.vaultFiles.trash(item.path, id));
+    this.acknowledgedPathsSinceManifest.add(item.path);
     if (item.kind === "file") {
       this.files.delete(item.path);
       this.contents.delete(item.path);
@@ -394,7 +598,9 @@ export class Vault extends Events {
 
   async rename(item: TFile | TFolder, newPath: string): Promise<void> {
     const oldPath = item.path;
-    await window.geode.rename(oldPath, newPath);
+    await this.withHostMutation((id) => this.host.vaultFiles.rename(oldPath, newPath, id));
+    this.acknowledgedPathsSinceManifest.add(oldPath);
+    this.acknowledgedPathsSinceManifest.add(newPath);
     if (item.kind === "file") {
       this.files.delete(oldPath);
       const content = this.contents.get(oldPath);

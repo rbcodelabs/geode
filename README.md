@@ -105,6 +105,167 @@ npm run release     # same, plus publish to GitHub Releases (requires GH_TOKEN)
 
 A demo vault lives in `test-vault/`.
 
+### Develop the iOS shell
+
+The iOS shell requires Node 22 or newer and Xcode 26.5. Build the portable
+renderer, synchronize it into the generated Capacitor project, and compile
+without changing the machine-wide Xcode selection:
+
+```bash
+npm run build:mobile
+npm run ios:sync
+DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
+  xcodebuild -project ios/App/App.xcodeproj -scheme App \
+  -sdk iphonesimulator -configuration Debug \
+  -derivedDataPath /private/tmp/geode-ios-debug-derived build
+```
+
+The Debug build includes an opt-in simulator smoke proof. With an iPhone 17 Pro
+simulator booted, the following exact commands install the app, edit and persist
+`Welcome.md` through the real WKWebView/CodeMirror path, exercise background and
+foreground lifecycle callbacks, terminate the process, and verify the persisted
+value after a cold relaunch:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
+  xcrun simctl install booted \
+  /private/tmp/geode-ios-debug-derived/Build/Products/Debug-iphonesimulator/App.app
+DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
+  xcrun simctl launch --console booted com.rbcodelabs.geode \
+  --geode-native-smoke-edit
+DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
+  xcrun simctl launch booted com.apple.mobilesafari
+DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
+  xcrun simctl launch --console booted com.rbcodelabs.geode
+DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
+  xcrun simctl terminate booted com.rbcodelabs.geode
+DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
+  xcrun simctl launch --console booted com.rbcodelabs.geode \
+  --geode-native-smoke-verify
+```
+
+The smoke runner retries only its explicit pre-load `not-ready` result and polls
+the persisted value for at most five seconds. Its JSON result includes the
+native adapter/vault identity, exact text and binary payloads, recoverable-trash
+result, and path-escape/collision error codes. Capacitor may log one early
+`JS Eval error` before `WebView loaded`; treat a missing
+`GEODE_NATIVE_SMOKE_RESULT` or any `GEODE_NATIVE_SMOKE_ERROR` as a failed proof.
+
+`dist/mobile/` is the self-contained web directory bundled by Capacitor. The
+browser build intentionally keeps a localStorage-backed proof adapter for
+deterministic Chromium testing. On native iOS, Geode instead uses its first-party
+Capacitor vault adapter. “On this device” is backed by `Documents/Geode Vault`
+inside the app container; “Choose folder in Files” uses a protected persisted
+security-scoped bookmark and an opaque `external://…` identity. Cancel keeps the
+current vault untouched, and a missing, unavailable, or revoked folder presents
+an exact-vault Reconnect action instead of silently selecting an empty vault.
+Native note bytes use coordinated atomic replacement, attachments are
+read as binary (with a 32 MiB bridge limit), and deleted items move into the
+recoverable, normally hidden `.geode-trash` area under the active root. Renderer
+and plugin APIs receive only normalized vault-relative paths and stable opaque
+vault identities—never absolute URLs or bookmark bytes. Security-scoped access
+is released on vault close and scene disconnect.
+
+Each trash record contains the original vault-relative path, trash timestamp,
+and untouched payload bytes. Slice 1C preserves everything needed for recovery;
+an in-app restore browser is not part of this slice yet.
+
+Slice 5A's deterministic simulator probe exercises the same bookmark registry,
+stale refresh, moved/missing/revoked-folder states, coordinated I/O, and balanced
+access lifecycle using a local Files-equivalent folder. It is not release proof
+for iCloud Drive or a third-party File Provider. Its picker-cancel result and
+security-scope start/stop counts are DEBUG seam simulations, not delegate-level
+UI automation or physical-provider evidence.
+
+Slice 5B1 adds deterministic foreground and explicit-refresh reconciliation.
+Autosave pauses until an authoritative scan completes or reaches a visible,
+recoverable state; incomplete scans retain the prior device-local manifest and
+cannot synthesize deletes. A clean open note reloads provider bytes in place. If
+the provider changes a dirty note, Geode preserves the provider version at the
+original path and writes the local editor text to a collision-safe
+`(Geode conflict …)` sibling. If that copy fails, the local text remains in
+device recovery storage and is restored read-only after relaunch; if device
+recovery storage also rejects the write, the editor stays read-only with an
+explicit memory-only warning until the user retries. Real iCloud
+two-device evidence, third-party-provider eviction/re-download and offline
+behavior, delegate-level picker automation, and physical-device validation
+remain Slice 5B2/release gates.
+
+The current Capacitor adapter obtains that authoritative snapshot through one
+native recursive `list` call. Renderer application is yielded in bounded
+batches, but provider enumeration itself is not yet paged or cancellable.
+Large-vault paging/cancellation and partial native scan checkpoints are an
+explicit Slice 5B2 scalability gate; 5B1 does not claim them.
+
+Slice 2A1 gives the shared Graph renderer a touch-specific pointer state
+machine: tap selects, a second tap or the visible Open action opens a note,
+empty-space drag pans, and two-pointer centroid gestures pan and zoom within
+bounded limits. Mobile Graph controls expose search, linked-node filtering,
+folder grouping, local/global mode, relayout, and fit with 44px targets. The
+browser proof covers iPhone/iPad pointer cancellation, background release,
+rotation, and device-local camera/selection restoration. This renderer-only
+slice does not claim physical multi-touch, VoiceOver ordering, or large-vault
+performance evidence; those remain release gates. The current metadata model
+does not expose a trustworthy partial-index progress signal, so the Graph UI
+does not fabricate one.
+
+Slice 2A2 adds touch-native Canvas interaction to the same JSON Canvas model:
+tap selection, thresholded card dragging, two-pointer viewport pan/pinch, and
+rollback on cancellation or backgrounding. Mobile action surfaces expose text
+and vault-file creation, editing, duplication, deletion, connection, color,
+select-all, and undo/redo with 44px targets and visual-viewport keyboard
+avoidance. Touch-sized edge paths and endpoints support selection and reconnect,
+and transparent connection/resize hit areas stay at least 44px at every supported
+zoom without changing visible or serialized geometry. Transient connections cancel
+on pointer loss, backgrounding, view disposal, or reconciliation pause. Canvas bytes
+and history advance only after an acknowledged vault write; the visible save
+status exposes a contextual retry after failure. External deletion closes a
+clean Canvas, while an in-progress local gesture is preserved as a read-only
+conflict copy and cannot recreate the removed path. Chromium covers these
+journeys on iPhone and iPad profiles, including rotation and reload. Physical
+multi-touch, VoiceOver order, software-keyboard behavior in WKWebView, and
+large-canvas gesture/render performance remain release gates.
+
+Slice 2A3 makes Bases a deliberate touch workflow rather than a squeezed
+desktop table. Phone and tablet layouts provide axis-locked table scrolling,
+tap selection with explicit edit/open actions, accessible filter/sort/property
+panels, and a Cards layout whose primary actions remain visible above the
+software keyboard. Source-note frontmatter is only reported Saved after its
+vault write is acknowledged; failures retain the draft and expose Retry.
+Provider changes or deletion during a dirty cell edit preserve the local
+frontmatter as a read-only conflict copy without recreating a deleted note.
+Mobile Table and Cards DOM rendering is capped at 200 results with an honest
+result notice, while desktop rendering remains unchanged. Chromium covers the
+journey with iPhone and iPad profiles, including rotation, backgrounding,
+failure recovery, reconciliation, and 44px controls. Physical-device touch and
+software-keyboard behavior, VoiceOver ordering, and large-Base performance are
+still release gates.
+
+Slice 3A1 admits installed vault plugins into the mobile renderer before any
+plugin entrypoint is read or evaluated. Manifests explicitly marked compatible
+can load immediately, desktop-only manifests remain blocked, and legacy
+manifests require a per-vault mobile opt-in. The mobile CommonJS resolver exposes
+only the approved Geode/Obsidian, CodeMirror, and Lezer modules; Node, Electron,
+native addons, and unknown modules fail with stable diagnostics that do not
+disclose host paths. A bounded, initialized module lexer rejects static imports,
+dynamic imports, `import.meta`, and ESM exports before plugin code is compiled or
+evaluated; its WebAssembly is inlined in the bundle with no runtime sidecar fetch.
+Startup failures and mobile startup timeouts quarantine the exact plugin for the exact
+vault/device state, remove partial registrations, and provide retry/disable
+recovery. Enable, disable, restart, vault switching, and update rollback preserve
+one active registration set; rollback swaps the manifest, entrypoint, and exact
+stylesheet presence as one host-owned operation and awaits old plugin view closure.
+On native iOS, plugin discovery, bounded file reads, and those exact-file swaps
+run through the first-party managed-vault bridge against the active managed or
+Files-provider root. The bridge keeps vault URLs and absolute paths native-only,
+validates plugin-relative paths, and coordinates each update as one rollback-safe
+directory replacement rather than a sequence of renderer writes.
+Because admitted plugins execute as trusted browser
+code, the mobile bundle permits dynamic CommonJS evaluation and is not a security
+sandbox; admission and the restricted resolver are compatibility/trust gates.
+Native request brokering, Keychain-backed secrets, community catalog installation,
+and evidence from real third-party plugins remain Slice 3A2 gates.
+
 ### Cutting a release
 
 Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`) —

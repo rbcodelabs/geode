@@ -74,6 +74,11 @@ export class MarkdownView implements View {
   private editorHostEl: HTMLElement;
   private saveTimer: number | null = null;
   private lastSavedText = "";
+  private pendingSaveText: string | null = null;
+  private flushInFlight: Promise<void> | null = null;
+  private vaultSwitching = false;
+  private conflictReadOnly = false;
+  private conflictBanner: HTMLElement | null = null;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -163,6 +168,7 @@ export class MarkdownView implements View {
       for (const el of buildBreadcrumbs(file.parent)) this.titleParentEl.appendChild(el);
     }
     const text = await this.app.vault.read(file);
+    this.clearConflictState();
     this.lastSavedText = text;
     this.buildEditor(text);
     if (this.mode === "reading") await this.renderReading();
@@ -298,6 +304,7 @@ export class MarkdownView implements View {
 
   private scheduleSave() {
     if (this.saveTimer) window.clearTimeout(this.saveTimer);
+    if (this.vaultSwitching || this.conflictReadOnly) return;
     this.saveTimer = window.setTimeout(() => this.flush(), 1000);
     this.app.statusBar.update();
   }
@@ -308,11 +315,137 @@ export class MarkdownView implements View {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    if (this.flushInFlight) await this.flushInFlight;
     if (!this.file || !this.editor) return;
     const text = this.editor.state.doc.toString();
     if (text === this.lastSavedText) return;
+    const file = this.file;
+    this.pendingSaveText = text;
+    const write = this.app.vault.modify(file, text);
+    this.flushInFlight = write;
+    try {
+      await write;
+      this.lastSavedText = text;
+    } finally {
+      if (this.pendingSaveText === text) this.pendingSaveText = null;
+      if (this.flushInFlight === write) this.flushInFlight = null;
+    }
+  }
+
+  async prepareVaultSwitch(): Promise<void> {
+    this.vaultSwitching = true;
+    await this.flush();
+  }
+
+  cancelVaultSwitch(): void {
+    this.vaultSwitching = false;
+    if (this.editor && this.editor.state.doc.toString() !== this.lastSavedText) this.scheduleSave();
+  }
+
+  async pauseAutosave(): Promise<void> {
+    this.vaultSwitching = true;
+    if (this.saveTimer) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.flushInFlight) await this.flushInFlight;
+  }
+
+  resumeAutosave(): void {
+    this.vaultSwitching = false;
+    if (!this.conflictReadOnly && this.hasUnacknowledgedChanges()) this.scheduleSave();
+  }
+
+  hasUnacknowledgedChanges(): boolean {
+    return this.pendingSaveText !== null || this.getText() !== this.lastSavedText;
+  }
+
+  acceptExternalText(text: string): void {
+    this.clearConflictState();
+    this.pendingSaveText = null;
     this.lastSavedText = text;
-    await this.app.vault.modify(this.file, text);
+    this.buildEditor(text);
+    if (this.mode === "reading") void this.renderReading();
+    this.applyMode();
+  }
+
+  presentConflict(
+    externalText: string | null,
+    conflictPath: string | null,
+    recoveryOnly: boolean,
+    recoveryLocation: "device" | "memory" = "device",
+  ): void {
+    const localText = this.getText();
+    this.conflictReadOnly = true;
+    this.lastSavedText = externalText ?? "";
+    if (this.saveTimer) window.clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.editor?.contentDOM.setAttribute("contenteditable", "false");
+    this.editor?.contentDOM.setAttribute("aria-readonly", "true");
+    this.conflictBanner?.remove();
+    const banner = document.createElement("div");
+    banner.className = "editor-conflict-banner";
+    banner.setAttribute("role", "status");
+    banner.setAttribute("aria-label", "External edit conflict");
+    const message = document.createElement("span");
+    message.textContent = recoveryOnly
+      ? recoveryLocation === "device"
+        ? "External changes were found. Your local edit is in device recovery storage; the provider note is read-only."
+        : "External changes were found. Your local edit is held in memory only; keep Geode open and retry before leaving this note."
+      : externalText === null
+        ? `The provider note was deleted or moved. Your local edit was preserved as ${conflictPath}.`
+      : `External changes were found. Your local edit was preserved as ${conflictPath}.`;
+    banner.appendChild(message);
+    if (externalText !== null) {
+      const openProvider = document.createElement("button");
+      openProvider.type = "button";
+      openProvider.textContent = "Open provider version";
+      openProvider.addEventListener("click", () => this.acceptExternalText(externalText));
+      banner.appendChild(openProvider);
+    }
+    if (conflictPath) {
+      const openConflict = document.createElement("button");
+      openConflict.type = "button";
+      openConflict.textContent = "Open conflict copy";
+      openConflict.addEventListener("click", () => {
+        const file = this.app.vault.getFileByPath(conflictPath);
+        if (file) void this.app.openFile(file, true);
+      });
+      banner.appendChild(openConflict);
+    }
+    const copyLocal = document.createElement("button");
+    copyLocal.type = "button";
+    copyLocal.textContent = "Copy local version";
+    copyLocal.addEventListener("click", () => void navigator.clipboard?.writeText(localText));
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.textContent = "Dismiss";
+    dismiss.addEventListener("click", () => banner.remove());
+    banner.appendChild(copyLocal);
+    if (externalText !== null) {
+      const copyProvider = document.createElement("button");
+      copyProvider.type = "button";
+      copyProvider.textContent = "Copy provider version";
+      copyProvider.addEventListener("click", () => void navigator.clipboard?.writeText(externalText));
+      banner.appendChild(copyProvider);
+    }
+    banner.appendChild(dismiss);
+    this.containerEl.prepend(banner);
+    this.conflictBanner = banner;
+  }
+
+  restoreConflictRecovery(localText: string, externalText: string | null): void {
+    this.lastSavedText = externalText ?? "";
+    this.buildEditor(localText);
+    this.presentConflict(externalText, null, true);
+    this.applyMode();
+  }
+
+  private clearConflictState(): void {
+    this.conflictReadOnly = false;
+    this.conflictBanner?.remove();
+    this.conflictBanner = null;
+    this.editor?.contentDOM.removeAttribute("aria-readonly");
   }
 
   private async commitTitleRename() {
@@ -342,7 +475,7 @@ export class MarkdownView implements View {
    * required here.
    */
   getLastKnownText(): string {
-    return this.lastSavedText;
+    return this.pendingSaveText ?? this.lastSavedText;
   }
 
   /** Cmd/Ctrl+E: flip between editing (live or source) and reading. */
@@ -483,6 +616,7 @@ export class MarkdownView implements View {
 
   async onClose(): Promise<void> {
     await this.flush();
+    this.vaultSwitching = true;
     this.editor?.destroy();
     this.editor = null;
     if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);

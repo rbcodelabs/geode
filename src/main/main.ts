@@ -40,6 +40,7 @@ import { startVaultWatcher, type VaultWatcherHandle, type VaultWatchEventName } 
 import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 import { DeepLinkDispatcher } from "./deep-link";
+import type { PluginFileSet } from "./preload";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -413,6 +414,47 @@ function registerIpc() {
         fsFinishedAt: Date.now(),
       };
     }
+  });
+
+  ipcMain.handle("plugin-files-replace", async (e, id: string, expectedManifest: string, replacement: PluginFileSet) => {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error("INVALID_PLUGIN_ID");
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const pluginRoot = path.join(session.root, ".geode", "plugins", id);
+    const readOptional = (file: string) => fsp.readFile(path.join(pluginRoot, file), "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    await withPathLock([pluginRoot], async () => {
+      const manifest = await readOptional("manifest.json");
+      if (manifest !== expectedManifest) {
+        throw new Error("PLUGIN_FILES_CHANGED");
+      }
+      const parent = path.dirname(pluginRoot);
+      const staging = await fsp.mkdtemp(path.join(parent, `.replace-${id}-`));
+      const backup = `${staging}-backup-${randomUUID()}`;
+      try {
+        await fsp.cp(pluginRoot, staging, { recursive: true });
+        await fsp.writeFile(path.join(staging, "manifest.json"), replacement.manifest, "utf8");
+        await fsp.writeFile(path.join(staging, "main.js"), replacement.main, "utf8");
+        if (replacement.styles === null) await fsp.rm(path.join(staging, "styles.css"), { force: true });
+        else await fsp.writeFile(path.join(staging, "styles.css"), replacement.styles, "utf8");
+        await fsp.rename(pluginRoot, backup);
+        try {
+          await fsp.rename(staging, pluginRoot);
+        } catch (error) {
+          await fsp.rename(backup, pluginRoot);
+          throw error;
+        }
+        // The active directory has committed. Backup cleanup is best-effort;
+        // surfacing it as a failed transaction would invite an unsafe retry
+        // against an already-replaced manifest.
+        await fsp.rm(backup, { recursive: true, force: true }).catch(() => {});
+      } finally {
+        await fsp.rm(staging, { recursive: true, force: true });
+      }
+    });
   });
 
   ipcMain.handle("vault-read-binary", async (e, rel: string) => {
