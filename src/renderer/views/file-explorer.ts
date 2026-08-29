@@ -3,7 +3,6 @@ import type { View } from "../workspace";
 import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
 import { VAULT_FILE_DRAG_MIME } from "../file-drag";
-import { isBookmarked } from "../bookmarks";
 
 export type SortOrder = "name-asc" | "name-desc";
 
@@ -288,93 +287,30 @@ export class FileExplorerView implements View {
   private fileMenu(e: MouseEvent, file: TFile) {
     e.preventDefault();
     const targets = this.menuTargetPaths(file.path);
-    const bookmarkItem =
-      targets.length > 1
-        ? {
-            title: `Bookmark all (${targets.length})`,
-            icon: "bookmark",
-            action: () => void this.app.bookmarkPaths(targets),
-          }
-        : {
-            title: isBookmarked(this.app.bookmarksRoot, file.path) ? "Un-bookmark" : "Bookmark",
-            icon: "bookmark",
-            action: () => void this.app.toggleBookmarkFile(file),
-          };
-    this.app.showMenu(e, [
-      { title: "Open in new tab", action: () => this.app.openFile(file, true) },
-      bookmarkItem,
-      {
-        title: "Rename…",
-        action: async () => {
-          const name = prompt("New name", file.basename);
-          if (!name || name === file.basename) return;
-          const newPath = (file.parent ? file.parent + "/" : "") + name + "." + file.extension;
-          await this.app.renameFileWithLinkUpdate(file, newPath);
-        },
-      },
-      {
-        title: "Delete",
-        action: async () => {
-          if (confirm(`Delete "${file.name}"? It will be moved to the system trash.`)) {
-            await this.app.vault.trash(file);
-          }
-        },
-      },
-    ]);
+    const items = this.app.resourceMenuItems(file);
+    if (targets.length > 1) {
+      const bookmark = items.findIndex((item) => item.id === "resource.bookmark");
+      if (bookmark >= 0) items.splice(bookmark, 1, {
+        ...items[bookmark],
+        title: `Bookmark all (${targets.length})`,
+        action: () => void this.app.bookmarkPaths(targets),
+      });
+    }
+    this.app.showMenu(e, items);
   }
 
   private folderMenu(e: MouseEvent, folder: TFolder) {
     e.preventDefault();
-    this.app.showMenu(e, [
-      {
-        title: "New note",
-        action: () => this.app.createNewNote(folder.path),
-      },
-      {
-        title: "New canvas",
-        action: () => this.app.createNewCanvas(folder.path),
-      },
-      {
-        title: "New base",
-        action: () => this.app.createNewBase(folder.path),
-      },
-      {
-        title: "New folder",
-        action: async () => {
-          const name = prompt("Folder name");
-          if (!name) return;
-          await this.app.vault.createFolder(`${folder.path}/${name}`);
-          this.render();
-        },
-      },
-      this.menuTargetPaths(folder.path).length > 1
-        ? {
-            title: `Bookmark all (${this.menuTargetPaths(folder.path).length})`,
-            icon: "bookmark",
-            action: () => void this.app.bookmarkPaths(this.menuTargetPaths(folder.path)),
-          }
-        : {
-            title: isBookmarked(this.app.bookmarksRoot, folder.path) ? "Un-bookmark" : "Bookmark",
-            icon: "bookmark",
-            action: () => void this.app.toggleBookmarkFolder(folder),
-          },
-      {
-        title: "Rename…",
-        action: async () => {
-          const name = prompt("New name", folder.name);
-          if (!name || name === folder.name) return;
-          const newPath = (folder.parent ? folder.parent + "/" : "") + name;
-          await this.app.vault.rename(folder, newPath);
-        },
-      },
-      {
-        title: "Delete",
-        action: async () => {
-          if (confirm(`Delete folder "${folder.name}" and all its contents?`)) {
-            await this.app.vault.trash(folder);
-          }
-        },
-      },
-    ]);
+    const targets = this.menuTargetPaths(folder.path);
+    const resourceItems = this.app.folderMenuItems(folder);
+    if (targets.length > 1) {
+      const bookmark = resourceItems.findIndex((item) => item.id === "resource.bookmark");
+      if (bookmark >= 0) resourceItems.splice(bookmark, 1, {
+        ...resourceItems[bookmark],
+        title: `Bookmark all (${targets.length})`,
+        action: () => void this.app.bookmarkPaths(targets),
+      });
+    }
+    this.app.showMenu(e, resourceItems);
   }
 }

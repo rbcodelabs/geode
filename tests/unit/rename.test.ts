@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rewriteWikilinksForRename } from "../../src/renderer/rename";
+import { renamePathForBasename, rewriteWikilinksForRename } from "../../src/renderer/rename";
 
 // "Daily Plan.md" renamed to "Daily Notes.md" throughout these cases.
 const oldBasename = "Daily Plan";
@@ -138,5 +138,15 @@ describe("rewriteWikilinksForRename", () => {
     expect(rewriteWikilinksForRename(text, oldBasename, oldPathNoExt, oldPath, newBasename)).toBe(
       text
     );
+  });
+});
+
+describe("renamePathForBasename", () => {
+  it("preserves the parent and extension", () => {
+    expect(renamePathForBasename("Folder/A.md", "B")).toEqual({ ok: true, path: "Folder/B.md" });
+  });
+
+  it.each(["", "A/B", "A:B", "A#B", "A|B", "A[1]"])("rejects invalid basename %j", (name) => {
+    expect(renamePathForBasename("A.md", name)).toEqual({ ok: false, error: "Invalid file name" });
   });
 });
