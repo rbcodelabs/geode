@@ -303,6 +303,63 @@ test("Mod+R acts on the guest it was pressed in, not on the host's active tab", 
   }
 });
 
+test('View menu "Reload app" carries no accelerator and still reloads the renderer', async () => {
+  const { app, window, cleanup } = await launch();
+
+  try {
+    const item = await app.evaluate(({ Menu }) => {
+      const view = Menu.getApplicationMenu()!.items.find((i) => i.label === "View")!;
+      const first = view.submenu!.items[0];
+      return {
+        label: first.label,
+        role: first.role ?? null,
+        // What macOS actually paints beside the item.
+        accelerator: first.accelerator ?? null,
+        userAccelerator: (first as unknown as { userAccelerator?: string }).userAccelerator ?? null,
+        // Nothing anywhere in the installed menu may claim Cmd+R or Cmd+Shift+R.
+        rOffenders: Menu.getApplicationMenu()!.items.flatMap(function walk(i): string[] {
+          const own = /^(cmdorctrl|commandorcontrol|command|cmd|ctrl|control|super|meta)\+(shift\+)?r$/i
+            .test(i.accelerator ?? "") || i.role === "reload" || i.role === "forceReload"
+            ? [i.label || String(i.role)]
+            : [];
+          return [...own, ...(i.submenu ? i.submenu.items.flatMap(walk) : [])];
+        }),
+      };
+    });
+    expect(item.label).toMatch(/^Reload app/);
+    expect(item.role).toBeNull();
+    expect(item.accelerator).toBeNull();
+    expect(item.userAccelerator).toBeNull();
+    expect(item.rOffenders).toEqual([]);
+
+    // Still functional, on the path a real click takes: Electron invokes
+    // menuItem.click(event, focusedWindow, focusedWebContents) and forwards
+    // that window to the handler. The handler must resolve its target from
+    // that argument rather than from anything captured at build time, because
+    // crash recovery replaces windows.
+    await window.evaluate(() => { (window as unknown as { __sentinel: number }).__sentinel = 1; });
+    await app.evaluate(({ Menu, BrowserWindow }) => {
+      const view = Menu.getApplicationMenu()!.items.find((i) => i.label === "View")!;
+      const click = view.submenu!.items[0].click as unknown as (e: unknown, w: unknown, wc: unknown) => void;
+      click(undefined, BrowserWindow.getAllWindows()[0], undefined);
+    });
+    // A renderer reload wipes the sentinel and rebuilds the workspace. The
+    // catch absorbs the window in which the execution context is already gone
+    // but the new one has not been installed yet.
+    await expect.poll(
+      () => window
+        .evaluate(() => (window as unknown as { __sentinel?: number }).__sentinel ?? "cleared")
+        .catch(() => "navigating"),
+      { timeout: 30_000 },
+    ).toBe("cleared");
+    await expect(window.locator(".workspace")).toBeVisible({ timeout: 30_000 });
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  } finally {
+    await app.close();
+    cleanup();
+  }
+});
+
 test("web tab menus lead with Reload and share one Bookmark implementation", async () => {
   const { app, window, vaultDir, cleanup } = await launch({ "page.html": PROBE_HTML });
 
