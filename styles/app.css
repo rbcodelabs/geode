@@ -751,6 +751,16 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
    is written to tie the reveal rules above at (0,5,0) and win on source order.
    Deliberately does NOT hide the title: real Obsidian keeps a one-character
    ellipsised title at minimum width. */
+/* A pinned tab never offers a close X — its trailing slot belongs to the pin.
+   Obsidian gets here by having its JS write an inline `display: none` on the
+   button; the `mod-pinned` class Geode already sets on the tab makes a plain
+   rule enough. Ties the reveal rules above at (0,5,0) and wins on source
+   order. Presentational only: `leaf.detach()` still closes a pinned tab, which
+   is also true of Obsidian (a synthetic click on its hidden button closes it). */
+.workspace-split.mod-root .workspace-tab-header.mod-pinned .workspace-tab-header-inner-close-button {
+  display: none;
+}
+
 @container tab-header (width < 3rem) {
   .workspace-split.mod-root .workspace-tab-header:not(.is-active) .workspace-tab-header-inner-close-button {
     display: none;
