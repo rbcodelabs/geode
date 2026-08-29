@@ -38,6 +38,12 @@ test("sizes workspace tabs like Obsidian as the available space changes", async 
     const tabToClose = mainTabs.nth(1);
     const tabToCloseTitle = await tabToClose.locator(".workspace-tab-header-inner-title").textContent();
     const closeButton = tabToClose.locator(".workspace-tab-header-inner-close-button");
+    // An idle, non-active tab must not render its close button at all. Note that
+    // `toBeVisible()` alone would NOT catch a regression here: Playwright counts
+    // an `opacity: 0` element as visible, which is how the reserved-dead-space
+    // bug shipped past this very test.
+    await expect(closeButton).toBeHidden();
+    await tabToClose.hover();
     await expect(closeButton).toBeVisible();
     await closeButton.click();
     await expect(mainTabs).toHaveCount(2);
@@ -50,6 +56,33 @@ test("sizes workspace tabs like Obsidian as the available space changes", async 
     await expect(mainTabs).toHaveCount(3);
     const roomyWidths = await mainTabs.evaluateAll((tabs) => tabs.map((tab) => tab.getBoundingClientRect().width));
     expect(Math.max(...roomyWidths)).toBeLessThanOrEqual(240);
+
+    // Park the pointer well clear of the tab bar: the `closeButton.click()`
+    // above leaves it hovering whichever tab slid into that spot, which would
+    // legitimately reveal that tab's close button and skew the measurement.
+    await window.mouse.move(600, 500);
+    const idleInactive = await mainTabs.nth(1).evaluate((tab) => {
+      const inner = tab.querySelector<HTMLElement>(".workspace-tab-header-inner")!;
+      const title = tab.querySelector<HTMLElement>(".workspace-tab-header-inner-title")!;
+      const close = tab.querySelector<HTMLElement>(".workspace-tab-header-inner-close-button")!;
+      const innerRect = inner.getBoundingClientRect();
+      const paddingRight = parseFloat(getComputedStyle(inner).paddingRight);
+      return {
+        isActive: tab.classList.contains("is-active"),
+        closeWidth: close.getBoundingClientRect().width,
+        titleRight: title.getBoundingClientRect().right,
+        innerContentRight: innerRect.right - paddingRight,
+      };
+    });
+    // Guards the fixture assumption the two assertions below depend on.
+    expect(idleInactive.isActive).toBe(false);
+    // The close button is out of flow, not merely transparent.
+    expect(idleInactive.closeWidth).toBe(0);
+    // ...and nothing else is holding its place either. This states the
+    // user-visible requirement ("no reserved dead space") independently of how
+    // the hiding is implemented: the title, being `flex: 1 1 auto`, must grow
+    // all the way to the inner's content edge.
+    expect(Math.abs(idleInactive.titleRight - idleInactive.innerContentRight)).toBeLessThanOrEqual(1);
 
     const sidebarTabs = window.locator(".workspace-sidebar .workspace-tab-header");
     expect(await sidebarTabs.count()).toBeGreaterThan(0);

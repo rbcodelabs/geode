@@ -49,6 +49,12 @@
   --h5-weight: 600;
   --h6-weight: 600;
 
+  /* Spacing — 2px grid (Obsidian's --size-2-N), for tight intra-control gaps
+     like the tab header's icon/title/close spacing. */
+  --size-2-1: 2px;
+  --size-2-2: 4px;
+  --size-2-3: 6px;
+
   /* Spacing — 4px grid (Obsidian's --size-4-N) */
   --size-4-1: 4px;
   --size-4-2: 8px;
@@ -617,11 +623,15 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   position: relative;
   display: flex;
   align-items: center;
-  gap: var(--size-4-1);
+  gap: var(--size-2-1);
   height: 100%;
   width: 100%;
   overflow: hidden;
-  padding: 0 var(--size-4-2) 0 var(--size-4-3);
+  /* Measured from real Obsidian 1.12.7 (`.mod-root .workspace-tab-header-inner`
+     computes to `padding-inline: 6px 3px`). The trailing 3px is deliberately
+     tighter than the leading 6px: the close button is `position: sticky` against
+     the inner's end edge, so it supplies its own visual breathing room. */
+  padding: 0 3px 0 var(--size-2-3);
 }
 
 /* 1px divider between inactive main-pane tabs; the active tab hides its own. */
@@ -659,27 +669,67 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   display: none;
 }
 
+/* 20x20 box = a 16px icon plus 2px padding on each side, matching real
+   Obsidian 1.12.7 (`--icon-size: var(--icon-s)` + `padding: var(--size-2-1)`
+   on `.mod-root .workspace-tab-header-inner-close-button`, measured at
+   `getBoundingClientRect().width === 20`). `flex: 0 1 auto` lets the control
+   shrink rather than force the title to zero on a squeezed tab. */
 .workspace-tab-header-status-icon,
 .workspace-tab-header-inner-close-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  flex: 0 1 auto;
+  width: 20px;
+  height: 20px;
+  padding: var(--size-2-1);
+  box-sizing: border-box;
   border-radius: var(--radius-s);
   cursor: pointer;
   color: var(--text-muted);
 }
 
-.workspace-tab-header-inner-close-button {
-  opacity: 0;
+/* Scoped down from the global `.geode-icon svg` 18px (further down this file)
+   so the tab controls get Obsidian's 16px glyph without resizing icons
+   app-wide. Needs (0,2,1) to beat that rule's (0,1,1) — `setIcon()` puts
+   `.geode-icon` on the control element itself, and the global rule appears
+   later in the file, so matching specificity would lose the tie. */
+.workspace-tab-header .workspace-tab-header-status-icon svg,
+.workspace-tab-header .workspace-tab-header-inner-close-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Hidden means OUT OF FLOW, not just invisible.
+   This was `opacity: 0`, which leaves the button's box in the flex layout, so
+   every tab permanently reserved 22px (20px button + the inner's 2px gap) of
+   dead space for an X that only ever appears on the active or hovered tab. At
+   the 220px max width that is ~14% of the title budget; on a 48px squeezed tab
+   it drove the title to zero and clipped the icon. Real Obsidian removes it
+   with `display: none` and reveals it with `display: flex` — measured
+   `closeBoxWidth: 0` on an idle inactive tab. Do not reintroduce `opacity: 0`.
+
+   Two cascade constraints pin the selectors here, so don't "simplify" them:
+
+   1. They must out-specify `.geode-icon { display: inline-flex }` further down
+      this file — `setIcon()` tags the button `.geode-icon`, so a bare
+      `.workspace-tab-header-inner-close-button` (0,1,0) ties it and loses on
+      source order, leaving the button in flow.
+   2. They must stay scoped to the main root split. The reveal selectors are
+      (0,5,0) (`.workspace-tab-header.is-active` alone is two classes, not one),
+      which would otherwise outrank the (0,2,0) sidebar suppression further down
+      and pop a close button into the icon-only sidebar pills. Obsidian scopes
+      its equivalent rules under `.mod-root` for the same reason. */
+.workspace-split.mod-root .workspace-tab-header-inner-close-button {
+  display: none;
   transition:
     opacity 0.1s ease,
     background 0.1s ease;
 }
 
-.workspace-tab-header:hover .workspace-tab-header-inner-close-button,
-.workspace-tab-header.is-active .workspace-tab-header-inner-close-button {
+.workspace-split.mod-root .workspace-tab-header:hover .workspace-tab-header-inner-close-button,
+.workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-close-button {
+  display: flex;
   opacity: 0.7;
 }
 
