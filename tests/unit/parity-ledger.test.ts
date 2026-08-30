@@ -92,6 +92,48 @@ async function fixtureSources(): Promise<{
   return { apiRoot, developerRoot, helpRoot };
 }
 
+/**
+ * A second, purpose-built fixture for the dom-surface evidence policy tests below. Kept separate
+ * from `fixtureSources()` (reused above with exact-match assertions on its specific inventory) so
+ * this file's obsidian.d.ts can be tailored to exercise the classifier's signals in isolation.
+ */
+async function domSurfaceFixtureSources(): Promise<{
+  apiRoot: string;
+  developerRoot: string;
+  helpRoot: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "geode-parity-ledger-dom-"));
+  const helpRoot = join(root, "obsidian-help");
+  const developerRoot = join(root, "obsidian-developer-docs");
+  const apiRoot = join(root, "obsidian-api");
+
+  await mkdir(join(helpRoot, "en"), { recursive: true });
+  await mkdir(join(helpRoot, "Release notes"), { recursive: true });
+  await mkdir(join(developerRoot, "en"), { recursive: true });
+  await mkdir(apiRoot, { recursive: true });
+
+  for (const version of ["1.13.2", "1.13.3", "1.13.4"]) {
+    await writeFile(join(helpRoot, "Release notes", `v${version}.md`), `# ${version}\n`);
+  }
+
+  await writeFile(
+    join(apiRoot, "obsidian.d.ts"),
+    [
+      "export declare class View {",
+      "  containerEl: HTMLElement;",
+      "  getIcon(): string;",
+      "}",
+      "export declare class Widget {",
+      "  ping(): void;",
+      "}",
+      "export declare function addIcon(iconId: string, svgContent: string): void;",
+      "",
+    ].join("\n"),
+  );
+
+  return { apiRoot, developerRoot, helpRoot };
+}
+
 describe("parity ledger", () => {
   it("inventories official pages, release deltas, and public API declarations with stable IDs", async () => {
     const roots = await fixtureSources();
@@ -185,5 +227,144 @@ describe("parity ledger", () => {
       "blocked",
       "unknown",
     ]);
+  });
+});
+
+describe("dom-surface evidence policy", () => {
+  it("computes dom via the class allowlist even when the member's own type has no DOM token", async () => {
+    const roots = await domSurfaceFixtureSources();
+    const baseline = await buildParityLedger({ ...roots, evidence: {} });
+    const target = baseline.requirements.find(
+      (row) => row.kind === "api-member" && row.title === "View.getIcon",
+    );
+    expect(target).toBeDefined();
+    // getIcon(): string carries no HTMLElement/SVGElement/etc token in its own signature; only
+    // the View class-allowlist signal can catch it.
+    expect(target!.surface).toBe("dom");
+
+    await expect(
+      buildParityLedger({
+        ...roots,
+        evidence: {
+          [target!.id]: {
+            status: "verified",
+            evidence: ["tests/unit/view.test.ts"],
+          },
+        },
+      }),
+    ).rejects.toThrow(/tests\/e2e/);
+  });
+
+  it("succeeds once tests/e2e/ evidence is supplied for the same dom-surface row", async () => {
+    const roots = await domSurfaceFixtureSources();
+    const baseline = await buildParityLedger({ ...roots, evidence: {} });
+    const target = baseline.requirements.find(
+      (row) => row.kind === "api-member" && row.title === "View.getIcon",
+    );
+    expect(target).toBeDefined();
+
+    const mapped = await buildParityLedger({
+      ...roots,
+      evidence: {
+        [target!.id]: {
+          status: "verified",
+          evidence: ["tests/e2e/view-icon.spec.ts"],
+        },
+      },
+    });
+    const row = mapped.requirements.find((requirement) => requirement.id === target!.id);
+    expect(row?.status).toBe("verified");
+    expect(row?.surface).toBe("dom");
+  });
+
+  it("does not over-fire on a logic-only row backed by unit-test-only evidence", async () => {
+    const roots = await domSurfaceFixtureSources();
+    const baseline = await buildParityLedger({ ...roots, evidence: {} });
+    const target = baseline.requirements.find(
+      (row) => row.kind === "api-member" && row.title === "Widget.ping",
+    );
+    expect(target).toBeDefined();
+    expect(target!.surface).toBe("logic");
+
+    const mapped = await buildParityLedger({
+      ...roots,
+      evidence: {
+        [target!.id]: {
+          status: "verified",
+          evidence: ["tests/unit/widget.test.ts"],
+        },
+      },
+    });
+    expect(
+      mapped.requirements.find((requirement) => requirement.id === target!.id)?.status,
+    ).toBe("verified");
+  });
+
+  it("enforces the tests/e2e/ requirement on the hand-maintained addIcon exception", async () => {
+    const roots = await domSurfaceFixtureSources();
+    const baseline = await buildParityLedger({ ...roots, evidence: {} });
+    const target = baseline.requirements.find(
+      (row) => row.kind === "api-declaration" && row.title === "addIcon",
+    );
+    expect(target).toBeDefined();
+    // addIcon's signature (string, string) => void carries no DOM type token at all; only the
+    // hand-maintained top-level function allowlist catches it.
+    expect(target!.surface).toBe("dom");
+
+    await expect(
+      buildParityLedger({
+        ...roots,
+        evidence: {
+          [target!.id]: { status: "verified", evidence: ["tests/unit/icons.test.ts"] },
+        },
+      }),
+    ).rejects.toThrow(/tests\/e2e/);
+
+    const mapped = await buildParityLedger({
+      ...roots,
+      evidence: {
+        [target!.id]: { status: "verified", evidence: ["tests/e2e/icons.spec.ts"] },
+      },
+    });
+    expect(
+      mapped.requirements.find((requirement) => requirement.id === target!.id)?.status,
+    ).toBe("verified");
+  });
+
+  it("requires notes whenever a row's surface is explicitly overridden", async () => {
+    const roots = await domSurfaceFixtureSources();
+    const baseline = await buildParityLedger({ ...roots, evidence: {} });
+    const target = baseline.requirements.find(
+      (row) => row.kind === "api-member" && row.title === "Widget.ping",
+    );
+    expect(target).toBeDefined();
+    expect(target!.surface).toBe("logic");
+
+    await expect(
+      buildParityLedger({
+        ...roots,
+        evidence: {
+          [target!.id]: {
+            status: "missing",
+            evidence: ["docs/spec/00-overview.md"],
+            surface: "dom",
+          },
+        },
+      }),
+    ).rejects.toThrow(/notes/);
+
+    const mapped = await buildParityLedger({
+      ...roots,
+      evidence: {
+        [target!.id]: {
+          status: "missing",
+          evidence: ["docs/spec/00-overview.md"],
+          surface: "dom",
+          notes: "Widget.ping renders a spinner overlay despite its void return type.",
+        },
+      },
+    });
+    const row = mapped.requirements.find((requirement) => requirement.id === target!.id);
+    expect(row?.surface).toBe("dom");
   });
 });

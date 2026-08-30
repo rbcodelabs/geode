@@ -887,11 +887,11 @@
     "notes": "Observed the active leaf property returning the focused leaf or null."
   },
   "API-MEMBER-9658cea6bc68": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed constructor-instance filtering of the active view and null for a different type, including require('obsidian')."
+    "notes": "Observed constructor-instance filtering of the active view and null for a different type, including require('obsidian'). Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-b016dc5102e6": {
     "status": "verified",
@@ -922,39 +922,39 @@
     "notes": "View state, open, and pin operations are observed; deferred, group, hover, resize, and synchronous detach signature contracts remain incomplete."
   },
   "API-MEMBER-6ad623ad0a53": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed mounting and returning the supplied View."
+    "notes": "Observed mounting and returning the supplied View. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-50222923fbc0": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed the mounted view type and current serialized state."
+    "notes": "Observed the mounted view type and current serialized state. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-b4b0b038376e": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed factory mounting and application of a falsey state value."
+    "notes": "Observed factory mounting and application of a falsey state value. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-e6a0f80c36cd": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed changing pinned state without recreating the view."
+    "notes": "Observed changing pinned state without recreating the view. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-badda12dab1b": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed toggling the leaf's pinned state."
+    "notes": "Observed toggling the leaf's pinned state. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-6bc62c09fa52": {
     "status": "partial",
@@ -964,102 +964,102 @@
     "notes": "Core construction and persistent/ephemeral state hooks are observed; pane menus and broader visual lifecycle behavior remain incomplete."
   },
   "API-MEMBER-75f2603e3cbf": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed construction from a WorkspaceLeaf."
+    "notes": "Observed construction from a WorkspaceLeaf. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-d628a3ee3e52": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed app identity derived from the leaf."
+    "notes": "Observed app identity derived from the leaf. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-2b6bbddf3d59": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed a constructed view container element."
+    "notes": "Observed a constructed view container element. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-f6e3e5d0743e": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed the mutable icon property and its default."
+    "notes": "Observed the mutable icon property and its default. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-b319dfc5d21c": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed the mutable navigation property and its default."
+    "notes": "Observed the mutable navigation property and its default. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-976149ed0d99": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed retained WorkspaceLeaf identity."
+    "notes": "Observed retained WorkspaceLeaf identity. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-4d409ced1251": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed the assignable scope property with null default."
+    "notes": "Observed the assignable scope property with null default. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-ebf47a19f558": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed a subclass-provided stable view type."
+    "notes": "Observed a subclass-provided stable view type. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-cce2661bec62": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed a subclass-provided display text."
+    "notes": "Observed a subclass-provided display text. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-200ae2a05b18": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed icon lookup from the view icon property."
+    "notes": "Observed icon lookup from the view icon property. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-c585e7c2f151": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed the default serializable state record."
+    "notes": "Observed the default serializable state record. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-2f45c261f99b": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed the asynchronous base state setter accepting state and result values."
+    "notes": "Observed the asynchronous base state setter accepting state and result values. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-aa050342fd39": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed default and updated ephemeral state records."
+    "notes": "Observed default and updated ephemeral state records. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "API-MEMBER-d6ca9ac17373": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
       "tests/unit/workspace-public-contracts.test.ts"
     ],
-    "notes": "Observed setting an ephemeral state record."
+    "notes": "Observed setting an ephemeral state record. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
   },
   "DEV-2d64b6ae58ea": {
     "status": "partial",
