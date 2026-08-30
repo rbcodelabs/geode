@@ -1,5 +1,21 @@
 # Geode Mobile MVP QA Review — 2026-08-29
 
+## Supersession — 2026-08-30
+
+This review preserves the findings and release recommendation as observed on
+2026-08-29. Subsequent work resolved the two simulator blockers: `7d6b306`
+fixed the iPad clipping defect, `81033a9` added the native XCTest/XCUITest target
+and acceptance gate, and `3f938ad` stabilized that gate against dropped or
+delayed WKWebView automation events. The current iPhone 17 Pro simulator gate
+passes three consecutive runs with 28/28 tests each (84/84 aggregate); definitive
+result bundles are retained under
+`ios-mvp-artifacts/release-final-20260830-1825/`.
+
+The historical no-go below therefore no longer describes the current simulator
+state. It is not an App Store or TestFlight readiness claim: real File Provider
+behavior on physical hardware, physical-device accessibility and performance,
+and a reviewed real-plugin lifecycle remain unproven.
+
 ## Recommendation
 
 **No-go for mobile MVP release and no-go for declaring Slice 3A1 fully exited.**

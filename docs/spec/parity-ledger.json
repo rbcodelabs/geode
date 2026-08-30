@@ -29,9 +29,9 @@
     "unknown"
   ],
   "summary": {
-    "total": 2850,
+    "total": 2852,
     "byKind": {
-      "help-page": 173,
+      "help-page": 175,
       "developer-page": 1319,
       "changelog-delta": 50,
       "api-declaration": 299,
@@ -43,7 +43,7 @@
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 0,
-      "unknown": 2620
+      "unknown": 2622
     }
   },
   "requirements": [
@@ -730,6 +730,17 @@
       "evidence": []
     },
     {
+      "id": "HELP-980f2ed7afa7",
+      "kind": "help-page",
+      "surface": "logic",
+      "category": "Import notes",
+      "title": "Import from Logseq",
+      "sourcePath": "obsidian-help/en/Import notes/Import from Logseq.md",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Logseq.md",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
       "id": "HELP-b5bb352519d1",
       "kind": "help-page",
       "surface": "logic",
@@ -759,6 +770,17 @@
       "title": "Import from Roam Research",
       "sourcePath": "obsidian-help/en/Import notes/Import from Roam Research.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Roam%20Research.md",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "HELP-51aaa60e232e",
+      "kind": "help-page",
+      "surface": "logic",
+      "category": "Import notes",
+      "title": "Import from Tomboy and Gnote",
+      "sourcePath": "obsidian-help/en/Import notes/Import from Tomboy and Gnote.md",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Tomboy%20and%20Gnote.md",
       "status": "unknown",
       "evidence": []
     },
@@ -796,13 +818,13 @@
       "evidence": []
     },
     {
-      "id": "HELP-6a2be6fd0c13",
+      "id": "HELP-bf2ce81f9f1e",
       "kind": "help-page",
       "surface": "logic",
       "category": "Import notes",
-      "title": "Import Zettelkasten notes",
-      "sourcePath": "obsidian-help/en/Import notes/Import Zettelkasten notes.md",
-      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20Zettelkasten%20notes.md",
+      "title": "Importer templates",
+      "sourcePath": "obsidian-help/en/Import notes/Importer templates.md",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Importer%20templates.md",
       "status": "unknown",
       "evidence": []
     },

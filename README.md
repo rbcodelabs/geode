@@ -133,7 +133,7 @@ WKWebView/CodeMirror interaction. It proves `managed://default`, root-level note
 discovery without a synthetic `Vault` wrapper, touch-open/edit/new-note flows,
 exact bytes after process termination and relaunch, safe-area containment, and
 zero captured JavaScript/native smoke errors. The recorded final simulator gate
-passed three consecutive runs with 27/27 tests each (81/81 aggregate). Result
+passed three consecutive runs with 28/28 tests each (84/84 aggregate). Result
 bundles and screenshots are retained under ignored `ios-mvp-artifacts/` paths.
 
 `dist/mobile/` is the self-contained web directory bundled by Capacitor. The
