@@ -7,6 +7,7 @@ import { matchesSearch } from "../../bases/search-match";
 import { cellsInSelection, moveCursor, type GridPos, type NavKey, type Selection } from "../../bases/table-nav";
 import type { BaseValue } from "../../bases/value";
 import type { TFile } from "../../types";
+import { resolveTouchScrollAxis } from "../../bases/touch-scroll";
 
 export type RowHeight = "short" | "medium" | "tall" | "extra tall";
 
@@ -20,7 +21,10 @@ export interface TableViewOptions {
 export interface TableViewCallbacks {
   onOpenFile(file: TFile, newTab: boolean): void;
   /** Commit an edited cell's raw text back to the file's frontmatter. */
-  onEditCell(file: TFile, columnPath: string, rawText: string): void;
+  onEditCell(file: TFile, columnPath: string, rawText: string): Promise<void>;
+  onEditStart(file: TFile, columnPath: string, rawText: string): void;
+  onEditDraft(rawText: string): void;
+  onEditEnd(): void;
 }
 
 function cellValue(row: QueryRow, path: string): BaseValue | undefined {
@@ -55,6 +59,11 @@ export class BasesTableView {
   private activeCell: GridPos | null = null;
   private selection: Selection = { type: "none" };
   private editing: GridPos | null = null;
+  private mobileActionsEl: HTMLElement | null = null;
+  private mobileEditorActionsEl: HTMLElement | null = null;
+  private readonly resultLimitEl: HTMLElement | null;
+  private readOnly = false;
+  private suppressMouseSelectionUntil = 0;
 
   constructor(
     private app: App,
@@ -70,7 +79,13 @@ export class BasesTableView {
     this.tfootEl = document.createElement("tfoot");
     this.tableEl.append(this.theadEl, this.tbodyEl, this.tfootEl);
     this.containerEl.appendChild(this.tableEl);
+    this.resultLimitEl = document.body.classList.contains("is-mobile") ? document.createElement("div") : null;
+    if (this.resultLimitEl) {
+      this.resultLimitEl.className = "bases-result-limit";
+      this.containerEl.appendChild(this.resultLimitEl);
+    }
     this.containerEl.addEventListener("keydown", (e) => this.onKeyDown(e));
+    if (document.body.classList.contains("is-mobile")) this.installTouchScrolling();
   }
 
   render(result: QueryResult, opts: TableViewOptions): void {
@@ -94,15 +109,32 @@ export class BasesTableView {
 
     const passesSearch = (row: QueryRow) => matchesSearch(this.columns.map((p) => displayFor(row, p)), opts.searchQuery);
 
+    const renderLimit = document.body.classList.contains("is-mobile") ? 200 : Number.POSITIVE_INFINITY;
+    let rendered = 0;
+    let total = 0;
     if (result.groups) {
       for (const group of result.groups) {
         const rows = group.rows.filter(passesSearch);
-        if (!rows.length) continue;
+        total += rows.length;
+        if (!rows.length || rendered >= renderLimit) continue;
         this.tbodyEl.appendChild(this.buildGroupHeaderRow(group));
-        for (const row of rows) this.appendDataRow(row);
+        for (const row of rows) {
+          if (rendered >= renderLimit) break;
+          this.appendDataRow(row);
+          rendered += 1;
+        }
       }
     } else {
-      for (const row of result.rows.filter(passesSearch)) this.appendDataRow(row);
+      const rows = result.rows.filter(passesSearch);
+      total = rows.length;
+      for (const row of rows.slice(0, renderLimit)) {
+        this.appendDataRow(row);
+        rendered += 1;
+      }
+    }
+    if (this.resultLimitEl) {
+      this.resultLimitEl.textContent = rendered < total ? `Showing ${rendered} of ${total} results` : "";
+      this.resultLimitEl.style.display = rendered < total ? "" : "none";
     }
 
     this.tfootEl.innerHTML = "";
@@ -142,12 +174,12 @@ export class BasesTableView {
       td.className = "bases-cell";
       if (isEditableColumn(path)) td.classList.add("is-editable");
       td.textContent = displayFor(row, path);
+      td.dataset.rowIndex = String(rowIndex);
+      td.dataset.colIndex = String(colIndex);
       td.addEventListener("mousedown", (e) => {
+        if (performance.now() < this.suppressMouseSelectionUntil) return;
         e.preventDefault();
-        this.containerEl.focus();
-        this.activeCell = { row: rowIndex, col: colIndex };
-        this.selection = { type: "cell", pos: this.activeCell };
-        this.applySelectionClasses();
+        this.selectCell(rowIndex, colIndex);
       });
       td.addEventListener("dblclick", () => this.startEdit({ row: rowIndex, col: colIndex }));
       tr.appendChild(td);
@@ -157,6 +189,15 @@ export class BasesTableView {
     this.dataRows.push(row);
     this.dataRowEls.push(tr);
     this.cellEls.push(cells);
+  }
+
+  private selectCell(row: number, col: number): void {
+    if (this.readOnly) return;
+    this.containerEl.focus();
+    this.activeCell = { row, col };
+    this.selection = { type: "cell", pos: this.activeCell };
+    this.applySelectionClasses();
+    this.renderMobileActions();
   }
 
   private clampSelection(): void {
@@ -193,6 +234,7 @@ export class BasesTableView {
   }
 
   private startEdit(pos: GridPos): void {
+    if (this.readOnly) return;
     const path = this.columns[pos.col];
     if (!isEditableColumn(path)) {
       if (path === "file.name") this.callbacks.onOpenFile(this.currentFile(pos), false);
@@ -207,23 +249,41 @@ export class BasesTableView {
     input.className = "bases-cell-input";
     input.value = currentText;
     td.appendChild(input);
+    this.callbacks.onEditStart(this.currentFile(pos), path, currentText);
+    input.addEventListener("input", () => this.callbacks.onEditDraft(input.value));
     input.focus();
     input.select();
 
-    const commit = () => {
+    let committing = false;
+    const commit = async () => {
       if (this.editing !== pos) return;
-      this.editing = null;
-      this.callbacks.onEditCell(this.currentFile(pos), path, input.value);
+      if (committing) return;
+      committing = true;
+      input.disabled = true;
+      try {
+        await this.callbacks.onEditCell(this.currentFile(pos), path, input.value);
+        this.editing = null;
+        this.callbacks.onEditEnd();
+        this.mobileEditorActionsEl?.remove();
+        this.mobileEditorActionsEl = null;
+      } catch {
+        committing = false;
+        input.disabled = false;
+        input.focus();
+      }
     };
     const cancel = () => {
       this.editing = null;
+      this.callbacks.onEditEnd();
       td.textContent = currentText;
+      this.mobileEditorActionsEl?.remove();
+      this.mobileEditorActionsEl = null;
     };
-    input.addEventListener("blur", commit);
+    if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", () => { void commit(); });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        commit();
+        void commit();
         this.containerEl.focus();
       } else if (e.key === "Escape") {
         e.preventDefault();
@@ -232,6 +292,99 @@ export class BasesTableView {
       }
       e.stopPropagation();
     });
+    if (document.body.classList.contains("is-mobile")) {
+      this.mobileActionsEl?.remove();
+      const actions = document.createElement("div");
+      actions.className = "bases-mobile-editor-actions";
+      const save = document.createElement("button");
+      save.type = "button";
+      save.textContent = "Save";
+      save.setAttribute("aria-label", "Save cell edit");
+      save.addEventListener("click", () => { void commit(); });
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.textContent = "Cancel";
+      cancelButton.setAttribute("aria-label", "Cancel cell edit");
+      cancelButton.addEventListener("click", cancel);
+      actions.append(save, cancelButton);
+      this.containerEl.appendChild(actions);
+      this.mobileEditorActionsEl = actions;
+      input.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly;
+    const input = this.containerEl.querySelector<HTMLInputElement>(".bases-cell-input");
+    if (input) input.disabled = readOnly;
+    if (readOnly) this.mobileEditorActionsEl?.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  }
+
+  acknowledgeEdit(): void {
+    if (!this.editing) return;
+    this.editing = null;
+    this.callbacks.onEditEnd();
+    this.mobileEditorActionsEl?.remove();
+    this.mobileEditorActionsEl = null;
+  }
+
+  resetForFile(): void {
+    this.editing = null;
+    this.activeCell = null;
+    this.selection = { type: "none" };
+    this.mobileActionsEl?.remove();
+    this.mobileActionsEl = null;
+    this.mobileEditorActionsEl?.remove();
+    this.mobileEditorActionsEl = null;
+    this.readOnly = false;
+  }
+
+  private renderMobileActions(): void {
+    if (!document.body.classList.contains("is-mobile") || !this.activeCell || this.editing) return;
+    this.mobileActionsEl?.remove();
+    const actions = document.createElement("div");
+    actions.className = "bases-mobile-cell-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.setAttribute("aria-label", "Edit selected cell");
+    edit.disabled = !isEditableColumn(this.columns[this.activeCell.col]);
+    edit.addEventListener("click", () => this.activeCell && this.startEdit(this.activeCell));
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "Open row";
+    open.setAttribute("aria-label", "Open selected row");
+    open.addEventListener("click", () => this.activeCell && this.callbacks.onOpenFile(this.currentFile(this.activeCell), false));
+    actions.append(edit, open);
+    this.containerEl.appendChild(actions);
+    this.mobileActionsEl = actions;
+  }
+
+  private installTouchScrolling(): void {
+    let gesture: { id: number; x: number; y: number; left: number; top: number; axis: "pending" | "x" | "y"; cell: HTMLElement | null } | null = null;
+    this.containerEl.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "touch") return;
+      this.suppressMouseSelectionUntil = performance.now() + 1_000;
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, left: this.containerEl.scrollLeft, top: this.containerEl.scrollTop, axis: "pending", cell: (event.target as Element).closest<HTMLElement>(".bases-cell") };
+    });
+    this.containerEl.addEventListener("pointermove", (event) => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      if (gesture.axis === "pending") gesture.axis = resolveTouchScrollAxis(dx, dy);
+      if (gesture.axis === "pending") return;
+      event.preventDefault();
+      if (gesture.axis === "x") this.containerEl.scrollLeft = gesture.left - dx;
+      else this.containerEl.scrollTop = gesture.top - dy;
+    }, { passive: false });
+    this.containerEl.addEventListener("pointerup", (event) => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      if (gesture.axis === "pending" && gesture.cell) {
+        this.selectCell(Number(gesture.cell.dataset.rowIndex), Number(gesture.cell.dataset.colIndex));
+      }
+      gesture = null;
+    });
+    this.containerEl.addEventListener("pointercancel", (event) => { if (gesture?.id === event.pointerId) gesture = null; });
   }
 
   private clearCells(cells: GridPos[]): void {

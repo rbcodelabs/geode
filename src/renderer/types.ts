@@ -1,8 +1,10 @@
 import type { GeodeApi } from "../main/preload";
+import type { HostServices } from "./host/contracts";
 
 declare global {
   interface Window {
     geode: GeodeApi;
+    hostServices?: HostServices;
   }
 }
 
@@ -171,12 +173,30 @@ export class TFolderClass {
  * module stays dependency-free; safe defaults keep any bare
  * `new FileSystemAdapter(basePath)` construction working.
  */
-export class FileSystemAdapter {
-  /** Absolute vault path. Public because real Obsidian exposes it directly. */
-  basePath: string;
+export class DataAdapter {
   private readonly nameProvider: () => string;
   private readonly existsProvider: (normalizedPath: string) => Promise<boolean> | boolean;
 
+  constructor(opts?: {
+    getName?: () => string;
+    exists?: (normalizedPath: string) => Promise<boolean> | boolean;
+  }) {
+    this.nameProvider = opts?.getName ?? (() => "");
+    this.existsProvider = opts?.exists ?? (() => false);
+  }
+
+  getName(): string {
+    return this.nameProvider();
+  }
+
+  exists(normalizedPath: string): Promise<boolean> | boolean {
+    return this.existsProvider(normalizedPath);
+  }
+}
+
+export class FileSystemAdapter extends DataAdapter {
+  /** Absolute vault path. Public because real Obsidian exposes it directly. */
+  basePath: string;
   constructor(
     basePath: string,
     opts?: {
@@ -184,26 +204,18 @@ export class FileSystemAdapter {
       exists?: (normalizedPath: string) => Promise<boolean> | boolean;
     }
   ) {
+    super(opts);
     this.basePath = basePath;
-    this.nameProvider = opts?.getName ?? (() => "");
-    this.existsProvider = opts?.exists ?? (() => false);
   }
 
   getBasePath(): string {
     return this.basePath;
   }
 
-  getName(): string {
-    return this.nameProvider();
-  }
-
   getResourcePath(normalizedPath: string): string {
     return `file://${this.basePath}/${normalizedPath}`.replace(/ /g, "%20");
   }
 
-  exists(normalizedPath: string): Promise<boolean> | boolean {
-    return this.existsProvider(normalizedPath);
-  }
 }
 
 /**

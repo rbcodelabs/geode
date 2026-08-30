@@ -150,6 +150,7 @@ export function initTooltips(): void {
   installed = true;
 
   document.body.addEventListener("mouseover", (e) => {
+    if (document.body.classList.contains("is-mobile")) return;
     const target = findTooltipTarget(e.target);
     if (!target || target === currentTarget) return;
     scheduleShow(target);
@@ -162,6 +163,7 @@ export function initTooltips(): void {
     hideTooltip();
   });
   document.body.addEventListener("focusin", (e) => {
+    if (document.body.classList.contains("is-mobile")) return;
     const target = findTooltipTarget(e.target);
     if (!target || target === currentTarget) return;
     scheduleShow(target);

@@ -305,13 +305,13 @@ describe("unregisterViewFactory", () => {
     onClose() {},
   });
 
-  it("converts open panes to placeholders instead of detaching them", () => {
+  it("converts open panes to placeholders instead of detaching them", async () => {
     const state = { cursor: 3 };
     const leaf = detachableLeaf(liveView(state));
     const workspace = fakeWorkspace([leaf]);
     setFactory(workspace, "probe-pane");
 
-    workspace.unregisterViewFactory("probe-pane");
+    await workspace.unregisterViewFactory("probe-pane");
 
     expect(leaf.detached).toBe(false);
     expect(isDeferredView(leaf.view)).toBe(true);
@@ -324,7 +324,7 @@ describe("unregisterViewFactory", () => {
     expect(deferred.getIcon()).toBe("star");
   });
 
-  it("falls back to the leaf's persisted state when the view's getState throws mid-teardown", () => {
+  it("falls back to the leaf's persisted state when the view's getState throws mid-teardown", async () => {
     const hostile = {
       ...liveView(null),
       getState() {
@@ -339,32 +339,41 @@ describe("unregisterViewFactory", () => {
     const workspace = fakeWorkspace([leaf]);
     setFactory(workspace, "probe-pane");
 
-    workspace.unregisterViewFactory("probe-pane");
+    await workspace.unregisterViewFactory("probe-pane");
 
     expect((leaf.view as DeferredView).getState()).toEqual({ cursor: 11 });
   });
 
-  it("leaves an already-deferred pane alone", () => {
+  it("leaves an already-deferred pane alone", async () => {
     const deferred = new DeferredView({ type: "probe-pane", state: { cursor: 1 } });
     const leaf = detachableLeaf(deferred);
     const workspace = fakeWorkspace([leaf]);
     setFactory(workspace, "probe-pane");
 
-    workspace.unregisterViewFactory("probe-pane");
+    await workspace.unregisterViewFactory("probe-pane");
 
     expect(leaf.view).toBe(deferred);
     expect(leaf.detached).toBe(false);
   });
 
-  it("still hard-detaches a non-deferrable type", () => {
+  it("still hard-detaches a non-deferrable type and awaits its delayed close", async () => {
     const leaf = detachableLeaf({ ...liveView(null), viewType: "search" } as View);
     const workspace = fakeWorkspace([leaf]);
     workspace.registerBuiltinViewType("search");
     setFactory(workspace, "search");
 
-    workspace.unregisterViewFactory("search");
+    let closed = false;
+    leaf.detach = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      closed = true;
+      leaf.detached = true;
+    });
+    const teardown = workspace.unregisterViewFactory("search");
+    expect(closed).toBe(false);
+    await teardown;
 
     expect(leaf.detached).toBe(true);
+    expect(closed).toBe(true);
   });
 });
 

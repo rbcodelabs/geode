@@ -573,6 +573,7 @@ export class MetadataCache extends Events {
   private backgroundRefreshPending = false;
   private backgroundUnavailable = false;
   private backgroundTask: Promise<void> = Promise.resolve();
+  private stopIndexerMessages: (() => void) | null = null;
 
   private scheduleBackground(task: () => Promise<void>): void {
     this.backgroundTask = this.backgroundTask.then(task).catch((error) => {
@@ -691,8 +692,20 @@ export class MetadataCache extends Events {
     vault.on("rename", (f: TFile, oldPath: string) => this.enqueueRename(f, oldPath));
     // See unlinkedMentionsCache's doc comment: "resolved" alone is sufficient invalidation.
     this.on("resolved", () => this.unlinkedMentionsCache.clear());
-    const api = typeof window === "undefined" ? undefined : window.geode;
-    api?.onMetadataIndexerMessage?.((message) => this.onIndexerMessage(message));
+    const host = (vault as Vault).host?.metadataIndex;
+    if (host) {
+      this.stopIndexerMessages = host.onMessage((message) => this.onIndexerMessage(message));
+    } else {
+      const stop = typeof window === "undefined"
+        ? undefined
+        : window.geode?.onMetadataIndexerMessage?.((message) => this.onIndexerMessage(message));
+      if (typeof stop === "function") this.stopIndexerMessages = stop as () => void;
+    }
+  }
+
+  dispose(): void {
+    this.stopIndexerMessages?.();
+    this.stopIndexerMessages = null;
   }
 
   private onIndexerMessage(message: any): void {

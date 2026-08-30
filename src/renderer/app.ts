@@ -26,7 +26,7 @@ import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
-import { TFile, TFolder, isTFile, pathName } from "./types";
+import { FileSystemAdapter, TFile, TFolder, isTFile, pathName } from "./types";
 import {
   addBookmark,
   createEmptyRoot,
@@ -38,6 +38,7 @@ import {
   type BookmarksRoot,
 } from "./bookmarks";
 import { renamePathForBasename, rewriteWikilinksForRename } from "./rename";
+import { buildConflictPath, formatConflictTimestamp } from "./reconciliation";
 import {
   ActionRegistry,
   DOCUMENT_MENU_SPEC,
@@ -64,6 +65,10 @@ import { setIcon } from "./api/icons";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
 import { applyWindowChromeState } from "./window-chrome";
+import { getHostServices } from "./host/registry";
+import type { HostServices } from "./host/contracts";
+import { VaultAccessError } from "./host/contracts";
+import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface WebViewerSettings {
@@ -191,6 +196,8 @@ class CommandPaletteModal extends SuggestModal<Command> {
 }
 
 class ManageVaultsModal extends Modal {
+  private actionPending = false;
+
   constructor(private geodeApp: App) {
     super(geodeApp);
     this.modalEl.classList.add("mod-manage-vaults");
@@ -203,7 +210,7 @@ class ManageVaultsModal extends Modal {
     this.contentEl.appendChild(heading);
 
     const currentPath = this.geodeApp.vault.root;
-    const recents = await window.geode.getRecentVaults();
+    const recents = await this.geodeApp.host.vaultRegistry.getRecentVaults();
     const paths = [currentPath, ...recents.filter((vaultPath) => vaultPath !== currentPath)];
     const list = document.createElement("div");
     list.className = "vault-switcher-list";
@@ -216,7 +223,13 @@ class ManageVaultsModal extends Modal {
       name.textContent = vaultPath.split(/[\\/]/).filter(Boolean).pop() ?? vaultPath;
       const pathEl = document.createElement("span");
       pathEl.className = "vault-switcher-path";
-      pathEl.textContent = vaultPath;
+      pathEl.textContent = this.geodeApp.host.runtime.runtime === "ios" ? "Loading…" : vaultPath;
+      if (this.geodeApp.host.runtime.runtime === "ios") {
+        void this.geodeApp.host.vaultRegistry.describeVault(vaultPath).then((descriptor) => {
+          name.textContent = descriptor.name;
+          pathEl.textContent = descriptor.kind === "managed" ? "On this device" : "Files folder";
+        }).catch((error) => this.showError(error));
+      }
       row.append(name, pathEl);
       if (vaultPath === currentPath) {
         row.classList.add("is-current");
@@ -225,7 +238,7 @@ class ManageVaultsModal extends Modal {
         marker.textContent = "Open in this window";
         row.appendChild(marker);
       }
-      row.addEventListener("click", () => void this.openVaultWindow(vaultPath));
+      row.addEventListener("click", () => void this.runVaultAction(() => this.openVaultWindow(vaultPath)));
       list.appendChild(row);
     }
     this.contentEl.appendChild(list);
@@ -234,13 +247,27 @@ class ManageVaultsModal extends Modal {
     openFolder.type = "button";
     openFolder.className = "mod-cta vault-switcher-open-folder";
     openFolder.textContent = "Open folder as vault";
-    openFolder.addEventListener("click", () => void this.chooseVault());
+    openFolder.addEventListener("click", () => void this.runVaultAction(() => this.chooseVault()));
     this.contentEl.appendChild(openFolder);
+
+    if (this.geodeApp.host.capabilities.externalVaultFolder) {
+      const chooseFiles = document.createElement("button");
+      chooseFiles.type = "button";
+      chooseFiles.className = "vault-switcher-choose-files";
+      chooseFiles.textContent = "Choose folder in Files";
+      chooseFiles.addEventListener("click", () => void this.runVaultAction(() => this.chooseExternalVault()));
+      this.contentEl.appendChild(chooseFiles);
+    }
   }
 
   private async chooseVault(): Promise<void> {
-    const vaultPath = await window.geode.chooseVault();
+    const vaultPath = await this.geodeApp.host.vaultRegistry.chooseVault();
     if (vaultPath) await this.openVaultWindow(vaultPath);
+  }
+
+  private async chooseExternalVault(): Promise<void> {
+    const vaultId = await this.geodeApp.host.vaultRegistry.chooseExternalVault();
+    if (vaultId) await this.openVaultWindow(vaultId);
   }
 
   private async openVaultWindow(vaultPath: string): Promise<void> {
@@ -248,18 +275,71 @@ class ManageVaultsModal extends Modal {
       this.close();
       return;
     }
-    try {
-      await window.geode.openVaultWindow(vaultPath);
+    if (!this.geodeApp.host.capabilities.multipleWindows || !this.geodeApp.host.desktop) {
+      await this.geodeApp.switchVaultInWindow(vaultPath);
+    } else {
+      await this.geodeApp.host.desktop.openVaultWindow(vaultPath);
       this.close();
-    } catch (error) {
-      let errorEl = this.contentEl.querySelector<HTMLElement>(".vault-switcher-error");
-      if (!errorEl) {
-        errorEl = document.createElement("div");
-        errorEl.className = "vault-switcher-error";
-        this.contentEl.appendChild(errorEl);
-      }
-      errorEl.textContent = error instanceof Error ? error.message : "Unable to open that vault";
     }
+  }
+
+  private setActionPending(pending: boolean): void {
+    this.actionPending = pending;
+    for (const button of this.contentEl.querySelectorAll<HTMLButtonElement>("button")) {
+      button.disabled = pending;
+    }
+  }
+
+  private async runVaultAction(action: () => Promise<void>): Promise<void> {
+    if (this.actionPending) return;
+    this.setActionPending(true);
+    try {
+      await action();
+    } catch (error) {
+      this.showError(error);
+    } finally {
+      this.setActionPending(false);
+    }
+  }
+
+  private showError(error: unknown): void {
+    let errorEl = this.contentEl.querySelector<HTMLElement>(".vault-switcher-error");
+    if (!errorEl) {
+      errorEl = document.createElement("div");
+      errorEl.className = "vault-switcher-error";
+      this.contentEl.appendChild(errorEl);
+    }
+    errorEl.empty();
+    if (error instanceof VaultAccessError) {
+      const state = vaultAccessPresentation(error);
+      const heading = document.createElement("strong");
+      heading.textContent = state.title;
+      const message = document.createElement("span");
+      message.textContent = state.message;
+      const reconnect = document.createElement("button");
+      reconnect.type = "button";
+      reconnect.textContent = state.action;
+      reconnect.disabled = this.actionPending;
+      reconnect.addEventListener("click", () => void this.runVaultAction(async () => {
+          if (!await this.geodeApp.host.vaultRegistry.reconnectVault(state.vaultId)) {
+            message.textContent = "Reconnect canceled. The current vault is still open.";
+            return;
+          }
+          await this.openVaultWindow(state.vaultId);
+      }));
+      errorEl.append(heading, message, reconnect);
+      return;
+    }
+    errorEl.textContent = error instanceof Error ? error.message : "Unable to open that vault";
+  }
+}
+
+class VaultSwitchBusyError extends Error {
+  readonly code = "VAULT_SWITCH_BUSY";
+
+  constructor(target: string | null) {
+    super(`A vault switch to ${target ?? "another vault"} is already in progress`);
+    this.name = "VaultSwitchBusyError";
   }
 }
 
@@ -278,12 +358,25 @@ class SettingsModal extends Modal {
   constructor(private geodeApp: App) {
     super(geodeApp);
     this.modalEl.classList.add("mod-settings");
+    this.modalEl.setAttribute("role", "dialog");
+    this.modalEl.setAttribute("aria-modal", "true");
+    this.modalEl.setAttribute("aria-label", "Settings");
+    this.modalEl.tabIndex = -1;
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "settings-close-button";
+    closeButton.setAttribute("aria-label", "Close Settings");
+    closeButton.textContent = "Done";
+    closeButton.addEventListener("click", () => this.close());
+    this.modalEl.prepend(closeButton);
   }
 
   onOpen(): void {
     this.contentEl.empty();
     this.navEl = document.createElement("div");
     this.navEl.className = "vertical-tab-header";
+    this.navEl.setAttribute("role", "tablist");
+    this.navEl.setAttribute("aria-label", "Settings categories");
     this.contentContainerEl = document.createElement("div");
     this.contentContainerEl.className = "vertical-tab-content-container";
     this.contentEl.append(this.navEl, this.contentContainerEl);
@@ -335,6 +428,10 @@ class SettingsModal extends Modal {
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
     } else if (id === "performance") {
+      if (!this.geodeApp.host.capabilities.processDiagnostics) {
+        this.activateTab("appearance");
+        return;
+      }
       this.stopPerformanceTab = renderPerformanceTab(this.contentContainerEl);
     } else {
       const tab = this.geodeApp.settingTabs.get(id);
@@ -362,9 +459,12 @@ class SettingsModal extends Modal {
     this.navEl.empty();
 
     const addNavItem = (id: string, label: string, container: HTMLElement) => {
-      const item = document.createElement("div");
+      const item = document.createElement("button");
+      item.type = "button";
       item.className = "vertical-tab-nav-item";
       item.textContent = label;
+      item.setAttribute("role", "tab");
+      item.setAttribute("aria-selected", String(id === this.activeTabId));
       item.classList.toggle("is-active", id === this.activeTabId);
       item.addEventListener("click", () => this.activateTab(id));
       container.appendChild(item);
@@ -372,7 +472,9 @@ class SettingsModal extends Modal {
 
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
-    addNavItem("performance", "Performance", this.navEl);
+    if (this.geodeApp.host.capabilities.processDiagnostics) {
+      addNavItem("performance", "Performance", this.navEl);
+    }
 
     const pluginTabs = [...this.geodeApp.settingTabs.keys()]
       .map((id) => ({ id, name: this.geodeApp.pluginManager?.getManifest(id)?.name ?? id }))
@@ -449,15 +551,25 @@ class SettingsModal extends Modal {
     );
     const cookieBtn = document.createElement("button");
     cookieBtn.textContent = "Import cookies from Chrome…";
+    cookieBtn.disabled = !this.geodeApp.host.capabilities.chromeCookieImport;
+    cookieBtn.title = cookieBtn.disabled ? "Chrome cookie import is available on desktop only" : "";
     cookieBtn.addEventListener("click", () => new ChromeCookieImportModal(this.geodeApp).open());
     cookieControl.appendChild(cookieBtn);
 
     const communityHeading = document.createElement("h2");
     communityHeading.textContent = "Community plugins & themes";
     container.appendChild(communityHeading);
+    if (!this.geodeApp.host.capabilities.nodePlugins) {
+      const unavailable = document.createElement("p");
+      unavailable.className = "community-mobile-unavailable";
+      unavailable.textContent = "Installed vault plugins can run when admitted as mobile compatible. GitHub installation and native request/secret services arrive in Slice 3A2.";
+      container.appendChild(unavailable);
+    }
     const { control } = this.addRow(container, "Install from GitHub");
     const addBtn = document.createElement("button");
     addBtn.textContent = "Add…";
+    addBtn.disabled = !this.geodeApp.host.capabilities.nodePlugins;
+    addBtn.title = addBtn.disabled ? "Community installation is available on desktop only" : "";
     control.appendChild(addBtn);
     const listEl = document.createElement("div");
     listEl.className = "community-list";
@@ -500,10 +612,23 @@ class SettingsModal extends Modal {
         }
         await this.renderCommunityList(listEl);
       });
-      row.append(info, restore);
+      const disable = document.createElement("button");
+      disable.textContent = "Disable plugin";
+      disable.addEventListener("click", async () => {
+        disable.disabled = true;
+        await this.geodeApp.pluginManager.disableQuarantined(pluginId);
+        await this.renderCommunityList(listEl);
+      });
+      row.append(info, restore, disable);
       listEl.appendChild(row);
     }
+    if (this.geodeApp.pluginManager.isMobileRuntime()) {
+      for (const manifest of this.geodeApp.pluginManager.listManifests()) {
+        listEl.appendChild(this.renderMobilePluginRow(manifest, listEl));
+      }
+    }
     if (!cfg.items.length && !Object.keys(quarantined).length) {
+      if (this.geodeApp.pluginManager.isMobileRuntime() && this.geodeApp.pluginManager.listManifests().length) return;
       const empty = document.createElement("div");
       empty.className = "community-empty";
       empty.textContent = "No community plugins or themes installed yet.";
@@ -513,6 +638,66 @@ class SettingsModal extends Modal {
     for (const item of cfg.items) {
       listEl.appendChild(this.renderCommunityRow(item, listEl));
     }
+  }
+
+  private renderMobilePluginRow(
+    manifest: import("./plugin-manifest").PluginManifest,
+    listEl: HTMLElement,
+  ): HTMLElement {
+    const manager = this.geodeApp.pluginManager;
+    const admission = manager.getMobileAdmission(manifest.id)!;
+    const row = document.createElement("div");
+    row.className = "community-item mobile-plugin-item";
+    row.dataset.pluginId = manifest.id;
+    const info = document.createElement("div");
+    info.className = "community-item-info";
+    const title = document.createElement("div");
+    title.className = "community-item-title";
+    title.textContent = manifest.name;
+    const badge = document.createElement("span");
+    badge.className = `community-item-badge mobile-plugin-${admission.compatibility}`;
+    badge.textContent = admission.label;
+    title.appendChild(badge);
+    const reason = document.createElement("div");
+    reason.className = "community-item-sub";
+    reason.textContent = admission.reason;
+    info.append(title, reason);
+    const controls = document.createElement("div");
+    controls.className = "community-item-controls";
+    if (admission.compatibility === "unknown" && !admission.allowed) {
+      const optIn = document.createElement("button");
+      optIn.textContent = "Allow on mobile";
+      optIn.addEventListener("click", async () => {
+        optIn.disabled = true;
+        await manager.setMobileOptIn(manifest.id, true);
+        await this.renderCommunityList(listEl);
+      });
+      controls.appendChild(optIn);
+    } else if (admission.allowed) {
+      const toggle = document.createElement("button");
+      toggle.textContent = manager.isEnabled(manifest.id) ? "Disable" : "Enable";
+      toggle.addEventListener("click", async () => {
+        toggle.disabled = true;
+        try {
+          if (manager.isEnabled(manifest.id)) await manager.disable(manifest.id);
+          else await manager.enable(manifest.id);
+        } catch (error) {
+          this.geodeApp.notify((error as Error).message);
+        }
+        await this.renderCommunityList(listEl);
+      });
+      controls.appendChild(toggle);
+    }
+    const loadError = manager.getLoadError(manifest.id);
+    if (loadError) {
+      const diagnostic = document.createElement("div");
+      diagnostic.className = "community-plugin-diagnostic";
+      diagnostic.setAttribute("role", "alert");
+      diagnostic.textContent = loadError;
+      info.appendChild(diagnostic);
+    }
+    row.append(info, controls);
+    return row;
   }
 
   private renderCommunityRow(
@@ -613,6 +798,7 @@ class SettingsModal extends Modal {
     const { control } = this.addRow(container, label);
     const input = document.createElement("input");
     input.type = "checkbox";
+    input.setAttribute("aria-label", label);
     input.checked = value;
     input.addEventListener("change", () => onChange(input.checked));
     control.appendChild(input);
@@ -628,6 +814,7 @@ class SettingsModal extends Modal {
     const { control } = this.addRow(container, label);
     const select = document.createElement("select");
     select.className = "dropdown";
+    select.setAttribute("aria-label", label);
     const def = document.createElement("option");
     def.value = "";
     def.textContent = "Default";
@@ -674,6 +861,7 @@ class SettingsModal extends Modal {
     const { control } = this.addRow(container, label);
     const input = document.createElement("input");
     input.type = "text";
+    input.setAttribute("aria-label", label);
     input.className = "web-view-address";
     input.value = value;
     input.spellcheck = false;
@@ -745,8 +933,9 @@ class StatusBar {
 export class App {
   private protocolHandlers = new Map<string, (params: Record<string, string>) => unknown>();
   private pendingProtocolLinks = new Map<string, Record<string, string>[]>();
-  vault = new Vault();
-  metadataCache = new MetadataCache(this.vault);
+  readonly host: HostServices;
+  vault: Vault;
+  metadataCache: MetadataCache;
   fileManager = new FileManager(this);
   commands = new CommandRegistry();
   /** Internal Geode actions. Kept separate from the public Obsidian-compatible CommandRegistry. */
@@ -797,6 +986,20 @@ export class App {
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+  private communityUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+  private hostDisposers = new Set<() => void>();
+  private vaultSwitchInFlight: Promise<void> | null = null;
+  private vaultSwitchTarget: string | null = null;
+  private reconcileInFlight: Promise<void> | null = null;
+  private reconcileGeneration = 0;
+  private suppressReconcileModify = new Set<string>();
+  private externalModifyInFlight = new Map<string, Promise<void>>();
+
+  constructor(host: HostServices = getHostServices()) {
+    this.host = host;
+    this.vault = new Vault(host);
+    this.metadataCache = new MetadataCache(this.vault);
+  }
 
   isDarkMode(): boolean {
     return document.body.classList.contains("theme-dark");
@@ -923,6 +1126,46 @@ export class App {
     new ManageVaultsModal(this).open();
   }
 
+  switchVaultInWindow(vaultId: string): Promise<void> {
+    if (this.vaultSwitchInFlight) {
+      if (this.vaultSwitchTarget === vaultId) return this.vaultSwitchInFlight;
+      return Promise.reject(new VaultSwitchBusyError(this.vaultSwitchTarget));
+    }
+    if (vaultId === this.vault.root) return Promise.resolve();
+    this.vaultSwitchTarget = vaultId;
+    const operation = this.performVaultSwitch(vaultId);
+    const tracked = operation.finally(() => {
+      if (this.vaultSwitchInFlight === tracked) {
+        this.vaultSwitchInFlight = null;
+        this.vaultSwitchTarget = null;
+      }
+    });
+    this.vaultSwitchInFlight = tracked;
+    return tracked;
+  }
+
+  private async performVaultSwitch(vaultId: string): Promise<void> {
+    const oldVaultId = this.vault.root;
+    const activeReconcile = this.reconcileInFlight;
+    if (activeReconcile) await activeReconcile;
+    await this.host.vaultRegistry.checkVault(vaultId);
+    await this.workspace.prepareVaultSwitch();
+    try {
+      await this.disposeVaultSession();
+    } catch (error) {
+      this.workspace.cancelVaultSwitch();
+      throw error;
+    }
+    try {
+      await this.host.vaultRegistry.openVault(vaultId);
+    } catch (error) {
+      await this.host.vaultRegistry.openVault(oldVaultId);
+      location.reload();
+      throw error;
+    }
+    location.reload();
+  }
+
   /** Mount the exact action element created by Plugin.addRibbonIcon(). */
   addRibbonIcon(el: HTMLElement): void {
     this.ribbonActionsEl.appendChild(el);
@@ -944,17 +1187,17 @@ export class App {
       // code reading `app.plugins` at module-eval time, would otherwise see
       // an undefined/empty registry if this only ran from that constructor.
       installObsidianAppCompat(this);
-      const updateWindowChrome = (state: Awaited<ReturnType<typeof window.geode.getWindowChromeState>>) =>
+      const updateWindowChrome = (state: Awaited<ReturnType<HostServices["runtime"]["getWindowChromeState"]>>) =>
         applyWindowChromeState(document.body.classList, state);
-      window.geode.onWindowChromeState(updateWindowChrome);
-      updateWindowChrome(await window.geode.getWindowChromeState());
-      window.geode.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params));
+      this.hostDisposers.add(this.host.runtime.onWindowChromeState(updateWindowChrome));
+      updateWindowChrome(await this.host.runtime.getWindowChromeState());
+      this.hostDisposers.add(this.host.runtime.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params)));
       this.installExternalLinkInterceptor();
       initTooltips();
       const rootEl = document.getElementById("app")!;
       const [launchTarget, recents] = await measureOperation("startup-recent-vaults", () => Promise.all([
-        window.geode.getLaunchVault(),
-        window.geode.getRecentVaults(),
+        this.host.vaultRegistry.getLaunchVault(),
+        this.host.vaultRegistry.getRecentVaults(),
       ]));
       if (launchTarget || recents.length) {
         await this.openVault(launchTarget ?? recents[0], rootEl);
@@ -965,18 +1208,48 @@ export class App {
   }
 
   private showVaultPicker(rootEl: HTMLElement, recents: string[]) {
+    this.workspace?.dispose();
     rootEl.innerHTML = "";
     const picker = document.createElement("div");
     picker.className = "vault-picker";
     picker.innerHTML = `<h1>Geode</h1><p>Your knowledge base, on local Markdown files.</p>`;
-    const openBtn = document.createElement("button");
-    openBtn.className = "mod-cta";
-    openBtn.textContent = "Open folder as vault";
-    openBtn.addEventListener("click", async () => {
-      const path = await window.geode.chooseVault();
-      if (path) await this.openVault(path, rootEl);
-    });
-    picker.appendChild(openBtn);
+    if (this.host.runtime.runtime === "ios") {
+      for (const action of mobileVaultActions(this.host.capabilities.externalVaultFolder)) {
+        const button = document.createElement("button");
+        button.className = action.id === "managed" ? "mod-cta" : "vault-picker-external";
+        button.textContent = action.label;
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            const id = action.id === "managed"
+              ? await this.host.vaultRegistry.chooseVault()
+              : await this.host.vaultRegistry.chooseExternalVault();
+            if (id) await this.openVault(id, rootEl);
+          } catch (error) {
+            this.showInlineVaultError(picker, error);
+          } finally {
+            button.disabled = false;
+          }
+        });
+        picker.appendChild(button);
+      }
+    } else {
+      const openBtn = document.createElement("button");
+      openBtn.className = "mod-cta";
+      openBtn.textContent = "Open folder as vault";
+      openBtn.addEventListener("click", async () => {
+        openBtn.disabled = true;
+        try {
+          const path = await this.host.vaultRegistry.chooseVault();
+          if (path) await this.openVault(path, rootEl);
+        } catch (error) {
+          this.showInlineVaultError(picker, error);
+        } finally {
+          openBtn.disabled = false;
+        }
+      });
+      picker.appendChild(openBtn);
+    }
     if (recents.length) {
       const h = document.createElement("h3");
       h.textContent = "Recent vaults";
@@ -985,6 +1258,10 @@ export class App {
         const row = document.createElement("div");
         row.className = "vault-picker-recent";
         row.textContent = path;
+        void this.host.vaultRegistry.describeVault(path).then(
+          (descriptor) => { row.textContent = descriptor.name; },
+          () => { row.textContent = "Unavailable vault"; },
+        );
         row.addEventListener("click", () => this.openVault(path, rootEl));
         picker.appendChild(row);
       }
@@ -1001,11 +1278,15 @@ export class App {
       await this.vault.open(path);
     } catch (err) {
       console.error(err);
-      const recents = await window.geode.getRecentVaults();
+      if (err instanceof VaultAccessError) {
+        this.showVaultAccessError(rootEl, err);
+        return;
+      }
+      const recents = await this.host.vaultRegistry.getRecentVaults();
       this.showVaultPicker(rootEl, recents);
       return;
     }
-    const saved = (await window.geode.readConfig("app")) as Partial<AppSettings> | null;
+    const saved = (await this.host.config.read("app")) as Partial<AppSettings> | null;
     if (saved) {
       this.settings = {
         ...this.settings,
@@ -1017,7 +1298,7 @@ export class App {
     // Loaded before pluginManager.initialize() so the internalPlugins compat
     // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready
     // before any hosted plugin (e.g. Calendar) can query "daily-notes".
-    const savedDailyNotes = (await window.geode.readConfig(
+    const savedDailyNotes = (await this.host.config.read(
       "daily-notes"
     )) as Partial<DailyNoteSettings> | null;
     this.dailyNoteSettings = resolveDailyNoteSettings(savedDailyNotes);
@@ -1025,7 +1306,7 @@ export class App {
     // Same shape as daily-notes above: read the persisted Bookmarks tree
     // before registerCommands()/pluginManager.initialize() so both see the
     // real in-memory model rather than the empty-root default.
-    const savedBookmarks = await window.geode.readConfig("bookmarks");
+    const savedBookmarks = await this.host.config.read("bookmarks");
     this.bookmarksRoot = normalizeBookmarksRoot(savedBookmarks);
 
     rootEl.innerHTML = "";
@@ -1075,6 +1356,11 @@ export class App {
 
     this.workspace = new Workspace(this, main);
     this.statusBar = new StatusBar(this, shell);
+    const mobileNavigation = this.createMobileNavigation();
+    mobileNavigation.inert = true;
+    mobileNavigation.setAttribute("aria-busy", "true");
+    shell.appendChild(mobileNavigation);
+    this.trackMobileVisualViewport();
 
     // Sidebar views
     this.workspace.leftSidebar.addView(new FileExplorerView(this));
@@ -1109,8 +1395,12 @@ export class App {
     // any hosted plugin targeting that view type (e.g. Threads'
     // obsidian_open_url) opens a tab here too. Must be registered before
     // restoreWorkspaceLayout() below, which resolves saved leaves by type.
-    this.workspace.registerViewFactory("webviewer", (leaf) => new WebView(this, leaf));
-    this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
+    if (this.host.capabilities.embeddedWebContent) {
+      this.workspace.registerViewFactory("webviewer", (leaf) => new WebView(this, leaf));
+    }
+    if (this.host.capabilities.artifacts) {
+      this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
+    }
 
     // Graph and Bases tabs are normally constructed directly (`openGraphView`,
     // `openFile` for `.base`), but restore resolves every saved leaf through
@@ -1133,7 +1423,7 @@ export class App {
 
     this.registerActions();
     this.registerCommands();
-    this.attachCommandsOnce();
+    this.hostDisposers.add(this.commands.attach(document));
     this.attachGuestHotkeyBridge();
     this.applySettings();
     // Apply the selected community theme (if the vault has it installed).
@@ -1185,9 +1475,22 @@ export class App {
     // Persist the initial layout (restored + any onLayoutReady-opened panes).
     this.scheduleSaveLayout();
 
+    // The shell renders before asynchronous layout/plugin startup finishes.
+    // Keep primary mobile actions out of the hit-test/accessibility tree until
+    // their target leaves exist, then place non-editing focus in the web view
+    // so the first physical tap is an activation rather than a focus-only tap.
+    mobileNavigation.inert = false;
+    mobileNavigation.removeAttribute("aria-busy");
+    if (document.body.classList.contains("is-mobile")) {
+      mobileNavigation.querySelector<HTMLButtonElement>('[aria-label="Files"]')?.focus({ preventScroll: true });
+    }
+
     // Check opt-in community items for updates shortly after startup, off the
     // critical path. No-op unless a tracked item has auto-update enabled.
-    setTimeout(() => void this.checkCommunityUpdates(false), 2500);
+    this.communityUpdateTimer = setTimeout(() => {
+      this.communityUpdateTimer = null;
+      void this.checkCommunityUpdates(false);
+    }, 2500);
 
     // Re-render open views when files change externally.
     //
@@ -1207,14 +1510,334 @@ export class App {
     // delayed echoes and only fires `setFile()` for genuine external edits.
     // Mirrors `BaseView.reloadIfChangedExternally()` (`base-view.ts`) —
     // don't "simplify" this back to comparing live editor text.
-    this.vault.on("modify", async (file: TFile) => {
-      const leaf = this.workspace.findLeafForFile(file.path);
-      const view = leaf?.view;
-      if (view instanceof MarkdownView && view.file) {
-        const text = await this.vault.cachedRead(view.file);
-        if (hasExternalChange(text, view.getLastKnownText())) await view.setFile(view.file);
+    this.vault.on("modify", (file: TFile) => {
+      if (this.suppressReconcileModify.delete(file.path)) return;
+      void this.handleExternalModify(file);
+    });
+    this.hostDisposers.add(this.host.runtime.onForeground(() => void this.reconcileVault("foreground")));
+    await this.restoreConflictRecovery();
+    if (this.vault.needsInitialReconcile()) await this.reconcileVault("foreground");
+  }
+
+  private async restoreConflictRecovery(): Promise<void> {
+    const prefix = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:`;
+    for (const key of Object.keys(localStorage).filter((candidate) => candidate.startsWith(prefix))) {
+      try {
+        const recovery = JSON.parse(localStorage.getItem(key) ?? "null") as { path?: string; text?: string } | null;
+        if (!recovery?.path || typeof recovery.text !== "string") continue;
+        let leaf = this.workspace.findLeafForFile(recovery.path);
+        if (!leaf) {
+          const file = this.vault.getFileByPath(recovery.path);
+          if (!file) continue;
+          await this.openFile(file, false);
+          leaf = this.workspace.findLeafForFile(recovery.path);
+        }
+        const view = leaf?.view;
+        if (!(view instanceof MarkdownView)) continue;
+        let externalText: string | null = null;
+        try { externalText = await this.host.vaultFiles.read(recovery.path); } catch { /* provider deletion remains explicit */ }
+        view.restoreConflictRecovery(recovery.text, externalText);
+      } catch {
+        // Malformed derived recovery records are ignored without touching provider bytes.
+      }
+    }
+  }
+
+  async reconcileVault(_reason: "foreground" | "manual"): Promise<void> {
+    if (this.vaultSwitchInFlight) {
+      await this.vaultSwitchInFlight;
+      return;
+    }
+    if (this.reconcileInFlight) return this.reconcileInFlight;
+    const generation = this.reconcileGeneration;
+    const operation = this.performReconcile(generation);
+    const tracked = operation.finally(() => {
+      if (this.reconcileInFlight === tracked) this.reconcileInFlight = null;
+    });
+    this.reconcileInFlight = tracked;
+    return tracked;
+  }
+
+  private async performReconcile(generation: number): Promise<void> {
+    let didPause = false;
+    let holdViewsForRetry = false;
+    const preparedConflictPresentations: Array<() => void> = [];
+    try {
+      await this.workspace.pauseAutosave();
+      didPause = true;
+      const result = await this.vault.reconcile();
+      if (result.status !== "complete") {
+        this.showReconcileState(result.status, result.errorCode);
+        return;
+      }
+      if (!result.manifest || generation !== this.reconcileGeneration) return;
+      const publish: Array<() => void> = [];
+      for (let index = 0; index < result.changes.length; index += 1) {
+        const change = result.changes[index];
+        if (change.event === "modify") {
+          const file = this.vault.getFileByPath(change.path);
+          const view = file ? this.workspace.findLeafForFile(file.path)?.view : null;
+          let baseSource: { view: BaseView; file: TFile; text: string } | null = null;
+          for (const leaf of this.workspace.getLeavesOfType("base")) {
+            if (!(leaf.view instanceof BaseView)) continue;
+            const source = await leaf.view.getDirtySourceConflict(change.path);
+            if (source) {
+              baseSource = { view: leaf.view, ...source };
+              break;
+            }
+          }
+          const textBackedView = view instanceof MarkdownView || view instanceof BaseView || view instanceof CanvasView;
+          const externalText = textBackedView || baseSource ? await this.host.vaultFiles.read(change.path) : undefined;
+          if (baseSource && externalText !== undefined) {
+            const conflictPath = buildConflictPath(
+              change.path,
+              formatConflictTimestamp(new Date()),
+              (path) => this.vault.getAbstractFileByPath(path) !== null,
+            );
+            try {
+              await this.vault.create(conflictPath, baseSource.text);
+              const present = () => baseSource!.view.presentSourceConflict(conflictPath);
+              preparedConflictPresentations.push(present);
+              publish.push(present);
+            } catch (writeError) {
+              baseSource.view.presentSourceConflict(null, true);
+              const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(baseSource.file.path)}`;
+              try {
+                localStorage.setItem(recoveryKey, JSON.stringify({ vaultId: this.vault.root, path: baseSource.file.path, text: baseSource.text }));
+              } catch {
+                // The live read-only edit remains the last recovery tier.
+              }
+              throw writeError;
+            }
+          }
+          if (file && (view instanceof MarkdownView || view instanceof CanvasView) && view.file && externalText !== undefined &&
+            hasExternalChange(externalText, view.getLastKnownText())) {
+            if (view.hasUnacknowledgedChanges()) {
+              const present = await this.prepareConflict(view, file, externalText, file.path);
+              preparedConflictPresentations.push(present);
+              publish.push(present);
+            } else {
+              publish.push(() => view.acceptExternalText(externalText));
+            }
+          } else if (view instanceof BaseView && externalText !== undefined) {
+            try {
+              await view.acceptExternalText(externalText);
+            } catch (error) {
+              holdViewsForRetry = true;
+              throw error;
+            }
+          }
+          publish.push(() => {
+            this.suppressReconcileModify.add(change.path);
+            this.vault.applyReconcileChange(change, externalText);
+          });
+        } else if (change.event === "delete" || change.event === "delete-folder") {
+          const prepared = await this.prepareExternalDelete(change.path, change.event === "delete-folder");
+          preparedConflictPresentations.push(...prepared.conflicts);
+          publish.push(...prepared.conflicts);
+          publish.push(() => {
+            this.vault.applyReconcileChange(change);
+            for (const leaf of prepared.cleanLeaves) void leaf.detach().catch(() => {});
+          });
+        } else {
+          publish.push(() => this.vault.applyReconcileChange(change));
+        }
+        if (index > 0 && index % 100 === 0) await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      }
+      if (generation !== this.reconcileGeneration) return;
+      await this.vault.commitReconcileManifest(result.manifest);
+      this.clearReconcileState();
+      for (const apply of publish) {
+        try { apply(); } catch { /* Durable decisions must not be rolled back by view rendering. */ }
+      }
+    } catch (error) {
+      for (const present of preparedConflictPresentations) {
+        try { present(); } catch { /* Preserve the remaining local editor state below. */ }
+      }
+      this.showReconcileState("unavailable", error instanceof Error ? error.message : undefined);
+    } finally {
+      if (didPause && !holdViewsForRetry) this.workspace.resumeAutosave();
+    }
+  }
+
+  private handleExternalModify(file: TFile, suppliedText?: string): Promise<void> {
+    const existing = this.externalModifyInFlight.get(file.path);
+    if (existing) return existing;
+    const operation = this.processExternalModify(file, suppliedText).finally(() => {
+      if (this.externalModifyInFlight.get(file.path) === operation) this.externalModifyInFlight.delete(file.path);
+    });
+    this.externalModifyInFlight.set(file.path, operation);
+    return operation;
+  }
+
+  private async processExternalModify(file: TFile, suppliedText?: string): Promise<void> {
+    const leaf = this.workspace.findLeafForFile(file.path);
+    const view = leaf?.view;
+    if (!(view instanceof MarkdownView) || !view.file) return;
+    const text = suppliedText ?? await this.host.vaultFiles.read(file.path);
+    if (!hasExternalChange(text, view.getLastKnownText())) return;
+    if (!view.hasUnacknowledgedChanges()) {
+      view.acceptExternalText(text);
+      return;
+    }
+    await this.preserveConflict(view, file, text, file.path);
+  }
+
+  private async preserveConflict(
+    view: MarkdownView,
+    file: TFile,
+    externalText: string | null,
+    candidatePath: string,
+  ): Promise<void> {
+    const present = await this.prepareConflict(view, file, externalText, candidatePath);
+    present();
+  }
+
+  private async prepareConflict(
+    view: MarkdownView | CanvasView,
+    file: TFile,
+    externalText: string | null,
+    candidatePath: string,
+  ): Promise<() => void> {
+    const localText = view.getText();
+    const conflictPath = buildConflictPath(
+      candidatePath,
+      formatConflictTimestamp(new Date()),
+      (path) => this.vault.getAbstractFileByPath(path) !== null,
+    );
+    try {
+      await this.vault.create(conflictPath, localText);
+      return () => view.presentConflict(externalText, conflictPath, false);
+    } catch (writeError) {
+      const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(file.path)}`;
+      view.presentConflict(externalText, null, true, "memory");
+      try {
+        localStorage.setItem(recoveryKey, JSON.stringify({ vaultId: this.vault.root, path: file.path, text: localText }));
+        view.presentConflict(externalText, null, true, "device");
+      } catch (storageError) {
+        throw new AggregateError([writeError, storageError], "Conflict copy and device recovery both failed");
+      }
+      throw writeError;
+    }
+  }
+
+  private async prepareExternalDelete(path: string, folder: boolean): Promise<{
+    cleanLeaves: WorkspaceLeaf[];
+    conflicts: Array<() => void>;
+  }> {
+    const cleanLeaves: WorkspaceLeaf[] = [];
+    const work: Array<Promise<() => void>> = [];
+    this.workspace.iterateLeaves((leaf) => {
+      const view = leaf.view;
+      if (view instanceof BaseView) {
+        if (view.file && (view.file.path === path || (folder && view.file.path.startsWith(`${path}/`)))) {
+          cleanLeaves.push(leaf);
+        }
+        work.push((async () => {
+          const source = await view.getDirtySourceConflict(path, folder);
+          if (!source) return () => {};
+          const candidatePath = folder ? source.file.name : source.file.path;
+          const conflictPath = buildConflictPath(
+            candidatePath,
+            formatConflictTimestamp(new Date()),
+            (candidate) => this.vault.getAbstractFileByPath(candidate) !== null,
+          );
+          try {
+            await this.vault.create(conflictPath, source.text);
+            return () => view.presentSourceConflict(conflictPath);
+          } catch (writeError) {
+            view.presentSourceConflict(null, true);
+            const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(source.file.path)}`;
+            try {
+              localStorage.setItem(recoveryKey, JSON.stringify({ vaultId: this.vault.root, path: source.file.path, text: source.text }));
+            } catch {
+              // The live read-only Base edit remains the last recovery tier.
+            }
+            throw writeError;
+          }
+        })());
+        return;
+      }
+      if (!(view instanceof MarkdownView || view instanceof CanvasView) || !view.file) return;
+      if (view.file.path !== path && !(folder && view.file.path.startsWith(`${path}/`))) return;
+      if (!view.hasUnacknowledgedChanges()) {
+        cleanLeaves.push(leaf);
+        return;
+      }
+      const candidate = folder ? view.file.name : view.file.path;
+      work.push(this.prepareConflict(view, view.file, null, candidate));
+    });
+    return { cleanLeaves, conflicts: await Promise.all(work) };
+  }
+
+  private showReconcileState(status: string, detail?: string): void {
+    let state = document.querySelector<HTMLElement>(".vault-reconcile-state");
+    if (!state) {
+      state = document.createElement("div");
+      state.className = "vault-reconcile-state";
+      state.setAttribute("role", "status");
+      document.querySelector(".app-shell")?.prepend(state);
+    }
+    state.empty();
+    const message = document.createElement("span");
+    if (status === "partial" || status === "cancelled") {
+      message.textContent = "Vault refresh was incomplete. The previous file manifest is still active.";
+    } else if (detail === "CONTENT_UNAVAILABLE") {
+      message.textContent = "This provider item is offline and has not downloaded yet. No file was overwritten.";
+    } else if (detail?.includes("PERMISSION") || detail?.includes("REVOKED")) {
+      message.textContent = "Access to this vault was revoked. Reconnect the same vault to continue.";
+    } else {
+      message.textContent = "Vault provider is temporarily unavailable. Your previous manifest and local edits are preserved.";
+    }
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "Retry refresh";
+    retry.addEventListener("click", () => void this.reconcileVault("manual"));
+    state.append(message, retry);
+  }
+
+  private clearReconcileState(): void {
+    document.querySelector(".vault-reconcile-state")?.remove();
+  }
+
+  private showVaultAccessError(rootEl: HTMLElement, error: VaultAccessError): void {
+    this.workspace?.dispose();
+    rootEl.innerHTML = "";
+    const state = vaultAccessPresentation(error);
+    const panel = document.createElement("div");
+    panel.className = "vault-picker vault-access-error";
+    const heading = document.createElement("h1");
+    heading.textContent = state.title;
+    const message = document.createElement("p");
+    message.textContent = state.message;
+    const reconnect = document.createElement("button");
+    reconnect.className = "mod-cta";
+    reconnect.textContent = state.action;
+    reconnect.addEventListener("click", async () => {
+      reconnect.disabled = true;
+      try {
+        if (await this.host.vaultRegistry.reconnectVault(state.vaultId)) {
+          await this.openVault(state.vaultId, rootEl);
+        }
+      } catch (reconnectError) {
+        this.showInlineVaultError(panel, reconnectError);
+      } finally {
+        reconnect.disabled = false;
       }
     });
+    panel.append(heading, message, reconnect);
+    rootEl.appendChild(panel);
+  }
+
+  private showInlineVaultError(container: HTMLElement, error: unknown): void {
+    let message = container.querySelector<HTMLElement>(".vault-picker-error");
+    if (!message) {
+      message = document.createElement("div");
+      message.className = "vault-picker-error";
+      message.setAttribute("role", "alert");
+      container.appendChild(message);
+    }
+    message.textContent = error instanceof Error ? error.message : "Unable to access that vault";
   }
 
   private showCrashRecoveryBanner(shell: HTMLElement): void {
@@ -1241,32 +1864,20 @@ export class App {
    * mid-keystroke, so the bound combos are published to it up front and
    * republished whenever a plugin adds or removes a command.
    */
-  /**
-   * openVaultMeasured re-runs on every vault switch, and both listeners
-   * installed here are additive: a second capture-phase keydown listener on
-   * the same node is NOT stopped by the first one's stopPropagation(), and
-   * onGuestHotkey returns an unsubscribe that used to be discarded. After N
-   * vault switches a single Cmd+R fired N+1 reloads. Drop the previous
-   * subscription, and attach the DOM listener exactly once.
-   */
-  private detachGuestHotkeys: (() => void) | null = null;
-  private detachHotkeyPublisher: (() => void) | null = null;
-  private commandsAttached = false;
-
   private attachGuestHotkeyBridge() {
     let pending = 0;
     const publish = () => {
       // registerCommands() alone fires ~40 times; coalesce into one IPC call.
       window.clearTimeout(pending);
       pending = window.setTimeout(() => {
-        void window.geode.publishHotkeys(this.commands.hotkeys());
+        if (this.host.capabilities.embeddedWebContent) {
+          void this.host.desktop?.publishHotkeys(this.commands.hotkeys());
+        }
       }, 0);
     };
-    this.detachHotkeyPublisher?.();
-    this.detachHotkeyPublisher = this.commands.onChange(publish);
+    this.hostDisposers.add(this.commands.onChange(publish));
     publish();
-    this.detachGuestHotkeys?.();
-    this.detachGuestHotkeys = window.geode.onGuestHotkey((combo, guestId) => {
+    const stopGuestHotkeys = this.host.desktop?.onGuestHotkey((combo, guestId) => {
       // Transient, and only readable for the duration of this dispatch:
       // createActionCommand resolves its context synchronously, before any
       // await, so activeActionContext() below always sees the right source.
@@ -1277,6 +1888,41 @@ export class App {
         this.guestHotkeySource = null;
       }
     });
+    if (stopGuestHotkeys) this.hostDisposers.add(stopGuestHotkeys);
+  }
+
+  async dispose(): Promise<void> {
+    this.reconcileGeneration += 1;
+    for (const dispose of this.hostDisposers) dispose();
+    this.hostDisposers.clear();
+    const activeReconcile = this.reconcileInFlight;
+    if (activeReconcile) await activeReconcile;
+    if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
+    this.saveLayoutTimer = null;
+    if (this.communityUpdateTimer) clearTimeout(this.communityUpdateTimer);
+    this.communityUpdateTimer = null;
+    await this.vault.close();
+    this.metadataCache.dispose();
+    this.workspace?.dispose();
+  }
+
+  private async disposeVaultSession(): Promise<void> {
+    this.reconcileGeneration += 1;
+    for (const dispose of this.hostDisposers) dispose();
+    this.hostDisposers.clear();
+    const activeReconcile = this.reconcileInFlight;
+    if (activeReconcile) await activeReconcile;
+    if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
+    this.saveLayoutTimer = null;
+    if (this.communityUpdateTimer) clearTimeout(this.communityUpdateTimer);
+    this.communityUpdateTimer = null;
+    this.activeSettingsModal?.close();
+    await this.workspace?.closeAllLeaves();
+    await this.pluginManager?.dispose();
+    this.mermaidPlugin?.unload();
+    this.workspace?.dispose();
+    this.metadataCache.dispose();
+    await this.vault.close();
   }
 
   /**
@@ -1311,13 +1957,6 @@ export class App {
       if (!owner && leaf.contentEl.contains(guestEl)) owner = leaf;
     });
     return owner;
-  }
-
-  /** Idempotent: see detachGuestHotkeys above for why re-attaching would double-fire. */
-  private attachCommandsOnce() {
-    if (this.commandsAttached) return;
-    this.commandsAttached = true;
-    this.commands.attach(document);
   }
 
   /**
@@ -1510,12 +2149,15 @@ export class App {
     );
     c("open-settings", "Open settings", "Mod+,", () => this.setting.open());
     c("open-another-vault", "Open another vault", undefined, () => this.openManageVaults());
-    c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
-      new InstallFromGithubModal(this, this.communityManager).open()
-    );
-    c("community-check-updates", "Community: Check for updates", undefined, () =>
-      void this.checkCommunityUpdates(true)
-    );
+    c("refresh-vault", "Refresh external vault", undefined, () => void this.reconcileVault("manual"));
+    if (this.host.capabilities.nodePlugins) {
+      c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
+        new InstallFromGithubModal(this, this.communityManager).open()
+      );
+      c("community-check-updates", "Community: Check for updates", undefined, () =>
+        void this.checkCommunityUpdates(true)
+      );
+    }
     c("toggle-theme", "Toggle dark/light theme", undefined, () => {
       this.settings.theme = this.settings.theme === "dark" ? "light" : "dark";
       this.applySettings();
@@ -1527,8 +2169,10 @@ export class App {
       const files = this.vault.getMarkdownFiles();
       if (files.length) this.openFile(files[Math.floor(Math.random() * files.length)], false);
     });
-    c("open-web-viewer", "Open web viewer", undefined, () => void this.openWebViewer());
-    c("search-web", "Search the web", undefined, () => this.searchWeb());
+    if (this.host.capabilities.embeddedWebContent) {
+      c("open-web-viewer", "Open web viewer", undefined, () => void this.openWebViewer());
+      c("search-web", "Search the web", undefined, () => this.searchWeb());
+    }
     c("pin-tab", "Toggle pin on current tab", undefined, () => {
       const leaf = this.workspace.getActiveLeaf();
       leaf?.togglePinned();
@@ -1613,6 +2257,10 @@ export class App {
       return;
     }
     if (file.extension === "html" || file.extension === "htm") {
+      if (!(this.vault.adapter instanceof FileSystemAdapter)) {
+        this.notify("Local HTML preview is available on desktop only");
+        return;
+      }
       const leaf = this.workspace.getLeaf(newTab);
       await leaf.setViewState({
         type: "webviewer",
@@ -1709,6 +2357,10 @@ export class App {
 
   /** "Open web viewer" (Obsidian compat command `open-web-viewer`): opens a new Web Viewer tab at the given URL, or the configured home URL. */
   async openWebViewer(url?: string): Promise<void> {
+    if (!this.host.capabilities.embeddedWebContent) {
+      await this.host.navigation.openExternal(url ?? this.settings.webViewer.homeUrl);
+      return;
+    }
     const leaf = this.workspace.getLeaf(true);
     await leaf.setViewState({
       type: "webviewer",
@@ -1719,6 +2371,10 @@ export class App {
 
   /** Open a validated static design artifact in an isolated guest session. */
   async openArtifact(root: string): Promise<void> {
+    if (!this.host.capabilities.artifacts) {
+      this.notify("Artifacts are available on desktop only");
+      return;
+    }
     const leaf = this.workspace.getLeaf(true);
     await leaf.setViewState({ type: "geode-artifact", active: true, state: { root } });
   }
@@ -1773,13 +2429,13 @@ export class App {
       const href = anchor.href || rawHref;
       // Cmd/Ctrl-click forces the OS browser, matching the Live Preview
       // convention (markdown/live-preview.ts).
-      if (e.metaKey || e.ctrlKey) window.geode.openExternal(href);
+      if (e.metaKey || e.ctrlKey) void this.host.navigation.openExternal(href);
       else this.openExternalLink(href);
     });
   }
 
   private async openLocalFileLink(href: string): Promise<void> {
-    const result = await window.geode.openLocalFile(href);
+    const result = await this.host.navigation.openLocalFile(href);
     if (result.kind !== "vault") return;
     const file = this.vault.getAbstractFileByPath(result.path);
     if (!isTFile(file)) return;
@@ -1797,10 +2453,10 @@ export class App {
   openExternalLink(url: string): void {
     // Only web URLs can render in the in-app Web Viewer; anything else (e.g.
     // mailto:) always goes to the OS regardless of the setting.
-    if (this.settings.webViewer.openLinksInApp && /^https?:\/\//i.test(url)) {
+    if (this.host.capabilities.embeddedWebContent && this.settings.webViewer.openLinksInApp && /^https?:\/\//i.test(url)) {
       void this.openWebViewer(url);
     } else {
-      window.geode.openExternal(url);
+      void this.host.navigation.openExternal(url);
     }
   }
 
@@ -1865,7 +2521,7 @@ export class App {
    */
   async mutateBookmarks(fn: (root: BookmarksRoot) => BookmarksRoot): Promise<void> {
     this.bookmarksRoot = fn(this.bookmarksRoot);
-    await window.geode.writeConfig("bookmarks", this.bookmarksRoot);
+    await this.host.config.write("bookmarks", this.bookmarksRoot);
     this.workspace.trigger("bookmarks-changed");
   }
 
@@ -2137,7 +2793,7 @@ export class App {
     this.restoringLayout = true;
     let restored = false;
     try {
-      const saved = (await window.geode.readConfig("workspace")) as PersistedWorkspace | null;
+      const saved = (await this.host.config.read("workspace")) as PersistedWorkspace | null;
       if (saved && (saved.version === 1 || saved.version === 2)) {
         restored = await this.workspace.deserialize(saved);
       }
@@ -2167,7 +2823,7 @@ export class App {
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = setTimeout(() => {
       this.saveLayoutTimer = null;
-      window.geode.writeConfig("workspace", this.workspace.serialize()).catch((err) => {
+      this.host.config.write("workspace", this.workspace.serialize()).catch((err) => {
         console.error("Failed to save workspace layout", err);
       });
     }, 400);
@@ -2175,6 +2831,72 @@ export class App {
 
   openQuickSwitcher() {
     new QuickSwitcherModal(this).open();
+  }
+
+  private createMobileNavigation(): HTMLElement {
+    const navigation = document.createElement("nav");
+    navigation.className = "mobile-navigation";
+    navigation.setAttribute("aria-label", "Mobile navigation");
+    const addAction = (label: string, icon: string, action: (button: HTMLButtonElement) => void) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "mobile-navigation-action";
+      button.setAttribute("aria-label", label);
+      setIcon(button, icon);
+      const text = document.createElement("span");
+      text.textContent = label;
+      button.appendChild(text);
+      button.addEventListener("touchend", (event) => {
+        // WKWebView can consume the first compatibility click while moving
+        // focus into web content after launch. A completed touch is already
+        // the user's activation; preventing its synthetic click keeps the
+        // action exactly-once while keyboard/mouse activation stays intact.
+        event.preventDefault();
+        action(button);
+      }, { passive: false });
+      button.addEventListener("click", () => action(button));
+      navigation.appendChild(button);
+    };
+
+    addAction("Files", "files", (button) => {
+      const leaf = this.workspace.getLeavesOfType("file-explorer")[0];
+      if (leaf) this.workspace.presentMobileSidebarLeaf("left", leaf, button);
+    });
+    addAction("Search", "search", (button) => {
+      const leaf = this.workspace.getLeavesOfType("search")[0];
+      const view = leaf?.view as SearchView | null;
+      if (!leaf || !view) return;
+      view.setQuery("");
+      this.workspace.presentMobileSidebarLeaf("left", leaf, button);
+      requestAnimationFrame(() =>
+        this.workspace.leftSidebar.containerEl.querySelector<HTMLInputElement>(".search-input")?.focus()
+      );
+    });
+    addAction("New note", "file-plus-2", () => void this.createNewNote());
+    addAction("Details", "panel-right", (button) => this.workspace.presentCurrentMobileSidebar("right", button));
+    addAction("More", "ellipsis", (button) => {
+      this.showMenu(new MouseEvent("click"), [
+        { title: "Quick switcher", icon: "arrow-left-right", action: () => this.openQuickSwitcher() },
+        { title: "Commands", icon: "terminal", action: () => this.openCommandPalette() },
+        { title: "Settings", icon: "settings", action: () => this.setting.open() },
+      ], { anchor: button, horizontalAlign: "end", menuClass: "mod-mobile-more" });
+    });
+    return navigation;
+  }
+
+  private trackMobileVisualViewport(): void {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => {
+      const offset = document.body.classList.contains("is-mobile")
+        ? Math.max(0, viewport.offsetTop + window.scrollY)
+        : 0;
+      document.documentElement.style.setProperty("--geode-visual-viewport-top", `${offset}px`);
+    };
+    viewport.addEventListener("resize", update, { passive: true });
+    viewport.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("scroll", update, { passive: true });
+    update();
   }
 
   openCommandPalette() {
@@ -2431,11 +3153,13 @@ export class App {
   syncWindowBackgroundColor(): void {
     const color = getComputedStyle(document.querySelector(".app-main") ?? document.body)
       .backgroundColor;
-    void window.geode.setWindowBackgroundColor(color);
+    if (this.host.capabilities.multipleWindows) {
+      void this.host.desktop?.setWindowBackgroundColor(color);
+    }
   }
 
   saveSettings() {
-    window.geode.writeConfig("app", this.settings);
+    void this.host.config.write("app", this.settings);
   }
 
   /** Select a community theme by name (or "" for the built-in default): apply it and persist. */

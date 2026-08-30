@@ -3,6 +3,7 @@ import type { App } from "./app";
 import type { View, WorkspaceLeaf } from "./workspace";
 import type { Command } from "./commands";
 import type { PluginManifest } from "./plugin-manifest";
+import type { EventRef } from "./events";
 
 export type { PluginManifest } from "./plugin-manifest";
 
@@ -30,6 +31,8 @@ export abstract class Plugin extends Component {
   /** Plugin-owned settings assigned from loadData() during onload(). */
   settings?: unknown;
   private errorHandler?: PluginErrorHandler;
+  private hostGeneration: "constructing" | "active" | "inactive" = "constructing";
+  private pendingTeardowns = new Set<Promise<void>>();
 
   constructor(app: App, manifest: PluginManifest) {
     super();
@@ -45,6 +48,37 @@ export abstract class Plugin extends Component {
   /** @internal Installed by PluginManager before onload runs. */
   setErrorHandler(handler: PluginErrorHandler): void {
     this.errorHandler = handler;
+  }
+
+  /** @internal Marks this instance as the manager's currently admitted generation. */
+  activateHostGeneration(): void {
+    if (this.hostGeneration === "inactive") throw new Error(`Plugin "${this.manifest.id}" generation is no longer active`);
+    this.hostGeneration = "active";
+  }
+
+  private assertHostGeneration(): void {
+    if (this.hostGeneration === "inactive") {
+      throw new Error(`Plugin "${this.manifest.id}" generation is no longer active`);
+    }
+  }
+
+  private trackTeardown(work: Promise<void>): void {
+    this.pendingTeardowns.add(work);
+    void work.then(
+      () => this.pendingTeardowns.delete(work),
+      () => this.pendingTeardowns.delete(work),
+    );
+  }
+
+  /** @internal Synchronously revoke registrations, then await owned view closure. */
+  async unloadAndWait(): Promise<void> {
+    this.hostGeneration = "inactive";
+    this.unload();
+    while (this.pendingTeardowns.size) {
+      const results = await Promise.allSettled([...this.pendingTeardowns]);
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed) throw failed.reason;
+    }
   }
 
   private guard<T extends (...args: any[]) => any>(boundary: string, callback: T | undefined): T | undefined {
@@ -73,6 +107,7 @@ export abstract class Plugin extends Component {
    * on `onunload()`.
    */
   addCommand(command: PluginCommand): Command {
+    this.assertHostGeneration();
     const full: Command = {
       id: this.prefixed(command.id),
       name: `${this.manifest.name}: ${command.name}`,
@@ -97,6 +132,10 @@ export abstract class Plugin extends Component {
    * open leaves of this type detached) on `onunload()`.
    */
   registerView(viewType: string, factory: (leaf: WorkspaceLeaf) => View): void {
+    this.assertHostGeneration();
+    if (!this.app.workspace.isDeferrableViewType(viewType)) {
+      throw new Error(`Plugin "${this.manifest.id}" cannot register reserved or built-in view type "${viewType}"`);
+    }
     this.app.workspace.registerViewFactory(viewType, (leaf) => {
       let view: View;
       try {
@@ -109,7 +148,30 @@ export abstract class Plugin extends Component {
       view.onClose = this.guard(`view-onClose:${viewType}`, view.onClose.bind(view))!;
       return view;
     });
-    this.register(() => this.app.workspace.unregisterViewFactory(viewType));
+    this.register(() => {
+      const teardown = this.app.workspace.unregisterViewFactory(viewType);
+      // Older/fake workspace hosts may still implement the historical void
+      // signature; the real Workspace returns the owned closure promise.
+      if (teardown && typeof (teardown as Promise<void>).then === "function") {
+        this.trackTeardown(teardown as Promise<void>);
+      }
+    });
+  }
+
+  override register(cb: () => void): void {
+    if (this.hostGeneration === "inactive") {
+      cb();
+      return;
+    }
+    super.register(cb);
+  }
+
+  override registerEvent(ref: EventRef): void {
+    if (this.hostGeneration === "inactive") {
+      ref();
+      return;
+    }
+    super.registerEvent(ref);
   }
 
   override registerDomEvent<K extends keyof HTMLElementEventMap>(
@@ -118,7 +180,16 @@ export abstract class Plugin extends Component {
     callback: (ev: HTMLElementEventMap[K]) => any,
     options?: boolean | AddEventListenerOptions
   ): void {
+    this.assertHostGeneration();
     super.registerDomEvent(el, type, this.guard(`dom-event:${String(type)}`, callback)!, options);
+  }
+
+  override registerInterval(id: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> {
+    if (this.hostGeneration === "inactive") {
+      clearInterval(id);
+      return id;
+    }
+    return super.registerInterval(id);
   }
 
   private dataPath(): string {

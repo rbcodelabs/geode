@@ -28,6 +28,7 @@ export interface TimedPluginReadResult {
   fsStartedAt: number;
   fsFinishedAt: number;
 }
+export interface PluginFileSet { manifest: string; main: string; styles: string | null }
 
 const api = {
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
@@ -50,6 +51,8 @@ const api = {
   read: (path: string): Promise<string> => ipcRenderer.invoke("vault-read", path),
   readPluginFile: (path: string, rendererSentAt: number): Promise<TimedPluginReadResult> =>
     ipcRenderer.invoke("plugin-file-read", path, rendererSentAt),
+  replacePluginFiles: (id: string, expectedManifest: string, replacement: PluginFileSet): Promise<void> =>
+    ipcRenderer.invoke("plugin-files-replace", id, expectedManifest, replacement),
   readBinary: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("vault-read-binary", path),
   write: (path: string, data: string): Promise<{ mtime: number; ctime: number; size: number }> =>
@@ -63,7 +66,9 @@ const api = {
   writeMetadataCache: (data: unknown): Promise<void> => ipcRenderer.invoke("metadata-cache-write", data),
   startMetadataIndexer: (): Promise<true | null> => ipcRenderer.invoke("metadata-indexer-start"),
   onMetadataIndexerMessage: (cb: (message: any) => void) => {
-    ipcRenderer.on("metadata-indexer-message", (_e, message) => cb(message));
+    const listener = (_e: Electron.IpcRendererEvent, message: any) => cb(message);
+    ipcRenderer.on("metadata-indexer-message", listener);
+    return () => { ipcRenderer.removeListener("metadata-indexer-message", listener); };
   },
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
@@ -99,10 +104,14 @@ const api = {
   getArtifactState: (registrationId: string) => ipcRenderer.invoke("artifact-state", registrationId),
   captureArtifact: (root: string) => ipcRenderer.invoke("artifact-capture", root),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
-    ipcRenderer.on("vault-event", (_e, ev: VaultEvent) => cb(ev));
+    const listener = (_e: Electron.IpcRendererEvent, ev: VaultEvent) => cb(ev);
+    ipcRenderer.on("vault-event", listener);
+    return () => { ipcRenderer.removeListener("vault-event", listener); };
   },
   onDeepLink: (cb: (link: { action: string; params: Record<string, string> }) => void) => {
-    ipcRenderer.on("geode-deep-link", (_e, link) => cb(link));
+    const listener = (_e: Electron.IpcRendererEvent, link: { action: string; params: Record<string, string> }) => cb(link);
+    ipcRenderer.on("geode-deep-link", listener);
+    return () => { ipcRenderer.removeListener("geode-deep-link", listener); };
   },
   getWindowChromeState: (): Promise<{ platform: NodeJS.Platform; isFullScreen: boolean }> =>
     ipcRenderer.invoke("window-chrome-state"),
@@ -116,7 +125,7 @@ const api = {
       state: { platform: NodeJS.Platform; isFullScreen: boolean },
     ) => cb(state);
     ipcRenderer.on("window-chrome-state", listener);
-    return () => ipcRenderer.removeListener("window-chrome-state", listener);
+    return () => { ipcRenderer.removeListener("window-chrome-state", listener); };
   },
   /**
    * Tell main which combos the CommandRegistry currently has bound. Main's
@@ -136,7 +145,7 @@ const api = {
   onGuestHotkey: (cb: (combo: string, guestId: number) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, combo: string, guestId: number) => cb(combo, guestId);
     ipcRenderer.on("guest-hotkey", listener);
-    return () => ipcRenderer.removeListener("guest-hotkey", listener);
+    return () => { ipcRenderer.removeListener("guest-hotkey", listener); };
   },
 };
 

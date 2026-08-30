@@ -12,6 +12,14 @@ export interface View {
   getIcon(): string;
   onOpen(): void | Promise<void>;
   onClose(): void | Promise<void>;
+  /** Suspend new vault-backed writes and await any buffered/in-flight writes. */
+  prepareVaultSwitch?(): Promise<void>;
+  /** Resume a suspended writer when the switch transaction aborts. */
+  cancelVaultSwitch?(): void;
+  /** Pause new autosaves without flushing dirty text, for provider reconciliation. */
+  pauseAutosave?(): Promise<void>;
+  /** Resume autosave after reconciliation reaches a complete or recoverable state. */
+  resumeAutosave?(): void;
   /** Serialized state for WorkspaceLeaf.getViewState(). */
   getState?(): unknown;
   /** Optional visibility callback; unlike onOpen, may run whenever a tab is revealed. */
@@ -359,9 +367,9 @@ export class TabGroup implements LeafContainer {
   tabHeaderInnerEl: HTMLElement;
   contentHostEl: HTMLElement;
   /** Left-sidebar toggle button, first child of `tabBarEl` (only meaningful/visible on the leftmost group). */
-  leftToggleEl: HTMLElement;
+  leftToggleEl: HTMLButtonElement;
   /** Right-sidebar toggle button, last child of `tabBarEl` (only meaningful/visible on the rightmost group). */
-  rightToggleEl: HTMLElement;
+  rightToggleEl: HTMLButtonElement;
   private bodyDropEdge: "left" | "right" | "top" | "bottom" | null = null;
 
   constructor(
@@ -382,10 +390,11 @@ export class TabGroup implements LeafContainer {
     // collapsible sidebar itself so it stays clickable when the sidebar
     // shrinks to width 0 (the reason for this whole change — see the
     // `Sidebar.toggle()`/CSS comments for context).
-    this.leftToggleEl = document.createElement("div");
+    this.leftToggleEl = document.createElement("button");
+    this.leftToggleEl.type = "button";
     this.leftToggleEl.className = "clickable-icon sidebar-toggle-button mod-left";
     setIcon(this.leftToggleEl, "panel-left");
-    this.leftToggleEl.addEventListener("click", () => this.workspace.leftSidebar.toggle());
+    this.leftToggleEl.addEventListener("click", () => this.workspace.toggleSidebar("left", this.leftToggleEl));
     this.tabBarEl.appendChild(this.leftToggleEl);
 
     this.tabBarEl.appendChild(this.tabHeaderInnerEl);
@@ -433,10 +442,11 @@ export class TabGroup implements LeafContainer {
     this.tabBarEl.appendChild(newTab);
 
     // Right sidebar toggle: last child of the tab bar.
-    this.rightToggleEl = document.createElement("div");
+    this.rightToggleEl = document.createElement("button");
+    this.rightToggleEl.type = "button";
     this.rightToggleEl.className = "clickable-icon sidebar-toggle-button mod-right";
     setIcon(this.rightToggleEl, "panel-right");
-    this.rightToggleEl.addEventListener("click", () => this.workspace.rightSidebar.toggle());
+    this.rightToggleEl.addEventListener("click", () => this.workspace.toggleSidebar("right", this.rightToggleEl));
     this.tabBarEl.appendChild(this.rightToggleEl);
 
     this.contentHostEl = document.createElement("div");
@@ -563,7 +573,7 @@ export class TabGroup implements LeafContainer {
       this.contentHostEl.appendChild(leaf.leafEl);
       void leaf.ensureOpen();
       this.renderTabs();
-      if (!this.sidebar) this.workspace.activeGroup = this;
+      if (!this.sidebar) this.workspace.setActiveGroup(this);
       this.workspace.trigger("active-leaf-change", leaf);
       const file = leaf.view?.getFile?.();
       if (file) this.workspace.trigger("file-open", file);
@@ -639,6 +649,7 @@ export class Sidebar implements LeafContainer {
   tabHeaderInnerEl: HTMLElement;
   contentEl: HTMLElement;
   resizeHandleEl: HTMLElement;
+  closeDrawerEl: HTMLButtonElement;
   views: View[] = [];
   leaves: WorkspaceLeaf[] = [];
   /** Vertically stacked leaf containers; the legacy sidebar itself is the first group. */
@@ -646,6 +657,7 @@ export class Sidebar implements LeafContainer {
   groupSizes: number[] = [1];
   private groupDividers: HTMLElement[] = [];
   active: SidebarItem | null = null;
+  private mobilePresented: SidebarItem | null = null;
   collapsed = false;
   width: number = SIDEBAR_DEFAULT_WIDTH;
   private dragging = false;
@@ -669,6 +681,16 @@ export class Sidebar implements LeafContainer {
     this.tabHeaderInnerEl = document.createElement("div");
     this.tabHeaderInnerEl.className = "workspace-tab-header-container-inner";
     this.tabHeaderContainerEl.appendChild(this.tabHeaderInnerEl);
+    this.closeDrawerEl = document.createElement("button");
+    this.closeDrawerEl.type = "button";
+    this.closeDrawerEl.className = "clickable-icon mobile-drawer-close";
+    this.closeDrawerEl.setAttribute(
+      "aria-label",
+      this.side === "left" ? "Close files drawer" : "Close details drawer"
+    );
+    setIcon(this.closeDrawerEl, "x");
+    this.closeDrawerEl.addEventListener("click", () => this.app.workspace.closeMobileDrawers());
+    this.tabHeaderContainerEl.appendChild(this.closeDrawerEl);
     this.contentEl = document.createElement("div");
     this.contentEl.className = "sidebar-content";
     this.tabHeaderContainerEl.parentElement?.classList.add("sidebar-tab-group");
@@ -753,7 +775,12 @@ export class Sidebar implements LeafContainer {
   }
 
   setWidth(px: number): void {
-    const effectiveMax = Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth * 0.5);
+    // Compact drawers have CSS-owned presentation geometry. Preserve the
+    // user's docked width verbatim so merely restoring on a phone cannot
+    // rewrite the desktop/tablet layout snapshot.
+    const effectiveMax = this.app.workspace?.isCompactMobile()
+      ? SIDEBAR_MAX_WIDTH
+      : Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth * 0.5);
     this.width = Math.min(Math.max(px, SIDEBAR_MIN_WIDTH), effectiveMax);
     this.containerEl.style.setProperty("--sidebar-width", `${this.width}px`);
   }
@@ -941,10 +968,34 @@ export class Sidebar implements LeafContainer {
     this.tabHeaderContainerEl.innerHTML = "";
     this.tabHeaderInnerEl.innerHTML = "";
     this.tabHeaderContainerEl.appendChild(this.tabHeaderInnerEl);
+    this.tabHeaderContainerEl.appendChild(this.closeDrawerEl);
     for (const item of this.leaves as SidebarItem[]) {
       if (this.isLeaf(item) && !item.view) continue; // no tab until a view is mounted
-      this.tabHeaderInnerEl.appendChild(this.buildSidebarTab(item, item === this.active));
+      this.tabHeaderInnerEl.appendChild(this.buildSidebarTab(item, item === (this.mobilePresented ?? this.active)));
     }
+  }
+
+  presentMobile(item: SidebarItem): void {
+    const resolved = this.isLeaf(item) ? item : this.leaves.find((leaf) => leaf.view === item);
+    if (!resolved) return;
+    this.mobilePresented = resolved;
+    this.contentEl.innerHTML = "";
+    const { el } = this.metaOf(resolved);
+    if (el) this.contentEl.appendChild(el);
+    void resolved.ensureOpen();
+    resolved.view?.onReveal?.();
+    this.renderIcons();
+  }
+
+  restorePersistentPresentation(): void {
+    if (!this.mobilePresented) return;
+    this.mobilePresented = null;
+    this.contentEl.innerHTML = "";
+    if (this.active) {
+      const { el } = this.metaOf(this.active);
+      if (el) this.contentEl.appendChild(el);
+    }
+    this.renderIcons();
   }
 
   show(item: SidebarItem) {
@@ -1237,12 +1288,19 @@ export class Workspace extends Events {
   centerEl: HTMLElement;
   leftSidebar: Sidebar;
   rightSidebar: Sidebar;
+  mobileDrawerBackdropEl: HTMLButtonElement;
   groups: TabGroup[] = [];
   activeGroup: TabGroup;
   /** viewType -> factory, populated by `Plugin.registerView` (see plugin.ts). */
   private viewFactories = new Map<string, (leaf: WorkspaceLeaf) => View>();
   /** Built-in sidebar view types, recorded by `Sidebar.addView`. Never deferred. */
   private builtinViewTypes = new Set<string>();
+  private compactQuery: MediaQueryList;
+  private tabletQuery: MediaQueryList;
+  private drawerOpener: HTMLElement | null = null;
+  private drawerSide: "left" | "right" | null = null;
+  private readonly breakpointHandler = () => this.handleBreakpointChange();
+  private readonly documentKeyHandler = (event: KeyboardEvent) => this.handleDrawerKeydown(event);
 
   constructor(public app: App, parentEl: HTMLElement) {
     super();
@@ -1250,6 +1308,11 @@ export class Workspace extends Events {
     this.rootEl.className = "workspace";
     this.leftSidebar = new Sidebar("left", this.app);
     this.rightSidebar = new Sidebar("right", this.app);
+    this.mobileDrawerBackdropEl = document.createElement("button");
+    this.mobileDrawerBackdropEl.type = "button";
+    this.mobileDrawerBackdropEl.className = "mobile-drawer-backdrop";
+    this.mobileDrawerBackdropEl.setAttribute("aria-label", "Close navigation drawer");
+    this.mobileDrawerBackdropEl.addEventListener("click", () => this.closeMobileDrawers());
     this.centerEl = document.createElement("div");
     // `workspace-split mod-root mod-vertical` are Obsidian's real root-split
     // hooks (added alongside Geode's own `workspace-center`, which existing
@@ -1260,8 +1323,190 @@ export class Workspace extends Events {
     this.rootEl.appendChild(this.leftSidebar.containerEl);
     this.rootEl.appendChild(this.centerEl);
     this.rootEl.appendChild(this.rightSidebar.containerEl);
+    this.rootEl.appendChild(this.mobileDrawerBackdropEl);
     parentEl.appendChild(this.rootEl);
+    this.compactQuery = window.matchMedia("(max-width: 700px)");
+    this.tabletQuery = window.matchMedia("(max-width: 900px)");
+    this.compactQuery.addEventListener("change", this.breakpointHandler);
+    this.tabletQuery.addEventListener("change", this.breakpointHandler);
+    document.addEventListener("keydown", this.documentKeyHandler, true);
     this.activeGroup = this.addGroup();
+    this.on("file-open", () => this.closeMobileDrawers(false));
+    this.syncAdaptivePresentation();
+  }
+
+  isCompactMobile(): boolean {
+    return document.body.classList.contains("is-mobile") && this.compactQuery.matches;
+  }
+
+  private usesDrawer(side: "left" | "right"): boolean {
+    if (!document.body.classList.contains("is-mobile")) return false;
+    return this.compactQuery.matches || (side === "right" && this.tabletQuery.matches);
+  }
+
+  private setDrawerBackgroundInert(inert: boolean, target?: Sidebar): void {
+    this.centerEl.inert = inert;
+    const other = target === this.leftSidebar ? this.rightSidebar : this.leftSidebar;
+    other.containerEl.inert = inert;
+    const navigation = this.rootEl.closest(".app-shell")?.querySelector<HTMLElement>(".mobile-navigation");
+    if (navigation) navigation.inert = inert;
+  }
+
+  private handleDrawerKeydown(event: KeyboardEvent): void {
+    if (!this.drawerSide) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeMobileDrawers();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const target = this.drawerSide === "left" ? this.leftSidebar : this.rightSidebar;
+    const focusable = [...target.containerEl.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+    )].filter((element) => !element.hidden && getComputedStyle(element).display !== "none");
+    if (!focusable.length) {
+      event.preventDefault();
+      target.closeDrawerEl.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  private handleBreakpointChange(): void {
+    this.closeMobileDrawers();
+    if (!this.compactQuery.matches) this.leftSidebar.restorePersistentPresentation();
+    if (!this.tabletQuery.matches) this.rightSidebar.restorePersistentPresentation();
+    this.syncSidebarToggleButtons();
+    this.syncAdaptivePresentation();
+  }
+
+  openMobileDrawer(side: "left" | "right", opener?: HTMLElement): void {
+    if (!this.usesDrawer(side)) return;
+    const target = side === "left" ? this.leftSidebar : this.rightSidebar;
+    const other = side === "left" ? this.rightSidebar : this.leftSidebar;
+    this.drawerOpener = opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    this.drawerSide = side;
+    other.containerEl.classList.remove("is-mobile-drawer-open");
+    target.containerEl.classList.add("is-mobile-drawer-open");
+    target.containerEl.setAttribute("role", "dialog");
+    target.containerEl.setAttribute("aria-modal", "true");
+    target.containerEl.setAttribute("aria-label", side === "left" ? "Files and search" : "Details");
+    this.rootEl.classList.add("mobile-drawer-active");
+    this.setDrawerBackgroundInert(true, target);
+    target.containerEl.inert = false;
+    target.closeDrawerEl.focus();
+  }
+
+  closeMobileDrawers(restoreFocus = true): void {
+    const opener = this.drawerOpener;
+    this.leftSidebar.containerEl.classList.remove("is-mobile-drawer-open");
+    this.rightSidebar.containerEl.classList.remove("is-mobile-drawer-open");
+    for (const sidebar of [this.leftSidebar, this.rightSidebar]) {
+      sidebar.containerEl.removeAttribute("role");
+      sidebar.containerEl.removeAttribute("aria-modal");
+      sidebar.containerEl.removeAttribute("aria-label");
+      sidebar.containerEl.inert = false;
+    }
+    this.rootEl.classList.remove("mobile-drawer-active");
+    this.centerEl.inert = false;
+    const navigation = this.rootEl.closest(".app-shell")?.querySelector<HTMLElement>(".mobile-navigation");
+    if (navigation) navigation.inert = false;
+    this.drawerSide = null;
+    this.drawerOpener = null;
+    if (restoreFocus && opener?.isConnected) opener.focus({ preventScroll: true });
+    // `overflow: hidden` made the workspace programmatically scrollable on
+    // WebKit/Chromium. Moving a focused drawer offscreen could therefore leave
+    // the center pane shifted left after an orientation change.
+    this.rootEl.scrollLeft = 0;
+  }
+
+  toggleSidebar(side: "left" | "right", opener?: HTMLElement): void {
+    const sidebar = side === "left" ? this.leftSidebar : this.rightSidebar;
+    if (!this.usesDrawer(side)) {
+      sidebar.toggle();
+      return;
+    }
+    if (sidebar.containerEl.classList.contains("is-mobile-drawer-open")) this.closeMobileDrawers();
+    else this.openMobileDrawer(side, opener);
+  }
+
+  presentMobileSidebarLeaf(side: "left" | "right", leaf: WorkspaceLeaf, opener: HTMLElement): void {
+    const sidebar = side === "left" ? this.leftSidebar : this.rightSidebar;
+    if (!this.usesDrawer(side)) {
+      this.revealLeaf(leaf);
+      return;
+    }
+    sidebar.presentMobile(leaf);
+    this.openMobileDrawer(side, opener);
+  }
+
+  presentCurrentMobileSidebar(side: "left" | "right", opener: HTMLElement): void {
+    const sidebar = side === "left" ? this.leftSidebar : this.rightSidebar;
+    if (sidebar.active) sidebar.presentMobile(sidebar.active);
+    this.openMobileDrawer(side, opener);
+  }
+
+  syncAdaptivePresentation(): void {
+    const compact = this.isCompactMobile();
+    for (const group of this.groups) {
+      group.containerEl.classList.toggle("is-mobile-center-active", compact && group === this.activeGroup);
+    }
+  }
+
+  dispose(): void {
+    this.compactQuery.removeEventListener("change", this.breakpointHandler);
+    this.tabletQuery.removeEventListener("change", this.breakpointHandler);
+    document.removeEventListener("keydown", this.documentKeyHandler, true);
+    this.closeMobileDrawers(false);
+  }
+
+  async prepareVaultSwitch(): Promise<void> {
+    const views: View[] = [];
+    this.iterateLeaves((leaf) => { if (leaf.view) views.push(leaf.view); });
+    try {
+      for (const view of views) await view.prepareVaultSwitch?.();
+    } catch (error) {
+      for (const view of views) view.cancelVaultSwitch?.();
+      throw error;
+    }
+  }
+
+  cancelVaultSwitch(): void {
+    this.iterateLeaves((leaf) => leaf.view?.cancelVaultSwitch?.());
+  }
+
+  async pauseAutosave(): Promise<void> {
+    const views: View[] = [];
+    this.iterateLeaves((leaf) => { if (leaf.view) views.push(leaf.view); });
+    const paused: View[] = [];
+    try {
+      for (const view of views) {
+        paused.push(view);
+        await view.pauseAutosave?.();
+      }
+    } catch (error) {
+      for (const view of paused.reverse()) view.resumeAutosave?.();
+      throw error;
+    }
+  }
+
+  resumeAutosave(): void {
+    this.iterateLeaves((leaf) => leaf.view?.resumeAutosave?.());
+  }
+
+  async closeAllLeaves(): Promise<void> {
+    const leaves: WorkspaceLeaf[] = [];
+    this.iterateLeaves((leaf) => leaves.push(leaf));
+    for (const leaf of leaves) await leaf.detach();
   }
 
   /**
@@ -1297,6 +1542,7 @@ export class Workspace extends Events {
       this.centerEl.appendChild(group.containerEl);
     }
     this.syncSidebarToggleButtons();
+    this.syncAdaptivePresentation();
     this.trigger("layout-change");
     return group;
   }
@@ -1310,10 +1556,14 @@ export class Workspace extends Events {
    */
   syncSidebarToggleButtons(): void {
     for (const group of this.groups) {
-      const leftLabel = this.leftSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
+      const leftLabel = this.isCompactMobile()
+        ? "Open files drawer"
+        : this.leftSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
       group.leftToggleEl.setAttribute("aria-label", leftLabel);
       group.leftToggleEl.title = leftLabel;
-      const rightLabel = this.rightSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
+      const rightLabel = this.isCompactMobile()
+        ? "Open details drawer"
+        : this.rightSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
       group.rightToggleEl.setAttribute("aria-label", rightLabel);
       group.rightToggleEl.title = rightLabel;
     }
@@ -1332,12 +1582,13 @@ export class Workspace extends Events {
     const i = this.groups.indexOf(group);
     this.groups.splice(i, 1);
     group.containerEl.remove();
-    this.activeGroup = this.groups[Math.max(0, i - 1)];
+    this.setActiveGroup(this.groups[Math.max(0, i - 1)]);
     this.trigger("layout-change");
   }
 
   setActiveGroup(group: TabGroup) {
     this.activeGroup = group;
+    this.syncAdaptivePresentation();
   }
 
   getActiveLeaf(): WorkspaceLeaf | null {
@@ -1533,16 +1784,18 @@ export class Workspace extends Events {
    * `onunload` still hard-detaches. The guarantee is "Geode won't destroy your
    * panes", not "no plugin can".
    */
-  unregisterViewFactory(viewType: string): void {
+  async unregisterViewFactory(viewType: string): Promise<void> {
     this.viewFactories.delete(viewType);
     if (!this.isDeferrableViewType(viewType)) {
-      this.detachLeavesOfType(viewType);
+      await this.detachLeavesOfType(viewType);
       return;
     }
+    const teardowns: Promise<void>[] = [];
     for (const leaf of this.getLeavesOfType(viewType)) {
       if (isDeferredView(leaf.view)) continue;
-      void leaf.setView(this.createDeferredView(this.captureLeafForDeferral(leaf, viewType)));
+      teardowns.push(leaf.setView(this.createDeferredView(this.captureLeafForDeferral(leaf, viewType))));
     }
+    await Promise.all(teardowns);
   }
 
   /**
@@ -1577,8 +1830,8 @@ export class Workspace extends Events {
   }
 
   /** Detach (close) every open leaf of this view type. */
-  detachLeavesOfType(viewType: string): void {
-    for (const leaf of this.getLeavesOfType(viewType)) leaf.detach();
+  async detachLeavesOfType(viewType: string): Promise<void> {
+    await Promise.all(this.getLeavesOfType(viewType).map((leaf) => leaf.detach()));
   }
 
   /**

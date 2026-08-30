@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Vault } from "../../src/renderer/vault";
 import { withPathLock } from "../../src/main/path-lock";
 import type { VaultFileEntry } from "../../src/main/preload";
+import { createElectronHost } from "../../src/renderer/host/electron-host";
 
 /**
  * Minimal in-memory `window.geode` stand-in, just enough surface for
@@ -75,13 +76,13 @@ function installFakeGeode(initialEntries: VaultFileEntry[] = []) {
     exists: vi.fn(async (path: string) => files.has(path) || folders.has(path)),
     onVaultEvent: vi.fn(() => {}),
   };
-  (globalThis as any).window = { geode };
+  (globalThis as any).window = { geode, hostServices: createElectronHost(geode as any) };
   return { geode, files, folders };
 }
 
 async function openTestVault(entries: VaultFileEntry[] = []) {
   const fake = installFakeGeode(entries);
-  const vault = new Vault();
+  const vault = new Vault(createElectronHost(fake.geode as any));
   await vault.open("/fake/vault");
   return { vault, ...fake };
 }

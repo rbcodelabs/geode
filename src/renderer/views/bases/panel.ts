@@ -15,6 +15,7 @@ export function openPanel(anchorEl: HTMLElement, build: (panel: Panel) => void, 
 
   const el = document.createElement("div");
   el.className = `bases-panel${extraClass ? ` ${extraClass}` : ""}`;
+  if (document.querySelector(".is-mobile")) el.classList.add("is-mobile-panel");
   const rect = anchorEl.getBoundingClientRect();
   el.style.left = `${rect.left}px`;
   el.style.top = `${rect.bottom + 4}px`;

@@ -145,10 +145,8 @@ export class CommandRegistry {
   }
 
   /** Install the global hotkey listener. */
-  attach(target: Document) {
-    target.addEventListener(
-      "keydown",
-      (e) => {
+  attach(target: Document): () => void {
+    const listener = (e: KeyboardEvent) => {
         const combo = eventToHotkey(e);
         if (!combo) return;
         const cmd = this.byHotkey.get(combo);
@@ -157,8 +155,8 @@ export class CommandRegistry {
           e.stopPropagation();
           run(cmd);
         }
-      },
-      true
-    );
+      };
+    target.addEventListener("keydown", listener, true);
+    return () => target.removeEventListener("keydown", listener, true);
   }
 }

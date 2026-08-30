@@ -162,6 +162,14 @@ function installFakeGeode(
       fs.files.set(path, data);
       return { mtime: 0, size: data.length };
     }),
+    replacePluginFiles: vi.fn(async (id: string, expectedManifest: string, replacement: { manifest: string; main: string; styles: string | null }) => {
+      const base = `.geode/plugins/${id}`;
+      if (fs.files.get(`${base}/manifest.json`) !== expectedManifest) throw new Error("PLUGIN_FILES_CHANGED");
+      fs.files.set(`${base}/manifest.json`, replacement.manifest);
+      fs.files.set(`${base}/main.js`, replacement.main);
+      if (replacement.styles === null) fs.files.delete(`${base}/styles.css`);
+      else fs.files.set(`${base}/styles.css`, replacement.styles);
+    }),
     readConfig: vi.fn(async (name: string) => fs.config.get(name) ?? null),
     writeConfig: vi.fn(async (name: string, data: unknown) => {
       fs.config.set(name, data);
@@ -178,6 +186,15 @@ const fakeApp = {
   commands: { add: vi.fn(), remove: vi.fn() },
   notify: vi.fn(),
 } as unknown as App;
+
+function mobileApp(overrides: Record<string, unknown> = {}): App {
+  return {
+    commands: { add: vi.fn(), remove: vi.fn() },
+    notify: vi.fn(),
+    host: { runtime: { runtime: "browser" } },
+    ...overrides,
+  } as unknown as App;
+}
 
 describe("PluginManager", () => {
   beforeEach(() => {
@@ -369,6 +386,7 @@ describe("PluginManager", () => {
     const app = {
       commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn(),
       workspace: {
+        isDeferrableViewType: vi.fn(() => true),
         registerViewFactory: vi.fn((_type: string, factory: () => any) => { viewFactory = factory; }),
         unregisterViewFactory: vi.fn(),
       },
@@ -603,6 +621,178 @@ describe("PluginManager", () => {
       expect(fs.config.get("plugin-quarantine")).toMatchObject({ foo: { boundary: "onload", message: "late onload boom" } });
       warn.mockRestore();
     });
+
+    it("mobile treats timeout as a failed generation and blocks every late registration", async () => {
+      const fs = installFakeGeode(["foo"]);
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { isDesktopOnly: false }));
+      fs.files.set(".geode/plugins/foo/main.js", `
+        const { Plugin } = require('geode');
+        module.exports.default = class extends Plugin {
+          async onload() {
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            try { this.addCommand({ id: 'late', name: 'Late', callback() {} }); } catch {}
+            try { this.registerView('late-view', () => ({})); } catch {}
+            try { this.registerDomEvent(globalThis.__lateElement, 'click', () => {}); } catch {}
+            this.registerEvent(() => globalThis.__pluginLog.push('late-event-cleaned'));
+            globalThis.__pluginLog.push('late-style-added');
+            this.register(() => globalThis.__pluginLog.push('late-style-removed'));
+          }
+        };
+      `);
+      (globalThis as any).__lateElement = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
+      const workspace = { isDeferrableViewType: vi.fn(() => true), registerViewFactory: vi.fn(), unregisterViewFactory: vi.fn(async () => {}) };
+      const app = mobileApp({ workspace });
+      const pm = new PluginManager(app, 5);
+      await pm.initialize();
+
+      await expect(pm.enable("foo")).rejects.toThrow(/did not finish/i);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(pm.isEnabled("foo")).toBe(false);
+      expect(pm.listQuarantined()).toMatchObject({ foo: { boundary: "onload-timeout" } });
+      expect((app.commands.add as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+      expect(workspace.registerViewFactory).not.toHaveBeenCalled();
+      expect((globalThis as any).__lateElement.addEventListener).not.toHaveBeenCalled();
+      expect((globalThis as any).__pluginLog).toEqual(["late-event-cleaned", "late-style-added", "late-style-removed"]);
+      expect(fs.config.get("plugins")).toBeUndefined();
+      delete (globalThis as any).__lateElement;
+    });
+  });
+
+  it("mobile reload rechecks the replacement manifest before reading its entrypoint", async () => {
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { isDesktopOnly: false }));
+    fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+    const app = mobileApp();
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+    const geode = (globalThis as any).window.geode;
+    geode.read.mockClear();
+    (globalThis as any).__replacementEvaluated = 0;
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { version: "2.0.0", isDesktopOnly: true }));
+    fs.files.set(".geode/plugins/foo/main.js", `globalThis.__replacementEvaluated++; ${mainJsSource("foo")}`);
+
+    await expect(pm.reload("foo")).rejects.toThrow(/Desktop only/);
+
+    expect((globalThis as any).__replacementEvaluated).toBe(0);
+    expect(geode.read.mock.calls.some(([path]: [string]) => path.endsWith("/main.js"))).toBe(false);
+    expect(pm.isEnabled("foo")).toBe(true);
+    delete (globalThis as any).__replacementEvaluated;
+  });
+
+  it("mobile update compiles without evaluating and runs replacement top-level exactly once", async () => {
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { isDesktopOnly: false }));
+    fs.files.set(".geode/plugins/foo/main.js", mainJsSource("foo"));
+    const pm = new PluginManager(mobileApp());
+    await pm.initialize();
+    await pm.enable("foo");
+    (globalThis as any).__replacementEvaluated = 0;
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { version: "2.0.0", isDesktopOnly: false }));
+    fs.files.set(".geode/plugins/foo/main.js", `globalThis.__replacementEvaluated++; ${mainJsSource("foo")}`);
+
+    await pm.reload("foo");
+
+    expect((globalThis as any).__replacementEvaluated).toBe(1);
+    expect(pm.isEnabled("foo")).toBe(true);
+    delete (globalThis as any).__replacementEvaluated;
+  });
+
+  it("mobile failed update atomically restores an absent stylesheet and the known-good generation", async () => {
+    const fs = installFakeGeode(["foo"]);
+    const oldManifest = manifestJson("foo", { isDesktopOnly: false });
+    const oldMain = mainJsSource("foo");
+    fs.files.set(".geode/plugins/foo/manifest.json", oldManifest);
+    fs.files.set(".geode/plugins/foo/main.js", oldMain);
+    const pm = new PluginManager(mobileApp());
+    await pm.initialize();
+    await pm.enable("foo");
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { version: "2.0.0", isDesktopOnly: false }));
+    fs.files.set(".geode/plugins/foo/main.js", throwingMainJsSource());
+    fs.files.set(".geode/plugins/foo/styles.css", ".new-style { color: red } ");
+
+    await expect(pm.reload("foo")).rejects.toThrow("boom during onload");
+
+    expect(fs.files.get(".geode/plugins/foo/manifest.json")).toBe(oldManifest);
+    expect(fs.files.get(".geode/plugins/foo/main.js")).toBe(oldMain);
+    expect(fs.files.has(".geode/plugins/foo/styles.css")).toBe(false);
+    expect(pm.isEnabled("foo")).toBe(true);
+  });
+
+  it("mobile rollback retries an injected pre-swap failure without exposing partial old files", async () => {
+    const fs = installFakeGeode(["foo"]);
+    const oldManifest = manifestJson("foo", { isDesktopOnly: false });
+    const oldMain = mainJsSource("foo");
+    fs.files.set(".geode/plugins/foo/manifest.json", oldManifest);
+    fs.files.set(".geode/plugins/foo/main.js", oldMain);
+    const pm = new PluginManager(mobileApp());
+    await pm.initialize();
+    await pm.enable("foo");
+    const geode = (globalThis as any).window.geode;
+    const atomicReplace = geode.replacePluginFiles.getMockImplementation();
+    geode.replacePluginFiles.mockRejectedValueOnce(new Error("injected staging failure")).mockImplementation(atomicReplace);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { version: "2.0.0", isDesktopOnly: true }));
+    fs.files.set(".geode/plugins/foo/main.js", "throw new Error('must never evaluate')");
+    fs.files.set(".geode/plugins/foo/styles.css", "new");
+
+    await expect(pm.reload("foo")).rejects.toThrow(/Desktop only/);
+
+    expect(geode.replacePluginFiles).toHaveBeenCalledTimes(2);
+    expect(fs.files.get(".geode/plugins/foo/manifest.json")).toBe(oldManifest);
+    expect(fs.files.get(".geode/plugins/foo/main.js")).toBe(oldMain);
+    expect(fs.files.has(".geode/plugins/foo/styles.css")).toBe(false);
+    expect(pm.isEnabled("foo")).toBe(true);
+  });
+
+  it("awaits owned plugin view teardown before the next generation starts", async () => {
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { isDesktopOnly: false }));
+    fs.files.set(".geode/plugins/foo/main.js", `
+      const { Plugin } = require('geode');
+      module.exports.default = class extends Plugin {
+        onload() { globalThis.__pluginLog.push('onload'); this.registerView('owned', () => ({})); }
+      };
+    `);
+    const workspace = {
+      isDeferrableViewType: vi.fn(() => true),
+      registerViewFactory: vi.fn(),
+      unregisterViewFactory: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        (globalThis as any).__pluginLog.push("closed");
+      }),
+    };
+    const app = mobileApp({ workspace });
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+    await pm.disable("foo", { persist: false });
+    await pm.enable("foo", { persist: false });
+
+    expect((globalThis as any).__pluginLog).toEqual(["onload", "closed", "onload"]);
+  });
+
+  it("rejects reserved or built-in plugin view types before mutating core factories or leaves", async () => {
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo", { isDesktopOnly: false }));
+    fs.files.set(".geode/plugins/foo/main.js", `
+      const { Plugin } = require('geode');
+      module.exports.default = class extends Plugin {
+        onload() { this.registerView('markdown', () => ({})); }
+      };
+    `);
+    const workspace = {
+      isDeferrableViewType: vi.fn(() => false),
+      registerViewFactory: vi.fn(),
+      unregisterViewFactory: vi.fn(async () => {}),
+      detachLeavesOfType: vi.fn(async () => {}),
+    };
+    const pm = new PluginManager(mobileApp({ workspace }));
+    await pm.initialize();
+
+    await expect(pm.enable("foo")).rejects.toThrow(/reserved or built-in view type "markdown"/);
+    expect(workspace.registerViewFactory).not.toHaveBeenCalled();
+    expect(workspace.detachLeavesOfType).not.toHaveBeenCalled();
   });
 
   it("disable() calls onunload(), drops the instance, and persists", async () => {

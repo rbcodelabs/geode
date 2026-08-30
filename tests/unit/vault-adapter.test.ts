@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Vault } from "../../src/renderer/vault";
-import { FileSystemAdapter } from "../../src/renderer/types";
+import { DataAdapter, FileSystemAdapter } from "../../src/renderer/types";
+import { createBrowserHost, createBrowserHostState } from "../../src/renderer/host/browser-host";
 import type { VaultFileEntry } from "../../src/main/preload";
+import { createElectronHost } from "../../src/renderer/host/electron-host";
 
 /**
  * Regression coverage for the bug where a plugin's
@@ -36,13 +38,13 @@ function installFakeGeode(initialEntries: VaultFileEntry[] = []) {
     exists: vi.fn(async (path: string) => files.has(path)),
     onVaultEvent: vi.fn(() => {}),
   };
-  (globalThis as any).window = { geode };
+  (globalThis as any).window = { geode, hostServices: createElectronHost(geode as any) };
   return { geode, files };
 }
 
 async function openTestVault(entries: VaultFileEntry[] = []) {
   const fake = installFakeGeode(entries);
-  const vault = new Vault();
+  const vault = new Vault(createElectronHost(fake.geode as any));
   await vault.open(ROOT);
   return { vault, ...fake };
 }
@@ -85,6 +87,18 @@ describe("Vault.adapter", () => {
   it("memoizes the instance so two successive reads return the same reference", async () => {
     const { vault } = await openTestVault();
     expect(vault.adapter).toBe(vault.adapter);
+  });
+
+  it("uses a non-filesystem DataAdapter on mobile without exposing a POSIX base path", async () => {
+    const host = createBrowserHost(createBrowserHostState({ files: { "Note.md": "mobile" } }));
+    const vault = new Vault(host);
+    await vault.open("managed://default");
+
+    expect(vault.adapter).toBeInstanceOf(DataAdapter);
+    expect(vault.adapter).not.toBeInstanceOf(FileSystemAdapter);
+    expect("basePath" in vault.adapter).toBe(false);
+    expect("getBasePath" in vault.adapter).toBe(false);
+    await expect(vault.adapter.exists("Note.md")).resolves.toBe(true);
   });
 });
 
