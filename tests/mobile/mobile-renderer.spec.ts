@@ -18,6 +18,13 @@ async function resetProofVault(page: Page): Promise<void> {
   await page.reload();
 }
 
+async function emulatePhoneSafeArea(page: Page): Promise<void> {
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setSafeAreaInsetsOverride", {
+    insets: { top: 47, right: 0, bottom: 34, left: 0 },
+  });
+}
+
 async function openExternalProofNote(page: Page): Promise<void> {
   await page.goto(externalVaultProofUrl);
   await page.evaluate(() => localStorage.clear());
@@ -185,6 +192,107 @@ test("@phone provides an accessible daily workspace with dismissible drawers", a
   await page.screenshot({ path: phoneScreenshot, animations: "disabled" });
   await testInfo.attach("phone-daily-workspace", { path: phoneScreenshot, contentType: "image/png" });
   expect(errors).toEqual([]);
+});
+
+test("@phone keeps drawers and settings inside the device safe area", async ({ page }, testInfo) => {
+  await emulatePhoneSafeArea(page);
+  await resetProofVault(page);
+
+  const navigation = page.getByRole("navigation", { name: "Mobile navigation" });
+  const backdrop = page.locator(".mobile-drawer-backdrop");
+  const leftDrawer = page.locator(".workspace-sidebar.mod-left");
+  const rightDrawer = page.locator(".workspace-sidebar.mod-right");
+
+  await navigation.getByRole("button", { name: "Files" }).click();
+  await expect(leftDrawer).toHaveClass(/is-mobile-drawer-open/);
+  expect((await leftDrawer.boundingBox())!.y).toBeGreaterThanOrEqual(47);
+  expect((await backdrop.boundingBox())!.y).toBeGreaterThanOrEqual(47);
+  const filesScreenshot = testInfo.outputPath("phone-safe-area-files-drawer.png");
+  await page.screenshot({ path: filesScreenshot, animations: "disabled" });
+  await testInfo.attach("phone-safe-area-files-drawer", { path: filesScreenshot, contentType: "image/png" });
+  await leftDrawer.getByRole("button", { name: "Close files drawer" }).click();
+
+  await navigation.getByRole("button", { name: "Details" }).click();
+  await expect(rightDrawer).toHaveClass(/is-mobile-drawer-open/);
+  expect((await rightDrawer.boundingBox())!.y).toBeGreaterThanOrEqual(47);
+  const detailsScreenshot = testInfo.outputPath("phone-safe-area-details-drawer.png");
+  await page.screenshot({ path: detailsScreenshot, animations: "disabled" });
+  await testInfo.attach("phone-safe-area-details-drawer", { path: detailsScreenshot, contentType: "image/png" });
+  await rightDrawer.getByRole("button", { name: "Close details drawer" }).click();
+
+  await navigation.getByRole("button", { name: "More" }).click();
+  await page.locator(".menu.mod-mobile-more").getByText("Settings", { exact: true }).click();
+
+  const modal = page.locator(".modal.mod-settings");
+  const modalContent = modal.locator(".modal-content");
+  const tabHeader = modal.locator(".vertical-tab-header");
+  const content = modal.locator(".vertical-tab-content-container");
+  const modalBox = (await modal.boundingBox())!;
+  const headerBox = (await tabHeader.boundingBox())!;
+  const contentBox = (await content.boundingBox())!;
+
+  expect(modalBox.x).toBeGreaterThanOrEqual(8);
+  expect(modalBox.y).toBeGreaterThanOrEqual(47);
+  expect(modalBox.x + modalBox.width).toBeLessThanOrEqual(page.viewportSize()!.width - 8);
+  expect(modalBox.y + modalBox.height).toBeLessThanOrEqual(page.viewportSize()!.height - 34);
+  expect(modalBox.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 18);
+  expect(await modalContent.evaluate((element) => getComputedStyle(element).flexDirection)).toBe("column");
+  expect(headerBox.width).toBeGreaterThanOrEqual(modalBox.width - 2);
+  expect(headerBox.height).toBeLessThan(100);
+  expect(contentBox.width).toBeGreaterThanOrEqual(modalBox.width - 34);
+
+  const appearanceTab = tabHeader.getByText("Appearance", { exact: true });
+  const communityTab = tabHeader.getByText("Community plugins & themes", { exact: true });
+  expect((await appearanceTab.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  expect((await communityTab.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await communityTab.click();
+  await expect(communityTab).toHaveClass(/is-active/);
+  await expect(content.getByRole("heading", { name: "Web Viewer" })).toBeVisible();
+  await appearanceTab.click();
+
+  for (const item of await content.locator(".setting-item").all()) {
+    const itemBox = (await item.boundingBox())!;
+    const controlBox = (await item.locator(".setting-item-control").boundingBox())!;
+    expect(controlBox.x).toBeGreaterThanOrEqual(itemBox.x);
+    expect(controlBox.x + controlBox.width).toBeLessThanOrEqual(itemBox.x + itemBox.width + 1);
+  }
+
+  const screenshot = testInfo.outputPath("phone-safe-area-settings.png");
+  await page.screenshot({ path: screenshot, animations: "disabled" });
+  await testInfo.attach("phone-safe-area-settings", { path: screenshot, contentType: "image/png" });
+});
+
+test("@phone opens existing and new notes with touch inside the device safe area", async ({ page }, testInfo) => {
+  await emulatePhoneSafeArea(page);
+  await resetProofVault(page);
+
+  const navigation = page.getByRole("navigation", { name: "Mobile navigation" });
+  const leftDrawer = page.locator(".workspace-sidebar.mod-left");
+  await navigation.getByRole("button", { name: "Files" }).tap();
+  const welcomeRow = leftDrawer.locator('.nav-file-title[data-path="Welcome.md"]');
+  await expect(welcomeRow).toBeVisible();
+  expect.soft((await welcomeRow.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  await welcomeRow.tap();
+  await expect(leftDrawer).not.toHaveClass(/is-mobile-drawer-open/);
+  await expect.poll(() => page.evaluate(() => (window as any).app.workspace.getActiveFile()?.path))
+    .toBe("Welcome.md");
+  await expect(page.locator(".workspace-tabs.is-mobile-center-active .cm-content")).toContainText("Welcome");
+  const existingGroup = page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active");
+  expect.soft((await existingGroup.boundingBox())!.y).toBeGreaterThanOrEqual(47);
+  const existingScreenshot = testInfo.outputPath("phone-safe-area-existing-note.png");
+  await page.screenshot({ path: existingScreenshot, animations: "disabled" });
+  await testInfo.attach("phone-safe-area-existing-note", { path: existingScreenshot, contentType: "image/png" });
+
+  await navigation.getByRole("button", { name: "New note" }).tap();
+  await expect.poll(() => page.evaluate(() => (window as any).app.workspace.getActiveFile()?.path))
+    .toBe("Untitled.md");
+  const newGroup = page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active");
+  await expect(newGroup.locator(".cm-editor")).toBeVisible();
+  expect.soft((await newGroup.boundingBox())!.y).toBeGreaterThanOrEqual(47);
+  const newScreenshot = testInfo.outputPath("phone-safe-area-new-note.png");
+  await page.screenshot({ path: newScreenshot, animations: "disabled" });
+  await testInfo.attach("phone-safe-area-new-note", { path: newScreenshot, contentType: "image/png" });
 });
 
 test("@phone keeps adaptive presentation out of persisted workspace state", async ({ page }) => {
