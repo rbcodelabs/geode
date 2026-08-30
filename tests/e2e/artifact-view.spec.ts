@@ -81,8 +81,9 @@ test("opens a static artifact in a contained, networkless ephemeral guest", asyn
 
     await expect(view.locator(".artifact-view-diagnostics-btn")).toContainText(/Diagnostics [1-9]/);
     await view.locator(".artifact-view-diagnostics-btn").click();
-    await expect(view.locator(".artifact-view-diagnostic.is-error", { hasText: "artifact runtime proof" }))
-      .toBeVisible();
+    const runtimeDiagnostics = view.locator(".artifact-view-diagnostic.is-error", { hasText: "artifact runtime proof" });
+    await expect.poll(() => runtimeDiagnostics.count()).toBeGreaterThanOrEqual(1);
+    await expect(runtimeDiagnostics.first()).toBeVisible();
 
     await view.locator('[data-viewport="mobile"]').click();
     await expect(frame).toHaveCSS("width", "390px");
