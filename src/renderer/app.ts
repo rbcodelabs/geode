@@ -358,12 +358,25 @@ class SettingsModal extends Modal {
   constructor(private geodeApp: App) {
     super(geodeApp);
     this.modalEl.classList.add("mod-settings");
+    this.modalEl.setAttribute("role", "dialog");
+    this.modalEl.setAttribute("aria-modal", "true");
+    this.modalEl.setAttribute("aria-label", "Settings");
+    this.modalEl.tabIndex = -1;
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "settings-close-button";
+    closeButton.setAttribute("aria-label", "Close Settings");
+    closeButton.textContent = "Done";
+    closeButton.addEventListener("click", () => this.close());
+    this.modalEl.prepend(closeButton);
   }
 
   onOpen(): void {
     this.contentEl.empty();
     this.navEl = document.createElement("div");
     this.navEl.className = "vertical-tab-header";
+    this.navEl.setAttribute("role", "tablist");
+    this.navEl.setAttribute("aria-label", "Settings categories");
     this.contentContainerEl = document.createElement("div");
     this.contentContainerEl.className = "vertical-tab-content-container";
     this.contentEl.append(this.navEl, this.contentContainerEl);
@@ -446,9 +459,12 @@ class SettingsModal extends Modal {
     this.navEl.empty();
 
     const addNavItem = (id: string, label: string, container: HTMLElement) => {
-      const item = document.createElement("div");
+      const item = document.createElement("button");
+      item.type = "button";
       item.className = "vertical-tab-nav-item";
       item.textContent = label;
+      item.setAttribute("role", "tab");
+      item.setAttribute("aria-selected", String(id === this.activeTabId));
       item.classList.toggle("is-active", id === this.activeTabId);
       item.addEventListener("click", () => this.activateTab(id));
       container.appendChild(item);
@@ -782,6 +798,7 @@ class SettingsModal extends Modal {
     const { control } = this.addRow(container, label);
     const input = document.createElement("input");
     input.type = "checkbox";
+    input.setAttribute("aria-label", label);
     input.checked = value;
     input.addEventListener("change", () => onChange(input.checked));
     control.appendChild(input);
@@ -797,6 +814,7 @@ class SettingsModal extends Modal {
     const { control } = this.addRow(container, label);
     const select = document.createElement("select");
     select.className = "dropdown";
+    select.setAttribute("aria-label", label);
     const def = document.createElement("option");
     def.value = "";
     def.textContent = "Default";
@@ -843,6 +861,7 @@ class SettingsModal extends Modal {
     const { control } = this.addRow(container, label);
     const input = document.createElement("input");
     input.type = "text";
+    input.setAttribute("aria-label", label);
     input.className = "web-view-address";
     input.value = value;
     input.spellcheck = false;
@@ -1337,7 +1356,11 @@ export class App {
 
     this.workspace = new Workspace(this, main);
     this.statusBar = new StatusBar(this, shell);
-    shell.appendChild(this.createMobileNavigation());
+    const mobileNavigation = this.createMobileNavigation();
+    mobileNavigation.inert = true;
+    mobileNavigation.setAttribute("aria-busy", "true");
+    shell.appendChild(mobileNavigation);
+    this.trackMobileVisualViewport();
 
     // Sidebar views
     this.workspace.leftSidebar.addView(new FileExplorerView(this));
@@ -1451,6 +1474,16 @@ export class App {
 
     // Persist the initial layout (restored + any onLayoutReady-opened panes).
     this.scheduleSaveLayout();
+
+    // The shell renders before asynchronous layout/plugin startup finishes.
+    // Keep primary mobile actions out of the hit-test/accessibility tree until
+    // their target leaves exist, then place non-editing focus in the web view
+    // so the first physical tap is an activation rather than a focus-only tap.
+    mobileNavigation.inert = false;
+    mobileNavigation.removeAttribute("aria-busy");
+    if (document.body.classList.contains("is-mobile")) {
+      mobileNavigation.querySelector<HTMLButtonElement>('[aria-label="Files"]')?.focus({ preventScroll: true });
+    }
 
     // Check opt-in community items for updates shortly after startup, off the
     // critical path. No-op unless a tracked item has auto-update enabled.
@@ -2813,6 +2846,14 @@ export class App {
       const text = document.createElement("span");
       text.textContent = label;
       button.appendChild(text);
+      button.addEventListener("touchend", (event) => {
+        // WKWebView can consume the first compatibility click while moving
+        // focus into web content after launch. A completed touch is already
+        // the user's activation; preventing its synthetic click keeps the
+        // action exactly-once while keyboard/mouse activation stays intact.
+        event.preventDefault();
+        action(button);
+      }, { passive: false });
       button.addEventListener("click", () => action(button));
       navigation.appendChild(button);
     };
@@ -2841,6 +2882,21 @@ export class App {
       ], { anchor: button, horizontalAlign: "end", menuClass: "mod-mobile-more" });
     });
     return navigation;
+  }
+
+  private trackMobileVisualViewport(): void {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => {
+      const offset = document.body.classList.contains("is-mobile")
+        ? Math.max(0, viewport.offsetTop + window.scrollY)
+        : 0;
+      document.documentElement.style.setProperty("--geode-visual-viewport-top", `${offset}px`);
+    };
+    viewport.addEventListener("resize", update, { passive: true });
+    viewport.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("scroll", update, { passive: true });
+    update();
   }
 
   openCommandPalette() {

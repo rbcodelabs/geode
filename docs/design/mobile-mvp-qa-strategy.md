@@ -1,6 +1,6 @@
 # Geode Mobile MVP QA Strategy
 
-**Date:** 2026-08-28
+**Date:** 2026-08-30
 **Status:** Proposed
 **Scope:** Full-featured Geode MVP for iPhone and iPad, while preserving the Electron desktop product
 
@@ -16,10 +16,12 @@ The repository currently has:
 
 - A Node-based Vitest suite under `tests/unit` with substantial coverage of vault behavior, metadata, plugins, graph, Canvas, Bases, and pure renderer logic.
 - A large Playwright Electron suite under `tests/e2e`, run serially with one retry. It exercises real Electron windows, filesystem fixtures, CodeMirror Live Preview, graph, Canvas, Bases, plugins, Web Viewer, binary embeds, and workspace persistence.
-- A renderer that calls one `window.geode` bridge defined in `src/main/preload.ts`. This is a useful seam for a platform-neutral host contract, although the current exported type is inferred from Electron implementation details.
-- Regression coverage for own-write watcher echoes versus genuine external note changes, but not a complete concurrent-edit policy.
-- No iOS project or XCTest/XCUITest target, no Capacitor dependencies, no browser-only renderer integration harness, no device matrix, and no mobile CI job.
-- Almost no mobile/responsive treatment in `styles/app.css`; current E2E gestures are predominantly mouse and keyboard events.
+- A shared renderer behind platform host adapters, including the first-party Capacitor managed-vault bridge for app-local storage and security-scoped external Files roots.
+- Browser-renderer mobile coverage for phone/tablet layouts, touch workflows, reconciliation, and plugin admission, plus native Swift filesystem and migration coverage.
+- A shared-scheme `AppUITests` XCUITest target and the exact ephemeral-simulator gate `scripts/ios-mvp-acceptance.sh`. The recorded final gate passed three consecutive iPhone 17 Pro simulator runs with 27/27 tests each (81/81 aggregate).
+- A five-action phone bottom navigation surface (Files, Search, New note, Details, More), native safe-area assertions, and responsive editor/drawer/Settings layouts.
+- Physical-iPhone confirmation that canonicalizing the `/var` container alias to `/private/var` prevents a synthetic duplicate `Vault` root and keeps `Welcome.md` and new notes directly accessible. This is managed-local-vault evidence, not File Provider or release-matrix proof.
+- Regression coverage for own-write watcher echoes and provider reconciliation/conflict preservation. Large-vault paging, complete File Provider lifecycle evidence, and mobile CI remain open gates.
 
 This strategy follows proposed [ADR-0007](../adr/0007-mobile-runtime-and-platform-boundary.md): the renderer receives a capability-based `HostServices` contract, with `ElectronHostServices` and `CapacitorHostServices` implementations. Native vault and Web Viewer behavior is supplied by Geode Swift plugins. The ADR remains proposed until Slice 0 proves the boundary and the product selects a `ThreadExecutionProvider`.
 
@@ -74,6 +76,8 @@ Required journeys at iPhone and iPad viewport classes:
 ### 3. Native iOS vault bridge
 
 Use XCTest against temporary folders for deterministic adapter tests and a small UI/device suite against document-picker/File-provider flows.
+
+The current managed-core gate is defined by [ADR-0010](../adr/0010-native-ios-managed-core-acceptance.md) and run with `scripts/ios-mvp-acceptance.sh`. Its three consecutive ephemeral-simulator passes cover native adapter/vault identity, root shape, exact persisted bytes, relaunch, primary touch flows, the five-action bottom navigation, safe areas, responsive Settings, legacy-wrapper migration, and bounded JavaScript/native errors. The 81/81 aggregate simulator result and the physical-iPhone `/var` versus `/private/var` canonical-path confirmation are acceptance evidence for the managed local vault only; they do not satisfy the iCloud Drive, third-party File Provider, physical iPad, accessibility, or production-signing gates below.
 
 #### Security-scoped bookmark and permission behavior
 
@@ -135,6 +139,8 @@ Shared rule engines stay in unit tests; mobile integration focuses on gestures, 
 - Gesture tests assert both resulting model/file state and UI state. Pixel movement alone is too brittle and does not prove persistence.
 
 ### 7. Plugin compatibility gating
+
+The implemented native admission boundary discovers and reads plugin files through the first-party managed-vault bridge for both managed and external Files roots. It validates plugin-relative paths before I/O, blocks desktop-only and unsupported module shapes before entrypoint evaluation, and coordinates exact manifest/entrypoint/stylesheet swaps with rollback. This is native boundary coverage, not proof that arbitrary community plugins are production-ready.
 
 - A manifest marked `isDesktopOnly: true` is blocked before its entry module is read or evaluated.
 - Static/dynamic use of `require`, Node built-ins, Electron, child processes, `FileSystemAdapter`, popout windows, and status-bar-only assumptions follows the declared compatibility policy and yields actionable UI.

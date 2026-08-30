@@ -120,36 +120,21 @@ DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
   -derivedDataPath /private/tmp/geode-ios-debug-derived build
 ```
 
-The Debug build includes an opt-in simulator smoke proof. With an iPhone 17 Pro
-simulator booted, the following exact commands install the app, edit and persist
-`Welcome.md` through the real WKWebView/CodeMirror path, exercise background and
-foreground lifecycle callbacks, terminate the process, and verify the persisted
-value after a cold relaunch:
+The native managed-core acceptance gate creates an ephemeral iPhone 17 Pro
+simulator, builds the shared `App` scheme, and runs the XCUITest journey three
+times by default:
 
 ```bash
-DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
-  xcrun simctl install booted \
-  /private/tmp/geode-ios-debug-derived/Build/Products/Debug-iphonesimulator/App.app
-DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
-  xcrun simctl launch --console booted com.rbcodelabs.geode \
-  --geode-native-smoke-edit
-DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
-  xcrun simctl launch booted com.apple.mobilesafari
-DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
-  xcrun simctl launch --console booted com.rbcodelabs.geode
-DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
-  xcrun simctl terminate booted com.rbcodelabs.geode
-DEVELOPER_DIR=/Applications/Xcode-26.5.0.app/Contents/Developer \
-  xcrun simctl launch --console booted com.rbcodelabs.geode \
-  --geode-native-smoke-verify
+scripts/ios-mvp-acceptance.sh
 ```
 
-The smoke runner retries only its explicit pre-load `not-ready` result and polls
-the persisted value for at most five seconds. Its JSON result includes the
-native adapter/vault identity, exact text and binary payloads, recoverable-trash
-result, and path-escape/collision error codes. Capacitor may log one early
-`JS Eval error` before `WebView loaded`; treat a missing
-`GEODE_NATIVE_SMOKE_RESULT` or any `GEODE_NATIVE_SMOKE_ERROR` as a failed proof.
+The checked-in runner uses the native Capacitor adapter and real
+WKWebView/CodeMirror interaction. It proves `managed://default`, root-level note
+discovery without a synthetic `Vault` wrapper, touch-open/edit/new-note flows,
+exact bytes after process termination and relaunch, safe-area containment, and
+zero captured JavaScript/native smoke errors. The recorded final simulator gate
+passed three consecutive runs with 27/27 tests each (81/81 aggregate). Result
+bundles and screenshots are retained under ignored `ios-mvp-artifacts/` paths.
 
 `dist/mobile/` is the self-contained web directory bundled by Capacitor. The
 browser build intentionally keeps a localStorage-backed proof adapter for
@@ -165,6 +150,12 @@ recoverable, normally hidden `.geode-trash` area under the active root. Renderer
 and plugin APIs receive only normalized vault-relative paths and stable opaque
 vault identities—never absolute URLs or bookmark bytes. Security-scoped access
 is released on vault close and scene disconnect.
+
+The phone workspace uses a five-action bottom navigation bar—Files, Search, New
+note, Details, and More—contained within the native safe areas. Editor, drawers,
+dialogs, and Settings respond to compact phone widths and wider tablet layouts;
+Settings keeps its primary controls reachable above the home indicator and
+software keyboard.
 
 Each trash record contains the original vault-relative path, trash timestamp,
 and untouched payload bytes. Slice 1C preserves everything needed for recovery;
@@ -186,10 +177,13 @@ original path and writes the local editor text to a collision-safe
 `(Geode conflict …)` sibling. If that copy fails, the local text remains in
 device recovery storage and is restored read-only after relaunch; if device
 recovery storage also rejects the write, the editor stays read-only with an
-explicit memory-only warning until the user retries. Real iCloud
-two-device evidence, third-party-provider eviction/re-download and offline
-behavior, delegate-level picker automation, and physical-device validation
-remain Slice 5B2/release gates.
+explicit memory-only warning until the user retries. A physical iPhone pass
+confirmed that canonicalizing the `/var` app-container alias to `/private/var`
+keeps managed-vault entries at the real root: `Welcome.md` and newly created
+notes open without a duplicate `Vault` subtree. Real iCloud two-device evidence,
+third-party-provider eviction/re-download and offline behavior, delegate-level
+picker automation, and the broader physical-device matrix remain Slice
+5B2/release gates.
 
 The current Capacitor adapter obtains that authoritative snapshot through one
 native recursive `list` call. Renderer application is yielded in bounded

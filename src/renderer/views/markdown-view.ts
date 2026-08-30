@@ -98,6 +98,9 @@ export class MarkdownView implements View {
     this.titleEl = document.createElement("div");
     this.titleEl.className = "view-header-title";
     this.titleEl.contentEditable = "plaintext-only";
+    this.titleEl.setAttribute("role", "textbox");
+    this.titleEl.setAttribute("aria-label", "Note title");
+    this.titleEl.setAttribute("aria-multiline", "false");
     this.titleEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -172,7 +175,7 @@ export class MarkdownView implements View {
     this.lastSavedText = text;
     this.buildEditor(text);
     if (this.mode === "reading") await this.renderReading();
-    this.applyMode();
+    this.applyMode(!document.body.classList.contains("is-mobile"));
   }
 
   /** Enter the same title-editing flow used after creating an Untitled note. */
@@ -281,6 +284,9 @@ export class MarkdownView implements View {
       ],
     });
     this.editor = new EditorView({ state, parent: this.editorHostEl });
+    this.editor.contentDOM.setAttribute("role", "textbox");
+    this.editor.contentDOM.setAttribute("aria-label", "Note editor");
+    this.editor.contentDOM.setAttribute("aria-multiline", "true");
   }
 
   private wikilinkAt(text: string, pos: number): string | null {
@@ -498,11 +504,11 @@ export class MarkdownView implements View {
     this.applyMode();
   }
 
-  private applyMode() {
+  private applyMode(focusEditor = true) {
     const editing = this.mode !== "reading";
     this.editorHostEl.style.display = editing ? "" : "none";
     this.readingEl.style.display = editing ? "none" : "";
-    if (editing) this.editor?.focus();
+    if (editing && focusEditor) this.editor?.focus();
   }
 
   private async renderReading() {
@@ -611,7 +617,7 @@ export class MarkdownView implements View {
   }
 
   onOpen(): void {
-    if (this.mode !== "reading") this.editor?.focus();
+    if (this.mode !== "reading" && !document.body.classList.contains("is-mobile")) this.editor?.focus();
   }
 
   async onClose(): Promise<void> {

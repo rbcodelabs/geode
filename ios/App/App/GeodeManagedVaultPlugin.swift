@@ -25,6 +25,10 @@ private struct ManagedVaultFailure: Error {
     static let io = ManagedVaultFailure(code: "IO_FAILURE", message: "Managed-vault I/O failed")
     static let payloadTooLarge = ManagedVaultFailure(code: "PAYLOAD_TOO_LARGE", message: "Binary payload exceeds the 32 MiB bridge limit")
     static let contentUnavailable = ManagedVaultFailure(code: "CONTENT_UNAVAILABLE", message: "Provider content is not currently available")
+    static let migrationRecovery = ManagedVaultFailure(
+        code: "MIGRATION_RECOVERY_REQUIRED",
+        message: "The legacy managed vault could not be migrated safely; resolve the migration issue before reopening it"
+    )
 
     static func vault(_ code: String, _ message: String, state: String, id: String, name: String) -> ManagedVaultFailure {
         ManagedVaultFailure(code: code, message: message, state: state, vaultId: id, vaultName: name)
@@ -91,6 +95,7 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
 #if DEBUG
         methods.append(CAPPluginMethod(name: "debugProbe", returnType: CAPPluginReturnPromise))
         methods.append(CAPPluginMethod(name: "debugExternalVaultProbe", returnType: CAPPluginReturnPromise))
+        methods.append(CAPPluginMethod(name: "debugAcceptanceSnapshot", returnType: CAPPluginReturnPromise))
 #endif
         return methods.compactMap { $0 }
     }()
@@ -109,6 +114,7 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
 #if DEBUG
     private var debugAccessStarts = 0
     private var debugAccessStops = 0
+    private var acceptanceFixtureError: String?
 #endif
 
     private var managedVaultRoot: URL {
@@ -207,6 +213,7 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             let id = call.getString("id") ?? "managed://default"
             if id == "managed://default" {
                 let root = try self.managedVaultRoot
+                try self.migrateLegacyManagedVaultIfNeeded(at: root)
                 try self.prepareVault(at: root, createWelcome: true)
                 try self.updateLaunchVault(id)
                 self.activate(root: root, id: id, accessURL: nil)
@@ -221,7 +228,9 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
         perform(call) {
             let id = call.getString("id") ?? "managed://default"
             if id == "managed://default" {
-                try self.prepareVault(at: self.managedVaultRoot, createWelcome: true)
+                let root = try self.managedVaultRoot
+                try self.migrateLegacyManagedVaultIfNeeded(at: root)
+                try self.prepareVault(at: root, createWelcome: true)
             } else {
                 try self.checkExternalVault(try self.record(id))
             }
@@ -813,6 +822,22 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
         }
     }
 
+    private func migrateLegacyManagedVaultIfNeeded(at root: URL) throws {
+        guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw ManagedVaultFailure.unavailable
+        }
+        do {
+            _ = try LegacyManagedVaultMigration(root: root, applicationSupport: support).migrateIfNeeded()
+        } catch let migrationError as LegacyManagedVaultMigration.MigrationError {
+#if DEBUG
+            NSLog("GEODE_LEGACY_MANAGED_VAULT_MIGRATION_ERROR %@", String(describing: migrationError))
+#endif
+            throw ManagedVaultFailure.migrationRecovery
+        } catch {
+            throw ManagedVaultFailure.io
+        }
+    }
+
     private func validatedURL(_ path: String) throws -> URL {
         guard !path.isEmpty,
               !path.contains("\0"),
@@ -863,13 +888,15 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
         }
         var result: [ManagedVaultEntry] = []
         while let url = enumerator.nextObject() as? URL {
-            let relative = String(url.path.dropFirst(root.path.count + 1))
-            if relative == trashName || relative.hasPrefix(trashName + "/") {
+            let values = try url.resourceValues(forKeys: Set(keys))
+            if values.isSymbolicLink == true {
                 enumerator.skipDescendants()
                 continue
             }
-            let values = try url.resourceValues(forKeys: Set(keys))
-            if values.isSymbolicLink == true {
+            let relative: String
+            do { relative = try CanonicalVaultPath.relative(url, within: root) }
+            catch { throw ManagedVaultFailure.invalidPath }
+            if relative == trashName || relative.hasPrefix(trashName + "/") {
                 enumerator.skipDescendants()
                 continue
             }
@@ -893,7 +920,9 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
 
     private func coordinatedExists(_ url: URL) throws -> Bool {
         let root = try vaultRoot
-        let relative = String(url.path.dropFirst(root.path.count + 1))
+        let relative: String
+        do { relative = try CanonicalVaultPath.relative(url, within: root) }
+        catch { throw ManagedVaultFailure.invalidPath }
         var coordinationError: NSError?
         var result = false
         NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: root, options: [], error: &coordinationError) { coordinated in
@@ -1127,6 +1156,125 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
     }
 
 #if DEBUG
+    private static var acceptanceMode: String? {
+#if targetEnvironment(simulator)
+        let process = ProcessInfo.processInfo
+        let environment = process.environment["GEODE_IOS_MVP_ACCEPTANCE"]
+        if environment == "seed", process.arguments.contains("--geode-ios-mvp-acceptance-seed") { return "seed" }
+        if environment == "verify", process.arguments.contains("--geode-ios-mvp-acceptance-verify") { return "verify" }
+        if environment == "legacy", process.arguments.contains("--geode-ios-mvp-acceptance-legacy") { return "legacy" }
+#endif
+        return nil
+    }
+
+    func prepareManagedCoreAcceptanceFixtureIfRequested() {
+        guard let mode = Self.acceptanceMode, mode == "seed" || mode == "legacy" else { return }
+        do {
+            releaseActiveAccess()
+            let root = try managedVaultRoot
+            if fileManager.fileExists(atPath: root.path) { try fileManager.removeItem(at: root) }
+            if mode == "legacy" {
+                if let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                    try? fileManager.removeItem(at: support.appendingPathComponent("GeodeLegacyManagedVaultMigration-v1.json"))
+                    try? fileManager.removeItem(at: support.appendingPathComponent("GeodeLegacyManagedVaultMigration-v1.complete"))
+                }
+                let documents = root.deletingLastPathComponent()
+                for item in (try? fileManager.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? []
+                where item.lastPathComponent.hasPrefix("Geode Legacy Vault Backup ") {
+                    try? fileManager.removeItem(at: item)
+                }
+            }
+            try saveRegistry(ExternalVaultRegistry())
+            try prepareVault(at: root, createWelcome: mode == "seed")
+            let fixtureRoot: URL
+            if mode == "legacy" {
+                fixtureRoot = root.appendingPathComponent("Vault", isDirectory: true)
+                try fileManager.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+                try Data("# Welcome to Geode Mobile\n".utf8)
+                    .write(to: fixtureRoot.appendingPathComponent("Welcome.md"), options: .atomic)
+                try Data("Preexisting root note".utf8)
+                    .write(to: root.appendingPathComponent("Untitled.md"), options: .atomic)
+                try Data("geode-legacy-managed-wrapper-v1".utf8)
+                    .write(to: fixtureRoot.appendingPathComponent(".geode-legacy-managed-wrapper-fixture"), options: .atomic)
+            } else {
+                fixtureRoot = root
+            }
+            let record = fixtureRoot.appendingPathComponent(trashName, isDirectory: true)
+                .appendingPathComponent("11111111-1111-4111-8111-111111111111", isDirectory: true)
+            try fileManager.createDirectory(at: record, withIntermediateDirectories: true)
+            try Data("discarded fixture bytes".utf8).write(to: record.appendingPathComponent("payload"), options: .atomic)
+            try Data("{\"originalPath\":\"Discarded.md\"}".utf8)
+                .write(to: record.appendingPathComponent("metadata.json"), options: .atomic)
+            acceptanceFixtureError = nil
+        } catch {
+            acceptanceFixtureError = error.localizedDescription
+            NSLog("GEODE_IOS_MVP_FIXTURE_ERROR %@", error.localizedDescription)
+        }
+    }
+
+    private func managedCoreAcceptanceSnapshot() throws -> JSObject {
+        guard let mode = Self.acceptanceMode else { throw ManagedVaultFailure.unavailable }
+        let root = try managedVaultRoot
+        let visibleEntries = try enumerateEntries(root)
+        let rootEntries = visibleEntries.map(\.path).filter { !$0.contains("/") }.sorted()
+        var bytes: JSObject = [:]
+        var totalBytes = 0
+        for entry in visibleEntries where !entry.isFolder && entry.size <= 64 * 1024 && totalBytes + entry.size <= 256 * 1024 {
+            let data = try Data(contentsOf: root.appendingPathComponent(entry.path))
+            if let value = String(data: data, encoding: .utf8) {
+                bytes[entry.path] = value
+                totalBytes += data.count
+            }
+        }
+        let trash = root.appendingPathComponent(trashName, isDirectory: true)
+        let trashChildren = (try? fileManager.contentsOfDirectory(atPath: trash.path)) ?? []
+        let trashRecords: [JSObject] = trashChildren.sorted().compactMap { identifier in
+            let record = trash.appendingPathComponent(identifier, isDirectory: true)
+            guard let payload = try? Data(contentsOf: record.appendingPathComponent("payload")),
+                  let metadata = try? Data(contentsOf: record.appendingPathComponent("metadata.json")) else { return nil }
+            return [
+                "id": identifier,
+                "payload": String(data: payload, encoding: .utf8) ?? "",
+                "metadata": String(data: metadata, encoding: .utf8) ?? ""
+            ]
+        }
+        let backups = ((try? fileManager.contentsOfDirectory(
+            at: root.deletingLastPathComponent(),
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )) ?? []).filter { $0.lastPathComponent.hasPrefix("Geode Legacy Vault Backup ") }
+        let migrationCompleted = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            .map { fileManager.fileExists(atPath: $0.appendingPathComponent("GeodeLegacyManagedVaultMigration-v1.complete").path) }
+            ?? false
+        let snapshot: JSObject = [
+            "mode": mode,
+            "adapter": "capacitor-managed-vault",
+            "vault": activeVaultId ?? "inactive",
+            "rootEntries": rootEntries,
+            "entries": visibleEntries.map(\.path),
+            "bytes": bytes,
+            "trashExists": fileManager.fileExists(atPath: trash.path),
+            "trashNonempty": !trashChildren.isEmpty,
+            "trashRecords": trashRecords,
+            "listedTrash": visibleEntries.contains { $0.path == trashName || $0.path.hasPrefix(trashName + "/") },
+            "legacyWrapperExists": fileManager.fileExists(atPath: root.appendingPathComponent("Vault").path),
+            "legacyBackupCount": backups.count,
+            "legacyMigrationCompleted": migrationCompleted,
+            "nativeErrors": acceptanceFixtureError.map { [$0] } ?? []
+        ]
+        return snapshot
+    }
+
+    func managedCoreAcceptanceSnapshot(_ completion: @escaping (Result<JSObject, Error>) -> Void) {
+        ioQueue.async {
+            do { completion(.success(try self.managedCoreAcceptanceSnapshot())) }
+            catch { completion(.failure(error)) }
+        }
+    }
+
+    @objc func debugAcceptanceSnapshot(_ call: CAPPluginCall) {
+        perform(call) { try self.managedCoreAcceptanceSnapshot() }
+    }
+
     @objc func debugExternalVaultProbe(_ call: CAPPluginCall) {
         perform(call) {
             let mode = call.getString("mode") ?? "edit"

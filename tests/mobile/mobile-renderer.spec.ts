@@ -130,7 +130,11 @@ test("@phone provides an accessible daily workspace with dismissible drawers", a
   await page.locator('.nav-file-title[data-path="Welcome.md"]').click();
   await expect(leftDrawer).not.toHaveClass(/is-mobile-drawer-open/);
   await expect(page.locator(".cm-editor")).toBeVisible();
-  await page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active .cm-content").click();
+  expect(await page.evaluate(() => document.activeElement?.closest(".workspace-sidebar") == null)).toBe(true);
+  const editorContent = page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active .cm-content");
+  await editorContent.tap({ position: { x: 5, y: 5 } });
+  await expect(page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active .cm-content"))
+    .toBeFocused();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type("# Persisted on mobile\n\nSearchable daily workspace");
   await expect.poll(() => page.evaluate(() => window.hostServices!.vaultFiles.read("Welcome.md")))
@@ -214,6 +218,7 @@ test("@phone keeps drawers and settings inside the device safe area", async ({ p
 
   await navigation.getByRole("button", { name: "Details" }).click();
   await expect(rightDrawer).toHaveClass(/is-mobile-drawer-open/);
+  await expect(page.locator(".tooltip")).toBeHidden();
   expect((await rightDrawer.boundingBox())!.y).toBeGreaterThanOrEqual(47);
   const detailsScreenshot = testInfo.outputPath("phone-safe-area-details-drawer.png");
   await page.screenshot({ path: detailsScreenshot, animations: "disabled" });
@@ -260,6 +265,13 @@ test("@phone keeps drawers and settings inside the device safe area", async ({ p
   const screenshot = testInfo.outputPath("phone-safe-area-settings.png");
   await page.screenshot({ path: screenshot, animations: "disabled" });
   await testInfo.attach("phone-safe-area-settings", { path: screenshot, contentType: "image/png" });
+  const closeSettings = modal.getByRole("button", { name: "Close Settings" });
+  const closeBox = (await closeSettings.boundingBox())!;
+  expect(closeBox.width).toBeGreaterThanOrEqual(44);
+  expect(closeBox.height).toBeGreaterThanOrEqual(44);
+  await closeSettings.click();
+  await expect(modal).toBeHidden();
+  await expect(navigation.getByRole("button", { name: "More" })).toBeVisible();
 });
 
 test("@phone opens existing and new notes with touch inside the device safe area", async ({ page }, testInfo) => {
@@ -278,11 +290,19 @@ test("@phone opens existing and new notes with touch inside the device safe area
   await expect.poll(() => page.evaluate(() => (window as any).app.workspace.getActiveFile()?.path))
     .toBe("Welcome.md");
   await expect(page.locator(".workspace-tabs.is-mobile-center-active .cm-content")).toContainText("Welcome");
+  expect(await page.evaluate(() => document.activeElement?.closest(".cm-editor") !== null)).toBe(false);
   const existingGroup = page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active");
   expect.soft((await existingGroup.boundingBox())!.y).toBeGreaterThanOrEqual(47);
   const existingScreenshot = testInfo.outputPath("phone-safe-area-existing-note.png");
   await page.screenshot({ path: existingScreenshot, animations: "disabled" });
   await testInfo.attach("phone-safe-area-existing-note", { path: existingScreenshot, contentType: "image/png" });
+
+  await page.reload();
+  await navigation.getByRole("button", { name: "Files" }).tap();
+  await leftDrawer.locator('.nav-file-title[data-path="Welcome.md"]').tap();
+  await expect.poll(() => page.evaluate(() => (window as any).app.workspace.getActiveFile()?.path))
+    .toBe("Welcome.md");
+  expect(await page.evaluate(() => document.activeElement?.closest(".cm-editor") !== null)).toBe(false);
 
   await navigation.getByRole("button", { name: "New note" }).tap();
   await expect.poll(() => page.evaluate(() => (window as any).app.workspace.getActiveFile()?.path))
@@ -870,6 +890,40 @@ test("@phone cold relaunch reconciles an existing manifest for external edit and
   });
   expect(manifest.entries["Notes/Proof.md"]).toBeDefined();
   expect(manifest.entries["Boards/Proof.canvas"]).toBeUndefined();
+});
+
+test("@phone cold relaunch repairs alias-corrupted managed paths without mutating vault bytes", async ({ page }) => {
+  await page.goto(externalVaultProofUrl);
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => (window as any).app?.vault?.root)).toBe("managed://default");
+  const filesBefore = await page.evaluate(() => {
+    const key = "geode:mobile-managed-vault:v1";
+    const stored = JSON.parse(localStorage.getItem(key)!);
+    const config = stored.config.find(([name]: [string]) => name.startsWith("device-reconcile:"));
+    const manifest = config[1];
+    manifest.entries = Object.fromEntries(
+      Object.values(manifest.entries).map((value: any) => [
+        `e Vault/${value.path}`,
+        { ...value, path: `e Vault/${value.path}` },
+      ]),
+    );
+    localStorage.setItem(key, JSON.stringify(stored));
+    return stored.files;
+  });
+
+  await page.reload();
+
+  await expect.poll(() => page.evaluate(() => (window as any).__geodeMobileTest.reconcileTrace)).toEqual(["scan"]);
+  expect(await page.evaluate(() => (window as any).app.vault.getMarkdownFiles().map((file: any) => file.path)))
+    .toEqual(["Welcome.md"]);
+  const repaired = await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("geode:mobile-managed-vault:v1")!);
+    const manifest = stored.config.find(([name]: [string]) => name.startsWith("device-reconcile:"))[1];
+    return { files: stored.files, paths: Object.keys(manifest.entries) };
+  });
+  expect(repaired.paths).toEqual(["Welcome.md"]);
+  expect(repaired.files).toEqual(filesBefore);
 });
 
 test("@phone failed processing or manifest commit retains the prior manifest and retries exact bytes", async ({ page }) => {

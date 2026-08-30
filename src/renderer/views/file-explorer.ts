@@ -141,7 +141,7 @@ export class FileExplorerView implements View {
       const row = document.createElement("div");
       row.className = "nav-folder-title nav-item";
       row.dataset.path = folder.path;
-      row.draggable = true;
+      row.draggable = !this.app.workspace.isCompactMobile();
       row.style.paddingLeft = "4px";
       const arrow = document.createElement("span");
       arrow.className = "nav-folder-arrow";
@@ -188,7 +188,10 @@ export class FileExplorerView implements View {
       const row = document.createElement("div");
       row.className = "nav-file-title nav-item";
       row.dataset.path = file.path;
-      row.draggable = true;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-label", `Open file ${file.path}`);
+      row.tabIndex = 0;
+      row.draggable = !this.app.workspace.isCompactMobile();
       row.style.paddingLeft = "18px";
       const titleEl = document.createElement("span");
       titleEl.className = "nav-item-title";
@@ -214,6 +217,20 @@ export class FileExplorerView implements View {
         // Plain / Cmd / Ctrl click: single-select and open (Cmd/Ctrl → new tab,
         // preserving the existing open-in-new-tab affordance).
         this.setSingleSelection(file.path);
+        if (this.app.workspace.isCompactMobile()) {
+          row.blur();
+          this.app.workspace.closeMobileDrawers(false);
+        }
+        this.app.openFile(file, e.metaKey || e.ctrlKey);
+      });
+      row.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        this.setSingleSelection(file.path);
+        if (this.app.workspace.isCompactMobile()) {
+          row.blur();
+          this.app.workspace.closeMobileDrawers(false);
+        }
         this.app.openFile(file, e.metaKey || e.ctrlKey);
       });
       row.addEventListener("dragstart", (e) => {

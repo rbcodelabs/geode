@@ -361,11 +361,16 @@ body.is-mobile .mobile-navigation {
   display: grid;
   grid-template-columns: repeat(5, minmax(44px, 1fr));
   flex: 0 0 auto;
-  min-height: calc(52px + env(safe-area-inset-bottom));
-  padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left));
+  min-height: calc(52px + max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)));
+  padding: 0 max(4px, env(safe-area-inset-right))
+    max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)) max(4px, env(safe-area-inset-left));
   border-top: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
   z-index: 70;
+}
+
+body.is-mobile .tooltip {
+  display: none;
 }
 
 .mobile-navigation-action {
@@ -383,6 +388,7 @@ body.is-mobile .mobile-navigation {
   background: transparent;
   font-size: 10px;
   line-height: 1;
+  touch-action: manipulation;
 }
 
 .mobile-navigation-action:active,
@@ -849,7 +855,8 @@ body.is-mobile .workspace-ribbon {
 
   body.is-mobile .workspace-center {
     width: 100%;
-    margin-top: env(safe-area-inset-top);
+    padding-top: max(env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px));
+    transform: translateY(var(--geode-visual-viewport-top, 0px));
   }
 
   body.is-mobile .workspace-center > .workspace-tabs {
@@ -867,10 +874,12 @@ body.is-mobile .workspace-ribbon {
   body.is-mobile .workspace-sidebar {
     display: flex;
     position: absolute;
-    top: env(safe-area-inset-top);
+    top: max(env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px));
     bottom: 0;
     width: min(86vw, 340px);
     min-width: min(86vw, 340px);
+    max-width: 100vw;
+    box-sizing: border-box;
     z-index: 60;
     transition: transform 0.18s ease;
     box-shadow: var(--shadow-s, 0 8px 30px rgba(0, 0, 0, 0.35));
@@ -908,7 +917,7 @@ body.is-mobile .workspace-ribbon {
   body.is-mobile .workspace.mobile-drawer-active .mobile-drawer-backdrop {
     display: block;
     position: absolute;
-    inset: env(safe-area-inset-top) 0 0;
+    inset: max(env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px)) 0 0;
     width: 100%;
     padding: 0;
     border: 0;
@@ -925,7 +934,25 @@ body.is-mobile .workspace-ribbon {
   }
 
   body.is-mobile .workspace-sidebar .nav-item {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     min-height: 44px;
+  }
+
+  body.is-mobile .workspace-sidebar > .sidebar-content,
+  body.is-mobile .workspace-sidebar > .workspace-tabs,
+  body.is-mobile .workspace-sidebar .workspace-tab-container,
+  body.is-mobile .workspace-sidebar .workspace-leaf,
+  body.is-mobile .workspace-sidebar .workspace-leaf-content,
+  body.is-mobile .workspace-sidebar .view-content-host,
+  body.is-mobile .workspace-sidebar .view-content,
+  body.is-mobile .workspace-sidebar .sidebar-view,
+  body.is-mobile .workspace-sidebar .nav-files-container {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
   }
 
   body.is-mobile .sidebar-resize-handle {
@@ -946,7 +973,7 @@ body.is-mobile .workspace-ribbon {
 
   body.is-mobile .workspace-sidebar.mod-right {
     position: absolute;
-    top: env(safe-area-inset-top);
+    top: max(env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px));
     right: 0;
     bottom: 0;
     width: min(72vw, 340px);
@@ -984,7 +1011,7 @@ body.is-mobile .workspace-ribbon {
   body.is-mobile .workspace.mobile-drawer-active .mobile-drawer-backdrop {
     display: block;
     position: absolute;
-    inset: env(safe-area-inset-top) 0 0;
+    inset: max(env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px)) 0 0;
     width: 100%;
     padding: 0;
     border: 0;
@@ -2516,6 +2543,10 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   min-height: 0;
 }
 
+.settings-close-button {
+  display: none;
+}
+
 /* ---- Settings nav (left column) ---- */
 
 .vertical-tab-header {
@@ -2541,10 +2572,15 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 }
 
 .vertical-tab-nav-item {
+  width: 100%;
   padding: 6px 10px;
+  border: 0;
   border-radius: var(--radius-s);
+  background: transparent;
   color: var(--text-muted);
+  font-family: inherit;
   font-size: var(--font-ui-medium);
+  text-align: left;
   cursor: pointer;
   user-select: none;
 }
@@ -2805,10 +2841,26 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 }
 
 @media (max-width: 700px) {
+  body.is-mobile .mod-settings .settings-close-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: flex-end;
+    flex: 0 0 44px;
+    min-width: 44px;
+    height: 44px;
+    margin: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--text-accent);
+    font: inherit;
+    font-weight: 600;
+  }
+
   body.is-mobile .modal-container:has(.mod-settings) {
     align-items: stretch;
-    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
-      max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    padding: max(8px, env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px)) max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)) max(8px, env(safe-area-inset-left));
   }
 
   body.is-mobile .modal.mod-settings {

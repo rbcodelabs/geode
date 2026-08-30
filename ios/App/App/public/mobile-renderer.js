@@ -102313,6 +102313,9 @@ ${stringify3(obj)}---` : "";
           this.titleEl = document.createElement("div");
           this.titleEl.className = "view-header-title";
           this.titleEl.contentEditable = "plaintext-only";
+          this.titleEl.setAttribute("role", "textbox");
+          this.titleEl.setAttribute("aria-label", "Note title");
+          this.titleEl.setAttribute("aria-multiline", "false");
           this.titleEl.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -102379,7 +102382,7 @@ ${stringify3(obj)}---` : "";
           this.lastSavedText = text;
           this.buildEditor(text);
           if (this.mode === "reading") await this.renderReading();
-          this.applyMode();
+          this.applyMode(!document.body.classList.contains("is-mobile"));
         }
         /** Enter the same title-editing flow used after creating an Untitled note. */
         beginTitleRename() {
@@ -102480,6 +102483,9 @@ ${stringify3(obj)}---` : "";
             ]
           });
           this.editor = new EditorView({ state, parent: this.editorHostEl });
+          this.editor.contentDOM.setAttribute("role", "textbox");
+          this.editor.contentDOM.setAttribute("aria-label", "Note editor");
+          this.editor.contentDOM.setAttribute("aria-multiline", "true");
         }
         wikilinkAt(text, pos) {
           const re = /\[\[([^\[\]\n]+)\]\]/g;
@@ -102667,11 +102673,11 @@ ${stringify3(obj)}---` : "";
           });
           this.applyMode();
         }
-        applyMode() {
+        applyMode(focusEditor = true) {
           const editing = this.mode !== "reading";
           this.editorHostEl.style.display = editing ? "" : "none";
           this.readingEl.style.display = editing ? "none" : "";
-          if (editing) this.editor?.focus();
+          if (editing && focusEditor) this.editor?.focus();
         }
         async renderReading() {
           await this.flush();
@@ -102770,7 +102776,7 @@ ${stringify3(obj)}---` : "";
           await this.app.addBlockBookmark(this.file, blockId);
         }
         onOpen() {
-          if (this.mode !== "reading") this.editor?.focus();
+          if (this.mode !== "reading" && !document.body.classList.contains("is-mobile")) this.editor?.focus();
         }
         async onClose() {
           await this.flush();
@@ -103498,6 +103504,7 @@ ${stringify3(obj)}---` : "";
           this.checkedIconEl = null;
           this.dom = document.createElement("div");
           this.dom.className = "menu-item tappable";
+          this.dom.setAttribute("role", "button");
           this.dom.tabIndex = -1;
           this.dom.addEventListener("click", (e) => {
             if (this.dom.classList.contains("is-disabled") || this.dom.classList.contains("is-label")) return;
@@ -103513,8 +103520,10 @@ ${stringify3(obj)}---` : "";
             this.dom.appendChild(titleEl);
           }
           titleEl.replaceChildren();
-          if (typeof title === "string") titleEl.textContent = title;
-          else titleEl.appendChild(title);
+          if (typeof title === "string") {
+            titleEl.textContent = title;
+            this.dom.setAttribute("aria-label", title);
+          } else titleEl.appendChild(title);
           return this;
         }
         setIcon(icon) {
@@ -111303,7 +111312,7 @@ ${text}`;
             const row = document.createElement("div");
             row.className = "nav-folder-title nav-item";
             row.dataset.path = folder.path;
-            row.draggable = true;
+            row.draggable = !this.app.workspace.isCompactMobile();
             row.style.paddingLeft = "4px";
             const arrow = document.createElement("span");
             arrow.className = "nav-folder-arrow";
@@ -111350,7 +111359,10 @@ ${text}`;
             const row = document.createElement("div");
             row.className = "nav-file-title nav-item";
             row.dataset.path = file.path;
-            row.draggable = true;
+            row.setAttribute("role", "button");
+            row.setAttribute("aria-label", `Open file ${file.path}`);
+            row.tabIndex = 0;
+            row.draggable = !this.app.workspace.isCompactMobile();
             row.style.paddingLeft = "18px";
             const titleEl = document.createElement("span");
             titleEl.className = "nav-item-title";
@@ -111374,6 +111386,20 @@ ${text}`;
                 return;
               }
               this.setSingleSelection(file.path);
+              if (this.app.workspace.isCompactMobile()) {
+                row.blur();
+                this.app.workspace.closeMobileDrawers(false);
+              }
+              this.app.openFile(file, e.metaKey || e.ctrlKey);
+            });
+            row.addEventListener("keydown", (e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              this.setSingleSelection(file.path);
+              if (this.app.workspace.isCompactMobile()) {
+                row.blur();
+                this.app.workspace.closeMobileDrawers(false);
+              }
               this.app.openFile(file, e.metaKey || e.ctrlKey);
             });
             row.addEventListener("dragstart", (e) => {
@@ -113861,6 +113887,7 @@ ${details}` : result.error.message);
     if (installed2) return;
     installed2 = true;
     document.body.addEventListener("mouseover", (e) => {
+      if (document.body.classList.contains("is-mobile")) return;
       const target = findTooltipTarget(e.target);
       if (!target || target === currentTarget) return;
       scheduleShow(target);
@@ -113873,6 +113900,7 @@ ${details}` : result.error.message);
       hideTooltip();
     });
     document.body.addEventListener("focusin", (e) => {
+      if (document.body.classList.contains("is-mobile")) return;
       const target = findTooltipTarget(e.target);
       if (!target || target === currentTarget) return;
       scheduleShow(target);
@@ -114719,11 +114747,24 @@ ${details}` : result.error.message);
           /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
           this.stopPerformanceTab = null;
           this.modalEl.classList.add("mod-settings");
+          this.modalEl.setAttribute("role", "dialog");
+          this.modalEl.setAttribute("aria-modal", "true");
+          this.modalEl.setAttribute("aria-label", "Settings");
+          this.modalEl.tabIndex = -1;
+          const closeButton = document.createElement("button");
+          closeButton.type = "button";
+          closeButton.className = "settings-close-button";
+          closeButton.setAttribute("aria-label", "Close Settings");
+          closeButton.textContent = "Done";
+          closeButton.addEventListener("click", () => this.close());
+          this.modalEl.prepend(closeButton);
         }
         onOpen() {
           this.contentEl.empty();
           this.navEl = document.createElement("div");
           this.navEl.className = "vertical-tab-header";
+          this.navEl.setAttribute("role", "tablist");
+          this.navEl.setAttribute("aria-label", "Settings categories");
           this.contentContainerEl = document.createElement("div");
           this.contentContainerEl.className = "vertical-tab-content-container";
           this.contentEl.append(this.navEl, this.contentContainerEl);
@@ -114786,9 +114827,12 @@ ${details}` : result.error.message);
         renderNav() {
           this.navEl.empty();
           const addNavItem = (id2, label, container) => {
-            const item = document.createElement("div");
+            const item = document.createElement("button");
+            item.type = "button";
             item.className = "vertical-tab-nav-item";
             item.textContent = label;
+            item.setAttribute("role", "tab");
+            item.setAttribute("aria-selected", String(id2 === this.activeTabId));
             item.classList.toggle("is-active", id2 === this.activeTabId);
             item.addEventListener("click", () => this.activateTab(id2));
             container.appendChild(item);
@@ -115086,6 +115130,7 @@ ${details}` : result.error.message);
           const { control } = this.addRow(container, label);
           const input = document.createElement("input");
           input.type = "checkbox";
+          input.setAttribute("aria-label", label);
           input.checked = value2;
           input.addEventListener("change", () => onChange(input.checked));
           control.appendChild(input);
@@ -115094,6 +115139,7 @@ ${details}` : result.error.message);
           const { control } = this.addRow(container, label);
           const select = document.createElement("select");
           select.className = "dropdown";
+          select.setAttribute("aria-label", label);
           const def = document.createElement("option");
           def.value = "";
           def.textContent = "Default";
@@ -115137,6 +115183,7 @@ ${details}` : result.error.message);
           const { control } = this.addRow(container, label);
           const input = document.createElement("input");
           input.type = "text";
+          input.setAttribute("aria-label", label);
           input.className = "web-view-address";
           input.value = value2;
           input.spellcheck = false;
@@ -115553,7 +115600,11 @@ ${details}` : result.error.message);
           main.appendChild(ribbon);
           this.workspace = new Workspace(this, main);
           this.statusBar = new StatusBar(this, shell);
-          shell.appendChild(this.createMobileNavigation());
+          const mobileNavigation = this.createMobileNavigation();
+          mobileNavigation.inert = true;
+          mobileNavigation.setAttribute("aria-busy", "true");
+          shell.appendChild(mobileNavigation);
+          this.trackMobileVisualViewport();
           this.workspace.leftSidebar.addView(new FileExplorerView(this));
           this.workspace.leftSidebar.addView(new SearchView(this));
           this.workspace.rightSidebar.addView(new BacklinksView(this));
@@ -115595,6 +115646,11 @@ ${details}` : result.error.message);
           await measureOperation("startup-metadata-warm", () => this.metadataCache.initialize());
           measureOperation("startup-layout-ready", () => this.workspace.flushLayoutReady());
           this.scheduleSaveLayout();
+          mobileNavigation.inert = false;
+          mobileNavigation.removeAttribute("aria-busy");
+          if (document.body.classList.contains("is-mobile")) {
+            mobileNavigation.querySelector('[aria-label="Files"]')?.focus({ preventScroll: true });
+          }
           this.communityUpdateTimer = setTimeout(() => {
             this.communityUpdateTimer = null;
             void this.checkCommunityUpdates(false);
@@ -116748,6 +116804,10 @@ ${details}` : result.error.message);
             const text = document.createElement("span");
             text.textContent = label;
             button.appendChild(text);
+            button.addEventListener("touchend", (event) => {
+              event.preventDefault();
+              action(button);
+            }, { passive: false });
             button.addEventListener("click", () => action(button));
             navigation.appendChild(button);
           };
@@ -116775,6 +116835,18 @@ ${details}` : result.error.message);
             ], { anchor: button, horizontalAlign: "end", menuClass: "mod-mobile-more" });
           });
           return navigation;
+        }
+        trackMobileVisualViewport() {
+          const viewport = window.visualViewport;
+          if (!viewport) return;
+          const update = () => {
+            const offset = document.body.classList.contains("is-mobile") ? Math.max(0, viewport.offsetTop + window.scrollY) : 0;
+            document.documentElement.style.setProperty("--geode-visual-viewport-top", `${offset}px`);
+          };
+          viewport.addEventListener("resize", update, { passive: true });
+          viewport.addEventListener("scroll", update, { passive: true });
+          window.addEventListener("scroll", update, { passive: true });
+          update();
         }
         openCommandPalette() {
           new CommandPaletteModal(this).open();

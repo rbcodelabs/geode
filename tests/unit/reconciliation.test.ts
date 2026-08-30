@@ -29,6 +29,29 @@ describe("vault reconciliation decisions", () => {
     ]);
   });
 
+  it("replaces alias-corrupted manifest paths with exact native entries without provider mutation", async () => {
+    const prior = buildVaultManifest("managed://default", [
+      entry("e Vault/Welcome.md", 1),
+      entry("e Vault/Test.md", 1),
+    ]);
+    const exactEntries = [entry("Welcome.md", 1), entry("Test.md", 1), entry("Untitled.md", 1)];
+    const result = await stageReconcileManifest({
+      vaultId: "managed://default",
+      previous: prior,
+      scan: async () => ({ status: "complete", entries: exactEntries }),
+    });
+
+    expect(result.status).toBe("complete");
+    expect(Object.keys(result.manifest.entries).sort()).toEqual(["Test.md", "Untitled.md", "Welcome.md"]);
+    expect(result.changes).toEqual([
+      { event: "delete", path: "e Vault/Test.md" },
+      { event: "delete", path: "e Vault/Welcome.md" },
+      expect.objectContaining({ event: "create", path: "Test.md" }),
+      expect.objectContaining({ event: "create", path: "Untitled.md" }),
+      expect.objectContaining({ event: "create", path: "Welcome.md" }),
+    ]);
+  });
+
   it.each(["partial", "cancelled", "unavailable"] as const)(
     "retains the prior durable manifest and emits no false deletes for a %s scan",
     async (status) => {

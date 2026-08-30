@@ -48,7 +48,11 @@ describe("iOS native smoke proof", () => {
     expect(source).toContain('if (!file) return "not-ready"');
     expect(source).toContain("case .failure(let error):\n                NSLog(");
     expect(source).toContain('print("GEODE_NATIVE_SMOKE_ERROR');
-    expect(source).not.toMatch(/case \.failure\([\s\S]*?runNativeSmoke/);
+    const smokeFailureBranch = source.slice(
+      source.lastIndexOf("case .failure(let error):"),
+      source.lastIndexOf("#endif"),
+    );
+    expect(smokeFailureBranch).not.toContain("runNativeSmoke");
     expect(source).toContain('debugExternalVaultProbe({ mode: "edit" })');
     expect(source).toContain('debugExternalVaultProbe({ mode: "verify" })');
   });

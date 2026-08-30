@@ -542,6 +542,7 @@ export class MenuItem {
   constructor(private menu: Menu) {
     this.dom = document.createElement("div");
     this.dom.className = "menu-item tappable";
+    this.dom.setAttribute("role", "button");
     this.dom.tabIndex = -1;
     this.dom.addEventListener("click", (e) => {
       if (this.dom.classList.contains("is-disabled") || this.dom.classList.contains("is-label")) return;
@@ -560,7 +561,10 @@ export class MenuItem {
       this.dom.appendChild(titleEl);
     }
     titleEl.replaceChildren();
-    if (typeof title === "string") titleEl.textContent = title;
+    if (typeof title === "string") {
+      titleEl.textContent = title;
+      this.dom.setAttribute("aria-label", title);
+    }
     else titleEl.appendChild(title);
     return this;
   }
