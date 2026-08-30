@@ -763,6 +763,11 @@ export class CanvasView implements View {
   }
 
   private revokeObjectUrls(): void {
+    for (const media of this.viewportEl.querySelectorAll<HTMLImageElement | HTMLMediaElement>(".canvas-node-media")) {
+      if (!this.objectUrls.has(media.src)) continue;
+      media.removeAttribute("src");
+      if (media instanceof HTMLMediaElement) media.load();
+    }
     for (const url of this.objectUrls) URL.revokeObjectURL(url);
     this.objectUrls.clear();
   }

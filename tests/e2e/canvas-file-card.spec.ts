@@ -43,7 +43,14 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
   try {
     const window = await app.firstWindow();
     const errors: string[] = [];
-    window.on("console", (msg) => { if (msg.type() === "error") errors.push(msg.text()); });
+    window.on("console", (msg) => {
+      if (msg.type() !== "error") return;
+      const location = msg.location();
+      errors.push(`${msg.text()} [${location.url || "unknown"}:${location.lineNumber}:${location.columnNumber}]`);
+    });
+    window.on("requestfailed", (request) => {
+      errors.push(`Request failed: ${request.url()} (${request.failure()?.errorText ?? "unknown"})`);
+    });
     window.on("pageerror", (error) => errors.push(String(error)));
     await window.evaluate(() => {
       const tracker = { created: [] as string[], revoked: [] as string[] };
@@ -154,6 +161,7 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
     await view.getByRole("button", { name: "Add text card" }).click();
     await view.locator(".canvas-node-text-editor").press("Escape");
     await expect.poll(() => window.evaluate(() => (window as any).__canvasBlobTracker.revoked.length)).toBeGreaterThanOrEqual(2);
+    expect(errors, `Console errors after Canvas rerender: ${errors.join("\n")}`).toEqual([]);
 
     const saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(saved.vendorCanvas).toEqual({ keep: true });
@@ -170,7 +178,7 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
     await expect(window.locator(".canvas-view").getByRole("button", { name: "Add note from vault" })).toHaveCount(1);
     await expect(window.locator(".canvas-view").getByRole("button", { name: "Add media from vault" })).toHaveCount(1);
 
-    expect(errors, `Console errors: ${errors.join("\n")}`).toEqual([]);
+    expect(errors, `Console errors after renderer reload: ${errors.join("\n")}`).toEqual([]);
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
