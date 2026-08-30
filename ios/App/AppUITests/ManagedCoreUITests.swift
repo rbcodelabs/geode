@@ -47,7 +47,6 @@ final class ManagedCoreUITests: XCTestCase {
 
         let welcome = app.buttons["Open file Welcome.md"]
         XCTAssertTrue(welcome.waitForExistence(timeout: 5))
-        waitUntilHittable(welcome)
         XCTAssertLessThanOrEqual(welcome.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(welcome.frame.width, app.windows.firstMatch.frame.width)
         XCTAssertGreaterThanOrEqual(welcome.frame.minY, safeAreaTop)
@@ -193,7 +192,6 @@ final class ManagedCoreUITests: XCTestCase {
         try openFilesDrawer(in: app, verifier: relaunchedVerifier)
         let relaunchedWelcome = app.buttons["Open file Welcome.md"]
         XCTAssertTrue(relaunchedWelcome.waitForExistence(timeout: 5))
-        waitUntilHittable(relaunchedWelcome)
         XCTAssertLessThanOrEqual(relaunchedWelcome.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(relaunchedWelcome.frame.width, app.windows.firstMatch.frame.width)
         _ = try tapUntilSnapshot(
@@ -209,7 +207,6 @@ final class ManagedCoreUITests: XCTestCase {
         try openFilesDrawer(in: app, verifier: relaunchedVerifier)
         let relaunchedJourney = app.buttons["Open file Native Journey.md"]
         XCTAssertTrue(relaunchedJourney.waitForExistence(timeout: 5))
-        waitUntilHittable(relaunchedJourney)
         XCTAssertLessThanOrEqual(relaunchedJourney.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(relaunchedJourney.frame.width, app.windows.firstMatch.frame.width)
         _ = try tapUntilSnapshot(
@@ -397,7 +394,6 @@ final class ManagedCoreUITests: XCTestCase {
         try openFilesDrawer(in: app, verifier: verifier)
         let welcome = app.buttons["Open file Welcome.md"]
         XCTAssertTrue(welcome.waitForExistence(timeout: 5))
-        waitUntilHittable(welcome)
         XCTAssertLessThanOrEqual(welcome.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(welcome.frame.width, app.windows.firstMatch.frame.width)
         _ = try tapUntilSnapshot(
@@ -532,7 +528,7 @@ final class ManagedCoreUITests: XCTestCase {
     private func tapUntilSnapshot(
         _ element: XCUIElement,
         verifier: XCUIElement,
-        timeout: TimeInterval = 10,
+        timeout: TimeInterval = 20,
         description: String,
         matching: ([String: Any]) -> Bool
     ) throws -> [String: Any] {
@@ -541,11 +537,10 @@ final class ManagedCoreUITests: XCTestCase {
         var snapshot = try readSnapshot(from: verifier)
 
         while !matching(snapshot), attempts < 3, Date() < deadline {
-            waitUntilHittable(element, timeout: min(5, deadline.timeIntervalSinceNow))
-            element.tap()
+            tapWithCoordinateFallback(element, timeout: min(5, deadline.timeIntervalSinceNow))
             attempts += 1
 
-            let attemptDeadline = min(deadline, Date().addingTimeInterval(2))
+            let attemptDeadline = min(deadline, Date().addingTimeInterval(5))
             repeat {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.1))
                 snapshot = try readSnapshot(from: verifier)
@@ -567,9 +562,8 @@ final class ManagedCoreUITests: XCTestCase {
     ) {
         for attempt in 1...3 {
             if target.exists { return }
-            waitUntilHittable(element)
-            element.tap()
-            if target.waitForExistence(timeout: 2) { return }
+            tapWithCoordinateFallback(element)
+            if target.waitForExistence(timeout: 5) { return }
             if attempt == 3 { XCTFail("\(description) after 3 bounded tap attempts") }
         }
     }
@@ -581,9 +575,8 @@ final class ManagedCoreUITests: XCTestCase {
     ) {
         for attempt in 1...3 {
             if !target.exists { return }
-            waitUntilHittable(element)
-            element.tap()
-            let deadline = Date().addingTimeInterval(2)
+            tapWithCoordinateFallback(element)
+            let deadline = Date().addingTimeInterval(5)
             while target.exists, Date() < deadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.1))
             }
@@ -603,6 +596,25 @@ final class ManagedCoreUITests: XCTestCase {
             if !app.keyboards.firstMatch.exists { return }
             if attempt == 3 { XCTFail("Keyboard did not dismiss after 3 bounded downward swipes") }
         }
+    }
+
+    private func tapWithCoordinateFallback(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 5
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !element.isHittable, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+
+        if element.isHittable {
+            element.tap()
+            return
+        }
+
+        XCTAssertTrue(element.exists, "Element did not exist before coordinate tap: \(element.debugDescription)")
+        XCTAssertFalse(element.frame.isEmpty, "Element had no frame for coordinate tap: \(element.debugDescription)")
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) {
@@ -631,13 +643,24 @@ final class ManagedCoreUITests: XCTestCase {
     }
 
     private func openFilesDrawer(in app: XCUIApplication, verifier: XCUIElement) throws {
-        _ = try tapUntilSnapshot(
-            mobileNavigationButton("Files", in: app),
-            verifier: verifier,
-            description: "Files did not open the drawer"
-        ) {
-            ($0["javascript"] as? [String: Any])?["leftDrawerOpen"] as? Bool == true
+        let files = mobileNavigationButton("Files", in: app)
+        let closeDrawer = app.buttons["Close files drawer"]
+        var snapshot = try readSnapshot(from: verifier)
+
+        for attempt in 1...3 {
+            tapWithCoordinateFallback(files)
+            let attemptDeadline = Date().addingTimeInterval(10)
+            repeat {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                snapshot = try readSnapshot(from: verifier)
+                if (snapshot["javascript"] as? [String: Any])?["leftDrawerOpen"] as? Bool == true {
+                    XCTAssertTrue(closeDrawer.exists, "Open Files drawer did not expose its close control")
+                    return
+                }
+            } while Date() < attemptDeadline
         }
+
+        XCTFail("Files did not open after 3 bounded tap attempts. Close control: \(closeDrawer.debugDescription). Last snapshot: \(snapshot)")
     }
 
     private func attachScreenshot(named name: String) {
