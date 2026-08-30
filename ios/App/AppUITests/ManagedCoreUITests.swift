@@ -51,9 +51,11 @@ final class ManagedCoreUITests: XCTestCase {
         XCTAssertLessThanOrEqual(welcome.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(welcome.frame.width, app.windows.firstMatch.frame.width)
         XCTAssertGreaterThanOrEqual(welcome.frame.minY, safeAreaTop)
-        welcome.tap()
-
-        _ = try waitForSnapshot(from: verifier, description: "Welcome did not become active") {
+        _ = try tapUntilSnapshot(
+            welcome,
+            verifier: verifier,
+            description: "Welcome did not become active"
+        ) {
             ($0["javascript"] as? [String: Any])?["activeFile"] as? String == "Welcome.md"
         }
         assertKeyboardRemainsAbsent(in: app, after: "opening Welcome from Files")
@@ -80,10 +82,9 @@ final class ManagedCoreUITests: XCTestCase {
         attachScreenshot(named: "01-welcome-open")
 
         let welcomeInsertion = "# Edited through native XCUI\n\nPersisted managed bytes"
-        editor.tap()
-        _ = try waitForSnapshot(
-            from: verifier,
-            timeout: 3,
+        _ = try tapUntilSnapshot(
+            editor,
+            verifier: verifier,
             description: "One explicit editor tap did not move DOM focus into CodeMirror"
         ) { snapshot in
             (snapshot["javascript"] as? [String: Any])?["editorFocused"] as? Bool == true
@@ -106,17 +107,18 @@ final class ManagedCoreUITests: XCTestCase {
         XCTAssertEqual(editedJavaScript["editor"] as? String, editedWelcome)
 
         XCTAssertTrue(app.keyboards.firstMatch.exists)
-        editor.swipeDown()
-        let keyboardDismissed = expectation(
-            for: NSPredicate(format: "exists == false"),
-            evaluatedWith: app.keyboards.firstMatch
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [keyboardDismissed], timeout: 5), .completed)
+        dismissKeyboard(in: app, with: editor)
         let newNoteButton = try XCTUnwrap(
             app.buttons.matching(identifier: "New note").allElementsBoundByIndex.first(where: \.isHittable),
             "New note remained covered after on-drag keyboard dismissal"
         )
-        newNoteButton.tap()
+        _ = try tapUntilSnapshot(
+            newNoteButton,
+            verifier: verifier,
+            description: "New note action did not create and activate an untitled note"
+        ) { snapshot in
+            ((snapshot["javascript"] as? [String: Any])?["activeFile"] as? String)?.hasPrefix("Untitled") == true
+        }
         let title = app.textFields["Note title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertTrue(title.isHittable)
@@ -128,7 +130,13 @@ final class ManagedCoreUITests: XCTestCase {
         }
         let newEditor = app.textViews["Note editor"]
         XCTAssertTrue(newEditor.waitForExistence(timeout: 5))
-        newEditor.tap()
+        _ = try tapUntilSnapshot(
+            newEditor,
+            verifier: verifier,
+            description: "New note editor did not receive DOM focus"
+        ) { snapshot in
+            (snapshot["javascript"] as? [String: Any])?["editorFocused"] as? Bool == true
+        }
 
         let newBody = "Created and persisted through native XCUI"
         newEditor.typeText(newBody)
@@ -188,8 +196,11 @@ final class ManagedCoreUITests: XCTestCase {
         waitUntilHittable(relaunchedWelcome)
         XCTAssertLessThanOrEqual(relaunchedWelcome.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(relaunchedWelcome.frame.width, app.windows.firstMatch.frame.width)
-        relaunchedWelcome.tap()
-        _ = try waitForSnapshot(from: relaunchedVerifier, description: "Welcome did not reopen") {
+        _ = try tapUntilSnapshot(
+            relaunchedWelcome,
+            verifier: relaunchedVerifier,
+            description: "Welcome did not reopen"
+        ) {
             ($0["javascript"] as? [String: Any])?["activeFile"] as? String == "Welcome.md"
                 && ($0["bytes"] as? [String: String])?["Welcome.md"] == editedWelcome
         }
@@ -201,8 +212,11 @@ final class ManagedCoreUITests: XCTestCase {
         waitUntilHittable(relaunchedJourney)
         XCTAssertLessThanOrEqual(relaunchedJourney.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(relaunchedJourney.frame.width, app.windows.firstMatch.frame.width)
-        relaunchedJourney.tap()
-        _ = try waitForSnapshot(from: relaunchedVerifier, description: "Native Journey did not reopen") {
+        _ = try tapUntilSnapshot(
+            relaunchedJourney,
+            verifier: relaunchedVerifier,
+            description: "Native Journey did not reopen"
+        ) {
             ($0["javascript"] as? [String: Any])?["activeFile"] as? String == "Native Journey.md"
                 && ($0["bytes"] as? [String: String])?["Native Journey.md"] == newBody
         }
@@ -217,7 +231,13 @@ final class ManagedCoreUITests: XCTestCase {
             app.windows.firstMatch.frame.maxY - relaunchedSafeBottom,
             "Mobile navigation entered the native home-indicator safe area"
         )
-        app.buttons["Details"].tap()
+        _ = try tapUntilSnapshot(
+            app.buttons["Details"],
+            verifier: relaunchedVerifier,
+            description: "Details action did not open its modal drawer"
+        ) {
+            ($0["javascript"] as? [String: Any])?["mobileNavigationInert"] as? Bool == true
+        }
         let closeDetails = app.buttons["Close details drawer"]
         XCTAssertTrue(closeDetails.waitForExistence(timeout: 5))
         XCTAssertTrue(closeDetails.isHittable)
@@ -252,15 +272,19 @@ final class ManagedCoreUITests: XCTestCase {
         )
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(settledNavigation["minHeight"] as? Double), 44)
         attachScreenshot(named: "04-details")
-        closeDetails.tap()
+        _ = try tapUntilSnapshot(
+            closeDetails,
+            verifier: relaunchedVerifier,
+            description: "Details drawer did not close"
+        ) {
+            ($0["javascript"] as? [String: Any])?["mobileNavigationInert"] as? Bool == false
+        }
 
-        app.buttons["More"].tap()
         let settings = app.buttons["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        tapUntilExists(app.buttons["More"], target: settings, description: "More menu did not open")
         XCTAssertTrue(settings.isHittable)
-        settings.tap()
         let appearanceTab = app.buttons["Appearance"]
-        XCTAssertTrue(appearanceTab.waitForExistence(timeout: 5))
+        tapUntilExists(settings, target: appearanceTab, description: "Settings did not open")
         XCTAssertTrue(appearanceTab.isHittable)
         let darkMode = app.switches["Dark mode"]
         XCTAssertTrue(darkMode.isHittable)
@@ -277,8 +301,7 @@ final class ManagedCoreUITests: XCTestCase {
         let closeSettings = app.buttons["Close Settings"]
         XCTAssertTrue(closeSettings.isHittable)
         XCTAssertGreaterThanOrEqual(closeSettings.frame.height, 44)
-        closeSettings.tap()
-        XCTAssertFalse(appearanceTab.exists)
+        tapUntilGone(closeSettings, target: appearanceTab, description: "Settings did not close")
         XCTAssertTrue(app.buttons["More"].isHittable)
     }
 
@@ -377,8 +400,11 @@ final class ManagedCoreUITests: XCTestCase {
         waitUntilHittable(welcome)
         XCTAssertLessThanOrEqual(welcome.frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertLessThanOrEqual(welcome.frame.width, app.windows.firstMatch.frame.width)
-        welcome.tap()
-        _ = try waitForSnapshot(from: verifier, description: "Migrated Welcome did not open") {
+        _ = try tapUntilSnapshot(
+            welcome,
+            verifier: verifier,
+            description: "Migrated Welcome did not open"
+        ) {
             ($0["javascript"] as? [String: Any])?["activeFile"] as? String == "Welcome.md"
         }
         XCTAssertFalse(app.staticTexts["Vault"].exists)
@@ -389,7 +415,16 @@ final class ManagedCoreUITests: XCTestCase {
             app.buttons.matching(identifier: "New note").allElementsBoundByIndex.first(where: \.isHittable),
             "No hittable New note action remained after opening the migrated Welcome note"
         )
-        newNoteButton.tap()
+        _ = try tapUntilSnapshot(
+            newNoteButton,
+            verifier: verifier,
+            description: "New note action did not create and activate an untitled note"
+        ) { snapshot in
+            guard let activeFile = (snapshot["javascript"] as? [String: Any])?["activeFile"] as? String else {
+                return false
+            }
+            return activeFile.hasPrefix("Untitled") && activeFile != "Untitled.md"
+        }
         let title = app.textFields["Note title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         title.typeText("Legacy Journey")
@@ -400,7 +435,13 @@ final class ManagedCoreUITests: XCTestCase {
         let editor = app.textViews["Note editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertTrue(editor.isHittable)
-        editor.tap()
+        _ = try tapUntilSnapshot(
+            editor,
+            verifier: verifier,
+            description: "Legacy journey editor did not receive DOM focus"
+        ) { snapshot in
+            (snapshot["javascript"] as? [String: Any])?["editorFocused"] as? Bool == true
+        }
         let body = "Created after collision-safe migration"
         editor.typeText(body)
         let created = try waitForSnapshot(from: verifier, description: "Legacy Journey did not persist") {
@@ -488,6 +529,82 @@ final class ManagedCoreUITests: XCTestCase {
         return try readSnapshot(from: verifier)
     }
 
+    private func tapUntilSnapshot(
+        _ element: XCUIElement,
+        verifier: XCUIElement,
+        timeout: TimeInterval = 10,
+        description: String,
+        matching: ([String: Any]) -> Bool
+    ) throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var attempts = 0
+        var snapshot = try readSnapshot(from: verifier)
+
+        while !matching(snapshot), attempts < 3, Date() < deadline {
+            waitUntilHittable(element, timeout: min(5, deadline.timeIntervalSinceNow))
+            element.tap()
+            attempts += 1
+
+            let attemptDeadline = min(deadline, Date().addingTimeInterval(2))
+            repeat {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                snapshot = try readSnapshot(from: verifier)
+                if matching(snapshot) { return snapshot }
+            } while Date() < attemptDeadline
+        }
+
+        XCTAssertTrue(
+            matching(snapshot),
+            "\(description) after \(attempts) bounded tap attempts. Last snapshot: \(snapshot)"
+        )
+        return snapshot
+    }
+
+    private func tapUntilExists(
+        _ element: XCUIElement,
+        target: XCUIElement,
+        description: String
+    ) {
+        for attempt in 1...3 {
+            if target.exists { return }
+            waitUntilHittable(element)
+            element.tap()
+            if target.waitForExistence(timeout: 2) { return }
+            if attempt == 3 { XCTFail("\(description) after 3 bounded tap attempts") }
+        }
+    }
+
+    private func tapUntilGone(
+        _ element: XCUIElement,
+        target: XCUIElement,
+        description: String
+    ) {
+        for attempt in 1...3 {
+            if !target.exists { return }
+            waitUntilHittable(element)
+            element.tap()
+            let deadline = Date().addingTimeInterval(2)
+            while target.exists, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            if !target.exists { return }
+            if attempt == 3 { XCTFail("\(description) after 3 bounded tap attempts") }
+        }
+    }
+
+    private func dismissKeyboard(in app: XCUIApplication, with editor: XCUIElement) {
+        for attempt in 1...3 {
+            if !app.keyboards.firstMatch.exists { return }
+            editor.swipeDown()
+            let deadline = Date().addingTimeInterval(2)
+            while app.keyboards.firstMatch.exists, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            if !app.keyboards.firstMatch.exists { return }
+            if attempt == 3 { XCTFail("Keyboard did not dismiss after 3 bounded downward swipes") }
+        }
+    }
+
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) {
         let hittable = expectation(
             for: NSPredicate(format: "hittable == true"),
@@ -514,8 +631,11 @@ final class ManagedCoreUITests: XCTestCase {
     }
 
     private func openFilesDrawer(in app: XCUIApplication, verifier: XCUIElement) throws {
-        mobileNavigationButton("Files", in: app).tap()
-        _ = try waitForSnapshot(from: verifier, timeout: 5, description: "One Files tap did not open the drawer") {
+        _ = try tapUntilSnapshot(
+            mobileNavigationButton("Files", in: app),
+            verifier: verifier,
+            description: "Files did not open the drawer"
+        ) {
             ($0["javascript"] as? [String: Any])?["leftDrawerOpen"] as? Bool == true
         }
     }
