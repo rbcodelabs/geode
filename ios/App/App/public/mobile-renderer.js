@@ -1549,7 +1549,7 @@
   });
 
   // src/renderer/vault.ts
-  var Vault;
+  var LruContentCache, CONTENT_CACHE_MAX_ENTRIES, Vault;
   var init_vault = __esm({
     "src/renderer/vault.ts"() {
       "use strict";
@@ -1558,6 +1558,35 @@
       init_registry();
       init_perf_instrumentation();
       init_reconciliation();
+      LruContentCache = class {
+        constructor(maxEntries) {
+          this.maxEntries = maxEntries;
+          this.map = /* @__PURE__ */ new Map();
+        }
+        get(path) {
+          const value2 = this.map.get(path);
+          if (value2 === void 0) return void 0;
+          this.map.delete(path);
+          this.map.set(path, value2);
+          return value2;
+        }
+        set(path, value2) {
+          this.map.delete(path);
+          this.map.set(path, value2);
+          while (this.map.size > this.maxEntries) {
+            const oldest = this.map.keys().next().value;
+            if (oldest === void 0) break;
+            this.map.delete(oldest);
+          }
+        }
+        delete(path) {
+          this.map.delete(path);
+        }
+        clear() {
+          this.map.clear();
+        }
+      };
+      CONTENT_CACHE_MAX_ENTRIES = 2e3;
       Vault = class _Vault extends Events {
         constructor(host = getHostServices()) {
           super();
@@ -1566,8 +1595,8 @@
           this.root = "";
           this.files = /* @__PURE__ */ new Map();
           this.folders = /* @__PURE__ */ new Map();
-          /** Content cache for markdown files, kept warm for search/metadata. */
-          this.contents = /* @__PURE__ */ new Map();
+          /** Content cache for markdown files, kept warm for search/metadata. LRU-capped — see `LruContentCache`. */
+          this.contents = new LruContentCache(CONTENT_CACHE_MAX_ENTRIES);
           this.stopHostChanges = null;
           this.mutationSequence = 0;
           this.ownMutationIds = /* @__PURE__ */ new Set();
@@ -9077,6 +9106,26 @@ ${end.comment}` : end.comment;
     }
   });
 
+  // src/indexer/metadata-indexer.ts
+  function isPersistedMetadataIndexSnapshot(value2) {
+    if (!value2 || typeof value2 !== "object") return false;
+    const cache2 = value2;
+    if (cache2.schemaVersion !== METADATA_INDEX_SCHEMA_VERSION || !cache2.entries || Array.isArray(cache2.entries)) return false;
+    return Object.values(cache2.entries).every((entry) => {
+      const item = entry;
+      return !!item && typeof item.mtimeMs === "number" && typeof item.size === "number" && !!item.metadata && Array.isArray(item.metadata.links) && Array.isArray(item.metadata.embeds) && Array.isArray(item.metadata.tags) && Array.isArray(item.metadata.headings) && Array.isArray(item.metadata.aliases) && (item.mentionKeys === void 0 || Array.isArray(item.mentionKeys) && item.mentionKeys.every((key) => typeof key === "string"));
+    });
+  }
+  var METADATA_INDEX_SCHEMA_VERSION, METADATA_SNAPSHOT_CHUNK_MAX_BYTES, DEBOUNCED_WRITER_MAX_BACKOFF_MS;
+  var init_metadata_indexer = __esm({
+    "src/indexer/metadata-indexer.ts"() {
+      "use strict";
+      METADATA_INDEX_SCHEMA_VERSION = 1;
+      METADATA_SNAPSHOT_CHUNK_MAX_BYTES = 256 * 1024;
+      DEBOUNCED_WRITER_MAX_BACKOFF_MS = 5 * 6e4;
+    }
+  });
+
   // src/renderer/metadata-cache.ts
   function yieldToEventLoop() {
     return new Promise((resolve) => {
@@ -9089,17 +9138,6 @@ ${end.comment}` : end.comment;
     const record = /* @__PURE__ */ Object.create(null);
     for (const [path, count2] of counts) record[path] = count2;
     return record;
-  }
-  function isPersistedMetadataCache(value2) {
-    if (!value2 || typeof value2 !== "object") return false;
-    const candidate = value2;
-    if (candidate.schemaVersion !== METADATA_CACHE_SCHEMA_VERSION) return false;
-    if (!candidate.entries || typeof candidate.entries !== "object" || Array.isArray(candidate.entries)) return false;
-    return Object.values(candidate.entries).every((entry) => {
-      if (!entry || typeof entry !== "object") return false;
-      const item = entry;
-      return typeof item.mtimeMs === "number" && typeof item.size === "number" && typeof item.content === "string" && !!item.metadata && typeof item.metadata === "object" && Array.isArray(item.metadata.links) && Array.isArray(item.metadata.embeds) && Array.isArray(item.metadata.tags) && Array.isArray(item.metadata.headings) && Array.isArray(item.metadata.aliases) && (item.mentionKeys === void 0 || Array.isArray(item.mentionKeys) && item.mentionKeys.every((key) => typeof key === "string"));
-    });
   }
   async function processInBatches(items, concurrency, fn, yieldFn = yieldToEventLoop) {
     for (let i = 0; i < items.length; i += concurrency) {
@@ -9397,6 +9435,7 @@ ${end.comment}` : end.comment;
       init_canvas_data();
       init_perf_instrumentation();
       init_types();
+      init_metadata_indexer();
       WIKILINK_RE = /(!)?\[\[([^\[\]\n]+)\]\]/g;
       TAG_RE = /(^|[\s(])#([\p{L}\p{N}_\/-]*[\p{L}_\/-][\p{L}\p{N}_\/-]*)/gu;
       HEADING_RE = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?$/;
@@ -9491,7 +9530,7 @@ ${end.comment}` : end.comment;
             const api = typeof window === "undefined" ? void 0 : window.geode;
             if (!api?.readMetadataCache) return null;
             const value2 = await api.readMetadataCache();
-            return isPersistedMetadataCache(value2) ? value2 : null;
+            return isPersistedMetadataIndexSnapshot(value2) ? value2 : null;
           } catch {
             return null;
           }
@@ -9503,14 +9542,12 @@ ${end.comment}` : end.comment;
             const entries = {};
             for (const file of this.vault.getMarkdownFiles()) {
               const metadata = this.cache.get(file.path);
-              const content2 = this.vault.getCachedContent(file.path);
-              if (metadata && content2 !== void 0) {
+              if (metadata) {
                 entries[file.path] = {
                   mtimeMs: file.mtime,
                   size: file.size,
-                  content: content2,
                   metadata,
-                  mentionKeys: this.mentionKeysBySource.get(file.path) ?? extractMentionIndexKeys(content2)
+                  mentionKeys: this.mentionKeysBySource.get(file.path)
                 };
               }
             }
@@ -9619,7 +9656,6 @@ ${end.comment}` : end.comment;
           if (message?.type !== "delta") return;
           if (message.entry) {
             this.workerEntries.set(message.path, message.entry);
-            this.vault.primeCachedContent(message.path, message.entry.content);
           }
           if (this.dirty.has(message.path)) this.scheduleFlush();
         }
@@ -9689,7 +9725,7 @@ ${end.comment}` : end.comment;
                 const fromWorker = isMdPath(path) ? this.workerEntries.get(path) : void 0;
                 if (fromWorker) {
                   newMeta.set(path, fromWorker.metadata);
-                  newMentionKeys.set(path, fromWorker.mentionKeys ?? extractMentionIndexKeys(fromWorker.content));
+                  newMentionKeys.set(path, fromWorker.mentionKeys ?? []);
                   this.workerEntries.delete(path);
                 } else if (isCanvasPath(path)) {
                   const parsed = parseCanvasLinkMetadata(await this.vault.cachedRead(file));
@@ -9809,7 +9845,6 @@ ${end.comment}` : end.comment;
                 const entry = persisted?.entries[file.path];
                 if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
                   this.cache.set(file.path, entry.metadata);
-                  this.vault.primeCachedContent(file.path, entry.content);
                   if (entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
                 } else if (!attemptedBackground) {
                   toRead.push(file);
@@ -9882,8 +9917,7 @@ ${end.comment}` : end.comment;
               if (!live && (snapshotEntry.mtimeMs !== file.mtime || snapshotEntry.size !== file.size)) return;
               const entry = live ? live : snapshotEntry;
               this.cache.set(path, entry.metadata);
-              this.vault.primeCachedContent(path, entry.content);
-              this.setMentionSourceKeys(path, entry.mentionKeys ?? extractMentionIndexKeys(entry.content));
+              this.setMentionSourceKeys(path, entry.mentionKeys ?? []);
             });
             const missing = [...currentMarkdown.values()].filter(
               (file) => !this.cache.has(file.path) || !this.mentionKeysBySource.has(file.path)
@@ -10103,8 +10137,16 @@ ${end.comment}` : end.comment;
          * Like `getBacklinks`, but each source file also carries a trimmed
          * snippet of the line surrounding each resolved link/embed occurrence,
          * for display as context in the Backlinks pane.
+         *
+         * Async: content is no longer pre-warmed for every file (the indexer's
+         * wire format and persisted cache no longer carry raw content — see the
+         * SQLite metadata-store migration), so a source file's text is fetched
+         * on demand via `vault.cachedRead()` (a single cheap IPC round trip,
+         * cached for subsequent reads). The candidate set here is bounded by
+         * `file`'s backlink sources, not the whole vault, so the added await is
+         * invisible in practice — this fires on navigation, not per-keystroke.
          */
-        getBacklinksWithContext(file) {
+        async getBacklinksWithContext(file) {
           const out = [];
           for (const [src, targets] of this.resolvedLinkMap) {
             const count2 = targets.get(file.path);
@@ -10112,7 +10154,16 @@ ${end.comment}` : end.comment;
             const srcFile = this.vault.getFileByPath(src);
             if (!srcFile) continue;
             const meta2 = this.cache.get(src);
-            const lines = srcFile.extension === "canvas" ? this.canvasLinkContexts.get(src) ?? [] : this.vault.getCachedContent(src)?.split("\n") ?? [];
+            let lines;
+            if (srcFile.extension === "canvas") {
+              lines = this.canvasLinkContexts.get(src) ?? [];
+            } else {
+              try {
+                lines = (await this.vault.cachedRead(srcFile)).split("\n");
+              } catch {
+                lines = [];
+              }
+            }
             const snippets2 = [];
             for (const link of [...meta2?.links ?? [], ...meta2?.embeds ?? []]) {
               if (this.getFirstLinkpathDest(link.link, src)?.path !== file.path) continue;
@@ -10126,8 +10177,13 @@ ${end.comment}` : end.comment;
         /**
          * Files that mention `file`'s basename or aliases as plain text without
          * an actual `[[wikilink]]` to it — Obsidian's "unlinked mentions".
+         *
+         * Async for the same reason as `getBacklinksWithContext`: candidate
+         * sources' content is fetched on demand via `vault.cachedRead()` rather
+         * than assumed pre-warmed. The candidate set is bounded by the mention-key
+         * index (not the whole vault), so this stays cheap.
          */
-        getUnlinkedMentions(file) {
+        async getUnlinkedMentions(file) {
           const cached = this.unlinkedMentionsCache.get(file.path);
           if (cached) return cached;
           if (!this.mentionIndexReady) return [];
@@ -10146,12 +10202,17 @@ ${end.comment}` : end.comment;
           for (const src of candidates) {
             if (src === file.path) continue;
             if (!isMdPath(src)) continue;
-            const content2 = this.vault.getCachedContent(src);
-            if (content2 === void 0) continue;
+            const srcFile = this.vault.getFileByPath(src);
+            if (!srcFile) continue;
+            let content2;
+            try {
+              content2 = await this.vault.cachedRead(srcFile);
+            } catch {
+              continue;
+            }
             const mentions = findUnlinkedMentions(content2, names);
             if (!mentions.length) continue;
-            const srcFile = this.vault.getFileByPath(src);
-            if (srcFile) out.push({ source: srcFile, mentions });
+            out.push({ source: srcFile, mentions });
           }
           out.sort((a, b2) => a.source.basename.localeCompare(b2.source.basename));
           this.unlinkedMentionsCache.set(file.path, out);
@@ -60076,7 +60137,6 @@ ${end.comment}` : end.comment;
       e.stopPropagation();
       leaf.detach();
     });
-    inner.append(icon, title, close);
     const status = document.createElement("div");
     status.className = "workspace-tab-header-status-container";
     if (leaf.pinned) {
@@ -60085,7 +60145,8 @@ ${end.comment}` : end.comment;
       setIcon(pin, "pin");
       status.appendChild(pin);
     }
-    tab.append(inner, status);
+    inner.append(icon, title, status, close);
+    tab.append(inner);
     return tab;
   }
   function isDeferrableViewType(type, builtins) {
@@ -111553,15 +111614,16 @@ ${text}`;
         getIcon() {
           return "link";
         }
-        render() {
+        async render() {
           if (!this.file || this.file.extension !== "md") {
             this.empty("No file is open.");
             return;
           }
           const file = this.file;
-          const linked = this.app.metadataCache.getBacklinksWithContext(file);
+          const linked = await this.app.metadataCache.getBacklinksWithContext(file);
           const unlinkedReady = this.app.metadataCache.isUnlinkedMentionsReady();
-          const unlinked = unlinkedReady ? this.app.metadataCache.getUnlinkedMentions(file) : [];
+          const unlinked = unlinkedReady ? await this.app.metadataCache.getUnlinkedMentions(file) : [];
+          if (this.file !== file) return;
           this.bodyEl.innerHTML = "";
           this.renderSection(
             `Linked mentions (${linked.reduce((n, b2) => n + b2.count, 0)})`,
@@ -112754,6 +112816,15 @@ ${text}`;
           this.app = app;
           this.leaf = leaf;
           this.viewType = "webviewer";
+          this.reloadLabel = "Reload page";
+          /**
+           * The URL of the most recent failed main-frame load, or null while the
+           * guest is healthy. `did-navigate` deliberately does not fire on a failed
+           * load, so `currentUrl` still points at the *previous* page after one:
+           * reloading it would silently teleport the user backwards. This is the URL
+           * a reload should actually retry.
+           */
+          this.failedUrl = null;
           this.title = "";
           this.cleanups = [];
           /**
@@ -112774,7 +112845,7 @@ ${text}`;
           toolbar.className = "web-view-toolbar";
           this.backBtn = this.makeButton("arrow-left", "Back", () => this.webview.goBack());
           this.forwardBtn = this.makeButton("arrow-right", "Forward", () => this.webview.goForward());
-          this.reloadBtn = this.makeButton("rotate-cw", "Reload", () => this.webview.reload());
+          this.reloadBtn = this.makeButton("rotate-cw", "Reload", () => this.runReload());
           this.addressInput = document.createElement("input");
           this.addressInput.type = "text";
           this.addressInput.className = "web-view-address";
@@ -112790,17 +112861,10 @@ ${text}`;
           toolbar.appendChild(this.reloadBtn);
           toolbar.appendChild(this.addressInput);
           const moreBtn = this.makeButton("more-horizontal", "More options", (e) => {
-            this.app.showMenu(
-              e,
-              [
-                {
-                  title: "Bookmark this page",
-                  icon: "bookmark",
-                  action: () => void this.app.addLinkBookmark(this.currentUrl, this.title)
-                }
-              ],
-              { anchor: moreBtn, horizontalAlign: "end" }
-            );
+            this.app.showMenu(e, this.app.webPageMenuItems(this), {
+              anchor: moreBtn,
+              horizontalAlign: "end"
+            });
           });
           toolbar.appendChild(moreBtn);
           this.containerEl.appendChild(toolbar);
@@ -112830,12 +112894,16 @@ ${text}`;
           const reloadButton = document.createElement("button");
           reloadButton.className = "web-view-error-reload";
           reloadButton.textContent = "Reload";
-          reloadButton.addEventListener("click", () => this.reloadCurrent(true));
+          reloadButton.addEventListener("click", () => this.runReload());
           overlay.appendChild(icon);
           overlay.appendChild(this.errorTitleEl);
           overlay.appendChild(this.errorDetailEl);
           overlay.appendChild(reloadButton);
           return overlay;
+        }
+        /** Route a UI affordance through the action rather than calling reload() directly. */
+        runReload() {
+          void this.app.actions.execute("web.reload", { reloadable: this, webView: this, leaf: this.leaf });
         }
         makeButton(icon, title, onClick) {
           const btn = document.createElement("button");
@@ -112871,9 +112939,10 @@ ${text}`;
           const onFailLoad = (e) => {
             const { errorCode, errorDescription, validatedURL, isMainFrame } = e;
             if (!isMainFrame || errorCode === ERR_ABORTED) return;
+            this.failedUrl = validatedURL || this.currentUrl;
             this.showError(
               "This page failed to load",
-              `${errorDescription || "Load failed"} (${validatedURL || this.currentUrl})`
+              `${errorDescription || "Load failed"} (${this.failedUrl})`
             );
           };
           const onUnresponsive = () => this.containerEl.classList.add("is-web-view-unresponsive");
@@ -112938,7 +113007,37 @@ ${text}`;
         /** Hide the overlay and re-arm the crash de-dupe once the guest is healthy again. */
         clearError() {
           this.crashHandled = false;
+          this.failedUrl = null;
           this.errorEl.classList.add("is-hidden");
+        }
+        /**
+         * What a reload should target: the URL that failed if one did, else the last
+         * URL that committed. See `failedUrl`.
+         */
+        get targetUrl() {
+          return this.failedUrl ?? this.currentUrl;
+        }
+        /**
+         * User-initiated reload, driving the toolbar button, the error overlay's
+         * Reload, the tab context menu and Cmd+R (`web.reload`).
+         *
+         * Deliberately not `reloadCurrent()`: that assigns `src`, which is a
+         * browser-initiated *navigation*. Whether Chromium collapses it into a
+         * reload is version-dependent, so history state and POST resubmission are
+         * not guaranteed to behave — and on a never-navigated view `currentUrl` is
+         * still the default home page, so it would navigate somewhere the user
+         * never was. A real `reload()` has none of those problems. The one case
+         * that genuinely needs a respawn is a dead guest, handled first.
+         */
+        reload() {
+          if (this.crashHandled) {
+            this.reloadCurrent(true);
+            return;
+          }
+          this.autoRecovered = false;
+          this.clearRecoverTimer();
+          this.addressInput.value = this.targetUrl;
+          this.webview.reload();
         }
         clearRecoverTimer() {
           if (this.recoverTimer !== null) {
@@ -112957,11 +113056,12 @@ ${text}`;
          *   false so it can't re-arm itself into a loop.
          */
         reloadCurrent(resetGuard = false) {
+          const url = this.targetUrl;
           this.clearRecoverTimer();
           if (resetGuard) this.autoRecovered = false;
           this.crashHandled = false;
           this.errorEl.classList.add("is-hidden");
-          this.webview.src = this.currentUrl;
+          this.webview.src = url;
         }
         updateNavButtons() {
           this.backBtn.classList.toggle("is-disabled", !this.webview.canGoBack());
@@ -112984,11 +113084,20 @@ ${text}`;
           this.clearRecoverTimer();
           this.autoRecovered = false;
           this.crashHandled = false;
+          this.failedUrl = null;
           this.errorEl.classList.add("is-hidden");
           this.webview.src = url;
           this.persistState();
         }
         // --- View / state-round-trip ---------------------------------------------
+        /**
+         * The page's own `<title>`, empty until one arrives. Deliberately not
+         * `getDisplayText()`, which falls back to the URL host: a bookmark made
+         * before the title lands should read as the URL, not as "example.com".
+         */
+        get pageTitle() {
+          return this.title;
+        }
         getDisplayText() {
           if (this.title) return this.title;
           try {
@@ -113034,6 +113143,7 @@ ${text}`;
           this.app = app;
           this.leaf = leaf;
           this.viewType = "geode-artifact";
+          this.reloadLabel = "Reload artifact";
           this.containerEl = document.createElement("div");
           this.stageEl = document.createElement("div");
           this.statusEl = document.createElement("div");
@@ -113047,7 +113157,9 @@ ${text}`;
           this.containerEl.className = "artifact-view";
           const toolbar = document.createElement("div");
           toolbar.className = "artifact-view-toolbar";
-          toolbar.append(this.iconButton("rotate-cw", "Reload artifact", () => this.webview?.reload()));
+          toolbar.append(this.iconButton("rotate-cw", "Reload artifact", () => {
+            void this.app.actions.execute("web.reload", { reloadable: this, leaf: this.leaf });
+          }));
           for (const preset of ["desktop", "tablet", "mobile"]) {
             const button = document.createElement("button");
             button.className = "artifact-view-viewport-btn";
@@ -113096,6 +113208,16 @@ ${text}`;
           return "layout-template";
         }
         onOpen() {
+        }
+        /**
+         * ReloadableView. `webview` is null exactly when `load()` bailed — a
+         * missing root, a manifest that failed validation, a thrown error — which
+         * is precisely when the user wants to retry, so fall back to re-running the
+         * load rather than doing nothing.
+         */
+        reload() {
+          if (this.webview) this.webview.reload();
+          else void this.load(this.root);
         }
         async setState(state) {
           if (!state || typeof state.root !== "string" || !state.root.trim()) {
@@ -113687,7 +113809,7 @@ ${details}` : result.error.message);
       return mode === "others" || index > clickedIndex;
     });
   }
-  var value, ActionRegistry, DOCUMENT_MENU_SPEC, TAB_MENU_SPEC, FOLDER_MENU_SPEC;
+  var value, ActionRegistry, DOCUMENT_MENU_SPEC, TAB_MENU_SPEC, WEB_TAB_MENU_SPEC, FOLDER_MENU_SPEC;
   var init_actions = __esm({
     "src/renderer/actions.ts"() {
       "use strict";
@@ -113699,6 +113821,21 @@ ${details}` : result.error.message);
         register(definition) {
           this.definitions.set(definition.id, definition);
         }
+        /**
+         * Resolve an action's presentation and availability against a context.
+         *
+         * `label`, `icon` and `checked` are evaluated BEFORE `available` and are
+         * returned alongside it. Two consequences worth stating out loud:
+         *
+         * 1. **Dynamic callbacks must be total.** A `label` that dereferences a
+         *    field only some contexts carry throws for every caller that enumerates
+         *    actions, including `commands.list()` (which polls availability across
+         *    every command to build the palette) and every context menu. Write them
+         *    defensively: `(c) => c.thing?.label ?? "Fallback"`.
+         * 2. **Do not "fix" (1) by short-circuiting when unavailable.** Menu specs
+         *    can pass `includeUnavailable`, and those greyed-out items still need
+         *    real labels rather than the id fallback.
+         */
         resolve(id2, context) {
           const definition = this.definitions.get(id2);
           if (!definition) return null;
@@ -113725,8 +113862,17 @@ ${details}` : result.error.message);
         { section: "file", actions: ["resource.rename", "resource.delete"] }
       ];
       TAB_MENU_SPEC = [
+        // Placed first rather than appended. On a web tab every DOCUMENT_MENU_SPEC
+        // section collapses (there is no file) while the tab section below renders
+        // four items unconditionally, so appending would bury Reload at the bottom
+        // of the menu. No `includeUnavailable`: on a markdown tab this section
+        // filters out entirely, leaving the existing menu text untouched.
+        { section: "web", actions: ["web.reload"] },
         ...DOCUMENT_MENU_SPEC,
         { section: "tab", actions: ["tab.pin", "tab.close", "tab.close-others", "tab.close-right"], includeUnavailable: true }
+      ];
+      WEB_TAB_MENU_SPEC = [
+        { section: "page", actions: ["web.reload", "web.bookmark-page"] }
       ];
       FOLDER_MENU_SPEC = [
         { section: "create", actions: ["folder.new-note", "folder.new-canvas", "folder.new-base", "folder.new-folder"] },
@@ -115308,6 +115454,11 @@ ${details}` : result.error.message);
            * modal closes.
            */
           this.activeSettingsModal = null;
+          /**
+           * The `<webview>` guest a hotkey currently being dispatched came from, or
+           * null for a host-document keystroke. See leafOwningGuest.
+           */
+          this.guestHotkeySource = null;
           this.host = host;
           this.vault = new Vault(host);
           this.metadataCache = new MetadataCache(this.vault);
@@ -115999,10 +116150,15 @@ ${details}` : result.error.message);
               }
             }, 0);
           };
-          this.commands.onChange(publish);
+          this.hostDisposers.add(this.commands.onChange(publish));
           publish();
-          const stopGuestHotkeys = this.host.desktop?.onGuestHotkey((combo) => {
-            this.commands.dispatchHotkey(combo);
+          const stopGuestHotkeys = this.host.desktop?.onGuestHotkey((combo, guestId) => {
+            this.guestHotkeySource = typeof guestId === "number" ? guestId : null;
+            try {
+              this.commands.dispatchHotkey(combo);
+            } finally {
+              this.guestHotkeySource = null;
+            }
           });
           if (stopGuestHotkeys) this.hostDisposers.add(stopGuestHotkeys);
         }
@@ -116038,14 +116194,63 @@ ${details}` : result.error.message);
           this.metadataCache.dispose();
           await this.vault.close();
         }
+        /**
+         * The leaf whose subtree contains the guest with this WebContents id.
+         *
+         * Clicks inside a `<webview>` are consumed by the guest and never produce a
+         * host DOM mouse event, so the host's active leaf does not follow focus
+         * into one. In a split layout with a web tab active in one group and a
+         * canvas web card clicked in another, Cmd+R would otherwise reload a page
+         * in a pane the user is not looking at. Resolving through the DOM covers
+         * every guest host uniformly: web tabs, artifact tabs, canvas web cards and
+         * any plugin view that mounts a webview.
+         */
+        leafOwningGuest(guestId) {
+          const guestEl = [...document.querySelectorAll("webview")].find((el4) => {
+            try {
+              return el4.getWebContentsId() === guestId;
+            } catch {
+              return false;
+            }
+          });
+          if (!guestEl) return null;
+          let owner = null;
+          this.workspace.iterateAllLeaves((leaf) => {
+            if (!owner && leaf.contentEl.contains(guestEl)) owner = leaf;
+          });
+          return owner;
+        }
+        /**
+         * The view-scoped half of an action context.
+         *
+         * Resolved with `instanceof` against Geode's own view classes, never with a
+         * structural `typeof view.reload === "function"` check: that would bind
+         * Cmd+R to any plugin view that happens to expose a `reload` method, which
+         * is untrusted third-party code.
+         *
+         * No `isDeferred` branch is needed. The "webviewer" and "geode-artifact"
+         * factories are registered in openVaultMeasured before restoreWorkspaceLayout
+         * runs, so a restored background web tab already holds a real WebView rather
+         * than a DeferredView placeholder. That would stop being true if Web Viewer
+         * ever moved behind a core-plugin registry.
+         */
+        viewActionContext(view) {
+          const reloadable = view instanceof WebView || view instanceof ArtifactView ? view : null;
+          return {
+            view: view instanceof MarkdownView ? view : null,
+            webView: view instanceof WebView ? view : null,
+            reloadable
+          };
+        }
         activeActionContext() {
-          const leaf = this.workspace.getActiveLeaf();
+          const source = this.guestHotkeySource;
+          const leaf = (source !== null ? this.leafOwningGuest(source) : null) ?? this.workspace.getActiveLeaf();
           const file = leaf?.view?.getFile?.() ?? null;
           return {
             leaf,
             file,
             resource: file,
-            view: leaf?.view instanceof MarkdownView ? leaf.view : null
+            ...this.viewActionContext(leaf?.view)
           };
         }
         registerActions() {
@@ -116142,6 +116347,25 @@ ${details}` : result.error.message);
             isAvailable: (context) => !!context.view,
             run: (context) => context.view.toggleSource()
           });
+          this.actions.register({
+            id: "web.reload",
+            // Total by construction: resolve() evaluates the label in every context,
+            // including markdown tabs that carry no reloadable view at all.
+            label: (context) => context.reloadable?.reloadLabel ?? "Reload",
+            icon: "rotate-cw",
+            isAvailable: (context) => !!context.reloadable,
+            run: (context) => context.reloadable.reload()
+          });
+          this.actions.register({
+            id: "web.bookmark-page",
+            label: "Bookmark this page",
+            icon: "bookmark",
+            isAvailable: (context) => !!context.webView,
+            run: (context) => {
+              const view = context.webView;
+              void this.addLinkBookmark(view.getState().url, view.pageTitle);
+            }
+          });
         }
         registerCommands() {
           const c = (id2, name2, hotkey, callback) => this.commands.add({ id: id2, name: name2, hotkey, callback });
@@ -116159,6 +116383,7 @@ ${details}` : result.error.message);
           this.commands.add(createActionCommand(this.actions, "resource.delete", "Delete current file", () => this.activeActionContext()));
           this.commands.add(createActionCommand(this.actions, "resource.bookmark", "Bookmark or un-bookmark current file", () => this.activeActionContext()));
           this.commands.add(createActionCommand(this.actions, "file.open-new-tab", "Open current file in new tab", () => this.activeActionContext()));
+          this.commands.add(createActionCommand(this.actions, "web.reload", "Reload page", () => this.activeActionContext(), "Mod+R"));
           c("split-right", "Split right", void 0, () => {
             const group = this.workspace.addGroup(this.workspace.activeGroup);
             this.openEmptyTab(group);
@@ -116251,13 +116476,12 @@ ${details}` : result.error.message);
             void view.bookmarkBlockUnderCursor();
           });
           c("bookmark-webpage", "Bookmark current web page", void 0, () => {
-            const view = this.workspace.getActiveViewOfType(WebView);
-            if (!view) {
+            const context = this.activeActionContext();
+            if (!context.webView) {
               this.notify("No web page is open");
               return;
             }
-            const url = view.getState().url ?? "";
-            void this.addLinkBookmark(url, view.getDisplayText());
+            void this.actions.execute("web.bookmark-page", context);
           });
         }
         // --- File opening -------------------------------------------------------
@@ -116995,6 +117219,10 @@ ${details}` : result.error.message);
         folderMenuItems(folder) {
           return composeMenu(this.actions, { resource: folder }, FOLDER_MENU_SPEC);
         }
+        /** Page actions for the Web Viewer toolbar's "More options" menu. */
+        webPageMenuItems(view) {
+          return composeMenu(this.actions, { webView: view, reloadable: view, leaf: null }, WEB_TAB_MENU_SPEC);
+        }
         // --- UI helpers ---------------------------------------------------------
         notify(message, timeout = 4e3) {
           createDismissibleNotice(message, timeout);
@@ -117026,7 +117254,7 @@ ${details}` : result.error.message);
             leaf,
             file,
             resource: file,
-            view: leaf.view instanceof MarkdownView ? leaf.view : null
+            ...this.viewActionContext(leaf.view)
           }, TAB_MENU_SPEC));
         }
         applySettings() {
