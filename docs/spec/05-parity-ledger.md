@@ -45,7 +45,9 @@ Status overrides live in [`parity-evidence.json`](parity-evidence.json), keyed
 by generated requirement ID. Any status other than `unknown` requires at least
 one evidence reference. Unknown IDs, invalid statuses, and evidence-free status
 claims fail generation. Name matching or code inspection alone never upgrades a
-row to `verified`.
+row to `verified` — and for DOM-rendering-surface rows, neither does unit-test
+evidence by itself; see [DOM-surface evidence policy](#dom-surface-evidence-policy)
+below.
 
 Example:
 
@@ -55,6 +57,87 @@ Example:
     "status": "verified",
     "evidence": ["tests/e2e/example.spec.ts"],
     "notes": "Observed behavior covered by the named test."
+  }
+}
+```
+
+## DOM-surface evidence policy
+
+A prior incident shipped through two releases because a custom-icon rendering
+bug was marked `verified` on tests that mocked or aliased Obsidian's API and
+never exercised a real Geode/Electron render. To close that gap, every
+requirement row carries a generator-computed `surface: "logic" | "dom"`
+classification, and **DOM-rendering-surface API claims cannot be `verified` on
+unit-test evidence alone — they require at least one `tests/e2e/`-prefixed
+evidence path.**
+
+Surface is classified at generation time from the syntax of `obsidian.d.ts`
+only (no type checker), in this priority order:
+
+1. **Class allowlist** — every member of any of these classes/interfaces is
+   `dom`, regardless of the member's own declared type:
+
+   ```
+   View, ItemView, FileView, TextFileView, EditableFileView, Modal,
+   SuggestModal, FuzzySuggestModal, Menu, MenuItem, Notice, WorkspaceLeaf,
+   HoverPopover, AbstractInputSuggest
+   ```
+
+2. **Declared-type token match** — a member's declared type (for methods, the
+   return type plus every parameter type, combined), or a top-level
+   function's return+parameter types, matching this pattern is `dom`:
+
+   ```
+   /\b(HTMLElement|HTMLDivElement|HTMLSpanElement|SVGElement|SVGSVGElement|DocumentFragment|Element)\b/
+   ```
+
+3. **`Workspace`/`WorkspaceItem` keyword scope** — for members of `Workspace`
+   or `WorkspaceItem` specifically, a member name matching this pattern is
+   `dom`:
+
+   ```
+   /icon|split|tab|ribbon|sidebar|dock|drawer|view/iu
+   ```
+
+4. **Top-level function exception** — `addIcon` and `removeIcon` are `dom` by
+   exact function name at the `api-declaration` level. This is a
+   hand-maintained literal list: their signatures are plain strings/`void`
+   with no syntactic DOM signal to infer from.
+
+5. Everything else is `logic`. This includes every `help-page`,
+   `developer-page`, and `changelog-delta` row (no computation needed — always
+   `logic`), and the top-level class/interface/enum/type-alias declaration
+   rows themselves (as opposed to their members).
+
+A row's evidence entry may override the computed default with an explicit
+`"surface": "dom" | "logic"` field. Any explicit override — in either
+direction — requires a non-empty `notes` string explaining why the computed
+default doesn't apply. Name matching or code inspection alone never upgrades
+a row to `verified`, and neither does asserting a `surface` override without
+a `tests/e2e/` reference when the resolved surface is `dom`; see the two
+examples below.
+
+`dom`-surface row, verified on a real-Electron test:
+
+```json
+{
+  "API-MEMBER-200ae2a05b18": {
+    "status": "verified",
+    "evidence": ["tests/e2e/view-icon.spec.ts"],
+    "notes": "Observed the rendered tab icon after mounting a custom View in a real Electron window."
+  }
+}
+```
+
+Explicit surface override, with its required note:
+
+```json
+{
+  "API-MEMBER-0123456789ab": {
+    "status": "missing",
+    "evidence": ["docs/spec/00-overview.md"],
+    "surface": "dom",
+    "notes": "Overridden to dom: this member paints a status-bar spinner despite its void return type, which the syntactic classifier cannot see."
   }
 }
 ```

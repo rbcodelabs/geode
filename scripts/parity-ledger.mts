@@ -20,10 +20,20 @@ export type RequirementKind =
   | "api-declaration"
   | "api-member";
 
+/**
+ * DOM-rendering-affecting API surface versus everything else. `dom` rows can
+ * only be marked `verified` on real-Electron (`tests/e2e/`) evidence; see
+ * `classifyMemberSurface`/`classifyTopLevelFunctionSurface` for the
+ * classification rules and docs/spec/05-parity-ledger.md for the policy.
+ */
+export type Surface = "logic" | "dom";
+
 export interface EvidenceEntry {
   status: ParityStatus;
   evidence: string[];
   notes?: string;
+  /** Explicit override of the generator-computed surface. Requires `notes`. */
+  surface?: Surface;
 }
 
 export type EvidenceMap = Record<string, EvidenceEntry>;
@@ -31,6 +41,7 @@ export type EvidenceMap = Record<string, EvidenceEntry>;
 export interface ParityRequirement {
   id: string;
   kind: RequirementKind;
+  surface: Surface;
   category: string;
   title: string;
   sourcePath: string;
@@ -69,6 +80,7 @@ interface RequirementSeed {
   title: string;
   sourcePath: string;
   sourceLink: string;
+  surface: Surface;
 }
 
 const SOURCE_URLS = {
@@ -155,6 +167,7 @@ async function helpPageSeeds(helpRoot: string): Promise<RequirementSeed[]> {
       title: titleFromPath(sourcePath),
       sourcePath: `obsidian-help/${sourcePath}`,
       sourceLink: `${SOURCE_URLS.help}${encodeSourcePath(sourcePath)}`,
+      surface: "logic",
     };
   });
 }
@@ -170,6 +183,7 @@ async function developerPageSeeds(developerRoot: string): Promise<RequirementSee
       title: titleFromPath(sourcePath),
       sourcePath: `obsidian-developer-docs/${sourcePath}`,
       sourceLink: `${SOURCE_URLS.developer}${encodeSourcePath(sourcePath)}`,
+      surface: "logic",
     };
   });
 }
@@ -199,6 +213,7 @@ async function changelogSeeds(helpRoot: string): Promise<RequirementSeed[]> {
         title: description,
         sourcePath: `obsidian-help/${repositoryPath}#L${index + 1}`,
         sourceLink: `${SOURCE_URLS.help}${encodeSourcePath(repositoryPath)}#L${index + 1}`,
+        surface: "logic",
       });
     }
   }
@@ -226,7 +241,41 @@ function isPrivateMember(node: ts.Node): boolean {
   );
 }
 
-function memberNames(node: ts.Node): string[] {
+/** A class/interface/type-literal member's name plus its declared type text (for methods, the
+ * return type and every parameter type combined) so callers can scan for DOM signal. */
+interface MemberInfo {
+  name: string;
+  typeText: string;
+}
+
+function combineTypeTexts(...pieces: Array<string | undefined>): string {
+  return pieces.filter((piece): piece is string => Boolean(piece)).join(" | ");
+}
+
+function memberTypeText(member: ts.ClassElement | ts.TypeElement): string {
+  if (ts.isPropertyDeclaration(member) || ts.isPropertySignature(member)) {
+    return combineTypeTexts(member.type?.getText());
+  }
+  if (ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
+    return combineTypeTexts(
+      member.type?.getText(),
+      ...member.parameters.map((parameter) => parameter.type?.getText()),
+    );
+  }
+  if (
+    ts.isMethodDeclaration(member) ||
+    ts.isMethodSignature(member) ||
+    ts.isConstructorDeclaration(member)
+  ) {
+    return combineTypeTexts(
+      member.type?.getText(),
+      ...member.parameters.map((parameter) => parameter.type?.getText()),
+    );
+  }
+  return "";
+}
+
+function memberInfos(node: ts.Node): MemberInfo[] {
   let members: ts.NodeArray<ts.TypeElement | ts.ClassElement | ts.EnumMember> | undefined;
   if (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) members = node.members;
   else if (ts.isEnumDeclaration(node)) members = node.members;
@@ -235,16 +284,94 @@ function memberNames(node: ts.Node): string[] {
   }
   if (!members) return [];
 
-  const names = new Set<string>();
+  const typeTextsByName = new Map<string, string[]>();
   for (const member of members) {
     if (isPrivateMember(member)) continue;
-    if (ts.isConstructorDeclaration(member)) names.add("(constructor)");
-    else if ("name" in member) {
-      const name = nodeName(member as ts.NamedDeclaration);
-      if (name && !name.startsWith("#")) names.add(name);
+    let name: string | undefined;
+    let typeText = "";
+    if (ts.isConstructorDeclaration(member)) {
+      name = "(constructor)";
+      typeText = memberTypeText(member);
+    } else if ("name" in member) {
+      const declaredName = nodeName(member as ts.NamedDeclaration);
+      if (declaredName && !declaredName.startsWith("#")) {
+        name = declaredName;
+        typeText = memberTypeText(member as ts.ClassElement | ts.TypeElement);
+      }
     }
+    if (!name) continue;
+    const bucket = typeTextsByName.get(name) ?? [];
+    if (typeText) bucket.push(typeText);
+    typeTextsByName.set(name, bucket);
   }
-  return [...names].sort((left, right) => left.localeCompare(right, "en"));
+
+  return [...typeTextsByName.entries()]
+    .map(([name, texts]) => ({ name, typeText: texts.join(" | ") }))
+    .sort((left, right) => left.name.localeCompare(right.name, "en"));
+}
+
+function functionTypeText(fn: ts.FunctionDeclaration): string {
+  return combineTypeTexts(
+    fn.type?.getText(),
+    ...fn.parameters.map((parameter) => parameter.type?.getText()),
+  );
+}
+
+/**
+ * Classes/interfaces whose every public member renders DOM regardless of the member's own
+ * declared type (View lifecycle, modals, menus, workspace panes, popovers, input suggesters).
+ */
+const DOM_CLASS_ALLOWLIST = new Set([
+  "View",
+  "ItemView",
+  "FileView",
+  "TextFileView",
+  "EditableFileView",
+  "Modal",
+  "SuggestModal",
+  "FuzzySuggestModal",
+  "Menu",
+  "MenuItem",
+  "Notice",
+  "WorkspaceLeaf",
+  "HoverPopover",
+  "AbstractInputSuggest",
+]);
+
+/** A declared type mentioning any of these tokens is rendering-affecting. */
+const DOM_TYPE_TOKEN_PATTERN =
+  /\b(HTMLElement|HTMLDivElement|HTMLSpanElement|SVGElement|SVGSVGElement|DocumentFragment|Element)\b/;
+
+/** Members of these classes are DOM-surface when their *name* smells like layout/chrome. */
+const WORKSPACE_KEYWORD_SCOPE_CLASSES = new Set(["Workspace", "WorkspaceItem"]);
+const WORKSPACE_KEYWORD_PATTERN = /icon|split|tab|ribbon|sidebar|dock|drawer|view/iu;
+
+/**
+ * Hand-maintained exception list: these top-level functions render DOM (icon registration) but
+ * their signatures are plain strings/void, so no syntactic type signal exists to infer it from.
+ */
+const DOM_TOP_LEVEL_FUNCTION_ALLOWLIST = new Set(["addIcon", "removeIcon"]);
+
+function classifyMemberSurface(
+  containingName: string,
+  memberName: string,
+  typeText: string,
+): Surface {
+  if (DOM_CLASS_ALLOWLIST.has(containingName)) return "dom";
+  if (DOM_TYPE_TOKEN_PATTERN.test(typeText)) return "dom";
+  if (
+    WORKSPACE_KEYWORD_SCOPE_CLASSES.has(containingName) &&
+    WORKSPACE_KEYWORD_PATTERN.test(memberName)
+  ) {
+    return "dom";
+  }
+  return "logic";
+}
+
+function classifyTopLevelFunctionSurface(functionName: string, typeText: string): Surface {
+  if (DOM_TYPE_TOKEN_PATTERN.test(typeText)) return "dom";
+  if (DOM_TOP_LEVEL_FUNCTION_ALLOWLIST.has(functionName)) return "dom";
+  return "logic";
 }
 
 function declarationNames(statement: ts.Statement): string[] {
@@ -285,6 +412,9 @@ async function apiSeeds(apiRoot: string): Promise<RequirementSeed[]> {
     if (!isExported(statement)) continue;
     for (const name of declarationNames(statement)) {
       const topKey = `api:${name}`;
+      const topLevelSurface: Surface = ts.isFunctionDeclaration(statement)
+        ? classifyTopLevelFunctionSurface(name, functionTypeText(statement))
+        : "logic";
       seeds.set(topKey, {
         canonicalKey: topKey,
         kind: "api-declaration",
@@ -292,16 +422,18 @@ async function apiSeeds(apiRoot: string): Promise<RequirementSeed[]> {
         title: name,
         sourcePath: `obsidian-api/${repositoryPath}`,
         sourceLink: `${SOURCE_URLS.api}${repositoryPath}`,
+        surface: topLevelSurface,
       });
-      for (const member of memberNames(statement)) {
-        const memberKey = `api:${name}.${member}`;
+      for (const member of memberInfos(statement)) {
+        const memberKey = `api:${name}.${member.name}`;
         seeds.set(memberKey, {
           canonicalKey: memberKey,
           kind: "api-member",
           category: "Plugin API member",
-          title: `${name}.${member}`,
+          title: `${name}.${member.name}`,
           sourcePath: `obsidian-api/${repositoryPath}`,
           sourceLink: `${SOURCE_URLS.api}${repositoryPath}`,
+          surface: classifyMemberSurface(name, member.name, member.typeText),
         });
       }
     }
@@ -309,12 +441,31 @@ async function apiSeeds(apiRoot: string): Promise<RequirementSeed[]> {
   return [...seeds.values()];
 }
 
-function validateEvidence(id: string, entry: EvidenceEntry): void {
+function validateEvidence(id: string, entry: EvidenceEntry, computedSurface: Surface): void {
   if (!STATUS_VOCABULARY.includes(entry.status)) {
     throw new Error(`${id} has invalid status: ${String(entry.status)}`);
   }
   if (entry.status !== "unknown" && entry.evidence.length === 0) {
     throw new Error(`${id} status ${entry.status} requires at least one evidence reference`);
+  }
+
+  const resolvedSurface = entry.surface ?? computedSurface;
+  if (resolvedSurface === "dom" && entry.status === "verified") {
+    const hasRealElectronEvidence = entry.evidence.some((reference) =>
+      reference.startsWith("tests/e2e/"),
+    );
+    if (!hasRealElectronEvidence) {
+      throw new Error(
+        `${id} is a dom-surface requirement marked verified but cites no tests/e2e/ evidence; ` +
+          `DOM-rendering API claims require at least one real-Electron tests/e2e/-prefixed evidence reference`,
+      );
+    }
+  }
+
+  if (entry.surface !== undefined && (typeof entry.notes !== "string" || entry.notes.length === 0)) {
+    throw new Error(
+      `${id} overrides surface to "${entry.surface}" but is missing a required, non-empty notes explanation`,
+    );
   }
 }
 
@@ -346,10 +497,11 @@ export async function buildParityLedger(
     if (generatedIds.has(id)) throw new Error(`Stable requirement ID collision: ${id}`);
     generatedIds.add(id);
     const explicit = options.evidence[id];
-    if (explicit) validateEvidence(id, explicit);
+    if (explicit) validateEvidence(id, explicit, seed.surface);
     return {
       id,
       kind: seed.kind,
+      surface: explicit?.surface ?? seed.surface,
       category: seed.category,
       title: seed.title,
       sourcePath: seed.sourcePath,
