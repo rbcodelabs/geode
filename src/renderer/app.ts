@@ -577,6 +577,8 @@ class SettingsModal extends Modal {
         const row = document.createElement("div");
         row.className = "hotkey-command";
         row.dataset.commandId = command.id;
+        row.setAttribute("role", "group");
+        row.setAttribute("aria-label", command.name);
         const info = document.createElement("div");
         info.className = "hotkey-command-info";
         const name = document.createElement("div"); name.className = "hotkey-command-name"; name.textContent = command.name;
@@ -586,8 +588,20 @@ class SettingsModal extends Modal {
         for (const binding of bindings) {
           const pill = document.createElement("span"); pill.className = "hotkey-pill"; pill.textContent = displayHotkey(binding);
           const owners = this.geodeApp.commands.snapshot().ownersByBinding[bindingIdentity(binding)] ?? [];
-          if (owners.length > 1) { pill.classList.add("is-conflicted"); pill.title = `Conflict with ${owners.filter(o => o !== command.id).join(", ")}`; }
-          const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "×"; remove.setAttribute("aria-label", `Remove ${displayHotkey(binding)}`);
+          if (owners.length > 1) {
+            const conflictingNames = owners
+              .filter(owner => owner !== command.id)
+              .map(owner => this.geodeApp.commands.findCommand(owner)?.name ?? owner);
+            const conflictDescription = `${displayHotkey(binding)} conflicts with ${conflictingNames.join(", ")}`;
+            pill.classList.add("is-conflicted");
+            pill.title = conflictDescription;
+            const indicator = document.createElement("span");
+            indicator.className = "hotkey-conflict-indicator";
+            indicator.textContent = "Conflict";
+            indicator.setAttribute("aria-label", conflictDescription);
+            pill.append(indicator);
+          }
+          const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "×"; remove.setAttribute("aria-label", `Remove ${displayHotkey(binding)} from ${command.name}`);
           remove.addEventListener("click", () => void this.geodeApp.commands.removeBinding(command.id, binding));
           pill.append(remove); bindingList.append(pill);
         }
@@ -596,6 +610,7 @@ class SettingsModal extends Modal {
         bindingList.append(add);
         if (this.geodeApp.commands.hasOverride(command.id)) {
           const reset = document.createElement("button"); reset.type = "button"; reset.className = "hotkey-reset"; reset.textContent = "Reset";
+          reset.setAttribute("aria-label", `Reset hotkeys for ${command.name}`);
           reset.addEventListener("click", () => void this.geodeApp.commands.resetBindings(command.id)); bindingList.append(reset);
         }
         row.append(info, bindingList); list.append(row);
@@ -609,17 +624,30 @@ class SettingsModal extends Modal {
   private captureHotkey(commandId: string, commandName: string, button: HTMLButtonElement, row: HTMLElement): void {
     this.stopHotkeyRecorder?.();
     button.textContent = "Press keys…";
+    button.setAttribute("aria-label", `Recording hotkey for ${commandName}. Press Escape to cancel.`);
+    const status = document.createElement("span");
+    status.className = "hotkey-recording-status";
+    status.setAttribute("role", "status");
+    status.textContent = `Recording hotkey for ${commandName}. Press Escape to cancel.`;
+    row.append(status);
     let active = true;
-    const stop = () => {
+    const stop = (announcement?: string) => {
       if (!active) return;
       active = false;
       window.removeEventListener("keydown", listener, true);
       button.textContent = "+";
+      button.setAttribute("aria-label", `Add hotkey for ${commandName}`);
+      if (announcement) {
+        status.textContent = announcement;
+        window.setTimeout(() => status.remove(), 1500);
+      } else {
+        status.remove();
+      }
       if (this.stopHotkeyRecorder === stop) this.stopHotkeyRecorder = null;
     };
     const listener = async (event: KeyboardEvent) => {
       event.preventDefault(); event.stopPropagation();
-      if (event.code === "Escape") { stop(); return; }
+      if (event.code === "Escape") { stop("Hotkey recording canceled."); return; }
       const binding = eventToBinding(event);
       if (!binding) return;
       stop();
@@ -630,6 +658,7 @@ class SettingsModal extends Modal {
       if (result.status !== "conflict") return;
       const existing = row.querySelector(".hotkey-conflict-choice"); existing?.remove();
       const choice = document.createElement("div"); choice.className = "hotkey-conflict-choice";
+      choice.setAttribute("role", "alert");
       const names = result.owners.map(owner => this.geodeApp.commands.findCommand(owner)?.name ?? owner);
       choice.append(` ${displayHotkey(binding)} is assigned to ${names.join(", ")}. `);
       if (["Mod+KeyQ", "Mod+KeyW", "Mod+KeyT"].includes(bindingIdentity(binding))) {
