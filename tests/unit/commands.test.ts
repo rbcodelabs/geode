@@ -97,9 +97,9 @@ describe("CommandRegistry", () => {
     registry.add(cmd("palette", { hotkey: "Mod+P" }));
     registry.add(cmd("close-tab", { hotkey: "Mod+W" }));
     registry.add(cmd("no-hotkey"));
-    expect(registry.hotkeys().sort()).toEqual(["Mod+P", "Mod+W"]);
+    expect(registry.hotkeys().sort()).toEqual(["Mod+KeyP", "Mod+KeyW"]);
     registry.remove("close-tab");
-    expect(registry.hotkeys()).toEqual(["Mod+P"]);
+    expect(registry.hotkeys()).toEqual(["Mod+KeyP"]);
   });
 
   it("onChange() fires on add and remove, and stops firing once unsubscribed", () => {
@@ -121,9 +121,9 @@ describe("CommandRegistry", () => {
     const registry = new CommandRegistry();
     let fired = 0;
     registry.add(cmd("close-tab", { hotkey: "Mod+W", callback: () => fired++ }));
-    expect(registry.dispatchHotkey("Mod+W")).toBe(true);
+    expect(registry.dispatchHotkey("Mod+KeyW")).toBe(true);
     expect(fired).toBe(1);
-    expect(registry.dispatchHotkey("Mod+Q")).toBe(false);
+    expect(registry.dispatchHotkey("Mod+KeyQ")).toBe(false);
     expect(fired).toBe(1);
   });
 

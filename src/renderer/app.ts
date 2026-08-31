@@ -2,6 +2,7 @@ import { Vault } from "./vault";
 import { MetadataCache } from "./metadata-cache";
 import { Workspace, TabGroup, View, type PersistedWorkspace, type ReloadableView, type WorkspaceLeaf } from "./workspace";
 import { CommandRegistry } from "./commands";
+import { displayHotkey, eventToBinding, bindingIdentity, type Hotkey } from "../shared/hotkey";
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
 import { CommunityManager } from "./community/community-manager";
@@ -186,8 +187,17 @@ class CommandPaletteModal extends SuggestModal<Command> {
   }
 
   renderItem(cmd: Command, el: HTMLElement): void {
-    const hotkey = cmd.hotkey ? `<span class="prompt-result-hotkey">${cmd.hotkey.replace("Mod", navigator.platform.includes("Mac") ? "⌘" : "Ctrl")}</span>` : "";
-    el.innerHTML = `<div class="prompt-result-title">${cmd.name}</div>${hotkey}`;
+    const label = this.geodeApp.commands.bindingsFor(cmd.id).map(binding => displayHotkey(binding)).join(", ");
+    const title = document.createElement("div");
+    title.className = "prompt-result-title";
+    title.textContent = cmd.name;
+    el.append(title);
+    if (label) {
+      const hotkey = document.createElement("span");
+      hotkey.className = "prompt-result-hotkey";
+      hotkey.textContent = label;
+      el.append(hotkey);
+    }
   }
 
   onChooseItem(cmd: Command): void {
@@ -344,14 +354,16 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "community-plugins" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "community-plugins", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "community-plugins" | "performance";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "community-plugins", "performance"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
   private contentContainerEl!: HTMLElement;
   private activeTabId: string = "appearance";
   private unsubscribeSettingTabs: (() => void) | null = null;
+  private unsubscribeHotkeys: (() => void) | null = null;
+  private stopHotkeyRecorder: (() => void) | null = null;
   /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
   private stopPerformanceTab: (() => void) | null = null;
 
@@ -418,6 +430,10 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab();
       this.stopPerformanceTab = null;
     }
+    this.unsubscribeHotkeys?.();
+    this.unsubscribeHotkeys = null;
+    this.stopHotkeyRecorder?.();
+    this.stopHotkeyRecorder = null;
 
     this.activeTabId = id;
     this.renderNav();
@@ -425,6 +441,8 @@ class SettingsModal extends Modal {
 
     if (id === "appearance") {
       this.renderAppearanceTab(this.contentContainerEl);
+    } else if (id === "hotkeys") {
+      this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
     } else if (id === "performance") {
@@ -471,6 +489,7 @@ class SettingsModal extends Modal {
     };
 
     addNavItem("appearance", "Appearance", this.navEl);
+    addNavItem("hotkeys", "Hotkeys", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
@@ -525,6 +544,133 @@ class SettingsModal extends Modal {
         this.geodeApp.saveSettings();
       }
     );
+  }
+
+  private renderHotkeysTab(container: HTMLElement): void {
+    container.innerHTML = `<h2>Hotkeys</h2>`;
+    const guidance = document.createElement("p");
+    guidance.className = "hotkey-guidance";
+    guidance.textContent = "Use a physical hardware keyboard to record shortcuts. Touch-only devices can still remove and reset assignments.";
+    const controls = document.createElement("div");
+    controls.className = "hotkey-controls";
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "Search commands…";
+    search.setAttribute("aria-label", "Search hotkeys");
+    const assignedLabel = document.createElement("label");
+    const assigned = document.createElement("input");
+    assigned.type = "checkbox";
+    assignedLabel.append(assigned, " Assigned only");
+    controls.append(search, assignedLabel);
+    const list = document.createElement("div");
+    list.className = "hotkey-list";
+    container.append(guidance, controls, list);
+
+    const render = () => {
+      list.empty();
+      const query = search.value.trim().toLowerCase();
+      const commands = this.geodeApp.commands.listCommands().sort((a, b) => a.name.localeCompare(b.name));
+      for (const command of commands) {
+        const bindings = this.geodeApp.commands.bindingsFor(command.id);
+        if (assigned.checked && !bindings.length) continue;
+        if (query && !`${command.name} ${command.id}`.toLowerCase().includes(query)) continue;
+        const row = document.createElement("div");
+        row.className = "hotkey-command";
+        row.dataset.commandId = command.id;
+        row.setAttribute("role", "group");
+        row.setAttribute("aria-label", command.name);
+        const info = document.createElement("div");
+        info.className = "hotkey-command-info";
+        const name = document.createElement("div"); name.className = "hotkey-command-name"; name.textContent = command.name;
+        const id = document.createElement("div"); id.className = "hotkey-command-id"; id.textContent = command.id;
+        info.append(name, id);
+        const bindingList = document.createElement("div"); bindingList.className = "hotkey-bindings";
+        for (const binding of bindings) {
+          const pill = document.createElement("span"); pill.className = "hotkey-pill"; pill.textContent = displayHotkey(binding);
+          const owners = this.geodeApp.commands.snapshot().ownersByBinding[bindingIdentity(binding)] ?? [];
+          if (owners.length > 1) {
+            const conflictingNames = owners
+              .filter(owner => owner !== command.id)
+              .map(owner => this.geodeApp.commands.findCommand(owner)?.name ?? owner);
+            const conflictDescription = `${displayHotkey(binding)} conflicts with ${conflictingNames.join(", ")}`;
+            pill.classList.add("is-conflicted");
+            pill.title = conflictDescription;
+            const indicator = document.createElement("span");
+            indicator.className = "hotkey-conflict-indicator";
+            indicator.textContent = "Conflict";
+            indicator.setAttribute("aria-label", conflictDescription);
+            pill.append(indicator);
+          }
+          const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "×"; remove.setAttribute("aria-label", `Remove ${displayHotkey(binding)} from ${command.name}`);
+          remove.addEventListener("click", () => void this.geodeApp.commands.removeBinding(command.id, binding));
+          pill.append(remove); bindingList.append(pill);
+        }
+        const add = document.createElement("button"); add.type = "button"; add.className = "hotkey-add"; add.textContent = "+"; add.setAttribute("aria-label", `Add hotkey for ${command.name}`);
+        add.addEventListener("click", () => this.captureHotkey(command.id, command.name, add, row));
+        bindingList.append(add);
+        if (this.geodeApp.commands.hasOverride(command.id)) {
+          const reset = document.createElement("button"); reset.type = "button"; reset.className = "hotkey-reset"; reset.textContent = "Reset";
+          reset.setAttribute("aria-label", `Reset hotkeys for ${command.name}`);
+          reset.addEventListener("click", () => void this.geodeApp.commands.resetBindings(command.id)); bindingList.append(reset);
+        }
+        row.append(info, bindingList); list.append(row);
+      }
+    };
+    search.addEventListener("input", render); assigned.addEventListener("change", render);
+    this.unsubscribeHotkeys = this.geodeApp.commands.onChange(render);
+    render();
+  }
+
+  private captureHotkey(commandId: string, commandName: string, button: HTMLButtonElement, row: HTMLElement): void {
+    this.stopHotkeyRecorder?.();
+    button.textContent = "Press keys…";
+    button.setAttribute("aria-label", `Recording hotkey for ${commandName}. Press Escape to cancel.`);
+    const status = document.createElement("span");
+    status.className = "hotkey-recording-status";
+    status.setAttribute("role", "status");
+    status.textContent = `Recording hotkey for ${commandName}. Press Escape to cancel.`;
+    row.append(status);
+    let active = true;
+    const stop = (announcement?: string) => {
+      if (!active) return;
+      active = false;
+      window.removeEventListener("keydown", listener, true);
+      button.textContent = "+";
+      button.setAttribute("aria-label", `Add hotkey for ${commandName}`);
+      if (announcement) {
+        status.textContent = announcement;
+        window.setTimeout(() => status.remove(), 1500);
+      } else {
+        status.remove();
+      }
+      if (this.stopHotkeyRecorder === stop) this.stopHotkeyRecorder = null;
+    };
+    const listener = async (event: KeyboardEvent) => {
+      event.preventDefault(); event.stopPropagation();
+      if (event.code === "Escape") { stop("Hotkey recording canceled."); return; }
+      const binding = eventToBinding(event);
+      if (!binding) return;
+      stop();
+      if (["Mod+KeyQ", "Mod+KeyW", "Mod+KeyT"].includes(bindingIdentity(binding))) {
+        this.geodeApp.notify("This shortcut may be reserved by the operating system or host.");
+      }
+      const result = await this.geodeApp.commands.assignBinding(commandId, binding);
+      if (result.status !== "conflict") return;
+      const existing = row.querySelector(".hotkey-conflict-choice"); existing?.remove();
+      const choice = document.createElement("div"); choice.className = "hotkey-conflict-choice";
+      choice.setAttribute("role", "alert");
+      const names = result.owners.map(owner => this.geodeApp.commands.findCommand(owner)?.name ?? owner);
+      choice.append(` ${displayHotkey(binding)} is assigned to ${names.join(", ")}. `);
+      if (["Mod+KeyQ", "Mod+KeyW", "Mod+KeyT"].includes(bindingIdentity(binding))) {
+        const warning = document.createElement("span"); warning.className = "hotkey-reserved-warning"; warning.textContent = " This shortcut may be reserved by the operating system or host."; choice.append(warning);
+      }
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Cancel"; cancel.addEventListener("click", () => choice.remove());
+      const reassign = document.createElement("button"); reassign.type = "button"; reassign.textContent = `Reassign to ${commandName}`;
+      reassign.addEventListener("click", async () => { await this.geodeApp.commands.assignBinding(commandId, binding, { reassign: true }); choice.remove(); });
+      choice.append(cancel, reassign); row.append(choice);
+    };
+    this.stopHotkeyRecorder = stop;
+    window.addEventListener("keydown", listener, true);
   }
 
   private renderCommunityTab(container: HTMLElement): void {
@@ -889,6 +1035,10 @@ class SettingsModal extends Modal {
     }
     this.unsubscribeSettingTabs?.();
     this.unsubscribeSettingTabs = null;
+    this.unsubscribeHotkeys?.();
+    this.unsubscribeHotkeys = null;
+    this.stopHotkeyRecorder?.();
+    this.stopHotkeyRecorder = null;
     this.geodeApp.activeSettingsModal = null;
     this.geodeApp.saveSettings();
   }
@@ -937,7 +1087,7 @@ export class App {
   vault: Vault;
   metadataCache: MetadataCache;
   fileManager = new FileManager(this);
-  commands = new CommandRegistry();
+  commands: CommandRegistry;
   /** Internal Geode actions. Kept separate from the public Obsidian-compatible CommandRegistry. */
   actions = new ActionRegistry<AppActionContext>();
   markdownRenderer = new MarkdownRenderer(this);
@@ -997,6 +1147,7 @@ export class App {
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
+    this.commands = new CommandRegistry(host.config);
     this.vault = new Vault(host);
     this.metadataCache = new MetadataCache(this.vault);
   }
@@ -1287,6 +1438,7 @@ export class App {
       return;
     }
     const saved = (await this.host.config.read("app")) as Partial<AppSettings> | null;
+    await this.commands.loadHotkeys();
     if (saved) {
       this.settings = {
         ...this.settings,

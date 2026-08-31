@@ -32,7 +32,8 @@ import {
 } from "./crash-diagnostics";
 import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
-import { resolveGuestHotkey } from "../shared/hotkey";
+import { nodeHotkeyPlatform, resolveGuestHotkey } from "../shared/hotkey";
+import { writeJsonAtomic } from "./config-file";
 import { selectVaultWindowAction } from "./vault-window-selection";
 import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-watchdog";
 import { listVaultFiles, type VaultFileEntry } from "./vault-files";
@@ -558,7 +559,7 @@ function registerIpc() {
     if (!session) return;
     const dir = path.join(session.root, ".geode");
     await fsp.mkdir(dir, { recursive: true });
-    await fsp.writeFile(path.join(dir, `${name}.json`), JSON.stringify(data, null, 2));
+    await writeJsonAtomic(path.join(dir, `${name}.json`), data);
   });
 
   ipcMain.handle("get-vault-root", (e) => {
@@ -776,7 +777,7 @@ function registerIpc() {
  */
 function bridgeGuestHotkeys(win: BrowserWindow, guest: Electron.WebContents): void {
   guest.on("before-input-event", (event, input) => {
-    const combo = resolveGuestHotkey(input, guestHotkeys.get(win.id) ?? EMPTY_HOTKEYS);
+    const combo = resolveGuestHotkey(input, guestHotkeys.get(win.id) ?? EMPTY_HOTKEYS, nodeHotkeyPlatform(process.platform));
     if (!combo) return;
     event.preventDefault();
     // The guest's id travels with the combo so the renderer can act on the

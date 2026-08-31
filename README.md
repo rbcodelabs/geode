@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.10.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.10.1). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.10.0)
+## Features (v0.10.1)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -52,8 +52,9 @@ cloud, no lock-in.
   and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
   dark/light themes via CSS variables
-- **Settings** — tabbed Settings window (Appearance, Community plugins &
-  themes, plus one tab per installed plugin that calls `Plugin.addSettingTab`)
+- **Settings** — tabbed Settings window with a searchable **Hotkeys** tab,
+  Appearance, Community plugins & themes, and one tab per installed plugin
+  that calls `Plugin.addSettingTab`
 - **Community plugins & themes** — install from GitHub, enable/disable,
   auto-update; broad plugin-API compatibility (`EditorSuggest`, `Scope`,
   metadata cache with list items/sections + frontmatter tag helpers) so real
@@ -66,6 +67,23 @@ cloud, no lock-in.
   cookies from Chrome" option so viewer tabs open already logged in. App
   hotkeys (command palette, quick switcher, tab switching) keep working while
   focus is inside a viewer tab instead of being swallowed by the page
+
+## Customize keyboard shortcuts
+
+Open **Settings → Hotkeys** to search every registered core and plugin
+command. Select **+**, then press the shortcut on a physical keyboard. A
+command can have more than one shortcut; use **×** beside a shortcut to remove
+it, or **Reset** to restore the command's defaults. **Assigned only** filters
+the list to commands that currently have shortcuts.
+
+If a shortcut already belongs to another command, Geode names every conflicting
+command and asks you to **Cancel** or explicitly **Reassign** it. Conflicted
+shortcuts never run an arbitrary command. Changes take effect immediately in
+the workspace and Web Viewer and are saved per vault in
+`.geode/hotkeys.json`. Touch-only devices can inspect, remove, and reset
+shortcuts; recording a new shortcut requires a hardware keyboard. Operating
+system-reserved shortcuts can be saved, but Geode warns that the host may
+intercept them.
 
 ## Install
 

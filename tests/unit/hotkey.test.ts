@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  bindingIdentity,
+  displayHotkey,
+  legacyHotkeyToBinding,
   comboFromParts,
   eventToHotkey,
   inputToHotkey,
@@ -15,6 +18,7 @@ import {
  */
 function keyEvent(init: {
   key: string;
+  code?: string;
   meta?: boolean;
   ctrl?: boolean;
   alt?: boolean;
@@ -22,6 +26,7 @@ function keyEvent(init: {
 }): KeyboardEvent {
   return {
     key: init.key,
+    code: init.code ?? (init.key.length === 1 && /[a-z]/i.test(init.key) ? `Key${init.key.toUpperCase()}` : init.key === "," ? "Comma" : init.key === " " ? "Space" : init.key),
     metaKey: init.meta ?? false,
     ctrlKey: init.ctrl ?? false,
     altKey: init.alt ?? false,
@@ -31,6 +36,7 @@ function keyEvent(init: {
 
 function keyInput(init: {
   key: string;
+  code?: string;
   meta?: boolean;
   ctrl?: boolean;
   alt?: boolean;
@@ -40,6 +46,7 @@ function keyInput(init: {
   return {
     type: init.type ?? "keyDown",
     key: init.key,
+    code: init.code ?? (init.key.length === 1 && /[a-z]/i.test(init.key) ? `Key${init.key.toUpperCase()}` : init.key === "," ? "Comma" : init.key === " " ? "Space" : init.key),
     meta: init.meta ?? false,
     control: init.ctrl ?? false,
     alt: init.alt ?? false,
@@ -48,11 +55,11 @@ function keyInput(init: {
 }
 
 const cases: { name: string; init: { key: string; meta?: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean }; combo: string }[] = [
-  { name: "Cmd+W", init: { key: "w", meta: true }, combo: "Mod+W" },
-  { name: "Ctrl+W", init: { key: "w", ctrl: true }, combo: "Mod+W" },
-  { name: "Cmd+Shift+F", init: { key: "F", meta: true, shift: true }, combo: "Mod+Shift+F" },
-  { name: "Cmd+,", init: { key: ",", meta: true }, combo: "Mod+," },
-  { name: "Cmd+Alt+I", init: { key: "i", meta: true, alt: true }, combo: "Mod+Alt+I" },
+  { name: "Cmd+W", init: { key: "w", meta: true }, combo: "Mod+KeyW" },
+  { name: "Ctrl+W", init: { key: "w", ctrl: true }, combo: "Ctrl+KeyW" },
+  { name: "Cmd+Shift+F", init: { key: "F", meta: true, shift: true }, combo: "Mod+Shift+KeyF" },
+  { name: "Cmd+,", init: { key: ",", meta: true }, combo: "Mod+Comma" },
+  { name: "Cmd+Alt+I", init: { key: "i", meta: true, alt: true }, combo: "Mod+Alt+KeyI" },
   { name: "Escape (no modifiers)", init: { key: "Escape" }, combo: "Escape" },
   { name: "Cmd+Space", init: { key: " ", meta: true }, combo: "Mod+Space" },
   { name: "bare Space", init: { key: " " }, combo: "Space" },
@@ -60,17 +67,32 @@ const cases: { name: string; init: { key: string; meta?: boolean; ctrl?: boolean
 ];
 
 describe("shared hotkey normalizer", () => {
+  it("stores physical codes, normalizes modifier order, and adapts legacy defaults", () => {
+    expect(legacyHotkeyToBinding("Shift+Mod+P")).toEqual({ modifiers: ["Mod", "Shift"], code: "KeyP" });
+    expect(bindingIdentity({ modifiers: ["Shift", "Mod"], code: "KeyP" })).toBe("Mod+Shift+KeyP");
+    expect(displayHotkey({ modifiers: ["Mod", "Shift"], code: "Comma" }, "MacIntel")).toBe("⌘⇧,");
+  });
+
+  it("fails closed when a DOM or Electron event has no physical code", () => {
+    expect(eventToHotkey({ ...keyEvent({ key: "p", meta: true }), code: "" } as KeyboardEvent)).toBe("");
+    expect(inputToHotkey({ ...keyInput({ key: "p", meta: true }), code: "" })).toBe("");
+  });
+  it("normalizes macOS Electron meta and DOM meta to the same Mod identity", () => {
+    expect(eventToHotkey(keyEvent({ key: "p", meta: true }), "mac")).toBe("Mod+KeyP");
+    expect(inputToHotkey(keyInput({ key: "p", meta: true }), "mac")).toBe("Mod+KeyP");
+    expect(inputToHotkey(keyInput({ key: "p", ctrl: true }), "mac")).toBe("Ctrl+KeyP");
+  });
   it.each(cases)("eventToHotkey and inputToHotkey agree on $name", ({ init, combo }) => {
-    expect(eventToHotkey(keyEvent(init))).toBe(combo);
-    expect(inputToHotkey(keyInput(init))).toBe(combo);
+    expect(eventToHotkey(keyEvent(init), "mac")).toBe(combo);
+    expect(inputToHotkey(keyInput(init), "mac")).toBe(combo);
   });
 
   it("orders modifiers Mod, Alt, Shift regardless of how they arrive", () => {
-    expect(comboFromParts({ mod: true, alt: true, shift: true, key: "k" })).toBe("Mod+Alt+Shift+K");
+    expect(comboFromParts({ mod: true, alt: true, shift: true, key: "k" })).toBe("Mod+Alt+Shift+KeyK");
   });
 
   it("uppercases single-character keys but leaves named keys alone", () => {
-    expect(comboFromParts({ mod: true, alt: false, shift: false, key: "p" })).toBe("Mod+P");
+    expect(comboFromParts({ mod: true, alt: false, shift: false, key: "p" })).toBe("Mod+KeyP");
     expect(comboFromParts({ mod: false, alt: false, shift: false, key: "Enter" })).toBe("Enter");
   });
 
@@ -81,7 +103,7 @@ describe("shared hotkey normalizer", () => {
   it("returns an empty combo for modifier-only keystrokes", () => {
     for (const key of ["Meta", "Control", "Alt", "Shift"]) {
       expect(eventToHotkey(keyEvent({ key, meta: true }))).toBe("");
-      expect(inputToHotkey(keyInput({ key, meta: true }))).toBe("");
+      expect(inputToHotkey(keyInput({ key, meta: true }), "mac")).toBe("");
     }
   });
 
@@ -97,20 +119,20 @@ describe("shared hotkey normalizer", () => {
 });
 
 describe("resolveGuestHotkey", () => {
-  const combos = new Set(["Mod+W", "Mod+P", "Mod+Shift+F"]);
+  const combos = new Set(["Mod+KeyW", "Mod+KeyP", "Mod+Shift+KeyF"]);
 
   it("returns the combo when the renderer has it bound", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), combos)).toBe("Mod+W");
-    expect(resolveGuestHotkey(keyInput({ key: "F", meta: true, shift: true }), combos)).toBe(
-      "Mod+Shift+F",
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), combos, "mac")).toBe("Mod+KeyW");
+    expect(resolveGuestHotkey(keyInput({ key: "F", meta: true, shift: true }), combos, "mac")).toBe(
+      "Mod+Shift+KeyF",
     );
   });
 
   it("returns null for a combo the renderer has not bound", () => {
     // Cmd+A / Cmd+C must keep working as ordinary page/OS shortcuts inside a
     // web page, so an unbound combo has to fall through untouched.
-    expect(resolveGuestHotkey(keyInput({ key: "a", meta: true }), combos)).toBeNull();
-    expect(resolveGuestHotkey(keyInput({ key: "c", meta: true }), combos)).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "a", meta: true }), combos, "mac")).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "c", meta: true }), combos, "mac")).toBeNull();
   });
 
   it("returns null for plain typing", () => {
@@ -119,15 +141,15 @@ describe("resolveGuestHotkey", () => {
   });
 
   it("returns null for key-up of a bound combo, so one press fires once", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true, type: "keyUp" }), combos)).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true, type: "keyUp" }), combos, "mac")).toBeNull();
   });
 
   it("returns null when the renderer has published nothing yet", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), new Set())).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), new Set(), "mac")).toBeNull();
   });
 
   it("accepts an array of combos as well as a set", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), ["Mod+W"])).toBe("Mod+W");
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), ["Mod+KeyW"], "mac")).toBe("Mod+KeyW");
     expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), [])).toBeNull();
   });
 });
