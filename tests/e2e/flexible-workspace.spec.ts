@@ -82,7 +82,7 @@ test("sidebar dividers resize with minimum clamping and serialize the recursive 
     };
   });
   expect(result.minHeight).toBeGreaterThanOrEqual(120);
-  expect(result.version).toBe(2);
+  expect(result.version).toBe(3);
   expect(result.direction).toBe("vertical");
   expect(result.sizes).toHaveLength(2);
   if (screenshotDir) {

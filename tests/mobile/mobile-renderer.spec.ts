@@ -388,6 +388,47 @@ test("@phone projects one active center group and preserves exact serialization 
   expect(await page.evaluate(() => (window as any).app.workspace.serialize())).toEqual(beforeResize);
 });
 
+test("@phone preserves desktop-authored v3 tab collection metadata without exposing collection UI", async ({ page }) => {
+  const authored = {
+    version: 3,
+    center: { activeGroup: 0, root: { type: "tabs", active: 1,
+      collections: [{ id: "desktop-research", name: "Desktop research", color: "purple", collapsed: true }],
+      leaves: [
+        { type: "markdown", file: "Welcome.md", collectionId: "desktop-research" },
+        { type: "markdown", file: "Collection member.md", collectionId: "desktop-research", pinned: true },
+      ] } },
+    left: { root: null, collapsed: false }, right: { root: null, collapsed: false },
+  };
+  await page.goto(mobileUrl);
+  await page.evaluate((workspace) => {
+    localStorage.clear();
+    localStorage.setItem("geode:mobile-managed-vault:v1", JSON.stringify({
+      vaultName: "Geode Mobile",
+      files: [
+        ["Welcome.md", { data: "# Welcome\n", ctime: 1, mtime: 1 }],
+        ["Collection member.md", { data: "# Member\n", ctime: 2, mtime: 2 }],
+      ],
+      folders: [], config: [["workspace", workspace]], metadataCache: null, clock: 3,
+    }));
+  }, authored);
+  await page.reload();
+
+  await expect(page.locator(".tab-collection-label")).toBeHidden();
+  expect(await page.evaluate(() => (window as any).app.commands.listCommands()
+    .filter((command: any) => command.id.startsWith("tab.collection"))
+    .map((command: any) => command.id))).toEqual([]);
+
+  await page.evaluate(() => (window as any).app.workspace.leftSidebar.toggle());
+  await expect.poll(() => page.evaluate(async () => ((await window.hostServices!.config.read("workspace")) as any)?.left?.collapsed)).toBe(true);
+  await page.reload();
+  const roundTripped = await page.evaluate(() => (window as any).app.workspace.serialize());
+  expect(roundTripped.version).toBe(3);
+  expect(roundTripped.center.root.collections).toEqual(authored.center.root.collections);
+  expect(roundTripped.center.root.leaves.map((leaf: any) => leaf.collectionId)).toEqual(
+    authored.center.root.leaves.map((leaf: any) => leaf.collectionId)
+  );
+});
+
 test("@phone exposes keyboard-operable files and details dialogs with restored focus", async ({ page }) => {
   await resetProofVault(page);
   const files = page.getByRole("navigation", { name: "Mobile navigation" })
