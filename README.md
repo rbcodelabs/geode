@@ -43,9 +43,10 @@ cloud, no lock-in.
   non-destructive recovery view. Inline note editing, PDF previews, and some
   broader context/action workflows are not implemented yet
 - **Workspace** — movable built-in and plugin views, tabs, named/color-coded
-  split-local tab collections with persistent collapse state, split panes, pinned
-  tabs, vertically stacked and independently resizable sidebar groups, recursive
-  layout persistence, a hideable left ribbon with persistent Settings and
+  split-local tab collections with persistent collapse state, split panes with
+  pointer- and keyboard-resizable persisted proportions, pinned tabs, vertically
+  stacked and independently resizable sidebar groups, recursive layout persistence,
+  a hideable left ribbon with persistent Settings and
   plugin-contributed actions, shared document actions across tab, view, command,
   and File Explorer menus, pinned-safe bulk tab closing, and status-bar word
   count; tab bar and view header DOM/CSS match real Obsidian so community themes

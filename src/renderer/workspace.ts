@@ -1673,6 +1673,37 @@ export interface PersistedSplitNode {
 
 export type WorkspaceTreeNode = PersistedTabNode | PersistedSplitNode;
 
+export function normalizeCenterGroupSizes(sizes: readonly number[] | undefined, count: number): number[] {
+  if (count <= 0) return [];
+  const equal = () => Array.from({ length: count }, () => 1 / count);
+  if (!sizes || sizes.length !== count || sizes.some((size) => !Number.isFinite(size) || size <= 0)) return equal();
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  if (!Number.isFinite(total) || total <= 0) return equal();
+  return sizes.map((size) => size / total);
+}
+
+/** Insert after `donorIndex`, retaining `leadingRatio` in the donor pane. */
+export function insertCenterGroupSize(
+  sizes: readonly number[],
+  donorIndex: number,
+  leadingRatio = 0.5
+): number[] {
+  if (sizes.length === 0) return [1];
+  const normalized = normalizeCenterGroupSizes(sizes, sizes.length);
+  const donor = Math.max(0, Math.min(donorIndex, normalized.length - 1));
+  const ratio = Number.isFinite(leadingRatio) && leadingRatio > 0 && leadingRatio < 1 ? leadingRatio : 0.5;
+  const allocation = normalized[donor];
+  const result = [...normalized];
+  result.splice(donor, 1, allocation * ratio, allocation * (1 - ratio));
+  return result;
+}
+
+export function removeCenterGroupSize(sizes: readonly number[], index: number): number[] {
+  if (sizes.length <= 1) return [];
+  const result = normalizeCenterGroupSizes(sizes, sizes.length).filter((_, i) => i !== index);
+  return normalizeCenterGroupSizes(result, result.length);
+}
+
 interface PersistedRegionV2 {
   root: WorkspaceTreeNode | null;
   collapsed?: boolean;
@@ -1787,6 +1818,9 @@ export class Workspace extends Events {
   rightSidebar: Sidebar;
   mobileDrawerBackdropEl: HTMLButtonElement;
   groups: TabGroup[] = [];
+  centerGroupSizes: number[] = [];
+  private centerDividers: HTMLElement[] = [];
+  private activeCenterResizeCleanup: (() => void) | null = null;
   activeGroup: TabGroup;
   /** viewType -> factory, populated by `Plugin.registerView` (see plugin.ts). */
   private viewFactories = new Map<string, (leaf: WorkspaceLeaf) => View>();
@@ -1960,6 +1994,7 @@ export class Workspace extends Events {
   }
 
   dispose(): void {
+    this.activeCenterResizeCleanup?.();
     this.compactQuery.removeEventListener("change", this.breakpointHandler);
     this.tabletQuery.removeEventListener("change", this.breakpointHandler);
     document.removeEventListener("keydown", this.documentKeyHandler, true);
@@ -2028,8 +2063,10 @@ export class Workspace extends Events {
     return this.rightSidebar;
   }
 
-  addGroup(after?: TabGroup): TabGroup {
+  addGroup(after?: TabGroup, leadingRatio = 0.5): TabGroup {
     const group = new TabGroup(this, this.app);
+    const donorIndex = after ? this.groups.indexOf(after) : Math.max(0, this.groups.length - 1);
+    this.centerGroupSizes = insertCenterGroupSize(this.centerGroupSizes, donorIndex, leadingRatio);
     if (after) {
       const i = this.groups.indexOf(after);
       this.groups.splice(i + 1, 0, group);
@@ -2038,10 +2075,109 @@ export class Workspace extends Events {
       this.groups.push(group);
       this.centerEl.appendChild(group.containerEl);
     }
+    this.layoutCenterGroups();
     this.syncSidebarToggleButtons();
     this.syncAdaptivePresentation();
     this.trigger("layout-change");
     return group;
+  }
+
+  private layoutCenterGroups(): void {
+    this.centerGroupSizes = normalizeCenterGroupSizes(this.centerGroupSizes, this.groups.length);
+    while (this.centerDividers.length < Math.max(0, this.groups.length - 1)) {
+      const divider = document.createElement("div");
+      divider.className = "workspace-split-resize-handle workspace-center-resize-handle";
+      divider.setAttribute("role", "separator");
+      divider.setAttribute("aria-orientation", "vertical");
+      divider.setAttribute("aria-valuemin", "0");
+      divider.setAttribute("aria-valuemax", "100");
+      divider.tabIndex = 0;
+      this.centerEl.appendChild(divider);
+      this.centerDividers.push(divider);
+      this.attachCenterResize(divider);
+    }
+    while (this.centerDividers.length > Math.max(0, this.groups.length - 1)) {
+      this.centerDividers.pop()?.remove();
+    }
+    this.groups.forEach((group, index) => {
+      group.containerEl.style.order = `${index * 2}`;
+      group.containerEl.style.flex = `1 1 ${this.centerGroupSizes[index] * 100}%`;
+    });
+    this.centerDividers.forEach((divider, index) => {
+      divider.style.order = `${index * 2 + 1}`;
+      const pairShare = this.centerGroupSizes[index] + this.centerGroupSizes[index + 1];
+      const value = pairShare > 0 ? Math.round(this.centerGroupSizes[index] / pairShare * 100) : 50;
+      divider.setAttribute("aria-valuenow", `${value}`);
+      divider.setAttribute("aria-label", `Resize panes (${value}% / ${100 - value}%)`);
+    });
+  }
+
+  private resizeCenterPair(dividerIndex: number, leadingShare: number): void {
+    const leading = this.groups[dividerIndex]?.containerEl;
+    const trailing = this.groups[dividerIndex + 1]?.containerEl;
+    if (!leading || !trailing) return;
+    const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
+    const total = leading.getBoundingClientRect().width + trailing.getBoundingClientRect().width;
+    const minimumShare = total > 0 ? pairShare * Math.min(240, total / 2) / total : 0;
+    const clamped = Math.max(minimumShare, Math.min(pairShare - minimumShare, leadingShare));
+    this.centerGroupSizes[dividerIndex] = clamped;
+    this.centerGroupSizes[dividerIndex + 1] = pairShare - clamped;
+    this.layoutCenterGroups();
+  }
+
+  private attachCenterResize(handle: HTMLElement): void {
+    handle.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const dividerIndex = this.centerDividers.indexOf(handle);
+      const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
+      const delta = pairShare * 0.05 * (event.key === "ArrowRight" ? 1 : -1);
+      this.resizeCenterPair(dividerIndex, this.centerGroupSizes[dividerIndex] + delta);
+      this.trigger("layout-change");
+    });
+    handle.addEventListener("pointerdown", (event) => {
+      if (this.isCompactMobile()) return;
+      event.preventDefault();
+      this.activeCenterResizeCleanup?.();
+      const dividerIndex = this.centerDividers.indexOf(handle);
+      const leading = this.groups[dividerIndex]?.containerEl;
+      const trailing = this.groups[dividerIndex + 1]?.containerEl;
+      if (!leading || !trailing) return;
+      const startX = event.clientX;
+      const leadingStart = leading.getBoundingClientRect().width;
+      const trailingStart = trailing.getBoundingClientRect().width;
+      const total = leadingStart + trailingStart;
+      const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
+      const minimum = Math.min(240, total / 2);
+      let finished = false;
+      const move = (moveEvent: PointerEvent) => {
+        const leadingPx = Math.max(minimum, Math.min(total - minimum, leadingStart + moveEvent.clientX - startX));
+        this.resizeCenterPair(dividerIndex, pairShare * leadingPx / total);
+      };
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        window.removeEventListener("blur", finish);
+        handle.removeEventListener("pointercancel", finish);
+        handle.removeEventListener("lostpointercapture", finish);
+        handle.classList.remove("is-resizing");
+        if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+        if (this.activeCenterResizeCleanup === finish) this.activeCenterResizeCleanup = null;
+        this.trigger("layout-change");
+      };
+      handle.classList.add("is-resizing");
+      try { handle.setPointerCapture(event.pointerId); } catch { /* Synthetic events may not own a native pointer. */ }
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+      window.addEventListener("blur", finish);
+      handle.addEventListener("pointercancel", finish);
+      handle.addEventListener("lostpointercapture", finish);
+      this.activeCenterResizeCleanup = finish;
+    });
   }
 
   /**
@@ -2077,8 +2213,10 @@ export class Workspace extends Events {
       return;
     }
     const i = this.groups.indexOf(group);
+    this.centerGroupSizes = removeCenterGroupSize(this.centerGroupSizes, i);
     this.groups.splice(i, 1);
     group.containerEl.remove();
+    this.layoutCenterGroups();
     this.setActiveGroup(this.groups[Math.max(0, i - 1)]);
     this.trigger("layout-change");
   }
@@ -2137,6 +2275,12 @@ export class Workspace extends Events {
    */
   splitActiveLeaf(_direction?: "vertical" | "horizontal"): WorkspaceLeaf {
     const group = this.addGroup(this.activeGroup);
+    return group.createLeaf();
+  }
+
+  /** Geode extension: split the active center allocation with an explicit leading/trailing ratio. */
+  splitActiveLeafWithRatio(_direction: "vertical" | "horizontal", leadingRatio: number): WorkspaceLeaf {
+    const group = this.addGroup(this.activeGroup, leadingRatio);
     return group.createLeaf();
   }
 
@@ -2519,7 +2663,7 @@ export class Workspace extends Events {
     };
     return {
       version: 3,
-      center: { root: regionRoot(this.groups, "horizontal"), activeGroup },
+      center: { root: regionRoot(this.groups, "horizontal", this.centerGroupSizes), activeGroup },
       left: {
         root: regionRoot(this.leftSidebar.groups as (Sidebar | TabGroup)[], "vertical", this.leftSidebar.groupSizes),
         collapsed: this.leftSidebar.collapsed,
@@ -2651,6 +2795,11 @@ export class Workspace extends Events {
     // one placeholder tab (never accumulating empties across launches).
     const targetGroups = Math.max(1, centerNodes.length);
     while (this.groups.length < targetGroups) this.addGroup();
+    this.centerGroupSizes = normalizeCenterGroupSizes(
+      state.center.root?.type === "split" ? state.center.root.sizes : undefined,
+      this.groups.length
+    );
+    this.layoutCenterGroups();
     for (let gi = 0; gi < this.groups.length; gi++) {
       const group = this.groups[gi];
       const gs = centerNodes[gi];

@@ -197,6 +197,76 @@ test("normalizes v3 and prunes missing members with next-survivor active fallbac
   }
 });
 
+test("restores pane sizes with independent split-local collections and the active center leaf", async ({}, testInfo) => {
+  const { vaultDir, userDataDir } = fixture();
+  fs.mkdirSync(path.join(vaultDir, ".geode"), { recursive: true });
+  fs.writeFileSync(path.join(vaultDir, ".geode", "workspace.json"), JSON.stringify({
+    version: 3,
+    center: { activeGroup: 1, root: { type: "split", direction: "horizontal", sizes: [0.3, 0.7], children: [
+      { type: "tabs", active: 0,
+        collections: [{ id: "left", name: "Left work", color: "blue", collapsed: false }],
+        leaves: [{ type: "markdown", file: "Alpha.md", collectionId: "left" }] },
+      { type: "tabs", active: 0,
+        collections: [{ id: "right", name: "Right work", color: "purple", collapsed: true }],
+        leaves: [{ type: "markdown", file: "Beta.md", collectionId: "right" }] },
+    ] } },
+    left: { collapsed: true, root: { type: "tabs", active: 0, collections: [{ id: "bad", name: "Sidebar", color: "red", collapsed: true }],
+      leaves: [{ type: "file-explorer", collectionId: "bad" }] } },
+    right: { collapsed: true, root: null },
+  }));
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await expect(window.locator(".workspace-center > .workspace-tabs")).toHaveCount(2);
+    await expect(window.locator(".workspace-center > .workspace-center-resize-handle")).toHaveCount(1);
+    await expect(window.locator(".workspace-center .tab-collection-label")).toHaveCount(2);
+    await expect(window.locator(".sidebar-tab-group .tab-collection-label")).toHaveCount(0);
+    const state = await window.evaluate(() => {
+      const workspace = (window as any).app.workspace;
+      return {
+        activeGroup: workspace.groups.indexOf(workspace.activeGroup),
+        activeFile: workspace.activeLeaf?.view?.getFile?.()?.path,
+        state: workspace.serialize(),
+      };
+    });
+    expect(state.activeGroup).toBe(1);
+    expect(state.activeFile).toBe("Beta.md");
+    expect(state.state.version).toBe(3);
+    expect(state.state.center.root.sizes).toEqual([0.3, 0.7]);
+    expect(state.state.center.root.children.map((child: any) => child.collections[0].name))
+      .toEqual(["Left work", "Right work"]);
+    expect(state.state.left.root.collections).toBeUndefined();
+    expect(state.state.left.root.leaves[0].collectionId).toBeUndefined();
+    const browserWindow = await app.browserWindow(window);
+    const activeLabel = window.locator(".workspace-center .tab-collection-label").nth(1);
+    const disclosure = activeLabel.locator(".tab-collection-disclosure");
+    for (const size of [
+      { name: "small", width: 900, height: 700 },
+      { name: "standard", width: 1280, height: 800 },
+      { name: "large", width: 1440, height: 900 },
+    ]) {
+      await browserWindow.evaluate((nativeWindow: any, nextSize) => nativeWindow.setSize(nextSize.width, nextSize.height), size);
+      await expect.poll(() => window.evaluate(() => window.innerWidth)).toBeGreaterThan(size.width - 100);
+      for (const scheme of ["light", "dark"] as const) {
+        await window.evaluate((value) => {
+          const a = (window as any).app; a.settings.theme = value; a.applySettings();
+        }, scheme);
+        await activeLabel.locator(".tab-collection-surface").focus();
+        await window.keyboard.press("Shift+Tab");
+        await expect(disclosure).toBeFocused();
+        await expect(activeLabel).toHaveClass(/is-active/);
+        const screenshot = testInfo.outputPath(`tab-collections-center-panes-${size.name}-${scheme}.png`);
+        await window.screenshot({ path: screenshot, animations: "disabled" });
+        await testInfo.attach(`tab-collections-center-panes-${size.name}-${scheme}`, { path: screenshot, contentType: "image/png" });
+      }
+    }
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("keeps collection controls usable under light/dark and two structural community theme fixtures", async ({}, testInfo) => {
   const { vaultDir, userDataDir } = fixture();
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });

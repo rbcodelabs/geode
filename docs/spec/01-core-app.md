@@ -434,6 +434,12 @@ tree and migrates the prior flat version-1 format. Obsidian-compatible
 `getLeftLeaf(true)` / `getRightLeaf(true)` calls create a new sidebar group;
 passing `false` reuses an available leaf in the default group.
 
+Main-area tab groups expose draggable, keyboard-operable separators whose
+proportional sizes persist with the workspace layout. Ordinary splits begin at
+50/50; callers can request a different initial ratio, and later pane insertion
+or removal preserves unrelated shares. Missing or invalid persisted sizes fall
+back safely, and the mobile workspace does not rewrite desktop proportions.
+
 A saved leaf whose view type cannot be resolved at restore time is **never
 discarded**. If the plugin providing it is disabled, quarantined, mid-update,
 suppressed by crash recovery, or simply slower to load than the plugin onload
@@ -457,7 +463,7 @@ overwrite the real layout. See `docs/adr/0005-deferred-view-restore.md`.
 - **Linked views**: tab More options → "Open linked view" → Graph / Backlinks / Outline (or linked Reading view); linked tabs scroll/update with their source tab.
 
 ### Splits & resizing
-- Split any tab group right (vertical divider) or down (horizontal divider); resize by dragging highlighted group edges.
+- Split any tab group right (vertical divider) or down (horizontal divider); resize by dragging highlighted group edges. Geode's main-area separators also support keyboard resizing and expose separator orientation and current/minimum/maximum values to assistive technology.
 
 ### Pop-out windows (desktop only)
 - Open a note or tab in a separate OS window: file explorer right-click → "Open in new window"; Command palette → "Open current tab in new window" / "Move current tab to new window"; tab context menu; right-click a link.
