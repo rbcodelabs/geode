@@ -32,19 +32,24 @@ export class CommandRegistry {
 
   async loadHotkeys(): Promise<void> {
     const raw = await this.config?.read("hotkeys");
-    this.overrides = this.parseFile(raw);
+    const parsed = this.parseFile(raw);
+    this.overrides = parsed.overrides;
+    this.malformedOverrides = parsed.malformedOverrides;
     this.recompute();
   }
-  private parseFile(raw: unknown): Record<string, Hotkey[]> {
-    if (!raw || typeof raw !== "object" || (raw as any).version !== 1 || !(raw as any).overrides || typeof (raw as any).overrides !== "object") return {};
+  private parseFile(raw: unknown): { overrides: Record<string, Hotkey[]>; malformedOverrides: Record<string, unknown> } {
     const parsed: Record<string, Hotkey[]> = {};
+    const malformedOverrides: Record<string, unknown> = {};
+    if (!raw || typeof raw !== "object" || (raw as any).version !== 1 || !(raw as any).overrides || typeof (raw as any).overrides !== "object") {
+      return { overrides: parsed, malformedOverrides };
+    }
     for (const [id, value] of Object.entries((raw as any).overrides)) {
-      if (!Array.isArray(value)) { this.malformedOverrides[id] = value; parsed[id] = []; continue; }
+      if (!Array.isArray(value)) { malformedOverrides[id] = value; parsed[id] = []; continue; }
       const bindings = value.map(normalizeHotkey);
       if (bindings.every(Boolean)) parsed[id] = bindings as Hotkey[];
-      else { this.malformedOverrides[id] = value; parsed[id] = []; }
+      else { malformedOverrides[id] = value; parsed[id] = []; }
     }
-    return parsed;
+    return { overrides: parsed, malformedOverrides };
   }
   private defaults(command: Command): Hotkey[] {
     const source = command.hotkeys ?? (command.hotkey ? [legacyHotkeyToBinding(command.hotkey)] : []);
@@ -76,7 +81,17 @@ export class CommandRegistry {
     return this.bindingsFor(id).flatMap(binding => { const owners = [...(this.snapshotValue.ownersByBinding[bindingIdentity(binding)] ?? [])]; return owners.length > 1 ? [{ binding, owners }] : []; });
   }
   hasOverride(id: string): boolean { return Object.prototype.hasOwnProperty.call(this.overrides, id); }
-  async setBindings(id: string, bindings: readonly Hotkey[]): Promise<void> { await this.commit({ ...this.overrides, [id]: clone(bindings) }, [id]); }
+  async setBindings(id: string, bindings: readonly Hotkey[]): Promise<void> {
+    const normalized: Hotkey[] = [];
+    const seen = new Set<string>();
+    for (const binding of bindings) {
+      const value = normalizeHotkey(binding);
+      if (!value) throw new TypeError("Invalid hotkey binding");
+      const identity = bindingIdentity(value);
+      if (!seen.has(identity)) { seen.add(identity); normalized.push(value); }
+    }
+    await this.commit({ ...this.overrides, [id]: normalized }, [id]);
+  }
   async resetBindings(id: string): Promise<void> { const next = { ...this.overrides }; delete next[id]; await this.commit(next, [id]); }
   async removeBinding(id: string, binding: Hotkey): Promise<void> { const identity = bindingIdentity(binding); await this.setBindings(id, this.bindingsFor(id).filter(b => bindingIdentity(b) !== identity)); }
   async assignBinding(id: string, binding: Hotkey, options: { reassign?: boolean } = {}): Promise<AssignmentResult> {

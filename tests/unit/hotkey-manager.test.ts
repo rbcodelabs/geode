@@ -84,6 +84,37 @@ describe("hotkey override manager", () => {
     expect(write.mock.calls[0][1]).toMatchObject({ overrides: { broken: saved.overrides.broken } });
   });
 
+  it("replaces malformed state when the same registry loads a different vault", async () => {
+    const reads = [
+      { version: 1, overrides: { shared: [{ modifiers: ["Mod"], code: "<bad>" }], onlyA: "broken" } },
+      { version: 1, overrides: { shared: [{ modifiers: ["Mod"], code: "KeyB" }] } },
+    ];
+    const write = vi.fn(async () => {});
+    const registry = new CommandRegistry({ read: async () => reads.shift(), write });
+    registry.add(command("shared", { hotkey: "Mod+S" })); registry.add(command("other"));
+    await registry.loadHotkeys();
+    expect(registry.bindingsFor("shared")).toEqual([]);
+    await registry.loadHotkeys();
+    expect(registry.bindingsFor("shared")).toEqual([{ modifiers: ["Mod"], code: "KeyB" }]);
+    await registry.setBindings("other", [{ modifiers: ["Mod"], code: "KeyO" }]);
+    const persisted = write.mock.calls[0][1] as any;
+    expect(persisted.overrides.onlyA).toBeUndefined();
+    expect(persisted.overrides.shared).toEqual([{ modifiers: ["Mod"], code: "KeyB" }]);
+  });
+
+  it("normalizes and deduplicates setBindings inputs and rejects invalid bindings", async () => {
+    const write = vi.fn(async () => {});
+    const registry = new CommandRegistry({ read: async () => null, write });
+    registry.add(command("a")); await registry.loadHotkeys();
+    await registry.setBindings("a", [
+      { modifiers: ["Shift", "Mod"], code: "KeyA" },
+      { modifiers: ["Mod", "Shift"], code: "KeyA" },
+    ]);
+    expect(registry.bindingsFor("a")).toEqual([{ modifiers: ["Mod", "Shift"], code: "KeyA" }]);
+    await expect(registry.setBindings("a", [{ modifiers: ["Mod"], code: "<bad>" }])).rejects.toThrow("Invalid hotkey binding");
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
   it("does not publish state when persistence fails", async () => {
     const registry = new CommandRegistry({ read: async () => null, write: async () => { throw new Error("disk full"); } });
     registry.add(command("a", { hotkey: "Mod+A" }));
