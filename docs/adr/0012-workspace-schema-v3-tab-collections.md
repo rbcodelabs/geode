@@ -1,4 +1,4 @@
-# ADR-0011: Workspace schema v3 for named tab collections
+# ADR-0012: Workspace schema v3 for named tab collections
 
 **Date:** 2026-08-31
 **Status:** Accepted
