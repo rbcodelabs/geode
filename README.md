@@ -42,7 +42,8 @@ cloud, no lock-in.
   Markdown, web cards can show live previews, and malformed files open in a
   non-destructive recovery view. Inline note editing, PDF previews, and some
   broader context/action workflows are not implemented yet
-- **Workspace** — movable built-in and plugin views, tabs, split panes, pinned
+- **Workspace** — movable built-in and plugin views, tabs, named/color-coded
+  split-local tab collections with persistent collapse state, split panes, pinned
   tabs, vertically stacked and independently resizable sidebar groups, recursive
   layout persistence, a hideable left ribbon with persistent Settings and
   plugin-contributed actions, shared document actions across tab, view, command,

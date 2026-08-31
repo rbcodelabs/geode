@@ -650,6 +650,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   flex: 1 1 140px;
   transition: color 0.1s ease;
 }
+.workspace-tab-header[hidden] { display: none !important; }
 
 .workspace-tab-header:hover {
   color: var(--text-muted);
@@ -903,6 +904,121 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   -webkit-app-region: drag;
 }
 
+/* Named tab collections extend the canonical horizontal tab strip without
+   changing the meaning or DOM shape of existing community-theme tab hooks. */
+.tab-collection-label {
+  --tab-collection-accent: var(--text-muted);
+  -webkit-app-region: no-drag;
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 72px;
+  min-height: 28px;
+  box-sizing: border-box;
+  max-width: 220px;
+  margin-top: var(--size-4-1);
+  border-radius: var(--radius-s) var(--radius-s) 0 0;
+  border-block-end: 3px solid var(--tab-collection-accent);
+  background: color-mix(in srgb, var(--tab-collection-accent) 14%, var(--background-secondary));
+  color: var(--text-normal);
+}
+.tab-collection-label[data-color="blue"] { --tab-collection-accent: var(--color-blue, #3b82f6); }
+.tab-collection-label[data-color="cyan"] { --tab-collection-accent: var(--color-cyan, #0891b2); }
+.tab-collection-label[data-color="green"] { --tab-collection-accent: var(--color-green, #16a34a); }
+.tab-collection-label[data-color="yellow"] { --tab-collection-accent: var(--color-yellow, #ca8a04); }
+.tab-collection-label[data-color="orange"] { --tab-collection-accent: var(--color-orange, #ea580c); }
+.tab-collection-label[data-color="red"] { --tab-collection-accent: var(--color-red, #dc2626); }
+.tab-collection-label[data-color="purple"] { --tab-collection-accent: var(--color-purple, #9333ea); }
+.tab-collection-label.is-active {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent, var(--tab-collection-accent));
+  background: var(--tab-background-active);
+}
+.tab-collection-disclosure,
+.tab-collection-surface {
+  appearance: none;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  min-height: 28px;
+}
+.tab-collection-disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  padding: 4px;
+}
+.tab-collection-surface {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 7px 0 2px;
+}
+.tab-collection-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-collection-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.tab-collection-disclosure:focus-visible,
+.tab-collection-surface:focus-visible,
+.tab-collection-rename:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+.tab-collection-rename {
+  min-width: 80px;
+  max-width: 180px;
+}
+.tab-collection-live-region {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.tab-drop-before::before,
+.tab-drop-after::after {
+  content: "";
+  position: absolute;
+  z-index: 8;
+  inset-block: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--interactive-accent);
+}
+.tab-drop-before::before { inset-inline-start: -2px; }
+.tab-drop-after::after { inset-inline-end: -2px; }
+.tab-drop-inside { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.tab-drop-preview {
+  position: absolute;
+  z-index: 20;
+  inset-inline-end: 4px;
+  inset-block-end: 3px;
+  max-width: calc(100% - 8px);
+  box-sizing: border-box;
+  padding: 3px 7px;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary-alt, var(--background-secondary));
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-collection-label,
+  .tab-collection-label * { transition: none !important; animation: none !important; }
+}
+body.is-mobile .tab-collection-label { display: none; }
+
 .workspace-tab-header-tab-list,
 .workspace-tab-header-new-tab {
   -webkit-app-region: no-drag;
@@ -919,6 +1035,11 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
 .workspace-tab-header-tab-list .clickable-icon:hover,
 .workspace-tab-header-new-tab .clickable-icon:hover {
   background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+.menu-item.has-submenu::after {
+  content: "›";
+  margin-inline-start: auto;
   color: var(--text-muted);
 }
 
