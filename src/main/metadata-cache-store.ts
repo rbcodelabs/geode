@@ -79,6 +79,48 @@ export function readAllMetadataEntries(db: DatabaseSync): PersistedMetadataIndex
   return { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries };
 }
 
+/**
+ * `JSON.stringify` with cycle- and BigInt-safety.
+ *
+ * `CachedMetadata.frontmatter` stores parsed YAML verbatim (see
+ * `PersistedMetadataIndexEntry`'s doc comment). The `yaml` package resolves
+ * anchor/alias pairs (`&x` / `*x`) by reference, so a note whose frontmatter
+ * self-references via an alias (e.g. `a: &x\n  self: *x`) parses into a
+ * genuinely circular JS object — `fm.a.self === fm.a`. Plain `JSON.stringify`
+ * throws `TypeError: Converting circular structure to JSON` for that object.
+ *
+ * Without this guard, that throw happens mid-loop inside
+ * `upsertMetadataEntries`/`replaceAllMetadataEntries`, after some rows in the
+ * same batch/snapshot have already been written to the still-open
+ * transaction — the `catch` there rolls the whole transaction back, so ONE
+ * pathological note poisons every other file's write in the same batch. Worse,
+ * on the live-edit path (`DebouncedMetadataCacheWriter` in
+ * `src/indexer/metadata-indexer.ts`), a write failure re-queues the entire
+ * failed batch and retries forever at a capped exponential backoff — since
+ * the poisoned entry never becomes stringify-able on its own, that retry
+ * repeats for the lifetime of the app process, each attempt performing a
+ * `BEGIN IMMEDIATE` + partial inserts + `ROLLBACK` against the WAL. That is
+ * the mechanism that plausibly explains multi-gigabyte WAL growth from a
+ * single bad note over normal day-to-day use, not just a one-time crash.
+ *
+ * The fix: never let a circular reference (or a BigInt, same idea) reach
+ * `JSON.stringify` unguarded. Circular references are replaced with the
+ * string `"[Circular]"` — the pathological note loses fidelity only on its
+ * own self-referencing field, everything else (including every other note)
+ * is unaffected.
+ */
+export function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key, val) => {
+    if (typeof val === "bigint") return val.toString();
+    if (typeof val === "object" && val !== null) {
+      if (seen.has(val)) return "[Circular]";
+      seen.add(val);
+    }
+    return val;
+  });
+}
+
 function upsertStatement(db: DatabaseSync) {
   return db.prepare(`
     INSERT INTO metadata_entries (path, mtime_ms, size, metadata_json, mention_keys_json)
@@ -91,6 +133,30 @@ function upsertStatement(db: DatabaseSync) {
   `);
 }
 
+/**
+ * Serialize and write one row. `safeStringify` means a circular-frontmatter
+ * note degrades gracefully (its self-reference becomes `"[Circular]"`)
+ * instead of throwing — but this is still wrapped per-row so that ANY
+ * unexpected per-row failure (not just circularity) is logged and skipped
+ * rather than aborting/rolling back the rest of the batch's otherwise-good
+ * writes. Returns true if the row was written.
+ */
+function runUpsert(stmt: ReturnType<typeof upsertStatement>, path: string, entry: PersistedMetadataIndexEntry): boolean {
+  try {
+    stmt.run(
+      path,
+      entry.mtimeMs,
+      entry.size,
+      safeStringify(entry.metadata),
+      entry.mentionKeys ? safeStringify(entry.mentionKeys) : null,
+    );
+    return true;
+  } catch (error) {
+    console.error(`Failed to persist metadata cache entry for "${path}", skipping this file`, error);
+    return false;
+  }
+}
+
 /** Upsert a batch of entries in one transaction — avoids one commit per file and one all-or-nothing whole-vault transaction. */
 export function upsertMetadataEntries(db: DatabaseSync, entries: Record<string, PersistedMetadataIndexEntry>): void {
   const paths = Object.keys(entries);
@@ -98,10 +164,7 @@ export function upsertMetadataEntries(db: DatabaseSync, entries: Record<string, 
   const stmt = upsertStatement(db);
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const path of paths) {
-      const entry = entries[path];
-      stmt.run(path, entry.mtimeMs, entry.size, JSON.stringify(entry.metadata), entry.mentionKeys ? JSON.stringify(entry.mentionKeys) : null);
-    }
+    for (const path of paths) runUpsert(stmt, path, entries[path]);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -141,9 +204,7 @@ export function replaceAllMetadataEntries(db: DatabaseSync, snapshot: PersistedM
   db.exec("BEGIN IMMEDIATE");
   try {
     db.exec("DELETE FROM metadata_entries");
-    for (const [path, entry] of Object.entries(snapshot.entries)) {
-      stmt.run(path, entry.mtimeMs, entry.size, JSON.stringify(entry.metadata), entry.mentionKeys ? JSON.stringify(entry.mentionKeys) : null);
-    }
+    for (const [path, entry] of Object.entries(snapshot.entries)) runUpsert(stmt, path, entry);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
