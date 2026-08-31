@@ -114,4 +114,16 @@ describe("tabCloseTargets", () => {
     expect(tabCloseTargets(leaves, leaves[0], "right").map((l) => l.id)).toEqual(["c", "d"]);
     expect(tabCloseTargets(leaves, leaves[1], "self").map((l) => l.id)).toEqual(["b"]);
   });
+
+  it("uses canonical flattened order even when collection members are collapsed in the UI", () => {
+    const leaves = [
+      { id: "a", pinned: false },
+      { id: "hidden-1", pinned: false, collectionId: "collapsed" },
+      { id: "hidden-pinned", pinned: true, collectionId: "collapsed" },
+      { id: "hidden-2", pinned: false, collectionId: "collapsed" },
+      { id: "tail", pinned: false },
+    ];
+    expect(tabCloseTargets(leaves, leaves[0], "right").map((leaf) => leaf.id)).toEqual(["hidden-1", "hidden-2", "tail"]);
+    expect(tabCloseTargets(leaves, leaves[1], "others").map((leaf) => leaf.id)).toEqual(["a", "hidden-2", "tail"]);
+  });
 });

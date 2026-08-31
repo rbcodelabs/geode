@@ -90,6 +90,7 @@ export const TAB_MENU_SPEC: MenuSection[] = [
   // filters out entirely, leaving the existing menu text untouched.
   { section: "web", actions: ["web.reload"] },
   ...DOCUMENT_MENU_SPEC,
+  { section: "collection", actions: ["tab.collection-new", "tab.collection-remove", "tab.collection-rename", "tab.collection-toggle", "tab.collection-move", "tab.move-left", "tab.move-right" ] },
   { section: "tab", actions: ["tab.pin", "tab.close", "tab.close-others", "tab.close-right"], includeUnavailable: true },
 ];
 

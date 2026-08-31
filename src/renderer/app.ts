@@ -2214,6 +2214,66 @@ export class App {
       isAvailable: (context) => !!context.leaf,
       run: (context) => context.leaf!.detach(),
     });
+    this.actions.register({
+      id: "tab.collection-new",
+      label: "Add tab to new collection",
+      isAvailable: (context) => !!context.leaf && context.leaf.group instanceof TabGroup && !context.leaf.group.sidebar,
+      run: (context) => { (context.leaf!.group as TabGroup).createCollection(context.leaf!); },
+    });
+    this.actions.register({
+      id: "tab.collection-remove",
+      label: "Remove tab from collection",
+      isAvailable: (context) => !!context.leaf && context.leaf.group instanceof TabGroup && !!context.leaf.collectionId,
+      run: (context) => { (context.leaf!.group as TabGroup).removeLeafFromCollection(context.leaf!); },
+    });
+    this.actions.register({
+      id: "tab.collection-rename",
+      label: "Rename tab's collection",
+      isAvailable: (context) => !!context.leaf && context.leaf.group instanceof TabGroup && !!context.leaf.collectionId,
+      run: (context) => {
+        const group = context.leaf!.group as TabGroup;
+        const collection = group.collectionForLeaf(context.leaf!);
+        if (collection) group.beginCollectionRename(collection);
+      },
+    });
+    this.actions.register({
+      id: "tab.collection-toggle",
+      label: "Toggle tab's collection collapsed",
+      isAvailable: (context) => !!context.leaf && context.leaf.group instanceof TabGroup && !!context.leaf.collectionId,
+      run: (context) => (context.leaf!.group as TabGroup).toggleCollection(context.leaf!.collectionId!),
+    });
+    this.actions.register({
+      id: "tab.collection-move",
+      label: (context) => context.leaf?.collectionId ? "Move tab to collection…" : "Add tab to collection…",
+      isAvailable: (context) => !!context.leaf && context.leaf.group instanceof TabGroup && (context.leaf.group as TabGroup).collections.length > 0,
+      run: (context) => this.showCollectionPicker(context.leaf!),
+    });
+    for (const [id, label, direction] of [
+      ["tab.collection-left", "Move collection left", -1],
+      ["tab.collection-right", "Move collection right", 1],
+    ] as const) {
+      this.actions.register({
+        id,
+        label,
+        isAvailable: (context) => !!context.leaf && context.leaf.group instanceof TabGroup && !!context.leaf.collectionId,
+        run: (context) => { (context.leaf!.group as TabGroup).moveCollection(context.leaf!.collectionId!, direction); },
+      });
+    }
+    for (const [id, label, direction] of [
+      ["tab.move-left", "Move tab left", -1],
+      ["tab.move-right", "Move tab right", 1],
+    ] as const) {
+      this.actions.register({
+        id,
+        label,
+        isAvailable: (context) => {
+          if (!context.leaf || !(context.leaf.group instanceof TabGroup)) return false;
+          const index = context.leaf.group.leaves.indexOf(context.leaf);
+          return direction < 0 ? index > 0 : index >= 0 && index < context.leaf.group.leaves.length - 1;
+        },
+        run: (context) => { (context.leaf!.group as TabGroup).moveLeafStep(context.leaf!, direction); },
+      });
+    }
     for (const [id, label, mode] of [
       ["tab.close-others", "Close others", "others"],
       ["tab.close-right", "Close tabs to the right", "right"],
@@ -2228,7 +2288,7 @@ export class App {
         run: async (context) => {
           const leaf = context.leaf;
           if (!leaf || !(leaf.group instanceof TabGroup)) return;
-          for (const target of tabCloseTargets([...leaf.group.leaves], leaf, mode)) await target.detach();
+          await leaf.group.closeLeaves(tabCloseTargets([...leaf.group.leaves], leaf, mode));
         },
       });
     }
@@ -2279,6 +2339,17 @@ export class App {
     this.commands.add(createActionCommand(this.actions, "tab.close-others", "Close other tabs", () => this.activeActionContext()));
     this.commands.add(createActionCommand(this.actions, "tab.close-right", "Close tabs to the right", () => this.activeActionContext()));
     this.commands.add(createActionCommand(this.actions, "tab.pin", "Pin or unpin current tab", () => this.activeActionContext()));
+    if (!document.body.classList.contains("is-mobile")) {
+      this.commands.add(createActionCommand(this.actions, "tab.collection-new", "Tabs: Add active tab to new collection", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.collection-remove", "Tabs: Remove active tab from collection", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.collection-rename", "Tabs: Rename active tab's collection", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.collection-toggle", "Tabs: Toggle active tab's collection collapsed", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.collection-move", "Tabs: Move active tab to collection...", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.move-left", "Tabs: Move tab left", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.move-right", "Tabs: Move tab right", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.collection-left", "Tabs: Move collection left", () => this.activeActionContext()));
+      this.commands.add(createActionCommand(this.actions, "tab.collection-right", "Tabs: Move collection right", () => this.activeActionContext()));
+    }
     this.commands.add(createActionCommand(this.actions, "resource.rename", "Rename current file", () => this.activeActionContext()));
     this.commands.add(createActionCommand(this.actions, "resource.delete", "Delete current file", () => this.activeActionContext()));
     this.commands.add(createActionCommand(this.actions, "resource.bookmark", "Bookmark or un-bookmark current file", () => this.activeActionContext()));
@@ -2946,7 +3017,7 @@ export class App {
     let restored = false;
     try {
       const saved = (await this.host.config.read("workspace")) as PersistedWorkspace | null;
-      if (saved && (saved.version === 1 || saved.version === 2)) {
+      if (saved && (saved.version === 1 || saved.version === 2 || saved.version === 3)) {
         restored = await this.workspace.deserialize(saved);
       }
     } catch (err) {
@@ -3234,7 +3305,16 @@ export class App {
     e: MouseEvent,
     items: Array<{
       title: string | DocumentFragment;
-      action: () => void;
+      action?: () => void;
+      submenu?: Array<{
+        title: string | DocumentFragment;
+        action: () => void;
+        icon?: string | null;
+        checked?: boolean;
+        disabled?: boolean;
+        section?: string;
+        warning?: boolean;
+      }>;
       icon?: string | null;
       checked?: boolean;
       disabled?: boolean;
@@ -3257,7 +3337,11 @@ export class App {
           .setChecked(item.checked ?? false)
           .setDisabled(item.disabled ?? false)
           .setSection(item.section ?? "default")
-          .onClick(item.action);
+          .onClick(item.submenu
+            ? () => this.showMenu(new MouseEvent("click"), item.submenu!, { anchor: menuItem.dom })
+            : (item.action ?? (() => {})));
+        menuItem.dom.classList.toggle("has-submenu", !!item.submenu);
+        if (item.submenu) menuItem.dom.setAttribute("aria-haspopup", "menu");
         menuItem.dom.classList.toggle("is-warning", item.warning ?? false);
       });
     }
@@ -3280,6 +3364,18 @@ export class App {
       resource: file,
       ...this.viewActionContext(leaf.view),
     }, TAB_MENU_SPEC));
+  }
+
+  private showCollectionPicker(leaf: WorkspaceLeaf): void {
+    if (!(leaf.group instanceof TabGroup)) return;
+    const group = leaf.group;
+    const items = group.collections.map((collection, index) => ({
+      title: `${collection.name} (${collection.color}, ${index + 1})`,
+      checked: leaf.collectionId === collection.id,
+      action: () => group.addLeafToCollection(leaf, collection.id),
+    }));
+    if (!items.length) return;
+    this.showMenu(new MouseEvent("click", { clientX: 0, clientY: 0 }), items, { anchor: leaf.tabEl });
   }
 
   applySettings() {

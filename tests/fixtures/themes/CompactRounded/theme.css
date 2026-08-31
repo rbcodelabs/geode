@@ -1,0 +1,4 @@
+.workspace-tab-header-container { --header-height: 34px; font-size: 11px; }
+.workspace-tab-header, .tab-collection-label { border-radius: 14px !important; }
+.workspace-tab-header { flex-basis: 92px; }
+.workspace-tab-header-container-inner { gap: 1px !important; }

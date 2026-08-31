@@ -94,7 +94,7 @@ test("pins a hosted plugin tab from its context menu, protects navigation, and r
       const file = path.join(vaultDir, ".geode", "workspace.json");
       if (!fs.existsSync(file)) return false;
       const saved = JSON.parse(fs.readFileSync(file, "utf8"));
-      const groups = saved.version === 2
+      const groups = saved.version === 2 || saved.version === 3
         ? (saved.center.root.type === "split" ? saved.center.root.children : [saved.center.root])
         : saved.groups;
       return groups

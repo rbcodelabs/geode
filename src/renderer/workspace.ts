@@ -4,6 +4,21 @@ import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
 import { markStart, markEnd } from "./perf-instrumentation";
 import { DeferredView, isDeferredView } from "./views/deferred-view";
+import {
+  COLLECTION_COLORS,
+  classifyMemberDrop,
+  collectionBlocks,
+  moveCollectionBlock,
+  nextCollectionColor,
+  normalizeCollectionName,
+  normalizeSerializedCollectionSubset,
+  normalizeTabCollections,
+  runAllSettled,
+  selectNearestSurvivor,
+  tabStripNavigationIndex,
+  type TabCollection,
+  uniqueCollectionId,
+} from "./tab-collections";
 
 export interface View {
   readonly viewType: string;
@@ -79,6 +94,7 @@ let leafIdCounter = 0;
 
 /** The leaf currently being dragged, shared across containers during a drag-and-drop. */
 let draggingLeaf: WorkspaceLeaf | null = null;
+let draggingCollection: { group: TabGroup; id: string } | null = null;
 
 /** A leaf is one tab (or one docked sidebar pane): a container hosting a single view. */
 export class WorkspaceLeaf {
@@ -89,6 +105,8 @@ export class WorkspaceLeaf {
   leafEl: HTMLElement;
   contentEl: HTMLElement;
   pinned = false;
+  /** Split-local Phase 1 collection membership. Never carried across containers. */
+  collectionId?: string;
   private opened = false;
 
   constructor(
@@ -360,6 +378,7 @@ export class TabGroup implements LeafContainer {
   readonly isSidebar: boolean;
   leaves: WorkspaceLeaf[] = [];
   active: WorkspaceLeaf | null = null;
+  collections: TabCollection[] = [];
   containerEl: HTMLElement;
   /** `.workspace-tab-header-container` — the whole header bar (scrollable inner row + tab-list/new-tab). */
   tabBarEl: HTMLElement;
@@ -371,6 +390,8 @@ export class TabGroup implements LeafContainer {
   /** Right-sidebar toggle button, last child of `tabBarEl` (only meaningful/visible on the rightmost group). */
   rightToggleEl: HTMLButtonElement;
   private bodyDropEdge: "left" | "right" | "top" | "bottom" | null = null;
+  private collectionCounter = 0;
+  private dropMarkerEl: HTMLElement | null = null;
 
   constructor(
     public workspace: Workspace,
@@ -407,13 +428,31 @@ export class TabGroup implements LeafContainer {
     setIcon(tabListIcon, "chevron-down");
     tabListIcon.addEventListener("click", (event) => {
       event.stopPropagation();
-      const items = this.leaves.map((leaf) => ({
-        title: leaf.getDisplayText(),
-        icon: leaf.view?.getIcon() ?? "file",
-        checked: leaf === this.active,
-        section: "tabs",
-        action: () => this.setActiveLeaf(leaf),
-      }));
+      const items: Array<{ title: string; icon?: string | null; checked?: boolean; disabled?: boolean; section: string; action?: () => void; submenu?: Array<{ title: string; icon?: string | null; checked?: boolean; action: () => void }> }> = [];
+      const seenCollections = new Set<string>();
+      for (const leaf of this.leaves) {
+        const collection = this.collectionForLeaf(leaf);
+        if (collection && !seenCollections.has(collection.id)) {
+          seenCollections.add(collection.id);
+          items.push({
+            title: `${collection.collapsed ? "▸" : "▾"} ${collection.name} (${collection.color})`,
+            section: "tabs",
+            submenu: this.leaves.filter((member) => member.collectionId === collection.id).map((member) => ({
+              title: member.getDisplayText(),
+              icon: member.view?.getIcon() ?? "file",
+              checked: member === this.active,
+              action: () => this.setActiveLeaf(member),
+            })),
+          });
+        }
+        if (!collection) items.push({
+          title: collection ? `  ${leaf.getDisplayText()}` : leaf.getDisplayText(),
+          icon: leaf.view?.getIcon() ?? "file",
+          checked: leaf === this.active,
+          section: "tabs",
+          action: () => this.setActiveLeaf(leaf),
+        });
+      }
       // Spec: tab-group dropdown → "Bookmark [N] tabs".
       items.push({
         title: `Bookmark ${this.leaves.length} tab${this.leaves.length === 1 ? "" : "s"}`,
@@ -468,7 +507,7 @@ export class TabGroup implements LeafContainer {
   /** Accept a dragged leaf: dropping over the tab bar inserts at a position; over the body appends. */
   private installDropTarget() {
     const over = (e: DragEvent, el: HTMLElement) => {
-      if (!draggingLeaf) return;
+      if (!draggingLeaf && !draggingCollection) return;
       e.preventDefault();
       el.classList.add("drag-over");
     };
@@ -477,6 +516,11 @@ export class TabGroup implements LeafContainer {
     this.tabBarEl.addEventListener("dragleave", () => leave(this.tabBarEl));
     this.tabBarEl.addEventListener("drop", (e) => {
       leave(this.tabBarEl);
+      if (draggingCollection?.group === this) {
+        e.preventDefault();
+        this.moveCollectionToIndex(draggingCollection.id, this.leaves.length);
+        return;
+      }
       if (!draggingLeaf) return;
       e.preventDefault();
       this.workspace.moveLeaf(draggingLeaf, this, this.dropIndex(e.clientX));
@@ -544,17 +588,20 @@ export class TabGroup implements LeafContainer {
     const i = this.leaves.indexOf(leaf);
     if (i === -1) return;
     this.leaves.splice(i, 1);
+    leaf.collectionId = undefined;
     if (this.active === leaf) {
       this.active = this.leaves[Math.min(i, this.leaves.length - 1)] ?? null;
       this.contentHostEl.innerHTML = "";
       if (this.active) this.contentHostEl.appendChild(this.active.leafEl);
     }
+    this.normalizeCollections();
     this.renderTabs();
   }
 
   /** Adopt an existing leaf (from another container) at `index` (default: end). */
   insertLeaf(leaf: WorkspaceLeaf, index?: number) {
     leaf.group = this;
+    leaf.collectionId = undefined;
     // The view element may have been mounted directly in a sidebar; put it
     // back inside the leaf's own content wrapper for tab display.
     if (leaf.view && leaf.view.containerEl.parentElement !== leaf.contentEl) {
@@ -595,14 +642,343 @@ export class TabGroup implements LeafContainer {
         this.workspace.groupEmptied(this);
       }
     }
+    this.normalizeCollections();
     this.renderTabs();
     this.workspace.trigger("layout-change");
   }
 
+  private normalizeCollections(): void {
+    const normalized = normalizeTabCollections(
+      this.leaves.map((leaf) => ({ leaf, id: leaf.id, collectionId: leaf.collectionId })),
+      this.collections,
+    );
+    this.leaves = normalized.leaves.map((entry) => {
+      entry.leaf.collectionId = entry.collectionId;
+      return entry.leaf;
+    });
+    this.collections = normalized.collections;
+  }
+
+  collectionForLeaf(leaf: WorkspaceLeaf): TabCollection | undefined {
+    return leaf.collectionId ? this.collections.find((collection) => collection.id === leaf.collectionId) : undefined;
+  }
+
+  createCollection(leaf: WorkspaceLeaf): TabCollection | null {
+    if (!this.leaves.includes(leaf)) return null;
+    const id = uniqueCollectionId(
+      new Set(this.collections.map((collection) => collection.id)),
+      () => `collection-${Date.now().toString(36)}-${++this.collectionCounter}`,
+    );
+    const collection: TabCollection = {
+      id,
+      name: "New collection",
+      color: nextCollectionColor(this.collections),
+      collapsed: false,
+    };
+    this.collections.push(collection);
+    leaf.collectionId = id;
+    this.normalizeCollections();
+    this.renderTabs();
+    this.workspace.trigger("layout-change");
+    queueMicrotask(() => this.beginCollectionRename(collection));
+    return collection;
+  }
+
+  addLeafToCollection(leaf: WorkspaceLeaf, collectionId: string, memberIndex?: number): boolean {
+    if (!this.leaves.includes(leaf) || !this.collections.some((collection) => collection.id === collectionId)) return false;
+    const current = this.leaves.indexOf(leaf);
+    this.leaves.splice(current, 1);
+    const members = this.leaves.filter((candidate) => candidate.collectionId === collectionId);
+    const at = Math.max(0, Math.min(memberIndex ?? members.length, members.length));
+    const insertion = members.length
+      ? this.leaves.indexOf(members[Math.min(at, members.length - 1)]) + (at === members.length ? 1 : 0)
+      : this.leaves.length;
+    leaf.collectionId = collectionId;
+    this.leaves.splice(insertion, 0, leaf);
+    this.normalizeCollections();
+    this.renderTabs();
+    this.announce(`${leaf.getDisplayText()} moved to ${this.collectionForLeaf(leaf)?.name}, position ${at + 1} of ${this.leaves.filter((candidate) => candidate.collectionId === collectionId).length}`);
+    this.workspace.trigger("layout-change");
+    return true;
+  }
+
+  removeLeafFromCollection(leaf: WorkspaceLeaf): boolean {
+    const collection = this.collectionForLeaf(leaf);
+    if (!collection) return false;
+    leaf.collectionId = undefined;
+    this.normalizeCollections();
+    this.renderTabs();
+    this.announce(`${leaf.getDisplayText()} removed from ${collection.name}`);
+    this.workspace.trigger("layout-change");
+    return true;
+  }
+
+  toggleCollection(collectionId: string): void {
+    const collection = this.collections.find((candidate) => candidate.id === collectionId);
+    if (!collection) return;
+    collection.collapsed = !collection.collapsed;
+    this.renderTabs();
+    this.workspace.trigger("layout-change");
+  }
+
+  renameCollection(collectionId: string, name: string): void {
+    const collection = this.collections.find((candidate) => candidate.id === collectionId);
+    if (!collection) return;
+    collection.name = normalizeCollectionName(name);
+    this.renderTabs();
+    this.workspace.trigger("layout-change");
+  }
+
+  recolorCollection(collectionId: string, color: TabCollection["color"]): void {
+    const collection = this.collections.find((candidate) => candidate.id === collectionId);
+    if (!collection || !COLLECTION_COLORS.includes(color)) return;
+    collection.color = color;
+    this.renderTabs();
+    this.workspace.trigger("layout-change");
+  }
+
+  moveCollection(collectionId: string, direction: -1 | 1): boolean {
+    const blocks = collectionBlocks(this.leaves.map((leaf) => ({ id: leaf.id, collectionId: leaf.collectionId })));
+    const blockIndex = blocks.findIndex((block) => block.kind === "collection" && block.collectionId === collectionId);
+    const targetIndex = blockIndex + direction;
+    if (blockIndex < 0 || targetIndex < 0 || targetIndex >= blocks.length) return false;
+    const idToLeaf = new Map(this.leaves.map((leaf) => [leaf.id, leaf]));
+    const reordered = [...blocks];
+    [reordered[blockIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[blockIndex]];
+    this.leaves = reordered.flatMap((block) => block.leafIds.map((id) => idToLeaf.get(id)!));
+    this.renderTabs();
+    this.workspace.trigger("layout-change");
+    return true;
+  }
+
+  moveCollectionToIndex(collectionId: string, index: number): boolean {
+    if (!this.collections.some((collection) => collection.id === collectionId)) return false;
+    const tagged = this.leaves.map((leaf) => ({ leaf, id: leaf.id, collectionId: leaf.collectionId }));
+    const reordered = moveCollectionBlock(tagged, collectionId, index);
+    this.leaves = reordered.map((entry) => entry.leaf);
+    this.renderTabs();
+    this.workspace.trigger("layout-change");
+    return true;
+  }
+
+  moveLeafStep(leaf: WorkspaceLeaf, direction: -1 | 1): boolean {
+    const index = this.leaves.indexOf(leaf);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= this.leaves.length) return false;
+    const targetLeaf = this.leaves[target];
+    if (leaf.collectionId !== targetLeaf.collectionId) leaf.collectionId = undefined;
+    this.leaves.splice(index, 1);
+    this.leaves.splice(target, 0, leaf);
+    this.normalizeCollections();
+    this.renderTabs();
+    this.workspace.trigger("layout-change");
+    return true;
+  }
+
+  async closeCollection(collectionId: string): Promise<void> {
+    await this.closeLeaves([...this.leaves].filter((candidate) => candidate.collectionId === collectionId));
+  }
+
+  async closeLeaves(leaves: readonly WorkspaceLeaf[]): Promise<Error[]> {
+    const errors = await runAllSettled(leaves, (leaf) => leaf.detach());
+    this.normalizeCollections();
+    this.renderTabs();
+    if (errors.length) {
+      console.error("Failed to close one or more tabs", errors);
+      this.app.notify(`${errors.length} tab${errors.length === 1 ? "" : "s"} could not be closed`);
+    }
+    return errors;
+  }
+
+  private announce(message: string): void {
+    let live = this.containerEl.querySelector<HTMLElement>(".tab-collection-live-region");
+    if (!live) {
+      live = document.createElement("div");
+      live.className = "tab-collection-live-region";
+      live.setAttribute("aria-live", "polite");
+      live.setAttribute("aria-atomic", "true");
+      this.containerEl.appendChild(live);
+    }
+    live.textContent = message;
+  }
+
+  private showDropPreview(target: HTMLElement, placement: "before" | "after" | "inside", text: string): void {
+    this.clearDropPreview();
+    target.classList.add(`tab-drop-${placement}`);
+    this.dropMarkerEl = target;
+    let preview = this.tabBarEl.querySelector<HTMLElement>(".tab-drop-preview");
+    if (!preview) {
+      preview = document.createElement("div");
+      preview.className = "tab-drop-preview";
+      preview.setAttribute("role", "status");
+      this.tabBarEl.appendChild(preview);
+    }
+    preview.textContent = text;
+  }
+
+  private clearDropPreview(): void {
+    this.dropMarkerEl?.classList.remove("tab-drop-before", "tab-drop-after", "tab-drop-inside");
+    this.dropMarkerEl = null;
+    this.tabBarEl.querySelector(".tab-drop-preview")?.remove();
+  }
+
+  beginCollectionRename(collection: TabCollection): void {
+    const label = this.tabHeaderInnerEl.querySelector<HTMLElement>(`[data-collection-id="${CSS.escape(collection.id)}"]`);
+    if (!label) return;
+    const title = label.querySelector<HTMLElement>(".tab-collection-title");
+    if (!title) return;
+    const input = document.createElement("input");
+    input.className = "tab-collection-rename";
+    input.dataset.stripFocus = `collection:${collection.id}:surface`;
+    input.value = collection.name;
+    input.maxLength = 160;
+    let accepted = false;
+    const accept = () => {
+      if (accepted) return;
+      accepted = true;
+      this.renameCollection(collection.id, input.value);
+    };
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === "Escape") { event.preventDefault(); accept(); }
+    });
+    input.addEventListener("blur", accept, { once: true });
+    title.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  private collectionMenu(event: MouseEvent, collection: TabCollection): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.app.showMenu(event, [
+      { title: "Rename collection", section: "collection", action: () => this.beginCollectionRename(collection) },
+      { title: "Collection color", section: "color", submenu: COLLECTION_COLORS.map((color) => ({
+        title: color,
+        checked: collection.color === color,
+        action: () => this.recolorCollection(collection.id, color),
+      })) },
+      { title: "Move collection left", section: "move", action: () => this.moveCollection(collection.id, -1) },
+      { title: "Move collection right", section: "move", action: () => this.moveCollection(collection.id, 1) },
+      { title: "Close tabs to the right", section: "close", action: async () => {
+        const members = this.leaves.filter((leaf) => leaf.collectionId === collection.id);
+        const last = members[members.length - 1];
+        await this.closeLeaves([...this.leaves].slice(this.leaves.indexOf(last) + 1).filter((candidate) => !candidate.pinned));
+      } },
+      { title: "Close collection", warning: true, section: "close", action: () => void this.closeCollection(collection.id) },
+    ]);
+  }
+
   renderTabs() {
+    const focused = document.activeElement instanceof HTMLElement && this.tabHeaderInnerEl.contains(document.activeElement)
+      ? document.activeElement.dataset.stripFocus
+      : undefined;
+    this.normalizeCollections();
     this.tabHeaderInnerEl.innerHTML = "";
+    const renderedCollections = new Set<string>();
     for (const leaf of this.leaves) {
+      const collection = this.collectionForLeaf(leaf);
+      if (collection && !renderedCollections.has(collection.id)) {
+        renderedCollections.add(collection.id);
+        const members = this.leaves.filter((candidate) => candidate.collectionId === collection.id);
+        const ownsActive = !!this.active && this.active.collectionId === collection.id;
+        const label = document.createElement("div");
+        label.className = "tab-collection-label";
+        label.dataset.collectionId = collection.id;
+        label.dataset.color = collection.color;
+        label.classList.toggle("is-collapsed", collection.collapsed);
+        label.classList.toggle("is-active", ownsActive);
+        label.setAttribute("role", "group");
+
+        const disclosure = document.createElement("button");
+        disclosure.type = "button";
+        disclosure.className = "tab-collection-disclosure";
+        disclosure.dataset.stripFocus = `collection:${collection.id}:disclosure`;
+        disclosure.setAttribute("aria-label", `${collection.collapsed ? "Expand" : "Collapse"} ${collection.name}`);
+        disclosure.setAttribute("aria-expanded", String(!collection.collapsed));
+        disclosure.setAttribute("aria-controls", members.map((member) => `${member.id}-tab`).join(" "));
+        setIcon(disclosure, collection.collapsed ? "chevron-right" : "chevron-down");
+        disclosure.addEventListener("click", () => this.toggleCollection(collection.id));
+
+        const surface = document.createElement("button");
+        surface.type = "button";
+        surface.className = "tab-collection-surface";
+        surface.dataset.stripFocus = `collection:${collection.id}:surface`;
+        const activeText = ownsActive ? `, active: ${this.active!.getDisplayText()}` : "";
+        surface.setAttribute("aria-label", `${collection.name}, ${collection.color}, ${collection.collapsed ? "collapsed" : "expanded"}, ${members.length} tabs${activeText}`);
+        surface.title = surface.getAttribute("aria-label")!;
+        const title = document.createElement("span");
+        title.className = "tab-collection-title";
+        title.textContent = collection.name;
+        const count = document.createElement("span");
+        count.className = "tab-collection-count";
+        count.textContent = String(members.length);
+        surface.append(title, count);
+        let renaming = false;
+        surface.addEventListener("mousedown", (event) => {
+          if (event.detail === 2) {
+            event.preventDefault();
+            renaming = true;
+            this.beginCollectionRename(collection);
+          }
+        });
+        surface.addEventListener("click", () => {
+          if (!renaming) this.setActiveLeaf(ownsActive ? this.active! : members[0]);
+        });
+        label.addEventListener("contextmenu", (event) => this.collectionMenu(event, collection));
+        label.draggable = true;
+        label.addEventListener("dragstart", (event) => {
+          draggingCollection = { group: this, id: collection.id };
+          event.dataTransfer?.setData("text/plain", collection.id);
+          label.classList.add("is-dragging");
+        });
+        label.addEventListener("dragend", () => { draggingCollection = null; label.classList.remove("is-dragging"); this.clearDropPreview(); });
+        label.addEventListener("dragover", (event) => {
+          if (draggingLeaf || draggingCollection?.group === this) {
+            event.preventDefault();
+            const crossGroupLeaf = !!draggingLeaf && draggingLeaf.group !== this;
+            this.showDropPreview(
+              label,
+              draggingLeaf ? (crossGroupLeaf ? "before" : "inside") : "before",
+              draggingLeaf
+                ? crossGroupLeaf ? `Move ungrouped before ${collection.name}` : `Move to ${collection.name}`
+                : `Move collection before ${collection.name}`,
+            );
+          }
+        });
+        label.addEventListener("dragleave", () => this.clearDropPreview());
+        label.addEventListener("drop", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.clearDropPreview();
+          if (draggingLeaf) {
+            if (draggingLeaf.group === this) this.addLeafToCollection(draggingLeaf, collection.id);
+            else {
+              const insertion = this.leaves.findIndex((candidate) => candidate.collectionId === collection.id);
+              const displayText = draggingLeaf.getDisplayText();
+              this.workspace.moveLeaf(draggingLeaf, this, insertion);
+              this.announce(`${displayText} moved ungrouped before ${collection.name}`);
+            }
+          }
+          else if (draggingCollection?.group === this) {
+            const first = this.leaves.findIndex((candidate) => candidate.collectionId === collection.id);
+            const sourceFirst = this.leaves.findIndex((candidate) => candidate.collectionId === draggingCollection!.id);
+            const targetMembers = this.leaves.filter((candidate) => candidate.collectionId === collection.id);
+            const insertion = sourceFirst < first
+              ? this.leaves.indexOf(targetMembers[targetMembers.length - 1]) + 1
+              : first;
+            this.moveCollectionToIndex(draggingCollection.id, insertion);
+          }
+        });
+        label.append(disclosure, surface);
+        this.tabHeaderInnerEl.appendChild(label);
+      }
       const tab = buildTabHeader(leaf, leaf === this.active);
+      tab.id = `${leaf.id}-tab`;
+      tab.dataset.stripFocus = `leaf:${leaf.id}`;
+      tab.hidden = !!collection?.collapsed;
+      tab.tabIndex = tab.hidden ? -1 : 0;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(leaf === this.active));
       tab.draggable = true;
       tab.onmousedown = (e) => {
         if (e.button === 1) leaf.detach();
@@ -617,12 +993,83 @@ export class TabGroup implements LeafContainer {
       tab.ondragend = () => {
         draggingLeaf = null;
         tab.classList.remove("is-dragging");
+        this.clearDropPreview();
       };
+      tab.addEventListener("dragover", (event) => {
+        if (draggingCollection?.group === this || draggingLeaf) {
+          event.preventDefault();
+          const rect = tab.getBoundingClientRect();
+          const fraction = (event.clientX - rect.left) / Math.max(1, rect.width);
+          if (leaf.collectionId) {
+            const members = this.leaves.filter((candidate) => candidate.collectionId === leaf.collectionId);
+            const drop = classifyMemberDrop(members.indexOf(leaf), members.length, fraction);
+            this.showDropPreview(tab, drop.kind === "join" ? (fraction < 0.5 ? "before" : "after") : drop.kind === "ungrouped-before" ? "before" : "after", drop.kind === "join" ? `Move within ${this.collectionForLeaf(leaf)?.name}` : "Ungrouped");
+          } else {
+            this.showDropPreview(tab, fraction < 0.5 ? "before" : "after", "Ungrouped");
+          }
+        }
+      });
+      tab.addEventListener("dragleave", () => this.clearDropPreview());
+      tab.addEventListener("drop", (event) => {
+        this.clearDropPreview();
+        if (draggingLeaf && leaf.collectionId && draggingLeaf !== leaf) {
+          event.preventDefault();
+          event.stopPropagation();
+          const members = this.leaves.filter((candidate) => candidate.collectionId === leaf.collectionId);
+          const rect = tab.getBoundingClientRect();
+          const drop = classifyMemberDrop(members.indexOf(leaf), members.length, (event.clientX - rect.left) / Math.max(1, rect.width));
+          if (drop.kind === "join") this.addLeafToCollection(draggingLeaf, leaf.collectionId, drop.memberIndex);
+          else {
+            draggingLeaf.collectionId = undefined;
+            const edge = drop.kind === "ungrouped-before" ? this.leaves.indexOf(members[0]) : this.leaves.indexOf(members[members.length - 1]) + 1;
+            this.workspace.moveLeaf(draggingLeaf, this, edge);
+          }
+          return;
+        }
+        if (draggingLeaf && !leaf.collectionId && draggingLeaf !== leaf) {
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = tab.getBoundingClientRect();
+          const before = event.clientX < rect.left + rect.width / 2;
+          draggingLeaf.collectionId = undefined;
+          this.workspace.moveLeaf(draggingLeaf, this, this.leaves.indexOf(leaf) + (before ? 0 : 1));
+          return;
+        }
+        if (draggingCollection?.group === this) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.moveCollectionToIndex(draggingCollection.id, this.leaves.indexOf(leaf));
+        }
+      });
       this.tabHeaderInnerEl.appendChild(tab);
     }
     const spacer = document.createElement("div");
     spacer.className = "workspace-tab-header-spacer";
     this.tabHeaderInnerEl.appendChild(spacer);
+    this.installTabKeyboardNavigation();
+    if (focused) this.tabHeaderInnerEl.querySelector<HTMLElement>(`[data-strip-focus="${CSS.escape(focused)}"]`)?.focus();
+  }
+
+  private installTabKeyboardNavigation(): void {
+    const logical: Array<{ target: HTMLElement; controls: HTMLElement[] }> = [];
+    for (const child of this.tabHeaderInnerEl.children) {
+      if (!(child instanceof HTMLElement)) continue;
+      if (child.classList.contains("tab-collection-label")) {
+        const surface = child.querySelector<HTMLElement>(".tab-collection-surface");
+        const disclosure = child.querySelector<HTMLElement>(".tab-collection-disclosure");
+        if (surface && disclosure) logical.push({ target: surface, controls: [disclosure, surface] });
+      } else if (child.classList.contains("workspace-tab-header") && !child.hidden) {
+        logical.push({ target: child, controls: [child] });
+      }
+    }
+    logical.forEach((entry, logicalIndex) => {
+      for (const control of entry.controls) control.onkeydown = (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const next = tabStripNavigationIndex(event.key, logicalIndex, logical.length);
+        event.preventDefault();
+        logical[next]?.target.focus();
+      };
+    });
   }
 }
 
@@ -1107,6 +1554,8 @@ export interface PersistedLeaf {
   /** For plugin views: the view's serialized state (from `getViewState`). */
   state?: unknown;
   pinned?: boolean;
+  /** v3 center-tab collection membership. Absent for sidebars and ungrouped tabs. */
+  collectionId?: string;
   /**
    * Last known tab/pane title. Optional and purely additive — older
    * `workspace.json` files without it restore fine. Only used to label a
@@ -1211,6 +1660,8 @@ export interface PersistedTabNode {
   type: "tabs";
   leaves: PersistedLeaf[];
   active: number;
+  /** v3 center-only split-local collection registry. */
+  collections?: TabCollection[];
 }
 
 export interface PersistedSplitNode {
@@ -1267,7 +1718,11 @@ export interface PersistedWorkspaceV2 {
   right: PersistedRegionV2;
 }
 
-export type PersistedWorkspace = PersistedWorkspaceV1 | PersistedWorkspaceV2;
+export interface PersistedWorkspaceV3 extends Omit<PersistedWorkspaceV2, "version"> {
+  version: 3;
+}
+
+export type PersistedWorkspace = PersistedWorkspaceV1 | PersistedWorkspaceV2 | PersistedWorkspaceV3;
 
 /** Remove empty branches and redundant one-child splits after moves/closes. */
 export function normalizeWorkspaceNode(node: WorkspaceTreeNode, keepEmptyRoot = false): WorkspaceTreeNode | null {
@@ -1287,8 +1742,50 @@ export function normalizeWorkspaceNode(node: WorkspaceTreeNode, keepEmptyRoot = 
 }
 
 /** Upgrade the old flat v1 layout without dropping any user-visible state. */
-export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWorkspaceV2 {
-  if (state.version === 2) return state;
+export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWorkspaceV3 {
+  const normalizeNode = (node: WorkspaceTreeNode | null, center: boolean): WorkspaceTreeNode | null => {
+    if (!node || (node as WorkspaceTreeNode).type !== "tabs" && (node as WorkspaceTreeNode).type !== "split") return null;
+    if (node.type === "split") {
+      const children = Array.isArray(node.children)
+        ? node.children.map((child) => normalizeNode(child, center)).filter((child): child is WorkspaceTreeNode => !!child)
+        : [];
+      return { ...node, children, sizes: Array.isArray(node.sizes) ? node.sizes : children.map(() => 1 / Math.max(1, children.length)) };
+    }
+    const rawLeaves = Array.isArray(node.leaves) ? node.leaves : [];
+    if (!center) {
+      return {
+        ...node,
+        leaves: rawLeaves.map(({ collectionId: _ignored, ...leaf }) => leaf),
+        active: Number.isInteger(node.active) && node.active >= 0 && node.active < rawLeaves.length ? node.active : 0,
+      };
+    }
+    const activeLeaf = rawLeaves[Number.isInteger(node.active) ? node.active : 0];
+    const tagged = rawLeaves.map((leaf, index) => ({ ...leaf, id: `persisted-${index}` }));
+    const normalized = normalizeTabCollections(tagged, Array.isArray(node.collections) ? node.collections : []);
+    const leaves = normalized.leaves.map(({ id: _ignored, ...leaf }) => leaf);
+    const active = activeLeaf ? normalized.leaves.findIndex((leaf) => rawLeaves[Number(leaf.id.slice(10))] === activeLeaf) : -1;
+    return { ...node, leaves, active: active >= 0 ? active : 0, collections: normalized.collections };
+  };
+
+  if (state.version === 2 || state.version === 3) {
+    const stripCollections = (node: WorkspaceTreeNode | null): WorkspaceTreeNode | null => {
+      if (!node) return null;
+      if (node.type === "split") return { ...node, children: node.children.map(stripCollections).filter((child): child is WorkspaceTreeNode => !!child) };
+      return {
+        ...node,
+        collections: [],
+        leaves: node.leaves.map(({ collectionId: _ignored, ...leaf }) => leaf),
+      };
+    };
+    const centerRoot = state.version === 2 ? stripCollections(state.center?.root ?? null) : state.center?.root ?? null;
+    return {
+      ...state,
+      version: 3,
+      center: { ...state.center, root: normalizeNode(centerRoot, true) },
+      left: { ...state.left, root: normalizeNode(state.left?.root ?? null, false) },
+      right: { ...state.right, root: normalizeNode(state.right?.root ?? null, false) },
+    };
+  }
   const tabs = (leaves: PersistedLeaf[], activeType?: string | null): PersistedTabNode => ({
     type: "tabs",
     leaves,
@@ -1302,8 +1799,8 @@ export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWork
     ? (centerChildren[0] ?? tabs([]))
     : { type: "split", direction: "horizontal", sizes: centerChildren.map(() => 1 / centerChildren.length), children: centerChildren };
   return {
-    version: 2,
-    center: { root: centerRoot, activeGroup: state.activeGroup },
+    version: 3,
+    center: { root: normalizeNode(centerRoot, true), activeGroup: state.activeGroup },
     left: { root: tabs(state.left.leaves, state.left.activeType), collapsed: state.left.collapsed, width: state.left.width },
     right: { root: tabs(state.right.leaves, state.right.activeType), collapsed: state.right.collapsed, width: state.right.width },
   };
@@ -2131,7 +2628,7 @@ export class Workspace extends Events {
   }
 
   /** Snapshot the current layout for persistence. Empty tabs/groups are dropped. */
-  serialize(): PersistedWorkspaceV2 {
+  serialize(): PersistedWorkspaceV3 {
     const activeGroup = Math.max(0, this.groups.indexOf(this.activeGroup));
     const nodeFor = (container: Sidebar | TabGroup): PersistedTabNode => {
       const leaves = container.leaves
@@ -2140,7 +2637,23 @@ export class Workspace extends Events {
       const active = container.active instanceof WorkspaceLeaf
         ? Math.max(0, leaves.findIndex((item) => item.leaf === container.active))
         : 0;
-      return { type: "tabs", leaves: leaves.map((item) => item.persisted), active };
+      const candidateLeaves = leaves.map((item) => ({
+        id: item.leaf.id,
+        persisted: item.persisted,
+        collectionId: container instanceof TabGroup && !container.sidebar ? item.leaf.collectionId : undefined,
+      }));
+      const subset = container instanceof TabGroup && !container.sidebar
+        ? normalizeSerializedCollectionSubset(candidateLeaves, container.collections)
+        : { leaves: candidateLeaves.map((item) => ({ ...item, collectionId: undefined })), collections: [] };
+      const persistedLeaves = subset.leaves.map((item) => item.collectionId
+        ? { ...item.persisted, collectionId: item.collectionId }
+        : item.persisted);
+      return {
+        type: "tabs",
+        leaves: persistedLeaves,
+        active,
+        ...(container instanceof TabGroup && !container.sidebar ? { collections: subset.collections.map((collection) => ({ ...collection })) } : {}),
+      };
     };
     const regionRoot = (containers: (Sidebar | TabGroup)[], direction: "horizontal" | "vertical", sizes?: number[]): WorkspaceTreeNode => {
       const children = containers.map(nodeFor);
@@ -2149,7 +2662,7 @@ export class Workspace extends Events {
       };
     };
     return {
-      version: 2,
+      version: 3,
       center: { root: regionRoot(this.groups, "horizontal", this.centerGroupSizes), activeGroup },
       left: {
         root: regionRoot(this.leftSidebar.groups as (Sidebar | TabGroup)[], "vertical", this.leftSidebar.groupSizes),
@@ -2291,7 +2804,15 @@ export class Workspace extends Events {
       const group = this.groups[gi];
       const gs = centerNodes[gi];
       if (gs?.type === "tabs") {
-        for (const ls of gs.leaves) {
+        // Do not install the registry until all leaves exist: createLeaf()
+        // renders/normalizes after each addition, when no restored membership
+        // has been assigned yet, and would correctly (but prematurely) prune it.
+        const restoredCollections = (gs.collections ?? []).map((collection) => ({ ...collection }));
+        group.collections = [];
+        const restored: Array<{ leaf: WorkspaceLeaf; sourceIndex: number; collectionId?: string }> = [];
+        for (let sourceIndex = 0; sourceIndex < gs.leaves.length; sourceIndex++) {
+          const ls = gs.leaves[sourceIndex];
+          if ((ls.type === "markdown" || ls.type === "canvas") && ls.file && !this.app.vault.getFileByPath(ls.file)) continue;
           const factory = this.getViewFactory(ls.type);
           const existingBuiltin = ls.type !== "markdown" && ls.type !== "empty" && !factory
             ? pickExistingBuiltinLeaf(this.getLeavesOfType(ls.type), preExisting)
@@ -2299,17 +2820,31 @@ export class Workspace extends Events {
           if (existingBuiltin) {
             this.moveLeaf(existingBuiltin, group);
             if (ls.pinned) existingBuiltin.setPinned(true);
+            existingBuiltin.collectionId = ls.collectionId;
+            restored.push({ leaf: existingBuiltin, sourceIndex, collectionId: ls.collectionId });
           } else {
             const leaf = group.createLeaf();
             await this.restoreLeafView(leaf, ls);
+            leaf.collectionId = ls.collectionId;
+            restored.push({ leaf, sourceIndex, collectionId: ls.collectionId });
           }
         }
+        const normalized = normalizeTabCollections(
+          restored.map((entry) => ({ ...entry, id: entry.leaf.id })),
+          restoredCollections,
+        );
+        group.collections = normalized.collections;
+        const restoredByLeaf = new Map(normalized.leaves.map((entry) => [entry.leaf, entry]));
+        group.leaves = normalized.leaves.map((entry) => entry.leaf);
+        for (const entry of normalized.leaves) entry.leaf.collectionId = entry.collectionId;
+        const chosen = selectNearestSurvivor(normalized.leaves, gs.active);
+        if (chosen && restoredByLeaf.has(chosen.leaf)) group.setActiveLeaf(chosen.leaf);
       }
       if (group.leaves.length === 0) {
         const leaf = group.createLeaf();
         await leaf.setView(this.app.createEmptyView());
       }
-      const active = (gs?.type === "tabs" && group.leaves[gs.active]) || group.leaves[0];
+      const active = group.active || group.leaves[0];
       if (active) group.setActiveLeaf(active);
     }
     const ag = this.groups[state.center.activeGroup ?? 0] ?? this.groups[0];

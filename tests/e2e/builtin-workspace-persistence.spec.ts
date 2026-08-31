@@ -24,7 +24,7 @@ test("restores one live File Explorer in the center group after relaunch", async
     await expect(win.locator('.workspace-center .workspace-leaf-content[data-type="file-explorer"]')).toBeVisible();
     await expect.poll(() => {
       const file = path.join(vaultDir, ".geode", "workspace.json");
-      return fs.existsSync(file) && JSON.parse(fs.readFileSync(file, "utf8")).version === 2;
+      return fs.existsSync(file) && JSON.parse(fs.readFileSync(file, "utf8")).version === 3;
     }).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 500));
     await app.close();
