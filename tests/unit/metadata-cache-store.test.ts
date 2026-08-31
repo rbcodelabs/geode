@@ -2,7 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   METADATA_DB_RELATIVE_PATH,
   deleteMetadataEntries,
@@ -15,8 +15,10 @@ import {
   upsertMetadataEntries,
 } from "../../src/main/metadata-cache-store";
 import {
+  DebouncedMetadataCacheWriter,
   METADATA_INDEX_SCHEMA_VERSION,
   reconcileMetadataIndex,
+  type MetadataDirtyOp,
   type MetadataFileStat,
   type MetadataReconcileStore,
   type PersistedMetadataIndexEntry,
@@ -220,6 +222,115 @@ describe("safeStringify", () => {
     const value = { a: { x: 1 }, b: { x: 1 } };
     expect(JSON.parse(safeStringify(value))).toEqual(value);
   });
+
+  it("preserves a YAML anchor shared by sibling aliases instead of treating the second alias as circular", () => {
+    const parsed = parseMetadata(`---
+shared: &shared
+  label: preserved
+  nested:
+    count: 2
+first: *shared
+second: *shared
+---
+`);
+    const frontmatter = parsed.frontmatter as Record<string, unknown>;
+    expect(frontmatter.first).toBe(frontmatter.second);
+
+    const serialized = JSON.parse(safeStringify(parsed));
+    expect(serialized.frontmatter.first).toEqual({ label: "preserved", nested: { count: 2 } });
+    expect(serialized.frontmatter.second).toEqual({ label: "preserved", nested: { count: 2 } });
+  });
+});
+
+function injectUpsertFailure(db: DatabaseSync, failOnRun: number): { attempts: () => number; restore: () => void } {
+  const originalPrepare = db.prepare.bind(db);
+  let attempts = 0;
+  const spy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+    const stmt = originalPrepare(sql);
+    if (!sql.includes("INSERT INTO metadata_entries")) return stmt;
+    return new Proxy(stmt, {
+      get(target, property) {
+        if (property !== "run") return Reflect.get(target, property, target);
+        return (...args: unknown[]) => {
+          attempts += 1;
+          if (attempts === failOnRun) {
+            const error = new Error("database or disk is full") as Error & { code: string };
+            error.code = "SQLITE_FULL";
+            throw error;
+          }
+          return target.run(...args);
+        };
+      },
+    });
+  }) as typeof db.prepare);
+  return { attempts: () => attempts, restore: () => spy.mockRestore() };
+}
+
+describe("metadata cache transaction failures", () => {
+  it("isolates an entry that fails during serialization without hiding database failures", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const pathologicalMetadata = Object.defineProperty({}, "broken", {
+        enumerable: true,
+        get: () => { throw new Error("pathological getter"); },
+      }) as PersistedMetadataIndexEntry["metadata"];
+      expect(() => upsertMetadataEntries(db, {
+        "Pathological.md": entry({ metadata: pathologicalMetadata }),
+        "Good.md": entry({ size: 7 }),
+      })).not.toThrow();
+
+      expect(Object.keys(readAllMetadataEntries(db).entries)).toEqual(["Good.md"]);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to serialize metadata cache entry for "Pathological.md"'),
+        expect.any(Error),
+      );
+    } finally {
+      consoleError.mockRestore();
+      db.close();
+    }
+  });
+
+  it("propagates an upsert statement failure and rolls back rows written earlier in the batch", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, { "Existing.md": entry({ size: 9 }) });
+      const failure = injectUpsertFailure(db, 2);
+      expect(() => upsertMetadataEntries(db, {
+        "First.md": entry({ size: 1 }),
+        "Fails.md": entry({ size: 2 }),
+        "Never.md": entry({ size: 3 }),
+      })).toThrowError(/database or disk is full/);
+      failure.restore();
+
+      expect(failure.attempts()).toBe(2);
+      expect(readAllMetadataEntries(db).entries).toEqual({ "Existing.md": entry({ size: 9 }) });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("propagates a replace-all statement failure and rolls back the preceding DELETE and partial inserts", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, { "Existing.md": entry({ size: 9 }), "Also existing.md": entry({ size: 8 }) });
+      const before = readAllMetadataEntries(db);
+      const failure = injectUpsertFailure(db, 2);
+      expect(() => replaceAllMetadataEntries(db, {
+        schemaVersion: METADATA_INDEX_SCHEMA_VERSION,
+        entries: { "First.md": entry({ size: 1 }), "Fails.md": entry({ size: 2 }) },
+      })).toThrowError(/database or disk is full/);
+      failure.restore();
+
+      expect(failure.attempts()).toBe(2);
+      expect(readAllMetadataEntries(db)).toEqual(before);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 /**
@@ -291,7 +402,7 @@ describe("circular frontmatter (OOM regression)", () => {
     }
   });
 
-  it("a full reconcile over a vault containing a circular-frontmatter note succeeds, and repeated passes over the SAME unchanged files keep the DB bounded (not growing)", async () => {
+  it("a full reconcile over a vault containing a circular-frontmatter note succeeds", async () => {
     const root = await tmpRoot();
     const db = openMetadataDb(root);
     try {
@@ -311,12 +422,8 @@ describe("circular frontmatter (OOM regression)", () => {
         deletePaths: (paths) => deleteMetadataEntries(db, paths),
       };
       const read = async (p: string) => contents[p]!;
-      const dbPath = path.join(root, METADATA_DB_RELATIVE_PATH);
-      const sizesAfterEachPass: number[] = [];
-
       for (let i = 0; i < 20; i++) {
         await expect(reconcileMetadataIndex(files, store, read, parseMetadata)).resolves.toBeUndefined();
-        sizesAfterEachPass.push((await fsp.stat(dbPath)).size);
       }
 
       // All three files landed in the DB — the circular note never poisoned
@@ -326,46 +433,86 @@ describe("circular frontmatter (OOM regression)", () => {
       const fm = snapshot.entries["Circular.md"].metadata.frontmatter as { a: { self: unknown } };
       expect(fm.a.self).toBe("[Circular]");
 
-      // Direct regression check for the reported 1.6GB index.sqlite / 1.2GB
-      // -wal blowup: after the first (write) pass, every subsequent pass over
-      // UNCHANGED files is a pure no-op reuse — the DB file must not keep
-      // growing pass over pass for a fixed, tiny 3-file vault.
-      const first = sizesAfterEachPass[0]!;
-      const last = sizesAfterEachPass.at(-1)!;
-      expect(last).toBeLessThanOrEqual(first * 2);
-      expect(last).toBeLessThan(1_000_000);
     } finally {
       db.close();
     }
   });
 
-  it("repeated writes of the IDENTICAL poisoned batch (simulating the live-edit debounced-writer retry loop) do not grow the DB unboundedly", async () => {
+  it("uses the real debounced writer for repeated circular writes without retry or WAL churn", async () => {
+    vi.useFakeTimers();
     const root = await tmpRoot();
     const db = openMetadataDb(root);
     try {
-      const batch = {
-        "Circular.md": circularEntry(),
-        "Good.md": entry({ size: 7 }),
-      };
-      const dbPath = path.join(root, METADATA_DB_RELATIVE_PATH);
-      const sizesAfterEachPass: number[] = [];
+      const attempts: Map<string, MetadataDirtyOp>[] = [];
+      const writer = new DebouncedMetadataCacheWriter(async (dirty) => {
+        attempts.push(new Map(dirty));
+        upsertMetadataEntries(db, Object.fromEntries(
+          [...dirty].filter((item): item is [string, PersistedMetadataIndexEntry] => item[1] !== null),
+        ));
+      }, 10);
+      const walPath = `${path.join(root, METADATA_DB_RELATIVE_PATH)}-wal`;
+      const walSizes: number[] = [];
 
-      // Before the fix, DebouncedMetadataCacheWriter would retry this exact
-      // batch forever (capped exponential backoff) because the write always
-      // threw and never landed. Simulate that here by calling the store's
-      // write function directly, repeatedly, with the same never-fixed batch.
-      for (let i = 0; i < 25; i++) {
-        expect(() => upsertMetadataEntries(db, batch)).not.toThrow();
-        sizesAfterEachPass.push((await fsp.stat(dbPath)).size);
+      for (let i = 0; i < 12; i++) {
+        writer.schedule("Circular.md", circularEntry({ mtimeMs: i + 1 }));
+        await vi.advanceTimersByTimeAsync(10);
+        walSizes.push((await fsp.stat(walPath)).size);
       }
 
-      expect(Object.keys(readAllMetadataEntries(db).entries).sort()).toEqual(["Circular.md", "Good.md"]);
-      const first = sizesAfterEachPass[0]!;
-      const last = sizesAfterEachPass.at(-1)!;
-      expect(last).toBeLessThanOrEqual(first * 2);
-      expect(last).toBeLessThan(1_000_000);
+      expect(attempts).toHaveLength(12);
+      const persistedFrontmatter = readAllMetadataEntries(db).entries["Circular.md"].metadata.frontmatter as {
+        a: { self: unknown };
+      };
+      expect(persistedFrontmatter.a.self).toBe("[Circular]");
+      expect(walSizes.every((size) => size > 0)).toBe(true);
+      expect(Math.max(...walSizes)).toBeLessThan(1_000_000);
+
+      const walSizeAfterWrites = (await fsp.stat(walPath)).size;
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(attempts).toHaveLength(12);
+      expect((await fsp.stat(walPath)).size).toBe(walSizeAfterWrites);
     } finally {
       db.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates a real store failure into debounced retry and preserves the entire dirty batch", async () => {
+    vi.useFakeTimers();
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, { "Existing.md": entry({ size: 9 }) });
+      const failure = injectUpsertFailure(db, 1);
+      const attemptedBatches: Map<string, MetadataDirtyOp>[] = [];
+      const onError = vi.fn();
+      const writer = new DebouncedMetadataCacheWriter(async (dirty) => {
+        attemptedBatches.push(new Map(dirty));
+        upsertMetadataEntries(db, Object.fromEntries(
+          [...dirty].filter((item): item is [string, PersistedMetadataIndexEntry] => item[1] !== null),
+        ));
+      }, 10, onError);
+
+      writer.schedule("A.md", entry({ size: 1 }));
+      writer.schedule("B.md", entry({ size: 2 }));
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(attemptedBatches).toHaveLength(1);
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: "SQLITE_FULL" }), 1);
+      expect(readAllMetadataEntries(db).entries).toEqual({ "Existing.md": entry({ size: 9 }) });
+
+      await vi.advanceTimersByTimeAsync(19);
+      expect(attemptedBatches).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(attemptedBatches).toHaveLength(2);
+      expect(attemptedBatches[1]).toEqual(attemptedBatches[0]);
+      expect(Object.keys(readAllMetadataEntries(db).entries).sort()).toEqual(["A.md", "B.md", "Existing.md"]);
+      expect(failure.attempts()).toBe(3);
+      failure.restore();
+    } finally {
+      db.close();
+      vi.useRealTimers();
     }
   });
 });

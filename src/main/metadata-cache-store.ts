@@ -110,12 +110,13 @@ export function readAllMetadataEntries(db: DatabaseSync): PersistedMetadataIndex
  * is unaffected.
  */
 export function safeStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key, val) => {
+  const ancestors: object[] = [];
+  return JSON.stringify(value, function (this: unknown, _key, val) {
     if (typeof val === "bigint") return val.toString();
     if (typeof val === "object" && val !== null) {
-      if (seen.has(val)) return "[Circular]";
-      seen.add(val);
+      while (ancestors.length > 0 && ancestors.at(-1) !== this) ancestors.pop();
+      if (ancestors.includes(val)) return "[Circular]";
+      ancestors.push(val);
     }
     return val;
   });
@@ -134,27 +135,23 @@ function upsertStatement(db: DatabaseSync) {
 }
 
 /**
- * Serialize and write one row. `safeStringify` means a circular-frontmatter
- * note degrades gracefully (its self-reference becomes `"[Circular]"`)
- * instead of throwing — but this is still wrapped per-row so that ANY
- * unexpected per-row failure (not just circularity) is logged and skipped
- * rather than aborting/rolling back the rest of the batch's otherwise-good
- * writes. Returns true if the row was written.
+ * Serialize and write one row. Unexpected serialization failures are isolated
+ * to the pathological entry, but the database write deliberately sits outside
+ * that boundary: SQLite failures must reach the transaction owner so it can
+ * roll back the entire batch and let the debounced writer retry it.
  */
 function runUpsert(stmt: ReturnType<typeof upsertStatement>, path: string, entry: PersistedMetadataIndexEntry): boolean {
+  let metadataJson: string;
+  let mentionKeysJson: string | null;
   try {
-    stmt.run(
-      path,
-      entry.mtimeMs,
-      entry.size,
-      safeStringify(entry.metadata),
-      entry.mentionKeys ? safeStringify(entry.mentionKeys) : null,
-    );
-    return true;
+    metadataJson = safeStringify(entry.metadata);
+    mentionKeysJson = entry.mentionKeys ? safeStringify(entry.mentionKeys) : null;
   } catch (error) {
-    console.error(`Failed to persist metadata cache entry for "${path}", skipping this file`, error);
+    console.error(`Failed to serialize metadata cache entry for "${path}", skipping this file`, error);
     return false;
   }
+  stmt.run(path, entry.mtimeMs, entry.size, metadataJson, mentionKeysJson);
+  return true;
 }
 
 /** Upsert a batch of entries in one transaction — avoids one commit per file and one all-or-nothing whole-vault transaction. */
