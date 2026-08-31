@@ -11,7 +11,7 @@ export interface Command {
   checkCallback?: (checking: boolean) => boolean | void;
 }
 interface ConfigStore { read(name: string): Promise<unknown>; write(name: string, data: unknown): Promise<void> }
-interface HotkeyFile { version: 1; overrides: Record<string, Hotkey[]> }
+interface HotkeyFile { version: 1; overrides: Record<string, unknown> }
 export interface HotkeySnapshot {
   bindingsByCommand: Readonly<Record<string, readonly Hotkey[]>>;
   ownersByBinding: Readonly<Record<string, readonly string[]>>;
@@ -25,6 +25,7 @@ const clone = (bindings: readonly Hotkey[]) => bindings.map(b => ({ modifiers: [
 export class CommandRegistry {
   commands: Record<string, Command> = {};
   private overrides: Record<string, Hotkey[]> = {};
+  private malformedOverrides: Record<string, unknown> = {};
   private snapshotValue: HotkeySnapshot = { bindingsByCommand: {}, ownersByBinding: {}, dispatchable: [] };
   private changeListeners = new Set<() => void>();
   constructor(private config?: ConfigStore) {}
@@ -38,25 +39,34 @@ export class CommandRegistry {
     if (!raw || typeof raw !== "object" || (raw as any).version !== 1 || !(raw as any).overrides || typeof (raw as any).overrides !== "object") return {};
     const parsed: Record<string, Hotkey[]> = {};
     for (const [id, value] of Object.entries((raw as any).overrides)) {
-      if (!Array.isArray(value)) continue;
+      if (!Array.isArray(value)) { this.malformedOverrides[id] = value; parsed[id] = []; continue; }
       const bindings = value.map(normalizeHotkey);
       if (bindings.every(Boolean)) parsed[id] = bindings as Hotkey[];
+      else { this.malformedOverrides[id] = value; parsed[id] = []; }
     }
     return parsed;
   }
   private defaults(command: Command): Hotkey[] {
     const source = command.hotkeys ?? (command.hotkey ? [legacyHotkeyToBinding(command.hotkey)] : []);
-    return source.map(normalizeHotkey).filter((b): b is Hotkey => Boolean(b));
+    const seen = new Set<string>();
+    return source.map(normalizeHotkey).filter((b): b is Hotkey => {
+      if (!b) return false;
+      const identity = bindingIdentity(b);
+      if (seen.has(identity)) return false;
+      seen.add(identity); return true;
+    });
   }
   private effective(id: string): Hotkey[] { return clone(Object.prototype.hasOwnProperty.call(this.overrides, id) ? this.overrides[id] : this.defaults(this.commands[id])); }
   private recompute(): void {
     const bindingsByCommand: Record<string, Hotkey[]> = {};
     const ownersByBinding: Record<string, string[]> = {};
     for (const id of Object.keys(this.commands)) {
-      const bindings = this.effective(id);
-      bindingsByCommand[id] = bindings;
+      const seen = new Set<string>();
+      const bindings = this.effective(id).filter(binding => { const key = bindingIdentity(binding); if (seen.has(key)) return false; seen.add(key); return true; });
+      bindingsByCommand[id] = Object.freeze(bindings.map(binding => Object.freeze({ modifiers: Object.freeze([...binding.modifiers]) as unknown as Hotkey["modifiers"], code: binding.code }))) as unknown as Hotkey[];
       for (const binding of bindings) (ownersByBinding[bindingIdentity(binding)] ??= []).push(id);
     }
+    for (const owners of Object.values(ownersByBinding)) Object.freeze(owners);
     this.snapshotValue = Object.freeze({ bindingsByCommand: Object.freeze(bindingsByCommand), ownersByBinding: Object.freeze(ownersByBinding), dispatchable: Object.freeze(Object.entries(ownersByBinding).filter(([, owners]) => owners.length === 1).map(([identity]) => identity)) });
     for (const listener of this.changeListeners) listener();
   }
@@ -66,8 +76,8 @@ export class CommandRegistry {
     return this.bindingsFor(id).flatMap(binding => { const owners = [...(this.snapshotValue.ownersByBinding[bindingIdentity(binding)] ?? [])]; return owners.length > 1 ? [{ binding, owners }] : []; });
   }
   hasOverride(id: string): boolean { return Object.prototype.hasOwnProperty.call(this.overrides, id); }
-  async setBindings(id: string, bindings: readonly Hotkey[]): Promise<void> { await this.commit({ ...this.overrides, [id]: clone(bindings) }); }
-  async resetBindings(id: string): Promise<void> { const next = { ...this.overrides }; delete next[id]; await this.commit(next); }
+  async setBindings(id: string, bindings: readonly Hotkey[]): Promise<void> { await this.commit({ ...this.overrides, [id]: clone(bindings) }, [id]); }
+  async resetBindings(id: string): Promise<void> { const next = { ...this.overrides }; delete next[id]; await this.commit(next, [id]); }
   async removeBinding(id: string, binding: Hotkey): Promise<void> { const identity = bindingIdentity(binding); await this.setBindings(id, this.bindingsFor(id).filter(b => bindingIdentity(b) !== identity)); }
   async assignBinding(id: string, binding: Hotkey, options: { reassign?: boolean } = {}): Promise<AssignmentResult> {
     const normalized = normalizeHotkey(binding); if (!normalized || !this.commands[id]) return { status: "unchanged" };
@@ -78,13 +88,17 @@ export class CommandRegistry {
     const next = { ...this.overrides };
     for (const owner of owners) next[owner] = this.bindingsFor(owner).filter(b => bindingIdentity(b) !== identity);
     next[id] = [...this.bindingsFor(id), normalized];
-    await this.commit(next);
+    await this.commit(next, [...owners, id]);
     return { status: "assigned" };
   }
-  private async commit(next: Record<string, Hotkey[]>): Promise<void> {
-    const file: HotkeyFile = { version: 1, overrides: next };
+  private async commit(next: Record<string, Hotkey[]>, repairedIds: string[] = []): Promise<void> {
+    const preserved = { ...this.malformedOverrides };
+    for (const id of repairedIds) delete preserved[id];
+    const file: HotkeyFile = { version: 1, overrides: { ...next, ...preserved } };
     await this.config?.write("hotkeys", file);
-    this.overrides = next; this.recompute();
+    this.overrides = next;
+    for (const id of repairedIds) delete this.malformedOverrides[id];
+    this.recompute();
   }
   add(command: Command): void { this.commands[command.id] = command; this.recompute(); }
   addCommand(command: Command): void { this.add(command); }

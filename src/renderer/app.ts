@@ -188,8 +188,16 @@ class CommandPaletteModal extends SuggestModal<Command> {
 
   renderItem(cmd: Command, el: HTMLElement): void {
     const label = this.geodeApp.commands.bindingsFor(cmd.id).map(binding => displayHotkey(binding)).join(", ");
-    const hotkey = label ? `<span class="prompt-result-hotkey">${label}</span>` : "";
-    el.innerHTML = `<div class="prompt-result-title">${cmd.name}</div>${hotkey}`;
+    const title = document.createElement("div");
+    title.className = "prompt-result-title";
+    title.textContent = cmd.name;
+    el.append(title);
+    if (label) {
+      const hotkey = document.createElement("span");
+      hotkey.className = "prompt-result-hotkey";
+      hotkey.textContent = label;
+      el.append(hotkey);
+    }
   }
 
   onChooseItem(cmd: Command): void {
@@ -355,6 +363,7 @@ class SettingsModal extends Modal {
   private activeTabId: string = "appearance";
   private unsubscribeSettingTabs: (() => void) | null = null;
   private unsubscribeHotkeys: (() => void) | null = null;
+  private stopHotkeyRecorder: (() => void) | null = null;
   /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
   private stopPerformanceTab: (() => void) | null = null;
 
@@ -423,6 +432,8 @@ class SettingsModal extends Modal {
     }
     this.unsubscribeHotkeys?.();
     this.unsubscribeHotkeys = null;
+    this.stopHotkeyRecorder?.();
+    this.stopHotkeyRecorder = null;
 
     this.activeTabId = id;
     this.renderNav();
@@ -537,6 +548,9 @@ class SettingsModal extends Modal {
 
   private renderHotkeysTab(container: HTMLElement): void {
     container.innerHTML = `<h2>Hotkeys</h2>`;
+    const guidance = document.createElement("p");
+    guidance.className = "hotkey-guidance";
+    guidance.textContent = "Use a physical hardware keyboard to record shortcuts. Touch-only devices can still remove and reset assignments.";
     const controls = document.createElement("div");
     controls.className = "hotkey-controls";
     const search = document.createElement("input");
@@ -550,7 +564,7 @@ class SettingsModal extends Modal {
     controls.append(search, assignedLabel);
     const list = document.createElement("div");
     list.className = "hotkey-list";
-    container.append(controls, list);
+    container.append(guidance, controls, list);
 
     const render = () => {
       list.empty();
@@ -593,24 +607,40 @@ class SettingsModal extends Modal {
   }
 
   private captureHotkey(commandId: string, commandName: string, button: HTMLButtonElement, row: HTMLElement): void {
+    this.stopHotkeyRecorder?.();
     button.textContent = "Press keys…";
-    const listener = async (event: KeyboardEvent) => {
-      event.preventDefault(); event.stopPropagation();
-      const binding = eventToBinding(event);
-      if (!binding) return;
+    let active = true;
+    const stop = () => {
+      if (!active) return;
+      active = false;
       window.removeEventListener("keydown", listener, true);
       button.textContent = "+";
+      if (this.stopHotkeyRecorder === stop) this.stopHotkeyRecorder = null;
+    };
+    const listener = async (event: KeyboardEvent) => {
+      event.preventDefault(); event.stopPropagation();
+      if (event.code === "Escape") { stop(); return; }
+      const binding = eventToBinding(event);
+      if (!binding) return;
+      stop();
+      if (["Mod+KeyQ", "Mod+KeyW", "Mod+KeyT"].includes(bindingIdentity(binding))) {
+        this.geodeApp.notify("This shortcut may be reserved by the operating system or host.");
+      }
       const result = await this.geodeApp.commands.assignBinding(commandId, binding);
       if (result.status !== "conflict") return;
       const existing = row.querySelector(".hotkey-conflict-choice"); existing?.remove();
       const choice = document.createElement("div"); choice.className = "hotkey-conflict-choice";
       const names = result.owners.map(owner => this.geodeApp.commands.findCommand(owner)?.name ?? owner);
       choice.append(` ${displayHotkey(binding)} is assigned to ${names.join(", ")}. `);
+      if (["Mod+KeyQ", "Mod+KeyW", "Mod+KeyT"].includes(bindingIdentity(binding))) {
+        const warning = document.createElement("span"); warning.className = "hotkey-reserved-warning"; warning.textContent = " This shortcut may be reserved by the operating system or host."; choice.append(warning);
+      }
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Cancel"; cancel.addEventListener("click", () => choice.remove());
       const reassign = document.createElement("button"); reassign.type = "button"; reassign.textContent = `Reassign to ${commandName}`;
       reassign.addEventListener("click", async () => { await this.geodeApp.commands.assignBinding(commandId, binding, { reassign: true }); choice.remove(); });
       choice.append(cancel, reassign); row.append(choice);
     };
+    this.stopHotkeyRecorder = stop;
     window.addEventListener("keydown", listener, true);
   }
 
@@ -978,6 +1008,8 @@ class SettingsModal extends Modal {
     this.unsubscribeSettingTabs = null;
     this.unsubscribeHotkeys?.();
     this.unsubscribeHotkeys = null;
+    this.stopHotkeyRecorder?.();
+    this.stopHotkeyRecorder = null;
     this.geodeApp.activeSettingsModal = null;
     this.geodeApp.saveSettings();
   }

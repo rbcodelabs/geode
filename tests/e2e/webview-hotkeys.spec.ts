@@ -119,6 +119,41 @@ test("a Geode hotkey pressed inside a web viewer guest runs its command", async 
   }
 });
 
+test("changed and conflicted bindings republish live to the webview guest", async () => {
+  const { app, window, cleanup } = await launch();
+  try {
+    await runCommand(window, "Open web viewer");
+    await expect(window.locator(".web-view-frame")).toBeVisible();
+    await window.evaluate(async () => {
+      const commands = (window as any).app.commands;
+      await commands.setBindings("command-palette", [{ modifiers: ["Mod"], code: "KeyY" }]);
+    });
+    await window.waitForTimeout(100);
+    expect(await pressInGuest(app, "p", [MOD])).toBe(true);
+    await expect(window.locator(".prompt-input")).toHaveCount(0);
+    expect(await pressInGuest(app, "y", [MOD])).toBe(true);
+    await expect(window.locator(".prompt-input")).toBeVisible();
+    await window.keyboard.press("Escape");
+
+    // A manually introduced duplicate is omitted from the published set, so
+    // main leaves the event in the guest instead of swallowing it.
+    await window.evaluate(() => (window as any).app.commands.add({ id: "probe:duplicate-y", name: "Duplicate Y", hotkeys: [{ modifiers: ["Mod"], code: "KeyY" }], callback: () => {} }));
+    await app.evaluate(({ webContents }) => {
+      const guest = webContents.getAllWebContents().find(wc => wc.getType() === "webview");
+      return guest?.executeJavaScript("window.__geodeGuestKeys=0; window.addEventListener('keydown',()=>window.__geodeGuestKeys++)");
+    });
+    await window.waitForTimeout(100);
+    expect(await pressInGuest(app, "y", [MOD])).toBe(true);
+    await expect.poll(() => app.evaluate(({ webContents }) => {
+      const guest = webContents.getAllWebContents().find(wc => wc.getType() === "webview");
+      return guest?.executeJavaScript("window.__geodeGuestKeys") ?? 0;
+    })).toBe(1);
+    await expect(window.locator(".prompt-input")).toHaveCount(0);
+  } finally {
+    await app.close(); cleanup();
+  }
+});
+
 test("an unbound combo inside a web viewer guest is left alone for the page", async () => {
   const { app, window, cleanup } = await launch();
 

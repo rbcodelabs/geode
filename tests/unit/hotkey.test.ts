@@ -77,9 +77,14 @@ describe("shared hotkey normalizer", () => {
     expect(eventToHotkey({ ...keyEvent({ key: "p", meta: true }), code: "" } as KeyboardEvent)).toBe("");
     expect(inputToHotkey({ ...keyInput({ key: "p", meta: true }), code: "" })).toBe("");
   });
+  it("normalizes macOS Electron meta and DOM meta to the same Mod identity", () => {
+    expect(eventToHotkey(keyEvent({ key: "p", meta: true }), "mac")).toBe("Mod+KeyP");
+    expect(inputToHotkey(keyInput({ key: "p", meta: true }), "mac")).toBe("Mod+KeyP");
+    expect(inputToHotkey(keyInput({ key: "p", ctrl: true }), "mac")).toBe("Ctrl+KeyP");
+  });
   it.each(cases)("eventToHotkey and inputToHotkey agree on $name", ({ init, combo }) => {
-    expect(eventToHotkey(keyEvent(init))).toBe(combo);
-    expect(inputToHotkey(keyInput(init))).toBe(combo);
+    expect(eventToHotkey(keyEvent(init), "mac")).toBe(combo);
+    expect(inputToHotkey(keyInput(init), "mac")).toBe(combo);
   });
 
   it("orders modifiers Mod, Alt, Shift regardless of how they arrive", () => {
@@ -98,7 +103,7 @@ describe("shared hotkey normalizer", () => {
   it("returns an empty combo for modifier-only keystrokes", () => {
     for (const key of ["Meta", "Control", "Alt", "Shift"]) {
       expect(eventToHotkey(keyEvent({ key, meta: true }))).toBe("");
-      expect(inputToHotkey(keyInput({ key, meta: true }))).toBe("");
+      expect(inputToHotkey(keyInput({ key, meta: true }), "mac")).toBe("");
     }
   });
 
@@ -117,8 +122,8 @@ describe("resolveGuestHotkey", () => {
   const combos = new Set(["Mod+KeyW", "Mod+KeyP", "Mod+Shift+KeyF"]);
 
   it("returns the combo when the renderer has it bound", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), combos)).toBe("Mod+KeyW");
-    expect(resolveGuestHotkey(keyInput({ key: "F", meta: true, shift: true }), combos)).toBe(
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), combos, "mac")).toBe("Mod+KeyW");
+    expect(resolveGuestHotkey(keyInput({ key: "F", meta: true, shift: true }), combos, "mac")).toBe(
       "Mod+Shift+KeyF",
     );
   });
@@ -126,8 +131,8 @@ describe("resolveGuestHotkey", () => {
   it("returns null for a combo the renderer has not bound", () => {
     // Cmd+A / Cmd+C must keep working as ordinary page/OS shortcuts inside a
     // web page, so an unbound combo has to fall through untouched.
-    expect(resolveGuestHotkey(keyInput({ key: "a", meta: true }), combos)).toBeNull();
-    expect(resolveGuestHotkey(keyInput({ key: "c", meta: true }), combos)).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "a", meta: true }), combos, "mac")).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "c", meta: true }), combos, "mac")).toBeNull();
   });
 
   it("returns null for plain typing", () => {
@@ -136,15 +141,15 @@ describe("resolveGuestHotkey", () => {
   });
 
   it("returns null for key-up of a bound combo, so one press fires once", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true, type: "keyUp" }), combos)).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true, type: "keyUp" }), combos, "mac")).toBeNull();
   });
 
   it("returns null when the renderer has published nothing yet", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), new Set())).toBeNull();
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), new Set(), "mac")).toBeNull();
   });
 
   it("accepts an array of combos as well as a set", () => {
-    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), ["Mod+KeyW"])).toBe("Mod+KeyW");
+    expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), ["Mod+KeyW"], "mac")).toBe("Mod+KeyW");
     expect(resolveGuestHotkey(keyInput({ key: "w", meta: true }), [])).toBeNull();
   });
 });

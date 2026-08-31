@@ -17,6 +17,24 @@ describe("hotkey override manager", () => {
     expect(write).toHaveBeenCalledTimes(2);
   });
 
+  it("deduplicates duplicate bindings declared by one command", () => {
+    const registry = new CommandRegistry();
+    const binding = { modifiers: ["Mod"] as const, code: "KeyA" };
+    registry.add(command("a", { hotkeys: [binding, binding] }));
+    expect(registry.bindingsFor("a")).toEqual([{ modifiers: ["Mod"], code: "KeyA" }]);
+    expect(registry.hotkeys()).toEqual(["Mod+KeyA"]);
+  });
+
+  it("returns immutable snapshot objects", () => {
+    const registry = new CommandRegistry();
+    registry.add(command("a", { hotkey: "Mod+A" }));
+    const snapshot = registry.snapshot();
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.bindingsByCommand)).toBe(true);
+    expect(Object.isFrozen(snapshot.bindingsByCommand.a)).toBe(true);
+    expect(Object.isFrozen(snapshot.bindingsByCommand.a[0])).toBe(true);
+  });
+
   it("preserves unknown command overrides across plugin unload and reload", async () => {
     const saved = { version: 1, overrides: { "plug:run": [{ modifiers: ["Mod"], code: "KeyR" }] } };
     const registry = new CommandRegistry({ read: async () => saved, write: async () => {} });
@@ -44,6 +62,26 @@ describe("hotkey override manager", () => {
     expect(registry.bindingsFor("a")).toEqual([]);
     expect(registry.bindingsFor("b")).toEqual([]);
     expect(registry.bindingsFor("target")).toEqual([{ modifiers: ["Mod"], code: "KeyP" }]);
+  });
+
+  it("fails closed for duplicate defaults in every registration order", () => {
+    for (const ids of [["a", "b"], ["b", "a"]]) {
+      const registry = new CommandRegistry();
+      for (const id of ids) registry.add(command(id, { hotkey: "Mod+P", callback: () => { throw new Error("must not run"); } }));
+      expect(registry.hotkeys()).toEqual([]);
+      expect(registry.dispatchHotkey("Mod+KeyP")).toBe(false);
+    }
+  });
+
+  it("preserves malformed manual overrides on unrelated writes and fails them closed", async () => {
+    const write = vi.fn(async () => {});
+    const saved = { version: 1, overrides: { broken: [{ modifiers: ["Mod"], code: "<script>" }] } };
+    const registry = new CommandRegistry({ read: async () => saved, write });
+    registry.add(command("broken", { hotkey: "Mod+B" })); registry.add(command("other"));
+    await registry.loadHotkeys();
+    expect(registry.bindingsFor("broken")).toEqual([]);
+    await registry.setBindings("other", [{ modifiers: ["Mod"], code: "KeyO" }]);
+    expect(write.mock.calls[0][1]).toMatchObject({ overrides: { broken: saved.overrides.broken } });
   });
 
   it("does not publish state when persistence fails", async () => {
