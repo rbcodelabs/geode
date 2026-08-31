@@ -2750,6 +2750,20 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   padding: 8px 0;
 }
 
+.hotkey-controls { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }
+.hotkey-controls input[type="search"] { flex: 1; min-width: 160px; }
+.hotkey-command { position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--background-modifier-border); }
+.hotkey-command-name { color: var(--text-normal); }
+.hotkey-command-id { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.hotkey-bindings { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.hotkey-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-secondary); }
+.hotkey-pill.is-conflicted { border-color: var(--text-error); color: var(--text-error); }
+.hotkey-conflict-indicator { font-size: var(--font-ui-smaller); font-weight: var(--font-semibold); }
+.hotkey-pill button { border: 0; padding: 0 2px; background: transparent; color: inherit; }
+.hotkey-recording-status { flex: 1 0 100%; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.hotkey-conflict-choice { flex: 1 0 100%; padding: 8px; border-radius: var(--radius-s); background: var(--background-modifier-error); color: var(--text-error); }
+.hotkey-conflict-choice button { margin-left: 8px; }
+
 /* Install-from-GitHub modal (community plugins & themes) */
 .mod-community-install .modal-content {
   padding: 16px 24px 24px;

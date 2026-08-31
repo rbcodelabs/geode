@@ -489,9 +489,11 @@ overwrite the real layout. See `docs/adr/0005-deferred-view-restore.md`.
 
 ## 11. Hotkeys
 
-- Settings → **Hotkeys**: searchable list of every command; assign with the "+" icon (press the combo, Save); remove with the X icon; multiple combos per command supported; filter icon shows only commands with assignments; conflicts are highlighted.
+- Settings → **Hotkeys**: searchable list of every registered core and plugin command. Assign with the "+" icon and press a physical-key combination; changes apply immediately. Remove an individual assignment with its X button, use **Reset** to restore a command's declared defaults, and use **Assigned only** to show only commands with effective assignments.
+- Multiple combinations per command are supported. When an exact combination belongs to another command, **Cancel** leaves every assignment unchanged and explicit **Reassign** removes it from every current owner before assigning it to the selected command. Malformed/manual duplicate ownership is highlighted and fails closed instead of choosing a command by registration order.
 - Hotkeys display using US-keyboard labels but trigger by physical key pressed (layout-independent once assigned).
-- Custom hotkeys are stored per-vault in `.obsidian/hotkeys.json`.
+- Geode customizations apply live in the host workspace and embedded Web Viewer, and are stored per vault as override deltas in `.geode/hotkeys.json`. Obsidian uses `.obsidian/hotkeys.json`; importing that separate key-based schema is outside the native Geode hotkey manager.
+- Browser/mobile hosts use the same physical-key event path when a hardware keyboard is present. Touch-only devices can inspect, remove, and reset assignments. Geode warns about shortcuts commonly reserved by the operating system or host because those events may never reach the app.
 - Notable defaults (beyond OS text-editing): New note `Ctrl/Cmd+N`, Quick switcher `Ctrl/Cmd+O`, Command palette `Ctrl/Cmd+P`, Global search `Ctrl/Cmd+Shift+F`, Toggle reading view `Ctrl/Cmd+E`, New tab `Ctrl/Cmd+T`, Reopen closed tab `Ctrl/Cmd+Shift+T`, Add file property `Ctrl/Cmd+;`, Rename `F2`, Bold `Ctrl/Cmd+B`, Italic `Ctrl/Cmd+I`, tab cycling `Ctrl+Tab`/`Ctrl+Shift+Tab`, tab jump `Ctrl/Cmd+1…9`.
 
 ---

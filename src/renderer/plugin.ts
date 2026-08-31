@@ -1,7 +1,7 @@
 import { Component } from "./component";
 import type { App } from "./app";
 import type { View, WorkspaceLeaf } from "./workspace";
-import type { Command } from "./commands";
+import type { Command, Hotkey } from "./commands";
 import type { PluginManifest } from "./plugin-manifest";
 import type { EventRef } from "./events";
 
@@ -12,6 +12,7 @@ export interface PluginCommand {
   id: string;
   name: string;
   hotkey?: string;
+  hotkeys?: Hotkey[];
   callback?: () => any;
   checkCallback?: (checking: boolean) => boolean | void;
 }
@@ -112,6 +113,7 @@ export abstract class Plugin extends Component {
       id: this.prefixed(command.id),
       name: `${this.manifest.name}: ${command.name}`,
       hotkey: command.hotkey,
+      hotkeys: command.hotkeys,
       callback: this.guard(`command:${command.id}`, command.callback),
       checkCallback: this.guard(`command-check:${command.id}`, command.checkCallback),
     };
