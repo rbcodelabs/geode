@@ -367,6 +367,7 @@ test("@phone projects one active center group and preserves exact serialization 
     elements.filter((element) => getComputedStyle(element).display !== "none").length
   )).toBe(1);
   await expect(page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active")).toHaveCount(1);
+  await expect(page.locator(".workspace-center > .workspace-center-resize-handle")).toBeHidden();
   expect(await page.evaluate(() => (window as any).app.workspace.serialize())).toEqual(saved);
 
   const nav = page.getByRole("navigation", { name: "Mobile navigation" });

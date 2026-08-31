@@ -554,6 +554,19 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   min-width: 0;
 }
 
+.workspace-center > .workspace-center-resize-handle {
+  flex: 0 0 5px;
+  width: 5px;
+  cursor: col-resize;
+  background: var(--background-modifier-border);
+  z-index: 2;
+  -webkit-app-region: no-drag;
+}
+
+.workspace-center > .workspace-center-resize-handle:hover {
+  background: var(--interactive-accent);
+}
+
 /* ---- Tab bar (Obsidian-compatible DOM: see `TabGroup` in workspace.ts) ----
    Structural/layout fallback only — real property values (heights, padding,
    flex-grow) are pulled from Obsidian's own app.css where straightforward.
@@ -999,6 +1012,10 @@ body.is-mobile .workspace-ribbon {
 
   body.is-mobile .workspace-center > .workspace-tabs.is-mobile-center-active {
     display: flex;
+  }
+
+  body.is-mobile .workspace-center > .workspace-center-resize-handle {
+    display: none;
   }
 
   body.is-mobile .workspace-center > .workspace-tabs > .workspace-tab-header-container {
