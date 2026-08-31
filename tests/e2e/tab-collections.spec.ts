@@ -86,14 +86,56 @@ test("creates, edits, collapses, activates, and restores a named tab collection"
     await expect(label).toHaveClass(/is-active/);
     await expect(label.locator(".tab-collection-surface")).toHaveAttribute("aria-label", /collapsed, 2 tabs, active: Beta/);
     await expect(window.locator(".workspace-tab-container")).toContainText("Beta");
-    const interactionScreenshot = testInfo.outputPath("tab-collections-collapsed-active.png");
-    await window.screenshot({ path: interactionScreenshot, animations: "disabled" });
-    await testInfo.attach("tab-collections-collapsed-active", { path: interactionScreenshot, contentType: "image/png" });
-    await browserWindow.evaluate((nativeWindow: any) => nativeWindow.setSize(1440, 900));
-    await expect.poll(() => window.evaluate(() => window.innerWidth)).toBeGreaterThan(1300);
-    const largeInteractionScreenshot = testInfo.outputPath("tab-collections-collapsed-active-large.png");
-    await window.screenshot({ path: largeInteractionScreenshot, animations: "disabled" });
-    await testInfo.attach("tab-collections-collapsed-active-large", { path: largeInteractionScreenshot, contentType: "image/png" });
+    for (const size of [
+      { name: "small", width: 900, height: 700 },
+      { name: "standard", width: 1280, height: 800 },
+    ]) {
+      await browserWindow.evaluate((nativeWindow: any, nextSize) => nativeWindow.setSize(nextSize.width, nextSize.height), size);
+      await expect.poll(() => window.evaluate(() => window.innerWidth)).toBeGreaterThan(size.width - 100);
+      for (const scheme of ["light", "dark"] as const) {
+        await window.evaluate((value) => {
+          const a = (window as any).app; a.settings.theme = value; a.applySettings();
+        }, scheme);
+        await label.locator(".tab-collection-surface").focus();
+        await window.keyboard.press("Shift+Tab");
+        await expect(disclosure).toBeFocused();
+        await expect(label).toHaveClass(/is-active/);
+        await expect.poll(() => disclosure.evaluate((element) => getComputedStyle(element).backgroundColor))
+          .not.toBe("rgba(0, 0, 0, 0)");
+        const treatment = await disclosure.evaluate((element) => {
+          const style = getComputedStyle(element);
+          const labelStyle = getComputedStyle(element.closest<HTMLElement>(".tab-collection-label")!);
+          const channels = (value: string) => value.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+          const luminance = (value: string) => {
+            const [r, g, b] = channels(value).map((channel) => {
+              const normalized = channel / 255;
+              return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          };
+          const foreground = luminance(style.color);
+          const background = luminance(style.backgroundColor);
+          return {
+            focusVisible: element.matches(":focus-visible"),
+            outlineWidth: style.outlineWidth,
+            outlineStyle: style.outlineStyle,
+            backgroundColor: style.backgroundColor,
+            boxShadow: style.boxShadow,
+            labelBoxShadow: labelStyle.boxShadow,
+            contrast: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+          };
+        });
+        expect(treatment.focusVisible).toBe(true);
+        expect(treatment.outlineStyle).toBe("none");
+        expect(treatment.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+        expect(treatment.boxShadow).toContain("inset");
+        expect(treatment.labelBoxShadow).not.toBe("none");
+        expect(treatment.contrast).toBeGreaterThanOrEqual(3);
+        const screenshot = testInfo.outputPath(`tab-collections-active-focus-${size.name}-${scheme}.png`);
+        await window.screenshot({ path: screenshot, animations: "disabled" });
+        await testInfo.attach(`tab-collections-active-focus-${size.name}-${scheme}`, { path: screenshot, contentType: "image/png" });
+      }
+    }
     await window.evaluate(() => {
       const group = (window as any).app.workspace.activeGroup;
       const alphaLeaf = group.leaves.find((leaf: any) => leaf.view?.getFile?.()?.path === "Alpha.md");
@@ -105,7 +147,11 @@ test("creates, edits, collapses, activates, and restores a named tab collection"
       const file = path.join(vaultDir, ".geode", "workspace.json");
       if (!fs.existsSync(file)) return null;
       const state = JSON.parse(fs.readFileSync(file, "utf8"));
-      return state.version === 3 && state.center.root.collections?.[0]?.collapsed === true ? state : null;
+      return state.version === 3
+        && state.center.root.collections?.[0]?.collapsed === true
+        && state.center.root.active === 0
+        ? state
+        : null;
     }, { timeout: 5000 }).not.toBeNull();
     await app.close();
 
