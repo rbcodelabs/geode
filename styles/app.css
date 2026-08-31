@@ -555,6 +555,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
 }
 
 .workspace-center > .workspace-center-resize-handle {
+  position: relative;
   flex: 0 0 5px;
   width: 5px;
   cursor: col-resize;
@@ -563,8 +564,17 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   -webkit-app-region: no-drag;
 }
 
-.workspace-center > .workspace-center-resize-handle:hover {
+.workspace-center > .workspace-center-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+
+.workspace-center > .workspace-center-resize-handle:hover,
+.workspace-center > .workspace-center-resize-handle.is-resizing,
+.workspace-center > .workspace-center-resize-handle:focus-visible {
   background: var(--interactive-accent);
+  outline: none;
 }
 
 /* ---- Tab bar (Obsidian-compatible DOM: see `TabGroup` in workspace.ts) ----

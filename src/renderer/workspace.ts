@@ -1323,6 +1323,7 @@ export class Workspace extends Events {
   groups: TabGroup[] = [];
   centerGroupSizes: number[] = [];
   private centerDividers: HTMLElement[] = [];
+  private activeCenterResizeCleanup: (() => void) | null = null;
   activeGroup: TabGroup;
   /** viewType -> factory, populated by `Plugin.registerView` (see plugin.ts). */
   private viewFactories = new Map<string, (leaf: WorkspaceLeaf) => View>();
@@ -1496,6 +1497,7 @@ export class Workspace extends Events {
   }
 
   dispose(): void {
+    this.activeCenterResizeCleanup?.();
     this.compactQuery.removeEventListener("change", this.breakpointHandler);
     this.tabletQuery.removeEventListener("change", this.breakpointHandler);
     document.removeEventListener("keydown", this.documentKeyHandler, true);
@@ -1588,6 +1590,11 @@ export class Workspace extends Events {
     while (this.centerDividers.length < Math.max(0, this.groups.length - 1)) {
       const divider = document.createElement("div");
       divider.className = "workspace-split-resize-handle workspace-center-resize-handle";
+      divider.setAttribute("role", "separator");
+      divider.setAttribute("aria-orientation", "vertical");
+      divider.setAttribute("aria-valuemin", "0");
+      divider.setAttribute("aria-valuemax", "100");
+      divider.tabIndex = 0;
       this.centerEl.appendChild(divider);
       this.centerDividers.push(divider);
       this.attachCenterResize(divider);
@@ -1599,13 +1606,42 @@ export class Workspace extends Events {
       group.containerEl.style.order = `${index * 2}`;
       group.containerEl.style.flex = `1 1 ${this.centerGroupSizes[index] * 100}%`;
     });
-    this.centerDividers.forEach((divider, index) => { divider.style.order = `${index * 2 + 1}`; });
+    this.centerDividers.forEach((divider, index) => {
+      divider.style.order = `${index * 2 + 1}`;
+      const pairShare = this.centerGroupSizes[index] + this.centerGroupSizes[index + 1];
+      const value = pairShare > 0 ? Math.round(this.centerGroupSizes[index] / pairShare * 100) : 50;
+      divider.setAttribute("aria-valuenow", `${value}`);
+      divider.setAttribute("aria-label", `Resize panes (${value}% / ${100 - value}%)`);
+    });
+  }
+
+  private resizeCenterPair(dividerIndex: number, leadingShare: number): void {
+    const leading = this.groups[dividerIndex]?.containerEl;
+    const trailing = this.groups[dividerIndex + 1]?.containerEl;
+    if (!leading || !trailing) return;
+    const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
+    const total = leading.getBoundingClientRect().width + trailing.getBoundingClientRect().width;
+    const minimumShare = total > 0 ? pairShare * Math.min(240, total / 2) / total : 0;
+    const clamped = Math.max(minimumShare, Math.min(pairShare - minimumShare, leadingShare));
+    this.centerGroupSizes[dividerIndex] = clamped;
+    this.centerGroupSizes[dividerIndex + 1] = pairShare - clamped;
+    this.layoutCenterGroups();
   }
 
   private attachCenterResize(handle: HTMLElement): void {
+    handle.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const dividerIndex = this.centerDividers.indexOf(handle);
+      const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
+      const delta = pairShare * 0.05 * (event.key === "ArrowRight" ? 1 : -1);
+      this.resizeCenterPair(dividerIndex, this.centerGroupSizes[dividerIndex] + delta);
+      this.trigger("layout-change");
+    });
     handle.addEventListener("pointerdown", (event) => {
       if (this.isCompactMobile()) return;
       event.preventDefault();
+      this.activeCenterResizeCleanup?.();
       const dividerIndex = this.centerDividers.indexOf(handle);
       const leading = this.groups[dividerIndex]?.containerEl;
       const trailing = this.groups[dividerIndex + 1]?.containerEl;
@@ -1616,19 +1652,34 @@ export class Workspace extends Events {
       const total = leadingStart + trailingStart;
       const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
       const minimum = Math.min(240, total / 2);
+      let finished = false;
       const move = (moveEvent: PointerEvent) => {
         const leadingPx = Math.max(minimum, Math.min(total - minimum, leadingStart + moveEvent.clientX - startX));
-        this.centerGroupSizes[dividerIndex] = pairShare * leadingPx / total;
-        this.centerGroupSizes[dividerIndex + 1] = pairShare * (total - leadingPx) / total;
-        this.layoutCenterGroups();
+        this.resizeCenterPair(dividerIndex, pairShare * leadingPx / total);
       };
-      const up = () => {
+      const finish = () => {
+        if (finished) return;
+        finished = true;
         window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        window.removeEventListener("blur", finish);
+        handle.removeEventListener("pointercancel", finish);
+        handle.removeEventListener("lostpointercapture", finish);
+        handle.classList.remove("is-resizing");
+        if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+        if (this.activeCenterResizeCleanup === finish) this.activeCenterResizeCleanup = null;
         this.trigger("layout-change");
       };
+      handle.classList.add("is-resizing");
+      try { handle.setPointerCapture(event.pointerId); } catch { /* Synthetic events may not own a native pointer. */ }
       window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+      window.addEventListener("blur", finish);
+      handle.addEventListener("pointercancel", finish);
+      handle.addEventListener("lostpointercapture", finish);
+      this.activeCenterResizeCleanup = finish;
     });
   }
 
