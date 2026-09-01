@@ -31,11 +31,14 @@ test("defers Backlinks work while hidden and refreshes it when revealed", async 
 
     await window.evaluate(() => {
       const geode = (window as any).app;
-      const original = geode.metadataCache.getUnlinkedMentions.bind(geode.metadataCache);
+      const scanSymbol = Object.getOwnPropertySymbols(Object.getPrototypeOf(geode.metadataCache))
+        .find((symbol) => symbol.description === "geode.unlinkedMentionsScan");
+      if (!scanSymbol) throw new Error("cancellable unlinked-mention scan entry point was not found");
+      const original = geode.metadataCache[scanSymbol].bind(geode.metadataCache);
       (window as any).__unlinkedMentionCalls = [];
-      geode.metadataCache.getUnlinkedMentions = (file: { path: string }) => {
+      geode.metadataCache[scanSymbol] = (file: { path: string }, options: { signal?: AbortSignal }) => {
         (window as any).__unlinkedMentionCalls.push(file.path);
-        return original(file);
+        return original(file, options);
       };
     });
 

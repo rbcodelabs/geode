@@ -235,6 +235,301 @@ export interface UnlinkedMention {
   count: number;
 }
 
+export const UNLINKED_MENTIONS_SCAN: unique symbol = Symbol("geode.unlinkedMentionsScan");
+
+interface UnlinkedMentionScanOptions {
+  signal?: AbortSignal;
+  chunkSize?: number;
+  yieldToEventLoop?: () => Promise<void>;
+}
+
+interface CompiledMentionPattern {
+  regexp: RegExp;
+  overlap: number;
+}
+
+interface MentionMaskRange { start: number; end: number }
+
+const UNLINKED_MENTION_CHUNK_SIZE = 16 * 1024;
+const UNLINKED_MENTION_CANDIDATE_SLICE = 512;
+
+function abortError(): Error {
+  const error = new Error("Unlinked mention scan was cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfScanCancelled(signal: AbortSignal | undefined, internal: AbortSignal): void {
+  if (signal?.aborted || internal.aborted) throw abortError();
+}
+
+function compileMentionPattern(names: string[]): CompiledMentionPattern | null {
+  // The established matcher applies the regex to one `split("\n")` line at
+  // a time, so an alias containing LF can never match and must not bridge
+  // adjacent lines in the cooperative whole-window matcher. Bare CR remains
+  // matchable, preserving current behavior.
+  const candidates = [...new Set(names.map((name) => name.trim()).filter((name) => name && !name.includes("\n")))]
+    .sort((a, b) => b.length - a.length);
+  if (!candidates.length) return null;
+  return {
+    regexp: new RegExp(
+      `(?<![\\p{L}\\p{N}_])(?:${candidates.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}_])`,
+      "giu"
+    ),
+    // Keep enough already-masked text to recognize a name and both of its
+    // whole-word boundary characters when the match straddles a slice.
+    overlap: Math.max(...candidates.map((name) => name.length)) + 2,
+  };
+}
+
+function pushMaskRange(ranges: MentionMaskRange[], range: MentionMaskRange): void {
+  const previous = ranges.at(-1);
+  if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end);
+  else ranges.push(range);
+}
+
+async function mergeSortedMaskRanges(
+  first: MentionMaskRange[],
+  second: MentionMaskRange[],
+  sliceSize: number,
+  yieldFn: () => Promise<void>,
+  assertCurrent: () => void
+): Promise<MentionMaskRange[]> {
+  const merged: MentionMaskRange[] = [];
+  let firstIndex = 0;
+  let secondIndex = 0;
+  let operations = 0;
+  while (firstIndex < first.length || secondIndex < second.length) {
+    const useFirst = secondIndex >= second.length ||
+      (firstIndex < first.length && first[firstIndex].start <= second[secondIndex].start);
+    pushMaskRange(merged, { ...(useFirst ? first[firstIndex++] : second[secondIndex++]) });
+    operations += 1;
+    if (operations >= sliceSize && (firstIndex < first.length || secondIndex < second.length)) {
+      operations = 0;
+      await yieldFn();
+      assertCurrent();
+    }
+  }
+  return merged;
+}
+
+async function buildMentionMaskRanges(
+  text: string,
+  sliceSize: number,
+  yieldFn: () => Promise<void>,
+  assertCurrent: () => void
+): Promise<MentionMaskRange[]> {
+  const fences: MentionMaskRange[] = [];
+  let fenceStart: number | null = null;
+  let operations = 0;
+  for (let offset = 0; offset < text.length;) {
+    assertCurrent();
+    if (text.startsWith("```", offset)) {
+      if (fenceStart === null) fenceStart = offset;
+      else {
+        pushMaskRange(fences, { start: fenceStart, end: offset + 3 });
+        fenceStart = null;
+      }
+      offset += 3;
+      operations += 3;
+    } else {
+      offset += 1;
+      operations += 1;
+    }
+    if (operations >= sliceSize && offset < text.length) {
+      operations = 0;
+      await yieldFn();
+      assertCurrent();
+    }
+  }
+  if (fenceStart !== null) pushMaskRange(fences, { start: fenceStart, end: text.length });
+
+  const inlineCode: MentionMaskRange[] = [];
+  let inlineStart: number | null = null;
+  let fenceIndex = 0;
+  operations = 0;
+  for (let offset = 0; offset < text.length; offset++) {
+    while (fenceIndex < fences.length && fences[fenceIndex].end <= offset) fenceIndex += 1;
+    const maskedByFence = fenceIndex < fences.length && fences[fenceIndex].start <= offset;
+    const char = maskedByFence && text[offset] !== "\n" ? " " : text[offset];
+    if (char === "\n") inlineStart = null;
+    else if (char === "`") {
+      if (inlineStart === null) inlineStart = offset;
+      else {
+        pushMaskRange(inlineCode, { start: inlineStart, end: offset + 1 });
+        inlineStart = null;
+      }
+    }
+    operations += 1;
+    if (operations >= sliceSize && offset + 1 < text.length) {
+      operations = 0;
+      await yieldFn();
+      assertCurrent();
+    }
+  }
+  const code = await mergeSortedMaskRanges(fences, inlineCode, sliceSize, yieldFn, assertCurrent);
+
+  const wikilinks: MentionMaskRange[] = [];
+  let wikilinkStart: number | null = null;
+  let wikilinkContentLength = 0;
+  let codeIndex = 0;
+  operations = 0;
+  for (let offset = 0; offset < text.length;) {
+    assertCurrent();
+    while (codeIndex < code.length && code[codeIndex].end <= offset) codeIndex += 1;
+    const effective = (at: number): string => {
+      let rangeIndex = codeIndex;
+      while (rangeIndex < code.length && code[rangeIndex].end <= at) rangeIndex += 1;
+      const masked = rangeIndex < code.length && code[rangeIndex].start <= at;
+      return masked && text[at] !== "\n" ? " " : text[at];
+    };
+    const char = effective(offset);
+    if (wikilinkStart === null) {
+      const openerLength = char === "!" && effective(offset + 1) === "[" && effective(offset + 2) === "["
+        ? 3
+        : char === "[" && effective(offset + 1) === "[" ? 2 : 0;
+      if (openerLength) {
+        wikilinkStart = offset;
+        wikilinkContentLength = 0;
+        offset += openerLength;
+        operations += openerLength;
+      } else {
+        offset += 1;
+        operations += 1;
+      }
+    } else if (char === "\n" || char === "[") {
+      const failedStart = wikilinkStart;
+      wikilinkStart = null;
+      wikilinkContentLength = 0;
+      // Regex search advances one code unit after a failed opener. For `[[[`,
+      // that means the overlapping inner opener begins at the second `[`. For
+      // a later nested `[[`, reprocess the current bracket instead.
+      if (char === "[") offset = text[offset - 1] === "[" ? Math.max(failedStart + 1, offset - 1) : offset;
+      else offset += 1;
+      operations += 1;
+    } else if (char === "]") {
+      if (wikilinkContentLength > 0 && effective(offset + 1) === "]") {
+        pushMaskRange(wikilinks, { start: wikilinkStart, end: offset + 2 });
+        offset += 2;
+        operations += 2;
+      } else {
+        offset += 1;
+        operations += 1;
+      }
+      wikilinkStart = null;
+      wikilinkContentLength = 0;
+    } else {
+      wikilinkContentLength += 1;
+      offset += 1;
+      operations += 1;
+    }
+    if (operations >= sliceSize && offset < text.length) {
+      operations = 0;
+      await yieldFn();
+      assertCurrent();
+    }
+  }
+  return mergeSortedMaskRanges(code, wikilinks, sliceSize, yieldFn, assertCurrent);
+}
+
+function maskMentionSlice(
+  text: string,
+  start: number,
+  end: number,
+  ranges: MentionMaskRange[],
+  firstRange: number
+): { masked: string; nextRange: number } {
+  const chars = text.slice(start, end).split("");
+  let rangeIndex = firstRange;
+  while (rangeIndex < ranges.length && ranges[rangeIndex].end <= start) rangeIndex += 1;
+  const nextRange = rangeIndex;
+  while (rangeIndex < ranges.length && ranges[rangeIndex].start < end) {
+    const range = ranges[rangeIndex];
+    for (let offset = Math.max(start, range.start); offset < Math.min(end, range.end); offset++) {
+      if (text[offset] !== "\n") chars[offset - start] = " ";
+    }
+    rangeIndex += 1;
+  }
+  return { masked: chars.join(""), nextRange };
+}
+
+async function findUnlinkedMentionsCooperatively(
+  text: string,
+  compiled: CompiledMentionPattern,
+  bodyStart: number,
+  options: Required<Pick<UnlinkedMentionScanOptions, "chunkSize" | "yieldToEventLoop">>,
+  assertCurrent: () => void
+): Promise<UnlinkedMention[]> {
+  const lineStarts = [0];
+  const countByLine = new Map<number, number>();
+  const maskRanges = await buildMentionMaskRanges(
+    text,
+    options.chunkSize,
+    options.yieldToEventLoop,
+    assertCurrent
+  );
+  let rangeIndex = 0;
+  let carry = "";
+  let carryStart = 0;
+  let committedThrough = 0;
+  let matchedLine = 0;
+
+  for (let start = 0; start < text.length; start += options.chunkSize) {
+    assertCurrent();
+    const end = Math.min(text.length, start + options.chunkSize);
+    for (let offset = start; offset < end; offset++) {
+      if (text.charCodeAt(offset) === 10) lineStarts.push(offset + 1);
+    }
+    const next = maskMentionSlice(text, start, end, maskRanges, rangeIndex);
+    rangeIndex = next.nextRange;
+    let masked = next.masked;
+    if (start < bodyStart) {
+      const hidden = Math.min(end, bodyStart) - start;
+      masked = masked.slice(0, hidden).replace(/[^\n]/g, " ") + masked.slice(hidden);
+    }
+    const window = carry + masked;
+    const final = end === text.length;
+    const safeEnd = final ? window.length : Math.max(0, window.length - compiled.overlap);
+    const safeEndAbsolute = carryStart + safeEnd;
+    compiled.regexp.lastIndex = 0;
+    for (const match of window.matchAll(compiled.regexp)) {
+      if (match.index === undefined) break;
+      const absoluteOffset = carryStart + match.index;
+      if (absoluteOffset < committedThrough) continue;
+      if (!final && absoluteOffset >= safeEndAbsolute) break;
+      while (matchedLine + 1 < lineStarts.length && lineStarts[matchedLine + 1] <= absoluteOffset) {
+        matchedLine += 1;
+      }
+      countByLine.set(matchedLine, (countByLine.get(matchedLine) ?? 0) + 1);
+    }
+    committedThrough = safeEndAbsolute;
+    // Preserve one complete UTF-16 code point of left context for the next
+    // window's Unicode word-boundary lookbehind (astral letters use 2 units).
+    const carryCut = final ? window.length : Math.max(0, safeEnd - 2);
+    carry = window.slice(carryCut);
+    carryStart += carryCut;
+    assertCurrent();
+    if (!final) {
+      await options.yieldToEventLoop();
+      assertCurrent();
+    }
+  }
+
+  const mentions: UnlinkedMention[] = [];
+  let mappedLines = 0;
+  for (const [line, count] of countByLine) {
+    const start = lineStarts[line];
+    const end = line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length;
+    mentions.push({ line, snippet: text.slice(start, end).trim(), count });
+    mappedLines += 1;
+    if (mappedLines % UNLINKED_MENTION_CANDIDATE_SLICE === 0) {
+      await options.yieldToEventLoop();
+      assertCurrent();
+    }
+  }
+  return mentions;
+}
+
 /**
  * Find whole-word, case-insensitive occurrences of any of `names` in `text`
  * that are NOT already inside a `[[wikilink]]`/`![[embed]]` or a code span —
@@ -590,6 +885,9 @@ export class MetadataCache extends Events {
    * listeners or per-entry version tracking.
    */
   private unlinkedMentionsCache = new Map<string, { source: TFile; mentions: UnlinkedMention[] }[]>();
+  private unlinkedMentionsEpoch = 0;
+  private activeUnlinkedMentionScans = new Set<AbortController>();
+  private disposed = false;
   /** Compact token/punctuation key -> Markdown source paths that contain it. */
   private mentionSourcesByKey = new Map<string, Set<string>>();
   /** Authoritative per-file keys, persisted and computed by the utility process. */
@@ -832,7 +1130,12 @@ export class MetadataCache extends Events {
     vault.on("delete", (f: TFile) => this.enqueue(f, true, false, !(this.backgroundIndexerActive && f?.extension === "md")));
     vault.on("rename", (f: TFile, oldPath: string) => this.enqueueRename(f, oldPath));
     // See unlinkedMentionsCache's doc comment: "resolved" alone is sufficient invalidation.
-    this.on("resolved", () => this.unlinkedMentionsCache.clear());
+    this.on("resolved", () => {
+      this.unlinkedMentionsEpoch += 1;
+      this.unlinkedMentionsCache.clear();
+      for (const controller of this.activeUnlinkedMentionScans) controller.abort();
+      this.activeUnlinkedMentionScans.clear();
+    });
     const host = (vault as Vault).host?.metadataIndex;
     if (host) {
       this.stopIndexerMessages = host.onMessage((message) => this.onIndexerMessage(message));
@@ -845,6 +1148,9 @@ export class MetadataCache extends Events {
   }
 
   dispose(): void {
+    this.disposed = true;
+    for (const controller of this.activeUnlinkedMentionScans) controller.abort();
+    this.activeUnlinkedMentionScans.clear();
     this.stopIndexerMessages?.();
     this.stopIndexerMessages = null;
   }
@@ -1518,6 +1824,22 @@ export class MetadataCache extends Events {
    * index (not the whole vault), so this stays cheap.
    */
   async getUnlinkedMentions(file: TFile): Promise<{ source: TFile; mentions: UnlinkedMention[] }[]> {
+    while (true) {
+      try {
+        return await this[UNLINKED_MENTIONS_SCAN](file);
+      } catch (error) {
+        // Preserve the plugin-facing contract across ordinary metadata churn:
+        // a generation invalidation retries from authoritative current state.
+        if ((error as Error)?.name !== "AbortError" || this.disposed) throw error;
+      }
+    }
+  }
+
+  async [UNLINKED_MENTIONS_SCAN](
+    file: TFile,
+    options: UnlinkedMentionScanOptions = {}
+  ): Promise<{ source: TFile; mentions: UnlinkedMention[] }[]> {
+    if (options.signal?.aborted || this.disposed) throw abortError();
     const cached = this.unlinkedMentionsCache.get(file.path);
     if (cached) return cached;
     // Never fall back to a vault-wide synchronous scan. The Backlinks view
@@ -1526,36 +1848,82 @@ export class MetadataCache extends Events {
     if (!this.mentionIndexReady) return [];
 
     const names = [file.basename, ...(this.cache.get(file.path)?.aliases ?? [])];
-    const candidates = new Set<string>();
-    for (const name of names) {
-      const keys = extractMentionIndexKeys(name.trim());
-      if (!keys.length) continue;
-      const sourceSets = keys.map((key) => this.mentionSourcesByKey.get(key) ?? new Set<string>());
-      sourceSets.sort((a, b) => a.size - b.size);
-      for (const src of sourceSets[0]) {
-        if (sourceSets.every((sources) => sources.has(src))) candidates.add(src);
-      }
-    }
+    const compiled = compileMentionPattern(names);
+    if (!compiled) return [];
+    const controller = new AbortController();
+    const epoch = this.unlinkedMentionsEpoch;
+    const yieldFn = options.yieldToEventLoop ?? yieldToEventLoop;
+    const chunkSize = Math.max(64, options.chunkSize ?? UNLINKED_MENTION_CHUNK_SIZE);
+    const assertCurrent = () => {
+      throwIfScanCancelled(options.signal, controller.signal);
+      if (epoch !== this.unlinkedMentionsEpoch || this.disposed) throw abortError();
+    };
+    this.activeUnlinkedMentionScans.add(controller);
 
-    const out: { source: TFile; mentions: UnlinkedMention[] }[] = [];
-    for (const src of candidates) {
-      if (src === file.path) continue;
-      if (!isMdPath(src)) continue;
-      const srcFile = this.vault.getFileByPath(src);
-      if (!srcFile) continue;
-      let content: string;
-      try {
-        content = await this.vault.cachedRead(srcFile);
-      } catch {
-        continue;
+    try {
+      const candidates = new Set<string>();
+      let candidateOperations = 0;
+      for (const name of names) {
+        assertCurrent();
+        const keys = extractMentionIndexKeys(name.trim());
+        if (!keys.length) continue;
+        const sourceSets = keys.map((key) => this.mentionSourcesByKey.get(key) ?? new Set<string>());
+        sourceSets.sort((a, b) => a.size - b.size);
+        for (const src of sourceSets[0]) {
+          let presentInEverySet = true;
+          for (const sources of sourceSets) {
+            presentInEverySet &&= sources.has(src);
+            candidateOperations += 1;
+            if (candidateOperations % UNLINKED_MENTION_CANDIDATE_SLICE === 0) {
+              await yieldFn();
+              assertCurrent();
+            }
+            if (!presentInEverySet) break;
+          }
+          if (presentInEverySet) candidates.add(src);
+        }
       }
-      const mentions = findUnlinkedMentions(content, names);
-      if (!mentions.length) continue;
-      out.push({ source: srcFile, mentions });
+
+      const out: { source: TFile; mentions: UnlinkedMention[] }[] = [];
+      const candidatePaths = [...candidates];
+      for (let index = 0; index < candidatePaths.length; index++) {
+        assertCurrent();
+        const src = candidatePaths[index];
+        try {
+          if (src === file.path) continue;
+          if (!isMdPath(src)) continue;
+          const srcFile = this.vault.getFileByPath(src);
+          if (!srcFile) continue;
+          let content: string;
+          try {
+            content = await this.vault.cachedRead(srcFile);
+          } catch {
+            continue;
+          }
+          assertCurrent();
+          const mentions = await findUnlinkedMentionsCooperatively(
+            content,
+            compiled,
+            this.cache.get(src)?.frontmatterEndOffset ?? 0,
+            { chunkSize, yieldToEventLoop: yieldFn },
+            assertCurrent
+          );
+          if (mentions.length) out.push({ source: srcFile, mentions });
+        } finally {
+          if (index + 1 < candidatePaths.length) {
+            await yieldFn();
+            assertCurrent();
+          }
+        }
+      }
+      assertCurrent();
+      out.sort((a, b) => a.source.basename.localeCompare(b.source.basename));
+      assertCurrent();
+      this.unlinkedMentionsCache.set(file.path, out);
+      return out;
+    } finally {
+      this.activeUnlinkedMentionScans.delete(controller);
     }
-    out.sort((a, b) => a.source.basename.localeCompare(b.source.basename));
-    this.unlinkedMentionsCache.set(file.path, out);
-    return out;
   }
 
   isUnlinkedMentionsReady(): boolean {
