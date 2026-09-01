@@ -810,9 +810,30 @@
     "evidence": [
       "tests/unit/plugin-manager.test.ts",
       "tests/e2e/plugin-api-compat.spec.ts",
-      "tests/unit/commands.test.ts"
+      "tests/unit/commands.test.ts",
+      "tests/unit/plugin-hotkeys.test.ts",
+      "tests/e2e/plugin-editor-commands.spec.ts"
     ],
-    "notes": "Global callback/checkCallback registration, prefixing, cleanup, and crash attribution are observed; editor callback variants and the complete Command shape are not supported."
+    "notes": "Global and editor callback variants are observed with exact-one-style registration validation, active editing-Markdown context gating, prefixing, unload cleanup, palette/hotkey/programmatic routing, and synchronous/asynchronous crash attribution. The complete Command shape and Obsidian Editor abstraction remain incomplete; editor variants currently receive the live CM6 EditorView."
+  },
+  "API-MEMBER-5f2f8bc971ca": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/commands.test.ts",
+      "tests/unit/plugin-hotkeys.test.ts",
+      "tests/e2e/plugin-editor-commands.spec.ts"
+    ],
+    "notes": "Observed editorCallback routing, active editing-Markdown gating, and exact live editor/view identity across palette, hotkey, and programmatic dispatch. The editor argument remains CM6 EditorView rather than the documented Editor abstraction."
+  },
+  "API-MEMBER-3ee207f52ff7": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/commands.test.ts",
+      "tests/unit/plugin-hotkeys.test.ts",
+      "tests/unit/plugin-manager.test.ts",
+      "tests/e2e/plugin-editor-commands.spec.ts"
+    ],
+    "notes": "Observed checking=true availability, checking=false execution, context gating, and crash attribution. The editor argument remains CM6 EditorView rather than the documented Editor abstraction."
   },
   "DEV-6a4f4ec9e63a": {
     "status": "partial",
@@ -868,9 +889,31 @@
   "DEV-278f508d49c7": {
     "status": "partial",
     "evidence": [
-      "tests/unit/plugin-manager.test.ts"
+      "tests/unit/plugin-manager.test.ts",
+      "tests/unit/commands.test.ts",
+      "tests/unit/plugin-hotkeys.test.ts",
+      "tests/e2e/plugin-editor-commands.spec.ts"
     ],
-    "notes": "Global callback/checkCallback command behavior is observed; editor callback variants and the complete Command shape remain incomplete."
+    "notes": "Global and editor callback variants are observed with exact-one-style registration validation, active editing-Markdown gating, unload cleanup, palette/hotkey/programmatic routing, and crash attribution. The complete Command shape and Obsidian Editor abstraction remain incomplete."
+  },
+  "DEV-eb4079aa1261": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/commands.test.ts",
+      "tests/unit/plugin-hotkeys.test.ts",
+      "tests/e2e/plugin-editor-commands.spec.ts"
+    ],
+    "notes": "The documented editor-only routing and context gating are observed, with exact-one-style registration validation and the current CM6 EditorView limitation."
+  },
+  "DEV-b01a3a7c423b": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/commands.test.ts",
+      "tests/unit/plugin-hotkeys.test.ts",
+      "tests/unit/plugin-manager.test.ts",
+      "tests/e2e/plugin-editor-commands.spec.ts"
+    ],
+    "notes": "The documented availability/execution phases, editor-only routing, exact-one-style registration validation, and crash attribution are observed, with the current CM6 EditorView limitation."
   },
   "API-0d4d7fe76b91": {
     "status": "partial",

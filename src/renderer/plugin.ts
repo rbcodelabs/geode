@@ -4,6 +4,8 @@ import type { View, WorkspaceLeaf } from "./workspace";
 import type { Command, Hotkey } from "./commands";
 import type { PluginManifest } from "./plugin-manifest";
 import type { EventRef } from "./events";
+import type { EditorView } from "@codemirror/view";
+import type { MarkdownView } from "./views/markdown-view";
 
 export type { PluginManifest } from "./plugin-manifest";
 
@@ -15,6 +17,8 @@ export interface PluginCommand {
   hotkeys?: Hotkey[];
   callback?: () => any;
   checkCallback?: (checking: boolean) => boolean | void;
+  editorCallback?: (editor: EditorView, context: MarkdownView) => any;
+  editorCheckCallback?: (checking: boolean, editor: EditorView, context: MarkdownView) => boolean | void;
 }
 
 export type PluginErrorHandler = (boundary: string, error: unknown) => void | Promise<void>;
@@ -109,6 +113,15 @@ export abstract class Plugin extends Component {
    */
   addCommand(command: PluginCommand): Command {
     this.assertHostGeneration();
+    const definedExecutionStyles = [
+      command.callback,
+      command.checkCallback,
+      command.editorCallback,
+      command.editorCheckCallback,
+    ].filter((style) => style !== undefined);
+    if (definedExecutionStyles.length !== 1 || definedExecutionStyles.some((style) => typeof style !== "function")) {
+      throw new TypeError(`Command "${command.id}" must define exactly one execution style`);
+    }
     const full: Command = {
       id: this.prefixed(command.id),
       name: `${this.manifest.name}: ${command.name}`,
@@ -116,6 +129,8 @@ export abstract class Plugin extends Component {
       hotkeys: command.hotkeys,
       callback: this.guard(`command:${command.id}`, command.callback),
       checkCallback: this.guard(`command-check:${command.id}`, command.checkCallback),
+      editorCallback: this.guard(`command:${command.id}`, command.editorCallback),
+      editorCheckCallback: this.guard(`command-check:${command.id}`, command.editorCheckCallback),
     };
     this.app.commands.add(full);
     this.register(() => this.app.commands.remove(full.id));

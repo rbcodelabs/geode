@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 183,
-      "partial": 47,
+      "partial": 51,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 0,
-      "unknown": 2622
+      "unknown": 2618
     }
   },
   "requirements": [
@@ -5833,8 +5833,13 @@
       "title": "editorCallback",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Command/editorCallback.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Command/editorCallback.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/commands.test.ts",
+        "tests/unit/plugin-hotkeys.test.ts",
+        "tests/e2e/plugin-editor-commands.spec.ts"
+      ],
+      "notes": "The documented editor-only routing and context gating are observed, with exact-one-style registration validation and the current CM6 EditorView limitation."
     },
     {
       "id": "DEV-b01a3a7c423b",
@@ -5844,8 +5849,14 @@
       "title": "editorCheckCallback",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Command/editorCheckCallback.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Command/editorCheckCallback.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/commands.test.ts",
+        "tests/unit/plugin-hotkeys.test.ts",
+        "tests/unit/plugin-manager.test.ts",
+        "tests/e2e/plugin-editor-commands.spec.ts"
+      ],
+      "notes": "The documented availability/execution phases, editor-only routing, exact-one-style registration validation, and crash attribution are observed, with the current CM6 EditorView limitation."
     },
     {
       "id": "DEV-b5e37614ad24",
@@ -11618,9 +11629,12 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Plugin/addCommand.md",
       "status": "partial",
       "evidence": [
-        "tests/unit/plugin-manager.test.ts"
+        "tests/unit/plugin-manager.test.ts",
+        "tests/unit/commands.test.ts",
+        "tests/unit/plugin-hotkeys.test.ts",
+        "tests/e2e/plugin-editor-commands.spec.ts"
       ],
-      "notes": "Global callback/checkCallback command behavior is observed; editor callback variants and the complete Command shape remain incomplete."
+      "notes": "Global and editor callback variants are observed with exact-one-style registration validation, active editing-Markdown gating, unload cleanup, palette/hotkey/programmatic routing, and crash attribution. The complete Command shape and Obsidian Editor abstraction remain incomplete."
     },
     {
       "id": "DEV-6b6fc2070916",
@@ -22809,8 +22823,13 @@
       "title": "Command.editorCallback",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/commands.test.ts",
+        "tests/unit/plugin-hotkeys.test.ts",
+        "tests/e2e/plugin-editor-commands.spec.ts"
+      ],
+      "notes": "Observed editorCallback routing, active editing-Markdown gating, and exact live editor/view identity across palette, hotkey, and programmatic dispatch. The editor argument remains CM6 EditorView rather than the documented Editor abstraction."
     },
     {
       "id": "API-MEMBER-3ee207f52ff7",
@@ -22820,8 +22839,14 @@
       "title": "Command.editorCheckCallback",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/commands.test.ts",
+        "tests/unit/plugin-hotkeys.test.ts",
+        "tests/unit/plugin-manager.test.ts",
+        "tests/e2e/plugin-editor-commands.spec.ts"
+      ],
+      "notes": "Observed checking=true availability, checking=false execution, context gating, and crash attribution. The editor argument remains CM6 EditorView rather than the documented Editor abstraction."
     },
     {
       "id": "API-MEMBER-047558dda79c",
@@ -27240,9 +27265,11 @@
       "evidence": [
         "tests/unit/plugin-manager.test.ts",
         "tests/e2e/plugin-api-compat.spec.ts",
-        "tests/unit/commands.test.ts"
+        "tests/unit/commands.test.ts",
+        "tests/unit/plugin-hotkeys.test.ts",
+        "tests/e2e/plugin-editor-commands.spec.ts"
       ],
-      "notes": "Global callback/checkCallback registration, prefixing, cleanup, and crash attribution are observed; editor callback variants and the complete Command shape are not supported."
+      "notes": "Global and editor callback variants are observed with exact-one-style registration validation, active editing-Markdown context gating, prefixing, unload cleanup, palette/hotkey/programmatic routing, and synchronous/asynchronous crash attribution. The complete Command shape and Obsidian Editor abstraction remain incomplete; editor variants currently receive the live CM6 EditorView."
     },
     {
       "id": "API-MEMBER-26af6989953d",

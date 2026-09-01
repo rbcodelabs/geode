@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommandRegistry, type Command } from "../../src/renderer/commands";
 
 function cmd(id: string, extra: Partial<Command> = {}): Command {
@@ -6,6 +6,10 @@ function cmd(id: string, extra: Partial<Command> = {}): Command {
 }
 
 describe("CommandRegistry", () => {
+  const editor = { state: { doc: "live" }, dispatch: vi.fn() };
+  const view = { viewType: "markdown", mode: "live", editor };
+  const withEditor = () => ({ editor, context: view });
+
   it("backs `commands` with a plain Record, not a Map (Obsidian's app.commands.commands shape)", () => {
     const registry = new CommandRegistry();
     registry.add(cmd("a"));
@@ -156,5 +160,99 @@ describe("CommandRegistry", () => {
     );
     expect(registry.execute("gated")).toBe(false);
     expect(fired).toBe(0);
+  });
+
+  it("lists and executes editorCallback commands with the exact active editor context", () => {
+    const registry = new (CommandRegistry as any)(undefined, withEditor) as CommandRegistry;
+    const callback = vi.fn();
+    registry.add(cmd("editor", { editorCallback: callback } as any));
+
+    expect(registry.list().map((command) => command.id)).toContain("editor");
+    expect(registry.executeCommandById("editor")).toBe(true);
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledWith(editor, view);
+  });
+
+  it("uses editorCheckCallback checking=true for availability and checking=false for execution", () => {
+    const registry = new (CommandRegistry as any)(undefined, withEditor) as CommandRegistry;
+    const calls: Array<[boolean, unknown, unknown]> = [];
+    registry.add(cmd("editor-check", {
+      hotkey: "Mod+J",
+      editorCheckCallback: (checking: boolean, activeEditor: unknown, context: unknown) => {
+        calls.push([checking, activeEditor, context]);
+        return checking ? true : undefined;
+      },
+    } as any));
+
+    expect(registry.list().map((command) => command.id)).toContain("editor-check");
+    expect(calls).toEqual([[true, editor, view]]);
+    calls.length = 0;
+
+    expect(registry.dispatchHotkey("Mod+KeyJ")).toBe(true);
+    expect(calls).toEqual([
+      [true, editor, view],
+      [false, editor, view],
+    ]);
+  });
+
+  it.each([false, undefined])("hides editorCheckCallback commands unless checking=true returns true (%s)", (available) => {
+    const registry = new (CommandRegistry as any)(undefined, withEditor) as CommandRegistry;
+    const callback = vi.fn((checking: boolean) => checking ? available : undefined);
+    registry.add(cmd("gated-editor", { editorCheckCallback: callback } as any));
+
+    expect(registry.list()).toEqual([]);
+    expect(registry.execute("gated-editor")).toBe(false);
+    expect(callback).not.toHaveBeenCalledWith(false, expect.anything(), expect.anything());
+  });
+
+  it("keeps editorCallback commands unavailable without editor context", () => {
+    const registry = new (CommandRegistry as any)(undefined, () => null) as CommandRegistry;
+    const editorCallback = vi.fn();
+    registry.add(cmd("editor-without-context", {
+      hotkey: "Mod+J",
+      editorCallback,
+    } as any));
+
+    expect(registry.list()).toEqual([]);
+    expect(registry.executeCommandById("editor-without-context")).toBe(false);
+    expect(registry.dispatchHotkey("Mod+KeyJ")).toBe(false);
+    expect(editorCallback).not.toHaveBeenCalled();
+  });
+
+  it("keeps editorCheckCallback commands unavailable without editor context", () => {
+    const registry = new (CommandRegistry as any)(undefined, () => null) as CommandRegistry;
+    const editorCheckCallback = vi.fn(() => true);
+    registry.add(cmd("editor-check-without-context", {
+      hotkey: "Mod+J",
+      editorCheckCallback,
+    } as any));
+
+    expect(registry.list()).toEqual([]);
+    expect(registry.executeCommandById("editor-check-without-context")).toBe(false);
+    expect(registry.dispatchHotkey("Mod+KeyJ")).toBe(false);
+    expect(editorCheckCallback).not.toHaveBeenCalled();
+  });
+
+  it("resolves editor context once so availability and execution share the same pair", () => {
+    const secondEditor = { state: { doc: "second" } };
+    const secondView = { viewType: "markdown", mode: "source", editor: secondEditor };
+    const provider = vi.fn()
+      .mockReturnValueOnce({ editor, context: view })
+      .mockReturnValue({ editor: secondEditor, context: secondView });
+    const registry = new (CommandRegistry as any)(undefined, provider) as CommandRegistry;
+    const calls: unknown[][] = [];
+    registry.add(cmd("stable-context", {
+      editorCheckCallback: (checking: boolean, activeEditor: unknown, context: unknown) => {
+        calls.push([checking, activeEditor, context]);
+        return true;
+      },
+    } as any));
+
+    expect(registry.execute("stable-context")).toBe(true);
+    expect(provider).toHaveBeenCalledOnce();
+    expect(calls).toEqual([
+      [true, editor, view],
+      [false, editor, view],
+    ]);
   });
 });
