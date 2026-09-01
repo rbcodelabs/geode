@@ -17,7 +17,7 @@
  * their tooltip upward automatically.
  */
 
-type TooltipPosition = "top" | "bottom" | "left" | "right";
+export type TooltipPosition = "top" | "bottom" | "left" | "right";
 
 const DEFAULT_DELAY_MS = 300;
 const VIEWPORT_MARGIN = 4;
@@ -81,7 +81,16 @@ function computeCoords(
   }
 }
 
-function positionTooltip(el: HTMLElement, target: HTMLElement, requested: TooltipPosition): void {
+/**
+ * Position a hover-owned floating element against its trigger and clamp it to
+ * the viewport. Page Preview shares this primitive so tooltip and preview
+ * cards cannot drift into two subtly different edge-placement systems.
+ */
+export function positionHoverElement(
+  el: HTMLElement,
+  target: HTMLElement,
+  requested: TooltipPosition = "bottom"
+): void {
   const targetRect = target.getBoundingClientRect();
   const tooltipRect = el.getBoundingClientRect();
 
@@ -129,7 +138,7 @@ function showTooltipFor(target: HTMLElement): void {
   el.textContent = label;
   document.body.appendChild(el);
   tooltipEl = el;
-  positionTooltip(el, target, position);
+  positionHoverElement(el, target, position);
 }
 
 function scheduleShow(target: HTMLElement): void {

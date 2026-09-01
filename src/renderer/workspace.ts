@@ -613,15 +613,30 @@ export class TabGroup implements LeafContainer {
   }
 
   setActiveLeaf(leaf: WorkspaceLeaf) {
+    if (this.active === leaf && (this.sidebar || this.workspace.activeGroup === this)) {
+      // Re-selecting the current center leaf is event-idempotent, but still
+      // synchronizes adaptive presentation (for example, closing a mobile
+      // drawer after its selected destination is activated).
+      if (!this.sidebar) {
+        this.workspace.setActiveGroup(this);
+        const file = leaf.view?.getFile?.();
+        if (file) this.workspace.trigger("file-open", file);
+      }
+      return;
+    }
     markStart("leaf-activate");
     try {
+      const changesWorkspaceGroup = !this.sidebar && this.workspace.activeGroup !== this;
       this.active = leaf;
       this.contentHostEl.innerHTML = "";
       this.contentHostEl.appendChild(leaf.leafEl);
       void leaf.ensureOpen();
       this.renderTabs();
       if (!this.sidebar) this.workspace.setActiveGroup(this);
-      this.workspace.trigger("active-leaf-change", leaf);
+      // setActiveGroup emits when moving between center groups. Activating a
+      // different tab inside the current group (or any sidebar tab) remains
+      // this method's responsibility, so every effective change emits once.
+      if (!changesWorkspaceGroup) this.workspace.trigger("active-leaf-change", leaf);
       const file = leaf.view?.getFile?.();
       if (file) this.workspace.trigger("file-open", file);
     } finally {
@@ -2222,8 +2237,11 @@ export class Workspace extends Events {
   }
 
   setActiveGroup(group: TabGroup) {
+    const previousLeaf = this.getActiveLeaf();
     this.activeGroup = group;
     this.syncAdaptivePresentation();
+    const nextLeaf = this.getActiveLeaf();
+    if (nextLeaf !== previousLeaf) this.trigger("active-leaf-change", nextLeaf);
   }
 
   getActiveLeaf(): WorkspaceLeaf | null {
@@ -2837,6 +2855,11 @@ export class Workspace extends Events {
         const restoredByLeaf = new Map(normalized.leaves.map((entry) => [entry.leaf, entry]));
         group.leaves = normalized.leaves.map((entry) => entry.leaf);
         for (const entry of normalized.leaves) entry.leaf.collectionId = entry.collectionId;
+        // Collection metadata is installed after every leaf exists so the
+        // incremental createLeaf() renders cannot prune partial membership.
+        // Render that completed registry explicitly: the chosen leaf may
+        // already be active, and the runtime same-leaf contract is a no-op.
+        group.renderTabs();
         const chosen = selectNearestSurvivor(normalized.leaves, gs.active);
         if (chosen && restoredByLeaf.has(chosen.leaf)) group.setActiveLeaf(chosen.leaf);
       }
