@@ -10,7 +10,13 @@ import { withPathLock } from "./path-lock";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { getProcessMetricsSnapshot } from "./process-metrics";
 import { PowerSaveBlockerRegistry } from "./power-save-blocker";
-import { openMetadataDb, readAllMetadataEntries, replaceAllMetadataEntries } from "./metadata-cache-store";
+import {
+  openMetadataDb,
+  pruneMetadataEntries,
+  readAllMetadataEntries,
+  replaceAllMetadataEntries,
+  upsertMetadataEntries,
+} from "./metadata-cache-store";
 import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
 import { MetadataIndexerHost } from "./metadata-indexer-host";
@@ -532,6 +538,57 @@ function registerIpc() {
     } catch (error) {
       console.error("Failed to write metadata cache", error);
     }
+  });
+
+  // Chunked counterpart to metadata-cache-write, used by the renderer's
+  // fallback persist path (see MetadataCache.persistCache): each call carries
+  // one bounded batch of entries rather than the whole vault, so this handler
+  // — and the structured-clone IPC payload that reaches it — never has to
+  // hold a full-vault-sized snapshot at once. Call metadata-cache-prune once
+  // after the last batch to drop rows for since-deleted files.
+  ipcMain.handle("metadata-cache-upsert", async (e, data: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session || !isPersistedMetadataIndexSnapshot(data)) return;
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      upsertMetadataEntries(session.metadataDb, data.entries);
+    } catch (error) {
+      console.error("Failed to upsert metadata cache batch", error);
+    }
+  });
+
+  ipcMain.handle("metadata-cache-prune", async (e, paths: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session || !Array.isArray(paths) || !paths.every((p) => typeof p === "string")) return;
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      pruneMetadataEntries(session.metadataDb, paths);
+    } catch (error) {
+      console.error("Failed to prune metadata cache", error);
+    }
+  });
+
+  // Fire-and-forget: the renderer fell back to indexing the vault itself
+  // because the background utility process was unavailable. This path used
+  // to be completely silent (see the OOM postmortem this exists for) — now
+  // it's visible in diagnostic.log even when no crash-recovery state exists
+  // for the window yet.
+  ipcMain.handle("metadata-fallback-entered", (e, info: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const state = win ? crashStates.get(win.id) : undefined;
+    const { reason, fileCount } = (info ?? {}) as { reason?: unknown; fileCount?: unknown };
+    recordDiagnostic(state, {
+      at: Date.now(),
+      category: "metadata-index",
+      level: "warn",
+      message: "renderer-fallback-entered",
+      metadata: {
+        reason: sanitizeDiagnosticValue(String(reason ?? "unknown"), { maxLength: 200 }),
+        fileCount: typeof fileCount === "number" ? fileCount : -1,
+      },
+    });
   });
 
   ipcMain.handle("metadata-indexer-start", async (e) => {

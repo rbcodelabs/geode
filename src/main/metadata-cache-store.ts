@@ -189,12 +189,34 @@ export function deleteMetadataEntries(db: DatabaseSync, paths: string[]): void {
 }
 
 /**
+ * Delete rows whose path is NOT in `keepPaths` — the counterpart to a run of
+ * chunked `upsertMetadataEntries` batches. `persistCache()`'s renderer
+ * fallback write path used to hand this module one full-vault snapshot and
+ * call `replaceAllMetadataEntries` (delete-all-then-reinsert-all in one
+ * transaction), which requires the whole vault's metadata to exist as one
+ * in-memory object on both the renderer and main sides at the same instant —
+ * that single-shot duplication is what let a large vault's structured-clone
+ * IPC payload push V8's heap past its limit. Upserting bounded batches as
+ * they're produced and pruning once at the end (this function) gets the same
+ * end state — every currently-present file's row is fresh, every row for a
+ * since-deleted file is gone — without ever requiring more than one bounded
+ * batch to be resident at once. Only reads the small content-less
+ * (path, mtimeMs, size) projection to compute the diff, never metadata_json.
+ */
+export function pruneMetadataEntries(db: DatabaseSync, keepPaths: readonly string[]): void {
+  const keep = new Set(keepPaths);
+  const stale = readMetadataStats(db)
+    .map((stat) => stat.path)
+    .filter((path) => !keep.has(path));
+  deleteMetadataEntries(db, stale);
+}
+
+/**
  * Atomically replace the ENTIRE table with `snapshot`'s entries — matches the
- * old JSON cache's whole-file-replace semantics. Used only by the
- * main-process renderer-fallback write path (`persistCache()`/
- * `applyRendererFallback()`), which always sends the complete current vault
- * state, not a partial update — a plain upsert-merge would leak stale rows
- * for since-deleted files forever.
+ * old JSON cache's whole-file-replace semantics. Retained for callers that
+ * genuinely have (and want to send) one complete snapshot in one shot; the
+ * renderer-fallback write path (`persistCache()`/`applyRendererFallback()`)
+ * no longer uses this — see `pruneMetadataEntries`'s doc comment for why.
  */
 export function replaceAllMetadataEntries(db: DatabaseSync, snapshot: PersistedMetadataIndexSnapshot): void {
   const stmt = upsertStatement(db);

@@ -8,6 +8,7 @@ import {
   deleteMetadataEntries,
   deleteMetadataEntry,
   openMetadataDb,
+  pruneMetadataEntries,
   readAllMetadataEntries,
   readMetadataStats,
   replaceAllMetadataEntries,
@@ -147,6 +148,79 @@ describe("metadata cache store", () => {
       expect(snapshot.entries["Kept.md"].size).toBe(2);
     } finally {
       db.close();
+    }
+  });
+
+  it("pruneMetadataEntries deletes rows absent from keepPaths and leaves the rest untouched", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, {
+        "Kept.md": entry({ size: 1 }),
+        "AlsoKept.md": entry({ size: 2 }),
+        "Stale.md": entry({ size: 3 }),
+      });
+      pruneMetadataEntries(db, ["Kept.md", "AlsoKept.md"]);
+      const snapshot = readAllMetadataEntries(db);
+      expect(Object.keys(snapshot.entries).sort()).toEqual(["AlsoKept.md", "Kept.md"]);
+      expect(snapshot.entries["Kept.md"].size).toBe(1);
+      expect(snapshot.entries["AlsoKept.md"].size).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("pruneMetadataEntries is a no-op when every persisted path is kept", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, { "A.md": entry(), "B.md": entry() });
+      pruneMetadataEntries(db, ["A.md", "B.md", "NotYetPersisted.md"]);
+      expect(Object.keys(readAllMetadataEntries(db).entries).sort()).toEqual(["A.md", "B.md"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("pruneMetadataEntries with an empty keep list deletes every row, mirroring an empty vault", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, { "A.md": entry(), "B.md": entry() });
+      pruneMetadataEntries(db, []);
+      expect(readAllMetadataEntries(db).entries).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+
+  it("upsertMetadataEntries followed by pruneMetadataEntries reaches the same end state as one replaceAllMetadataEntries call", async () => {
+    // This is the equivalence the chunked renderer->main persist path relies
+    // on: N bounded upsert batches + one prune must land in the same place a
+    // single atomic replace-all would have, without ever requiring the whole
+    // snapshot to exist in memory at once.
+    const root = await tmpRoot();
+    const chunked = openMetadataDb(root);
+    const atomicRoot = await tmpRoot();
+    const atomic = openMetadataDb(atomicRoot);
+    try {
+      upsertMetadataEntries(chunked, { "Old.md": entry(), "Kept.md": entry({ size: 1 }) });
+      upsertMetadataEntries(atomic, { "Old.md": entry(), "Kept.md": entry({ size: 1 }) });
+
+      const nextEntries = { "Kept.md": entry({ size: 2 }), "New.md": entry() };
+
+      // Chunked: two separate upsert batches (simulating two IPC calls), then one prune.
+      upsertMetadataEntries(chunked, { "Kept.md": nextEntries["Kept.md"] });
+      upsertMetadataEntries(chunked, { "New.md": nextEntries["New.md"] });
+      pruneMetadataEntries(chunked, Object.keys(nextEntries));
+
+      // Atomic: the old single-shot replace-all.
+      replaceAllMetadataEntries(atomic, { schemaVersion: METADATA_INDEX_SCHEMA_VERSION, entries: nextEntries });
+
+      expect(readAllMetadataEntries(chunked)).toEqual(readAllMetadataEntries(atomic));
+    } finally {
+      chunked.close();
+      atomic.close();
     }
   });
 

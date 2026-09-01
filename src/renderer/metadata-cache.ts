@@ -18,6 +18,8 @@ import {
 } from "./types";
 import {
   isPersistedMetadataIndexSnapshot,
+  METADATA_SNAPSHOT_CHUNK_MAX_BYTES,
+  METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES,
   type PersistedMetadataIndexEntry,
   type PersistedMetadataIndexSnapshot,
 } from "../indexer/metadata-indexer";
@@ -61,6 +63,31 @@ function toLinkRecord(counts: Map<string, number>): Record<string, number> {
   const record: Record<string, number> = Object.create(null);
   for (const [path, count] of counts) record[path] = count;
   return record;
+}
+
+/**
+ * Conservative size estimate for one persisted entry, used only to decide
+ * batch boundaries for the chunked renderer->main cache handoff (see
+ * `persistCache`). UTF-16 code-unit count from `JSON.stringify` is a close
+ * enough proxy for serialized byte size for this purpose — it only needs to
+ * keep chunks in the right ballpark, not be byte-exact — and, unlike
+ * `Buffer.byteLength` (which `chunkMetadataSnapshot` uses on the main-process
+ * side), has no dependency on `Buffer` being a global. The desktop renderer
+ * happens to have it (nodeIntegration), but this module is also bundled for
+ * the mobile renderer, which isn't guaranteed to.
+ *
+ * A circular `frontmatter` (see `safeStringify`'s doc comment in
+ * `metadata-cache-store.ts`) makes `JSON.stringify` throw; the main-process
+ * write path already serializes each entry safely and in isolation, so here
+ * we only need some bounded fallback estimate that still lets batching
+ * proceed sensibly.
+ */
+function estimateEntryBytes(entry: PersistedMetadataEntry): number {
+  try {
+    return JSON.stringify(entry).length;
+  } catch {
+    return METADATA_SNAPSHOT_CHUNK_MAX_BYTES;
+  }
 }
 
 // The persisted-cache entry/snapshot shape and its validator are imported
@@ -572,6 +599,8 @@ export class MetadataCache extends Events {
   private backgroundRefreshRunning = false;
   private backgroundRefreshPending = false;
   private backgroundUnavailable = false;
+  /** Why `backgroundUnavailable` was set — surfaced to diagnostic.log when `applyRendererFallback` runs. */
+  private backgroundUnavailableReason: string | null = null;
   private backgroundTask: Promise<void> = Promise.resolve();
   private stopIndexerMessages: (() => void) | null = null;
 
@@ -597,12 +626,80 @@ export class MetadataCache extends Events {
     }
   }
 
+  /**
+   * Persist the current in-memory cache for every markdown file the vault
+   * knows about right now.
+   *
+   * On hosts that support it (Electron desktop — see `upsertMetadataCache
+   * Entries`/`pruneMetadataCache` in `preload.ts`), this streams files into
+   * bounded batches (same size limits the utility process's own outbound
+   * snapshot uses — `METADATA_SNAPSHOT_CHUNK_MAX_*`) and upserts each batch
+   * as soon as it's full, discarding it before building the next. This used
+   * to build one `entries` object covering the ENTIRE vault, then hand it to
+   * a single `writeMetadataCache` IPC call — for a vault with gigabytes of
+   * metadata (many files, or even a few pathologically large ones) that
+   * meant a full-vault-sized duplicate living in the renderer AND a second
+   * full-vault-sized copy materializing in the main process the instant the
+   * structured-clone IPC payload arrived, which is what pushed peak memory
+   * past the OOM ceiling. Peak memory here is now O(one batch), not O(vault
+   * size), on both sides of the IPC boundary — see `pruneMetadataEntries`'s
+   * doc comment in `metadata-cache-store.ts` for how the final state stays
+   * equivalent to the old atomic replace-all.
+   *
+   * Hosts that don't implement the chunked methods (mobile/browser, via
+   * `createLegacyGeodeFacade` — see `preload.ts`'s `GeodeApi` doc comment)
+   * fall back to the original single-shot `writeMetadataCache` call. Those
+   * hosts' vaults are small enough that this was never the OOM's mechanism,
+   * so preserving the exact old call keeps their behavior (and every
+   * pre-existing test for it) unchanged.
+   */
   private async persistCache(): Promise<void> {
     try {
       const api = typeof window === "undefined" ? undefined : window.geode;
       if (!api?.writeMetadataCache) return;
+      const files = this.vault.getMarkdownFiles();
+
+      if (api.upsertMetadataCacheEntries && api.pruneMetadataCache) {
+        const upsertBatch = api.upsertMetadataCacheEntries;
+        let batch: Record<string, PersistedMetadataEntry> = {};
+        let batchCount = 0;
+        let batchBytes = 0;
+        const flushBatch = async () => {
+          if (!batchCount) return;
+          await upsertBatch({ schemaVersion: METADATA_CACHE_SCHEMA_VERSION, entries: batch });
+          batch = {};
+          batchCount = 0;
+          batchBytes = 0;
+        };
+
+        for (const file of files) {
+          const metadata = this.cache.get(file.path);
+          if (!metadata) continue;
+          const entry: PersistedMetadataEntry = {
+            mtimeMs: file.mtime,
+            size: file.size,
+            metadata,
+            mentionKeys: this.mentionKeysBySource.get(file.path),
+          };
+          const entryBytes = estimateEntryBytes(entry);
+          if (batchCount && (batchCount >= METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES || batchBytes + entryBytes > METADATA_SNAPSHOT_CHUNK_MAX_BYTES)) {
+            await flushBatch();
+          }
+          batch[file.path] = entry;
+          batchCount += 1;
+          batchBytes += entryBytes;
+        }
+        await flushBatch();
+
+        // Drop rows for files that no longer exist — the counterpart to the
+        // old replace-all's implicit "anything not in this snapshot is gone".
+        await api.pruneMetadataCache(files.map((file) => file.path));
+        return;
+      }
+
+      // Legacy single-shot fallback (see doc comment above).
       const entries: Record<string, PersistedMetadataEntry> = {};
-      for (const file of this.vault.getMarkdownFiles()) {
+      for (const file of files) {
         const metadata = this.cache.get(file.path);
         if (metadata) {
           entries[file.path] = {
@@ -965,11 +1062,13 @@ export class MetadataCache extends Events {
           if (available === true) this.backgroundIndexerActive = true;
           else {
             this.backgroundUnavailable = true;
+            this.backgroundUnavailableReason = "startMetadataIndexer resolved to a non-true value";
             if (this.initialized) this.scheduleBackground(() => this.applyRendererFallback());
           }
-        }).catch(() => {
+        }).catch((error) => {
           this.backgroundIndexerActive = false;
           this.backgroundUnavailable = true;
+          this.backgroundUnavailableReason = `startMetadataIndexer rejected: ${(error as Error)?.message ?? String(error)}`;
           if (this.initialized) this.scheduleBackground(() => this.applyRendererFallback());
         });
       }
@@ -1096,11 +1195,23 @@ export class MetadataCache extends Events {
     }
   }
 
-  /** Progressive safety net used only when the utility process is absent. */
+  /**
+   * Progressive safety net used only when the utility process is absent.
+   *
+   * This path used to be completely silent — see the diagnostic report below
+   * — which made a real production OOM (a vault whose renderer-side fallback
+   * scan + persist ballooned past several GB) invisible until it crashed.
+   * Reporting here, rather than only where `backgroundUnavailable` is set,
+   * captures the moment the expensive full-vault work actually starts.
+   */
   private async applyRendererFallback(): Promise<void> {
     if (!this.backgroundUnavailable) return;
     this.backgroundUnavailable = false;
     const files = this.vault.getMarkdownFiles();
+    const reason = this.backgroundUnavailableReason ?? "unknown";
+    this.backgroundUnavailableReason = null;
+    const api = typeof window === "undefined" ? undefined : window.geode;
+    void api?.reportMetadataFallback?.({ reason, fileCount: files.length })?.catch(() => {});
     this.mentionIndexReady = false;
     this.mentionSourcesByKey.clear();
     await processInBatches(files, INDEX_CONCURRENCY, async (file) => {
