@@ -177,6 +177,33 @@ describe("FileManager.processFrontMatter", () => {
     expect(vault.modify).not.toHaveBeenCalled();
   });
 
+  it("rejects an in-place path change before the next queued mutation", async () => {
+    const { app, files, vault } = fakeApp({ "Note.md": "Body\n" });
+    const manager = new FileManager(app);
+    const note = files.get("Note.md")!;
+    let release!: () => void;
+    let markStarted!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    vault.modify.mockImplementationOnce(async () => {
+      markStarted();
+      await blocked;
+    });
+
+    const first = manager.processFrontMatter(note, (fm) => { fm.first = true; });
+    const second = manager.processFrontMatter(note, (fm) => { fm.second = true; });
+    await started;
+    files.delete("Note.md");
+    note.path = "Renamed.md";
+    files.set("Renamed.md", note);
+    const secondRejected = expect(second).rejects.toThrow(/file path changed/);
+    release();
+
+    await expect(first).resolves.toBeUndefined();
+    await secondRejected;
+    expect(vault.modify).toHaveBeenCalledTimes(1);
+  });
+
   it("makes callback and serialization failures zero-write", async () => {
     const { app, files, vault, contents } = fakeApp({ "Note.md": "Body\n" });
     const manager = new FileManager(app);
@@ -214,5 +241,30 @@ describe("FileManager.processFrontMatter", () => {
     expect(vault.modify).toHaveBeenCalledTimes(1);
     expect(readFrontmatter(contents.get("Note.md")!)).toMatchObject({ recoveredAfterThenable: true });
     expect(readFrontmatter(contents.get("Note.md")!)).not.toHaveProperty("lateMutation");
+  });
+
+  it("consumes a later rejection from a callable thenable without writing", async () => {
+    const { app, files, vault } = fakeApp({ "Note.md": "Body\n" });
+    const manager = new FileManager(app);
+    const note = files.get("Note.md")!;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const thenable = Object.assign(() => undefined, {
+        then: (_resolve: (value: unknown) => void, reject: (reason: unknown) => void) => {
+          queueMicrotask(() => reject(new Error("late thenable rejection")));
+        },
+      });
+      const rejected = manager.processFrontMatter(note, () => thenable);
+
+      await expect(rejected).rejects.toThrow(TypeError);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      expect(vault.modify).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });
