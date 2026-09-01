@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { View } from "../../src/renderer/api/obsidian";
-import { Workspace, WorkspaceLeaf } from "../../src/renderer/workspace";
+import { TabGroup, Workspace, WorkspaceLeaf } from "../../src/renderer/workspace";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -44,6 +44,78 @@ describe("Workspace public query contracts", () => {
     expect(workspace.getLeavesOfType("alpha")).toEqual([leaves[0], leaves[2]]);
     workspace.detachLeavesOfType("alpha");
     expect(detached).toEqual(["alpha", "alpha-2"]);
+  });
+});
+
+describe("Workspace active leaf events", () => {
+  function eventWorkspace(firstGroup: object, groups: object[]): Workspace {
+    const workspace = Object.create(Workspace.prototype) as Workspace;
+    Object.assign(workspace, {
+      activeGroup: firstGroup,
+      groups,
+      syncAdaptivePresentation: vi.fn(),
+      trigger: vi.fn(),
+    });
+    return workspace;
+  }
+
+  function eventGroup(workspace: Workspace, active: WorkspaceLeaf, leaves: WorkspaceLeaf[]): TabGroup {
+    const group = Object.create(TabGroup.prototype) as TabGroup;
+    Object.assign(group, {
+      workspace,
+      active,
+      leaves,
+      sidebar: null,
+      contentHostEl: { innerHTML: "", appendChild: vi.fn() },
+      renderTabs: vi.fn(),
+    });
+    for (const leaf of leaves) Object.assign(leaf, { group, leafEl: {}, ensureOpen: vi.fn() });
+    return group;
+  }
+
+  it("emits once for a direct group switch and not for the already-active group", () => {
+    const firstLeaf = { view: null } as unknown as WorkspaceLeaf;
+    const secondLeaf = { view: null } as unknown as WorkspaceLeaf;
+    const firstGroup = { active: firstLeaf } as TabGroup;
+    const secondGroup = { active: secondLeaf } as TabGroup;
+    const workspace = eventWorkspace(firstGroup, [firstGroup, secondGroup]);
+
+    workspace.setActiveGroup(secondGroup);
+    expect(workspace.trigger).toHaveBeenCalledTimes(1);
+    expect(workspace.trigger).toHaveBeenCalledWith("active-leaf-change", secondLeaf);
+
+    workspace.setActiveGroup(secondGroup);
+    expect(workspace.trigger).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits once for a current-group leaf switch and an inactive-group leaf activation", () => {
+    const firstFile = { path: "first.md" };
+    const firstLeaf = { view: { getFile: () => firstFile } } as unknown as WorkspaceLeaf;
+    const nextLeaf = { view: null } as unknown as WorkspaceLeaf;
+    const otherLeaf = { view: null } as unknown as WorkspaceLeaf;
+    const placeholderGroup = {} as TabGroup;
+    const workspace = eventWorkspace(placeholderGroup, []);
+    const currentGroup = eventGroup(workspace, firstLeaf, [firstLeaf, nextLeaf]);
+    const inactiveGroup = eventGroup(workspace, otherLeaf, [otherLeaf]);
+    workspace.groups = [currentGroup, inactiveGroup];
+    workspace.activeGroup = currentGroup;
+
+    currentGroup.setActiveLeaf(currentGroup.active);
+    expect((workspace as any).syncAdaptivePresentation).toHaveBeenCalledTimes(1);
+    expect(workspace.trigger).not.toHaveBeenCalledWith("active-leaf-change", expect.anything());
+    expect(workspace.trigger).toHaveBeenCalledOnce();
+    expect(workspace.trigger).toHaveBeenCalledWith("file-open", firstFile);
+
+    currentGroup.setActiveLeaf(nextLeaf);
+    expect(workspace.trigger).toHaveBeenCalledTimes(2);
+    expect(workspace.trigger).toHaveBeenLastCalledWith("active-leaf-change", nextLeaf);
+
+    currentGroup.setActiveLeaf(nextLeaf);
+    expect(workspace.trigger).toHaveBeenCalledTimes(2);
+
+    inactiveGroup.setActiveLeaf(otherLeaf);
+    expect(workspace.trigger).toHaveBeenCalledTimes(3);
+    expect(workspace.trigger).toHaveBeenLastCalledWith("active-leaf-change", otherLeaf);
   });
 });
 

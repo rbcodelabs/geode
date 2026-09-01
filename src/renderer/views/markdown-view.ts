@@ -22,6 +22,7 @@ import { setIcon } from "../api/icons";
 import type { HeadingCache, TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 import { resolveBlockBoundary } from "../block-boundary";
+import { PagePreviewController } from "../page-preview";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, class: "cm-header-1" },
@@ -79,6 +80,7 @@ export class MarkdownView implements View {
   private vaultSwitching = false;
   private conflictReadOnly = false;
   private conflictBanner: HTMLElement | null = null;
+  private pagePreview: PagePreviewController;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -148,6 +150,11 @@ export class MarkdownView implements View {
     this.bodyEl.appendChild(this.readingEl);
     this.containerEl.appendChild(this.headerEl);
     this.containerEl.appendChild(this.bodyEl);
+    this.pagePreview = new PagePreviewController(
+      this.app,
+      this.containerEl,
+      () => this.file?.path ?? ""
+    );
   }
 
   getDisplayText(): string {
@@ -163,6 +170,7 @@ export class MarkdownView implements View {
   }
 
   async setFile(file: TFile): Promise<void> {
+    this.pagePreview.hide();
     await this.flush();
     this.file = file;
     this.titleEl.textContent = file.basename;
@@ -367,6 +375,7 @@ export class MarkdownView implements View {
   }
 
   acceptExternalText(text: string): void {
+    this.pagePreview.hide();
     this.clearConflictState();
     this.pendingSaveText = null;
     this.lastSavedText = text;
@@ -486,6 +495,7 @@ export class MarkdownView implements View {
 
   /** Cmd/Ctrl+E: flip between editing (live or source) and reading. */
   async toggleMode(): Promise<void> {
+    this.pagePreview.hide();
     this.mode = this.mode === "reading" ? this.lastEditingMode : "reading";
     if (this.mode === "reading") await this.renderReading();
     this.applyMode();
@@ -493,6 +503,7 @@ export class MarkdownView implements View {
 
   /** Flip between Live Preview and raw source while editing. */
   toggleSource(): void {
+    this.pagePreview.hide();
     if (this.mode === "reading") this.mode = this.lastEditingMode;
     this.mode = this.mode === "live" ? "source" : "live";
     this.lastEditingMode = this.mode;
@@ -512,6 +523,7 @@ export class MarkdownView implements View {
   }
 
   private async renderReading() {
+    this.pagePreview.hide();
     await this.flush();
     if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);
     this.readingContentEl = null;
@@ -621,6 +633,7 @@ export class MarkdownView implements View {
   }
 
   async onClose(): Promise<void> {
+    this.pagePreview.destroy();
     await this.flush();
     this.vaultSwitching = true;
     this.editor?.destroy();

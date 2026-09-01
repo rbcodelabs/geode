@@ -668,6 +668,11 @@ Shows all outgoing connections from the active note and surfaces potential links
 ### Interactions
 - Works on internal links, and other plugins' panes opt in (Backlinks, Search, Outline, Bookmarks, etc.).
 
+### Geode implementation subset
+- Reading View previews resolved Markdown links and wikilinks on plain hover. Live Preview requires Cmd/Ctrl and only previews rendered link decorations (never raw source on the active line).
+- The first-class preview card shows the resolved note path/title and a safe, non-editable rendered excerpt; authored heading targets are scoped to that section.
+- Follow-up: add the Core plugins → Page preview per-surface modifier settings and opt-in surfaces (File explorer, Search, Backlinks, Outline, Bookmarks, and plugin hover-link sources). Geode's current Settings model has no core-plugin category, so that broader settings architecture is intentionally not hidden inside this initial Markdown-view delivery.
+
 ---
 
 ## Properties view
