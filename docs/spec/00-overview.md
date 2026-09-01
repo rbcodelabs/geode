@@ -42,7 +42,7 @@ branding were used. The name, icon, and styling are original.
    that boots the app against `test-vault/`, opens a note, asserts Live
    Preview rendering and no console errors. Wire both into `npm test` and
    require green before push.
-1. **Live Preview embeds** — render `![[image]]`/`![[note]]` transclusions inline while editing (currently raw syntax in LP, rendered in reading view)
+1. **Live Preview embeds** — implemented for `![[image]]`/`![[note]]` transclusions and same-vault standard Markdown images (`![alt](path "title")`), with cursor-line source reveal and safe unresolved/load-failure fallbacks; broader PDF/block embed parity remains open
 2. **Graph view** — canvas force-directed renderer over `resolvedLinks`; local graph
 3. **Unlinked mentions** in backlinks pane; backlink context snippets
 4. **Canvas** — `.canvas` JSON Canvas 1.0 editor (spec in 02/04)

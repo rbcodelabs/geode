@@ -1019,6 +1019,133 @@ class EmbedWidget extends WidgetType {
 }
 
 /**
+ * Convert a CodeMirror Markdown `URL` node into a vault linkpath. Standard
+ * Markdown destinations are URLs syntactically, but Live Preview only loads
+ * same-vault image files: remote/data/file schemes and protocol-relative
+ * URLs must never reach the vault reader or renderer navigation.
+ */
+function markdownImageTarget(raw: string): string | null {
+  let target = raw;
+  if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
+  target = target.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
+  try {
+    target = decodeURIComponent(target);
+  } catch {
+    return null;
+  }
+  target = target.trim();
+  if (
+    !target ||
+    target.includes("\0") ||
+    target.startsWith("//") ||
+    /^[A-Za-z][A-Za-z0-9+.-]*:/.test(target)
+  ) {
+    return null;
+  }
+  return target;
+}
+
+/** Strip the parser-supported quote/delimiter pair from a Markdown title. */
+function markdownImageTitle(raw: string): string {
+  if (raw.length < 2) return raw;
+  const first = raw[0];
+  const last = raw[raw.length - 1];
+  if (
+    (first === '"' && last === '"') ||
+    (first === "'" && last === "'") ||
+    (first === "(" && last === ")")
+  ) {
+    return raw.slice(1, -1);
+  }
+  return raw;
+}
+
+/** Renders a standard `![alt](path "title")` same-vault image in Live Preview. */
+class MarkdownImageWidget extends WidgetType {
+  private blobUrl: string | null = null;
+  private destroyed = false;
+
+  constructor(
+    private target: string | null,
+    private authoredTarget: string,
+    private alt: string,
+    private title: string,
+    private sourcePath: string,
+    private app: App
+  ) {
+    super();
+  }
+
+  eq(other: MarkdownImageWidget): boolean {
+    return (
+      other.target === this.target &&
+      other.authoredTarget === this.authoredTarget &&
+      other.alt === this.alt &&
+      other.title === this.title &&
+      other.sourcePath === this.sourcePath
+    );
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement("span");
+    root.className = "cm-embed-widget cm-markdown-image-widget";
+
+    const resolved = this.target ? resolveEmbed(this.target, this.sourcePath, this.app) : null;
+    if (!resolved || resolved.kind !== "image" || !resolved.file) {
+      this.renderFallback(root);
+      return root;
+    }
+
+    const img = document.createElement("img");
+    img.className = "internal-embed";
+    img.alt = this.alt;
+    if (this.title) img.title = this.title;
+    root.appendChild(img);
+
+    const fail = () => {
+      if (this.destroyed) return;
+      this.revokeBlobUrl();
+      this.renderFallback(root);
+      view.requestMeasure();
+    };
+    img.addEventListener("error", fail, { once: true });
+    void loadEmbedBlobUrl(this.app, resolved.file)
+      .then((url) => {
+        if (this.destroyed) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        this.blobUrl = url;
+        img.src = url;
+        view.requestMeasure();
+      })
+      .catch(fail);
+    return root;
+  }
+
+  destroy(_dom: HTMLElement): void {
+    this.destroyed = true;
+    this.revokeBlobUrl();
+  }
+
+  private renderFallback(root: HTMLElement): void {
+    root.replaceChildren();
+    root.classList.add("internal-embed", "is-unresolved");
+    root.textContent = `Unresolved image: ${this.alt || this.authoredTarget}`;
+  }
+
+  private revokeBlobUrl(): void {
+    if (!this.blobUrl) return;
+    URL.revokeObjectURL(this.blobUrl);
+    this.blobUrl = null;
+  }
+}
+
+/**
  * Renders a ```mermaid block as a diagram while editing (Live Preview),
  * through the same `renderMermaid()` Reading view's code-block processor uses
  * so the two modes cannot drift.
@@ -1269,6 +1396,30 @@ export function livePreview(app: App, getPath: () => string): Extension {
                   )
                 );
               }
+              break;
+            }
+            case "Image": {
+              if (isActive(node.from)) break;
+              const marks = node.node.getChildren("LinkMark");
+              const url = node.node.getChild("URL");
+              if (marks.length < 4 || !url) break;
+              const authoredTarget = doc.sliceString(url.from, url.to);
+              const titleNode = node.node.getChild("LinkTitle");
+              const title = titleNode
+                ? markdownImageTitle(doc.sliceString(titleNode.from, titleNode.to))
+                : "";
+              decos.push(
+                Decoration.replace({
+                  widget: new MarkdownImageWidget(
+                    markdownImageTarget(authoredTarget),
+                    authoredTarget,
+                    doc.sliceString(marks[0].to, marks[1].from),
+                    title,
+                    sourcePath,
+                    app
+                  ),
+                }).range(node.from, node.to)
+              );
               break;
             }
             case "Link": {
