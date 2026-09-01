@@ -1488,7 +1488,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 .workspace-tabs:not(:first-child) .sidebar-toggle-button.mod-left {
   display: none;
 }
-.workspace-tabs:not(:last-child) .sidebar-toggle-button.mod-right {
+.workspace-center > .workspace-tabs:has(~ .workspace-tabs) .sidebar-toggle-button.mod-right {
   display: none;
 }
 
