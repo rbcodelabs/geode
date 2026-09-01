@@ -38,6 +38,51 @@ export interface MetadataReconcileStats {
 export const METADATA_SNAPSHOT_CHUNK_MAX_BYTES = 256 * 1024;
 export const METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES = 50;
 
+/**
+ * Default cap on `body.length` (a file's content after frontmatter is
+ * stripped) that `parseMetadata` will body-scan for wikilinks/embeds/
+ * in-body tags/headings/sections/list items before giving up and returning
+ * frontmatter-only metadata. Verified against a real OOM: a vault of 878
+ * Markdown files (AI session transcripts up to 1.6MB each) whose exhaustive
+ * position-span extraction produced >4.8MB of metadata per file. This
+ * default is what resolved that crash without regressing normal-sized notes.
+ *
+ * User-configurable per vault (Settings -> Advanced -> "Metadata scan size
+ * limit", persisted at `.geode/app.json` as `metadataScanCapBytes`) — this
+ * constant is only the fallback for callers that don't pass an explicit
+ * value, and the value `resolveMetadataScanCapBytes` returns when the saved
+ * setting is missing or invalid.
+ */
+export const DEFAULT_METADATA_SCAN_CAP_BYTES = 300_000;
+/**
+ * Floor for the configurable cap: intentionally low enough to place no
+ * real-world restriction on how aggressively a user can shrink it, while
+ * still ruling out 0/negative — which would skip the body scan on every
+ * non-empty note, including tiny ones, defeating the setting's purpose.
+ */
+export const MIN_METADATA_SCAN_CAP_BYTES = 1_000; // 1 KB
+/**
+ * Ceiling for the configurable cap. Generous enough that setting it here
+ * effectively disables the cap for any realistic Markdown note (the OOM-
+ * triggering files above were 1.6MB, ~5x smaller) while still bounding
+ * pathological input (e.g. a corrupted config or `Number.MAX_SAFE_INTEGER`).
+ */
+export const MAX_METADATA_SCAN_CAP_BYTES = 1_000_000_000; // ~1GB / 1,000,000 KB
+
+/**
+ * Coerce a raw, possibly missing/invalid persisted value into a valid scan
+ * cap: non-finite/non-numeric input falls back to the default, and any
+ * numeric input is clamped to `[MIN_METADATA_SCAN_CAP_BYTES,
+ * MAX_METADATA_SCAN_CAP_BYTES]`. Pure and side-effect free so both the
+ * renderer (loading/validating the Settings -> Advanced input) and the main
+ * process (reading the setting off disk to hand to the utility process at
+ * `initialize()` time) share one definition of "valid".
+ */
+export function resolveMetadataScanCapBytes(raw: unknown): number {
+  const n = typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_METADATA_SCAN_CAP_BYTES;
+  return Math.max(MIN_METADATA_SCAN_CAP_BYTES, Math.min(n, MAX_METADATA_SCAN_CAP_BYTES));
+}
+
 export type MetadataSnapshotMessage =
   | { type: "snapshot-start"; schemaVersion: number; totalEntries: number }
   | { type: "snapshot-chunk"; sequence: number; entries: Record<string, PersistedMetadataIndexEntry> }

@@ -43,10 +43,21 @@ export class MetadataIndexerHost {
     });
   }
 
-  initialize(root: string, files: MetadataFileStat[]): Promise<true | null> {
+  /**
+   * `scanCapBytes` is the per-vault metadata scan cap (see
+   * `resolveMetadataScanCapBytes` in `../indexer/metadata-indexer`),
+   * resolved by the caller from that vault's `.geode/app.json` before this
+   * is called. Threaded once at initialize() time, alongside the file list
+   * — like `root` and `files`, it's fixed for the lifetime of this utility
+   * process; a setting change while the vault is open takes effect for the
+   * renderer's own parsing immediately (see `MetadataCache.setScanCapBytes`)
+   * but only reaches the background indexer the next time the vault is
+   * (re)opened, which restarts this utility process.
+   */
+  initialize(root: string, files: MetadataFileStat[], scanCapBytes?: number): Promise<true | null> {
     if (!this.ready) {
       this.ready = new Promise((resolve) => { this.resolveReady = resolve; });
-      this.child.postMessage({ type: "initialize", root, files });
+      this.child.postMessage({ type: "initialize", root, files, scanCapBytes });
     }
     return this.ready;
   }

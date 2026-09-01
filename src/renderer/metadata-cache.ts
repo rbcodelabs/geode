@@ -17,9 +17,11 @@ import {
   splitExt,
 } from "./types";
 import {
+  DEFAULT_METADATA_SCAN_CAP_BYTES,
   isPersistedMetadataIndexSnapshot,
   METADATA_SNAPSHOT_CHUNK_MAX_BYTES,
   METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES,
+  resolveMetadataScanCapBytes,
   type PersistedMetadataIndexEntry,
   type PersistedMetadataIndexSnapshot,
 } from "../indexer/metadata-indexer";
@@ -261,7 +263,22 @@ export function findUnlinkedMentions(text: string, names: string[]): UnlinkedMen
   return out;
 }
 
-export function parseMetadata(text: string): CachedMetadata {
+/**
+ * Parses frontmatter and (unless `body.length` exceeds `maxBodyBytesForScan`)
+ * the body's wikilinks, embeds, in-body tags, headings, sections, and list
+ * items into Obsidian-shaped `CachedMetadata`.
+ *
+ * `maxBodyBytesForScan` defaults to `DEFAULT_METADATA_SCAN_CAP_BYTES` so
+ * every existing call site keeps working unchanged; callers that have a
+ * resolved per-vault setting (see `resolveMetadataScanCapBytes`) should pass
+ * it explicitly rather than relying on the default — see `MetadataCache`'s
+ * `scanCapBytes` field and `indexer-process.ts`'s module-level `scanCapBytes`
+ * for the two production call paths that do.
+ */
+export function parseMetadata(
+  text: string,
+  maxBodyBytesForScan: number = DEFAULT_METADATA_SCAN_CAP_BYTES
+): CachedMetadata {
   const meta: CachedMetadata = {
     // Left undefined (key absent) unless real frontmatter is parsed below —
     // matches Obsidian, whose plugins guard on `frontmatter !== undefined`.
@@ -314,6 +331,19 @@ export function parseMetadata(text: string): CachedMetadata {
         });
     }
   }
+
+  // A very large body (rare, but real: AI session transcripts and similar
+  // pasted logs can run into the megabytes) makes the exhaustive position-
+  // span extraction below — wikilinks, embeds, in-body tags, headings,
+  // sections, list items — expensive enough in both CPU and allocated
+  // metadata to OOM a vault with many such files (see
+  // DEFAULT_METADATA_SCAN_CAP_BYTES's comment for the incident this guards
+  // against). Bail out here with just the frontmatter-derived fields
+  // already populated above (frontmatter itself, aliases, tags) — those are
+  // cheap and unaffected by body size. `meta.listItems`/`meta.sections` are
+  // deliberately left unset (not even the "yaml" section for frontmatter),
+  // matching this function's normal "present only when computed" contract.
+  if (body.length > maxBodyBytesForScan) return meta;
 
   const masked = maskCode(body);
 
@@ -603,6 +633,20 @@ export class MetadataCache extends Events {
   private backgroundUnavailableReason: string | null = null;
   private backgroundTask: Promise<void> = Promise.resolve();
   private stopIndexerMessages: (() => void) | null = null;
+  /**
+   * The renderer-side scan cap passed to every `parseMetadata` call this
+   * class makes (flush/initialize/background-snapshot-fill/renderer-
+   * fallback). A field rather than a module-level global so it stays
+   * explicit and per-instance — App calls `setScanCapBytes` once per vault
+   * open/switch, right after loading that vault's `.geode/app.json`
+   * (`AppSettings.metadataScanCapBytes`) and before `initialize()`.
+   */
+  private scanCapBytes: number = DEFAULT_METADATA_SCAN_CAP_BYTES;
+
+  /** Update the configured scan cap (see `resolveMetadataScanCapBytes`); clamps/validates `bytes`. */
+  setScanCapBytes(bytes: number): void {
+    this.scanCapBytes = resolveMetadataScanCapBytes(bytes);
+  }
 
   private scheduleBackground(task: () => Promise<void>): void {
     this.backgroundTask = this.backgroundTask.then(task).catch((error) => {
@@ -943,7 +987,7 @@ export class MetadataCache extends Events {
             newCanvasContexts.set(path, parsed.contexts);
           } else {
             const content = await this.vault.cachedRead(file);
-            newMeta.set(path, parseMetadata(content));
+            newMeta.set(path, parseMetadata(content, this.scanCapBytes));
             newMentionKeys.set(path, extractMentionIndexKeys(content));
           }
         } catch (err) {
@@ -1100,7 +1144,7 @@ export class MetadataCache extends Events {
               this.cache.set(f.path, parsed.metadata);
               this.canvasLinkContexts.set(f.path, parsed.contexts);
             } else {
-              this.cache.set(f.path, parseMetadata(text));
+              this.cache.set(f.path, parseMetadata(text, this.scanCapBytes));
               this.setMentionSourceKeys(f.path, extractMentionIndexKeys(text));
             }
           } catch (err) {
@@ -1175,7 +1219,7 @@ export class MetadataCache extends Events {
       await processInBatches(missing, 1, async (file) => {
         try {
           const content = await this.vault.cachedRead(file);
-          if (!this.cache.has(file.path)) this.cache.set(file.path, parseMetadata(content));
+          if (!this.cache.has(file.path)) this.cache.set(file.path, parseMetadata(content, this.scanCapBytes));
           this.setMentionSourceKeys(file.path, extractMentionIndexKeys(content));
         } catch (err) {
           if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
@@ -1217,7 +1261,7 @@ export class MetadataCache extends Events {
     await processInBatches(files, INDEX_CONCURRENCY, async (file) => {
       try {
         const content = await this.vault.cachedRead(file);
-        this.cache.set(file.path, parseMetadata(content));
+        this.cache.set(file.path, parseMetadata(content, this.scanCapBytes));
         this.setMentionSourceKeys(file.path, extractMentionIndexKeys(content));
       } catch (err) {
         if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);

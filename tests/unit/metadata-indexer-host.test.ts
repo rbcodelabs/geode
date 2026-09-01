@@ -28,6 +28,30 @@ describe("MetadataIndexerHost", () => {
     expect(forwarded.some((message: any) => message.type === "snapshot")).toBe(false);
   });
 
+  it("forwards an explicit scanCapBytes to the utility process at initialize() time", async () => {
+    const child = new FakeChild();
+    const host = new MetadataIndexerHost(child, vi.fn());
+    host.initialize("/vault", [{ path: "A.md", mtimeMs: 1, size: 1 }], 750_000);
+    expect(child.postMessage).toHaveBeenCalledWith({
+      type: "initialize",
+      root: "/vault",
+      files: [{ path: "A.md", mtimeMs: 1, size: 1 }],
+      scanCapBytes: 750_000,
+    });
+  });
+
+  it("omits scanCapBytes when the caller doesn't pass one (indexer-process.ts falls back to its own default)", async () => {
+    const child = new FakeChild();
+    const host = new MetadataIndexerHost(child, vi.fn());
+    host.initialize("/vault", []);
+    expect(child.postMessage).toHaveBeenCalledWith({
+      type: "initialize",
+      root: "/vault",
+      files: [],
+      scanCapBytes: undefined,
+    });
+  });
+
   it("returns null when the utility process exits before startup", async () => {
     const child = new FakeChild();
     const host = new MetadataIndexerHost(child, vi.fn());

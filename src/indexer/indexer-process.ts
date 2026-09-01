@@ -9,6 +9,7 @@ import {
   METADATA_INDEX_SCHEMA_VERSION,
   chunkMetadataSnapshot,
   reconcileMetadataIndex,
+  resolveMetadataScanCapBytes,
   type MetadataDirtyOp,
   type MetadataFileStat,
   type MetadataReconcileStore,
@@ -16,7 +17,7 @@ import {
   type PersistedMetadataIndexSnapshot,
 } from "./metadata-indexer";
 
-type InitMessage = { type: "initialize"; root: string; files: MetadataFileStat[] };
+type InitMessage = { type: "initialize"; root: string; files: MetadataFileStat[]; scanCapBytes?: number };
 type VaultMessage = { type: "vault-event"; event: "create" | "modify" | "delete"; path: string };
 type ShutdownMessage = { type: "shutdown" };
 
@@ -26,6 +27,12 @@ if (!parentPort) {
 }
 
 let root = "";
+// Resolved from the `initialize` message's `scanCapBytes` (the renderer's
+// per-vault setting, read off `.geode/app.json` by main.ts before spawning
+// this process) — see resolveMetadataScanCapBytes's doc comment. Fixed for
+// this process's lifetime; a later setting change is picked up on the next
+// vault open, which spawns a fresh utility process.
+let scanCapBytes = resolveMetadataScanCapBytes(undefined);
 // A DB handle, not vault-sized data — the indexer never holds a whole-vault
 // snapshot object in memory. Peak JS heap during reconcile is O(batch size).
 let db: DatabaseSync | null = null;
@@ -60,6 +67,7 @@ const writer = new DebouncedMetadataCacheWriter(async (dirty) => {
 async function initialize(message: InitMessage): Promise<void> {
   initializing = true;
   root = message.root;
+  scanCapBytes = resolveMetadataScanCapBytes(message.scanCapBytes);
   db = openMetadataDb(root);
   const started = performance.now();
   let reconcileStats;
@@ -79,7 +87,7 @@ async function initialize(message: InitMessage): Promise<void> {
     message.files,
     store,
     readForIndex,
-    parseMetadata,
+    (content) => parseMetadata(content, scanCapBytes),
     (batch) => { Object.assign(changed, batch); },
     (stats) => { reconcileStats = stats; },
     extractMentionIndexKeys,
@@ -107,7 +115,7 @@ async function applyVaultEvent(message: VaultMessage): Promise<void> {
   try {
     const started = performance.now();
     const [content, stat] = await Promise.all([fsp.readFile(absolute, "utf8"), fsp.stat(absolute)]);
-    const metadata = parseMetadata(content);
+    const metadata = parseMetadata(content, scanCapBytes);
     const entry: PersistedMetadataIndexEntry = {
       mtimeMs: stat.mtimeMs,
       size: stat.size,
