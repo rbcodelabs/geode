@@ -113,13 +113,13 @@ export abstract class Plugin extends Component {
    */
   addCommand(command: PluginCommand): Command {
     this.assertHostGeneration();
-    const executionStyleCount = [
+    const definedExecutionStyles = [
       command.callback,
       command.checkCallback,
       command.editorCallback,
       command.editorCheckCallback,
-    ].filter((style) => style !== undefined).length;
-    if (executionStyleCount !== 1) {
+    ].filter((style) => style !== undefined);
+    if (definedExecutionStyles.length !== 1 || definedExecutionStyles.some((style) => typeof style !== "function")) {
       throw new TypeError(`Command "${command.id}" must define exactly one execution style`);
     }
     const full: Command = {
