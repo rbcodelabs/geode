@@ -12,6 +12,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
 import { setIcon } from "../api/icons";
 import { CanvasView } from "../views/canvas-view";
+import { IMAGE_EXTENSIONS, type TFile } from "../types";
 import { calloutMarkerLength, calloutMeta, parseCalloutHeader, type CalloutMeta } from "./callout";
 import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
 import { isMermaidInfoString, parseFencedBlock } from "../internal-plugins/mermaid/fence";
@@ -1019,15 +1020,38 @@ class EmbedWidget extends WidgetType {
 }
 
 /**
- * Convert a CodeMirror Markdown `URL` node into a vault linkpath. Standard
- * Markdown destinations are URLs syntactically, but Live Preview only loads
- * same-vault image files: remote/data/file schemes and protocol-relative
- * URLs must never reach the vault reader or renderer navigation.
+ * Decode CommonMark's backslash escapes for ASCII punctuation. CodeMirror
+ * exposes the authored source range, including the backslashes, for image
+ * alt text, titles, and destinations.
  */
-function markdownImageTarget(raw: string): string | null {
+function decodeMarkdownEscapes(raw: string): string {
+  return raw.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
+}
+
+/**
+ * Convert a CodeMirror Markdown `URL` node into one exact vault path.
+ * Standard Markdown paths are relative to the source note (or vault-root
+ * relative when they start with `/`), unlike wiki links' basename/alias
+ * fallback. Resolving `.`/`..` here also makes containment explicit: a path
+ * that climbs above the vault root is rejected before any vault lookup.
+ */
+function markdownImagePath(raw: string, sourcePath: string): string | null {
   let target = raw;
   if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
-  target = target.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
+
+  // A literal `#` begins a URL fragment. Percent-encoded `%23` is decoded
+  // later and remains a filename character for the exact vault lookup.
+  let escaped = false;
+  for (let index = 0; index < target.length; index += 1) {
+    if (!escaped && target[index] === "#") {
+      target = target.slice(0, index);
+      break;
+    }
+    if (!escaped && target[index] === "\\") escaped = true;
+    else escaped = false;
+  }
+
+  target = decodeMarkdownEscapes(target);
   try {
     target = decodeURIComponent(target);
   } catch {
@@ -1037,17 +1061,34 @@ function markdownImageTarget(raw: string): string | null {
   if (
     !target ||
     target.includes("\0") ||
+    target.includes("\\") ||
     target.startsWith("//") ||
     /^[A-Za-z][A-Za-z0-9+.-]*:/.test(target)
   ) {
     return null;
   }
-  return target;
+  const segments = target.replace(/^\/+/, "").split("/");
+  const resolved = target.startsWith("/")
+    ? []
+    : sourcePath
+        .split("/")
+        .slice(0, -1)
+        .filter(Boolean);
+  for (const segment of segments) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (!resolved.length) return null;
+      resolved.pop();
+      continue;
+    }
+    resolved.push(segment);
+  }
+  return resolved.length ? resolved.join("/") : null;
 }
 
 /** Strip the parser-supported quote/delimiter pair from a Markdown title. */
 function markdownImageTitle(raw: string): string {
-  if (raw.length < 2) return raw;
+  if (raw.length < 2) return decodeMarkdownEscapes(raw);
   const first = raw[0];
   const last = raw[raw.length - 1];
   if (
@@ -1055,9 +1096,15 @@ function markdownImageTitle(raw: string): string {
     (first === "'" && last === "'") ||
     (first === "(" && last === ")")
   ) {
-    return raw.slice(1, -1);
+    return decodeMarkdownEscapes(raw.slice(1, -1));
   }
-  return raw;
+  return decodeMarkdownEscapes(raw);
+}
+
+function resolveMarkdownImage(path: string | null, app: App): TFile | null {
+  if (!path) return null;
+  const file = app.vault.getFileByPath(path);
+  return file && IMAGE_EXTENSIONS.has(file.extension) ? file : null;
 }
 
 /** Renders a standard `![alt](path "title")` same-vault image in Live Preview. */
@@ -1094,8 +1141,8 @@ class MarkdownImageWidget extends WidgetType {
     const root = document.createElement("span");
     root.className = "cm-embed-widget cm-markdown-image-widget";
 
-    const resolved = this.target ? resolveEmbed(this.target, this.sourcePath, this.app) : null;
-    if (!resolved || resolved.kind !== "image" || !resolved.file) {
+    const file = resolveMarkdownImage(this.target, this.app);
+    if (!file) {
       this.renderFallback(root);
       return root;
     }
@@ -1113,7 +1160,7 @@ class MarkdownImageWidget extends WidgetType {
       view.requestMeasure();
     };
     img.addEventListener("error", fail, { once: true });
-    void loadEmbedBlobUrl(this.app, resolved.file)
+    void loadEmbedBlobUrl(this.app, file)
       .then((url) => {
         if (this.destroyed) {
           URL.revokeObjectURL(url);
@@ -1411,9 +1458,9 @@ export function livePreview(app: App, getPath: () => string): Extension {
               decos.push(
                 Decoration.replace({
                   widget: new MarkdownImageWidget(
-                    markdownImageTarget(authoredTarget),
+                    markdownImagePath(authoredTarget, sourcePath),
                     authoredTarget,
-                    doc.sliceString(marks[0].to, marks[1].from),
+                    decodeMarkdownEscapes(doc.sliceString(marks[0].to, marks[1].from)),
                     title,
                     sourcePath,
                     app
