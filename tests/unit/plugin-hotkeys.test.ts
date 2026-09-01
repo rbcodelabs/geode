@@ -29,6 +29,10 @@ describe("Plugin editor commands", () => {
     ["callback plus checkCallback", { callback: () => {}, checkCallback: () => true }],
     ["callback plus editorCallback", { callback: () => {}, editorCallback: () => {} }],
     ["editorCallback plus editorCheckCallback", { editorCallback: () => {}, editorCheckCallback: () => true }],
+    ["null callback", { callback: null }],
+    ["string checkCallback", { checkCallback: "available" }],
+    ["numeric editorCallback", { editorCallback: 42 }],
+    ["object editorCheckCallback", { editorCheckCallback: {} }],
     ["all four styles", {
       callback: () => {},
       checkCallback: () => true,
@@ -40,7 +44,7 @@ describe("Plugin editor commands", () => {
     const plugin = new ProbePlugin({ commands } as any, manifest);
     const register = vi.spyOn(plugin, "register");
 
-    expect(() => plugin.addCommand({ id: "invalid", name: "Invalid", ...styles })).toThrow(
+    expect(() => plugin.addCommand({ id: "invalid", name: "Invalid", ...(styles as any) })).toThrow(
       new TypeError("Command \"invalid\" must define exactly one execution style"),
     );
     expect(commands.add).not.toHaveBeenCalled();
