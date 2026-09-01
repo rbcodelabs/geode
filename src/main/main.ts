@@ -20,7 +20,7 @@ import {
 import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
 import { MetadataIndexerHost } from "./metadata-indexer-host";
-import { isPersistedMetadataIndexSnapshot, type MetadataFileStat } from "../indexer/metadata-indexer";
+import { isPersistedMetadataIndexSnapshot, resolveMetadataScanCapBytes, type MetadataFileStat } from "../indexer/metadata-indexer";
 import type { DatabaseSync } from "node:sqlite";
 import { CrashJournal, type CrashDiagnostic } from "./crash-journal";
 import {
@@ -225,6 +225,26 @@ function toRel(root: string, abs: string): string {
 }
 
 /**
+ * Read the per-vault metadata scan cap the renderer's Settings -> Advanced
+ * tab persists to `<vault>/.geode/app.json` (`AppSettings.metadataScanCapBytes`,
+ * via the generic `config-write` IPC handler below). Read directly off disk
+ * here — rather than round-tripping through the renderer — because this
+ * value must be threaded into the utility process's `initialize()` call
+ * (see MetadataIndexerHost.initialize), which happens synchronously during
+ * `open-vault`, before the renderer has necessarily loaded/merged its
+ * settings for this vault. Missing file, unreadable file, or invalid JSON
+ * all fail open to `resolveMetadataScanCapBytes`'s own default.
+ */
+async function readMetadataScanCapBytes(root: string): Promise<number> {
+  try {
+    const raw = JSON.parse(await fsp.readFile(path.join(root, ".geode", "app.json"), "utf8"));
+    return resolveMetadataScanCapBytes((raw as { metadataScanCapBytes?: unknown } | null)?.metadataScanCapBytes);
+  } catch {
+    return resolveMetadataScanCapBytes(undefined);
+  }
+}
+
+/**
  * `stats.birthtimeMs` is unreliable on some filesystems (e.g. some Linux
  * ext filesystems report it as 0, meaning "unavailable") — fall back to
  * mtime in that case so `file.ctime` never reports an epoch-zero date.
@@ -313,7 +333,8 @@ function registerIpc() {
       const markdownFiles: MetadataFileStat[] = files
         .filter((file) => !file.isFolder && file.path.toLowerCase().endsWith(".md"))
         .map((file) => ({ path: file.path, mtimeMs: file.mtime, size: file.size }));
-      indexerReady = indexer.initialize(root, markdownFiles);
+      const scanCapBytes = await readMetadataScanCapBytes(root);
+      indexerReady = indexer.initialize(root, markdownFiles, scanCapBytes);
     } catch (error) {
       console.error("Metadata utility process unavailable; using renderer fallback", error);
     }

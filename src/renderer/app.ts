@@ -1,5 +1,11 @@
 import { Vault } from "./vault";
 import { MetadataCache } from "./metadata-cache";
+import {
+  DEFAULT_METADATA_SCAN_CAP_BYTES,
+  MAX_METADATA_SCAN_CAP_BYTES,
+  MIN_METADATA_SCAN_CAP_BYTES,
+  resolveMetadataScanCapBytes,
+} from "../indexer/metadata-indexer";
 import { Workspace, TabGroup, View, type PersistedWorkspace, type ReloadableView, type WorkspaceLeaf } from "./workspace";
 import { CommandRegistry } from "./commands";
 import { displayHotkey, eventToBinding, bindingIdentity, type Hotkey } from "../shared/hotkey";
@@ -95,6 +101,15 @@ interface AppSettings {
   /** Selected community theme name ("" = built-in default). */
   cssTheme: string;
   webViewer: WebViewerSettings;
+  /**
+   * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
+   * which `parseMetadata` skips heading/tag/link/list-item indexing for that
+   * note — see `resolveMetadataScanCapBytes`'s doc comment for the OOM this
+   * protects against and why it defaults to `DEFAULT_METADATA_SCAN_CAP_BYTES`.
+   * Surfaced in Settings -> Advanced in KB; always a resolved (clamped)
+   * value, never raw/unvalidated user input.
+   */
+  metadataScanCapBytes: number;
 }
 
 class EmptyView implements View {
@@ -354,8 +369,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "community-plugins" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "community-plugins", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "community-plugins" | "advanced" | "performance";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "community-plugins", "advanced", "performance"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -445,6 +460,8 @@ class SettingsModal extends Modal {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
+    } else if (id === "advanced") {
+      this.renderAdvancedTab(this.contentContainerEl);
     } else if (id === "performance") {
       if (!this.geodeApp.host.capabilities.processDiagnostics) {
         this.activateTab("appearance");
@@ -491,6 +508,7 @@ class SettingsModal extends Modal {
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("hotkeys", "Hotkeys", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
+    addNavItem("advanced", "Advanced", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
     }
@@ -1015,6 +1033,64 @@ class SettingsModal extends Modal {
     control.appendChild(input);
   }
 
+  /**
+   * A validated, clamped integer input: out-of-range or non-numeric entry is
+   * snapped back to the nearest valid value (visibly, in the field) before
+   * `onChange` fires, so the caller never has to re-validate.
+   */
+  private addNumberInput(
+    container: HTMLElement,
+    label: string,
+    description: string,
+    value: number,
+    min: number,
+    max: number,
+    onChange: (v: number) => void
+  ) {
+    const { control } = this.addRow(container, label, description);
+    const input = document.createElement("input");
+    input.type = "number";
+    input.setAttribute("aria-label", label);
+    input.className = "setting-number-input";
+    input.min = String(min);
+    input.max = String(max);
+    input.step = "1";
+    input.value = String(value);
+    input.addEventListener("change", () => {
+      const parsed = Number(input.value);
+      const clamped = Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : value;
+      input.value = String(clamped);
+      onChange(clamped);
+    });
+    control.appendChild(input);
+  }
+
+  private renderAdvancedTab(container: HTMLElement): void {
+    const s = this.geodeApp.settings;
+    container.innerHTML = `<h2>Advanced</h2>`;
+    // Stored/threaded in bytes (see AppSettings.metadataScanCapBytes and
+    // resolveMetadataScanCapBytes); shown here in KB (1 KB = 1000 bytes) as a
+    // friendlier unit for a "how big is too big" judgment call.
+    const bytesPerKb = 1000;
+    this.addNumberInput(
+      container,
+      "Metadata scan size limit (KB)",
+      "Notes larger than this, after frontmatter, skip in-app heading, tag, link, and list-item " +
+        "indexing to protect against high memory use in vaults with very large notes (e.g. long " +
+        "pasted transcripts or logs). Frontmatter and frontmatter-derived tags are never affected. " +
+        "Applies to notes (re)indexed after this change — already-open vaults pick it up fully the " +
+        "next time this vault is opened.",
+      Math.round(s.metadataScanCapBytes / bytesPerKb),
+      Math.ceil(MIN_METADATA_SCAN_CAP_BYTES / bytesPerKb),
+      Math.floor(MAX_METADATA_SCAN_CAP_BYTES / bytesPerKb),
+      (kb) => {
+        s.metadataScanCapBytes = resolveMetadataScanCapBytes(kb * bytesPerKb);
+        this.geodeApp.metadataCache.setScanCapBytes(s.metadataScanCapBytes);
+        this.geodeApp.saveSettings();
+      }
+    );
+  }
+
   onClose(): void {
     if (!(BUILTIN_TAB_IDS as string[]).includes(this.activeTabId)) {
       const activeTab = this.geodeApp.settingTabs.get(this.activeTabId);
@@ -1128,6 +1204,7 @@ export class App {
     showStatusBar: true,
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
+    metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Resolved "daily-notes" config (defaults until a vault is opened); also read by the internalPlugins compat shim. */
   dailyNoteSettings: DailyNoteSettings = resolveDailyNoteSettings(null);
@@ -1450,8 +1527,16 @@ export class App {
         ...this.settings,
         ...saved,
         webViewer: { ...this.settings.webViewer, ...saved.webViewer },
+        // Always re-resolved (never trusted verbatim) — a hand-edited or
+        // stale config could carry 0/negative/non-numeric/huge values, and
+        // this is the one place raw disk content becomes a validated setting.
+        metadataScanCapBytes: resolveMetadataScanCapBytes(saved.metadataScanCapBytes),
       };
     }
+    // This vault's resolved cap must be in place before metadataCache.initialize()
+    // runs below (see setScanCapBytes's doc comment) — set it immediately after
+    // the settings merge rather than deferring to when the Advanced tab renders.
+    this.metadataCache.setScanCapBytes(this.settings.metadataScanCapBytes);
 
     // Loaded before pluginManager.initialize() so the internalPlugins compat
     // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready

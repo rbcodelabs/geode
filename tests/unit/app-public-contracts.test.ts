@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/renderer/app";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 import { MarkdownView } from "../../src/renderer/views/markdown-view";
+import { DEFAULT_METADATA_SCAN_CAP_BYTES } from "../../src/indexer/metadata-indexer";
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -36,6 +37,16 @@ describe("App public foundation", () => {
     expect(app.workspace).toBe(workspace);
     expect(app.metadataCache).toBeDefined();
     expect(app.metadataCache.getFileCache).toBeTypeOf("function");
+  });
+
+  it("defaults settings.metadataScanCapBytes to the shipped default before any vault settings are loaded", () => {
+    installBrowser();
+    const app = new App();
+    expect(app.settings.metadataScanCapBytes).toBe(DEFAULT_METADATA_SCAN_CAP_BYTES);
+    // Wired to MetadataCache via setScanCapBytes (see openVaultMeasured) —
+    // confirm the method exists and is callable without a vault open yet.
+    expect(app.metadataCache.setScanCapBytes).toBeTypeOf("function");
+    expect(() => app.metadataCache.setScanCapBytes(app.settings.metadataScanCapBytes)).not.toThrow();
   });
 
   it("reports the active body color scheme", () => {

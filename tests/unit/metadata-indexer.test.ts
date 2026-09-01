@@ -2,14 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import {
   chunkMetadataSnapshot,
   DebouncedMetadataCacheWriter,
+  DEFAULT_METADATA_SCAN_CAP_BYTES,
   isPersistedMetadataIndexSnapshot,
+  MAX_METADATA_SCAN_CAP_BYTES,
+  MIN_METADATA_SCAN_CAP_BYTES,
   reconcileMetadataIndex,
+  resolveMetadataScanCapBytes,
   type MetadataDirtyOp,
   type MetadataFileStat,
   type MetadataReconcileStore,
   type PersistedMetadataIndexEntry,
   type PersistedMetadataIndexSnapshot,
 } from "../../src/indexer/metadata-indexer";
+import { parseMetadata } from "../../src/renderer/metadata-cache";
 
 const metadata = { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] };
 
@@ -69,6 +74,43 @@ describe("metadata utility-process indexer", () => {
       const allEntries = Object.assign({}, ...messages.filter((m) => m.type === "snapshot-chunk").map((m: any) => m.entries));
       expect(allEntries).toEqual({ "small.md": snapshot.entries["small.md"] });
       expect(messages.at(-1)).toEqual({ type: "snapshot-complete", totalChunks: 1 });
+    });
+  });
+
+  describe("resolveMetadataScanCapBytes", () => {
+    it("matches the shipped default (300,000 bytes / 300KB) when unset", () => {
+      expect(DEFAULT_METADATA_SCAN_CAP_BYTES).toBe(300_000);
+      expect(resolveMetadataScanCapBytes(undefined)).toBe(300_000);
+      expect(resolveMetadataScanCapBytes(null)).toBe(300_000);
+    });
+
+    it("falls back to the default for non-numeric or non-finite input", () => {
+      expect(resolveMetadataScanCapBytes("300000")).toBe(DEFAULT_METADATA_SCAN_CAP_BYTES);
+      expect(resolveMetadataScanCapBytes(NaN)).toBe(DEFAULT_METADATA_SCAN_CAP_BYTES);
+      expect(resolveMetadataScanCapBytes(Infinity)).toBe(DEFAULT_METADATA_SCAN_CAP_BYTES);
+      expect(resolveMetadataScanCapBytes({})).toBe(DEFAULT_METADATA_SCAN_CAP_BYTES);
+    });
+
+    it("passes a valid in-range value through unchanged (after truncation)", () => {
+      expect(resolveMetadataScanCapBytes(500_000)).toBe(500_000);
+      expect(resolveMetadataScanCapBytes(500_000.9)).toBe(500_000);
+    });
+
+    it("clamps 0/negative up to the floor rather than disabling the cap entirely", () => {
+      expect(resolveMetadataScanCapBytes(0)).toBe(MIN_METADATA_SCAN_CAP_BYTES);
+      expect(resolveMetadataScanCapBytes(-1)).toBe(MIN_METADATA_SCAN_CAP_BYTES);
+      expect(resolveMetadataScanCapBytes(-1_000_000)).toBe(MIN_METADATA_SCAN_CAP_BYTES);
+    });
+
+    it("clamps an excessive value down to the ceiling", () => {
+      expect(resolveMetadataScanCapBytes(Number.MAX_SAFE_INTEGER)).toBe(MAX_METADATA_SCAN_CAP_BYTES);
+      expect(resolveMetadataScanCapBytes(MAX_METADATA_SCAN_CAP_BYTES + 1)).toBe(MAX_METADATA_SCAN_CAP_BYTES);
+    });
+
+    it("round-trips a persisted value exactly when it's already valid (simulating config-write then config-read)", () => {
+      const written = 750_000;
+      const persisted = JSON.parse(JSON.stringify({ metadataScanCapBytes: written }));
+      expect(resolveMetadataScanCapBytes(persisted.metadataScanCapBytes)).toBe(written);
     });
   });
 
@@ -231,6 +273,40 @@ describe("metadata utility-process indexer", () => {
       expect(batchCalls.length).toBeGreaterThanOrEqual(3);
       expect(batchCalls.reduce((a, b) => a + b, 0)).toBe(1_200);
       expect(store.rows.size).toBe(1_200);
+    });
+
+    // Exercises the exact call shape indexer-process.ts uses: a `parse`
+    // callback closing over a resolved, non-default scanCapBytes, so this
+    // pins down that the utility-process reconcile path honors a custom
+    // threshold the same way MetadataCache.parseMetadata does directly.
+    it("honors a custom, non-default scan cap threaded through the parse callback (utility-process path)", async () => {
+      const store = fakeStore();
+      const smallBody = "# Heading\n\n[[Link]] #tag\n";
+      const bigBody = `# Heading\n\n${"x".repeat(200)}\n[[Link]] #tag\n`;
+      expect(bigBody.length).toBeGreaterThan(150);
+
+      const customCap = 150;
+      await reconcileMetadataIndex(
+        [
+          { path: "small.md", mtimeMs: 1, size: smallBody.length },
+          { path: "big.md", mtimeMs: 1, size: bigBody.length },
+        ],
+        store,
+        async (path) => ({ "small.md": smallBody, "big.md": bigBody })[path]!,
+        (content) => parseMetadata(content, customCap),
+      );
+
+      // Under the custom cap: full scan, heading/link/tag all present.
+      expect(store.rows.get("small.md")?.metadata.headings).toHaveLength(1);
+      expect(store.rows.get("small.md")?.metadata.links).toHaveLength(1);
+      expect(store.rows.get("small.md")?.metadata.tags).toHaveLength(1);
+
+      // Over the custom cap: scan skipped entirely, even though this same
+      // body would be well under the shipped DEFAULT_METADATA_SCAN_CAP_BYTES.
+      expect(bigBody.length).toBeLessThan(DEFAULT_METADATA_SCAN_CAP_BYTES);
+      expect(store.rows.get("big.md")?.metadata.headings).toEqual([]);
+      expect(store.rows.get("big.md")?.metadata.links).toEqual([]);
+      expect(store.rows.get("big.md")?.metadata.tags).toEqual([]);
     });
   });
 

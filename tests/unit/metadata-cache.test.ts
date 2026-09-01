@@ -9,6 +9,10 @@ import {
   parseMetadata,
   processInBatches,
 } from "../../src/renderer/metadata-cache";
+import {
+  DEFAULT_METADATA_SCAN_CAP_BYTES,
+  MIN_METADATA_SCAN_CAP_BYTES,
+} from "../../src/indexer/metadata-indexer";
 import { FakeVault } from "../helpers/fake-vault";
 
 describe("parseMetadata", () => {
@@ -89,6 +93,121 @@ describe("parseMetadata", () => {
       // Trailing "###" closing-hash sequence is stripped, matching ATX heading syntax.
       expect.objectContaining({ heading: "Sub sub", level: 3 }),
     ]);
+  });
+});
+
+describe("parseMetadata scan cap", () => {
+  it("defaults to DEFAULT_METADATA_SCAN_CAP_BYTES (300,000) when no threshold is passed", () => {
+    expect(DEFAULT_METADATA_SCAN_CAP_BYTES).toBe(300_000);
+    // A body just over the default default would be skipped; well under it,
+    // full scanning still happens with no explicit second argument.
+    const text = "# Heading\n\n[[Link]] #tag\n";
+    const meta = parseMetadata(text);
+    expect(meta.headings).toHaveLength(1);
+    expect(meta.links).toHaveLength(1);
+    expect(meta.tags).toHaveLength(1);
+  });
+
+  it("fully scans a body at or under an explicit custom threshold", () => {
+    const body = "# Heading\n\n[[Link]] #tag\nSome paragraph text.\n- a list item\n";
+    const meta = parseMetadata(body, body.length); // exactly at the threshold: body.length > max is false
+    expect(meta.headings).toHaveLength(1);
+    expect(meta.links).toHaveLength(1);
+    expect(meta.tags).toHaveLength(1);
+    expect(meta.listItems).toHaveLength(1);
+    expect(meta.sections?.length).toBeGreaterThan(0);
+  });
+
+  it("skips the entire body scan when body.length exceeds an explicit custom threshold, keeping frontmatter/aliases/tags", () => {
+    const text =
+      "---\naliases: [Start Here]\ntags: [fm-tag]\n---\n" +
+      "# Heading\n\n[[Link]] #inline-tag\n- a list item\n";
+    const withoutCap = parseMetadata(text);
+    // Sanity: without a cap this file fully scans (small file).
+    expect(withoutCap.headings).toHaveLength(1);
+    expect(withoutCap.links).toHaveLength(1);
+
+    // Body (post-frontmatter) is well under 300,000 bytes but we pass a tiny
+    // custom threshold to force the skip path.
+    const capped = parseMetadata(text, 5);
+    // Frontmatter-derived fields (computed BEFORE the cap check) survive:
+    expect(capped.frontmatter).toEqual({ aliases: ["Start Here"], tags: ["fm-tag"] });
+    expect(capped.aliases).toEqual(["Start Here"]);
+    expect(capped.tags.map((t) => t.tag)).toEqual(["fm-tag"]);
+    // Everything from the body scan is skipped:
+    expect(capped.headings).toEqual([]);
+    expect(capped.links).toEqual([]);
+    expect(capped.embeds).toEqual([]);
+    expect(capped.listItems).toBeUndefined();
+    expect(capped.sections).toBeUndefined();
+  });
+
+  it("threshold is keyed on body.length AFTER frontmatter is stripped, not the raw file length", () => {
+    // Frontmatter itself is long, but the body after it is short — a
+    // threshold shorter than the whole file but longer than the body must
+    // still fully scan the body.
+    const longFrontmatter = `---\ntitle: ${"x".repeat(300)}\n---\n`;
+    const shortBody = "# Hi\n[[Link]]\n";
+    const text = longFrontmatter + shortBody;
+    expect(text.length).toBeGreaterThan(shortBody.length + 50);
+
+    const meta = parseMetadata(text, shortBody.length + 10);
+    expect(meta.headings).toHaveLength(1);
+    expect(meta.links).toHaveLength(1);
+  });
+
+  it("boundary: body.length exactly equal to the threshold still fully scans (strict > comparison)", () => {
+    const body = "[[Link]]";
+    const exact = parseMetadata(body, body.length);
+    const oneOver = parseMetadata(body, body.length - 1);
+    expect(exact.links).toHaveLength(1);
+    expect(oneOver.links).toEqual([]);
+  });
+});
+
+describe("MetadataCache scan cap wiring", () => {
+  it("setScanCapBytes takes effect on the next initialize(): a large note loses body-scan fields but keeps frontmatter tags/aliases", async () => {
+    const bigBody = `Some intro.\n\n${"word ".repeat(200)}\n[[Target]] #inline-tag\n`;
+    expect(bigBody.length).toBeGreaterThan(200);
+    const fake = new FakeVault({
+      "Big.md": `---\naliases: [Big Note]\ntags: [fm-tag]\n---\n${bigBody}`,
+      "Target.md": "",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    cache.setScanCapBytes(100); // well under bigBody's length
+    await cache.initialize();
+
+    const big = fake.getFileByPath("Big.md")!;
+    const meta = cache.getFileCache(big)!;
+    expect(meta.aliases).toEqual(["Big Note"]);
+    expect(meta.tags.map((t) => t.tag)).toEqual(["fm-tag"]);
+    expect(meta.links).toEqual([]);
+    expect(meta.headings).toEqual([]);
+    // The skipped file's outgoing link never resolved, so no backlink to Target.
+    const target = fake.getFileByPath("Target.md")!;
+    expect(cache.getBacklinks(target)).toEqual([]);
+  });
+
+  it("setScanCapBytes clamps an invalid value (e.g. 0) up to the floor rather than disabling the cap", async () => {
+    const fake = new FakeVault({ "A.md": "# Heading" });
+    const cache = new MetadataCache(fake.asVault());
+    cache.setScanCapBytes(0);
+    await cache.initialize();
+    // MIN_METADATA_SCAN_CAP_BYTES (1000) is still far larger than this tiny
+    // file's body, so it still fully scans rather than being skipped.
+    expect(MIN_METADATA_SCAN_CAP_BYTES).toBeGreaterThan("# Heading".length);
+    const a = fake.getFileByPath("A.md")!;
+    expect(cache.getFileCache(a)?.headings).toHaveLength(1);
+  });
+
+  it("a custom cap set well above a file's size fully scans it (asymmetric to the 'lower cap skips' case above)", async () => {
+    const bigBody = `${"word ".repeat(2000)}\n[[Target]]\n`;
+    const fake = new FakeVault({ "Big.md": bigBody, "Target.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    cache.setScanCapBytes(bigBody.length + 1_000); // explicit cap above this file's size
+    await cache.initialize();
+    const big = fake.getFileByPath("Big.md")!;
+    expect(cache.getFileCache(big)?.links).toHaveLength(1);
   });
 });
 
