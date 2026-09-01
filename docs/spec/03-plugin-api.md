@@ -571,6 +571,13 @@ class FileManager {
 }
 ```
 
+Geode's `processFrontMatter` implementation serializes calls for the same path
+across `FileManager` instances that share one `Vault`, but only within one
+renderer runtime. It does not coordinate direct `Vault.modify` calls, another
+Geode runtime, or an external filesystem writer, so this is not yet full atomic
+parity. `DataWriteOptions` are forwarded unchanged to `Vault.modify`, but the
+current Vault/host IPC does not apply requested `ctime` or `mtime` values.
+
 ### 2.10 Editor (CodeMirror abstraction)
 
 `Editor` wraps the active CM6 instance with a CM5-flavored line/ch API so plugin code is editor-engine agnostic. Obtained from `MarkdownView.editor` or editor command callbacks.

@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 183,
-      "partial": 51,
+      "partial": 53,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 0,
-      "unknown": 2618
+      "unknown": 2616
     }
   },
   "requirements": [
@@ -7799,8 +7799,13 @@
       "title": "processFrontMatter",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/FileManager/processFrontMatter.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/FileManager/processFrontMatter.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/file-manager-process-frontmatter.test.ts",
+        "tests/unit/frontmatter-io.test.ts",
+        "tests/e2e/plugin-process-frontmatter.spec.ts"
+      ],
+      "notes": "This is partial, not full atomic parity. The queue coordinates only `processFrontMatter` calls in one Geode renderer runtime for the same `Vault`. It does not coordinate direct `Vault.modify` calls, another Geode runtime, or an external filesystem writer. `DataWriteOptions` are forwarded unchanged to `Vault.modify`, but the current Vault/host IPC does not apply requested `ctime` or `mtime` values."
     },
     {
       "id": "DEV-bee496df0edf",
@@ -24549,8 +24554,13 @@
       "title": "FileManager.processFrontMatter",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/file-manager-process-frontmatter.test.ts",
+        "tests/unit/frontmatter-io.test.ts",
+        "tests/e2e/plugin-process-frontmatter.spec.ts"
+      ],
+      "notes": "This is partial, not full atomic parity. The queue coordinates only `processFrontMatter` calls in one Geode renderer runtime for the same `Vault`. It does not coordinate direct `Vault.modify` calls, another Geode runtime, or an external filesystem writer. `DataWriteOptions` are forwarded unchanged to `Vault.modify`, but the current Vault/host IPC does not apply requested `ctime` or `mtime` values."
     },
     {
       "id": "API-MEMBER-f89067bdc5d9",
