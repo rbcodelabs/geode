@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 183,
-      "partial": 53,
+      "partial": 54,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 0,
-      "unknown": 2616
+      "unknown": 2615
     }
   },
   "requirements": [
@@ -924,8 +924,12 @@
       "title": "Embed files",
       "sourcePath": "obsidian-help/en/Linking notes and files/Embed files.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Linking%20notes%20and%20files/Embed%20files.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/live-preview-markdown-image.spec.ts",
+        "tests/e2e/smoke.spec.ts"
+      ],
+      "notes": "Observed same-vault standard Markdown images and existing wiki image embeds as real Live Preview images away from the cursor; exact note-relative, parent-relative, dot-segment, and vault-root paths with above-root rejection; percent-encoded spaces and literal # filenames; angle-bracket paths; semantic plain alt/title text with CommonMark punctuation escapes and character references decoded and inline formatting marks excluded; explicit rejection of remote, protocol-relative, encoded/escaped scheme, data, file, malformed-percent, NUL, and traversal destinations; source reveal on the active line; missing/load-error fallbacks; distinct standard-versus-wiki sizing; blob URL teardown; and unchanged Reading View rendering. The broader help page also covers unsupported PDF/block embeds, remote images, and interactive image resizing, so the row remains partial."
     },
     {
       "id": "HELP-b38cb786725c",

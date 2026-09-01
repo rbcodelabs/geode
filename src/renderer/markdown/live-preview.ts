@@ -8,10 +8,12 @@ import {
 } from "@codemirror/view";
 import { EditorState, Extension, Range, RangeSet, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
+import type { SyntaxNode } from "@lezer/common";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
 import { setIcon } from "../api/icons";
 import { CanvasView } from "../views/canvas-view";
+import { IMAGE_EXTENSIONS, type TFile } from "../types";
 import { calloutMarkerLength, calloutMeta, parseCalloutHeader, type CalloutMeta } from "./callout";
 import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
 import { isMermaidInfoString, parseFencedBlock } from "../internal-plugins/mermaid/fence";
@@ -1019,6 +1021,237 @@ class EmbedWidget extends WidgetType {
 }
 
 /**
+ * Decode CommonMark's backslash escapes for ASCII punctuation. CodeMirror
+ * exposes the authored source range, including the backslashes, for image
+ * alt text, titles, and destinations.
+ */
+function decodeMarkdownEscapes(raw: string): string {
+  return raw.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
+}
+
+/** Decode one parser-recognized/entity-shaped HTML character reference. */
+function decodeMarkdownEntity(entity: string): string {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = entity;
+  return textarea.value;
+}
+
+/**
+ * Decode only CommonMark punctuation escapes and entity-shaped tokens. The
+ * browser sees each entity token in isolation, never arbitrary authored HTML.
+ * Processing both token types in one pass preserves an escaped `\\&amp;` as
+ * literal `&amp;` rather than decoding it a second time.
+ */
+function decodeMarkdownLiteral(raw: string): string {
+  return raw.replace(
+    /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])|&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});/g,
+    (token, escaped: string | undefined) => escaped ?? decodeMarkdownEntity(token)
+  );
+}
+
+const MARKDOWN_SEMANTIC_MARKS = new Set(["EmphasisMark", "CodeMark", "StrikethroughMark"]);
+
+/**
+ * Extract semantic plain text from a parsed Markdown range. Formatting
+ * containers recurse so their content remains, delimiter marks disappear,
+ * and only parser-recognized Escape/Entity nodes are decoded.
+ */
+function semanticMarkdownText(
+  node: SyntaxNode,
+  from: number,
+  to: number,
+  slice: (from: number, to: number) => string
+): string {
+  let text = "";
+  let cursor = from;
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.to <= from) continue;
+    if (child.from >= to) break;
+    const childFrom = Math.max(from, child.from);
+    const childTo = Math.min(to, child.to);
+    if (cursor < childFrom) text += slice(cursor, childFrom);
+    if (MARKDOWN_SEMANTIC_MARKS.has(child.name)) {
+      // Formatting/code delimiters are syntax, not alternative text.
+    } else if (child.name === "Escape") {
+      text += decodeMarkdownEscapes(slice(childFrom, childTo));
+    } else if (child.name === "Entity") {
+      text += decodeMarkdownEntity(slice(childFrom, childTo));
+    } else if (child.firstChild) {
+      text += semanticMarkdownText(child, childFrom, childTo, slice);
+    } else {
+      text += slice(childFrom, childTo);
+    }
+    cursor = Math.max(cursor, childTo);
+  }
+  if (cursor < to) text += slice(cursor, to);
+  return text;
+}
+
+/**
+ * Convert a CodeMirror Markdown `URL` node into one exact vault path.
+ * Standard Markdown paths are relative to the source note (or vault-root
+ * relative when they start with `/`), unlike wiki links' basename/alias
+ * fallback. Resolving `.`/`..` here also makes containment explicit: a path
+ * that climbs above the vault root is rejected before any vault lookup.
+ */
+function markdownImagePath(raw: string, sourcePath: string): string | null {
+  let target = raw;
+  if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
+
+  // A literal `#` begins a URL fragment. Percent-encoded `%23` is decoded
+  // later and remains a filename character for the exact vault lookup.
+  let escaped = false;
+  for (let index = 0; index < target.length; index += 1) {
+    if (!escaped && target[index] === "#") {
+      target = target.slice(0, index);
+      break;
+    }
+    if (!escaped && target[index] === "\\") escaped = true;
+    else escaped = false;
+  }
+
+  target = decodeMarkdownEscapes(target);
+  try {
+    target = decodeURIComponent(target);
+  } catch {
+    return null;
+  }
+  target = target.trim();
+  if (
+    !target ||
+    target.includes("\0") ||
+    target.includes("\\") ||
+    target.startsWith("//") ||
+    /^[A-Za-z][A-Za-z0-9+.-]*:/.test(target)
+  ) {
+    return null;
+  }
+  const segments = target.replace(/^\/+/, "").split("/");
+  const resolved = target.startsWith("/")
+    ? []
+    : sourcePath
+        .split("/")
+        .slice(0, -1)
+        .filter(Boolean);
+  for (const segment of segments) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (!resolved.length) return null;
+      resolved.pop();
+      continue;
+    }
+    resolved.push(segment);
+  }
+  return resolved.length ? resolved.join("/") : null;
+}
+
+/** Strip the parser-supported quote/delimiter pair from a Markdown title. */
+function markdownImageTitle(raw: string): string {
+  if (raw.length < 2) return decodeMarkdownLiteral(raw);
+  const first = raw[0];
+  const last = raw[raw.length - 1];
+  if (
+    (first === '"' && last === '"') ||
+    (first === "'" && last === "'") ||
+    (first === "(" && last === ")")
+  ) {
+    return decodeMarkdownLiteral(raw.slice(1, -1));
+  }
+  return decodeMarkdownLiteral(raw);
+}
+
+function resolveMarkdownImage(path: string | null, app: App): TFile | null {
+  if (!path) return null;
+  const file = app.vault.getFileByPath(path);
+  return file && IMAGE_EXTENSIONS.has(file.extension) ? file : null;
+}
+
+/** Renders a standard `![alt](path "title")` same-vault image in Live Preview. */
+class MarkdownImageWidget extends WidgetType {
+  private blobUrl: string | null = null;
+  private destroyed = false;
+
+  constructor(
+    private target: string | null,
+    private authoredTarget: string,
+    private alt: string,
+    private title: string,
+    private sourcePath: string,
+    private app: App
+  ) {
+    super();
+  }
+
+  eq(other: MarkdownImageWidget): boolean {
+    return (
+      other.target === this.target &&
+      other.authoredTarget === this.authoredTarget &&
+      other.alt === this.alt &&
+      other.title === this.title &&
+      other.sourcePath === this.sourcePath
+    );
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement("span");
+    root.className = "cm-embed-widget cm-markdown-image-widget";
+
+    const file = resolveMarkdownImage(this.target, this.app);
+    if (!file) {
+      this.renderFallback(root);
+      return root;
+    }
+
+    const img = document.createElement("img");
+    img.className = "internal-embed";
+    img.alt = this.alt;
+    if (this.title) img.title = this.title;
+    root.appendChild(img);
+
+    const fail = () => {
+      if (this.destroyed) return;
+      this.revokeBlobUrl();
+      this.renderFallback(root);
+      view.requestMeasure();
+    };
+    img.addEventListener("error", fail, { once: true });
+    void loadEmbedBlobUrl(this.app, file)
+      .then((url) => {
+        if (this.destroyed) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        this.blobUrl = url;
+        img.src = url;
+        view.requestMeasure();
+      })
+      .catch(fail);
+    return root;
+  }
+
+  destroy(_dom: HTMLElement): void {
+    this.destroyed = true;
+    this.revokeBlobUrl();
+  }
+
+  private renderFallback(root: HTMLElement): void {
+    root.replaceChildren();
+    root.classList.add("internal-embed", "is-unresolved");
+    root.textContent = `Unresolved image: ${this.alt || this.authoredTarget}`;
+  }
+
+  private revokeBlobUrl(): void {
+    if (!this.blobUrl) return;
+    URL.revokeObjectURL(this.blobUrl);
+    this.blobUrl = null;
+  }
+}
+
+/**
  * Renders a ```mermaid block as a diagram while editing (Live Preview),
  * through the same `renderMermaid()` Reading view's code-block processor uses
  * so the two modes cannot drift.
@@ -1269,6 +1502,36 @@ export function livePreview(app: App, getPath: () => string): Extension {
                   )
                 );
               }
+              break;
+            }
+            case "Image": {
+              if (isActive(node.from)) break;
+              const marks = node.node.getChildren("LinkMark");
+              const url = node.node.getChild("URL");
+              if (marks.length < 4 || !url) break;
+              const authoredTarget = doc.sliceString(url.from, url.to);
+              const titleNode = node.node.getChild("LinkTitle");
+              const title = titleNode
+                ? markdownImageTitle(doc.sliceString(titleNode.from, titleNode.to))
+                : "";
+              const alt = semanticMarkdownText(
+                node.node,
+                marks[0].to,
+                marks[1].from,
+                (from, to) => doc.sliceString(from, to)
+              );
+              decos.push(
+                Decoration.replace({
+                  widget: new MarkdownImageWidget(
+                    markdownImagePath(authoredTarget, sourcePath),
+                    authoredTarget,
+                    alt,
+                    title,
+                    sourcePath,
+                    app
+                  ),
+                }).range(node.from, node.to)
+              );
               break;
             }
             case "Link": {
