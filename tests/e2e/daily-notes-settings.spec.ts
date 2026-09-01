@@ -64,11 +64,35 @@ test("Daily Notes settings persist lifecycle and keep plugin compatibility live"
       a.host.config.write = a.__dailyOriginalWrite;
     });
 
+    await window.evaluate(() => {
+      const a = (window as any).app;
+      a.host.config.write = async (name: string, value: any) => {
+        if (name === "daily-notes" && value.folder === "Pending") {
+          await new Promise<void>((resolve) => { a.__resolveDailyWrite = resolve; });
+        }
+        return a.__dailyOriginalWrite(name, value);
+      };
+    });
+    await modal.getByRole("textbox", { name: "New file location" }).fill(" /Pending/ ");
+    await modal.getByRole("textbox", { name: "New file location" }).press("Tab");
+    await window.waitForFunction(() => typeof (window as any).app.__resolveDailyWrite === "function");
+    const dateDraft = modal.getByRole("textbox", { name: "Date format" });
+    await dateDraft.fill("draft-format");
+    await dateDraft.focus();
+    await window.evaluate(() => (window as any).app.__resolveDailyWrite());
+    await expect(modal.getByRole("textbox", { name: "New file location" })).toHaveValue("Pending");
+    await expect(dateDraft).toHaveValue("draft-format");
+    await expect(dateDraft).toBeFocused();
+    await window.evaluate(() => {
+      const a = (window as any).app;
+      a.host.config.write = a.__dailyOriginalWrite;
+    });
+
     await enabled.uncheck();
     await expect.poll(() => {
       const file = path.join(vaultDir, ".geode", "daily-notes.json");
       return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
-    }).toEqual({ enabled: false, folder: "", format: "YYYY-MM-DD", template: "" });
+    }).toEqual({ enabled: false, folder: "Pending", format: "draft-format", template: "" });
 
     const disabled = await window.evaluate(() => {
       const a = (window as any).app;

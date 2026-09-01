@@ -651,34 +651,50 @@ class SettingsModal extends Modal {
       dailyNotes.enabled,
       (enabled) => void this.updateDailyNotes({ enabled })
     );
-    this.addTextInput(
+    let folderInput!: HTMLInputElement;
+    folderInput = this.addTextInput(
       container,
       "New file location",
       dailyNotes.options.folder,
-      (folder) => void this.updateDailyNotes({ folder })
+      (folder) => void this.updateDailyNotes(
+        { folder },
+        () => { folderInput.value = dailyNotes.options.folder; }
+      )
     );
-    this.addTextInput(
+    let formatInput!: HTMLInputElement;
+    formatInput = this.addTextInput(
       container,
       "Date format",
       dailyNotes.options.format,
-      (format) => void this.updateDailyNotes({ format })
+      (format) => void this.updateDailyNotes(
+        { format },
+        () => { formatInput.value = dailyNotes.options.format; }
+      )
     );
-    this.addTextInput(
+    let templateInput!: HTMLInputElement;
+    templateInput = this.addTextInput(
       container,
       "Template file location",
       dailyNotes.options.template,
-      (template) => void this.updateDailyNotes({ template })
+      (template) => void this.updateDailyNotes(
+        { template },
+        () => { templateInput.value = dailyNotes.options.template; }
+      )
     );
   }
 
-  private async updateDailyNotes(patch: Partial<{ enabled: boolean; folder: string; format: string; template: string }>): Promise<void> {
+  private async updateDailyNotes(
+    patch: Partial<{ enabled: boolean; folder: string; format: string; template: string }>,
+    synchronizeControl?: () => void
+  ): Promise<void> {
     try {
       await this.geodeApp.dailyNotes.update(patch);
-      if (this.activeTabId === "daily-notes") this.activateTab("daily-notes");
+      synchronizeControl?.();
     } catch (err) {
       console.error(err);
       this.geodeApp.notify("Could not save Daily Notes settings. Your previous settings are still active.");
-      if (this.activeTabId === "daily-notes") this.activateTab("daily-notes");
+      if (synchronizeControl) synchronizeControl();
+      else if (this.activeTabId === "daily-notes") this.activateTab("daily-notes");
     }
   }
 
@@ -1064,7 +1080,7 @@ class SettingsModal extends Modal {
     return { control };
   }
 
-  private addTextInput(container: HTMLElement, label: string, value: string, onChange: (v: string) => void) {
+  private addTextInput(container: HTMLElement, label: string, value: string, onChange: (v: string) => void): HTMLInputElement {
     const { control } = this.addRow(container, label);
     const input = document.createElement("input");
     input.type = "text";
@@ -1074,6 +1090,7 @@ class SettingsModal extends Modal {
     input.spellcheck = false;
     input.addEventListener("change", () => onChange(input.value.trim()));
     control.appendChild(input);
+    return input;
   }
 
   /**
