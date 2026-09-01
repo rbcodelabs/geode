@@ -15,7 +15,8 @@ callback, safely serializes the result, and forwards changed text plus
 `DataWriteOptions` to `Vault.modify`. `Vault.modify` is skipped when the
 serialized bytes are unchanged; a no-op callback can still normalize
 noncanonical YAML formatting. A callback or serialization error rejects without
-calling `Vault.modify`.
+calling `Vault.modify`. A callback that returns a thenable is rejected before
+serialization or write so asynchronous mutation cannot race a later queued call.
 
 All `FileManager` instances that target the same `Vault` share an in-memory
 per-path promise queue. Same-path calls therefore serialize and read after the
