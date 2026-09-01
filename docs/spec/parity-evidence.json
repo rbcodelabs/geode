@@ -835,6 +835,24 @@
     ],
     "notes": "Observed checking=true availability, checking=false execution, context gating, and crash attribution. The editor argument remains CM6 EditorView rather than the documented Editor abstraction."
   },
+  "DEV-7462e954af0c": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/file-manager-process-frontmatter.test.ts",
+      "tests/unit/frontmatter-io.test.ts",
+      "tests/e2e/plugin-process-frontmatter.spec.ts"
+    ],
+    "notes": "This is partial, not full atomic parity. The queue coordinates only `processFrontMatter` calls in one Geode renderer runtime for the same `Vault`. It does not coordinate direct `Vault.modify` calls, another Geode runtime, or an external filesystem writer. `DataWriteOptions` are forwarded unchanged to `Vault.modify`, but the current Vault/host IPC does not apply requested `ctime` or `mtime` values."
+  },
+  "API-MEMBER-8913f8abd51f": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/file-manager-process-frontmatter.test.ts",
+      "tests/unit/frontmatter-io.test.ts",
+      "tests/e2e/plugin-process-frontmatter.spec.ts"
+    ],
+    "notes": "This is partial, not full atomic parity. The queue coordinates only `processFrontMatter` calls in one Geode renderer runtime for the same `Vault`. It does not coordinate direct `Vault.modify` calls, another Geode runtime, or an external filesystem writer. `DataWriteOptions` are forwarded unchanged to `Vault.modify`, but the current Vault/host IPC does not apply requested `ctime` or `mtime` values."
+  },
   "DEV-6a4f4ec9e63a": {
     "status": "partial",
     "evidence": [
