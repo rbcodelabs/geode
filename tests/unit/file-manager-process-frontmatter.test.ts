@@ -177,7 +177,7 @@ describe("FileManager.processFrontMatter", () => {
     expect(vault.modify).not.toHaveBeenCalled();
   });
 
-  it("rejects an in-place path change before the next queued mutation", async () => {
+  it("rejects an in-place path change before queued callbacks or writes", async () => {
     const { app, files, vault } = fakeApp({ "Note.md": "Body\n" });
     const manager = new FileManager(app);
     const note = files.get("Note.md")!;
@@ -185,23 +185,31 @@ describe("FileManager.processFrontMatter", () => {
     let markStarted!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
-    vault.modify.mockImplementationOnce(async () => {
+    vault.read.mockImplementationOnce(async () => {
       markStarted();
       await blocked;
+      return "Body\n";
     });
 
-    const first = manager.processFrontMatter(note, (fm) => { fm.first = true; });
-    const second = manager.processFrontMatter(note, (fm) => { fm.second = true; });
+    const firstMutation = vi.fn((fm: Record<string, unknown>) => { fm.first = true; });
+    const secondMutation = vi.fn((fm: Record<string, unknown>) => { fm.second = true; });
+    const first = manager.processFrontMatter(note, firstMutation);
+    const second = manager.processFrontMatter(note, secondMutation);
     await started;
     files.delete("Note.md");
     note.path = "Renamed.md";
+    note.name = "Renamed.md";
+    note.basename = "Renamed";
     files.set("Renamed.md", note);
+    const firstRejected = expect(first).rejects.toThrow(/file path changed/);
     const secondRejected = expect(second).rejects.toThrow(/file path changed/);
     release();
 
-    await expect(first).resolves.toBeUndefined();
+    await firstRejected;
     await secondRejected;
-    expect(vault.modify).toHaveBeenCalledTimes(1);
+    expect(firstMutation).not.toHaveBeenCalled();
+    expect(secondMutation).not.toHaveBeenCalled();
+    expect(vault.modify).not.toHaveBeenCalled();
   });
 
   it("makes callback and serialization failures zero-write", async () => {
