@@ -1,4 +1,5 @@
 import type { App } from "../app";
+import { UNLINKED_MENTIONS_SCAN } from "../metadata-cache";
 import type { View } from "../workspace";
 import { TFile } from "../types";
 
@@ -23,12 +24,14 @@ abstract class SidebarView implements View {
     // file-open is a single discrete user action — render immediately.
     app.workspace.on("file-open", (file: TFile | null) => {
       this.file = file;
+      this.onFileChanged();
       // Inactive fixed sidebar views are detached from the sidebar content
       // host. Keep their file state current, but defer potentially expensive
       // rendering (notably Backlinks' vault-wide unlinked-mention scan) until
       // Sidebar.show() calls onOpen() for the view again.
       if (this.containerEl.isConnected) this.render();
     });
+    app.workspace.on("layout-change", () => this.onVisibilityChanged(this.containerEl.isConnected));
     // A metadata burst fires N synchronous `changed` events in one microtask;
     // coalesce them into a single re-render on the next microtask, mirroring
     // base-view.ts's `scheduleRerender` pattern. Nothing about WHAT renders
@@ -64,6 +67,9 @@ abstract class SidebarView implements View {
 
   onClose(): void {}
 
+  protected onFileChanged(): void {}
+  protected onVisibilityChanged(_visible: boolean): void {}
+
   protected empty(message: string) {
     this.bodyEl.innerHTML = `<div class="pane-empty">${message}</div>`;
   }
@@ -71,6 +77,8 @@ abstract class SidebarView implements View {
 
 export class BacklinksView extends SidebarView {
   readonly viewType = "backlinks";
+  private unlinkedMentionScan: AbortController | null = null;
+  private renderGeneration = 0;
 
   constructor(app: App) {
     super(app, "Backlinks");
@@ -85,18 +93,31 @@ export class BacklinksView extends SidebarView {
   }
 
   async render(): Promise<void> {
+    this.unlinkedMentionScan?.abort();
+    const controller = new AbortController();
+    this.unlinkedMentionScan = controller;
+    const generation = ++this.renderGeneration;
     if (!this.file || this.file.extension !== "md") {
       this.empty("No file is open.");
       return;
     }
     const file = this.file;
     const linked = await this.app.metadataCache.getBacklinksWithContext(file);
+    if (generation !== this.renderGeneration || controller.signal.aborted) return;
     const unlinkedReady = this.app.metadataCache.isUnlinkedMentionsReady();
-    const unlinked = unlinkedReady ? await this.app.metadataCache.getUnlinkedMentions(file) : [];
+    let unlinked: Awaited<ReturnType<App["metadataCache"]["getUnlinkedMentions"]>> = [];
+    if (unlinkedReady) {
+      try {
+        unlinked = await this.app.metadataCache[UNLINKED_MENTIONS_SCAN](file, { signal: controller.signal });
+      } catch (error) {
+        if ((error as Error)?.name === "AbortError") return;
+        throw error;
+      }
+    }
     // The active file (or its md-ness) may have changed while awaiting
     // above (user navigated mid-render) — a subsequent render() is already
     // queued for the new state, so bail rather than paint stale content.
-    if (this.file !== file) return;
+    if (this.file !== file || generation !== this.renderGeneration || controller.signal.aborted) return;
     this.bodyEl.innerHTML = "";
 
     this.renderSection(
@@ -115,6 +136,24 @@ export class BacklinksView extends SidebarView {
         snippets: u.mentions.map((m) => m.snippet),
       }))
     );
+  }
+
+  protected override onFileChanged(): void {
+    this.cancelUnlinkedMentionScan();
+  }
+
+  protected override onVisibilityChanged(visible: boolean): void {
+    if (!visible) this.cancelUnlinkedMentionScan();
+  }
+
+  override onClose(): void {
+    this.cancelUnlinkedMentionScan();
+  }
+
+  private cancelUnlinkedMentionScan(): void {
+    this.renderGeneration += 1;
+    this.unlinkedMentionScan?.abort();
+    this.unlinkedMentionScan = null;
   }
 
   private renderSection(

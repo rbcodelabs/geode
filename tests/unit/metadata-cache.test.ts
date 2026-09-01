@@ -8,6 +8,7 @@ import {
   offsetToLoc,
   parseMetadata,
   processInBatches,
+  UNLINKED_MENTIONS_SCAN,
 } from "../../src/renderer/metadata-cache";
 import { FakeVault } from "../helpers/fake-vault";
 
@@ -483,6 +484,17 @@ describe("MetadataCache.getUnlinkedMentions", () => {
     expect(mentions.map((m) => m.source.path)).toEqual(["Welcome.md"]);
   });
 
+  it("does not match a multiline YAML alias across adjacent source lines", async () => {
+    const fake = new FakeVault({
+      "Welcome.md": "Start\nHere",
+      "Home.md": "---\nalias: |-\n  Start\n  Here\n---\n",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    expect(await cache.getUnlinkedMentions(fake.getFileByPath("Home.md")!)).toEqual([]);
+  });
+
   it("returns an empty array when every mention is already linked", async () => {
     const fake = new FakeVault({
       "Welcome.md": "See [[Daily Plan]].",
@@ -567,6 +579,313 @@ describe("MetadataCache.getUnlinkedMentions", () => {
 
     const computed = await cache.getUnlinkedMentions(dailyPlan);
     expect(cache.peekUnlinkedMentions(dailyPlan)).toBe(computed);
+  });
+
+  it("cooperatively yields within a pathological single-line candidate while preserving exact results", async () => {
+    const hugeLine = `${"padding ".repeat(8_000)}Daily Plan${" padding".repeat(8_000)}`;
+    const fake = new FakeVault({
+      "Huge transcript.md": hugeLine,
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    let yields = 0;
+
+    const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Daily Plan.md")!, {
+      chunkSize: 1_024,
+      yieldToEventLoop: async () => { yields += 1; },
+    });
+
+    expect(yields).toBeGreaterThan(100);
+    expect(result).toHaveLength(1);
+    expect(result[0].mentions).toEqual([{ line: 0, snippet: hugeLine, count: 1 }]);
+  });
+
+  it("preserves code and wikilink masking when delimiters straddle exact-scan slices", async () => {
+    const source = `\`\`\`Daily Plan${"x".repeat(50)}\`\`\` plain Daily Plan `
+      + `[[Daily Plan${"y".repeat(35)}]] plain Daily Plan`;
+    const fake = new FakeVault({ "Boundary.md": source, "Daily Plan.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Daily Plan.md")!, {
+      chunkSize: 64,
+      yieldToEventLoop: async () => {},
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].mentions).toEqual([{ line: 0, snippet: source, count: 2 }]);
+  });
+
+  it("preserves malformed nested wikilink text as an unlinked mention", async () => {
+    const source = "Malformed [[Daily Plan [[Other]] still contains plain target text.";
+    const fake = new FakeVault({ "Malformed link.md": source, "Daily Plan.md": "", "Other.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Daily Plan.md")!, {
+      chunkSize: 64,
+      yieldToEventLoop: async () => {},
+    });
+
+    expect(result[0].mentions).toEqual(findUnlinkedMentions(source, ["Daily Plan"]));
+  });
+
+  it("reconsiders an overlapping inner wikilink after an invalid outer opener", async () => {
+    const source = "[[[Target]]\nTarget";
+    const fake = new FakeVault({ "Overlapping.md": source, "Target.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Target.md")!, {
+      chunkSize: 64,
+      yieldToEventLoop: async () => {},
+    });
+
+    expect(result[0].mentions).toEqual(findUnlinkedMentions(source, ["Target"]));
+  });
+
+  it("bounds delimiter work for a pathological line of unmatched wikilink openers", async () => {
+    const source = `${"[[".repeat(5_000)}${"`x".repeat(5_000)} Daily Plan`;
+    const fake = new FakeVault({ "Malformed transcript.md": source, "Daily Plan.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const originalIndexOf = String.prototype.indexOf;
+    let indexOfCalls = 0;
+    const indexOfSpy = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      searchString: string,
+      position?: number
+    ) {
+      indexOfCalls += 1;
+      return originalIndexOf.call(this, searchString, position);
+    });
+
+    try {
+      const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Daily Plan.md")!, {
+        chunkSize: 256,
+        yieldToEventLoop: async () => {},
+      });
+      expect(result[0].mentions).toEqual(findUnlinkedMentions(source, ["Daily Plan"]));
+      expect(indexOfCalls).toBeLessThan(100);
+    } finally {
+      indexOfSpy.mockRestore();
+    }
+  });
+
+  it("matches established fence-before-inline masking semantics", async () => {
+    const source = "` Target ```\nTarget";
+    const fake = new FakeVault({ "Ordering.md": source, "Target.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Target.md")!, {
+      chunkSize: 64,
+      yieldToEventLoop: async () => {},
+    });
+
+    expect(result[0].mentions).toEqual(findUnlinkedMentions(source, ["Target"]));
+  });
+
+  it("preserves whole-word boundaries when surrounding malformed masks cross slices", async () => {
+    const source = "\nTarget target éxOther漢\n|``` target ]][``` \né[[\n]TargetxxTarget\n[[éxTarget```xTargetTarget_`";
+    const fake = new FakeVault({ "Fuzz regression.md": source, "Target.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Target.md")!, {
+      chunkSize: 64,
+      yieldToEventLoop: async () => {},
+    });
+
+    expect(result[0].mentions).toEqual(findUnlinkedMentions(source, ["Target"]));
+  });
+
+  it("does not lose mentions whose start and end straddle a scan-slice commit boundary", async () => {
+    for (const start of [53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]) {
+      const source = `${"x".repeat(start)} Daily Plan tail`;
+      const fake = new FakeVault({ "Boundary.md": source, "Daily Plan.md": "" });
+      const cache = new MetadataCache(fake.asVault());
+      await cache.initialize();
+      const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Daily Plan.md")!, {
+        chunkSize: 64,
+        yieldToEventLoop: async () => {},
+      });
+      expect(result[0]?.mentions, `mention starting at ${start + 1}`).toEqual(
+        findUnlinkedMentions(source, ["Daily Plan"])
+      );
+    }
+  });
+
+  it("retains BMP and astral Unicode word-boundary context across scan slices", async () => {
+    for (const adjacentLetter of ["x", "𐐀"]) {
+      for (let padding = 42; padding <= 64; padding++) {
+        const source = `${" ".repeat(padding)}${adjacentLetter}Daily Plan \nreal Daily Plan`;
+        const fake = new FakeVault({ "Boundary.md": source, "Daily Plan.md": "" });
+        const cache = new MetadataCache(fake.asVault());
+        await cache.initialize();
+        const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Daily Plan.md")!, {
+          chunkSize: 64,
+          yieldToEventLoop: async () => {},
+        });
+        expect(result[0].mentions, `${JSON.stringify(adjacentLetter)} at padding ${padding}`).toEqual(
+          findUnlinkedMentions(source, ["Daily Plan"])
+        );
+      }
+    }
+  });
+
+  it("matches the synchronous scanner across deterministic delimiter-heavy fixtures", async () => {
+    let seed = 0x134;
+    const random = () => {
+      seed = (seed * 1_664_525 + 1_013_904_223) >>> 0;
+      return seed / 0x1_0000_0000;
+    };
+    const alphabet = ["a", " ", "[", "]", "`", "!", "\n", "é", "_", "#"];
+    const files: Record<string, string> = { "Target.md": "" };
+    for (let fixture = 0; fixture < 200; fixture++) {
+      let source = "";
+      for (let i = 0; i < 180; i++) source += alphabet[Math.floor(random() * alphabet.length)];
+      const insertion = Math.floor(random() * (source.length + 1));
+      files[`Fuzz ${fixture}.md`] = source.slice(0, insertion) + " Target " + source.slice(insertion);
+    }
+    const fake = new FakeVault(files);
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const target = fake.getFileByPath("Target.md")!;
+
+    for (const chunkSize of [64, 127]) {
+      const result = await cache[UNLINKED_MENTIONS_SCAN](target, {
+        chunkSize,
+        yieldToEventLoop: async () => {},
+      });
+      const byPath = new Map(result.map((entry) => [entry.source.path, entry.mentions]));
+      for (const [path, source] of Object.entries(files)) {
+        if (path === "Target.md") continue;
+        expect(byPath.get(path) ?? [], `${path} at chunk ${chunkSize}`).toEqual(
+          findUnlinkedMentions(source, ["Target"])
+        );
+      }
+      cache.trigger("resolved");
+    }
+  });
+
+  it("aggregates a dense common alias per line while continuing to yield", async () => {
+    const occurrenceCount = 50_000;
+    const source = "Target ".repeat(occurrenceCount);
+    const fake = new FakeVault({ "Dense.md": source, "Target.md": "" });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    let yields = 0;
+
+    const result = await cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Target.md")!, {
+      chunkSize: 1_024,
+      yieldToEventLoop: async () => { yields += 1; },
+    });
+
+    expect(result[0].mentions).toEqual([{ line: 0, snippet: source.trim(), count: occurrenceCount }]);
+    expect(yields).toBeGreaterThan(1_000);
+  });
+
+  it("yields while intersecting a large candidate set before reading source content", async () => {
+    const files: Record<string, string> = { "Daily Plan.md": "" };
+    for (let i = 0; i < 1_200; i++) files[`Candidate ${i}.md`] = "Daily Plan";
+    const fake = new FakeVault(files);
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const controller = new AbortController();
+    const readSpy = vi.spyOn(fake, "cachedRead");
+
+    const scan = cache[UNLINKED_MENTIONS_SCAN](fake.getFileByPath("Daily Plan.md")!, {
+      signal: controller.signal,
+      yieldToEventLoop: async () => controller.abort(),
+    });
+
+    await expect(scan).rejects.toMatchObject({ name: "AbortError" });
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("cancels a stale candidate scan without returning or caching partial results", async () => {
+    const files: Record<string, string> = { "Daily Plan.md": "# Daily Plan" };
+    for (let i = 0; i < 100; i++) files[`Transcript ${i}.md`] = `${"x ".repeat(2_000)}Daily Plan`;
+    const fake = new FakeVault(files);
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const target = fake.getFileByPath("Daily Plan.md")!;
+    const controller = new AbortController();
+    let yields = 0;
+
+    const scan = cache[UNLINKED_MENTIONS_SCAN](target, {
+      signal: controller.signal,
+      chunkSize: 512,
+      yieldToEventLoop: async () => {
+        yields += 1;
+        controller.abort();
+      },
+    });
+
+    await expect(scan).rejects.toMatchObject({ name: "AbortError" });
+    expect(yields).toBe(1);
+    expect(cache.peekUnlinkedMentions(target)).toBeUndefined();
+  });
+
+  it("invalidates an in-flight scan on metadata resolution and refuses a stale cache commit", async () => {
+    const fake = new FakeVault({
+      "Transcript.md": `${"x ".repeat(10_000)}Daily Plan`,
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const target = fake.getFileByPath("Daily Plan.md")!;
+    let invalidated = false;
+
+    const scan = cache[UNLINKED_MENTIONS_SCAN](target, {
+      chunkSize: 512,
+      yieldToEventLoop: async () => {
+        if (!invalidated) {
+          invalidated = true;
+          cache.trigger("resolved");
+        }
+      },
+    });
+
+    await expect(scan).rejects.toMatchObject({ name: "AbortError" });
+    expect(cache.peekUnlinkedMentions(target)).toBeUndefined();
+    const stable = await cache.getUnlinkedMentions(target);
+    expect(stable.map((entry) => entry.source.path)).toEqual(["Transcript.md"]);
+  });
+
+  it("excludes valid YAML frontmatter but treats malformed frontmatter as body content", async () => {
+    const fake = new FakeVault({
+      "Valid.md": "---\ntitle: Daily Plan\n---\nNo body mention.",
+      "Malformed.md": "---\n: Daily Plan: invalid: yaml\n---\nBody.",
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+
+    const mentions = await cache.getUnlinkedMentions(fake.getFileByPath("Daily Plan.md")!);
+
+    expect(mentions.map((entry) => entry.source.path)).toEqual(["Malformed.md"]);
+    expect(mentions[0].mentions[0]).toMatchObject({ line: 1, count: 1 });
+  });
+
+  it("dispose cancels outstanding exact scans and prevents a partial cache entry", async () => {
+    const fake = new FakeVault({
+      "Transcript.md": `${"x ".repeat(10_000)}Daily Plan`,
+      "Daily Plan.md": "# Daily Plan",
+    });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    const target = fake.getFileByPath("Daily Plan.md")!;
+
+    const scan = cache[UNLINKED_MENTIONS_SCAN](target, {
+      chunkSize: 512,
+      yieldToEventLoop: async () => cache.dispose(),
+    });
+
+    await expect(scan).rejects.toMatchObject({ name: "AbortError" });
+    expect(cache.peekUnlinkedMentions(target)).toBeUndefined();
   });
 });
 
