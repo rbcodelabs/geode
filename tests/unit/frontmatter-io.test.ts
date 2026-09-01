@@ -26,6 +26,18 @@ describe("patchFrontmatterText (pure)", () => {
     expect(result).toBe('---\ntag: new\n---\nJust body text, no frontmatter.\n');
   });
 
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ])("updates an existing empty %s frontmatter block without duplicating it", (_label, newline) => {
+    const text = `---${newline}---${newline}Body${newline}`;
+    const result = patchFrontmatterText(text, (fm) => {
+      fm.status = "done";
+    });
+    expect(result).toBe(`---${newline}status: done${newline}---${newline}Body${newline}`);
+    expect(result.match(/^---/gm)).toHaveLength(2);
+  });
+
   it("leaves a file with no frontmatter and no mutation unchanged", () => {
     const text = "Just body text.\n";
     const result = patchFrontmatterText(text, () => {});
@@ -55,7 +67,7 @@ describe("patchFrontmatterText (pure)", () => {
     const result = patchFrontmatterText(text, (fm) => {
       fm.status = "ok";
     });
-    expect(result).toContain("status: ok");
+    expect(result).toBe("---\nstatus: ok\n---\nBody\n");
   });
 
   it("preserves CRLF line endings in the closing delimiter match", () => {
@@ -63,7 +75,28 @@ describe("patchFrontmatterText (pure)", () => {
     const result = patchFrontmatterText(text, (fm) => {
       fm.status = "done";
     });
-    expect(result).toContain("status: done");
+    expect(result).toBe("---\r\nstatus: done\r\n---\r\nBody\r\n");
+  });
+
+  it("removes a CRLF frontmatter block without changing body bytes", () => {
+    const text = "---\r\nonly: prop\r\n---\r\nBody\r\n\0tail";
+    const result = patchFrontmatterText(text, (fm) => {
+      delete fm.only;
+    });
+    expect(result).toBe("Body\r\n\0tail");
+  });
+
+  it("serializes prototype-sensitive keys as data without polluting Object.prototype", () => {
+    const text = "---\n__proto__:\n  polluted: true\nconstructor: old\n---\nBody\n";
+    const result = patchFrontmatterText(text, (fm) => {
+      expect(Object.hasOwn(fm, "__proto__")).toBe(true);
+      fm.constructor = "metadata";
+    });
+
+    expect(result).toContain("__proto__:");
+    expect(result).toContain("polluted: true");
+    expect(result).toContain("constructor: metadata");
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 });
 
@@ -91,6 +124,21 @@ describe("patchFrontmatter (I/O wrapper)", () => {
       },
     };
     await patchFrontmatter(vault, file("A.md"), () => {});
+    expect(modifyCalled).toBe(false);
+  });
+
+  it("does not call modify() when serialization fails", async () => {
+    let modifyCalled = false;
+    const vault: VaultWriter = {
+      read: async () => "Body\n",
+      modify: async () => {
+        modifyCalled = true;
+      },
+    };
+
+    await expect(patchFrontmatter(vault, file("A.md"), (fm) => {
+      fm.unsupported = Symbol("cannot serialize");
+    })).rejects.toThrow();
     expect(modifyCalled).toBe(false);
   });
 });
