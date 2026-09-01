@@ -224,10 +224,23 @@ test("Web Viewer toolbar bookmarks the current page as a link", async () => {
     await window.locator('.web-view-toolbar button[title="More options"]').click();
     await window.locator(".menu-item", { hasText: /Bookmark this page$/ }).click();
 
+    const readLink = () =>
+      window.evaluate(() => {
+        const items = (window as any).app.bookmarksRoot.items as Array<{
+          id: string;
+          type: string;
+          url?: string;
+          title?: string;
+        }>;
+        return items.find((item) => item.type === "link");
+      });
+    await expect.poll(readLink).toMatchObject({ type: "link", url: "https://example.com/" });
+
     await window.locator('.workspace-tab-header[data-type="bookmarks"]').click();
-    await expect(
-      bookmarksPane.locator(".nav-item-title", { hasText: "https://example.com/" })
-    ).toBeVisible();
+    const link = (await readLink())!;
+    const row = bookmarksPane.locator(`.nav-file-title[data-id="${link.id}"]`);
+    await expect(row).toBeVisible();
+    await expect(row.locator(".nav-item-title")).toHaveText(link.title || link.url!);
   } finally {
     await cleanup();
   }
