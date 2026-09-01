@@ -1,39 +1,10 @@
 import type { App } from "./app";
 import { extractSection } from "./markdown/embed";
 import { positionHoverElement } from "./tooltip";
-import { Marked, Renderer, type Tokens } from "marked";
 
 const SHOW_DELAY_MS = 300;
 const HIDE_GRACE_MS = 140;
 const MAX_EXCERPT_CHARS = 5_000;
-
-function escapePreviewHtml(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-class SafePreviewRenderer extends Renderer {
-  override html({ text }: Tokens.HTML | Tokens.Tag): string {
-    return escapePreviewHtml(text);
-  }
-
-  override image({ text }: Tokens.Image): string {
-    return text ? escapePreviewHtml(text) : "";
-  }
-
-  override link({ tokens }: Tokens.Link): string {
-    return this.parser.parseInline(tokens);
-  }
-
-  override checkbox({ checked }: Tokens.Checkbox): string {
-    return checked ? "☒ " : "☐ ";
-  }
-}
-
-const previewMarked = new Marked({
-  gfm: true,
-  breaks: true,
-  renderer: new SafePreviewRenderer(),
-});
 
 export interface PreviewTargetParts {
   linkpath: string;
@@ -84,22 +55,31 @@ export function safePreviewMarkdownSource(source: string): string {
   });
   source = source.replace(/%%[\s\S]*?%%/g, "");
   source = source.replace(/!\[\[[^\[\]\n]+\]\]/g, "");
+  source = source.replace(/!\[([^\]\n]*)\](?:\([^\n)]*\)|\[[^\]\n]*\])/g, "$1");
   source = source.replace(/\[\[([^\[\]\n]+)\]\]/g, (_match, inner: string) => {
     const pipe = inner.indexOf("|");
     return pipe === -1 ? inner.replace(/#/g, " > ") : inner.slice(pipe + 1).trim();
   });
+  // Authored HTML must reach the canonical renderer as text, never markup.
+  // Code regions are restored afterwards so their delimiters/content retain
+  // normal Markdown code semantics.
+  source = source.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return source.replace(/\u0000PREVIEW_CODE_(\d+)\u0000/g, (_match, index) => code[Number(index)]);
 }
 
-async function renderSafePreviewMarkdown(markdown: string, el: HTMLElement): Promise<void> {
-  const template = document.createElement("template");
-  template.innerHTML = await previewMarked.parse(safePreviewMarkdownSource(markdown));
-  for (const unsafe of template.content.querySelectorAll(
+async function renderSafePreviewMarkdown(
+  app: App,
+  markdown: string,
+  el: HTMLElement,
+  sourcePath: string
+): Promise<void> {
+  await app.markdownRenderer.render(safePreviewMarkdownSource(markdown), el, sourcePath);
+  for (const unsafe of el.querySelectorAll(
     "script, style, link, meta, base, iframe, object, embed, form, input, button, select, textarea, video, audio, img, picture, source, track, canvas, svg, math, details, dialog"
   )) {
     unsafe.remove();
   }
-  for (const child of template.content.querySelectorAll<HTMLElement>("*")) {
+  for (const child of el.querySelectorAll<HTMLElement>("*")) {
     for (const attr of [...child.attributes]) {
       // The preview is intentionally presentation-only. Removing every
       // authored/renderer attribute is stricter and more future-proof than a
@@ -110,7 +90,6 @@ async function renderSafePreviewMarkdown(markdown: string, el: HTMLElement): Pro
     if (child instanceof HTMLAnchorElement) child.setAttribute("aria-disabled", "true");
   }
   el.inert = true;
-  el.replaceChildren(template.content);
 }
 
 interface PreviewTrigger {
@@ -143,7 +122,7 @@ export class PagePreviewController {
     }
     this.hovered = trigger;
     this.clearHideTimer();
-    if (!trigger.editing || event.metaKey || event.ctrlKey) this.schedule(trigger);
+    if (!trigger.editing || this.isPreviewModifierHeld(event)) this.schedule(trigger);
   };
 
   private readonly onMouseOut = (event: MouseEvent): void => {
@@ -162,7 +141,7 @@ export class PagePreviewController {
       this.hide();
       return;
     }
-    if ((event.key === "Meta" || event.key === "Control") && this.hovered?.editing) {
+    if (this.isPreviewModifierKey(event) && this.hovered?.editing) {
       if (this.hovered.el.isConnected && this.hovered.el.matches(":hover")) this.schedule(this.hovered);
       else this.hovered = null;
     }
@@ -170,9 +149,8 @@ export class PagePreviewController {
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
     if (
-      (event.key === "Meta" || event.key === "Control") &&
-      !event.metaKey &&
-      !event.ctrlKey &&
+      this.isPreviewModifierKey(event) &&
+      !this.isPreviewModifierHeld(event) &&
       (this.activeTrigger?.editing || this.hovered?.editing)
     ) {
       // Releasing the required modifier cancels this attempt, but the pointer
@@ -190,6 +168,14 @@ export class PagePreviewController {
   };
 
   private readonly onResize = (): void => this.hide();
+
+  private isPreviewModifierKey(event: KeyboardEvent): boolean {
+    return event.key === (this.app.host.runtime.platform === "darwin" ? "Meta" : "Control");
+  }
+
+  private isPreviewModifierHeld(event: MouseEvent | KeyboardEvent): boolean {
+    return this.app.host.runtime.platform === "darwin" ? event.metaKey : event.ctrlKey;
+  }
 
   constructor(
     private readonly app: App,
@@ -212,6 +198,7 @@ export class PagePreviewController {
     this.clearHideTimer();
     this.activeTrigger = null;
     if (!preserveHovered) this.hovered = null;
+    if (this.contentEl) this.app.markdownRenderer.dispose(this.contentEl);
     this.contentEl = null;
     this.card?.remove();
     this.card = null;
@@ -296,8 +283,15 @@ export class PagePreviewController {
     card.append(header, content);
 
     const excerpt = previewMarkdownExcerpt(text, subpath, MAX_EXCERPT_CHARS);
-    await renderSafePreviewMarkdown(excerpt, content);
+    try {
+      await renderSafePreviewMarkdown(this.app, excerpt, content, file.path);
+    } catch (error) {
+      this.app.markdownRenderer.dispose(content);
+      console.error("Failed to render page preview", error);
+      return;
+    }
     if (!this.isCurrent(trigger, generation)) {
+      this.app.markdownRenderer.dispose(content);
       return;
     }
 
@@ -347,6 +341,7 @@ export class PagePreviewController {
   }
 
   private removeCard(): void {
+    if (this.contentEl) this.app.markdownRenderer.dispose(this.contentEl);
     this.contentEl = null;
     this.card?.remove();
     this.card = null;

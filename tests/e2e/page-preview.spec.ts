@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const platformModifier: "Meta" | "Control" = process.platform === "darwin" ? "Meta" : "Control";
+const wrongPlatformModifier: "Meta" | "Control" = platformModifier === "Meta" ? "Control" : "Meta";
 
 function fixture(): { vaultDir: string; userDataDir: string } {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-page-preview-vault-"));
@@ -22,6 +23,7 @@ function fixture(): { vaultDir: string; userDataDir: string } {
       "[[Sibling#Missing Heading|missing heading]]",
       "",
       "[[Slow|slow target]] and [[Fast|fast target]]",
+      "[[Reject|renderer rejection]]",
       "",
       "[[Missing]] [external](https://example.com) ![[Other]]",
     ].join("\n")
@@ -37,6 +39,7 @@ function fixture(): { vaultDir: string; userDataDir: string } {
       "Intro that is outside the requested section.",
       "## Details",
       "**Rendered detail** with `safe code`.",
+      "<script>window.previewUnsafe = true</script>",
       "<button autofocus onclick=\"window.previewUnsafe = true\">Unsafe</button>",
       "![remote](https://example.com/tracker.png) [nested navigation](https://example.com)",
       "<svg width=\"1\" height=\"1\" aria-hidden=\"true\"><image xlink:href=\"https://example.com/svg-tracker.png\"></image><a xlink:href=\"javascript:window.previewUnsafe = true\"><text>Unsafe SVG link</text></a></svg>",
@@ -47,6 +50,7 @@ function fixture(): { vaultDir: string; userDataDir: string } {
   );
   fs.writeFileSync(path.join(vaultDir, "Slow.md"), "# Slow\nStale slow content.");
   fs.writeFileSync(path.join(vaultDir, "Fast.md"), "# Fast\nFresh fast content.");
+  fs.writeFileSync(path.join(vaultDir, "Reject.md"), "# Reject\nRenderer rejection content.");
   fs.writeFileSync(path.join(vaultDir, "Other.md"), "# Other\nNo previews here.");
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
@@ -84,11 +88,26 @@ test("Reading View previews resolved wikilinks and source-relative Markdown head
   const { app, window, vaultDir, userDataDir } = await launchFixture();
   try {
     const remotePreviewRequests: string[] = [];
+    const previewConsoleErrors: string[] = [];
     window.on("request", (request) => {
       if (request.url().includes("example.com/tracker.png")) remotePreviewRequests.push(request.url());
     });
+    window.on("console", (message) => {
+      if (message.type() === "error" && message.text().includes("Failed to render page preview")) {
+        previewConsoleErrors.push(message.text());
+      }
+    });
     await window.getByRole("button", { name: /Toggle reading view/ }).click();
     await expect(window.locator(".markdown-reading-view")).toBeVisible();
+    await window.evaluate(() => {
+      const renderer = (window as any).app.markdownRenderer;
+      const original = renderer.render.bind(renderer);
+      (window as any).previewCanonicalRenders = 0;
+      renderer.render = async (...args: unknown[]) => {
+        (window as any).previewCanonicalRenders += 1;
+        return original(...args);
+      };
+    });
 
     const alias = window.locator('.markdown-reading-view a.internal-link[data-href="Preview Alias#Details"]');
     const focusBefore = await window.evaluate(() => document.activeElement?.outerHTML);
@@ -100,9 +119,10 @@ test("Reading View previews resolved wikilinks and source-relative Markdown head
     await expect(preview.locator(".page-preview-title")).toHaveText("Sibling");
     await expect(preview.locator(".page-preview-path")).toHaveText("Folder/Sibling.md#Details");
     await expect(preview.locator(".page-preview-content strong")).toHaveText("Rendered detail");
+    expect(await window.evaluate(() => (window as any).previewCanonicalRenders)).toBe(1);
     await expect(preview.locator(".page-preview-content")).not.toContainText("outside the requested section");
     await expect(preview.locator(".page-preview-content")).not.toContainText("This must not appear");
-    await expect(preview.locator("button, img, input, [href], [src], [xlink\\:href], [tabindex]")).toHaveCount(0);
+    await expect(preview.locator("script, button, img, input, [onclick], [href], [src], [xlink\\:href], [tabindex]")).toHaveCount(0);
     expect(await window.evaluate(() => (window as any).previewUnsafe)).toBeUndefined();
     expect(remotePreviewRequests).toEqual([]);
     expect(await window.evaluate(() => document.activeElement?.outerHTML)).toBe(focusBefore);
@@ -122,12 +142,17 @@ test("Reading View previews resolved wikilinks and source-relative Markdown head
 
     await window.keyboard.press("Escape");
     await expect(preview).toHaveCount(0);
+    expect(await window.evaluate(() => document.activeElement?.outerHTML)).toBe(focusBefore);
 
     const relative = window.locator('.markdown-reading-view a[href="Sibling.md#Details"]');
     await relative.hover();
     await expect(preview.locator(".page-preview-path")).toHaveText("Folder/Sibling.md#Details");
 
+    await window.mouse.move(0, 0);
+    await expect(preview).toHaveCount(0);
     await window.locator('.markdown-reading-view a[data-href="Sibling#Missing Heading"]').hover();
+    await window.waitForTimeout(400);
+    expect(previewConsoleErrors).toEqual([]);
     await expect(preview.locator(".page-preview-path")).toHaveText("Folder/Sibling.md");
     await expect(preview.locator(".page-preview-content")).toContainText("Intro that is outside");
 
@@ -163,8 +188,17 @@ test("Live Preview requires Cmd/Ctrl, cancels stale work, and tears down with it
     await alias.hover();
     await window.waitForTimeout(400);
     await expect(preview).toHaveCount(0);
+    await window.keyboard.down(wrongPlatformModifier);
+    await alias.hover();
+    await window.waitForTimeout(400);
+    await expect(preview).toHaveCount(0);
+    await window.keyboard.up(wrongPlatformModifier);
+
     await window.keyboard.down(platformModifier);
     await alias.hover();
+    await expect(preview).toBeVisible();
+    await window.keyboard.down(wrongPlatformModifier);
+    await window.keyboard.up(wrongPlatformModifier);
     await expect(preview).toBeVisible();
     await window.keyboard.press("Escape");
     await window.keyboard.up(platformModifier);
@@ -263,6 +297,85 @@ test("does not leave a stale card visible while a different link is pending", as
     await slow.hover();
     await window.waitForTimeout(50);
     expect(await preview.count()).toBe(0);
+  } finally {
+    await closeFixture(app, vaultDir, userDataDir);
+  }
+});
+
+test("disposes canonical renderer work on dismissal, replacement, staleness, and rejection", async () => {
+  const { app, window, vaultDir, userDataDir } = await launchFixture();
+  const pageErrors: string[] = [];
+  window.on("pageerror", (error) => pageErrors.push(error.message));
+  try {
+    await window.getByRole("button", { name: /Toggle reading view/ }).click();
+    await window.evaluate(() => {
+      const renderer = (window as any).app.markdownRenderer;
+      const originalRender = renderer.render.bind(renderer);
+      const originalDispose = renderer.dispose.bind(renderer);
+      const ids = new WeakMap<HTMLElement, string>();
+      (window as any).previewDisposals = [];
+      renderer.dispose = (el: HTMLElement) => {
+        const id = ids.get(el);
+        if (id) (window as any).previewDisposals.push(id);
+        return originalDispose(el);
+      };
+      renderer.render = async (markdown: string, el: HTMLElement, sourcePath: string) => {
+        const id = markdown.includes("Stale slow content")
+          ? "slow"
+          : markdown.includes("Fresh fast content")
+            ? "fast"
+            : markdown.includes("Renderer rejection content")
+              ? "reject"
+              : "sibling";
+        ids.set(el, id);
+        if (id === "slow") {
+          (window as any).slowCanonicalRenderStarted = true;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        if (id === "reject") throw new Error("intentional preview renderer rejection");
+        return originalRender(markdown, el, sourcePath);
+      };
+    });
+
+    const preview = window.locator(".page-preview");
+    const alias = window.locator('.markdown-reading-view a.internal-link[data-href="Preview Alias#Details"]');
+    const slow = window.locator('.markdown-reading-view a.internal-link[data-href="Slow"]');
+    const fast = window.locator('.markdown-reading-view a.internal-link[data-href="Fast"]');
+    const reject = window.locator('.markdown-reading-view a.internal-link[data-href="Reject"]');
+
+    await alias.hover();
+    await expect(preview).toBeVisible();
+    const beforeDismiss = await window.evaluate(() => (window as any).previewDisposals.length);
+    await window.keyboard.press("Escape");
+    await expect.poll(() => window.evaluate(() => (window as any).previewDisposals.length)).toBe(beforeDismiss + 1);
+
+    await window.mouse.move(0, 0);
+    await alias.hover();
+    await expect(preview).toBeVisible();
+    const beforeReplacement = await window.evaluate(() => (window as any).previewDisposals.length);
+    await slow.hover();
+    await expect(preview).toHaveCount(0);
+    await expect.poll(() => window.evaluate(() => (window as any).previewDisposals.length)).toBe(beforeReplacement + 1);
+
+    await window.waitForTimeout(325);
+    expect(await window.evaluate(() => (window as any).slowCanonicalRenderStarted)).toBe(true);
+    await fast.hover();
+    await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
+    await window.waitForTimeout(550);
+    expect(await window.evaluate(() =>
+      (window as any).previewDisposals.filter((id: string) => id === "slow").length
+    )).toBeGreaterThanOrEqual(2);
+    await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
+
+    await window.mouse.move(0, 0);
+    await expect(preview).toHaveCount(0);
+    await reject.hover();
+    await window.waitForTimeout(400);
+    await expect(preview).toHaveCount(0);
+    expect(await window.evaluate(() =>
+      (window as any).previewDisposals.filter((id: string) => id === "reject").length
+    )).toBeGreaterThanOrEqual(1);
+    expect(pageErrors).toEqual([]);
   } finally {
     await closeFixture(app, vaultDir, userDataDir);
   }

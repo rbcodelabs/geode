@@ -24,7 +24,7 @@ Resolved internal links in Reading View and CodeMirror Live Preview navigate, bu
 
 ## Spec
 
-**Approach:** A view-scoped `PagePreviewController` delegates hover events across the Reading View and editor roots, resolves only Markdown destinations, renders a bounded excerpt through a detached `SafePreviewRenderer`, and uses a monotonically increasing request generation to discard stale async work.
+**Approach:** A view-scoped `PagePreviewController` delegates hover events across the Reading View and editor roots, resolves only Markdown destinations, renders a bounded excerpt through the canonical app renderer in a detached, scrubbed container, and uses a monotonically increasing request generation to discard stale async work.
 
 **Files affected:**
 
@@ -43,8 +43,8 @@ Resolved internal links in Reading View and CodeMirror Live Preview navigate, bu
 - Only resolved `.md` files qualify. External URLs, unresolved links, embeds, and raw active-line source do not.
 - A heading subpath renders only that section. Missing headings fall back to the note excerpt without claiming a false section match.
 - Preview content is re-read for each hover, so an external file modification is reflected on the next preview.
-- Preview Markdown uses an intentionally detached `SafePreviewRenderer`: it parses into a `template`, removes active/fetch-capable elements and all authored attributes, marks the mounted result inert, and only then inserts it into the document. The canonical `app.markdownRenderer` is deliberately rejected for hover previews because its plugin and code-block processors, embeds (including canvas and Bases), blob/resource URLs, generated click handlers, and raw HTML behavior are designed for an interactive document surface rather than an inert tooltip. The safety boundary deliberately excludes plugin postprocessors, embeds, and callout rendering from this first delivery.
-- The detached renderer duplicates a small Markdown parsing path. That creates parser-drift risk as the canonical renderer evolves; preview parity and sanitizer coverage must therefore be reviewed when Markdown syntax support changes. This tradeoff is accepted in exchange for a narrow, auditable inert-content boundary.
+- Preview Markdown uses the canonical `app.markdownRenderer` in a detached card container so supported Markdown syntax stays aligned with Reading View. Before rendering, authored raw HTML is escaped and embeds/images are reduced to inert text; after rendering, active/fetch-capable elements and all renderer/authored attributes are removed before the card is mounted, and the content is marked inert. Renderer-owned children are disposed whenever a card is stale, dismissed, or replaced.
+- Canonical rendering runs registered Markdown/code processors before the final inert-DOM scrub. Their output cannot remain interactive in the mounted preview, but processor side effects are outside the DOM sanitizer's boundary; a future renderer-level inert mode would provide a stronger isolation seam without duplicating parsing.
 - Switching directly between existing split groups emits the established `active-leaf-change` event exactly once when the effective leaf changes, invalidating view-owned transient UI through the existing lifecycle seam.
 - The existing app settings surface has no Core Plugins category or per-surface model. Adding that architecture is explicitly out of scope; the documented default modifier behavior is implemented directly.
 
