@@ -58,7 +58,7 @@ cloud, no lock-in.
   and File Explorer menus, pinned-safe bulk tab closing, and status-bar word
   count; tab bar and view header DOM/CSS match real Obsidian so community themes
   and CSS snippets apply correctly
-- **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
+- **Command palette** (Cmd+P), **quick switcher** (Cmd+O), and Daily Notes (Cmd+D) with per-vault enable, folder, date-format, and template-path settings,
   dark/light themes via CSS variables
 - **Settings** — tabbed Settings window with searchable **Hotkeys**, Appearance,
   Community plugins & themes, and an **Advanced** per-vault metadata body-scan

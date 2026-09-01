@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import moment from "moment";
 import {
+  DailyNotesService,
   resolveDailyNoteSettings,
+  resolveDailyNotesConfig,
   matchDailyNoteFile,
   dailyNotePath,
 } from "../../src/renderer/daily-notes";
@@ -56,6 +58,93 @@ describe("resolveDailyNoteSettings", () => {
       format: "YYYY-MM-DD",
       template: "",
     });
+  });
+});
+
+describe("resolveDailyNotesConfig", () => {
+  it("enables Daily Notes by default for new and existing vaults", () => {
+    expect(resolveDailyNotesConfig(null)).toEqual({
+      enabled: true,
+      folder: "",
+      format: "YYYY-MM-DD",
+      template: "",
+    });
+    expect(resolveDailyNotesConfig({ folder: "Journal" })).toEqual({
+      enabled: true,
+      folder: "Journal",
+      format: "YYYY-MM-DD",
+      template: "",
+    });
+  });
+
+  it.each([
+    [{ enabled: "false", folder: 42, format: [], template: {} }, { enabled: true, folder: "", format: "YYYY-MM-DD", template: "" }],
+    [{ enabled: false, folder: "/Journal/", format: " YYYY.MM.DD ", template: " Templates/Daily.md " }, { enabled: false, folder: "Journal", format: "YYYY.MM.DD", template: "Templates/Daily.md" }],
+  ])("validates malformed legacy config per field", (raw, expected) => {
+    expect(resolveDailyNotesConfig(raw)).toEqual(expected);
+  });
+});
+
+describe("DailyNotesService", () => {
+  it("loads validated state and keeps the plugin-facing options reference live", async () => {
+    const writes: unknown[] = [];
+    const store = {
+      read: async () => ({ enabled: false, folder: "Journal", format: "YYYY.MM.DD", template: "" }),
+      write: async (_name: string, value: unknown) => { writes.push(value); },
+    };
+    const service = new DailyNotesService(store);
+    const retainedOptions = service.options;
+
+    await service.load();
+    expect(service.enabled).toBe(false);
+    expect(service.options).toBe(retainedOptions);
+    expect(retainedOptions).toEqual({ folder: "Journal", format: "YYYY.MM.DD", template: "" });
+
+    await service.update({ enabled: true, folder: "Notes/Daily" });
+    expect(service.enabled).toBe(true);
+    expect(service.options).toBe(retainedOptions);
+    expect(retainedOptions).toEqual({ folder: "Notes/Daily", format: "YYYY.MM.DD", template: "" });
+    expect(writes).toEqual([{ enabled: true, folder: "Notes/Daily", format: "YYYY.MM.DD", template: "" }]);
+  });
+
+  it("serializes concurrent updates without losing fields", async () => {
+    let persisted: unknown = null;
+    const store = {
+      read: async () => null,
+      write: async (_name: string, value: unknown) => {
+        await Promise.resolve();
+        persisted = value;
+      },
+    };
+    const service = new DailyNotesService(store);
+    await service.load();
+
+    await Promise.all([
+      service.update({ folder: "Journal" }),
+      service.update({ template: "Templates/Daily" }),
+    ]);
+
+    expect(persisted).toEqual({
+      enabled: true,
+      folder: "Journal",
+      format: "YYYY-MM-DD",
+      template: "Templates/Daily",
+    });
+  });
+
+  it("does not publish settings that fail to persist", async () => {
+    const service = new DailyNotesService({
+      read: async () => null,
+      write: async () => { throw new Error("disk full"); },
+    });
+    await service.load();
+    const retainedOptions = service.options;
+
+    await expect(service.update({ enabled: false, folder: "Journal" })).rejects.toThrow("disk full");
+
+    expect(service.enabled).toBe(true);
+    expect(service.options).toBe(retainedOptions);
+    expect(service.options).toEqual({ folder: "", format: "YYYY-MM-DD", template: "" });
   });
 });
 
