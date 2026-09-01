@@ -8,47 +8,28 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const NOTE = `# Standard images
 
 Relative: ![Relative alt](Images/photo%20one.png "Relative title")
-
 Parent: ![Parent alt](../Assets/parent.png)
-
 Root: ![Root alt](/Assets/root.png)
-
 Dot segments: ![Dot alt](./Images/../Images/photo%20one.png)
-
 Angle: ![Angle alt](<Images/photo one.png> "Angle title")
-
 Hash: ![Hash alt](Images/image%231.png)
-
 Escapes: ![Escaped \\[alt\\]](Images/photo%20one.png "A \\"quoted\\" title")
-
+Entities: ![A &amp; B](Images/photo%20one.png "T &quot; Q")
+Formatted: ![a **b**](Images/photo%20one.png)
 No wiki sizing: ![Alt|40](/Assets/root.png)
-
 Boundary: ![Boundary alt](../../outside.png)
-
 Traversal: ![Traversal alt](../../../outside.png)
-
 Missing: ![Missing alt](Images/missing.png)
-
 Unsafe: ![Remote alt](https://example.com/remote.png)
-
 Protocol relative: ![Protocol alt](//example.com/remote.png)
-
 Encoded scheme: ![Encoded scheme alt](%68%74%74%70%73%3A%2F%2Fexample.com/remote.png)
-
 Escaped scheme: ![Escaped scheme alt](https\\://example.com/remote.png)
-
 Data: ![Data alt](data:image/png;base64,AAAA)
-
 File: ![File alt](file:///tmp/remote.png)
-
 Malformed: ![Malformed alt](Images/%ZZ.png)
-
 Raw NUL: ![Raw NUL alt](Images/raw\0.png)
-
 Encoded NUL: ![Encoded NUL alt](Images/raw%00.png)
-
 Broken: ![Broken alt](Images/broken.png)
-
 Wiki: ![[Assets/root.png|24]]
 `;
 
@@ -83,7 +64,7 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
     await expect(window.locator(".cm-editor")).toBeVisible();
 
     const standardImages = window.locator(".cm-markdown-image-widget img.internal-embed");
-    await expect(standardImages).toHaveCount(9);
+    await expect(standardImages).toHaveCount(11);
     await expect(standardImages.nth(0)).toHaveAttribute("alt", "Relative alt");
     await expect(standardImages.nth(0)).toHaveAttribute("title", "Relative title");
     await expect(standardImages.nth(0)).toHaveAttribute("src", /^blob:/);
@@ -98,6 +79,8 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
       "title",
       'A "quoted" title'
     );
+    await expect(imageWithAlt("A & B")).toHaveAttribute("title", 'T " Q');
+    await expect(imageWithAlt("a b")).toHaveCount(1);
     const unsizedImage = imageWithAlt("Alt|40");
     await expect(unsizedImage).not.toHaveAttribute("width", /.+/);
     await expect(unsizedImage).not.toHaveAttribute("height", /.+/);
@@ -118,10 +101,10 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
       "Encoded NUL alt",
       "Broken alt",
     ];
-    await expect(fallbacks).toHaveCount(fallbackAlts.length);
     for (const alt of fallbackAlts) {
       await expect(fallbacks.filter({ hasText: alt })).toHaveCount(1);
     }
+    await expect(fallbacks).toHaveCount(fallbackAlts.length);
     expect(await window.locator(".cm-editor").innerText()).not.toContain(
       "https://example.com/remote.png"
     );
@@ -137,13 +120,13 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
     const content = window.locator(".cm-content");
     await content.press("ArrowDown");
     await content.press("ArrowDown");
-    await expect(standardImages).toHaveCount(8);
+    await expect(standardImages).toHaveCount(10);
     await expect(window.locator(".cm-editor")).toContainText(
       '![Relative alt](Images/photo%20one.png "Relative title")'
     );
     await content.press("ArrowUp");
     await content.press("ArrowUp");
-    await expect(standardImages).toHaveCount(9);
+    await expect(standardImages).toHaveCount(11);
 
     // Reading View remains on its existing renderer path: standard Markdown
     // syntax is handled by marked, while the wiki embed keeps its own sizing.
@@ -157,7 +140,7 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
     );
     await expect(readingView.locator("img.internal-embed")).toHaveAttribute("width", "24");
     await readingToggle.click();
-    await expect(standardImages).toHaveCount(9);
+    await expect(standardImages).toHaveCount(11);
 
     // Replacing the Live Preview extension destroys widgets and revokes all
     // created object URLs rather than leaking them until renderer shutdown.
@@ -176,7 +159,7 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
           () => (window as unknown as { revokedBlobUrls: string[] }).revokedBlobUrls.length
         )
       )
-      .toBeGreaterThanOrEqual(9);
+      .toBeGreaterThanOrEqual(11);
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });

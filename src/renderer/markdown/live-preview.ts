@@ -8,6 +8,7 @@ import {
 } from "@codemirror/view";
 import { EditorState, Extension, Range, RangeSet, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
+import type { SyntaxNode } from "@lezer/common";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
 import { setIcon } from "../api/icons";
@@ -1028,6 +1029,64 @@ function decodeMarkdownEscapes(raw: string): string {
   return raw.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
 }
 
+/** Decode one parser-recognized/entity-shaped HTML character reference. */
+function decodeMarkdownEntity(entity: string): string {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = entity;
+  return textarea.value;
+}
+
+/**
+ * Decode only CommonMark punctuation escapes and entity-shaped tokens. The
+ * browser sees each entity token in isolation, never arbitrary authored HTML.
+ * Processing both token types in one pass preserves an escaped `\\&amp;` as
+ * literal `&amp;` rather than decoding it a second time.
+ */
+function decodeMarkdownLiteral(raw: string): string {
+  return raw.replace(
+    /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])|&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});/g,
+    (token, escaped: string | undefined) => escaped ?? decodeMarkdownEntity(token)
+  );
+}
+
+const MARKDOWN_SEMANTIC_MARKS = new Set(["EmphasisMark", "CodeMark", "StrikethroughMark"]);
+
+/**
+ * Extract semantic plain text from a parsed Markdown range. Formatting
+ * containers recurse so their content remains, delimiter marks disappear,
+ * and only parser-recognized Escape/Entity nodes are decoded.
+ */
+function semanticMarkdownText(
+  node: SyntaxNode,
+  from: number,
+  to: number,
+  slice: (from: number, to: number) => string
+): string {
+  let text = "";
+  let cursor = from;
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.to <= from) continue;
+    if (child.from >= to) break;
+    const childFrom = Math.max(from, child.from);
+    const childTo = Math.min(to, child.to);
+    if (cursor < childFrom) text += slice(cursor, childFrom);
+    if (MARKDOWN_SEMANTIC_MARKS.has(child.name)) {
+      // Formatting/code delimiters are syntax, not alternative text.
+    } else if (child.name === "Escape") {
+      text += decodeMarkdownEscapes(slice(childFrom, childTo));
+    } else if (child.name === "Entity") {
+      text += decodeMarkdownEntity(slice(childFrom, childTo));
+    } else if (child.firstChild) {
+      text += semanticMarkdownText(child, childFrom, childTo, slice);
+    } else {
+      text += slice(childFrom, childTo);
+    }
+    cursor = Math.max(cursor, childTo);
+  }
+  if (cursor < to) text += slice(cursor, to);
+  return text;
+}
+
 /**
  * Convert a CodeMirror Markdown `URL` node into one exact vault path.
  * Standard Markdown paths are relative to the source note (or vault-root
@@ -1088,7 +1147,7 @@ function markdownImagePath(raw: string, sourcePath: string): string | null {
 
 /** Strip the parser-supported quote/delimiter pair from a Markdown title. */
 function markdownImageTitle(raw: string): string {
-  if (raw.length < 2) return decodeMarkdownEscapes(raw);
+  if (raw.length < 2) return decodeMarkdownLiteral(raw);
   const first = raw[0];
   const last = raw[raw.length - 1];
   if (
@@ -1096,9 +1155,9 @@ function markdownImageTitle(raw: string): string {
     (first === "'" && last === "'") ||
     (first === "(" && last === ")")
   ) {
-    return decodeMarkdownEscapes(raw.slice(1, -1));
+    return decodeMarkdownLiteral(raw.slice(1, -1));
   }
-  return decodeMarkdownEscapes(raw);
+  return decodeMarkdownLiteral(raw);
 }
 
 function resolveMarkdownImage(path: string | null, app: App): TFile | null {
@@ -1455,12 +1514,18 @@ export function livePreview(app: App, getPath: () => string): Extension {
               const title = titleNode
                 ? markdownImageTitle(doc.sliceString(titleNode.from, titleNode.to))
                 : "";
+              const alt = semanticMarkdownText(
+                node.node,
+                marks[0].to,
+                marks[1].from,
+                (from, to) => doc.sliceString(from, to)
+              );
               decos.push(
                 Decoration.replace({
                   widget: new MarkdownImageWidget(
                     markdownImagePath(authoredTarget, sourcePath),
                     authoredTarget,
-                    decodeMarkdownEscapes(doc.sliceString(marks[0].to, marks[1].from)),
+                    alt,
                     title,
                     sourcePath,
                     app
