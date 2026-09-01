@@ -1750,7 +1750,7 @@
       "tests/e2e/live-preview-markdown-image.spec.ts",
       "tests/e2e/smoke.spec.ts"
     ],
-    "notes": "Observed same-vault standard Markdown images and existing wiki image embeds as real Live Preview images away from the cursor, source reveal on the active line, percent-encoded and angle-bracket paths, alt/title preservation, missing/unsafe/load-error fallbacks, distinct standard-versus-wiki sizing, blob URL teardown, and unchanged Reading View rendering. The broader help page also covers unsupported PDF/block embeds, remote images, and interactive image resizing, so the row remains partial."
+    "notes": "Observed same-vault standard Markdown images and existing wiki image embeds as real Live Preview images away from the cursor; exact note-relative, parent-relative, dot-segment, and vault-root paths with above-root rejection; percent-encoded spaces and literal # filenames; angle-bracket paths; CommonMark-escaped alt/title text; explicit rejection of remote, protocol-relative, encoded/escaped scheme, data, file, malformed-percent, NUL, and traversal destinations; source reveal on the active line; missing/load-error fallbacks; distinct standard-versus-wiki sizing; blob URL teardown; and unchanged Reading View rendering. The broader help page also covers unsupported PDF/block embeds, remote images, and interactive image resizing, so the row remains partial."
   },
   "API-875834c93581": {
     "status": "verified",

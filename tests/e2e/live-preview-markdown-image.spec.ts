@@ -9,15 +9,43 @@ const NOTE = `# Standard images
 
 Relative: ![Relative alt](Images/photo%20one.png "Relative title")
 
-Root: ![Root alt](Assets/root.png)
+Parent: ![Parent alt](../Assets/parent.png)
+
+Root: ![Root alt](/Assets/root.png)
+
+Dot segments: ![Dot alt](./Images/../Images/photo%20one.png)
 
 Angle: ![Angle alt](<Images/photo one.png> "Angle title")
 
-No wiki sizing: ![Alt|40](Assets/root.png)
+Hash: ![Hash alt](Images/image%231.png)
+
+Escapes: ![Escaped \\[alt\\]](Images/photo%20one.png "A \\"quoted\\" title")
+
+No wiki sizing: ![Alt|40](/Assets/root.png)
+
+Boundary: ![Boundary alt](../../outside.png)
+
+Traversal: ![Traversal alt](../../../outside.png)
 
 Missing: ![Missing alt](Images/missing.png)
 
 Unsafe: ![Remote alt](https://example.com/remote.png)
+
+Protocol relative: ![Protocol alt](//example.com/remote.png)
+
+Encoded scheme: ![Encoded scheme alt](%68%74%74%70%73%3A%2F%2Fexample.com/remote.png)
+
+Escaped scheme: ![Escaped scheme alt](https\\://example.com/remote.png)
+
+Data: ![Data alt](data:image/png;base64,AAAA)
+
+File: ![File alt](file:///tmp/remote.png)
+
+Malformed: ![Malformed alt](Images/%ZZ.png)
+
+Raw NUL: ![Raw NUL alt](Images/raw\0.png)
+
+Encoded NUL: ![Encoded NUL alt](Images/raw%00.png)
 
 Broken: ![Broken alt](Images/broken.png)
 
@@ -27,13 +55,17 @@ Wiki: ![[Assets/root.png|24]]
 test("renders standard Markdown vault images safely in Live Preview", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-markdown-image-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-markdown-image-ud-"));
-  fs.mkdirSync(path.join(vaultDir, "Notes", "Images"), { recursive: true });
+  fs.mkdirSync(path.join(vaultDir, "Notes", "Nested", "Images"), { recursive: true });
+  fs.mkdirSync(path.join(vaultDir, "Notes", "Assets"), { recursive: true });
   fs.mkdirSync(path.join(vaultDir, "Assets"), { recursive: true });
   const imageBytes = fs.readFileSync(path.join(repoRoot, "test-vault", "geode-logo.png"));
-  fs.writeFileSync(path.join(vaultDir, "Notes", "Images", "photo one.png"), imageBytes);
-  fs.writeFileSync(path.join(vaultDir, "Notes", "Images", "broken.png"), "not an image");
+  fs.writeFileSync(path.join(vaultDir, "Notes", "Nested", "Images", "photo one.png"), imageBytes);
+  fs.writeFileSync(path.join(vaultDir, "Notes", "Nested", "Images", "image#1.png"), imageBytes);
+  fs.writeFileSync(path.join(vaultDir, "Notes", "Nested", "Images", "broken.png"), "not an image");
+  fs.writeFileSync(path.join(vaultDir, "Notes", "Assets", "parent.png"), imageBytes);
   fs.writeFileSync(path.join(vaultDir, "Assets", "root.png"), imageBytes);
-  fs.writeFileSync(path.join(vaultDir, "Notes", "Images.md"), NOTE);
+  fs.writeFileSync(path.join(vaultDir, "outside.png"), imageBytes);
+  fs.writeFileSync(path.join(vaultDir, "Notes", "Nested", "Images.md"), NOTE);
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
     JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
@@ -46,26 +78,50 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
   try {
     const window = await app.firstWindow();
     await window.locator('.nav-folder-title[data-path="Notes"]').click();
-    await window.locator('.nav-file-title[data-path="Notes/Images.md"]').click();
+    await window.locator('.nav-folder-title[data-path="Notes/Nested"]').click();
+    await window.locator('.nav-file-title[data-path="Notes/Nested/Images.md"]').click();
     await expect(window.locator(".cm-editor")).toBeVisible();
 
     const standardImages = window.locator(".cm-markdown-image-widget img.internal-embed");
-    await expect(standardImages).toHaveCount(4);
+    await expect(standardImages).toHaveCount(9);
     await expect(standardImages.nth(0)).toHaveAttribute("alt", "Relative alt");
     await expect(standardImages.nth(0)).toHaveAttribute("title", "Relative title");
     await expect(standardImages.nth(0)).toHaveAttribute("src", /^blob:/);
-    await expect(standardImages.nth(1)).toHaveAttribute("alt", "Root alt");
-    await expect(standardImages.nth(2)).toHaveAttribute("alt", "Angle alt");
-    await expect(standardImages.nth(2)).toHaveAttribute("title", "Angle title");
-    await expect(standardImages.nth(3)).toHaveAttribute("alt", "Alt|40");
-    await expect(standardImages.nth(3)).not.toHaveAttribute("width", /.+/);
-    await expect(standardImages.nth(3)).not.toHaveAttribute("height", /.+/);
+    const imageWithAlt = (alt: string) =>
+      window.locator(`.cm-markdown-image-widget img.internal-embed[alt="${alt}"]`);
+    await expect(imageWithAlt("Parent alt")).toHaveCount(1);
+    await expect(imageWithAlt("Root alt")).toHaveCount(1);
+    await expect(imageWithAlt("Dot alt")).toHaveCount(1);
+    await expect(imageWithAlt("Angle alt")).toHaveAttribute("title", "Angle title");
+    await expect(imageWithAlt("Hash alt")).toHaveCount(1);
+    await expect(imageWithAlt("Escaped [alt]")).toHaveAttribute(
+      "title",
+      'A "quoted" title'
+    );
+    const unsizedImage = imageWithAlt("Alt|40");
+    await expect(unsizedImage).not.toHaveAttribute("width", /.+/);
+    await expect(unsizedImage).not.toHaveAttribute("height", /.+/);
+    await expect(imageWithAlt("Boundary alt")).toHaveCount(1);
 
     const fallbacks = window.locator(".cm-markdown-image-widget.is-unresolved");
-    await expect(fallbacks).toHaveCount(3);
-    await expect(fallbacks.nth(0)).toContainText("Missing alt");
-    await expect(fallbacks.nth(1)).toContainText("Remote alt");
-    await expect(fallbacks.nth(2)).toContainText("Broken alt");
+    const fallbackAlts = [
+      "Traversal alt",
+      "Missing alt",
+      "Remote alt",
+      "Protocol alt",
+      "Encoded scheme alt",
+      "Escaped scheme alt",
+      "Data alt",
+      "File alt",
+      "Malformed alt",
+      "Raw NUL alt",
+      "Encoded NUL alt",
+      "Broken alt",
+    ];
+    await expect(fallbacks).toHaveCount(fallbackAlts.length);
+    for (const alt of fallbackAlts) {
+      await expect(fallbacks.filter({ hasText: alt })).toHaveCount(1);
+    }
     expect(await window.locator(".cm-editor").innerText()).not.toContain(
       "https://example.com/remote.png"
     );
@@ -81,13 +137,13 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
     const content = window.locator(".cm-content");
     await content.press("ArrowDown");
     await content.press("ArrowDown");
-    await expect(standardImages).toHaveCount(3);
+    await expect(standardImages).toHaveCount(8);
     await expect(window.locator(".cm-editor")).toContainText(
       '![Relative alt](Images/photo%20one.png "Relative title")'
     );
     await content.press("ArrowUp");
     await content.press("ArrowUp");
-    await expect(standardImages).toHaveCount(4);
+    await expect(standardImages).toHaveCount(9);
 
     // Reading View remains on its existing renderer path: standard Markdown
     // syntax is handled by marked, while the wiki embed keeps its own sizing.
@@ -101,7 +157,7 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
     );
     await expect(readingView.locator("img.internal-embed")).toHaveAttribute("width", "24");
     await readingToggle.click();
-    await expect(standardImages).toHaveCount(4);
+    await expect(standardImages).toHaveCount(9);
 
     // Replacing the Live Preview extension destroys widgets and revokes all
     // created object URLs rather than leaking them until renderer shutdown.
@@ -120,7 +176,7 @@ test("renders standard Markdown vault images safely in Live Preview", async () =
           () => (window as unknown as { revokedBlobUrls: string[] }).revokedBlobUrls.length
         )
       )
-      .toBeGreaterThanOrEqual(4);
+      .toBeGreaterThanOrEqual(9);
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
