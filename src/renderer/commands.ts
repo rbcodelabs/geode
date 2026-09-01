@@ -1,4 +1,6 @@
 import { bindingIdentity, eventToHotkey, legacyHotkeyToBinding, normalizeHotkey, type Hotkey } from "../shared/hotkey";
+import type { EditorView } from "@codemirror/view";
+import type { MarkdownView } from "./views/markdown-view";
 export type { Hotkey } from "../shared/hotkey";
 export { eventToHotkey };
 
@@ -7,9 +9,15 @@ export interface Command {
   /** @deprecated Prefer structured, physical-key `hotkeys`. */
   hotkey?: string;
   hotkeys?: Hotkey[];
-  callback?: () => void;
+  callback?: () => any;
   checkCallback?: (checking: boolean) => boolean | void;
+  /** Editor-only callback. */
+  editorCallback?: (editor: EditorView, context: MarkdownView) => any;
+  /** Editor-only availability/execution callback. */
+  editorCheckCallback?: (checking: boolean, editor: EditorView, context: MarkdownView) => boolean | void;
 }
+export interface EditorCommandContext { editor: EditorView; context: MarkdownView }
+export type EditorCommandContextProvider = () => EditorCommandContext | null;
 interface ConfigStore { read(name: string): Promise<unknown>; write(name: string, data: unknown): Promise<void> }
 interface HotkeyFile { version: 1; overrides: Record<string, unknown> }
 export interface HotkeySnapshot {
@@ -18,8 +26,6 @@ export interface HotkeySnapshot {
   dispatchable: readonly string[];
 }
 export type AssignmentResult = { status: "assigned" | "unchanged" } | { status: "conflict"; owners: string[] };
-const isAvailable = (cmd: Command) => !cmd.checkCallback || cmd.checkCallback(true) !== false;
-const run = (cmd: Command) => { if (cmd.checkCallback) cmd.checkCallback(false); else cmd.callback?.(); };
 const clone = (bindings: readonly Hotkey[]) => bindings.map(b => ({ modifiers: [...b.modifiers], code: b.code }));
 
 export class CommandRegistry {
@@ -28,7 +34,38 @@ export class CommandRegistry {
   private malformedOverrides: Record<string, unknown> = {};
   private snapshotValue: HotkeySnapshot = { bindingsByCommand: {}, ownersByBinding: {}, dispatchable: [] };
   private changeListeners = new Set<() => void>();
-  constructor(private config?: ConfigStore) {}
+  constructor(private config?: ConfigStore, private editorContext?: EditorCommandContextProvider) {}
+
+  private isAvailable(command: Command): boolean {
+    if (command.editorCheckCallback) {
+      const context = this.editorContext?.();
+      return !!context && command.editorCheckCallback(true, context.editor, context.context) === true;
+    }
+    if (command.editorCallback) return !!this.editorContext?.();
+    return !command.checkCallback || command.checkCallback(true) !== false;
+  }
+
+  private executeCommand(command: Command): boolean {
+    if (command.editorCheckCallback) {
+      const context = this.editorContext?.();
+      if (!context || command.editorCheckCallback(true, context.editor, context.context) !== true) return false;
+      command.editorCheckCallback(false, context.editor, context.context);
+      return true;
+    }
+    if (command.editorCallback) {
+      const context = this.editorContext?.();
+      if (!context) return false;
+      command.editorCallback(context.editor, context.context);
+      return true;
+    }
+    if (command.checkCallback) {
+      if (command.checkCallback(true) === false) return false;
+      command.checkCallback(false);
+      return true;
+    }
+    command.callback?.();
+    return true;
+  }
 
   async loadHotkeys(): Promise<void> {
     const raw = await this.config?.read("hotkeys");
@@ -125,14 +162,13 @@ export class CommandRegistry {
     const owners = this.snapshotValue.ownersByBinding[combo] ?? [];
     if (owners.length !== 1) return false;
     const cmd = this.commands[owners[0]];
-    if (!cmd || !isAvailable(cmd)) return false;
-    run(cmd); return true;
+    return !!cmd && this.executeCommand(cmd);
   }
   has(id: string): boolean { return Object.prototype.hasOwnProperty.call(this.commands, id); }
   findCommand(id: string): Command | undefined { return this.has(id) ? this.commands[id] : undefined; }
-  execute(id: string): boolean { const cmd = this.findCommand(id); if (!cmd || !isAvailable(cmd)) return false; run(cmd); return true; }
+  execute(id: string): boolean { const cmd = this.findCommand(id); return !!cmd && this.executeCommand(cmd); }
   executeCommandById(id: string): boolean { return this.execute(id); }
-  list(): Command[] { return Object.values(this.commands).filter(isAvailable).sort((a, b) => a.name.localeCompare(b.name)); }
+  list(): Command[] { return Object.values(this.commands).filter(command => this.isAvailable(command)).sort((a, b) => a.name.localeCompare(b.name)); }
   listCommands(): Command[] { return Object.values(this.commands); }
   attach(target: Document): () => void {
     const listener = (event: KeyboardEvent) => { const combo = eventToHotkey(event); if (combo && this.dispatchHotkey(combo)) { event.preventDefault(); event.stopPropagation(); } };

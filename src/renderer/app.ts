@@ -1147,7 +1147,13 @@ export class App {
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
-    this.commands = new CommandRegistry(host.config);
+    this.commands = new CommandRegistry(host.config, () => {
+      const source = this.guestHotkeySource;
+      const leaf = source !== null ? this.leafOwningGuest(source) : this.workspace?.activeLeaf;
+      const view = leaf?.view;
+      if (!(view instanceof MarkdownView) || view.mode === "reading" || !view.editor) return null;
+      return { editor: view.editor, context: view };
+    });
     this.vault = new Vault(host);
     this.metadataCache = new MetadataCache(this.vault);
   }
