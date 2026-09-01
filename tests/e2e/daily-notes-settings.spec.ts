@@ -87,8 +87,11 @@ test("Daily Notes settings persist lifecycle and keep plugin compatibility live"
       commandAvailable: false,
     });
 
-    await modal.getByRole("textbox", { name: "New file location" }).fill(" Journal/Daily ");
+    await modal.getByRole("textbox", { name: "New file location" }).fill(" /Journal/Daily/ ");
     await modal.getByRole("textbox", { name: "New file location" }).press("Tab");
+    await modal.getByRole("textbox", { name: "Date format" }).fill("   ");
+    await modal.getByRole("textbox", { name: "Date format" }).press("Tab");
+    await expect(modal.getByRole("textbox", { name: "Date format" })).toHaveValue("YYYY-MM-DD");
     await modal.getByRole("textbox", { name: "Date format" }).fill(" YYYY.MM.DD ");
     await modal.getByRole("textbox", { name: "Date format" }).press("Tab");
     await modal.getByRole("textbox", { name: "Template file location" }).fill(" Templates/Daily.md ");
@@ -103,6 +106,9 @@ test("Daily Notes settings persist lifecycle and keep plugin compatibility live"
       format: "YYYY.MM.DD",
       template: "Templates/Daily.md",
     });
+    await expect(modal.getByRole("textbox", { name: "New file location" })).toHaveValue("Journal/Daily");
+    await expect(modal.getByRole("textbox", { name: "Date format" })).toHaveValue("YYYY.MM.DD");
+    await expect(modal.getByRole("textbox", { name: "Template file location" })).toHaveValue("Templates/Daily.md");
     const live = await window.evaluate(() => {
       const a = window as any;
       const descriptor = a.app.internalPlugins.getPluginById("daily-notes");

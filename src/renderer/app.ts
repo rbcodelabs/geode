@@ -674,6 +674,7 @@ class SettingsModal extends Modal {
   private async updateDailyNotes(patch: Partial<{ enabled: boolean; folder: string; format: string; template: string }>): Promise<void> {
     try {
       await this.geodeApp.dailyNotes.update(patch);
+      if (this.activeTabId === "daily-notes") this.activateTab("daily-notes");
     } catch (err) {
       console.error(err);
       this.geodeApp.notify("Could not save Daily Notes settings. Your previous settings are still active.");
