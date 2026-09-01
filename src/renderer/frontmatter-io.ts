@@ -49,7 +49,7 @@ export function patchFrontmatterText(text: string, mutate: (fm: Record<string, u
     // The public callback contract is synchronous. Consume a later rejection
     // so an accidentally async callback cannot also create an unhandled one.
     void Promise.resolve(mutationResult).catch(() => undefined);
-    throw new Error("FileManager.processFrontMatter requires a synchronous callback; received a thenable");
+    throw new TypeError("FileManager.processFrontMatter requires a synchronous callback; received a thenable");
   }
 
   const hasProps = Object.keys(fm).length > 0;

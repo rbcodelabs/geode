@@ -200,10 +200,12 @@ describe("FileManager.processFrontMatter", () => {
     const manager = new FileManager(app);
     const note = files.get("Note.md")!;
 
-    await expect(manager.processFrontMatter(note, async (fm) => {
+    const rejected = manager.processFrontMatter(note, async (fm) => {
       await Promise.resolve();
       fm.lateMutation = true;
-    })).rejects.toThrow(/synchronous callback/);
+    });
+    await expect(rejected).rejects.toThrow(TypeError);
+    await expect(rejected).rejects.toThrow(/synchronous callback/);
     expect(vault.modify).not.toHaveBeenCalled();
 
     await expect(manager.processFrontMatter(note, (fm) => {
