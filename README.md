@@ -5,24 +5,31 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.10.4). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.11.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.10.4)
+## Features (v0.11.0)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
 - **Editor** — CodeMirror 6, markdown highlighting, `[[wikilink]]` autocomplete,
   Cmd/Ctrl+click to follow, autosave, rename-updates-links, and immediate inline
   naming for new notes with collision-safe validation
-- **Live Preview** — tables render in place and stay editable: cells render
+- **Live Preview** — safe same-vault standard Markdown images render in place
+  away from the cursor, alongside existing wiki image embeds; remote images,
+  PDFs, block embeds, and interactive image resizing remain out of scope.
+  Tables stay editable: cells render
   their inline markdown (bold, italic, code, links) and wrap onto multiple
   lines instead of forcing the row to overflow, while clicking into a cell
   still reveals the raw source to edit
 - **Reading view** — callouts (13 types, foldable), embeds (notes/images/audio/
   video), highlights, tags, tables, task lists, YAML properties
+- **Page previews** — safely inspect resolved internal Markdown links without
+  navigating away: hover in Reading View, or hold Cmd/Ctrl while hovering a
+  rendered link in Live Preview. Previews are read-only, honor heading targets,
+  and do not appear for external, unresolved, or active-line raw source links
 - **Mermaid diagrams** — ` ```mermaid ` blocks render as diagrams in both Live
   Preview and Reading view, follow the active light/dark theme, support
   `internal-link` nodes that navigate to notes, and show an inline error
@@ -53,13 +60,20 @@ cloud, no lock-in.
   and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), daily notes (Cmd+D),
   dark/light themes via CSS variables
-- **Settings** — tabbed Settings window with a searchable **Hotkeys** tab,
-  Appearance, Community plugins & themes, and one tab per installed plugin
-  that calls `Plugin.addSettingTab`
+- **Settings** — tabbed Settings window with searchable **Hotkeys**, Appearance,
+  Community plugins & themes, and an **Advanced** per-vault metadata body-scan
+  cap (300 KB by default). Oversized note bodies skip heading, tag, link, and
+  list-item indexing to bound memory use; frontmatter remains indexed. Installed
+  plugins can add their own tabs with `Plugin.addSettingTab`
 - **Community plugins & themes** — install from GitHub, enable/disable,
   auto-update; broad plugin-API compatibility (`EditorSuggest`, `Scope`,
   metadata cache with list items/sections + frontmatter tag helpers) so real
-  plugins like **obsidian-tasks** load and render their query blocks
+  plugins like **obsidian-tasks** load and render their query blocks. Editor
+  command callbacks work, but currently receive CM6's `EditorView` rather than
+  Obsidian's full `Editor` adapter. `FileManager.processFrontMatter` safely
+  serializes same-file calls within one renderer runtime; it does not lock out
+  direct vault/external writes, and forwarded timestamp options are not yet
+  applied by the host
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
   once with community plugins suppressed and reversible restart controls
