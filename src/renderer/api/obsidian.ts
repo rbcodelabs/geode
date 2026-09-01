@@ -1056,10 +1056,16 @@ export function installObsidianAppCompat(app: App): void {
     // daily-notes feature (App.openDailyNote) agree on config. Every other
     // internal plugin id still resolves to null/disabled — Geode has no
     // compat shim for them.
-    const dailyNotesDescriptor = () => ({
-      enabled: true,
-      instance: { options: (app as any).dailyNoteSettings },
-    });
+    // Lightweight App doubles used by the plugin runtime tests predate the
+    // service. Preserve their prior `dailyNoteSettings` contract while real
+    // App instances use the service-owned, retained options object.
+    const dailyNotesInstance = {
+      options: (app as any).dailyNotes?.options ?? (app as any).dailyNoteSettings,
+    };
+    const dailyNotesDescriptor = {
+      get enabled() { return (app as any).dailyNotes?.enabled ?? true; },
+      instance: dailyNotesInstance,
+    };
     // Obsidian's Web Viewer core plugin. Geode has no enable/disable toggle
     // for it — `App.start()` registers the "webviewer" view factory
     // unconditionally (see `workspace.registerViewFactory("webviewer", ...)`
@@ -1067,18 +1073,21 @@ export function installObsidianAppCompat(app: App): void {
     // `enabled: true` here is accurate, not aspirational.
     const webviewerDescriptor = () => ({ enabled: true, instance: {} });
     const internalPluginDescriptor = (id: string) =>
-      id === "daily-notes" ? dailyNotesDescriptor() : id === "webviewer" ? webviewerDescriptor() : null;
+      id === "daily-notes" ? dailyNotesDescriptor : id === "webviewer" ? webviewerDescriptor() : null;
     a.internalPlugins = {
       plugins: {
         get "daily-notes"() {
-          return dailyNotesDescriptor();
+          return dailyNotesDescriptor;
         },
         get webviewer() {
           return webviewerDescriptor();
         },
       },
       getPluginById: internalPluginDescriptor,
-      getEnabledPluginById: internalPluginDescriptor,
+      getEnabledPluginById: (id: string) => {
+        const descriptor = internalPluginDescriptor(id);
+        return descriptor?.enabled ? descriptor : null;
+      },
     };
   }
   if (!a.scope) {

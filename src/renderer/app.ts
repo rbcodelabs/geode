@@ -59,7 +59,7 @@ import {
 import { anchorSnapshot, parseLocalFileHref, shouldInterceptAnchor } from "./external-links";
 import { initTooltips } from "./tooltip";
 import {
-  resolveDailyNoteSettings,
+  DailyNotesService,
   matchDailyNoteFile,
   dailyNotePath,
   type DailyNoteSettings,
@@ -369,8 +369,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "community-plugins" | "advanced" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "community-plugins", "advanced", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "advanced" | "performance";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "advanced", "performance"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -458,6 +458,8 @@ class SettingsModal extends Modal {
       this.renderAppearanceTab(this.contentContainerEl);
     } else if (id === "hotkeys") {
       this.renderHotkeysTab(this.contentContainerEl);
+    } else if (id === "daily-notes") {
+      this.renderDailyNotesTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
     } else if (id === "advanced") {
@@ -507,6 +509,7 @@ class SettingsModal extends Modal {
 
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("hotkeys", "Hotkeys", this.navEl);
+    addNavItem("daily-notes", "Daily Notes", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
@@ -637,6 +640,45 @@ class SettingsModal extends Modal {
     search.addEventListener("input", render); assigned.addEventListener("change", render);
     this.unsubscribeHotkeys = this.geodeApp.commands.onChange(render);
     render();
+  }
+
+  private renderDailyNotesTab(container: HTMLElement): void {
+    const dailyNotes = this.geodeApp.dailyNotes;
+    container.innerHTML = `<h2>Daily Notes</h2>`;
+    this.addToggle(
+      container,
+      "Enable Daily Notes",
+      dailyNotes.enabled,
+      (enabled) => void this.updateDailyNotes({ enabled })
+    );
+    this.addTextInput(
+      container,
+      "New file location",
+      dailyNotes.options.folder,
+      (folder) => void this.updateDailyNotes({ folder })
+    );
+    this.addTextInput(
+      container,
+      "Date format",
+      dailyNotes.options.format,
+      (format) => void this.updateDailyNotes({ format })
+    );
+    this.addTextInput(
+      container,
+      "Template file location",
+      dailyNotes.options.template,
+      (template) => void this.updateDailyNotes({ template })
+    );
+  }
+
+  private async updateDailyNotes(patch: Partial<{ enabled: boolean; folder: string; format: string; template: string }>): Promise<void> {
+    try {
+      await this.geodeApp.dailyNotes.update(patch);
+    } catch (err) {
+      console.error(err);
+      this.geodeApp.notify("Could not save Daily Notes settings. Your previous settings are still active.");
+      if (this.activeTabId === "daily-notes") this.activateTab("daily-notes");
+    }
   }
 
   private captureHotkey(commandId: string, commandName: string, button: HTMLButtonElement, row: HTMLElement): void {
@@ -1160,6 +1202,7 @@ export class App {
   private protocolHandlers = new Map<string, (params: Record<string, string>) => unknown>();
   private pendingProtocolLinks = new Map<string, Record<string, string>[]>();
   readonly host: HostServices;
+  readonly dailyNotes: DailyNotesService;
   vault: Vault;
   metadataCache: MetadataCache;
   fileManager = new FileManager(this);
@@ -1206,8 +1249,8 @@ export class App {
     webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
-  /** Resolved "daily-notes" config (defaults until a vault is opened); also read by the internalPlugins compat shim. */
-  dailyNoteSettings: DailyNoteSettings = resolveDailyNoteSettings(null);
+  /** Live plugin-facing options alias retained for compatibility with existing callers. */
+  get dailyNoteSettings(): DailyNoteSettings { return this.dailyNotes.options; }
   /** In-memory Bookmarks core plugin model (defaults until a vault is opened), backed by ".geode/bookmarks.json". */
   bookmarksRoot: BookmarksRoot = createEmptyRoot();
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
@@ -1224,6 +1267,7 @@ export class App {
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
+    this.dailyNotes = new DailyNotesService(host.config);
     this.commands = new CommandRegistry(host.config, () => {
       const source = this.guestHotkeySource;
       const leaf = source !== null ? this.leafOwningGuest(source) : this.workspace?.activeLeaf;
@@ -1541,10 +1585,7 @@ export class App {
     // Loaded before pluginManager.initialize() so the internalPlugins compat
     // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready
     // before any hosted plugin (e.g. Calendar) can query "daily-notes".
-    const savedDailyNotes = (await this.host.config.read(
-      "daily-notes"
-    )) as Partial<DailyNoteSettings> | null;
-    this.dailyNoteSettings = resolveDailyNoteSettings(savedDailyNotes);
+    await this.dailyNotes.load();
 
     // Same shape as daily-notes above: read the persisted Bookmarks tree
     // before registerCommands()/pluginManager.initialize() so both see the
@@ -2477,7 +2518,16 @@ export class App {
       this.applySettings();
       this.saveSettings();
     });
-    c("daily-note", "Open today's daily note", "Mod+D", () => this.openDailyNote());
+    this.commands.add({
+      id: "daily-note",
+      name: "Open today's daily note",
+      hotkey: "Mod+D",
+      checkCallback: (checking) => {
+        if (!this.dailyNotes.enabled) return false;
+        if (!checking) void this.openDailyNote();
+        return true;
+      },
+    });
     c("open-graph", "Graph view: Open graph view", "Mod+G", () => this.openGraphView());
     c("random-note", "Open random note", undefined, () => {
       const files = this.vault.getMarkdownFiles();

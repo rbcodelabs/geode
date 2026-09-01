@@ -1,5 +1,6 @@
 import moment from "moment";
 import type { TFile } from "./types";
+import type { ConfigService } from "./host/contracts";
 
 /** Obsidian's own defaults for the "Daily notes" core plugin's settings. */
 const DEFAULT_FORMAT = "YYYY-MM-DD";
@@ -15,6 +16,17 @@ export interface DailyNoteSettings {
   template: string;
 }
 
+export interface DailyNotesConfig extends DailyNoteSettings {
+  enabled: boolean;
+}
+
+type DailyNotesConfigUpdate = Partial<DailyNotesConfig>;
+
+function stringField(raw: Record<string, unknown>, key: keyof DailyNoteSettings): string | undefined {
+  const value = raw[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 /**
  * Resolve raw (possibly partial/unset) persisted daily-notes config into a
  * fully-populated settings object, applying Obsidian's own defaults for any
@@ -27,14 +39,66 @@ export interface DailyNoteSettings {
 export function resolveDailyNoteSettings(
   raw: Partial<DailyNoteSettings> | null | undefined
 ): DailyNoteSettings {
-  const folder = raw?.folder?.trim();
-  const format = raw?.format?.trim();
-  const template = raw?.template?.trim();
+  const record = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const folder = stringField(record, "folder")?.trim();
+  const format = stringField(record, "format")?.trim();
+  const template = stringField(record, "template")?.trim();
   return {
     folder: folder ? folder.replace(/^\/+/, "").replace(/\/+$/, "") : DEFAULT_FOLDER,
     format: format ? format : DEFAULT_FORMAT,
     template: template ? template : DEFAULT_TEMPLATE,
   };
+}
+
+/** Validate the per-vault persisted lifecycle and options, one field at a time. */
+export function resolveDailyNotesConfig(raw: unknown): DailyNotesConfig {
+  const record = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  return {
+    enabled: typeof record.enabled === "boolean" ? record.enabled : true,
+    ...resolveDailyNoteSettings(record as Partial<DailyNoteSettings>),
+  };
+}
+
+/**
+ * Single per-vault owner for Daily Notes lifecycle, persisted settings, and
+ * the live `instance.options` object exposed to hosted Obsidian plugins.
+ */
+export class DailyNotesService {
+  enabled = true;
+  readonly options: DailyNoteSettings = resolveDailyNoteSettings(null);
+  private pendingUpdate: Promise<void> = Promise.resolve();
+
+  constructor(private readonly config: ConfigService) {}
+
+  async load(): Promise<void> {
+    const resolved = resolveDailyNotesConfig(await this.config.read("daily-notes"));
+    this.apply(resolved);
+  }
+
+  update(patch: DailyNotesConfigUpdate): Promise<void> {
+    const operation = this.pendingUpdate.then(async () => {
+      const next = resolveDailyNotesConfig({
+        enabled: this.enabled,
+        ...this.options,
+        ...patch,
+      });
+      await this.config.write("daily-notes", next);
+      this.apply(next);
+    });
+    this.pendingUpdate = operation.catch(() => {});
+    return operation;
+  }
+
+  private apply(config: DailyNotesConfig): void {
+    this.enabled = config.enabled;
+    Object.assign(this.options, {
+      folder: config.folder,
+      format: config.format,
+      template: config.template,
+    });
+  }
 }
 
 /**
