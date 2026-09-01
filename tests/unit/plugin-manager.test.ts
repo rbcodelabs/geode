@@ -120,6 +120,10 @@ function resilientPluginSource(id: string): string {
       onload() {
         this.addCommand({ id: 'explode', name: 'Explode', callback: () => { throw new Error('command boom'); } });
         this.addCommand({ id: 'reject', name: 'Reject', callback: async () => { throw new Error('async boom'); } });
+        this.addCommand({ id: 'editor-explode', name: 'Editor explode', editorCallback: () => { throw new Error('editor command boom'); } });
+        this.addCommand({ id: 'editor-reject', name: 'Editor reject', editorCallback: async () => { throw new Error('editor async boom'); } });
+        this.addCommand({ id: 'editor-check-explode', name: 'Editor check explode', editorCheckCallback: () => { throw new Error('editor check boom'); } });
+        this.addCommand({ id: 'editor-check-reject', name: 'Editor check reject', editorCheckCallback: async () => { throw new Error('editor check async boom'); } });
       }
     }
     module.exports.default = ResilientPlugin;
@@ -374,6 +378,62 @@ describe("PluginManager", () => {
 
     expect(pm.isEnabled("foo")).toBe(true);
     expect(fs.config.get("plugin-quarantine")).toEqual({});
+  });
+
+  it("attributes synchronous editor command crashes to the owning plugin", async () => {
+    const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn() } as any;
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    fs.files.set(".geode/plugins/foo/main.js", resilientPluginSource("foo"));
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+    const command = app.commands.add.mock.calls.find(([cmd]: any[]) => cmd.id === "foo:editor-explode")[0];
+
+    expect(() => command.editorCallback({}, {})).not.toThrow();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+    expect(fs.config.get("plugin-quarantine")).toMatchObject({
+      foo: { boundary: "command:editor-explode", message: "editor command boom" },
+    });
+  });
+
+  it("attributes rejected async editor callbacks and editor availability crashes", async () => {
+    const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn() } as any;
+    const fs = installFakeGeode(["foo"]);
+    fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+    fs.files.set(".geode/plugins/foo/main.js", resilientPluginSource("foo"));
+    const pm = new PluginManager(app);
+    await pm.initialize();
+    await pm.enable("foo");
+    let command = app.commands.add.mock.calls.find(([cmd]: any[]) => cmd.id === "foo:editor-reject")[0];
+
+    await expect(command.editorCallback({}, {})).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+    expect(fs.config.get("plugin-quarantine")).toMatchObject({
+      foo: { boundary: "command:editor-reject", message: "editor async boom" },
+    });
+
+    await pm.restoreQuarantined("foo");
+    app.commands.add.mockClear();
+    await pm.disable("foo", { persist: false });
+    await pm.enable("foo", { persist: false });
+    command = app.commands.add.mock.calls.find(([cmd]: any[]) => cmd.id === "foo:editor-check-explode")[0];
+    expect(command.editorCheckCallback(true, {}, {})).toBeUndefined();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+    expect(fs.config.get("plugin-quarantine")).toMatchObject({
+      foo: { boundary: "command-check:editor-check-explode", message: "editor check boom" },
+    });
+
+    await pm.restoreQuarantined("foo");
+    app.commands.add.mockClear();
+    await pm.disable("foo", { persist: false });
+    await pm.enable("foo", { persist: false });
+    command = app.commands.add.mock.calls.find(([cmd]: any[]) => cmd.id === "foo:editor-check-reject")[0];
+    await expect(command.editorCheckCallback(true, {}, {})).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(pm.isEnabled("foo")).toBe(false));
+    expect(fs.config.get("plugin-quarantine")).toMatchObject({
+      foo: { boundary: "command-check:editor-check-reject", message: "editor check async boom" },
+    });
   });
 
   it("contains errors at registered DOM and plugin-view lifecycle boundaries", async () => {

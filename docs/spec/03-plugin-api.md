@@ -201,6 +201,17 @@ type Modifier = 'Mod' | 'Ctrl' | 'Meta' | 'Shift' | 'Alt';
 // 'Mod' = Cmd on macOS, Ctrl on Win/Linux
 ```
 
+Geode validates at `Plugin.addCommand` that exactly one of `callback`,
+`checkCallback`, `editorCallback`, or `editorCheckCallback` is defined. Invalid
+zero-style and mixed-style registrations do not reach the command registry or
+register cleanup. Editor commands are available only for the live/source
+`MarkdownView` belonging to the current invocation source; reading mode and
+non-Markdown leaves have no editor context. The context argument is that
+`MarkdownView`. The editor argument is currently the view's real CM6
+`EditorView`, not yet the CM5-shaped `Editor` abstraction documented in §2.10,
+so ordinary plugins that call methods such as `getCursor` or `replaceRange`
+still require the separate Editor-adapter parity work.
+
 ### 2.4 App
 
 The root object, passed into every plugin and view. Also exposed as global `app` (deprecated for plugin use, but exists).

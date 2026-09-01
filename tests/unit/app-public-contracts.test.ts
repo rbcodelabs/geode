@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/renderer/app";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
+import { MarkdownView } from "../../src/renderer/views/markdown-view";
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -17,6 +18,7 @@ function installBrowser(theme: "dark" | "light" = "dark"): MemoryStorage {
   vi.stubGlobal("localStorage", storage);
   vi.stubGlobal("document", {
     body: { classList: { contains: (name: string) => name === `theme-${theme}` } },
+    querySelectorAll: vi.fn(() => []),
   });
   return storage;
 }
@@ -81,6 +83,21 @@ describe("App public foundation", () => {
     const el = { nodeName: "DIV" } as unknown as HTMLElement;
     app.addStatusBarItem(el);
     expect(appended).toEqual([el]);
+  });
+
+  it("does not use a stale active Markdown leaf when a guest hotkey source cannot be resolved", () => {
+    installBrowser();
+    const app = new App();
+    const editor = { state: { doc: "stale" } };
+    const view = Object.assign(Object.create(MarkdownView.prototype), { mode: "live", editor });
+    app.workspace = { activeLeaf: { view } } as any;
+    const callback = vi.fn();
+    app.commands.add({ id: "guest-unresolved", name: "Guest unresolved", editorCallback: callback } as any);
+
+    (app as any).guestHotkeySource = 999_999;
+
+    expect(app.commands.execute("guest-unresolved")).toBe(false);
+    expect(callback).not.toHaveBeenCalled();
   });
 });
 

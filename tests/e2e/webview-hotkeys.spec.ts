@@ -119,6 +119,43 @@ test("a Geode hotkey pressed inside a web viewer guest runs its command", async 
   }
 });
 
+test("an editor-command hotkey pressed inside a web viewer does not target a stale active Markdown leaf", async () => {
+  const { app, window, cleanup } = await launch();
+
+  try {
+    await window.locator('.nav-file-title[data-path="Note.md"]').click();
+    await window.evaluate(async () => {
+      const geodeApp = (window as any).app;
+      const markdownGroup = geodeApp.workspace.activeLeaf.group;
+      const webLeaf = geodeApp.workspace.splitActiveLeaf("vertical");
+      await webLeaf.setViewState({ type: "webviewer", active: true, state: { url: "https://example.com" } });
+      geodeApp.workspace.setActiveGroup(markdownGroup);
+      (window as any).__editorGuestCommandFired = 0;
+      geodeApp.commands.add({
+        id: "probe:editor-guest",
+        name: "Editor guest probe",
+        hotkeys: [{ modifiers: ["Mod"], code: "KeyJ" }],
+        editorCallback: () => { (window as any).__editorGuestCommandFired += 1; },
+      });
+    });
+    await expect(window.locator(".web-view-frame")).toBeVisible();
+    await window.waitForTimeout(100);
+
+    // The host-document path still resolves the active Markdown editor.
+    await window.keyboard.press(isMac ? "Meta+j" : "Control+j");
+    expect(await window.evaluate(() => (window as any).__editorGuestCommandFired)).toBe(1);
+
+    // The guest path must use the guest-owning Web Viewer leaf, not the stale
+    // host activeLeaf that still points at the Markdown split.
+    expect(await pressInGuest(app, "j", [MOD])).toBe(true);
+    await window.waitForTimeout(100);
+    expect(await window.evaluate(() => (window as any).__editorGuestCommandFired)).toBe(1);
+  } finally {
+    await app.close();
+    cleanup();
+  }
+});
+
 test("changed and conflicted bindings republish live to the webview guest", async () => {
   const { app, window, cleanup } = await launch();
   try {
