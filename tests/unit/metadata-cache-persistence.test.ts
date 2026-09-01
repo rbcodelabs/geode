@@ -6,6 +6,11 @@ import {
   extractMentionIndexKeys,
   parseMetadata,
 } from "../../src/renderer/metadata-cache";
+import {
+  METADATA_SNAPSHOT_CHUNK_MAX_BYTES,
+  METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES,
+  type PersistedMetadataIndexEntry,
+} from "../../src/indexer/metadata-indexer";
 
 type CacheApi = {
   readMetadataCache: ReturnType<typeof vi.fn>;
@@ -314,5 +319,203 @@ describe("MetadataCache persistence", () => {
     expect(cache.getFileCache(fake.getFileByPath("A.md")!)).not.toBeNull();
     expect(errorSpy).toHaveBeenCalledOnce();
     errorSpy.mockRestore();
+  });
+});
+
+/**
+ * Regression coverage for the renderer-fallback OOM: `applyRendererFallback()`
+ * + `persistCache()` used to read/parse every markdown file into one
+ * in-memory Map (unavoidable — that's the live index) and THEN build a
+ * SECOND full-vault-sized `entries` object and hand it to a single
+ * `writeMetadataCache` IPC call. For a vault with many files, or even a
+ * handful of pathologically large ones, that single structured-clone payload
+ * — duplicated again on arrival in the main process — was big enough to push
+ * V8's heap past its limit. These tests simulate that shape (many files, and
+ * separately, individually huge files) against a host that supports the new
+ * chunked `upsertMetadataCacheEntries`/`pruneMetadataCache` API and assert
+ * every individual IPC call's payload stays bounded — never the whole vault
+ * in one shot — while the persisted end state is still complete and correct.
+ */
+describe("MetadataCache renderer-fallback chunked persistence (OOM regression)", () => {
+  function headingHeavyContent(headingCount: number): string {
+    return Array.from(
+      { length: headingCount },
+      (_, i) => `# Heading number ${i} with enough padding text to make this entry non-trivially sized`
+    ).join("\n");
+  }
+
+  function installChunkedApi(startBackground: () => Promise<true | null> = async () => null) {
+    const api = {
+      readMetadataCache: vi.fn(async () => null),
+      writeMetadataCache: vi.fn(async () => {}),
+      upsertMetadataCacheEntries: vi.fn(async () => {}),
+      pruneMetadataCache: vi.fn(async () => {}),
+      reportMetadataFallback: vi.fn(async () => {}),
+      startMetadataIndexer: vi.fn(startBackground),
+      onMetadataIndexerMessage: vi.fn(),
+    };
+    vi.stubGlobal("window", { geode: api });
+    return api;
+  }
+
+  it("splits a vault of many small files into multiple bounded upsert batches instead of one whole-vault write", async () => {
+    // More files than fit in a single entry-count-limited batch.
+    const fileCount = METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES * 3 + 7;
+    const files: Record<string, string> = {};
+    for (let i = 0; i < fileCount; i++) files[`Note-${i}.md`] = `# Note ${i}\n\nSome body text.`;
+    const fake = new FakeVault(files);
+    const api = installChunkedApi();
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+
+    expect(api.writeMetadataCache).not.toHaveBeenCalled();
+    expect(api.upsertMetadataCacheEntries.mock.calls.length).toBeGreaterThan(1);
+
+    const seenPaths = new Set<string>();
+    for (const [payload] of api.upsertMetadataCacheEntries.mock.calls) {
+      const entries = payload.entries as Record<string, PersistedMetadataIndexEntry>;
+      const paths = Object.keys(entries);
+      expect(paths.length).toBeLessThanOrEqual(METADATA_SNAPSHOT_CHUNK_MAX_ENTRIES);
+      expect(payload.schemaVersion).toBe(METADATA_CACHE_SCHEMA_VERSION);
+      for (const path of paths) {
+        expect(seenPaths.has(path)).toBe(false); // no path sent twice
+        seenPaths.add(path);
+      }
+    }
+    expect(seenPaths.size).toBe(fileCount);
+
+    expect(api.pruneMetadataCache).toHaveBeenCalledOnce();
+    const [prunedPaths] = api.pruneMetadataCache.mock.calls[0] as [string[]];
+    expect(prunedPaths.sort()).toEqual([...seenPaths].sort());
+  });
+
+  it("splits a vault with a few pathologically large files by byte size, keeping every batch's serialized payload bounded", async () => {
+    // Individually large files (thousands of headings each, matching the
+    // reported repro of AI-transcript notes generating multi-MB of metadata
+    // per file) — few enough files to never hit the entry-count limit, but
+    // collectively far larger than one byte-size chunk.
+    const fake = new FakeVault({
+      "Big-1.md": headingHeavyContent(600),
+      "Big-2.md": headingHeavyContent(600),
+      "Big-3.md": headingHeavyContent(600),
+      "Big-4.md": headingHeavyContent(600),
+      "Big-5.md": headingHeavyContent(600),
+    });
+    const api = installChunkedApi();
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+
+    expect(api.writeMetadataCache).not.toHaveBeenCalled();
+    expect(api.upsertMetadataCacheEntries.mock.calls.length).toBeGreaterThan(1);
+
+    // The whole-vault size this regression test exists to bound: if this
+    // assertion fails, the "many small entries" batching above could still
+    // be passing for the wrong reason (count-based only) while a few large
+    // files still slip through as one giant payload.
+    let totalBytesAcrossAllCalls = 0;
+    for (const [payload] of api.upsertMetadataCacheEntries.mock.calls) {
+      const serializedBytes = JSON.stringify(payload).length;
+      totalBytesAcrossAllCalls += serializedBytes;
+      // Generous slack over the nominal chunk ceiling: the batching decision
+      // is made on a conservative per-entry estimate, not the exact
+      // serialized size of the accumulated batch, so this asserts "bounded",
+      // not "byte-exact" — a single oversized entry may be sent alone rather
+      // than dropped (see estimateEntryBytes's doc comment), but it is never
+      // combined with siblings into an unbounded pile.
+      expect(serializedBytes).toBeLessThan(METADATA_SNAPSHOT_CHUNK_MAX_BYTES * 2);
+    }
+    // Sanity check the fixture actually reproduces a large-vault shape: the
+    // total metadata sent is a large multiple of any single chunk's ceiling
+    // (otherwise this test would trivially pass with just one batch).
+    expect(totalBytesAcrossAllCalls).toBeGreaterThan(METADATA_SNAPSHOT_CHUNK_MAX_BYTES * 3);
+
+    expect(api.pruneMetadataCache).toHaveBeenCalledOnce();
+    const [prunedPaths] = api.pruneMetadataCache.mock.calls[0] as [string[]];
+    expect(prunedPaths.sort()).toEqual(["Big-1.md", "Big-2.md", "Big-3.md", "Big-4.md", "Big-5.md"]);
+  });
+
+  it("prunes rows for files no longer in the vault when the fallback path re-runs", async () => {
+    const fake = new FakeVault({ "Keep.md": "# Keep", "Gone.md": "# Gone" });
+    const api = installChunkedApi();
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+    expect(api.pruneMetadataCache).toHaveBeenCalledWith(["Keep.md", "Gone.md"]);
+
+    api.upsertMetadataCacheEntries.mockClear();
+    api.pruneMetadataCache.mockClear();
+    fake.removeFile("Gone.md");
+
+    // A second renderer-fallback cycle (e.g. the utility process stays
+    // unavailable across a vault reopen) must prune the now-deleted file
+    // rather than leaving its row stale forever.
+    (cache as unknown as { backgroundUnavailable: boolean }).backgroundUnavailable = true;
+    await (cache as unknown as { applyRendererFallback: () => Promise<void> }).applyRendererFallback();
+
+    expect(api.pruneMetadataCache).toHaveBeenCalledWith(["Keep.md"]);
+  });
+
+  it("reports a diagnostic when the renderer fallback is entered because the utility process resolved unavailable", async () => {
+    const fake = new FakeVault({ "A.md": "# A", "B.md": "# B" });
+    const api = installChunkedApi(async () => null);
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+
+    expect(api.reportMetadataFallback).toHaveBeenCalledOnce();
+    const [info] = api.reportMetadataFallback.mock.calls[0] as [{ reason: string; fileCount: number }];
+    expect(info.fileCount).toBe(2);
+    expect(info.reason).toMatch(/non-true/i);
+  });
+
+  it("reports a diagnostic with the rejection reason when starting the utility process throws", async () => {
+    const fake = new FakeVault({ "A.md": "# A" });
+    const api = installChunkedApi(() => Promise.reject(new Error("spawn ENOENT")));
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+
+    expect(api.reportMetadataFallback).toHaveBeenCalledOnce();
+    const [info] = api.reportMetadataFallback.mock.calls[0] as [{ reason: string; fileCount: number }];
+    expect(info.reason).toMatch(/spawn ENOENT/);
+  });
+
+  it("does not report a fallback diagnostic when the background indexer is available", async () => {
+    const fake = new FakeVault({ "A.md": "# A" });
+    const api = installChunkedApi(async () => true);
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+
+    expect(api.reportMetadataFallback).not.toHaveBeenCalled();
+    expect(api.upsertMetadataCacheEntries).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the single-shot writeMetadataCache call on a host without chunked persistence support (e.g. mobile)", async () => {
+    // No upsertMetadataCacheEntries/pruneMetadataCache on this host — mirrors
+    // createLegacyGeodeFacade, which mobile/browser hosts use.
+    const fake = new FakeVault({ "A.md": "# A", "B.md": "# B" });
+    const api = {
+      readMetadataCache: vi.fn(async () => null),
+      writeMetadataCache: vi.fn(async () => {}),
+      startMetadataIndexer: vi.fn(async () => null),
+      onMetadataIndexerMessage: vi.fn(),
+    };
+    vi.stubGlobal("window", { geode: api });
+    const cache = new MetadataCache(fake.asVault());
+
+    await cache.initialize();
+    await cache.waitForBackgroundIdle();
+
+    expect(api.writeMetadataCache).toHaveBeenCalledOnce();
+    const [payload] = api.writeMetadataCache.mock.calls[0] as [{ entries: Record<string, unknown> }];
+    expect(Object.keys(payload.entries).sort()).toEqual(["A.md", "B.md"]);
   });
 });

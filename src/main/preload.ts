@@ -64,7 +64,20 @@ const api = {
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),
   readMetadataCache: (): Promise<unknown | null> => ipcRenderer.invoke("metadata-cache-read"),
   writeMetadataCache: (data: unknown): Promise<void> => ipcRenderer.invoke("metadata-cache-write", data),
+  /**
+   * Upsert one bounded batch of entries (a partial snapshot, not the whole
+   * vault). Used by the renderer's chunked persist path so no single IPC
+   * call ever needs to structured-clone a full-vault-sized payload — see
+   * `metadata-cache-store.ts`'s `pruneMetadataEntries` doc comment.
+   */
+  upsertMetadataCacheEntries: (data: unknown): Promise<void> =>
+    ipcRenderer.invoke("metadata-cache-upsert", data),
+  /** Delete any persisted row whose path is not in `paths` — call once, after all upsert batches have landed. */
+  pruneMetadataCache: (paths: string[]): Promise<void> => ipcRenderer.invoke("metadata-cache-prune", paths),
   startMetadataIndexer: (): Promise<true | null> => ipcRenderer.invoke("metadata-indexer-start"),
+  /** Fire-and-forget diagnostic: the renderer had to fall back to indexing the vault itself because the background utility process was unavailable. */
+  reportMetadataFallback: (info: { reason: string; fileCount: number }): Promise<void> =>
+    ipcRenderer.invoke("metadata-fallback-entered", info),
   onMetadataIndexerMessage: (cb: (message: any) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, message: any) => cb(message);
     ipcRenderer.on("metadata-indexer-message", listener);
@@ -156,7 +169,28 @@ const heartbeat = setInterval(() => ipcRenderer.send("renderer-heartbeat"), hear
 heartbeat.unref?.();
 ipcRenderer.send("renderer-heartbeat");
 
-export type GeodeApi = typeof api;
+type ElectronOnlyGeodeApi = typeof api;
+
+/**
+ * `upsertMetadataCacheEntries`/`pruneMetadataCache`/`reportMetadataFallback`
+ * are declared optional here (though the real Electron `api` object above
+ * always implements them) so that other `GeodeApi`-shaped hosts —
+ * `createLegacyGeodeFacade` wraps `HostServices` for mobile/browser, whose
+ * `MetadataIndexService` never grew a chunked-write or diagnostic-report
+ * capability — aren't forced to fake an implementation just to satisfy this
+ * type. `MetadataCache.persistCache()` checks for their presence and falls
+ * back to the original single-shot `writeMetadataCache` call when they're
+ * absent, which is exactly what those hosts already did before chunked
+ * persistence existed — see its doc comment.
+ */
+export type GeodeApi = Omit<
+  ElectronOnlyGeodeApi,
+  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback"
+> & {
+  upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
+  pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
+  reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
+};
 
 // The renderer runs with contextIsolation disabled (see main.ts's
 // webPreferences and the plugin-hosting rationale there), so the
