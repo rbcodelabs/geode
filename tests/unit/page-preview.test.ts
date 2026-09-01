@@ -30,6 +30,27 @@ describe("safePreviewMarkdownSource", () => {
     const source = "---\ntitle: Hidden\n---\n%%secret%% [[Target|Alias]] ![[Embed]] `[[Code]] ![[CodeEmbed]]`";
     expect(safePreviewMarkdownSource(source)).toBe(" Alias  `[[Code]] ![[CodeEmbed]]`");
   });
+
+  it("neutralizes shortcut-reference images while preserving labels, definitions, links, and code", () => {
+    const source = [
+      "![tracker] ![ Mixed Case Label ]",
+      String.raw`\![odd escaped] \\![even tracker] \\\![odd escaped three]`,
+      String.raw`![adjacent a]![adjacent b] \\![even adjacent a]\\![even adjacent b]`,
+      "[ordinary][tracker] `![tracker]`",
+      "",
+      "[tracker]: https://example.com/tracker.png",
+      "[mixed case label]: https://example.com/mixed.png",
+    ].join("\n");
+    expect(safePreviewMarkdownSource(source)).toBe([
+      "tracker  Mixed Case Label ",
+      String.raw`\![odd escaped] \\even tracker \\\![odd escaped three]`,
+      String.raw`adjacent aadjacent b \\even adjacent a\\even adjacent b`,
+      "[ordinary][tracker] `![tracker]`",
+      "",
+      "[tracker]: https://example.com/tracker.png",
+      "[mixed case label]: https://example.com/mixed.png",
+    ].join("\n"));
+  });
 });
 
 describe("previewMarkdownExcerpt", () => {
