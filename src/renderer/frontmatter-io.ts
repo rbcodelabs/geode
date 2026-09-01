@@ -18,6 +18,11 @@ function newlineStyle(text: string): "\n" | "\r\n" {
   return text.match(/\r?\n/)?.[0] === "\r\n" ? "\r\n" : "\n";
 }
 
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
+  return typeof (value as { then?: unknown }).then === "function";
+}
+
 /**
  * Pure text transform: parse `text`'s frontmatter block (if any) into a
  * plain object, run `mutate` on it, and splice the re-stringified result
@@ -26,7 +31,7 @@ function newlineStyle(text: string): "\n" | "\r\n" {
  * trailing newline" behavior) but works on plain text instead of a live
  * CodeMirror `EditorView`, so it doesn't need an open editor.
  */
-export function patchFrontmatterText(text: string, mutate: (fm: Record<string, unknown>) => void): string {
+export function patchFrontmatterText(text: string, mutate: (fm: Record<string, unknown>) => unknown): string {
   const match = text.match(FM_RE);
 
   let fm: Record<string, unknown> = {};
@@ -39,7 +44,13 @@ export function patchFrontmatterText(text: string, mutate: (fm: Record<string, u
     }
   }
 
-  mutate(fm);
+  const mutationResult = mutate(fm);
+  if (isThenable(mutationResult)) {
+    // The public callback contract is synchronous. Consume a later rejection
+    // so an accidentally async callback cannot also create an unhandled one.
+    void Promise.resolve(mutationResult).catch(() => undefined);
+    throw new Error("FileManager.processFrontMatter requires a synchronous callback; received a thenable");
+  }
 
   const hasProps = Object.keys(fm).length > 0;
   const newline = newlineStyle(text);
@@ -62,7 +73,7 @@ export function patchFrontmatterText(text: string, mutate: (fm: Record<string, u
 export async function patchFrontmatter(
   vault: VaultWriter,
   file: TFile,
-  mutate: (fm: Record<string, unknown>) => void,
+  mutate: (fm: Record<string, unknown>) => unknown,
   options?: DataWriteOptions,
   beforeMutate?: () => void,
 ): Promise<void> {

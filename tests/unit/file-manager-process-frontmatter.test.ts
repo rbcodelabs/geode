@@ -194,4 +194,23 @@ describe("FileManager.processFrontMatter", () => {
     expect(vault.modify).toHaveBeenCalledTimes(1);
     expect(readFrontmatter(contents.get("Note.md")!)).toMatchObject({ recoveredAfterSerialization: true });
   });
+
+  it("rejects thenable callbacks before write and recovers the path queue", async () => {
+    const { app, files, vault, contents } = fakeApp({ "Note.md": "Body\n" });
+    const manager = new FileManager(app);
+    const note = files.get("Note.md")!;
+
+    await expect(manager.processFrontMatter(note, async (fm) => {
+      await Promise.resolve();
+      fm.lateMutation = true;
+    })).rejects.toThrow(/synchronous callback/);
+    expect(vault.modify).not.toHaveBeenCalled();
+
+    await expect(manager.processFrontMatter(note, (fm) => {
+      fm.recoveredAfterThenable = true;
+    })).resolves.toBeUndefined();
+    expect(vault.modify).toHaveBeenCalledTimes(1);
+    expect(readFrontmatter(contents.get("Note.md")!)).toMatchObject({ recoveredAfterThenable: true });
+    expect(readFrontmatter(contents.get("Note.md")!)).not.toHaveProperty("lateMutation");
+  });
 });
