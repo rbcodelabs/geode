@@ -42,6 +42,16 @@ function fixture(): { vaultDir: string; userDataDir: string } {
       "<script>window.previewUnsafe = true</script>",
       "<button autofocus onclick=\"window.previewUnsafe = true\">Unsafe</button>",
       "![remote](https://example.com/tracker.png) [nested navigation](https://example.com)",
+      "![Shortcut Preview Tracker]",
+      "[shortcut preview tracker]: https://example.com/shortcut-preview-tracker.png",
+      String.raw`\\![Even Slash Preview Tracker]`,
+      "[even slash preview tracker]: https://example.com/even-slash-preview-tracker.png",
+      String.raw`![Adjacent Preview One]![Adjacent Preview Two]`,
+      "[adjacent preview one]: https://example.com/adjacent-preview-one.png",
+      "[adjacent preview two]: https://example.com/adjacent-preview-two.png",
+      String.raw`\\![Even Adjacent One]\\![Even Adjacent Two]`,
+      "[even adjacent one]: https://example.com/even-adjacent-one.png",
+      "[even adjacent two]: https://example.com/even-adjacent-two.png",
       "<svg width=\"1\" height=\"1\" aria-hidden=\"true\"><image xlink:href=\"https://example.com/svg-tracker.png\"></image><a xlink:href=\"javascript:window.previewUnsafe = true\"><text>Unsafe SVG link</text></a></svg>",
       "![[Other]]",
       "## Later",
@@ -90,7 +100,15 @@ test("Reading View previews resolved wikilinks and source-relative Markdown head
     const remotePreviewRequests: string[] = [];
     const previewConsoleErrors: string[] = [];
     window.on("request", (request) => {
-      if (request.url().includes("example.com/tracker.png")) remotePreviewRequests.push(request.url());
+      if (
+        request.url().includes("example.com/tracker.png") ||
+        request.url().includes("example.com/shortcut-preview-tracker.png") ||
+        request.url().includes("example.com/even-slash-preview-tracker.png") ||
+        request.url().includes("example.com/adjacent-preview-one.png") ||
+        request.url().includes("example.com/adjacent-preview-two.png") ||
+        request.url().includes("example.com/even-adjacent-one.png") ||
+        request.url().includes("example.com/even-adjacent-two.png")
+      ) remotePreviewRequests.push(request.url());
     });
     window.on("console", (message) => {
       if (message.type() === "error" && message.text().includes("Failed to render page preview")) {

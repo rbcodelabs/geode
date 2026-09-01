@@ -56,6 +56,11 @@ export function safePreviewMarkdownSource(source: string): string {
   source = source.replace(/%%[\s\S]*?%%/g, "");
   source = source.replace(/!\[\[[^\[\]\n]+\]\]/g, "");
   source = source.replace(/!\[([^\]\n]*)\](?:\([^\n)]*\)|\[[^\]\n]*\])/g, "$1");
+  source = source.replace(
+    /([\\]*)!\[([^\]\n]+)\](?![[(])/g,
+    (match, backslashes: string, label: string) =>
+      backslashes.length % 2 === 0 ? `${backslashes}${label}` : match
+  );
   source = source.replace(/\[\[([^\[\]\n]+)\]\]/g, (_match, inner: string) => {
     const pipe = inner.indexOf("|");
     return pipe === -1 ? inner.replace(/#/g, " > ") : inner.slice(pipe + 1).trim();
