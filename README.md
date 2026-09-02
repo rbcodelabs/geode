@@ -107,19 +107,51 @@ the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 `v*` tag is pushed. Windows and Linux builds aren't set up yet — see the
 [roadmap](docs/spec/00-overview.md) item for packaging.
 
+### Install/update via script (recommended)
+
+`scripts/geode-update.mts` installs the latest release, or updates an
+existing install, in one command. It talks to the public GitHub API directly
+(no `gh` CLI, no account, no auth needed — this repo is public) and
+**automatically fixes the Gatekeeper "damaged app" warning** described below,
+so the manual `xattr`/right-click steps become a fallback rather than a
+required step. Requires macOS and Node.js 23.6+ (no install needed — Node
+runs `.mts` files directly). Run it straight from GitHub, no clone required:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rbcodelabs/geode/main/scripts/geode-update.mts -o /tmp/geode-update.mts && node /tmp/geode-update.mts
+```
+
+Or, from a checkout: `node scripts/geode-update.mts`. Useful flags:
+
+```bash
+node scripts/geode-update.mts --check      # report installed vs. latest version, change nothing
+node scripts/geode-update.mts --force      # reinstall even if already up to date
+node scripts/geode-update.mts --version X  # install a specific release, e.g. --version 0.11.1
+node scripts/geode-update.mts --user       # install to ~/Applications instead of /Applications
+node scripts/geode-update.mts --keep       # keep the downloaded dmg in ~/Downloads
+node scripts/geode-update.mts --help       # full usage
+```
+
+### Install manually
+
 1. Download `Geode-<version>-arm64.dmg` (Apple Silicon) or
    `Geode-<version>.dmg` (Intel) from the latest release.
 2. Open the dmg and drag **Geode.app** to **Applications**.
 3. **These builds are ad-hoc signed but not notarized** (no Apple Developer
    ID yet). The ad-hoc signature lets the app launch on any Mac — including
    Apple Silicon, which refuses to run fully-unsigned apps — but Gatekeeper
-   still shows an "unidentified developer" warning on the first launch of a
-   downloaded copy. To open it:
+   still shows an "unidentified developer" warning, or reports the app as
+   "damaged," on the first launch of a downloaded copy. To open it (only
+   needed if you installed manually — the script above handles this for
+   you):
    - Right-click (or Control-click) **Geode.app** → **Open** → **Open** again
      in the confirmation dialog (also available under System Settings →
      Privacy & Security → **Open Anyway**), **or**
    - Run `xattr -dr com.apple.quarantine /Applications/Geode.app` in Terminal
-     once, then launch normally.
+     once, then launch normally. If Gatekeeper instead says the app is
+     "damaged," that's not a quarantine issue and `xattr` won't fix it — the
+     dmg's ad-hoc signature is missing its resource manifest. Re-sign it
+     locally instead: `codesign --force --deep --sign - /Applications/Geode.app`.
 
    Full Developer ID signing + notarization (no warning at all) is a
    follow-up that needs a paid Apple Developer account.
