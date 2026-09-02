@@ -4,6 +4,7 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { installCommunity, resolveCommunity } from "./community";
+import { bootstrapFreshVault } from "./default-vault-bootstrap";
 import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import { withPathLock } from "./path-lock";
@@ -319,6 +320,11 @@ function registerIpc() {
     if (prev?.indexer) await prev.indexer.shutdown();
     prev?.metadataDb?.close();
     const root = path.resolve(vaultPath);
+    // Seed a brand-new (never-before-opened) vault with whatever a deploying
+    // organization has dropped into resources/ ahead of their build. No-op
+    // for every upstream build and for any vault that's been opened before
+    // — see default-vault-bootstrap.ts.
+    await bootstrapFreshVault(root);
     const files = await listVaultFiles(root);
     let indexer: MetadataIndexerHost | null = null;
     let indexerReady: Promise<unknown | null> = Promise.resolve(null);
