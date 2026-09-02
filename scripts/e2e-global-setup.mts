@@ -16,11 +16,14 @@
  */
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertElectronE2EEnvironment } from "./e2e-environment.mts";
 import { AUTO_REAP_MIN_AGE_MS, reapE2EArtifacts } from "./e2e-reap.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export default async function globalSetup(): Promise<void> {
+  assertElectronE2EEnvironment();
+
   const { killedPids, removedDirs } = await reapE2EArtifacts({
     repoRoot,
     minAgeMs: AUTO_REAP_MIN_AGE_MS,
