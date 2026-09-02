@@ -35,6 +35,27 @@ test("ordinary and ratio splits preserve their requested allocations", async () 
   await expect(window.locator(".workspace-center > .workspace-center-resize-handle")).toHaveCount(1);
 });
 
+test("a split workspace keeps a usable right sidebar collapse and expand control", async () => {
+  await window.evaluate(() => (window as any).app.workspace.splitActiveLeaf("vertical"));
+
+  const rightToggle = window.locator(".workspace-center .sidebar-toggle-button.mod-right").last();
+  const rightSidebar = window.locator(".workspace-sidebar.mod-right");
+  await expect(rightToggle).toBeVisible();
+  await expect(rightToggle).toHaveAccessibleName("Collapse sidebar");
+  await rightToggle.click();
+  await expect(rightSidebar).toHaveClass(/is-collapsed/);
+
+  const expandToggle = window.locator(".workspace-center .sidebar-toggle-button.mod-right").last();
+  await expect(expandToggle).toBeVisible();
+  await expect(expandToggle).toHaveAccessibleName("Expand sidebar");
+  await expandToggle.click();
+  await expect(rightSidebar).not.toHaveClass(/is-collapsed/);
+  if (screenshotDir) {
+    fs.mkdirSync(screenshotDir, { recursive: true });
+    await window.screenshot({ path: path.join(screenshotDir, "split-workspace-right-sidebar-reopened.png") });
+  }
+});
+
 test("a real center-divider drag clamps, serializes, and restores after restart", async () => {
   await window.evaluate(async () => {
     const app = (window as any).app;
