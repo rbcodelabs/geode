@@ -2670,17 +2670,35 @@ export class App {
   private async mountDocumentInLeaf(leaf: WorkspaceLeaf, file: TFile, recordHistory: boolean): Promise<void> {
     const previousPath = leaf.view?.getFile?.()?.path;
     if (file.extension === "canvas") {
-      const view = new CanvasView(this);
-      await view.setFile(file);
-      await leaf.setView(view);
+      if (leaf.view instanceof CanvasView) {
+        await leaf.view.setFile(file, true);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new CanvasView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     } else if (file.extension === "base") {
-      const view = new BaseView(this);
-      await view.setFile(file);
-      await leaf.setView(view);
+      if (leaf.view instanceof BaseView) {
+        await leaf.view.setFile(file, true);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new BaseView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     } else if (file.extension === "md") {
-      const view = new MarkdownView(this);
-      await view.setFile(file);
-      await leaf.setView(view);
+      if (leaf.view instanceof MarkdownView) {
+        await leaf.view.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new MarkdownView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     } else {
       throw new Error(`Unsupported document history file extension: .${file.extension}`);
     }

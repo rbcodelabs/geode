@@ -10,10 +10,53 @@ function makeVault() {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-actions-ud-"));
   for (const name of ["A.md", "B.md", "C.md", "D.md"]) fs.writeFileSync(path.join(vaultDir, name), `# ${name}\n`);
   fs.writeFileSync(path.join(vaultDir, "Board.canvas"), JSON.stringify({ nodes: [], edges: [] }));
+  fs.writeFileSync(path.join(vaultDir, "Board 2.canvas"), JSON.stringify({ nodes: [], edges: [] }));
   fs.writeFileSync(path.join(vaultDir, "Data.base"), "filters:\n  and: []\nviews:\n  - type: table\n    name: Table\n");
+  fs.writeFileSync(path.join(vaultDir, "Data 2.base"), "filters:\n  and: []\nviews:\n  - type: table\n    name: Table\n");
   fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
   return { vaultDir, userDataDir };
 }
+
+test("same-type document navigation preserves view identity and lifecycle", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    const result = await win.evaluate(async () => {
+      const a = (window as any).app;
+      const cases = [
+        ["A.md", "B.md"],
+        ["Board.canvas", "Board 2.canvas"],
+        ["Data.base", "Data 2.base"],
+      ];
+      const results = [];
+      for (const [firstPath, secondPath] of cases) {
+        await a.openFile(a.vault.getFileByPath(firstPath), true);
+        const leaf = a.workspace.getActiveLeaf();
+        const originalView = leaf.view;
+        let opens = 0;
+        let closes = 0;
+        const originalOpen = originalView.onOpen.bind(originalView);
+        const originalClose = originalView.onClose.bind(originalView);
+        originalView.onOpen = async () => { opens += 1; await originalOpen(); };
+        originalView.onClose = async () => { closes += 1; await originalClose(); };
+        await a.openFile(a.vault.getFileByPath(secondPath), false);
+        results.push({ same: leaf.view === originalView, opens, closes, path: leaf.view.getFile().path });
+      }
+      return results;
+    });
+    expect(result).toEqual([
+      { same: true, opens: 0, closes: 0, path: "B.md" },
+      { same: true, opens: 0, closes: 0, path: "Board 2.canvas" },
+      { same: true, opens: 0, closes: 0, path: "Data 2.base" },
+    ]);
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
 
 test("document tabs keep independent navigation with working back and forward controls", async () => {
   const { vaultDir, userDataDir } = makeVault();

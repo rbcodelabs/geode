@@ -172,13 +172,13 @@ export class MarkdownView implements View {
   async setFile(file: TFile): Promise<void> {
     this.pagePreview.hide();
     await this.flush();
+    const text = await this.app.vault.read(file);
     this.file = file;
     this.titleEl.textContent = file.basename;
     this.titleParentEl.innerHTML = "";
     if (file.parent) {
       for (const el of buildBreadcrumbs(file.parent)) this.titleParentEl.appendChild(el);
     }
-    const text = await this.app.vault.read(file);
     this.clearConflictState();
     this.lastSavedText = text;
     this.buildEditor(text);

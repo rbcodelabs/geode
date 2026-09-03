@@ -164,6 +164,33 @@ describe("per-leaf document navigation history", () => {
     expect(opened).toEqual(["A.md"]);
   });
 
+  it("binds navigation controls when a sidebar-created leaf moves into a main group", () => {
+    const { leaf } = leafWithFiles(["A.md", "B.md"]);
+    leaf.recordDocumentNavigation("A.md");
+    leaf.recordDocumentNavigation("B.md");
+    const listeners = new Map<string, EventListener>();
+    const attributes = new Map<string, string>([["aria-disabled", "true"]]);
+    const back = {
+      dataset: { documentNavigation: "back" },
+      tabIndex: -1,
+      addEventListener: vi.fn((type: string, listener: EventListener) => listeners.set(type, listener)),
+      getAttribute: (name: string) => attributes.get(name) ?? null,
+      setAttribute: (name: string, value: string) => void attributes.set(name, value),
+      click: vi.fn(),
+    } as unknown as HTMLElement;
+    (leaf as any).contentEl = { querySelectorAll: () => [back] };
+    (leaf.group as any).isSidebar = true;
+    leaf.refreshDocumentNavigationControls();
+    expect(back.addEventListener).not.toHaveBeenCalled();
+
+    (leaf.group as any).isSidebar = false;
+    leaf.refreshDocumentNavigationControls();
+    leaf.refreshDocumentNavigationControls();
+    expect(back.addEventListener).toHaveBeenCalledTimes(2);
+    expect(attributes.get("aria-disabled")).toBe("false");
+    expect(back.tabIndex).toBe(0);
+  });
+
   it("bounds retained entries to the most recent 100 documents", async () => {
     const paths = Array.from({ length: 105 }, (_, index) => `${index}.md`);
     const { leaf, opened } = leafWithFiles(paths);

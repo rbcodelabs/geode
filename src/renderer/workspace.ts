@@ -112,6 +112,7 @@ export class WorkspaceLeaf {
   private documentHistory: string[] = [];
   private documentHistoryIndex = -1;
   private documentNavigationQueue: Promise<void> = Promise.resolve();
+  private boundDocumentNavigationButtons = new WeakSet<HTMLElement>();
 
   constructor(
     public group: LeafContainer,
@@ -337,9 +338,16 @@ export class WorkspaceLeaf {
     }
   }
 
+  /** Rebind controls after this live leaf moves from a sidebar into a main group. */
+  refreshDocumentNavigationControls(): void {
+    this.bindDocumentNavigationButtons();
+  }
+
   private bindDocumentNavigationButtons(): void {
     if (this.group.isSidebar) return;
     for (const button of this.contentEl.querySelectorAll<HTMLElement>("[data-document-navigation]")) {
+      if (this.boundDocumentNavigationButtons.has(button)) continue;
+      this.boundDocumentNavigationButtons.add(button);
       const direction = button.dataset.documentNavigation;
       button.addEventListener("click", () => {
         if (button.getAttribute("aria-disabled") === "true") return;
@@ -361,6 +369,7 @@ export class WorkspaceLeaf {
     this.documentHistory ??= [];
     this.documentHistoryIndex ??= -1;
     this.documentNavigationQueue ??= Promise.resolve();
+    this.boundDocumentNavigationButtons ??= new WeakSet();
   }
 
   private updateDocumentNavigationButtons(): void {
@@ -729,6 +738,7 @@ export class TabGroup implements LeafContainer {
     if (leaf.view && leaf.view.containerEl.parentElement !== leaf.contentEl) {
       leaf.contentEl.appendChild(leaf.view.containerEl);
     }
+    leaf.refreshDocumentNavigationControls();
     const at = index ?? this.leaves.length;
     this.leaves.splice(Math.max(0, Math.min(at, this.leaves.length)), 0, leaf);
     this.renderTabs();
