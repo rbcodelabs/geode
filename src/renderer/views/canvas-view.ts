@@ -180,14 +180,19 @@ export class CanvasView implements View {
     }
   }
 
-  async setFile(file: TFile): Promise<void> {
+  async setFile(file: TFile, requireValid = false): Promise<void> {
+    await this.persistQueue;
+    const text = await this.app.vault.read(file);
+    // Navigation is transactional: validate before changing the live file,
+    // title, recovery state, or history owned by this view.
+    if (requireValid) parseCanvas(text);
     this.file = file;
     this.conflictReadOnly = false;
     this.surfaceEl.inert = false;
     this.lastKnownText = null;
     this.titleEl.textContent = file.basename;
     if (this.containerEl.classList.contains("canvas-embed-view")) this.containerEl.dataset.canvasPath = file.path;
-    await this.reloadFromFile(true);
+    this.load(text, true);
   }
 
   /** Mount the real Canvas surface without its normal workspace-tab header. */

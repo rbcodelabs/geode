@@ -257,9 +257,12 @@ export class BaseView implements View {
     await this.setFile(file);
   }
 
-  async setFile(file: TFile): Promise<void> {
+  async setFile(file: TFile, requireValid = false): Promise<void> {
     await this.persistQueue;
     await Promise.all([...this.sourcePersistsInFlight]);
+    const text = await this.app.vault.read(file);
+    const parsed = parseBaseFile(text);
+    if (requireValid && "error" in parsed) throw new Error(`Couldn't parse base: ${parsed.error}`);
     this.tableView.resetForFile();
     this.cardsView.destroy();
     this.sourceEdit = null;
@@ -282,7 +285,7 @@ export class BaseView implements View {
     this.bodyEl.inert = false;
     this.tableView.setReadOnly(false);
     this.titleEl.textContent = file.basename;
-    await this.reloadFromDisk();
+    await this.applyText(text);
   }
 
   /**
