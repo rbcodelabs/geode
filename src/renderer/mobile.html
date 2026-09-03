@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'" />
+    <!-- Kept byte-identical to the policy in src/renderer/index.html; the
+         rationale for each directive, including font-src data:, lives there. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" />
     <title>Geode Mobile</title>
     <link rel="stylesheet" href="./app.css" />
   </head>

@@ -10,8 +10,19 @@
       Obsidian's own (non-sandboxed) plugin trust model; this does not
       grant Node/Electron access, which stays gated behind contextIsolation
       + nodeIntegration:false in src/main/main.ts.
+
+      font-src 'self' data: — the only way a community theme can ship a font.
+      ThemeManager reads theme.css as text and injects it as a <style> element
+      (src/renderer/theme-manager.ts), so relative url() in a theme resolves
+      against the app bundle rather than the theme's own directory; and
+      community install only ever writes manifest.json/main.js/styles.css/
+      theme.css (ALLOWED_FILES in src/main/community.ts), so a font file cannot
+      travel with a theme. A data: URI is what's left. Fonts are passive
+      resources — no script execution — and this is strictly narrower than
+      allowing a remote font CDN. Matches img-src, and the artifact sandbox CSP
+      (src/artifacts/security-policy.ts) already allows data: fonts.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" />
     <title>Geode</title>
     <link rel="stylesheet" href="../../styles/app.css" />
   </head>

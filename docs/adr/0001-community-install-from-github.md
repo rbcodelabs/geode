@@ -185,6 +185,14 @@ New IPC (Phase 1+): `community-resolve`, `community-install`, `community-latest`
 (`manifest.json`, `main.js`, `styles.css`, `theme.css`) — remote asset names are
 never used to build paths.
 
+A consequence worth stating: a theme cannot ship font files. Fonts are not on the
+whitelist, and `ThemeManager` injects `theme.css` as a `<style>` element rather
+than linking it, so a relative `url()` in a theme resolves against the app bundle
+rather than the theme's own directory. Themes that want a custom typeface embed
+it in `theme.css` as a `data:` URI, which the renderer CSP permits via
+`font-src 'self' data:` (see `src/renderer/index.html`). Remote font origins stay
+blocked.
+
 The chokidar watcher already ignores dotfile paths, so writing under `.geode/`
 generates no file-explorer churn (verified).
 
