@@ -2655,42 +2655,32 @@ export class App {
     this.notify(`Cannot open .${file.extension} files yet`);
   }
 
-  /** Open a supported document in a specific leaf; history traversal opts out of recording. */
-  async openFileInLeaf(leaf: WorkspaceLeaf, file: TFile, recordHistory = true): Promise<void> {
+  /** Open a supported document in a specific leaf; every load is serialized by that leaf. */
+  async openFileInLeaf(
+    leaf: WorkspaceLeaf,
+    file: TFile,
+    recordHistory = true,
+    alreadySerialized = false
+  ): Promise<void> {
+    const open = async () => this.mountDocumentInLeaf(leaf, file, recordHistory);
+    if (alreadySerialized) return open();
+    return leaf.runDocumentNavigation(open);
+  }
+
+  private async mountDocumentInLeaf(leaf: WorkspaceLeaf, file: TFile, recordHistory: boolean): Promise<void> {
     const previousPath = leaf.view?.getFile?.()?.path;
     if (file.extension === "canvas") {
-      const current = leaf.view;
-      if (current instanceof CanvasView) {
-        await current.setFile(file);
-        leaf.group.renderTabs();
-        this.workspace.trigger("file-open", file);
-      } else {
-        const view = new CanvasView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
-      }
+      const view = new CanvasView(this);
+      await view.setFile(file);
+      await leaf.setView(view);
     } else if (file.extension === "base") {
-      const current = leaf.view;
-      if (current instanceof BaseView) {
-        await current.setFile(file);
-        leaf.group.renderTabs();
-        this.workspace.trigger("file-open", file);
-      } else {
-        const view = new BaseView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
-      }
+      const view = new BaseView(this);
+      await view.setFile(file);
+      await leaf.setView(view);
     } else if (file.extension === "md") {
-      const current = leaf.view;
-      if (current instanceof MarkdownView) {
-        await current.setFile(file);
-        leaf.group.renderTabs();
-        this.workspace.trigger("file-open", file);
-      } else {
-        const view = new MarkdownView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
-      }
+      const view = new MarkdownView(this);
+      await view.setFile(file);
+      await leaf.setView(view);
     } else {
       throw new Error(`Unsupported document history file extension: .${file.extension}`);
     }

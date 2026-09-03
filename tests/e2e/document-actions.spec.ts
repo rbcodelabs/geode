@@ -15,7 +15,7 @@ function makeVault() {
   return { vaultDir, userDataDir };
 }
 
-test("document tabs keep independent bounded navigation with working back and forward controls", async () => {
+test("document tabs keep independent navigation with working back and forward controls", async () => {
   const { vaultDir, userDataDir } = makeVault();
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
@@ -66,6 +66,60 @@ test("document tabs keep independent bounded navigation with working back and fo
     });
     await active.getByRole("button", { name: "Navigate back" }).click();
     await expect(active.locator(".view-header-title")).toHaveText("Board");
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("document navigation serializes races and leaves the mounted file unchanged after a read failure", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      await a.openFile(a.vault.getFileByPath("A.md"), false);
+      const originalRead = a.vault.read.bind(a.vault);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      a.vault.read = async (file: any) => {
+        if (file.path === "B.md") await gate;
+        return originalRead(file);
+      };
+      const first = a.openFile(a.vault.getFileByPath("B.md"), false);
+      const second = a.openFile(a.vault.getFileByPath("C.md"), false);
+      a.__releaseDocumentNavigation = release;
+      a.__documentNavigationRace = Promise.all([first, second]);
+      a.__restoreDocumentRead = () => { a.vault.read = originalRead; };
+    });
+    const active = win.locator(".workspace-leaf.mod-active");
+    await expect(active.locator(".view-header-title")).toHaveText("A");
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      a.__releaseDocumentNavigation();
+      await a.__documentNavigationRace;
+    });
+    await expect(active.locator(".view-header-title")).toHaveText("C");
+    await active.getByRole("button", { name: "Navigate back" }).click();
+    await expect(active.locator(".view-header-title")).toHaveText("B");
+
+    await win.evaluate(() => {
+      const a = (window as any).app;
+      a.__restoreDocumentRead();
+      const originalRead = a.vault.read.bind(a.vault);
+      a.vault.read = async (file: any) => {
+        if (file.path === "A.md") throw new Error("deterministic read failure");
+        return originalRead(file);
+      };
+    });
+    await active.getByRole("button", { name: "Navigate back" }).click();
+    await expect(win.locator(".notice", { hasText: "Could not navigate: deterministic read failure" })).toBeVisible();
+    await expect(active.locator(".view-header-title")).toHaveText("B");
+    await expect(active.getByRole("button", { name: "Navigate back" })).toHaveAttribute("aria-disabled", "false");
+    await expect(active.getByRole("button", { name: "Navigate forward" })).toHaveAttribute("aria-disabled", "false");
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });

@@ -111,7 +111,7 @@ export class WorkspaceLeaf {
   private opened = false;
   private documentHistory: string[] = [];
   private documentHistoryIndex = -1;
-  private documentNavigationInFlight = false;
+  private documentNavigationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     public group: LeafContainer,
@@ -254,12 +254,14 @@ export class WorkspaceLeaf {
 
   /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
   async openFile(file: TFile): Promise<void> {
-    const previousPath = this.view?.getFile?.()?.path;
-    const view = this.app.createMarkdownView();
-    await view.setFile(file);
-    await this.setView(view);
-    if (previousPath) this.recordDocumentNavigation(previousPath);
-    this.recordDocumentNavigation(file.path);
+    await this.runDocumentNavigation(async () => {
+      const previousPath = this.view?.getFile?.()?.path;
+      const view = this.app.createMarkdownView();
+      await view.setFile(file);
+      await this.setView(view);
+      if (previousPath) this.recordDocumentNavigation(previousPath);
+      this.recordDocumentNavigation(file.path);
+    });
   }
 
   /** Record a normal file navigation in this leaf without persisting it. */
@@ -280,19 +282,29 @@ export class WorkspaceLeaf {
   }
 
   canNavigateBack(): boolean {
+    if (this.group.isSidebar) return false;
     return this.findAvailableDocumentHistoryIndex(-1) !== -1;
   }
 
   canNavigateForward(): boolean {
+    if (this.group.isSidebar) return false;
     return this.findAvailableDocumentHistoryIndex(1) !== -1;
   }
 
   async navigateBack(): Promise<void> {
-    await this.traverseDocumentHistory(-1);
+    await this.runDocumentNavigation(() => this.traverseDocumentHistory(-1));
   }
 
   async navigateForward(): Promise<void> {
-    await this.traverseDocumentHistory(1);
+    await this.runDocumentNavigation(() => this.traverseDocumentHistory(1));
+  }
+
+  /** Serialize all document loads and their history mutations for this leaf. */
+  runDocumentNavigation<T>(operation: () => Promise<T>): Promise<T> {
+    this.ensureDocumentHistory();
+    const result = this.documentNavigationQueue.then(operation);
+    this.documentNavigationQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private findAvailableDocumentHistoryIndex(direction: -1 | 1): number {
@@ -309,7 +321,7 @@ export class WorkspaceLeaf {
 
   private async traverseDocumentHistory(direction: -1 | 1): Promise<void> {
     this.ensureDocumentHistory();
-    if (this.documentNavigationInFlight) return;
+    if (this.group.isSidebar) return;
     const index = this.findAvailableDocumentHistoryIndex(direction);
     if (index === -1) {
       this.updateDocumentNavigationButtons();
@@ -317,12 +329,10 @@ export class WorkspaceLeaf {
     }
     const file = this.app.vault.getFileByPath(this.documentHistory[index]);
     if (!file) return;
-    this.documentNavigationInFlight = true;
     try {
-      await this.app.openFileInLeaf(this, file, false);
+      await this.app.openFileInLeaf(this, file, false, true);
       this.documentHistoryIndex = index;
     } finally {
-      this.documentNavigationInFlight = false;
       this.updateDocumentNavigationButtons();
     }
   }
@@ -333,7 +343,10 @@ export class WorkspaceLeaf {
       const direction = button.dataset.documentNavigation;
       button.addEventListener("click", () => {
         if (button.getAttribute("aria-disabled") === "true") return;
-        void (direction === "back" ? this.navigateBack() : this.navigateForward());
+        void (direction === "back" ? this.navigateBack() : this.navigateForward()).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.app.notify(`Could not navigate: ${message}`);
+        });
       });
       button.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
@@ -347,7 +360,7 @@ export class WorkspaceLeaf {
   private ensureDocumentHistory(): void {
     this.documentHistory ??= [];
     this.documentHistoryIndex ??= -1;
-    this.documentNavigationInFlight ??= false;
+    this.documentNavigationQueue ??= Promise.resolve();
   }
 
   private updateDocumentNavigationButtons(): void {
