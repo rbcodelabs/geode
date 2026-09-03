@@ -1564,7 +1564,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 }
 
 /* Back/forward nav is main-pane-only. A view built in the main pane and then
-   dragged into a sidebar keeps its (now inert) nav buttons in the DOM; hide
+   dragged into a sidebar keeps its nav buttons in the DOM; hide
    them here so no docked pane ever shows them, regardless of how it got here.
    (Panes constructed directly in a sidebar already skip building them.) */
 .workspace-sidebar .view-header-nav-buttons {
@@ -1889,8 +1889,6 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   display: flex;
   align-items: center;
 }
-/* No navigation history to wire up yet (see Workspace in workspace.ts) —
-   rendered as inert placeholders rather than blocking on that follow-up. */
 .view-header-nav-buttons .clickable-icon[aria-disabled="true"] {
   opacity: 0.35;
   cursor: default;

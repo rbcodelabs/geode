@@ -9,9 +9,69 @@ function makeVault() {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-actions-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-actions-ud-"));
   for (const name of ["A.md", "B.md", "C.md", "D.md"]) fs.writeFileSync(path.join(vaultDir, name), `# ${name}\n`);
+  fs.writeFileSync(path.join(vaultDir, "Board.canvas"), JSON.stringify({ nodes: [], edges: [] }));
+  fs.writeFileSync(path.join(vaultDir, "Data.base"), "filters:\n  and: []\nviews:\n  - type: table\n    name: Table\n");
   fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
   return { vaultDir, userDataDir };
 }
+
+test("document tabs keep independent bounded navigation with working back and forward controls", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    const leafIds = await win.evaluate(async () => {
+      const a = (window as any).app;
+      for (const path of ["A.md", "Board.canvas", "Data.base"]) await a.openFile(a.vault.getFileByPath(path), false);
+      const first = a.workspace.getActiveLeaf();
+      await a.openFile(a.vault.getFileByPath("B.md"), true);
+      await a.openFile(a.vault.getFileByPath("D.md"), false);
+      return { first: first.id, second: a.workspace.getActiveLeaf().id };
+    });
+
+    const active = win.locator(".workspace-leaf.mod-active");
+    const back = active.getByRole("button", { name: "Navigate back" });
+    const forward = active.getByRole("button", { name: "Navigate forward" });
+    await expect(back).toHaveAttribute("aria-disabled", "false");
+    await expect(forward).toHaveAttribute("aria-disabled", "true");
+    await back.focus();
+    await back.press("Enter");
+    await expect(active.locator(".view-header-title")).toHaveText("B");
+    await expect(forward).toHaveAttribute("aria-disabled", "false");
+
+    await win.evaluate((id) => {
+      const a = (window as any).app;
+      const leaf = a.workspace.activeGroup.leaves.find((candidate: any) => candidate.id === id);
+      leaf.group.setActiveLeaf(leaf);
+    }, leafIds.first);
+    await expect(active.locator(".view-header-title")).toHaveText("Data");
+    await active.getByRole("button", { name: "Navigate back" }).click();
+    await expect(active.locator(".view-header-title")).toHaveText("Board");
+    await active.getByRole("button", { name: "Navigate back" }).click();
+    await expect(active.locator(".view-header-title")).toHaveText("A");
+    await active.getByRole("button", { name: "Navigate forward" }).click();
+    await expect(active.locator(".view-header-title")).toHaveText("Board");
+
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      await a.openFile(a.vault.getFileByPath("C.md"), false);
+    });
+    await expect(active.getByRole("button", { name: "Navigate forward" })).toHaveAttribute("aria-disabled", "true");
+
+    await win.evaluate(async () => {
+      const a = (window as any).app;
+      await a.openFile(a.vault.getFileByPath("D.md"), false);
+      await a.vault.trash(a.vault.getFileByPath("C.md"));
+    });
+    await active.getByRole("button", { name: "Navigate back" }).click();
+    await expect(active.locator(".view-header-title")).toHaveText("Board");
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
 
 test("new note selects Untitled for immediate rename and exposes shared document menus", async () => {
   const { vaultDir, userDataDir } = makeVault();

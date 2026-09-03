@@ -2626,16 +2626,7 @@ export class App {
         return;
       }
       const leaf = this.workspace.getLeaf(newTab);
-      const current = leaf.view;
-      if (current instanceof CanvasView) {
-        await current.setFile(file);
-        leaf.group.renderTabs();
-        this.workspace.trigger("file-open", file);
-      } else {
-        const view = new CanvasView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
-      }
+      await this.openFileInLeaf(leaf, file);
       return;
     }
     if (file.extension === "html" || file.extension === "htm") {
@@ -2651,13 +2642,34 @@ export class App {
       });
       return;
     }
-    if (file.extension === "base") {
+    if (file.extension === "base" || file.extension === "md") {
       const existing = this.workspace.findLeafForFile(file.path);
       if (existing && !newTab) {
         existing.group.setActiveLeaf(existing);
         return;
       }
       const leaf = this.workspace.getLeaf(newTab);
+      await this.openFileInLeaf(leaf, file);
+      return;
+    }
+    this.notify(`Cannot open .${file.extension} files yet`);
+  }
+
+  /** Open a supported document in a specific leaf; history traversal opts out of recording. */
+  async openFileInLeaf(leaf: WorkspaceLeaf, file: TFile, recordHistory = true): Promise<void> {
+    const previousPath = leaf.view?.getFile?.()?.path;
+    if (file.extension === "canvas") {
+      const current = leaf.view;
+      if (current instanceof CanvasView) {
+        await current.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new CanvasView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
+    } else if (file.extension === "base") {
       const current = leaf.view;
       if (current instanceof BaseView) {
         await current.setFile(file);
@@ -2668,27 +2680,23 @@ export class App {
         await view.setFile(file);
         await leaf.setView(view);
       }
-      return;
-    }
-    if (file.extension !== "md") {
-      this.notify(`Cannot open .${file.extension} files yet`);
-      return;
-    }
-    const existing = this.workspace.findLeafForFile(file.path);
-    if (existing && !newTab) {
-      existing.group.setActiveLeaf(existing);
-      return;
-    }
-    const leaf = this.workspace.getLeaf(newTab);
-    const current = leaf.view;
-    if (current instanceof MarkdownView) {
-      await current.setFile(file);
-      leaf.group.renderTabs();
-      this.workspace.trigger("file-open", file);
+    } else if (file.extension === "md") {
+      const current = leaf.view;
+      if (current instanceof MarkdownView) {
+        await current.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new MarkdownView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     } else {
-      const view = new MarkdownView(this);
-      await view.setFile(file);
-      await leaf.setView(view);
+      throw new Error(`Unsupported document history file extension: .${file.extension}`);
+    }
+    if (recordHistory) {
+      if (previousPath) leaf.recordDocumentNavigation(previousPath);
+      leaf.recordDocumentNavigation(file.path);
     }
   }
 

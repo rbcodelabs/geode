@@ -91,6 +91,7 @@ export interface LeafContainer {
 }
 
 let leafIdCounter = 0;
+const DOCUMENT_NAVIGATION_HISTORY_LIMIT = 100;
 
 /** The leaf currently being dragged, shared across containers during a drag-and-drop. */
 let draggingLeaf: WorkspaceLeaf | null = null;
@@ -108,6 +109,9 @@ export class WorkspaceLeaf {
   /** Split-local Phase 1 collection membership. Never carried across containers. */
   collectionId?: string;
   private opened = false;
+  private documentHistory: string[] = [];
+  private documentHistoryIndex = -1;
+  private documentNavigationInFlight = false;
 
   constructor(
     public group: LeafContainer,
@@ -137,6 +141,7 @@ export class WorkspaceLeaf {
       this.contentEl.appendChild(view.containerEl);
       await view.onOpen();
       this.opened = true;
+      this.bindDocumentNavigationButtons();
       this.group.renderTabs();
       if (view.getFile?.()) {
         this.app.workspace.trigger("file-open", view.getFile!());
@@ -249,9 +254,111 @@ export class WorkspaceLeaf {
 
   /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
   async openFile(file: TFile): Promise<void> {
+    const previousPath = this.view?.getFile?.()?.path;
     const view = this.app.createMarkdownView();
     await view.setFile(file);
     await this.setView(view);
+    if (previousPath) this.recordDocumentNavigation(previousPath);
+    this.recordDocumentNavigation(file.path);
+  }
+
+  /** Record a normal file navigation in this leaf without persisting it. */
+  recordDocumentNavigation(path: string): void {
+    if (this.group.isSidebar) return;
+    this.ensureDocumentHistory();
+    if (this.documentHistory[this.documentHistoryIndex] === path) {
+      this.updateDocumentNavigationButtons();
+      return;
+    }
+    this.documentHistory.splice(this.documentHistoryIndex + 1);
+    this.documentHistory.push(path);
+    if (this.documentHistory.length > DOCUMENT_NAVIGATION_HISTORY_LIMIT) {
+      this.documentHistory.splice(0, this.documentHistory.length - DOCUMENT_NAVIGATION_HISTORY_LIMIT);
+    }
+    this.documentHistoryIndex = this.documentHistory.length - 1;
+    this.updateDocumentNavigationButtons();
+  }
+
+  canNavigateBack(): boolean {
+    return this.findAvailableDocumentHistoryIndex(-1) !== -1;
+  }
+
+  canNavigateForward(): boolean {
+    return this.findAvailableDocumentHistoryIndex(1) !== -1;
+  }
+
+  async navigateBack(): Promise<void> {
+    await this.traverseDocumentHistory(-1);
+  }
+
+  async navigateForward(): Promise<void> {
+    await this.traverseDocumentHistory(1);
+  }
+
+  private findAvailableDocumentHistoryIndex(direction: -1 | 1): number {
+    this.ensureDocumentHistory();
+    for (
+      let index = this.documentHistoryIndex + direction;
+      index >= 0 && index < this.documentHistory.length;
+      index += direction
+    ) {
+      if (this.app.vault.getFileByPath(this.documentHistory[index])) return index;
+    }
+    return -1;
+  }
+
+  private async traverseDocumentHistory(direction: -1 | 1): Promise<void> {
+    this.ensureDocumentHistory();
+    if (this.documentNavigationInFlight) return;
+    const index = this.findAvailableDocumentHistoryIndex(direction);
+    if (index === -1) {
+      this.updateDocumentNavigationButtons();
+      return;
+    }
+    const file = this.app.vault.getFileByPath(this.documentHistory[index]);
+    if (!file) return;
+    this.documentNavigationInFlight = true;
+    try {
+      await this.app.openFileInLeaf(this, file, false);
+      this.documentHistoryIndex = index;
+    } finally {
+      this.documentNavigationInFlight = false;
+      this.updateDocumentNavigationButtons();
+    }
+  }
+
+  private bindDocumentNavigationButtons(): void {
+    if (this.group.isSidebar) return;
+    for (const button of this.contentEl.querySelectorAll<HTMLElement>("[data-document-navigation]")) {
+      const direction = button.dataset.documentNavigation;
+      button.addEventListener("click", () => {
+        if (button.getAttribute("aria-disabled") === "true") return;
+        void (direction === "back" ? this.navigateBack() : this.navigateForward());
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        button.click();
+      });
+    }
+    this.updateDocumentNavigationButtons();
+  }
+
+  private ensureDocumentHistory(): void {
+    this.documentHistory ??= [];
+    this.documentHistoryIndex ??= -1;
+    this.documentNavigationInFlight ??= false;
+  }
+
+  private updateDocumentNavigationButtons(): void {
+    if (!this.contentEl?.querySelectorAll) return;
+    for (const button of this.contentEl.querySelectorAll<HTMLElement>("[data-document-navigation]")) {
+      const enabled = button.dataset.documentNavigation === "back"
+        ? this.canNavigateBack()
+        : this.canNavigateForward();
+      button.setAttribute("aria-disabled", String(!enabled));
+      button.tabIndex = enabled ? 0 : -1;
+    }
   }
 
   /** Re-render this leaf's tab header (Obsidian `leaf.updateHeader`). */
@@ -291,22 +398,24 @@ export class WorkspaceLeaf {
 /**
  * `.view-header-nav-buttons` (back/forward), shared by `ItemView`
  * (api/obsidian.ts) and `MarkdownView` (views/markdown-view.ts). Geode's
- * `Workspace` has no navigation history to wire these to yet, so they render
- * as inert placeholders — real DOM/class shape for themes to style, but
- * disabled and inert rather than silently doing nothing on click. Follow-up:
- * wire to a real back/forward history once `Workspace` tracks one.
+ * The owning leaf binds these controls after mounting the view. Keeping the
+ * markup view-agnostic lets built-in and hosted views share Obsidian's DOM
+ * shape while history remains independently owned by each leaf.
  */
 export function buildViewHeaderNavButtons(): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "view-header-nav-buttons";
-  for (const [icon, label] of [
-    ["arrow-left", "Navigate back"],
-    ["arrow-right", "Navigate forward"],
+  for (const [icon, label, direction] of [
+    ["arrow-left", "Navigate back", "back"],
+    ["arrow-right", "Navigate forward", "forward"],
   ] as const) {
     const btn = document.createElement("div");
     btn.className = "clickable-icon view-action nav-action-button";
+    btn.setAttribute("role", "button");
     btn.setAttribute("aria-label", label);
     btn.setAttribute("aria-disabled", "true");
+    btn.tabIndex = -1;
+    btn.dataset.documentNavigation = direction;
     setIcon(btn, icon);
     wrap.appendChild(btn);
   }
