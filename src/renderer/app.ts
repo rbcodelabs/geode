@@ -76,23 +76,9 @@ import { getHostServices } from "./host/registry";
 import type { HostServices } from "./host/contracts";
 import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
+import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
-interface WebViewerSettings {
-  /** URL prefix a search query is appended to (URI-encoded). */
-  searchEngine: string;
-  /** Default URL for "Open web viewer". */
-  homeUrl: string;
-  /** When true, clicking an external link opens it in a Web Viewer tab instead of the OS browser. */
-  openLinksInApp: boolean;
-}
-
-const DEFAULT_WEB_VIEWER_SETTINGS: WebViewerSettings = {
-  searchEngine: "https://duckduckgo.com/?q=",
-  homeUrl: "https://duckduckgo.com/",
-  openLinksInApp: false,
-};
-
 interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
@@ -100,7 +86,7 @@ interface AppSettings {
   showStatusBar: boolean;
   /** Selected community theme name ("" = built-in default). */
   cssTheme: string;
-  webViewer: WebViewerSettings;
+  webViewer: WebViewerOptions;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -119,12 +105,21 @@ class EmptyView implements View {
   constructor(app: App) {
     this.containerEl = document.createElement("div");
     this.containerEl.className = "empty-state";
+    this.render(app);
+  }
+
+  refresh(app: App): void { this.render(app); }
+
+  private render(app: App): void {
     this.containerEl.innerHTML = `<div class="empty-state-title">No file is open</div>`;
     const actions = [
       { label: "Create new note (Cmd/Ctrl+N)", fn: () => app.createNewNote() },
       { label: "Open quick switcher (Cmd/Ctrl+O)", fn: () => app.openQuickSwitcher() },
       { label: "Open command palette (Cmd/Ctrl+P)", fn: () => app.openCommandPalette() },
     ];
+    if (app.isWebViewerAvailable()) {
+      actions.push({ label: "Open browser", fn: () => { void app.openWebViewer(); } });
+    }
     for (const a of actions) {
       const btn = document.createElement("button");
       btn.className = "empty-state-action";
@@ -460,6 +455,8 @@ class SettingsModal extends Modal {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "daily-notes") {
       this.renderDailyNotesTab(this.contentContainerEl);
+    } else if (id === "core-plugins") {
+      this.renderCorePluginsTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
     } else if (id === "advanced") {
@@ -510,6 +507,7 @@ class SettingsModal extends Modal {
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("hotkeys", "Hotkeys", this.navEl);
     addNavItem("daily-notes", "Daily Notes", this.navEl);
+    addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
@@ -698,6 +696,56 @@ class SettingsModal extends Modal {
     }
   }
 
+  private renderCorePluginsTab(container: HTMLElement): void {
+    const webViewer = this.geodeApp.webViewer;
+    container.innerHTML = `<h2>Core plugins</h2><h3>Web Viewer</h3>`;
+    this.addToggle(container, "Enable Web Viewer", webViewer.enabled, (enabled) => {
+      void this.updateWebViewer({ enabled });
+    });
+    let searchInput!: HTMLInputElement;
+    searchInput = this.addTextInput(container, "Search engine", webViewer.options.searchEngine, (searchEngine) => {
+      void this.updateWebViewer({ searchEngine }, () => { searchInput.value = webViewer.options.searchEngine; });
+    });
+    let homeInput!: HTMLInputElement;
+    homeInput = this.addTextInput(container, "Home URL", webViewer.options.homeUrl, (homeUrl) => {
+      void this.updateWebViewer({ homeUrl }, () => { homeInput.value = webViewer.options.homeUrl; });
+    });
+    this.addToggle(container, "Open external links in Geode", webViewer.options.openLinksInApp, (openLinksInApp) => {
+      void this.updateWebViewer({ openLinksInApp });
+    });
+    const { control: cookieControl } = this.addRow(
+      container,
+      "Import cookies from Chrome",
+      "One-time import so viewer tabs open already logged in."
+    );
+    const cookieBtn = document.createElement("button");
+    cookieBtn.textContent = "Import cookies from Chrome…";
+    cookieBtn.disabled = !this.geodeApp.host.capabilities.chromeCookieImport || !webViewer.enabled;
+    cookieBtn.title = cookieBtn.disabled ? "Chrome cookie import requires Web Viewer on desktop" : "";
+    cookieBtn.addEventListener("click", () => new ChromeCookieImportModal(this.geodeApp).open());
+    cookieControl.appendChild(cookieBtn);
+  }
+
+  private async updateWebViewer(
+    patch: Partial<{ enabled: boolean; searchEngine: string; homeUrl: string; openLinksInApp: boolean }>,
+    synchronizeControl?: () => void,
+  ): Promise<void> {
+    try {
+      await this.geodeApp.webViewer.update(patch);
+      synchronizeControl?.();
+    } catch (err) {
+      console.error(err);
+      const message = err instanceof WebViewerUpdateError && err.persistenceCompensationFailed
+        ? "Could not finish changing Web Viewer. In-memory settings were restored, but saved state may differ; restart Geode before retrying."
+        : err instanceof WebViewerUpdateError && err.lifecycleCompensationFailed
+          ? "Could not finish changing Web Viewer. Settings were restored, but the active viewer lifecycle may differ; restart Geode before retrying."
+          : "Could not save Web Viewer settings. Your previous settings are still active.";
+      this.geodeApp.notify(message);
+      if (synchronizeControl) synchronizeControl();
+      else if (this.activeTabId === "core-plugins") this.activateTab("core-plugins");
+    }
+  }
+
   private captureHotkey(commandId: string, commandName: string, button: HTMLButtonElement, row: HTMLElement): void {
     this.stopHotkeyRecorder?.();
     button.textContent = "Press keys…";
@@ -751,34 +799,6 @@ class SettingsModal extends Modal {
   }
 
   private renderCommunityTab(container: HTMLElement): void {
-    const s = this.geodeApp.settings;
-    const webViewerHeading = document.createElement("h2");
-    webViewerHeading.textContent = "Web Viewer";
-    container.appendChild(webViewerHeading);
-    this.addTextInput(container, "Search engine", s.webViewer.searchEngine, (v) => {
-      s.webViewer.searchEngine = v;
-      this.geodeApp.saveSettings();
-    });
-    this.addTextInput(container, "Home URL", s.webViewer.homeUrl, (v) => {
-      s.webViewer.homeUrl = v;
-      this.geodeApp.saveSettings();
-    });
-    this.addToggle(container, "Open external links in Geode", s.webViewer.openLinksInApp, (v) => {
-      s.webViewer.openLinksInApp = v;
-      this.geodeApp.saveSettings();
-    });
-    const { control: cookieControl } = this.addRow(
-      container,
-      "Import cookies from Chrome",
-      "One-time import so viewer tabs open already logged in."
-    );
-    const cookieBtn = document.createElement("button");
-    cookieBtn.textContent = "Import cookies from Chrome…";
-    cookieBtn.disabled = !this.geodeApp.host.capabilities.chromeCookieImport;
-    cookieBtn.title = cookieBtn.disabled ? "Chrome cookie import is available on desktop only" : "";
-    cookieBtn.addEventListener("click", () => new ChromeCookieImportModal(this.geodeApp).open());
-    cookieControl.appendChild(cookieBtn);
-
     const communityHeading = document.createElement("h2");
     communityHeading.textContent = "Community plugins & themes";
     container.appendChild(communityHeading);
@@ -1221,6 +1241,7 @@ export class App {
   private pendingProtocolLinks = new Map<string, Record<string, string>[]>();
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
+  readonly webViewer: WebViewerService;
   vault: Vault;
   metadataCache: MetadataCache;
   fileManager = new FileManager(this);
@@ -1264,7 +1285,7 @@ export class App {
     showRibbon: true,
     showStatusBar: true,
     cssTheme: "",
-    webViewer: { ...DEFAULT_WEB_VIEWER_SETTINGS },
+    webViewer: { ...DEFAULT_WEB_VIEWER_OPTIONS },
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -1282,10 +1303,13 @@ export class App {
   private reconcileGeneration = 0;
   private suppressReconcileModify = new Set<string>();
   private externalModifyInFlight = new Map<string, Promise<void>>();
+  private webViewerLifecycleEnabled = false;
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
     this.dailyNotes = new DailyNotesService(host.config);
+    this.webViewer = new WebViewerService(host.config, () => this.applyWebViewerLifecycle());
+    this.settings.webViewer = this.webViewer.options;
     this.commands = new CommandRegistry(host.config, () => {
       const source = this.guestHotkeySource;
       const leaf = source !== null ? this.leafOwningGuest(source) : this.workspace?.activeLeaf;
@@ -1299,6 +1323,27 @@ export class App {
 
   isDarkMode(): boolean {
     return document.body.classList.contains("theme-dark");
+  }
+
+  isWebViewerAvailable(): boolean {
+    return this.webViewer.enabled && this.host.capabilities.embeddedWebContent;
+  }
+
+  private async applyWebViewerLifecycle(): Promise<void> {
+    if (!this.workspace) return;
+    const available = this.isWebViewerAvailable();
+    if (available !== this.webViewerLifecycleEnabled) {
+      this.webViewerLifecycleEnabled = available;
+      if (available) {
+        this.workspace.registerViewFactory("webviewer", (leaf) => new WebView(this, leaf));
+        await this.workspace.hydrateDeferredLeaves("webviewer");
+      } else {
+        await this.workspace.unregisterViewFactory("webviewer");
+      }
+    }
+    this.workspace.iterateLeaves((leaf) => {
+      if (leaf.view instanceof EmptyView) leaf.view.refresh(this);
+    });
   }
 
   private localStorageKey(key: string): string {
@@ -1588,7 +1633,7 @@ export class App {
       this.settings = {
         ...this.settings,
         ...saved,
-        webViewer: { ...this.settings.webViewer, ...saved.webViewer },
+        webViewer: this.webViewer.options,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -1604,6 +1649,7 @@ export class App {
     // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready
     // before any hosted plugin (e.g. Calendar) can query "daily-notes".
     await this.dailyNotes.load();
+    await this.webViewer.load(saved?.webViewer);
 
     // Same shape as daily-notes above: read the persisted Bookmarks tree
     // before registerCommands()/pluginManager.initialize() so both see the
@@ -1697,9 +1743,7 @@ export class App {
     // any hosted plugin targeting that view type (e.g. Threads'
     // obsidian_open_url) opens a tab here too. Must be registered before
     // restoreWorkspaceLayout() below, which resolves saved leaves by type.
-    if (this.host.capabilities.embeddedWebContent) {
-      this.workspace.registerViewFactory("webviewer", (leaf) => new WebView(this, leaf));
-    }
+    await this.applyWebViewerLifecycle();
     if (this.host.capabilities.artifacts) {
       this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
     }
@@ -2551,10 +2595,24 @@ export class App {
       const files = this.vault.getMarkdownFiles();
       if (files.length) this.openFile(files[Math.floor(Math.random() * files.length)], false);
     });
-    if (this.host.capabilities.embeddedWebContent) {
-      c("open-web-viewer", "Open web viewer", undefined, () => void this.openWebViewer());
-      c("search-web", "Search the web", undefined, () => this.searchWeb());
-    }
+    this.commands.add({
+      id: "open-web-viewer",
+      name: "Open web viewer",
+      checkCallback: (checking) => {
+        if (!this.isWebViewerAvailable()) return false;
+        if (!checking) void this.openWebViewer();
+        return true;
+      },
+    });
+    this.commands.add({
+      id: "search-web",
+      name: "Search the web",
+      checkCallback: (checking) => {
+        if (!this.isWebViewerAvailable()) return false;
+        if (!checking) this.searchWeb();
+        return true;
+      },
+    });
     c("pin-tab", "Toggle pin on current tab", undefined, () => {
       const leaf = this.workspace.getActiveLeaf();
       leaf?.togglePinned();
@@ -2630,6 +2688,14 @@ export class App {
       return;
     }
     if (file.extension === "html" || file.extension === "htm") {
+      if (!this.webViewer.enabled) {
+        this.notify("Enable Web Viewer in Settings → Core plugins to open HTML files");
+        return;
+      }
+      if (!this.isWebViewerAvailable()) {
+        this.notify("Web Viewer is not available on this device");
+        return;
+      }
       if (!(this.vault.adapter instanceof FileSystemAdapter)) {
         this.notify("Local HTML preview is available on desktop only");
         return;
@@ -2755,7 +2821,7 @@ export class App {
 
   /** "Open web viewer" (Obsidian compat command `open-web-viewer`): opens a new Web Viewer tab at the given URL, or the configured home URL. */
   async openWebViewer(url?: string): Promise<void> {
-    if (!this.host.capabilities.embeddedWebContent) {
+    if (!this.isWebViewerAvailable()) {
       await this.host.navigation.openExternal(url ?? this.settings.webViewer.homeUrl);
       return;
     }
@@ -2851,7 +2917,7 @@ export class App {
   openExternalLink(url: string): void {
     // Only web URLs can render in the in-app Web Viewer; anything else (e.g.
     // mailto:) always goes to the OS regardless of the setting.
-    if (this.host.capabilities.embeddedWebContent && this.settings.webViewer.openLinksInApp && /^https?:\/\//i.test(url)) {
+    if (this.isWebViewerAvailable() && this.settings.webViewer.openLinksInApp && /^https?:\/\//i.test(url)) {
       void this.openWebViewer(url);
     } else {
       void this.host.navigation.openExternal(url);
@@ -3465,7 +3531,7 @@ export class App {
     return composeMenu(this.actions, { resource: folder }, FOLDER_MENU_SPEC);
   }
 
-  /** Page actions for the Web Viewer toolbar's "More options" menu. */
+  /** Page actions for a live Web Viewer toolbar's "More options" menu; deferred placeholders intentionally provide none. */
   webPageMenuItems(view: WebView) {
     return composeMenu(this.actions, { webView: view, reloadable: view, leaf: null }, WEB_TAB_MENU_SPEC);
   }
