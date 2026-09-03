@@ -735,9 +735,12 @@ class SettingsModal extends Modal {
       synchronizeControl?.();
     } catch (err) {
       console.error(err);
-      this.geodeApp.notify(err instanceof WebViewerUpdateError && err.compensationFailed
-        ? "Could not finish changing Web Viewer. Runtime settings were restored, but persisted rollback failed; restart Geode before retrying."
-        : "Could not save Web Viewer settings. Your previous settings are still active.");
+      const message = err instanceof WebViewerUpdateError && err.persistenceCompensationFailed
+        ? "Could not finish changing Web Viewer. In-memory settings were restored, but saved state may differ; restart Geode before retrying."
+        : err instanceof WebViewerUpdateError && err.lifecycleCompensationFailed
+          ? "Could not finish changing Web Viewer. Settings were restored, but the active viewer lifecycle may differ; restart Geode before retrying."
+          : "Could not save Web Viewer settings. Your previous settings are still active.";
+      this.geodeApp.notify(message);
       if (synchronizeControl) synchronizeControl();
       else if (this.activeTabId === "core-plugins") this.activateTab("core-plugins");
     }

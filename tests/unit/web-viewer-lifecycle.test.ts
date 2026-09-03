@@ -62,6 +62,8 @@ describe("WebViewerService", () => {
     await expect(service.update({ enabled: false })).rejects.toMatchObject({
       name: "WebViewerUpdateError",
       compensationFailed: false,
+      persistenceCompensationFailed: false,
+      lifecycleCompensationFailed: false,
     });
     expect(service.enabled).toBe(true);
     expect(writes).toEqual([
@@ -90,7 +92,12 @@ describe("WebViewerService", () => {
     const failed = service.update({ enabled: false });
     const recovered = service.update({ homeUrl: "https://example.com/home" });
     await expect(failed).rejects.toBeInstanceOf(WebViewerUpdateError);
-    await expect(failed).rejects.toMatchObject({ compensationFailed: true });
+    await expect(failed).rejects.toMatchObject({
+      compensationFailed: true,
+      persistenceCompensationFailed: true,
+      lifecycleCompensationFailed: false,
+      compensationErrors: { persistence: expect.any(Error) },
+    });
     await expect(recovered).resolves.toBeUndefined();
     expect(service.enabled).toBe(true);
     expect(service.options.homeUrl).toBe("https://example.com/home");
@@ -100,5 +107,37 @@ describe("WebViewerService", () => {
       homeUrl: "https://example.com/home",
       openLinksInApp: false,
     });
+  });
+
+  it("distinguishes lifecycle rollback failure, restores options, and recovers the queue", async () => {
+    const writes: unknown[] = [];
+    let changes = 0;
+    const service = new WebViewerService({
+      read: async () => ({ enabled: true, homeUrl: "https://before.example/" }),
+      write: async (_name, value) => { writes.push(value); },
+    }, async () => {
+      changes += 1;
+      if (changes <= 2) throw new Error(changes === 1 ? "apply failed" : "rollback lifecycle failed");
+    });
+    await service.load();
+    const options = service.options;
+    const failed = service.update({ enabled: false, homeUrl: "https://bad.example/" });
+    const recovered = service.update({ homeUrl: "https://after.example/" });
+
+    await expect(failed).rejects.toMatchObject({
+      persistenceCompensationFailed: false,
+      lifecycleCompensationFailed: true,
+      compensationErrors: { lifecycle: expect.any(Error) },
+    });
+    expect(service.enabled).toBe(true);
+    expect(service.options).toBe(options);
+    await expect(recovered).resolves.toBeUndefined();
+    expect(service.enabled).toBe(true);
+    expect(options.homeUrl).toBe("https://after.example/");
+    expect(writes).toEqual([
+      { enabled: false, searchEngine: "https://duckduckgo.com/?q=", homeUrl: "https://bad.example/", openLinksInApp: false },
+      { enabled: true, searchEngine: "https://duckduckgo.com/?q=", homeUrl: "https://before.example/", openLinksInApp: false },
+      { enabled: true, searchEngine: "https://duckduckgo.com/?q=", homeUrl: "https://after.example/", openLinksInApp: false },
+    ]);
   });
 });

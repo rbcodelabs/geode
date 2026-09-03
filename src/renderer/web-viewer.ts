@@ -18,12 +18,16 @@ export const DEFAULT_WEB_VIEWER_OPTIONS: WebViewerOptions = {
 
 export class WebViewerUpdateError extends Error {
   readonly name = "WebViewerUpdateError";
+  readonly compensationFailed: boolean;
   constructor(
     message: string,
-    readonly compensationFailed: boolean,
+    readonly persistenceCompensationFailed: boolean,
+    readonly lifecycleCompensationFailed: boolean,
+    readonly compensationErrors: { persistence?: unknown; lifecycle?: unknown },
     options?: ErrorOptions,
   ) {
     super(message, options);
+    this.compensationFailed = persistenceCompensationFailed || lifecycleCompensationFailed;
   }
 }
 
@@ -57,6 +61,9 @@ export class WebViewerService {
 
   async load(legacyOptions?: Partial<WebViewerOptions>): Promise<void> {
     const persisted = await this.config.read("web-viewer");
+    // Compatibility fallback, not an eager migration: old app.json options
+    // remain live until the first Web Viewer update transaction materializes
+    // the complete config in web-viewer.json.
     this.apply(resolveWebViewerConfig(persisted ?? legacyOptions));
   }
 
@@ -70,23 +77,27 @@ export class WebViewerService {
         await this.onChange(next);
       } catch (cause) {
         this.apply(previous);
-        const compensationFailures: unknown[] = [];
+        let persistenceCompensationError: unknown;
+        let lifecycleCompensationError: unknown;
         try {
           await this.config.write("web-viewer", previous);
         } catch (error) {
-          compensationFailures.push(error);
+          persistenceCompensationError = error;
         }
         try {
           await this.onChange(previous);
         } catch (error) {
-          compensationFailures.push(error);
+          lifecycleCompensationError = error;
         }
-        const compensationFailed = compensationFailures.length > 0;
+        const persistenceCompensationFailed = persistenceCompensationError !== undefined;
+        const lifecycleCompensationFailed = lifecycleCompensationError !== undefined;
         throw new WebViewerUpdateError(
-          compensationFailed
-            ? "Web Viewer lifecycle failed and its persisted rollback could not be completed. Runtime settings were restored; restart Geode before retrying."
+          persistenceCompensationFailed || lifecycleCompensationFailed
+            ? "Web Viewer lifecycle failed and rollback was incomplete. In-memory settings were restored; persisted state or the active viewer lifecycle may differ until Geode restarts."
             : "Web Viewer lifecycle failed. The previous settings were restored.",
-          compensationFailed,
+          persistenceCompensationFailed,
+          lifecycleCompensationFailed,
+          { persistence: persistenceCompensationError, lifecycle: lifecycleCompensationError },
           { cause },
         );
       }

@@ -82,6 +82,10 @@ test("Web Viewer live lifecycle defers/restores tabs and refreshes all availabil
     await expect(openBrowser).toBeVisible();
     await modal.getByRole("textbox", { name: "Home URL" }).fill("https://example.com/configured-home");
     await modal.getByRole("textbox", { name: "Home URL" }).press("Tab");
+    await expect.poll(() => window.evaluate(() => (window as any).app.webViewer.options.homeUrl)).toBe("https://example.com/configured-home");
+    await expect.poll(() => JSON.parse(
+      fs.readFileSync(path.join(vaultDir, ".geode", "web-viewer.json"), "utf8")
+    ).homeUrl).toBe("https://example.com/configured-home");
     await openBrowser.click({ force: true });
     await expect(window.locator(".web-view-address").last()).toHaveValue("https://example.com/configured-home");
     expect(await window.evaluate(async () => {
@@ -101,7 +105,7 @@ test("Web Viewer live lifecycle defers/restores tabs and refreshes all availabil
   }
 });
 
-test("Web Viewer persistence is per-vault and failed writes leave runtime and controls unchanged", async () => {
+test("Web Viewer persistence is per-vault, legacy app settings remain compatible until first write, and failed writes roll back", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-persist-vault-"));
   const otherVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-persist-other-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-persist-user-"));
@@ -111,6 +115,7 @@ test("Web Viewer persistence is per-vault and failed writes leave runtime and co
   }));
   let current = await launch(vaultDir, userDataDir);
   try {
+    expect(fs.existsSync(path.join(vaultDir, ".geode", "web-viewer.json"))).toBe(false);
     expect(await current.window.evaluate(() => (window as any).app.webViewer.options)).toEqual({
       homeUrl: "https://legacy.example/home",
       searchEngine: "https://legacy.example/?q=",
@@ -136,7 +141,12 @@ test("Web Viewer persistence is per-vault and failed writes leave runtime and co
       a.host.config.write = a.__originalWrite;
     });
     await enabled.click();
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "web-viewer.json"), "utf8")).enabled).toBe(false);
+    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "web-viewer.json"), "utf8"))).toEqual({
+      enabled: false,
+      homeUrl: "https://legacy.example/home",
+      searchEngine: "https://legacy.example/?q=",
+      openLinksInApp: true,
+    });
 
     await current.app.close();
     current = await launch(otherVaultDir, userDataDir);
@@ -167,6 +177,11 @@ test("a disabled cold relaunch preserves a viewer leaf and hydrates that same le
     fs.writeFileSync(path.join(vaultDir, ".geode", "web-viewer.json"), JSON.stringify({ enabled: false }));
 
     current = await launch(vaultDir, userDataDir);
+    await expect.poll(() => current.window.evaluate(() => (window as any).app.workspace.layoutReady)).toBe(true);
+    await expect.poll(() => current.window.evaluate(() => {
+      const leaves = (window as any).app.workspace.getLeavesOfType("webviewer");
+      return leaves.length === 1 && leaves[0].view.constructor.name === "DeferredView";
+    })).toBe(true);
     const deferred = await current.window.evaluate(() => {
       const leaf = (window as any).app.workspace.getLeavesOfType("webviewer")[0];
       return { id: leaf.id, view: leaf.view.constructor.name, url: leaf.getViewState().state.url };
