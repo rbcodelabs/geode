@@ -254,6 +254,37 @@ test("@phone keeps drawers and settings inside the device safe area", async ({ p
   await corePluginsTab.click();
   await expect(corePluginsTab).toHaveClass(/is-active/);
   await expect(content.getByRole("heading", { name: "Web Viewer" })).toBeVisible();
+  await expect(content.getByRole("checkbox", { name: "Enable Web Viewer" })).toBeChecked();
+  expect(await page.evaluate(async () => {
+    const a = (window as any).app;
+    const external: string[] = [];
+    a.host.navigation.openExternal = async (url: string) => { external.push(url); };
+    a.settings.webViewer.openLinksInApp = true;
+    a.openExternalLink("https://example.com/mobile");
+    await Promise.resolve();
+    const before = a.workspace.getActiveLeaf().id;
+    await a.openFile({ kind: "file", path: "Local.html", name: "Local.html", basename: "Local", extension: "html", parent: "", mtime: 0, ctime: 0, size: 0 }, false);
+    const activeUnchanged = a.workspace.getActiveLeaf().id === before;
+    a.openEmptyTab(a.workspace.activeGroup);
+    const descriptor = a.internalPlugins.getPluginById("webviewer");
+    return {
+      external,
+      activeUnchanged: activeUnchanged && a.workspace.getLeavesOfType("webviewer").length === 0,
+      descriptorEnabled: descriptor.enabled,
+      enabledLookup: a.internalPlugins.getEnabledPluginById("webviewer"),
+      openCommand: a.commands.execute("open-web-viewer"),
+      searchCommand: a.commands.execute("search-web"),
+    };
+  })).toEqual({
+    external: ["https://example.com/mobile"],
+    activeUnchanged: true,
+    descriptorEnabled: false,
+    enabledLookup: null,
+    openCommand: false,
+    searchCommand: false,
+  });
+  await expect(page.locator(".notice")).toContainText("Web Viewer is not available on this device");
+  await expect(page.getByRole("button", { name: "Open browser" })).toHaveCount(0);
   await appearanceTab.click();
 
   for (const item of await content.locator(".setting-item").all()) {

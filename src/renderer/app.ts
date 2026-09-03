@@ -76,7 +76,7 @@ import { getHostServices } from "./host/registry";
 import type { HostServices } from "./host/contracts";
 import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
-import { WebViewerService, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
+import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface AppSettings {
@@ -735,7 +735,9 @@ class SettingsModal extends Modal {
       synchronizeControl?.();
     } catch (err) {
       console.error(err);
-      this.geodeApp.notify("Could not save Web Viewer settings. Your previous settings are still active.");
+      this.geodeApp.notify(err instanceof WebViewerUpdateError && err.compensationFailed
+        ? "Could not finish changing Web Viewer. Runtime settings were restored, but persisted rollback failed; restart Geode before retrying."
+        : "Could not save Web Viewer settings. Your previous settings are still active.");
       if (synchronizeControl) synchronizeControl();
       else if (this.activeTabId === "core-plugins") this.activateTab("core-plugins");
     }
@@ -2696,6 +2698,10 @@ export class App {
         this.notify("Enable Web Viewer in Settings → Core plugins to open HTML files");
         return;
       }
+      if (!this.isWebViewerAvailable()) {
+        this.notify("Web Viewer is not available on this device");
+        return;
+      }
       if (!(this.vault.adapter instanceof FileSystemAdapter)) {
         this.notify("Local HTML preview is available on desktop only");
         return;
@@ -3506,7 +3512,7 @@ export class App {
     return composeMenu(this.actions, { resource: folder }, FOLDER_MENU_SPEC);
   }
 
-  /** Page actions for the Web Viewer toolbar's "More options" menu. */
+  /** Page actions for a live Web Viewer toolbar's "More options" menu; deferred placeholders intentionally provide none. */
   webPageMenuItems(view: WebView) {
     return composeMenu(this.actions, { webView: view, reloadable: view, leaf: null }, WEB_TAB_MENU_SPEC);
   }

@@ -16,6 +16,17 @@ export const DEFAULT_WEB_VIEWER_OPTIONS: WebViewerOptions = {
   openLinksInApp: false,
 };
 
+export class WebViewerUpdateError extends Error {
+  readonly name = "WebViewerUpdateError";
+  constructor(
+    message: string,
+    readonly compensationFailed: boolean,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
 export function resolveWebViewerConfig(raw: unknown): WebViewerConfig {
   const record = raw && typeof raw === "object" && !Array.isArray(raw)
     ? raw as Record<string, unknown>
@@ -51,10 +62,34 @@ export class WebViewerService {
 
   update(patch: Partial<WebViewerConfig>): Promise<void> {
     const operation = this.pendingUpdate.then(async () => {
+      const previous = resolveWebViewerConfig({ enabled: this.enabled, ...this.options });
       const next = resolveWebViewerConfig({ enabled: this.enabled, ...this.options, ...patch });
       await this.config.write("web-viewer", next);
       this.apply(next);
-      await this.onChange(next);
+      try {
+        await this.onChange(next);
+      } catch (cause) {
+        this.apply(previous);
+        const compensationFailures: unknown[] = [];
+        try {
+          await this.config.write("web-viewer", previous);
+        } catch (error) {
+          compensationFailures.push(error);
+        }
+        try {
+          await this.onChange(previous);
+        } catch (error) {
+          compensationFailures.push(error);
+        }
+        const compensationFailed = compensationFailures.length > 0;
+        throw new WebViewerUpdateError(
+          compensationFailed
+            ? "Web Viewer lifecycle failed and its persisted rollback could not be completed. Runtime settings were restored; restart Geode before retrying."
+            : "Web Viewer lifecycle failed. The previous settings were restored.",
+          compensationFailed,
+          { cause },
+        );
+      }
     });
     this.pendingUpdate = operation.catch(() => {});
     return operation;

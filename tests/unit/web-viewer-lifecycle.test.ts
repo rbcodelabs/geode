@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { WebViewerService, resolveWebViewerConfig } from "../../src/renderer/web-viewer";
+import { WebViewerService, WebViewerUpdateError, resolveWebViewerConfig } from "../../src/renderer/web-viewer";
 
 describe("resolveWebViewerConfig", () => {
   it("enables Web Viewer by default and validates each option", () => {
@@ -45,5 +45,60 @@ describe("WebViewerService", () => {
     await expect(service.update({ enabled: false })).rejects.toThrow("disk full");
     expect(service.enabled).toBe(true);
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("compensates persistence and runtime when lifecycle publication fails", async () => {
+    const writes: unknown[] = [];
+    let calls = 0;
+    const service = new WebViewerService({
+      read: async () => null,
+      write: async (_name, value) => { writes.push(value); },
+    }, async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("factory failure");
+    });
+    await service.load();
+
+    await expect(service.update({ enabled: false })).rejects.toMatchObject({
+      name: "WebViewerUpdateError",
+      compensationFailed: false,
+    });
+    expect(service.enabled).toBe(true);
+    expect(writes).toEqual([
+      { enabled: false, searchEngine: "https://duckduckgo.com/?q=", homeUrl: "https://duckduckgo.com/", openLinksInApp: false },
+      { enabled: true, searchEngine: "https://duckduckgo.com/?q=", homeUrl: "https://duckduckgo.com/", openLinksInApp: false },
+    ]);
+  });
+
+  it("reports failed compensation and lets the next queued update proceed from restored runtime", async () => {
+    const writes: unknown[] = [];
+    let writeCount = 0;
+    let changeCount = 0;
+    const service = new WebViewerService({
+      read: async () => null,
+      write: async (_name, value) => {
+        writeCount += 1;
+        writes.push(value);
+        if (writeCount === 2) throw new Error("rollback disk failure");
+      },
+    }, async () => {
+      changeCount += 1;
+      if (changeCount === 1) throw new Error("factory failure");
+    });
+    await service.load();
+
+    const failed = service.update({ enabled: false });
+    const recovered = service.update({ homeUrl: "https://example.com/home" });
+    await expect(failed).rejects.toBeInstanceOf(WebViewerUpdateError);
+    await expect(failed).rejects.toMatchObject({ compensationFailed: true });
+    await expect(recovered).resolves.toBeUndefined();
+    expect(service.enabled).toBe(true);
+    expect(service.options.homeUrl).toBe("https://example.com/home");
+    expect(writes.at(-1)).toEqual({
+      enabled: true,
+      searchEngine: "https://duckduckgo.com/?q=",
+      homeUrl: "https://example.com/home",
+      openLinksInApp: false,
+    });
   });
 });
