@@ -247,11 +247,12 @@ test("@phone keeps drawers and settings inside the device safe area", async ({ p
   expect(contentBox.width).toBeGreaterThanOrEqual(modalBox.width - 34);
 
   const appearanceTab = tabHeader.getByText("Appearance", { exact: true });
+  const corePluginsTab = tabHeader.getByText("Core plugins", { exact: true });
   const communityTab = tabHeader.getByText("Community plugins & themes", { exact: true });
   expect((await appearanceTab.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   expect((await communityTab.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  await communityTab.click();
-  await expect(communityTab).toHaveClass(/is-active/);
+  await corePluginsTab.click();
+  await expect(corePluginsTab).toHaveClass(/is-active/);
   await expect(content.getByRole("heading", { name: "Web Viewer" })).toBeVisible();
   await appearanceTab.click();
 

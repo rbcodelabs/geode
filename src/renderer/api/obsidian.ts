@@ -1066,21 +1066,26 @@ export function installObsidianAppCompat(app: App): void {
       get enabled() { return (app as any).dailyNotes?.enabled ?? true; },
       instance: dailyNotesInstance,
     };
-    // Obsidian's Web Viewer core plugin. Geode has no enable/disable toggle
-    // for it — `App.start()` registers the "webviewer" view factory
-    // unconditionally (see `workspace.registerViewFactory("webviewer", ...)`
-    // in app.ts) and `WebViewerSettings` has no enable flag — so reporting
-    // `enabled: true` here is accurate, not aspirational.
-    const webviewerDescriptor = () => ({ enabled: true, instance: {} });
+    const webviewerInstance = {
+      options: (app as any).webViewer?.options ?? (app as any).settings?.webViewer,
+    };
+    const webviewerDescriptor = {
+      get enabled() {
+        return typeof (app as any).isWebViewerAvailable === "function"
+          ? (app as any).isWebViewerAvailable()
+          : ((app as any).webViewer?.enabled ?? true);
+      },
+      instance: webviewerInstance,
+    };
     const internalPluginDescriptor = (id: string) =>
-      id === "daily-notes" ? dailyNotesDescriptor : id === "webviewer" ? webviewerDescriptor() : null;
+      id === "daily-notes" ? dailyNotesDescriptor : id === "webviewer" ? webviewerDescriptor : null;
     a.internalPlugins = {
       plugins: {
         get "daily-notes"() {
           return dailyNotesDescriptor;
         },
         get webviewer() {
-          return webviewerDescriptor();
+          return webviewerDescriptor;
         },
       },
       getPluginById: internalPluginDescriptor,
