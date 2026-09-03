@@ -523,6 +523,34 @@ export class TabGroup implements LeafContainer {
   private bodyDropEdge: "left" | "right" | "top" | "bottom" | null = null;
   private collectionCounter = 0;
   private dropMarkerEl: HTMLElement | null = null;
+  /**
+   * When true, `renderTabs()` is a no-op. `createLeaf()`, `setActiveLeaf()`,
+   * `insertLeaf()`, `moveLeaf()` and `WorkspaceLeaf.setView()` each
+   * unconditionally call `renderTabs()`, which discards and rebuilds every tab
+   * header (and every collection label) in the group from scratch. Adding N
+   * leaves to one group one at a time therefore costs a triangular
+   * 1+2+...+N = O(N^2) header rebuilds — confirmed by CPU profiling as the
+   * dominant main-thread cost when restoring a workspace with hundreds of tabs
+   * in a single group, to the point of tripping the renderer-hang watchdog.
+   * Bracket bulk leaf construction with `beginBatch()`/`endBatch()` (see
+   * `Workspace.deserialize()`) to collapse that to a single rebuild.
+   */
+  private batchRestoring = false;
+
+  /**
+   * Suspend `renderTabs()` until `endBatch()`. The caller MUST call
+   * `endBatch()` — use `try`/`finally`, because a leaked `batchRestoring`
+   * would silently freeze tab rendering for the rest of the session.
+   */
+  beginBatch(): void {
+    this.batchRestoring = true;
+  }
+
+  /** Resume rendering and perform exactly one rebuild for everything changed since `beginBatch()`. */
+  endBatch(): void {
+    this.batchRestoring = false;
+    this.renderTabs();
+  }
 
   constructor(
     public workspace: Workspace,
@@ -1016,6 +1044,8 @@ export class TabGroup implements LeafContainer {
   }
 
   renderTabs() {
+    // Suppressed during bulk leaf construction; `endBatch()` renders once.
+    if (this.batchRestoring) return;
     const focused = document.activeElement instanceof HTMLElement && this.tabHeaderInnerEl.contains(document.activeElement)
       ? document.activeElement.dataset.stripFocus
       : undefined;
@@ -2960,40 +2990,51 @@ export class Workspace extends Events {
         const restoredCollections = (gs.collections ?? []).map((collection) => ({ ...collection }));
         group.collections = [];
         const restored: Array<{ leaf: WorkspaceLeaf; sourceIndex: number; collectionId?: string }> = [];
-        for (let sourceIndex = 0; sourceIndex < gs.leaves.length; sourceIndex++) {
-          const ls = gs.leaves[sourceIndex];
-          if ((ls.type === "markdown" || ls.type === "canvas") && ls.file && !this.app.vault.getFileByPath(ls.file)) continue;
-          const factory = this.getViewFactory(ls.type);
-          const existingBuiltin = ls.type !== "markdown" && ls.type !== "empty" && !factory
-            ? pickExistingBuiltinLeaf(this.getLeavesOfType(ls.type), preExisting)
-            : undefined;
-          if (existingBuiltin) {
-            this.moveLeaf(existingBuiltin, group);
-            if (ls.pinned) existingBuiltin.setPinned(true);
-            existingBuiltin.collectionId = ls.collectionId;
-            restored.push({ leaf: existingBuiltin, sourceIndex, collectionId: ls.collectionId });
-          } else {
-            const leaf = group.createLeaf();
-            await this.restoreLeafView(leaf, ls);
-            leaf.collectionId = ls.collectionId;
-            restored.push({ leaf, sourceIndex, collectionId: ls.collectionId });
+        // Suppress the group's per-leaf tab-header rebuilds for the whole
+        // restore. `createLeaf()`, `moveLeaf()`, `setView()` and
+        // `setActiveLeaf()` below each call `renderTabs()`, which rebuilds every
+        // header built so far — O(N^2) across a group of N tabs (see
+        // `beginBatch()`). `finally` guarantees rendering resumes even if a view
+        // fails to restore, since a leaked flag would freeze every later render.
+        group.beginBatch();
+        try {
+          for (let sourceIndex = 0; sourceIndex < gs.leaves.length; sourceIndex++) {
+            const ls = gs.leaves[sourceIndex];
+            if ((ls.type === "markdown" || ls.type === "canvas") && ls.file && !this.app.vault.getFileByPath(ls.file)) continue;
+            const factory = this.getViewFactory(ls.type);
+            const existingBuiltin = ls.type !== "markdown" && ls.type !== "empty" && !factory
+              ? pickExistingBuiltinLeaf(this.getLeavesOfType(ls.type), preExisting)
+              : undefined;
+            if (existingBuiltin) {
+              this.moveLeaf(existingBuiltin, group);
+              if (ls.pinned) existingBuiltin.setPinned(true);
+              existingBuiltin.collectionId = ls.collectionId;
+              restored.push({ leaf: existingBuiltin, sourceIndex, collectionId: ls.collectionId });
+            } else {
+              const leaf = group.createLeaf();
+              await this.restoreLeafView(leaf, ls);
+              leaf.collectionId = ls.collectionId;
+              restored.push({ leaf, sourceIndex, collectionId: ls.collectionId });
+            }
           }
+          const normalized = normalizeTabCollections(
+            restored.map((entry) => ({ ...entry, id: entry.leaf.id })),
+            restoredCollections,
+          );
+          group.collections = normalized.collections;
+          const restoredByLeaf = new Map(normalized.leaves.map((entry) => [entry.leaf, entry]));
+          group.leaves = normalized.leaves.map((entry) => entry.leaf);
+          for (const entry of normalized.leaves) entry.leaf.collectionId = entry.collectionId;
+          const chosen = selectNearestSurvivor(normalized.leaves, gs.active);
+          if (chosen && restoredByLeaf.has(chosen.leaf)) group.setActiveLeaf(chosen.leaf);
+        } finally {
+          // Collection metadata is installed above, after every leaf exists, so
+          // the suppressed incremental renders cannot prune partial membership.
+          // This is the group's single rebuild, and it renders that completed
+          // registry explicitly: the chosen leaf may already be active, and the
+          // runtime same-leaf contract is a no-op.
+          group.endBatch();
         }
-        const normalized = normalizeTabCollections(
-          restored.map((entry) => ({ ...entry, id: entry.leaf.id })),
-          restoredCollections,
-        );
-        group.collections = normalized.collections;
-        const restoredByLeaf = new Map(normalized.leaves.map((entry) => [entry.leaf, entry]));
-        group.leaves = normalized.leaves.map((entry) => entry.leaf);
-        for (const entry of normalized.leaves) entry.leaf.collectionId = entry.collectionId;
-        // Collection metadata is installed after every leaf exists so the
-        // incremental createLeaf() renders cannot prune partial membership.
-        // Render that completed registry explicitly: the chosen leaf may
-        // already be active, and the runtime same-leaf contract is a no-op.
-        group.renderTabs();
-        const chosen = selectNearestSurvivor(normalized.leaves, gs.active);
-        if (chosen && restoredByLeaf.has(chosen.leaf)) group.setActiveLeaf(chosen.leaf);
       }
       if (group.leaves.length === 0) {
         const leaf = group.createLeaf();
