@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.11.2). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.12.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.11.2)
+## Features (v0.12.0)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -129,7 +129,7 @@ Or, from a checkout: `node scripts/geode-update.mts`. Useful flags:
 ```bash
 node scripts/geode-update.mts --check      # report installed vs. latest version, change nothing
 node scripts/geode-update.mts --force      # reinstall even if already up to date
-node scripts/geode-update.mts --version X  # install a specific release, e.g. --version 0.11.2
+node scripts/geode-update.mts --version X  # install a specific release, e.g. --version 0.12.0
 node scripts/geode-update.mts --user       # install to ~/Applications instead of /Applications
 node scripts/geode-update.mts --keep       # keep the downloaded dmg in ~/Downloads
 node scripts/geode-update.mts --help       # full usage
