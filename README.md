@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.12.1). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.12.2). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.12.1)
+## Features (v0.12.2)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -66,8 +66,11 @@ cloud, no lock-in.
   cap (300 KB by default). Oversized note bodies skip heading, tag, link, and
   list-item indexing to bound memory use; frontmatter remains indexed. Installed
   plugins can add their own tabs with `Plugin.addSettingTab`
-- **Community plugins & themes** — install from GitHub, enable/disable,
+- **Community plugins & themes** — install from GitHub or safely import from
+  an existing Obsidian vault without overwriting installed items or changing
+  their enabled state; enable/disable,
   auto-update; broad plugin-API compatibility (`EditorSuggest`, `Scope`,
+  `BaseComponent`, `ValueComponent`, `AbstractTextComponent`, `SearchComponent`,
   metadata cache with list items/sections + frontmatter tag helpers) so real
   plugins like **obsidian-tasks** load and render their query blocks. Editor
   command callbacks work, but currently receive CM6's `EditorView` rather than
