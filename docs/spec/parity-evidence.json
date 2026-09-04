@@ -1,4 +1,131 @@
 {
+  "API-72ed9cea7ff6": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/search-component-contracts.test.ts",
+      "tests/e2e/search-component.spec.ts"
+    ],
+    "notes": "The public AbstractTextComponent hierarchy, input element, fluent value/placeholder/disabled methods, and user change callback are observed through the plugin compatibility module."
+  },
+  "API-53642689ae70": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/search-component-contracts.test.ts",
+      "tests/e2e/search-component.spec.ts"
+    ],
+    "notes": "BaseComponent is exported through require('obsidian') and inherited by a plugin-created SearchComponent."
+  },
+  "API-d37d7c9eee1d": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/search-component-contracts.test.ts",
+      "tests/e2e/search-component.spec.ts"
+    ],
+    "notes": "ValueComponent is exported through require('obsidian') and its value contract is observed through SearchComponent."
+  },
+  "API-90fbe6b395f8": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/search-component-contracts.test.ts",
+      "tests/e2e/search-component.spec.ts"
+    ],
+    "notes": "A real CommonJS plugin imports and constructs SearchComponent, then observes native-shaped DOM, value, callback, focus, clear, and disabled behavior."
+  },
+  "API-MEMBER-6ce4cacfbaac": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "A plugin constructs SearchComponent into a supplied container and observes the resulting host DOM."
+  },
+  "API-MEMBER-d7628f019bce": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The public clearButtonEl is observed with its native class and accessible label, clearing once and returning focus."
+  },
+  "API-MEMBER-23a7c4b539d4": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "Input and clear interactions observe SearchComponent.onChanged updating clear state and invoking the registered callback exactly once."
+  },
+  "API-MEMBER-88d5ab6de9d4": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "A plugin directly focuses, blurs, fills, and inspects the public inputEl."
+  },
+  "API-MEMBER-89b04bdd1320": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The inherited text value is observed after programmatic, input, and clear changes."
+  },
+  "API-MEMBER-095afeb777e7": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "Programmatic setValue updates the input and clear state without invoking onChange."
+  },
+  "API-MEMBER-2ec4907e36ec": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "A plugin sets and observes the SearchComponent placeholder."
+  },
+  "API-MEMBER-eba3c5939d22": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "A plugin observes exactly one callback for user input and native clear, with no callback for setValue."
+  },
+  "API-MEMBER-fa075629067e": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "SearchComponent input and clear paths exercise the public onChanged hook."
+  },
+  "API-MEMBER-89fb0f9c2690": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "setDisabled synchronizes the input disabled state and blocks the clear control."
+  },
+  "API-MEMBER-2b9698a7e163": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The inherited disabled state controls SearchComponent input and clear interaction behavior."
+  },
+  "API-MEMBER-bb1bb5466e89": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "A plugin invokes the fluent inherited setDisabled method and observes the disabled component."
+  },
+  "API-MEMBER-dca08c50ca0c": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "A plugin observes then() receiving and returning the same concrete SearchComponent instance."
+  },
+  "API-MEMBER-c045058aba9a": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The generic value getter contract is observed through SearchComponent's inherited text implementation."
+  },
+  "API-MEMBER-a44904fa485a": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The generic value setter contract is observed through SearchComponent's inherited text implementation."
+  },
+  "DEV-28a3c73a8e81": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The documented SearchComponent surface is observed end to end through a real plugin fixture."
+  },
+  "DEV-e073a348e0f0": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The documented constructor behavior is observed through a real plugin fixture."
+  },
+  "DEV-1775cdd75db1": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The documented clearButtonEl surface and interaction are observed through a real plugin fixture."
+  },
+  "DEV-b9821c48dc3a": {
+    "status": "verified",
+    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "notes": "The documented onChanged behavior is observed for typing and clear activation."
+  },
   "API-005c3c0b05aa": {
     "status": "verified",
     "evidence": [

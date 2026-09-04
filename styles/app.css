@@ -1830,6 +1830,80 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   border-color: var(--interactive-accent);
 }
 
+.search-input-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.search-input-container::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  background-color: var(--text-muted);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='11' cy='11' r='8' fill='none' stroke='black' stroke-width='2'/%3E%3Cpath d='m21 21-4.35-4.35' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  pointer-events: none;
+}
+
+.search-input-container > .search-input {
+  width: 100%;
+  margin: 0;
+  padding-left: 30px;
+  padding-right: 30px;
+}
+
+.search-input-container > .search-input::-webkit-search-cancel-button,
+.search-input-container > .search-input::-webkit-search-decoration {
+  appearance: none;
+}
+
+.search-input-clear-button {
+  position: absolute;
+  right: 7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.search-input-clear-button::before,
+.search-input-clear-button::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 4px;
+  width: 10px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.search-input-clear-button::before {
+  transform: rotate(45deg);
+}
+
+.search-input-clear-button::after {
+  transform: rotate(-45deg);
+}
+
+.search-input-clear-button:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.search-input-container.is-empty > .search-input-clear-button,
+.search-input-container.is-disabled > .search-input-clear-button {
+  display: none;
+}
+
+.search-input-container.is-disabled::before {
+  opacity: 0.5;
+}
+
 .search-result {
   margin-bottom: 4px;
 }
