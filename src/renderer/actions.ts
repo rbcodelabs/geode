@@ -79,7 +79,7 @@ export interface MenuSection {
 export const DOCUMENT_MENU_SPEC: MenuSection[] = [
   { section: "open", actions: ["file.open-new-tab"] },
   { section: "bookmark", actions: ["resource.bookmark"] },
-  { section: "file", actions: ["resource.rename", "resource.delete"] },
+  { section: "file", actions: ["resource.rename", "resource.reveal", "resource.delete"] },
 ];
 
 export const TAB_MENU_SPEC: MenuSection[] = [
@@ -102,7 +102,7 @@ export const WEB_TAB_MENU_SPEC: MenuSection[] = [
 export const FOLDER_MENU_SPEC: MenuSection[] = [
   { section: "create", actions: ["folder.new-note", "folder.new-canvas", "folder.new-base", "folder.new-folder"] },
   { section: "bookmark", actions: ["resource.bookmark"] },
-  { section: "file", actions: ["resource.rename", "resource.delete"] },
+  { section: "file", actions: ["resource.rename", "resource.reveal", "resource.delete"] },
 ];
 
 export interface ComposedMenuItem {

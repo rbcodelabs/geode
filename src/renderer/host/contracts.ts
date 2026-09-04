@@ -144,6 +144,7 @@ export interface DesktopHostService {
   setWindowBackgroundColor(color: string): Promise<void>;
   publishHotkeys(combos: string[]): Promise<void>;
   onGuestHotkey(cb: (combo: string, guestId: number) => void): () => void;
+  revealInFileManager(path: string): Promise<void>;
 }
 
 export interface HostServices {

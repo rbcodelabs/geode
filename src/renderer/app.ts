@@ -2399,6 +2399,13 @@ export class App {
       run: (context) => this.promptRenameResource((context.resource ?? context.file)!),
     });
     this.actions.register({
+      id: "resource.reveal",
+      label: () => (this.host.runtime.platform === "darwin" ? "Reveal in Finder" : "Show in system explorer"),
+      icon: "folder-open",
+      isAvailable: (context) => !!this.host.desktop && !!(context.resource ?? context.file),
+      run: (context) => this.host.desktop!.revealInFileManager((context.resource ?? context.file)!.path),
+    });
+    this.actions.register({
       id: "resource.delete",
       label: "Delete",
       icon: "trash-2",

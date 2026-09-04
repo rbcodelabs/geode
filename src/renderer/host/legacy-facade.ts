@@ -27,6 +27,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     trash: (path) => host.vaultFiles.trash(path),
     rename: (path, newPath) => host.vaultFiles.rename(path, newPath),
     exists: (path) => host.vaultFiles.exists(path),
+    reveal: host.desktop?.revealInFileManager ?? unavailable("desktop") as never,
     readMetadataCache: () => host.metadataIndex.readCache(),
     writeMetadataCache: (data) => host.metadataIndex.writeCache(data),
     startMetadataIndexer: () => host.metadataIndex.startBackgroundIndexer(),
