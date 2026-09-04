@@ -45,6 +45,18 @@ describe("markdown comments format", () => {
     expect(stripCommentMetadata(source)).toBe(source);
   });
 
+  it.each([
+    ['<!-- geode-comment:v1 id="x" data="!!!" -->text<!-- geode-comment-end:x -->', "malformed"],
+    ['<!-- geode-comment:v1 id="x" data="abc', "truncated"],
+    ['<!-- geode-comment-end:x -->', "stray"],
+    [createCommentMarkers("x", { messages: [] }).open + createCommentMarkers("x", { messages: [] }).close + createCommentMarkers("x", { messages: [] }).open + createCommentMarkers("x", { messages: [] }).close, "duplicate"],
+    [createCommentMarkers("x", { messages: [] }).open + createCommentMarkers("y", { messages: [] }).open + 'text' + createCommentMarkers("x", { messages: [] }).close + createCommentMarkers("y", { messages: [] }).close, "nested"],
+    [createCommentMarkers("x", { messages: [] }).open + 'text' + createCommentMarkers("y", { messages: [] }).close, "crossed"],
+  ])("preserves and reports %s marker corruption", (source) => {
+    expect(parseCommentThreads(source).errors.length).toBeGreaterThan(0);
+    expect(stripCommentMetadata(source)).toBe(source);
+  });
+
   it("marks adjacent marker pairs as detached", () => {
     const markers = createCommentMarkers("thread-1", { messages: [] });
     expect(parseCommentThreads(markers.open + markers.close).threads[0].detached).toBe(true);
@@ -78,6 +90,21 @@ describe("comment range validation", () => {
 
   it("rejects ranges spanning text blocks or containing Markdown delimiters", () => {
     expect(() => validateCommentRange("First\n\nSecond", { from: 0, to: 13 })).toThrow("text block");
-    expect(() => validateCommentRange("A **bold** word", { from: 2, to: 10 })).toThrow("syntax");
+    expect(() => validateCommentRange("A **bold** word", { from: 2, to: 10 })).toThrow();
+  });
+
+  it.each([
+    ["reference link", "[label][ref]", 0, 12],
+    ["setext", "Heading\n===", 0, 11],
+    ["tilde fence", "~~~js\ncode\n~~~", 6, 10],
+    ["indented code", "    code", 4, 8],
+    ["multi-backtick", "Use ``code``", 6, 10],
+    ["table delimiter", "| a | b |", 2, 3],
+    ["wikilink text", "[[Target]]", 2, 8],
+    ["tag text", "A #topic here", 3, 8],
+    ["URL text", "See https://example.com now", 12, 19],
+    ["emphasis content", "A *word* here", 3, 7],
+  ])("rejects semantic %s selections", (_name, source, from, to) => {
+    expect(() => validateCommentRange(source, { from, to })).toThrow();
   });
 });

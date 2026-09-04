@@ -38,7 +38,9 @@ export interface CommentParseError {
 
 export class CommentFormatError extends Error {}
 
-const OPEN_RE = /<!-- geode-comment:v1 id="([^"]+)" data="([A-Za-z0-9_-]+)" -->/g;
+const OPEN_EXACT = /^<!-- geode-comment:v1 id="([^"]+)" data="([^"]*)" -->$/;
+const END_EXACT = /^<!-- geode-comment-end:([^\s<>]+) -->$/;
+const CANDIDATE_RE = /<!--\s*geode-comment[\s\S]*?(?:-->|$)/g;
 
 function encodeBase64Url(value: string): string {
   const bytes = new TextEncoder().encode(value);
@@ -86,37 +88,65 @@ export function createCommentMarkers(id: string, payload: CommentPayload): { ope
 export function parseCommentThreads(source: string): { threads: ParsedCommentThread[]; errors: CommentParseError[] } {
   const threads: ParsedCommentThread[] = [];
   const errors: CommentParseError[] = [];
-  OPEN_RE.lastIndex = 0;
-  for (let match = OPEN_RE.exec(source); match; match = OPEN_RE.exec(source)) {
-    const openFrom = match.index;
-    const openTo = openFrom + match[0].length;
-    const closeMarker = `<!-- geode-comment-end:${match[1]} -->`;
-    const closeFrom = source.indexOf(closeMarker, openTo);
-    if (closeFrom < 0) {
-      errors.push({ from: openFrom, to: openTo, message: `Comment ${match[1]} has no closing marker` });
+  const seen = new Set<string>();
+  let active: { id: string; data: string; from: number; to: number; invalid: boolean } | null = null;
+  for (const candidate of source.matchAll(CANDIDATE_RE)) {
+    const value = candidate[0];
+    const from = candidate.index!;
+    const to = from + value.length;
+    const open = value.match(OPEN_EXACT);
+    const end = value.match(END_EXACT);
+    if (open) {
+      if (active) {
+        errors.push({ from, to, message: `Comment ${open[1]} is nested inside ${active.id}` });
+        active.invalid = true;
+        continue;
+      }
+      const duplicate = seen.has(open[1]);
+      if (duplicate) errors.push({ from, to, message: `Duplicate comment id ${open[1]}` });
+      seen.add(open[1]);
+      active = { id: open[1], data: open[2], from, to, invalid: duplicate };
       continue;
     }
-    try {
-      const payload = decodePayload(match[2]);
-      const closeTo = closeFrom + closeMarker.length;
-      threads.push({
-        id: match[1], ...payload,
-        from: openTo, to: closeFrom,
-        markerFrom: openFrom, markerTo: closeTo,
-        openFrom, openTo, closeFrom, closeTo,
-        anchorText: source.slice(openTo, closeFrom),
-        detached: openTo === closeFrom,
-      });
-      OPEN_RE.lastIndex = closeTo;
-    } catch (error) {
-      errors.push({ from: openFrom, to: openTo, message: `Comment ${match[1]} is malformed: ${String(error)}` });
+    if (end) {
+      if (!active) {
+        errors.push({ from, to, message: `Stray closing marker for ${end[1]}` });
+        continue;
+      }
+      if (end[1] !== active.id) {
+        errors.push({ from, to, message: `Crossed comment markers: expected ${active.id}, found ${end[1]}` });
+        active = null;
+        continue;
+      }
+      if (!active.invalid) {
+        try {
+          const payload = decodePayload(active.data);
+          threads.push({
+            id: active.id, ...payload,
+            from: active.to, to: from,
+            markerFrom: active.from, markerTo: to,
+            openFrom: active.from, openTo: active.to,
+            closeFrom: from, closeTo: to,
+            anchorText: source.slice(active.to, from),
+            detached: active.to === from,
+          });
+        } catch (error) {
+          errors.push({ from: active.from, to: active.to, message: `Comment ${active.id} is malformed: ${String(error)}` });
+        }
+      }
+      active = null;
+      continue;
     }
+    errors.push({ from, to, message: "Malformed or truncated Geode comment marker" });
+    if (active) active.invalid = true;
   }
+  if (active) errors.push({ from: active.from, to: active.to, message: `Comment ${active.id} has no closing marker` });
   return { threads, errors };
 }
 
 export function stripCommentMetadata(source: string): string {
   const parsed = parseCommentThreads(source);
+  if (parsed.errors.length) return source;
   if (!parsed.threads.length) return source;
   let result = source;
   for (const thread of [...parsed.threads].sort((a, b) => b.markerFrom - a.markerFrom)) {
@@ -129,6 +159,7 @@ export function stripCommentMetadata(source: string): string {
 /** Hide valid marker bytes while preserving UTF-16 offsets and line endings for metadata positions. */
 export function maskCommentMetadata(source: string): string {
   const parsed = parseCommentThreads(source);
+  if (parsed.errors.length) return source;
   let result = source;
   const blank = (value: string) => value.replace(/[^\r\n]/g, " ");
   for (const thread of [...parsed.threads].sort((a, b) => b.markerFrom - a.markerFrom)) {
@@ -149,11 +180,19 @@ function protectedRanges(source: string): Array<{ from: number; to: number; kind
   };
   const frontmatter = source.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
   if (frontmatter) ranges.push({ from: 0, to: frontmatter[0].length, kind: "frontmatter" });
-  addMatches(/```[\s\S]*?(?:```|$)/g, "fenced code");
-  addMatches(/`[^`\n]*`/g, "inline code");
+  addMatches(/(?:```|~~~)[\s\S]*?(?:```|~~~|$)/g, "fenced code");
+  addMatches(/(`+)[^`\n]*\1/g, "inline code");
+  addMatches(/^(?: {4}|\t).*$/gm, "indented code");
   addMatches(/<!--(?! geode-comment:)[\s\S]*?-->/g, "HTML comment");
   addMatches(/\[[^\]\n]*\]\(([^)\n]*)\)/g, "link destination", 1);
-  addMatches(/^(?: {0,3}(?:#{1,6}\s+|>|[-+*]\s+|\d+[.)]\s+|```)|\s*\|)/gm, "structural Markdown");
+  addMatches(/\[[^\]\n]*\]\[[^\]\n]*\]/g, "reference link");
+  addMatches(/!?\[\[[^\]\n]+\]\]/g, "wikilink");
+  addMatches(/https?:\/\/[^\s<>]+/g, "URL");
+  addMatches(/(?:\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_)/g, "inline formatting");
+  addMatches(/(^|[\s(])(#[\p{L}\p{N}_\/-]+)/gmu, "tag", 2);
+  addMatches(/^.*\|.*$/gm, "table syntax");
+  addMatches(/^.*\r?\n {0,3}(?:=+|-+)[ \t]*$/gm, "setext heading");
+  addMatches(/^ {0,3}(?:#{1,6}\s+|>|[-+*]\s+|\d+[.)]\s+|```|~~~).*$/gm, "structural Markdown");
   return ranges;
 }
 

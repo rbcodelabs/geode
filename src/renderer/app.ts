@@ -3474,7 +3474,13 @@ export class App {
   }
 
   revealComment(thread: CommentThread): void {
+    this.selectComment(thread.id);
     void this.openFile(thread.file, false).then(() => this.getActiveMarkdownView()?.revealComment(thread.id));
+  }
+
+  selectComment(threadId: string): void {
+    this.showComments();
+    this.commentsView?.selectThread(threadId);
   }
 
   reattachComment(thread: CommentThread): void {
@@ -3483,6 +3489,10 @@ export class App {
     if (!range) { this.notify("Select replacement text in the note first"); return; }
     void this.comments.reattach(thread.file, thread.id, range)
       .catch((error) => this.notify(error instanceof Error ? error.message : "Could not reattach comment"));
+  }
+
+  reportCommentMutation(operation: Promise<unknown>): void {
+    void operation.catch((error) => this.notify(error instanceof Error ? error.message : "Could not update comment"));
   }
 
   private showComments(): void {

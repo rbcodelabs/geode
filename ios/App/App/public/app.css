@@ -4903,7 +4903,6 @@ body:not(.show-status-bar) .status-bar {
 .canvas-view.has-error .canvas-selection-controls {
   display: none;
 }
-+
 /* Anchored Markdown comments */
 .markdown-source-view { position: relative; }
 .cm-comment-anchor {
@@ -4925,6 +4924,7 @@ body:not(.show-status-bar) .status-bar {
 .comments-warning { margin: 8px; padding: 10px; border-radius: var(--radius-s); background: var(--background-modifier-error); color: var(--text-error); }
 .comment-thread { margin: 8px; padding: 10px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); }
 .comment-thread:focus-within { border-color: var(--interactive-accent); }
+.comment-thread.is-active { border-color: var(--interactive-accent); background: var(--background-secondary-alt); }
 .comment-anchor-preview { display: block; width: 100%; margin-bottom: 8px; overflow: hidden; color: var(--text-muted); font-style: italic; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .comment-message { padding: 7px 0; border-top: 1px solid var(--background-modifier-border); }
 .comment-message-body { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -3,7 +3,7 @@ import { projectCanvasForSearch } from "../canvas/canvas-data";
 import type { View } from "../workspace";
 import { TFile, TagCache } from "../types";
 import { setIcon } from "../api/icons";
-import { maskCommentMetadata, stripCommentMetadata } from "../comments/model";
+import { stripCommentMetadata } from "../comments/model";
 
 export interface SearchTerm {
   op: "text" | "file" | "path" | "tag" | "content" | "line";
@@ -59,8 +59,8 @@ export function matchFileAgainstTerms(
   getTags: (file: TFile) => TagCache[]
 ): SearchMatch | null {
   const snippets: { text: string; offset: number }[] = [];
+  if (content !== null) content = stripCommentMetadata(content);
   const rawContent = content;
-  if (content !== null) content = maskCommentMetadata(content);
   const lower = content?.toLowerCase() ?? "";
   const addSnippet = (index: number, len: number) => {
     const raw = rawContent ?? "";

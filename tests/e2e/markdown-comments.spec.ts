@@ -52,6 +52,57 @@ test("comments persist on disk, decorate Live Preview, hide in Reading view, and
     await window.getByRole("button", { name: "Toggle reading view (Cmd/Ctrl+E)" }).click();
     await expect(window.locator(".markdown-reading-view")).toContainText("Comment this passage");
     expect(await window.locator(".markdown-reading-view").innerText()).not.toContain("geode-comment");
+    await pane.locator(".comment-anchor-preview").click();
+    await expect(window.locator(`.cm-comment-anchor[data-comment-id="${created}"]`)).toBeVisible();
+    expect(await window.locator(".cm-editor").innerText()).not.toContain("geode-comment:v1");
+    await window.locator(`.cm-comment-anchor[data-comment-id="${created}"]`).click();
+    await expect(pane.locator(`.comment-thread[data-comment-id="${created}"]`)).toHaveClass(/is-active/);
+    await expect(pane.locator(`.comment-thread[data-comment-id="${created}"]`)).toBeFocused();
+
+    // Create and manage a second thread through the actual selection/prompt/sidebar UI.
+    await window.evaluate(() => {
+      const view = (window as any).app.getActiveMarkdownView();
+      const source = view.getText();
+      const from = source.lastIndexOf(".");
+      view.editor.dispatch({ selection: { anchor: from, head: from + 1 }, scrollIntoView: true });
+    });
+    await window.locator(".comment-selection-button").click();
+    await window.locator(".prompt-input").fill("UI thread");
+    await window.locator(".prompt-input").press("Enter");
+    const uiThread = pane.locator(".comment-thread", { hasText: "UI thread" });
+    await expect(uiThread).toBeVisible();
+    await uiThread.getByRole("button", { name: "Reply" }).click();
+    await window.locator(".prompt-input").fill("UI reply");
+    await window.locator(".prompt-input").press("Enter");
+    await expect(uiThread.getByText("UI reply", { exact: true })).toBeVisible();
+    await uiThread.getByRole("button", { name: "Edit" }).first().click();
+    await window.locator(".prompt-input").fill("UI thread edited");
+    await window.locator(".prompt-input").press("Enter");
+    await expect(uiThread.getByText("UI thread edited", { exact: true })).toBeVisible();
+    await uiThread.getByRole("button", { name: "Resolve" }).click();
+    await expect(uiThread).toHaveCount(0);
+    await pane.getByText("Include resolved").locator("input").check();
+    const resolvedThread = pane.locator(".comment-thread", { hasText: "UI thread edited" });
+    await resolvedThread.getByRole("button", { name: "Reopen" }).click();
+    await expect(resolvedThread.getByRole("button", { name: "Resolve" })).toBeVisible();
+    window.once("dialog", (dialog) => dialog.accept());
+    await resolvedThread.getByRole("button", { name: "Delete thread" }).click();
+    await expect(resolvedThread).toHaveCount(0);
+
+    await window.evaluate(() => {
+      const app = (window as any).app;
+      const view = app.getActiveMarkdownView();
+      const end = view.editor.state.doc.length;
+      view.editor.dispatch({ changes: { from: end, insert: '\n<!-- geode-comment:v1 id="broken" data="!!!" -->' } });
+      app.comments.trigger("changed", view.file);
+    });
+    await expect(pane.getByRole("alert")).toContainText("malformed");
+    expect(await window.evaluate(async () => {
+      const app = (window as any).app;
+      const view = app.getActiveMarkdownView();
+      try { await app.comments.create(view.file, { from: 0, to: 1 }, "blocked", { type: "user", name: "Rick" }); return "mutated"; }
+      catch (error) { return String(error); }
+    })).toContain("Repair malformed comment markers");
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });

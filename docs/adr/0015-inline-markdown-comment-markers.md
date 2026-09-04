@@ -23,6 +23,8 @@ Store each thread in paired, versioned HTML comment markers around its anchor. T
 
 Comments need no account or service and remain durable anywhere the Markdown goes. Rendering, indexing, search, and word count must consistently suppress marker metadata. Deleting a complete marker pair deletes its thread; deleting only the anchored prose leaves a detached thread that can be reattached.
 
+Closed-file mutations serialize per path and perform an uncached provider read immediately before writing. The current host contract has no atomic compare-and-swap primitive, so a residual read-to-write TOCTOU window remains; open editors continue through their normal conflict-aware save path.
+
 ## Risks
 
 The riskiest assumption is that markers can surround the allowed plain-text ranges without changing Markdown semantics. Conservative range validation and rendering regression tests are the release gate.

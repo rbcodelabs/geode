@@ -56,7 +56,7 @@ export class CommentService extends Events {
   private sources = new Map<string, string>();
 
   constructor(
-    private vault: Pick<Vault, "cachedRead" | "modify"> & Partial<Pick<Vault, "getCachedContent">>,
+    private vault: Pick<Vault, "cachedRead" | "modify"> & Partial<Pick<Vault, "read" | "getCachedContent">>,
     private openEditor: (file: TFile) => OpenCommentEditor | null = () => null,
   ) { super(); }
 
@@ -134,6 +134,9 @@ export class CommentService extends Events {
     await this.mutate(file, (source) => {
       const thread = this.findThread(source, threadId);
       if (!thread.detached) throw new CommentFormatError("Only detached comments can be reattached");
+      if (range.from < thread.markerTo && range.to > thread.markerFrom) {
+        throw new CommentFormatError("A reattachment selection cannot cross the detached marker pair");
+      }
       const without = source.slice(0, thread.markerFrom) + source.slice(thread.markerTo);
       const removedLength = thread.markerTo - thread.markerFrom;
       const adjusted = range.from >= thread.markerTo
@@ -180,7 +183,11 @@ export class CommentService extends Events {
         const source = await this.vault.cachedRead(file);
         const result = transform(source);
         if (result === source) { this.sources.set(file.path, source); return; }
-        const latest = await this.vault.cachedRead(file);
+        // `cachedRead()` intentionally returns a warmed snapshot. The guard must
+        // bypass it so provider/external edits are visible immediately. Hosts do
+        // not currently expose compare-and-swap, so a small read→write TOCTOU
+        // window remains; per-file serialization closes the in-process half.
+        const latest = this.vault.read ? await this.vault.read(file) : await this.vault.cachedRead(file);
         if (latest !== source) throw new StaleCommentWriteError("The note changed before the comment could be saved");
         await this.vault.modify(file, result);
         this.sources.set(file.path, result);

@@ -23,7 +23,7 @@ import type { HeadingCache, TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 import { resolveBlockBoundary } from "../block-boundary";
 import { PagePreviewController } from "../page-preview";
-import { commentDecorations } from "../comments/editor-extension";
+import { commentDecorations, commentInteractions } from "../comments/editor-extension";
 import { parseCommentThreads, validateCommentRange } from "../comments/model";
 
 const mdHighlight = HighlightStyle.define([
@@ -248,7 +248,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations]
+            ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion] }),
@@ -353,7 +353,16 @@ export class MarkdownView implements View {
   revealComment(threadId: string): void {
     const thread = parseCommentThreads(this.getText()).threads.find((item) => item.id === threadId);
     if (!thread) return;
-    if (this.mode === "reading") { this.mode = "live"; this.lastEditingMode = "live"; this.applyMode(); }
+    if (this.mode !== "live") {
+      this.mode = "live";
+      this.lastEditingMode = "live";
+      this.editor?.dispatch({ effects: this.editingCompartment.reconfigure([
+        livePreview(this.app, () => this.file?.path ?? ""),
+        commentDecorations,
+        commentInteractions((id) => this.app.selectComment(id)),
+      ]) });
+      this.applyMode();
+    }
     this.editor?.dispatch({ selection: { anchor: thread.from, head: thread.to }, scrollIntoView: true });
     this.editor?.focus();
   }
@@ -577,7 +586,7 @@ export class MarkdownView implements View {
     this.lastEditingMode = this.mode;
     this.editor?.dispatch({
       effects: this.editingCompartment.reconfigure(
-        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations] : []
+        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations, commentInteractions((id) => this.app.selectComment(id))] : []
       ),
     });
     this.applyMode();

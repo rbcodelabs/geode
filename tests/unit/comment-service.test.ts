@@ -76,11 +76,33 @@ describe("CommentService", () => {
     expect(h.vault.modify).not.toHaveBeenCalled();
   });
 
+  it("bypasses the warmed Vault cache for the stale-write guard", async () => {
+    let cached = "Hello world";
+    let provider = "Hello world";
+    const vault = {
+      cachedRead: vi.fn(async () => cached),
+      read: vi.fn(async () => provider),
+      modify: vi.fn(async (_file: TFile, next: string) => { cached = provider = next; }),
+    };
+    const service = new CommentService(vault as never);
+    provider = "External provider edit";
+    await expect(service.create(file, { from: 0, to: 5 }, "note", { type: "user", name: "Rick" })).rejects.toBeInstanceOf(StaleCommentWriteError);
+    expect(vault.read).toHaveBeenCalledOnce();
+    expect(vault.modify).not.toHaveBeenCalled();
+  });
+
   it("reattaches a detached thread to a valid new selection", async () => {
     const h = harness();
     const thread = await h.service.create(file, { from: 0, to: 5 }, "note", { type: "user", name: "Rick" });
     h.external(h.text().replace("Hello", ""));
     await h.service.reattach(file, thread.id, { from: h.text().indexOf("world"), to: h.text().indexOf("world") + 5 });
     expect(h.service.list(file)[0]).toMatchObject({ anchorText: "world", detached: false });
+  });
+
+  it("rejects a reattachment selection that crosses the detached marker pair", async () => {
+    const h = harness();
+    const thread = await h.service.create(file, { from: 0, to: 5 }, "note", { type: "user", name: "Rick" });
+    h.external(h.text().replace("Hello", ""));
+    await expect(h.service.reattach(file, thread.id, { from: 0, to: h.text().length })).rejects.toThrow("cross");
   });
 });

@@ -8,6 +8,28 @@ export const commentDecorations = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+export function commentInteractions(onActivate: (threadId: string) => void) {
+  const activateAt = (view: EditorView, pos: number): boolean => {
+    const thread = parseCommentThreads(view.state.doc.toString()).threads.find((item) => pos >= item.from && pos <= item.to);
+    if (!thread) return false;
+    onActivate(thread.id);
+    return true;
+  };
+  return EditorView.domEventHandlers({
+    click(event, view) {
+      const target = event.target as HTMLElement;
+      const id = target.closest<HTMLElement>(".cm-comment-anchor")?.dataset.commentId;
+      if (!id) return false;
+      onActivate(id);
+      return true;
+    },
+    keydown(event, view) {
+      if (event.key !== "Enter" || event.metaKey || event.ctrlKey || event.altKey) return false;
+      return activateAt(view, view.state.selection.main.head);
+    },
+  });
+}
+
 function build(source: string): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const ranges: Array<{ from: number; to: number; decoration: Decoration }> = [];

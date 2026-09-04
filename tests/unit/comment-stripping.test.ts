@@ -26,4 +26,15 @@ describe("comment metadata consumers", () => {
     expect(matchFileAgainstTerms(file, `${markers.open}Visible${markers.close}`, parseQuery("needle"), () => [])).toBeNull();
     expect(matchFileAgainstTerms(file, `${markers.open}Visible${markers.close}`, parseQuery("visible"), () => [])?.snippets[0].text).toBe("Visible");
   });
+
+  it.each(["hello", "https://example.com", "[[Target]]", "#tag", "[label][ref]", "Heading\n===", "one two"])(
+    "keeps anchored prose contiguous for consumers: %s",
+    (prose) => {
+      const split = Math.max(1, Math.floor(prose.length / 2));
+      const markers = createCommentMarkers(`thread-${split}`, { messages: [] });
+      const source = prose.slice(0, split) + markers.open + prose.slice(split) + markers.close;
+      const query = prose.replace(/[^A-Za-z]+/g, " ").trim().split(/\s+/)[0]?.toLowerCase();
+      if (query) expect(matchFileAgainstTerms({ path: "N.md", name: "N.md" } as TFile, source, parseQuery(query), () => [])).not.toBeNull();
+    }
+  );
 });

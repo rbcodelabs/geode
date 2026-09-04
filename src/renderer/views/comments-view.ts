@@ -70,15 +70,15 @@ export class CommentsView implements View {
         const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit";
         edit.addEventListener("click", () => this.app.promptEditComment(thread, item));
         const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Delete";
-        remove.addEventListener("click", () => void this.app.comments.deleteMessage(this.file!, thread.id, item.id));
+        remove.addEventListener("click", () => this.app.reportCommentMutation(this.app.comments.deleteMessage(this.file!, thread.id, item.id)));
         message.append(byline, body, edit, remove); card.append(message);
       }
       const reply = document.createElement("button"); reply.type = "button"; reply.textContent = "Reply";
       reply.addEventListener("click", () => this.app.promptReplyComment(thread));
       const resolve = document.createElement("button"); resolve.type = "button"; resolve.textContent = thread.resolvedAt ? "Reopen" : "Resolve";
-      resolve.addEventListener("click", () => void (thread.resolvedAt ? this.app.comments.reopen(this.file!, thread.id) : this.app.comments.resolve(this.file!, thread.id)));
+      resolve.addEventListener("click", () => this.app.reportCommentMutation(thread.resolvedAt ? this.app.comments.reopen(this.file!, thread.id) : this.app.comments.resolve(this.file!, thread.id)));
       const removeThread = document.createElement("button"); removeThread.type = "button"; removeThread.textContent = "Delete thread";
-      removeThread.addEventListener("click", () => { if (confirm("Delete this comment thread?")) void this.app.comments.deleteThread(this.file!, thread.id); });
+      removeThread.addEventListener("click", () => { if (confirm("Delete this comment thread?")) this.app.reportCommentMutation(this.app.comments.deleteThread(this.file!, thread.id)); });
       card.append(reply, resolve);
       if (thread.detached) {
         const reattach = document.createElement("button"); reattach.type = "button"; reattach.textContent = "Reattach to selection";
@@ -88,6 +88,15 @@ export class CommentsView implements View {
       card.append(removeThread);
       this.bodyEl.append(card);
     }
+  }
+
+  selectThread(threadId: string): void {
+    for (const card of this.bodyEl.querySelectorAll<HTMLElement>(".comment-thread")) {
+      card.classList.toggle("is-active", card.dataset.commentId === threadId);
+    }
+    const card = this.bodyEl.querySelector<HTMLElement>(`.comment-thread[data-comment-id="${CSS.escape(threadId)}"]`);
+    card?.focus();
+    card?.scrollIntoView({ block: "nearest" });
   }
 
   private empty(message: string): void {
