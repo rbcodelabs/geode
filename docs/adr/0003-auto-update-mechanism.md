@@ -1,8 +1,59 @@
 # ADR 0003 — Auto-update mechanism
 
-**Status:** Accepted (MVP scope).
-**Date:** 2026-08-14
+**Status:** Accepted (MVP scope). **Feature gated OFF by default — see
+"Amendment 2026-09-04" below.**
+**Date:** 2026-08-14 (amended 2026-09-04)
 **Compass:** Roadmap item `d36470c9` — "Mobile (Capacitor) + packaging/auto-update, pop-out windows, splits" (this ADR advances the packaging/auto-update part of that item).
+
+---
+
+## Amendment (2026-09-04) — opt-in gate + HTTPS-only feed
+
+The version of this ADR accepted on 2026-08-14 named the `error`-event
+fallback dialog ("Open Releases Page") as **the mitigation** for the
+unverified `quitAndInstall()` ad-hoc-signing risk. In the shipped code that
+mitigation was unreachable: the dialog is gated on `manualCheckInFlight`,
+which only `checkForUpdatesManually()` sets, and nothing triggers a manual
+check — `window.geode.checkForUpdates` has no renderer callers, there is no
+"Check for Updates" menu item in `src/main/application-menu.ts`, and the
+`updater-progress` event has no listeners. A background check that failed
+mid-install would therefore have been silent to the user, which is exactly
+the outcome the mitigation existed to prevent.
+
+Because the mitigation is not actually in force, the feature is now **off by
+default**, and two guards were added:
+
+1. **Explicit opt-in.** `initAutoUpdater()` requires `app.isPackaged` **and**
+   the `GEODE_ENABLE_AUTO_UPDATE` environment variable set to an affirmative
+   value (`1`/`true`/`yes`/`on`, case-insensitive). Anything else — including
+   a normal packaged build with the variable unset — logs one line saying it
+   is off and why, and starts no timers, shows no dialogs, and makes no
+   network calls. `checkForUpdatesManually()` honours the same gate and
+   returns `{status: "disabled"}` with an explanatory dialog.
+2. **HTTPS-only custom feed.** `GEODE_UPDATE_FEED_URL` is validated before it
+   reaches `setFeedURL({provider: "generic", url})`. A non-`https:` scheme or
+   an unparseable value is **rejected and the updater does not initialise at
+   all** (fail closed — silently falling back to the production feed would
+   hide an operator's mis-set override). These builds have no publisher
+   identity to verify against, so a plaintext `http://` feed would let anyone
+   on the network path hand the app an "update" to install.
+
+Both decisions live in a new pure module `src/main/update-config.ts`
+(`resolveAutoUpdateGate`, `resolveUpdateFeedUrl`, `isTruthyFlag`) — no
+Electron imports, mirroring the `update-scheduler.ts` split — and are covered
+by `tests/unit/update-config.test.ts`.
+
+**The gate comes off when, and only when, the packaged update path has
+actually been exercised end to end:** two ad-hoc-signed `electron-builder
+--mac` builds, a real feed, `update-downloaded` → "Restart Now" →
+`quitAndInstall()`, plus a confirmed recovery path when that install fails
+(the error dialog reachable from something a user can actually click). Until
+then this feature is dormant in every shipped build. **As of 2026-09-04 that
+verification has NOT been done.**
+
+A follow-on change should also wire the manual check to a real "Check for
+Updates…" menu item, so the documented fallback is reachable by a user rather
+than only by an IPC call nothing makes.
 
 ---
 
@@ -124,6 +175,7 @@ still degrade to "go get it yourself" rather than a silent failure.
 ```
 src/main/
   update-scheduler.ts   # NEW — pure "is it time to check yet?" logic, no Electron imports
+  update-config.ts       # NEW (2026-09-04) — pure opt-in gate + HTTPS-only feed-URL validation
   auto-updater.ts        # NEW — electron-updater wiring: init, manual check, event handlers
   main.ts                 # MODIFIED — calls initAutoUpdater() after createWindow();
                            #   registers the "updater-check" IPC handler
@@ -153,10 +205,13 @@ of keeping decision logic independently unit-testable
 
 ### `auto-updater.ts` — electron-updater wiring
 
-- `initAutoUpdater()`: no-op (with a log line) when `!app.isPackaged` — the
-  Playwright e2e smoke test launches Electron from source, so this must
-  never touch the network, show a dialog, or start a timer in that mode.
-  When packaged: optional `GEODE_UPDATE_FEED_URL` override via
+- `initAutoUpdater()`: no-op (with a log line) unless
+  `resolveAutoUpdateGate(process.env, app.isPackaged)` returns enabled —
+  i.e. packaged **and** `GEODE_ENABLE_AUTO_UPDATE` explicitly set (see the
+  2026-09-04 amendment). The Playwright e2e smoke test launches Electron from
+  source, so this must never touch the network, show a dialog, or start a
+  timer in that mode. When enabled: optional `GEODE_UPDATE_FEED_URL` override,
+  HTTPS-validated by `resolveUpdateFeedUrl`, via
   `autoUpdater.setFeedURL({provider: "generic", url})`; `autoDownload =
   false`; wires all event handlers; schedules a first check 5s after
   ready, then re-evaluates every 30 minutes via `shouldCheckForUpdates`
@@ -197,6 +252,8 @@ matching the existing style exactly. `UpdaterCheckResult = { status:
 
 | Condition | Behavior |
 |---|---|
+| Packaged, `GEODE_ENABLE_AUTO_UPDATE` unset (**the default**) | `initAutoUpdater()` no-ops with a log line; `checkForUpdatesManually()` returns `disabled` with an explanatory dialog. No timers, no network, no dialogs. |
+| `GEODE_UPDATE_FEED_URL` set to a non-`https:` or unparseable value | `initAutoUpdater()` logs an error and returns — the updater does not initialise at all rather than silently using the production feed. |
 | Unpackaged (dev/e2e) | `initAutoUpdater()` no-ops; `checkForUpdatesManually()` shows a "disabled in development" dialog and never touches the network. |
 | Background check finds no update | Silent — `lastCheckedAt` updates, nothing shown. |
 | Background check errors (offline, rate-limited, malformed feed) | `console.error` only — no dialog, so a flaky background check never interrupts the user. |
@@ -210,6 +267,11 @@ matching the existing style exactly. `UpdaterCheckResult = { status:
 Matches the repo's standard three-tier gate (`typecheck`, `test:unit` →
 `vitest run`, `test:e2e` → `build` + `playwright test`).
 
+- **`tests/unit/update-config.test.ts`** — opt-in absent ⇒ gated off (with a
+  reason naming the env var); non-affirmative values ⇒ off; unpackaged ⇒ off
+  even when opted in; packaged + affirmative ⇒ on. Feed URL: unset/blank ⇒
+  default feed; `https://…` ⇒ accepted; `http://`, `file://`, `ftp://`,
+  `javascript:`, `data:` and unparseable garbage ⇒ rejected.
 - **`tests/unit/update-scheduler.test.ts`** — never-checked ⇒ true;
   exactly-at-boundary ⇒ true (inclusive); short-of-interval ⇒ false;
   clock-skew ⇒ false; custom interval override.

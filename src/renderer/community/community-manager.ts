@@ -50,6 +50,12 @@ export class CommunityManager {
    * (that aren't already), and apply the theme Obsidian had active. Returns a
    * summary for a notice. Per-plugin enable failures are logged, not thrown, so
    * one bad plugin can't abort the whole import.
+   *
+   * Only `pluginsToEnable` — the plugins THIS import copied in — is ever
+   * enabled. `enable()` executes `main.js` and persists the id, so iterating
+   * the full merged `enabledPluginIds` would silently switch back on (and run)
+   * a plugin the user had installed in Geode and deliberately disabled, just
+   * because their stale `.obsidian/community-plugins.json` still lists it.
    */
   async importFromObsidian(): Promise<ObsidianImportSummary> {
     const result = await window.geode.importFromObsidian();
@@ -57,7 +63,7 @@ export class CommunityManager {
     await this.app.pluginManager.rescan();
 
     const enabled: string[] = [];
-    for (const id of result.enabledPluginIds) {
+    for (const id of result.pluginsToEnable) {
       if (this.app.pluginManager.isEnabled(id)) continue;
       if (!this.app.pluginManager.getManifest(id)) continue; // absent/unreadable on disk
       try {
