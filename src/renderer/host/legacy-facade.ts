@@ -39,6 +39,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     listThemes: () => host.plugins.listThemes(),
     resolveCommunity: unavailable("nodePlugins") as never,
     installCommunity: unavailable("nodePlugins") as never,
+    importFromObsidian: unavailable("nodePlugins") as never,
     listChromeProfiles: unavailable("chromeCookieImport") as never,
     importChromeCookies: unavailable("chromeCookieImport") as never,
     getProcessMetrics: unavailable("processDiagnostics") as never,
