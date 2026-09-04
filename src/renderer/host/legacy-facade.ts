@@ -22,7 +22,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     readPluginFile: (path, sent) => host.plugins.readPluginFile(path, sent),
     replacePluginFiles: (id, expected, replacement) => host.plugins.replacePluginFiles(id, expected, replacement),
     readBinary: (path) => host.vaultFiles.readBinary(path),
-    write: (path, data) => host.vaultFiles.write(path, data),
+    write: (path, data, options) => host.vaultFiles.write(path, data, options),
     mkdir: (path) => host.vaultFiles.mkdir(path),
     trash: (path) => host.vaultFiles.trash(path),
     rename: (path, newPath) => host.vaultFiles.rename(path, newPath),

@@ -138,7 +138,7 @@ describe("CapacitorHostServices", () => {
 
     await expect(host.vaultFiles.read("Welcome.md")).resolves.toBe("welcome");
     expect([...new Uint8Array(await host.vaultFiles.readBinary("asset.bin"))]).toEqual([0, 1, 2, 255]);
-    await host.vaultFiles.write("Welcome.md", "edited", "mutation-1");
+    await host.vaultFiles.write("Welcome.md", "edited", undefined, "mutation-1");
     await host.vaultFiles.mkdir("Folder", "mutation-2");
     await host.vaultFiles.rename("Folder", "Archive", "mutation-3");
     await host.vaultFiles.trash("Archive", "mutation-4");

@@ -126,7 +126,10 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
         requireOpen();
         return decodeBase64((await plugin.readBinary({ path: managedVaultPath(path) })).base64);
       },
-      write: async (path, data, mutationId) => {
+      // The native plugin does not yet accept mtime/ctime overrides; writeOptions
+      // is accepted for interface compatibility with the other hosts but not
+      // threaded through, matching this PR's Electron-only scope.
+      write: async (path, data, _writeOptions, mutationId) => {
         requireOpen();
         return plugin.write({ path: managedVaultPath(path), data, mutationId });
       },

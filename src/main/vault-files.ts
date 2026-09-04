@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
-import type { Stats } from "node:fs";
 import { isIgnoredSegment } from "./vault-ignore";
+import { birthtimeOf } from "./fs-utils";
 
 export interface VaultFileEntry {
   path: string;
@@ -29,12 +29,6 @@ function immediate(): Promise<void> {
 
 function toRel(root: string, abs: string): string {
   return path.relative(root, abs).split(path.sep).join("/");
-}
-
-/** Use mtime when a filesystem cannot provide a meaningful birthtime. */
-function birthtimeOf(st: Stats | null): number {
-  if (!st) return 0;
-  return st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs;
 }
 
 export async function listVaultFiles(

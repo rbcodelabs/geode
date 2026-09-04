@@ -208,14 +208,17 @@ export function createBrowserHost(
         const data = await createBrowserHostReader(activeState, requireOpen, path);
         return new TextEncoder().encode(data).buffer;
       },
-      write: async (path, data, mutationId) => {
+      write: async (path, data, writeOptions, mutationId) => {
         requireOpen();
         const key = normalizeVaultPath(path);
         await options.beforeWrite?.(activeVaultId, key, data);
         requireOpen();
         const prior = activeState.files.get(key);
         const timestamp = now();
-        const file = { data, ctime: prior?.ctime ?? timestamp, mtime: timestamp };
+        // ctime is intentionally never taken from writeOptions — this in-memory
+        // host mirrors the real fs write path's documented limitation that a
+        // file's birthtime can't be set independently of its mtime.
+        const file = { data, ctime: prior?.ctime ?? timestamp, mtime: writeOptions?.mtime ?? timestamp };
         activeState.files.set(key, file);
         activeState.persist();
         emit({ event: prior ? "modify" : "create", path: key, mutationId });

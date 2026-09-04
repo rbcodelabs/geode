@@ -521,9 +521,11 @@ export class Vault extends Events {
     return this.host.vaultFiles.readBinary(file.path);
   }
 
-  async create(path: string, data: string, _options?: DataWriteOptions): Promise<TFile> {
+  async create(path: string, data: string, options?: DataWriteOptions): Promise<TFile> {
     if (this.files.has(path)) throw new Error(`File already exists: ${path}`);
-    const { mtime, ctime, size } = await this.withHostMutation((id) => this.host.vaultFiles.write(path, data, id));
+    const { mtime, ctime, size } = await this.withHostMutation((id) =>
+      this.host.vaultFiles.write(path, data, options, id)
+    );
     this.indexEntry({ path, isFolder: false, mtime, ctime, size });
     this.acknowledgedPathsSinceManifest.add(path);
     this.contents.set(path, data);
@@ -546,8 +548,10 @@ export class Vault extends Events {
     return folder;
   }
 
-  async modify(file: TFile, data: string, _options?: DataWriteOptions): Promise<void> {
-    const { mtime, size } = await this.withHostMutation((id) => this.host.vaultFiles.write(file.path, data, id));
+  async modify(file: TFile, data: string, options?: DataWriteOptions): Promise<void> {
+    const { mtime, size } = await this.withHostMutation((id) =>
+      this.host.vaultFiles.write(file.path, data, options, id)
+    );
     file.mtime = mtime;
     file.size = size;
     this.acknowledgedPathsSinceManifest.add(file.path);

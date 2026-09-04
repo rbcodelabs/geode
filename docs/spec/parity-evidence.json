@@ -443,11 +443,12 @@
     "notes": "Observed cached plaintext reads avoiding repeat disk I/O and refreshing after a direct read."
   },
   "API-MEMBER-88d536f2d2cb": {
-    "status": "partial",
+    "status": "verified",
     "evidence": [
-      "tests/unit/vault-public-contracts.test.ts"
+      "tests/unit/vault-public-contracts.test.ts",
+      "tests/unit/vault-write-options.test.ts"
     ],
-    "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+    "notes": "Default plaintext modification, metadata/cache refresh, and modify event are observed. DataWriteOptions.mtime is forwarded through the vault-write IPC call to writeVaultFile() and applied via fs.utimes, and the resulting TFile.mtime is observed pinned to the requested value; a rejected write (e.g. an invalid mtime) propagates and leaves the file's cached content/metadata untouched."
   },
   "API-MEMBER-92ea17cba0a5": {
     "status": "verified",
@@ -479,11 +480,43 @@
     "notes": "Observed direct disk plaintext reads on every call and subsequent cache refresh."
   },
   "API-MEMBER-d6f46bfd7d5d": {
-    "status": "partial",
+    "status": "verified",
     "evidence": [
+      "tests/unit/vault-public-contracts.test.ts",
+      "tests/unit/vault-write-options.test.ts"
+    ],
+    "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed. DataWriteOptions.mtime is forwarded through the vault-write IPC call to writeVaultFile() and applied via fs.utimes, and the resulting TFile.mtime is observed pinned to the requested value; a rejected write (e.g. an invalid mtime) propagates and the file is never indexed into the vault."
+  },
+  "DEV-1b227481f869": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/vault-write-options.test.ts",
       "tests/unit/vault-public-contracts.test.ts"
     ],
-    "notes": "Default plaintext creation, returned TFile, duplicate rejection, cache, and create event are observed; DataWriteOptions timestamps are accepted but not applied by current IPC."
+    "notes": "The documented DataWriteOptions shape (mtime/ctime) is implemented end to end: mtime is validated, applied via fs.utimes in src/main/vault-write.ts's writeVaultFile(), and forwarded through the preload/IPC boundary and Vault.create/Vault.modify. ctime is accepted for shape compatibility but intentionally not applied (see API-MEMBER-4a325cdd6867)."
+  },
+  "API-5c4c8dad9e1d": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/vault-write-options.test.ts",
+      "tests/unit/vault-public-contracts.test.ts"
+    ],
+    "notes": "src/renderer/vault.ts exports a DataWriteOptions interface matching the documented { ctime?: number; mtime?: number } shape, threaded through Vault.create/Vault.modify, window.geode.write, and the vault-write IPC handler into writeVaultFile()."
+  },
+  "API-MEMBER-1a702f175420": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/vault-write-options.test.ts",
+      "tests/unit/vault-public-contracts.test.ts"
+    ],
+    "notes": "writeVaultFile()'s validateMtime() rejects non-finite values (throwing before any mkdir/writeFile mutation runs, verified by asserting the target file was never created) and converts a valid ms-since-epoch value to the seconds fs.utimes expects; the applied mtime is observed exactly on disk via fsp.stat, and via the TFile returned by Vault.create/updated by Vault.modify."
+  },
+  "API-MEMBER-4a325cdd6867": {
+    "status": "blocked",
+    "evidence": [
+      "tests/unit/vault-write-options.test.ts"
+    ],
+    "notes": "Node/Electron's fs.utimes can only set atime/mtime, not birthtime, so a caller-requested ctime cannot be applied to a file's actual creation time on any platform this app ships on. writeVaultFile() accepts options.ctime for API shape compatibility and documents this as a deliberate gap rather than a defect; the test observes ctime being accepted without being reflected in the file's real birthtime."
   },
   "API-MEMBER-e8941e646790": {
     "status": "verified",
