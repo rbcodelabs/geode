@@ -13,9 +13,11 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTO_UPDATE_OPT_IN_ENV,
+  UPDATE_FEED_URL_ENV,
   isTruthyFlag,
   resolveAutoUpdateGate,
   resolveUpdateFeedUrl,
+  resolveUpdaterState,
 } from "../../src/main/update-config";
 
 describe("resolveAutoUpdateGate — opt-in required (B4.1)", () => {
@@ -50,6 +52,44 @@ describe("resolveAutoUpdateGate — opt-in required (B4.1)", () => {
   it("explains why it is off, so the log line is actionable", () => {
     const gate = resolveAutoUpdateGate({}, true);
     expect(gate.enabled === false && gate.reason).toMatch(/verified|ad-hoc/i);
+  });
+});
+
+describe("resolveUpdaterState — the single decision both entry points share", () => {
+  const optedIn = { [AUTO_UPDATE_OPT_IN_ENV]: "1" };
+
+  it("is not live, and marks the gate as not passed, without the opt-in", () => {
+    const state = resolveUpdaterState({}, true);
+    expect(state.live).toBe(false);
+    // gatePassed false ⇒ never touch the electron-updater singleton.
+    expect(state.live === false && state.gatePassed).toBe(false);
+  });
+
+  it("is not live when the gate passes but the feed is rejected", () => {
+    const state = resolveUpdaterState(
+      { ...optedIn, [UPDATE_FEED_URL_ENV]: "http://staging.internal/geode/" },
+      true
+    );
+    expect(state.live).toBe(false);
+    // gatePassed true ⇒ the singleton is reachable, so pin its defaults off.
+    expect(state.live === false && state.gatePassed).toBe(true);
+    expect(state.live === false && state.reason).toContain(UPDATE_FEED_URL_ENV);
+    expect(state.live === false && state.reason).toContain("https:");
+  });
+
+  it("is live against the default feed when no override is set", () => {
+    expect(resolveUpdaterState(optedIn, true)).toEqual({ live: true, feed: { kind: "default" } });
+  });
+
+  it("is live against a validated https override", () => {
+    expect(
+      resolveUpdaterState({ ...optedIn, [UPDATE_FEED_URL_ENV]: "https://u.example.com/" }, true)
+    ).toEqual({ live: true, feed: { kind: "custom", url: "https://u.example.com/" } });
+  });
+
+  it("never reports the gate as passed when unpackaged", () => {
+    const state = resolveUpdaterState({ ...optedIn, [UPDATE_FEED_URL_ENV]: "http://nope/" }, false);
+    expect(state.live === false && state.gatePassed).toBe(false);
   });
 });
 

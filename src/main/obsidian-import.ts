@@ -117,6 +117,20 @@ export interface ImportPlan {
  * so `MyPlugin`, `myplugin` and an NFD-encoded `Café` all name the SAME
  * directory. Exact-string comparison misses that, which is how an
  * "already present, never overwrite" guard can end up deleting a live install.
+ *
+ * BEST-EFFORT, BY DESIGN. This approximates the filesystem's folding; it does
+ * not reproduce it. `toLowerCase()` is deliberately locale-independent (so no
+ * Turkish dotless-i surprise) but it is not full Unicode case folding: Greek
+ * `ΟΔΟΣ` and `οδοσ` do not fold together here, while a filesystem that folds
+ * both Σ and ς to σ may treat them as the same name. That is a FALSE NEGATIVE
+ * — the planner thinks the name is free — and it lands safely, because
+ * `commitStaging()` refuses any destination that already exists and reports
+ * the item as skipped instead.
+ *
+ * So: this function is the fast path that produces good skip messages;
+ * `commitStaging()`'s `lstat` is the actual backstop that makes data loss
+ * impossible. Do not "optimize away" that check on the grounds that the
+ * planner already guarantees the destination is free — it doesn't, quite.
  */
 export function normalizeItemKey(name: string): string {
   return name.normalize("NFC").toLowerCase();
@@ -589,11 +603,19 @@ export async function importFromObsidianVault(root: string): Promise<ObsidianImp
   };
 }
 
-/** Human-readable reason for a copy that didn't land, for `skipped[]`. */
+/**
+ * Human-readable reason for a copy that didn't land, for `skipped[]`.
+ *
+ * `destination-exists` is not only the mid-import race it might sound like.
+ * The common real case is an item the pre-scan structurally cannot see:
+ * `readdir(…, {withFileTypes: true})` reports a symlinked plugin directory as
+ * `isSymbolicLink()`, never `isDirectory()`, so `listDirNames` skips it and
+ * the planner believes the name is free. The wording says that.
+ */
 function copyFailureReason(kind: ImportItemType, outcome: Exclude<CopyOutcome, "copied">): string {
   const where = kind === "plugin" ? ".geode/plugins/" : ".geode/themes/";
   return outcome === "destination-exists"
-    ? `already present in ${where} — left as-is (destination appeared during the import)`
+    ? `already present in ${where} — left as-is (not visible to the pre-scan: e.g. a symlink or a non-directory)`
     : kind === "plugin"
       ? "source lost its main.js before it could be copied"
       : "source lost its theme.css before it could be copied";

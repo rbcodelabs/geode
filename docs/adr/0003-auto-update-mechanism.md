@@ -32,16 +32,42 @@ default**, and two guards were added:
    returns `{status: "disabled"}` with an explanatory dialog.
 2. **HTTPS-only custom feed.** `GEODE_UPDATE_FEED_URL` is validated before it
    reaches `setFeedURL({provider: "generic", url})`. A non-`https:` scheme or
-   an unparseable value is **rejected and the updater does not initialise at
-   all** (fail closed — silently falling back to the production feed would
-   hide an operator's mis-set override). These builds have no publisher
-   identity to verify against, so a plaintext `http://` feed would let anyone
-   on the network path hand the app an "update" to install.
+   an unparseable value is **rejected, and the feature stays inert** (fail
+   closed — silently falling back to the production feed would hide an
+   operator's mis-set override). These builds have no publisher identity to
+   verify against, so a plaintext `http://` feed would let anyone on the
+   network path hand the app an "update" to install.
 
-Both decisions live in a new pure module `src/main/update-config.ts`
-(`resolveAutoUpdateGate`, `resolveUpdateFeedUrl`, `isTruthyFlag`) — no
-Electron imports, mirroring the `update-scheduler.ts` split — and are covered
-by `tests/unit/update-config.test.ts`.
+   Concretely, on a rejected feed: `initAutoUpdater()` logs an error, wires no
+   handlers, sets no feed and starts no timers, **and pins
+   `autoDownload = false` / `autoInstallOnAppQuit = false`** on the
+   electron-updater singleton before returning; `checkForUpdatesManually()`
+   returns `{status: "disabled"}` with the reason in a dialog and never calls
+   `checkForUpdates()`.
+
+   That last part is not belt-and-braces, it is the fix for a real hole. An
+   earlier revision of this amendment claimed "the updater does not initialise
+   at all", which was true of `initAutoUpdater()` but **not of the feature**:
+   `checkForUpdatesManually()` consulted only the opt-in gate, so a packaged,
+   opted-in build with an `http://` feed had `initAutoUpdater()` bail out
+   *before* `autoDownload = false` and before any handler was wired, while a
+   manual check (`preload.ts` → `updater-check` IPC) sailed through and ran
+   `autoUpdater.checkForUpdates()` against the baked-in production
+   `app-update.yml`. With electron-updater's defaults — `autoDownload = true`
+   and `autoInstallOnAppQuit = true` (`electron-updater/out/AppUpdater.js`) —
+   that is a silent download followed by an install on quit, with no dialogs at
+   all, because nothing was wired. Exactly the `quitAndInstall()` exposure the
+   gate exists to prevent, reached through a door the gate left open.
+
+Both decisions now live behind **one** exported helper,
+`resolveUpdaterState(env, isPackaged)`, in the new pure module
+`src/main/update-config.ts` (alongside `resolveAutoUpdateGate`,
+`resolveUpdateFeedUrl`, `isTruthyFlag`) — no Electron imports, mirroring the
+`update-scheduler.ts` split. Both entry points consume that single helper and
+nothing else, so they cannot drift apart again. Covered by
+`tests/unit/update-config.test.ts` (the pure decisions) and
+`tests/unit/auto-updater-wiring.test.ts` (that both entry points actually obey
+them, asserted against a mocked `autoUpdater`).
 
 **The gate comes off when, and only when, the packaged update path has
 actually been exercised end to end:** two ad-hoc-signed `electron-builder
@@ -253,7 +279,7 @@ matching the existing style exactly. `UpdaterCheckResult = { status:
 | Condition | Behavior |
 |---|---|
 | Packaged, `GEODE_ENABLE_AUTO_UPDATE` unset (**the default**) | `initAutoUpdater()` no-ops with a log line; `checkForUpdatesManually()` returns `disabled` with an explanatory dialog. No timers, no network, no dialogs. |
-| `GEODE_UPDATE_FEED_URL` set to a non-`https:` or unparseable value | `initAutoUpdater()` logs an error and returns — the updater does not initialise at all rather than silently using the production feed. |
+| `GEODE_UPDATE_FEED_URL` set to a non-`https:` or unparseable value | Both entry points refuse. `initAutoUpdater()` logs an error, pins `autoDownload = false` and `autoInstallOnAppQuit = false` on the electron-updater singleton, wires no handlers, sets no feed, and starts no timers; `checkForUpdatesManually()` returns `{status: "disabled"}` with the rejection reason in a dialog and never calls `checkForUpdates()`. Nothing falls back to the production feed. |
 | Unpackaged (dev/e2e) | `initAutoUpdater()` no-ops; `checkForUpdatesManually()` shows a "disabled in development" dialog and never touches the network. |
 | Background check finds no update | Silent — `lastCheckedAt` updates, nothing shown. |
 | Background check errors (offline, rate-limited, malformed feed) | `console.error` only — no dialog, so a flaky background check never interrupts the user. |
@@ -271,7 +297,16 @@ Matches the repo's standard three-tier gate (`typecheck`, `test:unit` →
   reason naming the env var); non-affirmative values ⇒ off; unpackaged ⇒ off
   even when opted in; packaged + affirmative ⇒ on. Feed URL: unset/blank ⇒
   default feed; `https://…` ⇒ accepted; `http://`, `file://`, `ftp://`,
-  `javascript:`, `data:` and unparseable garbage ⇒ rejected.
+  `javascript:`, `data:` and unparseable garbage ⇒ rejected. Plus
+  `resolveUpdaterState` combining both, including the `gatePassed` distinction
+  that decides whether the singleton may be touched at all.
+- **`tests/unit/auto-updater-wiring.test.ts`** — the seam the pure tests
+  cannot reach, with `electron`/`electron-updater` mocked. On a rejected feed
+  with the opt-in set: `setFeedURL` not called, no handlers wired,
+  `checkForUpdates` not called from **either** entry point (before or after
+  `initAutoUpdater()` has run), `autoDownload`/`autoInstallOnAppQuit` both
+  pinned `false`, and the dialog names the offending env var. Plus the
+  no-opt-in and accepted-feed paths.
 - **`tests/unit/update-scheduler.test.ts`** — never-checked ⇒ true;
   exactly-at-boundary ⇒ true (inclusive); short-of-interval ⇒ false;
   clock-skew ⇒ false; custom interval override.

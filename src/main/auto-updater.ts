@@ -19,12 +19,7 @@
 import { app, BrowserWindow, dialog, shell, type MessageBoxOptions, type MessageBoxReturnValue } from "electron";
 import { autoUpdater } from "electron-updater";
 import { DEFAULT_UPDATE_CHECK_INTERVAL_MS, shouldCheckForUpdates } from "./update-scheduler";
-import {
-  AUTO_UPDATE_OPT_IN_ENV,
-  UPDATE_FEED_URL_ENV,
-  resolveAutoUpdateGate,
-  resolveUpdateFeedUrl,
-} from "./update-config";
+import { resolveUpdaterState } from "./update-config";
 
 /** Delay before the first startup check, so it doesn't compete with initial window paint/vault load. */
 const STARTUP_CHECK_DELAY_MS = 5_000;
@@ -157,25 +152,32 @@ function runScheduledCheck(): void {
  * saying why.
  */
 export function initAutoUpdater(): void {
-  const gate = resolveAutoUpdateGate(process.env, app.isPackaged);
-  if (!gate.enabled) {
-    console.log(`Auto-updater: disabled — ${gate.reason}.`);
+  const state = resolveUpdaterState(process.env, app.isPackaged);
+  if (!state.live) {
+    if (state.gatePassed) {
+      // Fail closed. We're past the packaged + opt-in gate, so the
+      // electron-updater singleton is live in this process and something else
+      // could still reach `checkForUpdates()`. Its defaults are
+      // `autoDownload = true` / `autoInstallOnAppQuit = true`
+      // (electron-updater/out/AppUpdater.js), which would turn any such check
+      // into a silent download-and-install-on-quit against whatever feed
+      // resolved — including the baked-in production one the operator was
+      // trying to override. Pin both off before bailing out. Not reached when
+      // the gate itself failed: unpackaged builds must not touch the singleton
+      // at all.
+      autoUpdater.autoDownload = false;
+      autoUpdater.autoInstallOnAppQuit = false;
+      console.error(`Auto-updater: disabled — ${state.reason}.`);
+    } else {
+      console.log(`Auto-updater: disabled — ${state.reason}.`);
+    }
     return;
   }
 
-  const feed = resolveUpdateFeedUrl(process.env[UPDATE_FEED_URL_ENV]);
-  if (feed.kind === "invalid") {
-    // Fail closed: an operator who set a feed meant to use it, so silently
-    // falling back to the production feed would be worse than not updating.
-    console.error(
-      `Auto-updater: disabled — ${UPDATE_FEED_URL_ENV}="${feed.raw}" rejected: ${feed.reason}.`
-    );
-    return;
-  }
-  if (feed.kind === "custom") {
-    autoUpdater.setFeedURL({ provider: "generic", url: feed.url });
-  }
   autoUpdater.autoDownload = false;
+  if (state.feed.kind === "custom") {
+    autoUpdater.setFeedURL({ provider: "generic", url: state.feed.url });
+  }
 
   wireEventHandlers();
 
@@ -185,19 +187,22 @@ export function initAutoUpdater(): void {
 
 /**
  * Manual "check now" trigger (wired to the `updater-check` IPC handler).
- * Returns `disabled` — and says why in a dialog — whenever `initAutoUpdater()`
- * would have gated itself off, since none of the event handlers are wired in
- * that case and a check would go nowhere. Otherwise marks the in-flight check
- * as manual so `update-not-available`/`error` surface a dialog instead of
- * staying silent (the background-check behavior).
+ *
+ * Consumes `resolveUpdaterState` — the SAME decision `initAutoUpdater()` uses,
+ * deliberately not a subset of it. If `initAutoUpdater()` refused to run, no
+ * event handlers are wired and no feed override was applied, so a check here
+ * would either go nowhere visible or go somewhere wrong; it returns `disabled`
+ * with the reason surfaced instead. Otherwise it marks the in-flight check as
+ * manual so `update-not-available`/`error` surface a dialog rather than staying
+ * silent (the background-check behavior).
  */
 export async function checkForUpdatesManually(): Promise<{ status: "checking" | "disabled" }> {
-  const gate = resolveAutoUpdateGate(process.env, app.isPackaged);
-  if (!gate.enabled) {
+  const state = resolveUpdaterState(process.env, app.isPackaged);
+  if (!state.live) {
     await showMessageBox({
       type: "info",
       message: app.isPackaged
-        ? `Updates are turned off in this build (set ${AUTO_UPDATE_OPT_IN_ENV} to enable them)`
+        ? `Updates are turned off in this build — ${state.reason}`
         : "Updates are disabled in development builds",
       buttons: ["OK"],
     }).catch(logRejection("updates-disabled dialog"));

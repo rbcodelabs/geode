@@ -93,3 +93,54 @@ export function resolveUpdateFeedUrl(raw: string | undefined): UpdateFeedUrl {
   }
   return { kind: "custom", url: trimmed };
 }
+
+export type UpdaterState =
+  | { live: true; feed: { kind: "default" } | { kind: "custom"; url: string } }
+  | {
+      live: false;
+      /**
+       * True when the packaged + opt-in gate PASSED and only the feed URL was
+       * rejected. In that state electron-updater's singleton is fair game in
+       * this process, so its dangerous defaults (`autoDownload = true`,
+       * `autoInstallOnAppQuit = true`) must be pinned off before bailing out.
+       * False means we never got past the gate and must not touch it at all
+       * (touching it unpackaged is exactly what the dev/e2e no-op avoids).
+       */
+      gatePassed: boolean;
+      reason: string;
+    };
+
+/**
+ * THE single "should the updater be doing anything, and against which feed?"
+ * decision. Both entry points in `auto-updater.ts` — `initAutoUpdater()` and
+ * `checkForUpdatesManually()` — must consume this and nothing else.
+ *
+ * They previously consulted different subsets: `initAutoUpdater()` checked the
+ * gate AND the feed, while `checkForUpdatesManually()` checked only the gate.
+ * A packaged, opted-in build with a rejected `http://` feed therefore left
+ * `initAutoUpdater()` bailing out early — before `autoDownload = false` and
+ * before any event handler was wired — while a manual check sailed through and
+ * called `autoUpdater.checkForUpdates()` with no feed override at all,
+ * resolving the baked-in production `app-update.yml`. With electron-updater's
+ * defaults (`autoDownload = true`, `autoInstallOnAppQuit = true`) that is a
+ * silent download and an install on quit, with no dialogs, because nothing was
+ * wired. Keeping the decision in one function is what stops the two entry
+ * points drifting apart again.
+ */
+export function resolveUpdaterState(
+  env: Record<string, string | undefined>,
+  isPackaged: boolean
+): UpdaterState {
+  const gate = resolveAutoUpdateGate(env, isPackaged);
+  if (!gate.enabled) return { live: false, gatePassed: false, reason: gate.reason };
+
+  const feed = resolveUpdateFeedUrl(env[UPDATE_FEED_URL_ENV]);
+  if (feed.kind === "invalid") {
+    return {
+      live: false,
+      gatePassed: true,
+      reason: `${UPDATE_FEED_URL_ENV}="${feed.raw}" rejected: ${feed.reason}`,
+    };
+  }
+  return { live: true, feed };
+}
