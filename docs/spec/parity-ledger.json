@@ -38,12 +38,12 @@
       "api-member": 1009
     },
     "byStatus": {
-      "verified": 188,
+      "verified": 211,
       "partial": 52,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2611
+      "unknown": 2588
     }
   },
   "requirements": [
@@ -12850,8 +12850,11 @@
       "title": "SearchComponent",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/SearchComponent.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/SearchComponent.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The documented SearchComponent surface is observed end to end through a real plugin fixture."
     },
     {
       "id": "DEV-e073a348e0f0",
@@ -12861,8 +12864,11 @@
       "title": "(constructor)",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/SearchComponent/(constructor).md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/SearchComponent/(constructor).md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The documented constructor behavior is observed through a real plugin fixture."
     },
     {
       "id": "DEV-1775cdd75db1",
@@ -12872,8 +12878,11 @@
       "title": "clearButtonEl",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/SearchComponent/clearButtonEl.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/SearchComponent/clearButtonEl.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The documented clearButtonEl surface and interaction are observed through a real plugin fixture."
     },
     {
       "id": "DEV-b9821c48dc3a",
@@ -12883,8 +12892,11 @@
       "title": "onChanged",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/SearchComponent/onChanged.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/SearchComponent/onChanged.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The documented onChanged behavior is observed for typing and clear activation."
     },
     {
       "id": "DEV-c93e4535219a",
@@ -17493,8 +17505,12 @@
       "title": "AbstractTextComponent",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/search-component-contracts.test.ts",
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The public AbstractTextComponent hierarchy, input element, fluent value/placeholder/disabled methods, and user change callback are observed through the plugin compatibility module."
     },
     {
       "id": "API-35ef8c1af585",
@@ -17587,8 +17603,12 @@
       "title": "BaseComponent",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/search-component-contracts.test.ts",
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "BaseComponent is exported through require('obsidian') and inherited by a plugin-created SearchComponent."
     },
     {
       "id": "API-eaccd753c4c1",
@@ -19907,8 +19927,12 @@
       "title": "SearchComponent",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/search-component-contracts.test.ts",
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "A real CommonJS plugin imports and constructs SearchComponent, then observes native-shaped DOM, value, callback, focus, clear, and disabled behavior."
     },
     {
       "id": "API-0680e88672f5",
@@ -20615,8 +20639,12 @@
       "title": "ValueComponent",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/search-component-contracts.test.ts",
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "ValueComponent is exported through require('obsidian') and its value contract is observed through SearchComponent."
     },
     {
       "id": "API-aca005cacccb",
@@ -20935,8 +20963,11 @@
       "title": "AbstractTextComponent.getValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The inherited text value is observed after programmatic, input, and clear changes."
     },
     {
       "id": "API-MEMBER-88d5ab6de9d4",
@@ -20946,8 +20977,11 @@
       "title": "AbstractTextComponent.inputEl",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "A plugin directly focuses, blurs, fills, and inspects the public inputEl."
     },
     {
       "id": "API-MEMBER-eba3c5939d22",
@@ -20957,8 +20991,11 @@
       "title": "AbstractTextComponent.onChange",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "A plugin observes exactly one callback for user input and native clear, with no callback for setValue."
     },
     {
       "id": "API-MEMBER-fa075629067e",
@@ -20968,8 +21005,11 @@
       "title": "AbstractTextComponent.onChanged",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "SearchComponent input and clear paths exercise the public onChanged hook."
     },
     {
       "id": "API-MEMBER-89fb0f9c2690",
@@ -20979,8 +21019,11 @@
       "title": "AbstractTextComponent.setDisabled",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "setDisabled synchronizes the input disabled state and blocks the clear control."
     },
     {
       "id": "API-MEMBER-2ec4907e36ec",
@@ -20990,8 +21033,11 @@
       "title": "AbstractTextComponent.setPlaceholder",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "A plugin sets and observes the SearchComponent placeholder."
     },
     {
       "id": "API-MEMBER-095afeb777e7",
@@ -21001,8 +21047,11 @@
       "title": "AbstractTextComponent.setValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "Programmatic setValue updates the input and clear state without invoking onChange."
     },
     {
       "id": "API-MEMBER-18368370d583",
@@ -21165,8 +21214,11 @@
       "title": "BaseComponent.disabled",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The inherited disabled state controls SearchComponent input and clear interaction behavior."
     },
     {
       "id": "API-MEMBER-bb1bb5466e89",
@@ -21176,8 +21228,11 @@
       "title": "BaseComponent.setDisabled",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "A plugin invokes the fluent inherited setDisabled method and observes the disabled component."
     },
     {
       "id": "API-MEMBER-dca08c50ca0c",
@@ -21187,8 +21242,11 @@
       "title": "BaseComponent.then",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "A plugin observes then() receiving and returning the same concrete SearchComponent instance."
     },
     {
       "id": "API-MEMBER-749cd074d517",
@@ -28212,8 +28270,11 @@
       "title": "SearchComponent.(constructor)",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "A plugin constructs SearchComponent into a supplied container and observes the resulting host DOM."
     },
     {
       "id": "API-MEMBER-d7628f019bce",
@@ -28223,8 +28284,11 @@
       "title": "SearchComponent.clearButtonEl",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The public clearButtonEl is observed with its native class and accessible label, clearing once and returning focus."
     },
     {
       "id": "API-MEMBER-23a7c4b539d4",
@@ -28234,8 +28298,11 @@
       "title": "SearchComponent.onChanged",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "Input and clear interactions observe SearchComponent.onChanged updating clear state and invoking the registered callback exactly once."
     },
     {
       "id": "API-MEMBER-35c0795f860b",
@@ -30577,8 +30644,11 @@
       "title": "ValueComponent.getValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The generic value getter contract is observed through SearchComponent's inherited text implementation."
     },
     {
       "id": "API-MEMBER-f8370b38b348",
@@ -30599,8 +30669,11 @@
       "title": "ValueComponent.setValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/search-component.spec.ts"
+      ],
+      "notes": "The generic value setter contract is observed through SearchComponent's inherited text implementation."
     },
     {
       "id": "API-MEMBER-fc26b35f9816",

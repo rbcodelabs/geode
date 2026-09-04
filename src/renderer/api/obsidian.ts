@@ -273,11 +273,65 @@ export class Modal {
 // Setting / SettingComponents
 // ---------------------------------------------------------------------------
 
-class ValueComponent<T> {
+export abstract class BaseComponent {
+  disabled = false;
+
+  then(cb: (component: this) => any): this {
+    cb(this);
+    return this;
+  }
+
+  setDisabled(disabled: boolean): this {
+    this.disabled = disabled;
+    return this;
+  }
+}
+
+export abstract class ValueComponent<T> extends BaseComponent {
   protected changeCb?: (value: T) => any;
+
+  abstract getValue(): T;
+  abstract setValue(value: T): this;
+
   onChange(cb: (value: T) => any): this {
     this.changeCb = cb;
     return this;
+  }
+}
+
+export class AbstractTextComponent<
+  T extends HTMLInputElement | HTMLTextAreaElement,
+> extends ValueComponent<string> {
+  inputEl: T;
+
+  constructor(inputEl: T) {
+    super();
+    this.inputEl = inputEl;
+    this.inputEl.addEventListener("input", () => this.onChanged());
+  }
+
+  override setDisabled(disabled: boolean): this {
+    super.setDisabled(disabled);
+    this.inputEl.disabled = disabled;
+    return this;
+  }
+
+  getValue(): string {
+    return this.inputEl.value;
+  }
+
+  setValue(value: string): this {
+    this.inputEl.value = value;
+    return this;
+  }
+
+  setPlaceholder(placeholder: string): this {
+    this.inputEl.placeholder = placeholder;
+    return this;
+  }
+
+  onChanged(): void {
+    this.changeCb?.(this.inputEl.value);
   }
 }
 
@@ -317,50 +371,71 @@ export class ButtonComponent {
   }
 }
 
-export class TextComponent extends ValueComponent<string> {
-  inputEl: HTMLInputElement;
+export class TextComponent extends AbstractTextComponent<HTMLInputElement> {
   constructor(container: HTMLElement) {
-    super();
-    this.inputEl = document.createElement("input");
-    this.inputEl.type = "text";
-    container.appendChild(this.inputEl);
-    this.inputEl.addEventListener("input", () => this.changeCb?.(this.inputEl.value));
-  }
-  getValue(): string {
-    return this.inputEl.value;
-  }
-  setValue(value: string): this {
-    this.inputEl.value = value;
-    return this;
-  }
-  setPlaceholder(placeholder: string): this {
-    this.inputEl.placeholder = placeholder;
-    return this;
-  }
-  setDisabled(disabled: boolean): this {
-    this.inputEl.disabled = disabled;
-    return this;
+    const inputEl = document.createElement("input");
+    inputEl.type = "text";
+    container.appendChild(inputEl);
+    super(inputEl);
   }
 }
 
-export class TextAreaComponent extends ValueComponent<string> {
-  inputEl: HTMLTextAreaElement;
+export class TextAreaComponent extends AbstractTextComponent<HTMLTextAreaElement> {
   constructor(container: HTMLElement) {
-    super();
-    this.inputEl = document.createElement("textarea");
-    container.appendChild(this.inputEl);
-    this.inputEl.addEventListener("input", () => this.changeCb?.(this.inputEl.value));
+    const inputEl = document.createElement("textarea");
+    container.appendChild(inputEl);
+    super(inputEl);
   }
-  getValue(): string {
-    return this.inputEl.value;
+}
+
+export class SearchComponent extends AbstractTextComponent<HTMLInputElement> {
+  clearButtonEl: HTMLElement;
+  private readonly containerEl: HTMLElement;
+
+  constructor(containerEl: HTMLElement) {
+    const searchContainerEl = document.createElement("div");
+    searchContainerEl.className = "search-input-container is-empty";
+    const inputEl = document.createElement("input");
+    inputEl.className = "search-input";
+    inputEl.type = "search";
+    const clearButtonEl = document.createElement("div");
+    clearButtonEl.className = "search-input-clear-button";
+    clearButtonEl.setAttribute("aria-label", "Clear search");
+    searchContainerEl.append(inputEl, clearButtonEl);
+    containerEl.appendChild(searchContainerEl);
+    super(inputEl);
+    this.containerEl = searchContainerEl;
+    this.clearButtonEl = clearButtonEl;
+    this.clearButtonEl.addEventListener("click", () => this.clear());
   }
-  setValue(value: string): this {
-    this.inputEl.value = value;
+
+  override setValue(value: string): this {
+    super.setValue(value);
+    this.updateClearButton();
     return this;
   }
-  setPlaceholder(placeholder: string): this {
-    this.inputEl.placeholder = placeholder;
+
+  override setDisabled(disabled: boolean): this {
+    super.setDisabled(disabled);
+    this.updateClearButton();
     return this;
+  }
+
+  override onChanged(): void {
+    this.updateClearButton();
+    super.onChanged();
+  }
+
+  private clear(): void {
+    if (this.disabled) return;
+    this.inputEl.value = "";
+    this.onChanged();
+    this.inputEl.focus();
+  }
+
+  private updateClearButton(): void {
+    this.containerEl.classList.toggle("is-empty", this.inputEl.value.length === 0);
+    this.containerEl.classList.toggle("is-disabled", this.disabled);
   }
 }
 
@@ -499,8 +574,11 @@ export class Setting {
     cb(c);
     return this;
   }
-  addSearch(cb: (c: TextComponent) => any): this {
-    return this.addText(cb);
+  addSearch(cb: (c: SearchComponent) => any): this {
+    const c = new SearchComponent(this.controlEl);
+    this.components.push(c);
+    cb(c);
+    return this;
   }
   then(cb: (setting: this) => any): this {
     cb(this);

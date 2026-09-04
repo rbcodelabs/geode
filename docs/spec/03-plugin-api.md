@@ -676,6 +676,21 @@ Related: `AbstractInputSuggest<T>` (popover suggestions on arbitrary inputs) and
 
 ### 3.2 Setting / PluginSettingTab
 
+Text controls share Obsidian's public component hierarchy. `BaseComponent`
+provides `disabled`, `setDisabled()`, and fluent `then()`; `ValueComponent<T>`
+defines `getValue()` / `setValue()`; and
+`AbstractTextComponent<HTMLInputElement | HTMLTextAreaElement>` adds `inputEl`,
+placeholder handling, change callbacks, and `onChanged()`. Programmatic
+`setValue()` calls are silent; user input invokes the most recently registered
+`onChange()` callback.
+
+`SearchComponent` is an `AbstractTextComponent<HTMLInputElement>` rendered as
+`.search-input-container` with an `input.search-input[type="search"]` and a
+`.search-input-clear-button`. Its built-in clear control empties the value,
+notifies the change callback once, and returns focus to the input. Disabling the
+component disables its input and prevents clear activation. `Setting.addSearch()`
+constructs this same public component.
+
 ```ts
 abstract class PluginSettingTab extends SettingTab {
   plugin: Plugin;
