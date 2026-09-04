@@ -126,9 +126,12 @@ describe("an invalid feed URL fails closed at BOTH entry points", () => {
 
     await checkForUpdatesManually();
 
-    const message = mocks.showMessageBox.mock.calls[0]?.[0]?.message ?? "";
-    expect(message).toContain(UPDATE_FEED_URL_ENV);
-    expect(message).toContain("https:");
+    // An operator set a bad feed and needs the specifics to fix it. Assert on
+    // everything the dialog actually shows, message and detail together.
+    const options = mocks.showMessageBox.mock.calls[0]?.[0];
+    const shown = `${options?.message ?? ""}\n${options?.detail ?? ""}`;
+    expect(shown).toContain(UPDATE_FEED_URL_ENV);
+    expect(shown).toContain("https:");
   });
 
   it("refuses after initAutoUpdater has already run, not just standalone", async () => {
@@ -161,6 +164,18 @@ describe("no opt-in", () => {
     expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
   });
 
+  it("does not show an end user the internal gate reason", async () => {
+    const { checkForUpdatesManually } = await loadUpdater();
+
+    await checkForUpdatesManually();
+
+    // The no-opt-in reason is a log line naming an env var and a repo doc
+    // path — fine in a console, wrong in a dialog aimed at a person.
+    const options = mocks.showMessageBox.mock.calls[0]?.[0];
+    expect(options?.message).toBe("Updates are turned off in this build");
+    expect(options?.detail).toBeUndefined();
+  });
+
   it("is disabled when unpackaged even with the opt-in set", async () => {
     mocks.app.isPackaged = false;
     process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
@@ -184,6 +199,13 @@ describe("packaged, opted in, feed accepted", () => {
     initAutoUpdater();
 
     expect(mocks.autoUpdater.autoDownload).toBe(false);
+    // Not cosmetic. MacUpdater (which is what runs here — `MacUpdater extends
+    // AppUpdater`, not `BaseUpdater`, so the quit-handler path is dead on
+    // macOS) stages the install via `nativeUpdater.checkForUpdates()` in the
+    // same synchronous block that raises the "Restart Now"/"Later" dialog
+    // (MacUpdater.js:218-224). Left `true`, clicking "Later" defers the
+    // install to the next quit instead of declining it.
+    expect(mocks.autoUpdater.autoInstallOnAppQuit).toBe(false);
     expect(mocks.autoUpdater.setFeedURL).toHaveBeenCalledWith({
       provider: "generic",
       url: "https://updates.example.com/geode/",
@@ -216,5 +238,62 @@ describe("packaged, opted in, feed accepted", () => {
 
     await expect(checkForUpdatesManually()).resolves.toEqual({ status: "checking" });
     expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("actually runs the first scheduled check after the startup delay", async () => {
+    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
+    const { initAutoUpdater } = await loadUpdater();
+
+    initAutoUpdater();
+
+    // The negative tests all assert checkForUpdates is NOT called, which would
+    // also pass if the timers were never wired at all. This is the other half.
+    vi.advanceTimersByTime(4_999);
+    expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an install that fails after an explicit click is not silent", () => {
+  /** Grab a handler `wireEventHandlers()` registered on the mocked updater. */
+  function handlerFor(event: string): (...args: unknown[]) => void {
+    const call = mocks.autoUpdater.on.mock.calls.find((c) => c[0] === event);
+    if (!call) throw new Error(`no handler wired for "${event}"`);
+    return call[1] as (...args: unknown[]) => void;
+  }
+
+  beforeEach(() => {
+    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
+  });
+
+  it("shows a recovery dialog when quitAndInstall fails after 'Restart Now'", async () => {
+    const { initAutoUpdater } = await loadUpdater();
+    initAutoUpdater();
+
+    // "Restart Now" (response 0) on the update-downloaded dialog.
+    mocks.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+    handlerFor("update-downloaded")();
+    await vi.waitFor(() => expect(mocks.autoUpdater.quitAndInstall).toHaveBeenCalled());
+
+    // With autoInstallOnAppQuit = false, quitAndInstall() has to fetch the
+    // artifact from the local proxy first; when that errors,
+    // handleUpdateDownloaded() never fires and the app just never restarts.
+    mocks.showMessageBox.mockClear();
+    handlerFor("error")(new Error("connect ECONNREFUSED 127.0.0.1:53000"));
+
+    const options = mocks.showMessageBox.mock.calls[0]?.[0];
+    expect(options, "an explicit click must not die in console.error").toBeDefined();
+    expect(options?.message).toContain("Update install failed");
+    expect(options?.buttons).toContain("Open Releases Page");
+  });
+
+  it("stays silent for a background check error, as before", async () => {
+    const { initAutoUpdater } = await loadUpdater();
+    initAutoUpdater();
+
+    handlerFor("error")(new Error("offline"));
+
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
   });
 });

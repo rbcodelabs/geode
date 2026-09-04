@@ -64,18 +64,72 @@ Both decisions now live behind **one** exported helper,
 `src/main/update-config.ts` (alongside `resolveAutoUpdateGate`,
 `resolveUpdateFeedUrl`, `isTruthyFlag`) — no Electron imports, mirroring the
 `update-scheduler.ts` split. Both entry points consume that single helper and
-nothing else, so they cannot drift apart again. Covered by
-`tests/unit/update-config.test.ts` (the pure decisions) and
-`tests/unit/auto-updater-wiring.test.ts` (that both entry points actually obey
-them, asserted against a mocked `autoUpdater`).
+nothing else.
+
+Nothing *structurally* prevents them diverging again — `resolveAutoUpdateGate`
+and `resolveUpdateFeedUrl` are still exported, and a future caller could reach
+for one of them directly. What is true, and is the actual guarantee, is that
+such a divergence **fails `tests/unit/auto-updater-wiring.test.ts`**, which
+asserts what each entry point does to a mocked `autoUpdater` rather than what
+the helpers return. (Stating this precisely matters here: an absolute claim of
+the "cannot happen again" kind is what this amendment exists to correct.)
+`tests/unit/update-config.test.ts` covers the pure decisions alongside it.
+
+### Amendment (2026-09-04, same day) — `autoInstallOnAppQuit`
+
+`autoDownload = false` alone does not deliver "no install without an explicit
+click" on macOS, and the reason is not the mechanism it looks like.
+`BaseUpdater.addQuitHandler()` — the obvious suspect — never runs here:
+`MacUpdater extends AppUpdater` (`electron-updater/out/MacUpdater.js:13`), not
+`BaseUpdater`, and Geode is macOS-only. The live path is
+`MacUpdater.js:218-224`:
+
+```js
+this.dispatchUpdateDownloaded(event);
+if (this.autoInstallOnAppQuit) {
+    this.nativeUpdater.once("error", reject);
+    this.nativeUpdater.checkForUpdates();   // hands artifact to Squirrel, stages install
+}
+```
+
+`dispatchUpdateDownloaded()` is what raises our "Restart Now"/"Later" dialog,
+and the staging call runs in the **same synchronous block** — before the user
+answers. Clicking **"Later" therefore did not decline the install, it deferred
+it to the next quit**: an unclicked route into the ad-hoc-signed Squirrel.Mac
+self-replace path this entire feature is gated off to keep dormant, and a
+direct contradiction of a constraint this ADR calls permanent and
+non-relitigable. `initAutoUpdater()` now sets `autoInstallOnAppQuit = false`
+on the live path.
+
+Known consequence, accepted: with the flag off,
+`MacUpdater.quitAndInstall()` takes its `if (!this.autoInstallOnAppQuit)`
+branch (`MacUpdater.js:240-256`), registering a `nativeUpdater`
+`update-downloaded` listener and calling `nativeUpdater.checkForUpdates()` to
+pull the artifact from the already-running localhost proxy first. Fast, but not
+instant — and if that fetch errors, `handleUpdateDownloaded()` never fires and
+the app simply never restarts. `manualCheckInFlight` is `false` by then, so
+that would have died in `console.error`. `auto-updater.ts` now tracks an
+`installRequested` flag between the "Restart Now" click and the outcome, and an
+`error` while it is set raises the "Open Releases Page" recovery dialog. The
+`nativeUpdater` error does reach us: `MacUpdater`'s constructor wires
+`nativeUpdater.on("error", it => this.emit("error", it))`
+(`MacUpdater.js:18-21`).
 
 **The gate comes off when, and only when, the packaged update path has
-actually been exercised end to end:** two ad-hoc-signed `electron-builder
---mac` builds, a real feed, `update-downloaded` → "Restart Now" →
-`quitAndInstall()`, plus a confirmed recovery path when that install fails
-(the error dialog reachable from something a user can actually click). Until
-then this feature is dormant in every shipped build. **As of 2026-09-04 that
-verification has NOT been done.**
+actually been exercised end to end.** Verification checklist:
+
+1. Two ad-hoc-signed `electron-builder --mac` builds and a real feed.
+2. `update-available` → "Download Update" → `update-downloaded` fires.
+3. **"Later" leaves the app un-updated across a full quit/relaunch cycle** —
+   the regression the `autoInstallOnAppQuit` fix exists to prevent.
+4. **"Restart Now" → `quitAndInstall()` with `autoInstallOnAppQuit = false`:
+   confirm the localhost-proxy fetch succeeds and the app restarts updated;
+   confirm a failed fetch surfaces an error rather than a silent no-op.**
+5. A recovery path when the install fails — the error dialog, reachable from
+   something a user can actually click.
+
+Until all five hold, this feature is dormant in every shipped build. **As of
+2026-09-04 that verification has NOT been done.**
 
 A follow-on change should also wire the manual check to a real "Check for
 Updates…" menu item, so the documented fallback is reachable by a user rather
@@ -231,21 +285,38 @@ of keeping decision logic independently unit-testable
 
 ### `auto-updater.ts` — electron-updater wiring
 
-- `initAutoUpdater()`: no-op (with a log line) unless
-  `resolveAutoUpdateGate(process.env, app.isPackaged)` returns enabled —
-  i.e. packaged **and** `GEODE_ENABLE_AUTO_UPDATE` explicitly set (see the
-  2026-09-04 amendment). The Playwright e2e smoke test launches Electron from
-  source, so this must never touch the network, show a dialog, or start a
-  timer in that mode. When enabled: optional `GEODE_UPDATE_FEED_URL` override,
-  HTTPS-validated by `resolveUpdateFeedUrl`, via
-  `autoUpdater.setFeedURL({provider: "generic", url})`; `autoDownload =
-  false`; wires all event handlers; schedules a first check 5s after
-  ready, then re-evaluates every 30 minutes via `shouldCheckForUpdates`
-  against the 6h default interval.
-- `checkForUpdatesManually()`: dev mode shows an "updates disabled in
-  development" dialog and returns immediately; packaged mode marks the
-  in-flight check as manual (so `update-not-available`/`error` show a
-  dialog instead of staying silent) and calls `autoUpdater.checkForUpdates()`.
+Both entry points below consult exactly one thing —
+`resolveUpdaterState(process.env, app.isPackaged)` — which is live only when
+the app is packaged, `GEODE_ENABLE_AUTO_UPDATE` is explicitly set, **and** any
+`GEODE_UPDATE_FEED_URL` override passed HTTPS validation. Packaged alone is not
+sufficient; that was the pre-fix contract and it was the bug (see the
+2026-09-04 amendment).
+
+- `initAutoUpdater()`: when the state is not live, logs one line and returns,
+  having started no timers, wired no handlers, set no feed and made no network
+  call. If the failure was a rejected feed (so the packaged + opt-in gate had
+  already passed and the electron-updater singleton is therefore constructed
+  and reachable), it first pins `autoDownload = false` and
+  `autoInstallOnAppQuit = false`; when the gate itself failed it does not touch
+  the singleton at all, which is what keeps the Playwright e2e launch — running
+  from source, `app.isPackaged === false` — free of any network call, dialog or
+  timer. When the state IS live: `autoDownload = false`,
+  `autoInstallOnAppQuit = false`, an HTTPS-validated `GEODE_UPDATE_FEED_URL`
+  override applied via `autoUpdater.setFeedURL({provider: "generic", url})` if
+  one was given, all event handlers wired, a first check scheduled 5s after
+  ready, then re-evaluated every 30 minutes via `shouldCheckForUpdates` against
+  the 6h default interval.
+- `checkForUpdatesManually()`: when the state is not live, shows a dialog and
+  returns `{status: "disabled"}` **without** calling
+  `autoUpdater.checkForUpdates()` — necessarily, since in that state no handlers
+  are wired and no feed override was applied, so a check would either go
+  nowhere visible or go somewhere wrong. The dialog says "disabled in
+  development builds" when unpackaged, and otherwise "turned off in this
+  build"; when the specific cause was a rejected feed URL it adds the rejection
+  reason as `detail`, because that is an operator misconfiguration and they
+  need the specifics. Only when the state is live does it mark the in-flight
+  check as manual (so `update-not-available`/`error` show a dialog instead of
+  staying silent) and call `autoUpdater.checkForUpdates()`.
 - Event handlers, always resolving the target window as
   `BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ??
   undefined` (a window-less `dialog.showMessageBox` call is valid and
@@ -256,11 +327,16 @@ of keeping decision logic independently unit-testable
     manual; silent for background checks.
   - `download-progress` → `webContents.send("updater-progress", {percent})`
     to the active window, no dialog.
-  - `update-downloaded` → `["Restart Now", "Later"]`; "Restart Now" →
-    `autoUpdater.quitAndInstall()`.
-  - `error` → always `console.error`; on a manual check only, dialog with
+  - `update-downloaded` → `["Restart Now", "Later"]`; "Restart Now" sets the
+    `installRequested` flag, then `autoUpdater.quitAndInstall()`. "Later"
+    genuinely declines (see the `autoInstallOnAppQuit` amendment).
+  - `error` → always `console.error`; a dialog with
     `["Open Releases Page", "Dismiss"]` → `shell.openExternal` to
-    `https://github.com/rbcodelabs/geode/releases/latest`.
+    `https://github.com/rbcodelabs/geode/releases/latest` when EITHER the
+    in-flight check was manual OR `installRequested` is set. The second case
+    covers a `quitAndInstall()` that fails its localhost-proxy fetch: the user
+    clicked a button and nothing happened, which must not be silent. A
+    background-check error remains silent.
 
 ### Wiring
 
@@ -285,7 +361,9 @@ matching the existing style exactly. `UpdaterCheckResult = { status:
 | Background check errors (offline, rate-limited, malformed feed) | `console.error` only — no dialog, so a flaky background check never interrupts the user. |
 | Manual check finds no update | "You're up to date" dialog. |
 | Manual check errors | "Open Releases Page" fallback dialog — the permanent safety net described above. |
-| `quitAndInstall()` fails the Squirrel.Mac signature check | Not directly observable as a distinct event from `electron-updater`'s public API in this design; a hung/failed install surfaces as either an `error` event (if it fires before the app quits) or the app simply not relaunching. The fallback dialog on `error` is the mitigation; the real-world behavior of this exact path is documented in this ADR's verification section, not assumed. |
+| User clicks "Later" on `update-downloaded` | The install is genuinely declined. `autoInstallOnAppQuit = false`, so nothing is staged for the next quit. |
+| `quitAndInstall()`'s localhost-proxy fetch fails after "Restart Now" | `MacUpdater`'s constructor re-emits `nativeUpdater` errors as our `error` event; `installRequested` is set, so the "Open Releases Page" dialog fires. The click never silently does nothing. |
+| `quitAndInstall()` fails the Squirrel.Mac signature check | Not directly observable as a distinct event from `electron-updater`'s public API in this design; a hung/failed install surfaces as either an `error` event (if it fires before the app quits) or the app simply not relaunching. The `error`-plus-`installRequested` dialog above is the mitigation for the observable case; the real-world behavior of this exact path is documented in this ADR's verification checklist, not assumed. |
 | Clock skew (system clock moved backwards) | `shouldCheckForUpdates` returns `false` until real time catches back up past the last recorded check. |
 
 ## Test plan
@@ -305,8 +383,14 @@ Matches the repo's standard three-tier gate (`typecheck`, `test:unit` →
   with the opt-in set: `setFeedURL` not called, no handlers wired,
   `checkForUpdates` not called from **either** entry point (before or after
   `initAutoUpdater()` has run), `autoDownload`/`autoInstallOnAppQuit` both
-  pinned `false`, and the dialog names the offending env var. Plus the
-  no-opt-in and accepted-feed paths.
+  pinned `false`, and the dialog names the offending env var. On the live
+  path: handlers wired, `autoDownload` AND `autoInstallOnAppQuit` both `false`
+  (the second is what stops "Later" staging an install), feed override applied,
+  and — the positive counterpart to all the "not called" assertions — a check
+  actually fires at `STARTUP_CHECK_DELAY_MS` and not before. Plus: an `error`
+  after an explicit "Restart Now" raises the recovery dialog, while a
+  background-check `error` stays silent; and the no-opt-in dialog does not leak
+  the internal gate reason to an end user.
 - **`tests/unit/update-scheduler.test.ts`** — never-checked ⇒ true;
   exactly-at-boundary ⇒ true (inclusive); short-of-interval ⇒ false;
   clock-skew ⇒ false; custom interval override.
