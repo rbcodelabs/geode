@@ -15,7 +15,16 @@ const manifest = {
 };
 
 const pluginMain = `
-  const { AbstractTextComponent, BaseComponent, Plugin, SearchComponent, Setting, ValueComponent } = require("obsidian");
+  const {
+    AbstractTextComponent,
+    BaseComponent,
+    Plugin,
+    SearchComponent,
+    Setting,
+    TextAreaComponent,
+    TextComponent,
+    ValueComponent,
+  } = require("obsidian");
   module.exports = class extends Plugin {
     onload() {
       const mount = document.createElement("div");
@@ -44,6 +53,28 @@ const pluginMain = `
         settingSearch.inputEl.id = "setting-search";
         window.__settingSearchIsNative = settingSearch instanceof SearchComponent;
       });
+
+      const textMount = document.createElement("div");
+      textMount.id = "text-component-mount";
+      mount.appendChild(textMount);
+      const text = new TextComponent(textMount)
+        .setPlaceholder("Text placeholder")
+        .onChange((value) => {
+          window.__textChanges = [...(window.__textChanges || []), value];
+        });
+      text.inputEl.id = "text-component-input";
+      window.__textComponent = text;
+
+      const textAreaMount = document.createElement("div");
+      textAreaMount.id = "textarea-component-mount";
+      mount.appendChild(textAreaMount);
+      const textArea = new TextAreaComponent(textAreaMount)
+        .setPlaceholder("Textarea placeholder")
+        .onChange((value) => {
+          window.__textAreaChanges = [...(window.__textAreaChanges || []), value];
+        });
+      textArea.inputEl.id = "textarea-component-input";
+      window.__textAreaComponent = textArea;
     }
   };
 `;
@@ -138,6 +169,45 @@ test("plugin SearchComponent matches the Obsidian interaction contract", async (
     await clear.evaluate((element: HTMLElement) => element.click());
     await expect(input).toHaveValue("locked");
     expect(await window.evaluate(() => (window as any).__searchChanges)).toEqual(["agents", ""]);
+
+    await window.evaluate(() => {
+      (window as any).__searchComponent.setDisabled(false);
+    });
+    await expect(input).toBeEnabled();
+    await expect(input).toHaveValue("locked");
+    await expect(clear).toBeVisible();
+    expect(await window.evaluate(() => (window as any).__searchComponent.disabled)).toBe(false);
+
+    const textInput = window.locator("#text-component-input");
+    expect(await textInput.evaluate((element) => element.parentElement?.id)).toBe("text-component-mount");
+    await expect(textInput).toHaveAttribute("type", "text");
+    await expect(textInput).toHaveAttribute("placeholder", "Text placeholder");
+    await window.evaluate(() => {
+      (window as any).__textComponent.setValue("silent text");
+    });
+    await expect(textInput).toHaveValue("silent text");
+    expect(await window.evaluate(() => (window as any).__textChanges || [])).toEqual([]);
+    await textInput.fill("typed text");
+    expect(await window.evaluate(() => (window as any).__textChanges)).toEqual(["typed text"]);
+    await window.evaluate(() => {
+      (window as any).__textComponent.setDisabled(true);
+    });
+    await expect(textInput).toBeDisabled();
+
+    const textAreaInput = window.locator("#textarea-component-input");
+    expect(await textAreaInput.evaluate((element) => element.parentElement?.id)).toBe("textarea-component-mount");
+    await expect(textAreaInput).toHaveAttribute("placeholder", "Textarea placeholder");
+    await window.evaluate(() => {
+      (window as any).__textAreaComponent.setValue("silent textarea");
+    });
+    await expect(textAreaInput).toHaveValue("silent textarea");
+    expect(await window.evaluate(() => (window as any).__textAreaChanges || [])).toEqual([]);
+    await textAreaInput.fill("typed textarea");
+    expect(await window.evaluate(() => (window as any).__textAreaChanges)).toEqual(["typed textarea"]);
+    await window.evaluate(() => {
+      (window as any).__textAreaComponent.setDisabled(true);
+    });
+    await expect(textAreaInput).toBeDisabled();
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
