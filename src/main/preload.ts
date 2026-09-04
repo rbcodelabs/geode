@@ -31,6 +31,10 @@ export interface TimedPluginReadResult {
 }
 export interface PluginFileSet { manifest: string; main: string; styles: string | null }
 
+export interface UpdaterCheckResult {
+  status: "checking" | "disabled";
+}
+
 const api = {
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
   acquirePowerSaveBlocker: (): Promise<string> =>
@@ -167,6 +171,7 @@ const api = {
     ipcRenderer.on("guest-hotkey", listener);
     return () => { ipcRenderer.removeListener("guest-hotkey", listener); };
   },
+  checkForUpdates: (): Promise<UpdaterCheckResult> => ipcRenderer.invoke("updater-check"),
 };
 
 // A main-process watchdog can distinguish a wedged renderer from a merely

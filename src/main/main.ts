@@ -12,6 +12,7 @@ import type { DataWriteOptions } from "../renderer/vault";
 import { withPathLock } from "./path-lock";
 import { writeVaultFile } from "./vault-write";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
+import { checkForUpdatesManually, initAutoUpdater } from "./auto-updater";
 import { getProcessMetricsSnapshot } from "./process-metrics";
 import { PowerSaveBlockerRegistry } from "./power-save-blocker";
 import {
@@ -837,6 +838,9 @@ function registerIpc() {
     const state = win ? crashStates.get(win.id) : undefined;
     if (state) state.lastHeartbeat = Date.now();
   });
+  // Auto-updater manual "check now" trigger (src/main/auto-updater.ts). Not
+  // vault-scoped — updates apply to the whole app, not a session.
+  ipcMain.handle("updater-check", () => checkForUpdatesManually());
 }
 
 /**
@@ -1142,6 +1146,7 @@ app.whenReady().then(() => {
   });
   installApplicationMenu();
   createWindow();
+  initAutoUpdater();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
