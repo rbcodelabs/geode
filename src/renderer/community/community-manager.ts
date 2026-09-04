@@ -8,6 +8,7 @@
 
 import type { App } from "../app";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "../../main/github-resolve";
+import type { ObsidianImportResult } from "../../main/obsidian-import";
 import {
   findItem,
   itemsToCheck,
@@ -32,8 +33,47 @@ export interface UpdateSummary {
 
 const CONFIG_KEY = "community"; // <vault>/.geode/community.json
 
+/** What an Obsidian import did, for surfacing as a notice. */
+export interface ObsidianImportSummary extends ObsidianImportResult {
+  /** Plugin ids this import actually enabled (weren't already enabled). */
+  enabled: string[];
+}
+
 export class CommunityManager {
   constructor(private app: App) {}
+
+  /**
+   * Import community plugins & themes from an existing Obsidian `.obsidian/`
+   * folder in the current vault into `.geode/`. Main copies the files (see
+   * src/main/obsidian-import.ts); here we make them live: rescan so freshly
+   * copied plugins are enable-able, enable the plugins Obsidian had enabled
+   * (that aren't already), and apply the theme Obsidian had active. Returns a
+   * summary for a notice. Per-plugin enable failures are logged, not thrown, so
+   * one bad plugin can't abort the whole import.
+   */
+  async importFromObsidian(): Promise<ObsidianImportSummary> {
+    const result = await window.geode.importFromObsidian();
+    // Freshly-copied plugin dirs must be visible before enable() will take them.
+    await this.app.pluginManager.rescan();
+
+    const enabled: string[] = [];
+    for (const id of result.enabledPluginIds) {
+      if (this.app.pluginManager.isEnabled(id)) continue;
+      if (!this.app.pluginManager.getManifest(id)) continue; // absent/unreadable on disk
+      try {
+        await this.app.pluginManager.enable(id);
+        enabled.push(id);
+      } catch (err) {
+        console.error(`Obsidian import: failed to enable "${id}":`, err);
+      }
+    }
+
+    if (result.activeTheme) {
+      await this.app.applyCommunityTheme(result.activeTheme);
+    }
+
+    return { ...result, enabled };
+  }
 
   /** Read the tracked-items config (tolerates a missing/corrupt file). */
   async load(): Promise<CommunityConfig> {
