@@ -432,7 +432,11 @@ type. Sidebar top/bottom drop targets create vertically stacked tab groups with
 resizable dividers. Layout persistence uses a versioned recursive split/tab
 tree and migrates the prior flat version-1 format. Obsidian-compatible
 `getLeftLeaf(true)` / `getRightLeaf(true)` calls create a new sidebar group;
-passing `false` reuses an available leaf in the default group.
+passing `false` reuses an available leaf in the default group. Restoring a tab
+group is linear in its tab count: leaf construction is bracketed by
+`TabGroup.beginBatch()`/`endBatch()`, so a group of N restored tabs costs one
+tab-header rebuild rather than one per leaf added (which was O(N^2) in total
+header work, and the dominant main-thread cost restoring hundreds of tabs).
 
 Main-area tab groups expose draggable, keyboard-operable separators whose
 proportional sizes persist with the workspace layout. Ordinary splits begin at
