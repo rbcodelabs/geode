@@ -12,6 +12,7 @@ import { displayHotkey, eventToBinding, bindingIdentity, type Hotkey } from "../
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
 import { CommunityManager } from "./community/community-manager";
+import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { MarkdownRenderer } from "./markdown/render";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
@@ -3718,15 +3719,10 @@ export class App {
   async importFromObsidianVault(): Promise<void> {
     try {
       const sum = await this.communityManager.importFromObsidian();
-      const parts: string[] = [];
-      if (sum.plugins.length) parts.push(`${sum.plugins.length} plugin(s)`);
-      if (sum.themes.length) parts.push(`${sum.themes.length} theme(s)`);
-      if (parts.length) {
-        const themeNote = sum.activeTheme ? `, applied theme "${sum.activeTheme}"` : "";
-        this.notify(`Imported ${parts.join(" and ")} from Obsidian${themeNote}`);
-      } else {
-        this.notify("Nothing to import — no new Obsidian plugins or themes found");
+      for (const item of sum.skipped) {
+        console.warn(`Obsidian import: skipped ${item.kind} "${item.name}" — ${item.reason}`);
       }
+      this.notify(formatObsidianImportNotice(sum));
     } catch (err) {
       console.error("Obsidian import failed", err);
       this.notify(`Obsidian import failed: ${(err as Error).message}`);

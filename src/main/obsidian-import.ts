@@ -53,8 +53,22 @@ export interface ImportPlanInput {
   activeThemeInObsidian: string;
   /** plugin ids already present under `.geode/plugins/`. */
   existingGeodePlugins: string[];
-  /** theme names already present under `.geode/themes/`. */
+  /**
+   * EVERY name already occupied under `.geode/themes/` — every directory
+   * regardless of its contents, plus any bare `<name>.css` file. This is the
+   * overwrite guard, so it must be exhaustive: a directory that happens not to
+   * contain a `theme.css` (an interrupted install, a hand-edited theme, a theme
+   * that ships `manifest.json` + `assets/`) still owns its name and must never
+   * be clobbered.
+   */
   existingGeodeThemes: string[];
+  /**
+   * Subset of `existingGeodeThemes` that is actually renderable today (has a
+   * `theme.css`). Only used to decide whether an already-present theme may be
+   * made active — never as an overwrite guard. Defaults to
+   * `existingGeodeThemes` when omitted.
+   */
+  renderableGeodeThemes?: string[];
   /** plugin ids already enabled in `.geode/plugins.json`. */
   enabledInGeode: string[];
 }
@@ -75,12 +89,64 @@ export interface ImportPlan {
   pluginsToCopy: PlannedCopy[];
   /** Theme names to copy. */
   themesToCopy: PlannedCopy[];
-  /** Full enabled-plugin id list to persist to `.geode/plugins.json`. */
+  /**
+   * The merged view of "what is enabled after this import" — Geode's existing
+   * enabled ids followed by the ids Obsidian had enabled, deduped and filtered
+   * to plugins that exist on disk. INFORMATIONAL ONLY: it necessarily includes
+   * plugins that were already installed in Geode, whose enabled/disabled state
+   * is the user's own decision and must not be changed by an import. Never
+   * feed this list to `enable()` — use `pluginsToEnable`.
+   */
   enabledPluginIds: string[];
+  /**
+   * The ids this import may actually turn on: plugins THIS import copies in
+   * that Obsidian had enabled. A plugin already present in `.geode/plugins/`
+   * never appears here, so an import can never resurrect a plugin the user
+   * deliberately disabled in Geode.
+   */
+  pluginsToEnable: string[];
   /** Theme name to set as active (`cssTheme`), or null to leave unchanged. */
   activeTheme: string | null;
   /** Items intentionally not imported, with a human-readable reason. */
   skipped: SkippedItem[];
+}
+
+/**
+ * Fold a plugin id / theme folder name to the key the filesystem actually
+ * compares on. macOS (APFS/HFS+) is case-insensitive AND unicode-normalizing,
+ * so `MyPlugin`, `myplugin` and an NFD-encoded `Café` all name the SAME
+ * directory. Exact-string comparison misses that, which is how an
+ * "already present, never overwrite" guard can end up deleting a live install.
+ *
+ * BEST-EFFORT, BY DESIGN. This approximates the filesystem's folding; it does
+ * not reproduce it. `toLowerCase()` is deliberately locale-independent (so no
+ * Turkish dotless-i surprise) but it is not full Unicode case folding: Greek
+ * `ΟΔΟΣ` and `οδοσ` do not fold together here, while a filesystem that folds
+ * both Σ and ς to σ may treat them as the same name. That is a FALSE NEGATIVE
+ * — the planner thinks the name is free — and it lands safely, because
+ * `commitStaging()` refuses any destination that already exists and reports
+ * the item as skipped instead.
+ *
+ * So: this function is the fast path that produces good skip messages;
+ * `commitStaging()`'s `lstat` is the actual backstop that makes data loss
+ * impossible. Do not "optimize away" that check on the grounds that the
+ * planner already guarantees the destination is free — it doesn't, quite.
+ */
+export function normalizeItemKey(name: string): string {
+  return name.normalize("NFC").toLowerCase();
+}
+
+/**
+ * Reason text for a name that is already taken on disk under a different
+ * spelling — keeps the on-disk name visible so the user can see what it
+ * collided with (e.g. Geode installs `Dataview` by manifest id, Obsidian
+ * installs `dataview`).
+ */
+function collisionReason(kind: ImportItemType, incoming: string, existing: string): string {
+  const where = kind === "plugin" ? ".geode/plugins/" : ".geode/themes/";
+  return existing === incoming
+    ? `already present in ${where} — left as-is`
+    : `already present as "${existing}" in ${where} (case/unicode variant of "${incoming}") — left as-is`;
 }
 
 /**
@@ -90,24 +156,37 @@ export interface ImportPlan {
  * Rules:
  *  - a plugin is importable only if it has BOTH manifest.json and main.js;
  *  - a theme is importable only if it has a theme.css;
- *  - an item already present in `.geode/` is NOT overwritten (skipped as
- *    "already present"), but a plugin already on disk still counts as
- *    installed when computing the enabled set;
- *  - the enabled set = the plugins already enabled in Geode (order preserved),
- *    then plugins Obsidian had enabled (in Obsidian's order), deduped and
- *    filtered to plugins that will exist in `.geode/` after the copy;
- *  - the active theme is set only when Obsidian had one AND it will exist in
- *    `.geode/`; otherwise null (never clobber Geode's current theme with none).
+ *  - an item whose name is already taken in `.geode/` is NOT overwritten
+ *    (skipped as "already present"), but a plugin already on disk still counts
+ *    as installed when computing the merged enabled view. "Already taken" is
+ *    decided on the case-folded, NFC-normalized name, because that is what the
+ *    filesystem compares on — see `normalizeItemKey`;
+ *  - `enabledPluginIds` = the plugins already enabled in Geode (order
+ *    preserved), then plugins Obsidian had enabled (in Obsidian's order),
+ *    deduped and filtered to plugins that will exist in `.geode/` after the
+ *    copy. It describes state; it is NOT an instruction to enable;
+ *  - `pluginsToEnable` = the plugins this import copies in that Obsidian had
+ *    enabled. Only these may be switched on; an import never changes the
+ *    enabled state of a plugin that was already installed in Geode;
+ *  - the active theme is set only when Obsidian had one AND a renderable theme
+ *    of that name will exist in `.geode/`; otherwise null (never clobber
+ *    Geode's current theme with none).
  */
 export function planObsidianImport(input: ImportPlanInput): ImportPlan {
   const skipped: SkippedItem[] = [];
 
   // --- plugins ---------------------------------------------------------------
-  const existingPlugins = new Set(input.existingGeodePlugins);
+  // Keyed by the filesystem-equivalent name, not the raw string, so a
+  // case/unicode variant of an installed plugin is recognized as "already
+  // present" instead of being copied over the top of it.
+  const takenPluginNames = new Map<string, string>();
+  for (const id of input.existingGeodePlugins) takenPluginNames.set(normalizeItemKey(id), id);
+
   const pluginsToCopy: PlannedCopy[] = [];
-  // Every plugin id that will exist under .geode/plugins/ after the import:
-  // the ones already there, plus every importable Obsidian one.
-  const willExistPlugins = new Set(input.existingGeodePlugins);
+  // key → the id that will name the directory under .geode/plugins/ after the
+  // import: the already-installed spelling when there is one, else the
+  // Obsidian spelling we're about to copy in.
+  const willExistPlugins = new Map(takenPluginNames);
 
   for (const p of input.obsidianPlugins) {
     if (!p.hasManifest || !p.hasMain) {
@@ -118,60 +197,79 @@ export function planObsidianImport(input: ImportPlanInput): ImportPlan {
       });
       continue;
     }
-    willExistPlugins.add(p.id);
-    if (existingPlugins.has(p.id)) {
-      skipped.push({
-        kind: "plugin",
-        name: p.id,
-        reason: "already present in .geode/plugins/ — left as-is",
-      });
+    const key = normalizeItemKey(p.id);
+    const taken = takenPluginNames.get(key);
+    if (taken !== undefined) {
+      skipped.push({ kind: "plugin", name: p.id, reason: collisionReason("plugin", p.id, taken) });
       continue;
     }
+    // Claim the name so a second Obsidian folder that only differs by case
+    // (`Foo` and `foo`) can't have both copies race for the same destination.
+    takenPluginNames.set(key, p.id);
+    willExistPlugins.set(key, p.id);
     pluginsToCopy.push({ name: p.id });
   }
 
   // Enabled set: keep the plugins Geode already had enabled (in order), then
   // append the plugins Obsidian had enabled (in Obsidian's order). Dedupe, and
-  // drop any id that won't actually exist on disk after the import.
+  // drop any id that won't actually exist on disk after the import. This is the
+  // informational merged view only — see `pluginsToEnable` for what may be
+  // switched on.
   const enabledPluginIds: string[] = [];
   const seenEnabled = new Set<string>();
   for (const id of [...input.enabledInGeode, ...input.enabledInObsidian]) {
-    if (seenEnabled.has(id)) continue;
-    if (!willExistPlugins.has(id)) continue;
-    seenEnabled.add(id);
-    enabledPluginIds.push(id);
+    const key = normalizeItemKey(id);
+    const actual = willExistPlugins.get(key);
+    if (actual === undefined) continue;
+    if (seenEnabled.has(key)) continue;
+    seenEnabled.add(key);
+    enabledPluginIds.push(actual);
   }
 
+  // What the import is allowed to actually turn on: only plugins it copies in
+  // itself. A plugin already installed in Geode keeps whatever enabled state
+  // the user last chose — an import must never re-enable (and therefore
+  // re-execute) something they deliberately switched off.
+  const enabledObsidianKeys = new Set(input.enabledInObsidian.map(normalizeItemKey));
+  const pluginsToEnable = pluginsToCopy
+    .map((p) => p.name)
+    .filter((id) => enabledObsidianKeys.has(normalizeItemKey(id)));
+
   // --- themes ----------------------------------------------------------------
-  const existingThemes = new Set(input.existingGeodeThemes);
+  const renderable = input.renderableGeodeThemes ?? input.existingGeodeThemes;
+  // Every name occupied under .geode/themes/, whatever it holds — the guard.
+  const takenThemeNames = new Map<string, string>();
+  for (const name of input.existingGeodeThemes) takenThemeNames.set(normalizeItemKey(name), name);
+  // Names that can legitimately be made the active theme after the import.
+  const usableThemes = new Map<string, string>();
+  for (const name of renderable) usableThemes.set(normalizeItemKey(name), name);
+
   const themesToCopy: PlannedCopy[] = [];
-  const willExistThemes = new Set(input.existingGeodeThemes);
 
   for (const t of input.obsidianThemes) {
     if (!t.hasThemeCss) {
       skipped.push({ kind: "theme", name: t.name, reason: "missing theme.css" });
       continue;
     }
-    willExistThemes.add(t.name);
-    if (existingThemes.has(t.name)) {
-      skipped.push({
-        kind: "theme",
-        name: t.name,
-        reason: "already present in .geode/themes/ — left as-is",
-      });
+    const key = normalizeItemKey(t.name);
+    const taken = takenThemeNames.get(key);
+    if (taken !== undefined) {
+      skipped.push({ kind: "theme", name: t.name, reason: collisionReason("theme", t.name, taken) });
       continue;
     }
+    takenThemeNames.set(key, t.name);
+    usableThemes.set(key, t.name);
     themesToCopy.push({ name: t.name });
   }
 
-  // Set the active theme only when Obsidian had one AND it will exist in
-  // .geode/ — never clobber Geode's current theme with "none".
-  const activeTheme =
-    input.activeThemeInObsidian && willExistThemes.has(input.activeThemeInObsidian)
-      ? input.activeThemeInObsidian
-      : null;
+  // Set the active theme only when Obsidian had one AND a renderable theme of
+  // that name will exist in .geode/ — never clobber Geode's current theme with
+  // "none". Resolve to the on-disk spelling, which may differ in case.
+  const activeTheme = input.activeThemeInObsidian
+    ? usableThemes.get(normalizeItemKey(input.activeThemeInObsidian)) ?? null
+    : null;
 
-  return { pluginsToCopy, themesToCopy, enabledPluginIds, activeTheme, skipped };
+  return { pluginsToCopy, themesToCopy, enabledPluginIds, pluginsToEnable, activeTheme, skipped };
 }
 
 /** Result the executor returns to the renderer after the copy completes. */
@@ -180,8 +278,16 @@ export interface ObsidianImportResult {
   plugins: string[];
   /** Theme names newly copied into `.geode/themes/`. */
   themes: string[];
-  /** Full enabled-plugin id list the renderer should persist + enable. */
+  /**
+   * Merged "what is enabled after this import" view, for display/persistence.
+   * NOT an instruction to enable — see `pluginsToEnable`.
+   */
   enabledPluginIds: string[];
+  /**
+   * The only ids the renderer may `enable()`: plugins this run actually copied
+   * in that Obsidian had enabled.
+   */
+  pluginsToEnable: string[];
   /** Theme to apply, or null to leave the current theme unchanged. */
   activeTheme: string | null;
   /** Items skipped, with reasons (already present / malformed). */
@@ -195,6 +301,32 @@ async function exists(p: string): Promise<boolean> {
   return fsp
     .access(p)
     .then(() => true)
+    .catch(() => false);
+}
+
+/**
+ * True if anything at all occupies `p` — including a broken symlink, which
+ * `access()` reports as absent but `rename()` would happily replace. Used as
+ * the "is the destination free?" check, so it must not follow links.
+ */
+async function pathIsOccupied(p: string): Promise<boolean> {
+  return fsp
+    .lstat(p)
+    .then(() => true)
+    .catch(() => false);
+}
+
+/**
+ * True only for a real, regular file. `copyFile` follows symlinks, so a
+ * whitelisted `data.json` that is a symlink to (say) `~/.ssh/id_rsa` would
+ * otherwise copy that file's *contents* into the vault. Sources are attacker-
+ * influenced (any `.obsidian/` folder a user opens), so only regular files are
+ * ever read.
+ */
+async function isRegularFile(p: string): Promise<boolean> {
+  return fsp
+    .lstat(p)
+    .then((st) => st.isFile())
     .catch(() => false);
 }
 
@@ -232,10 +364,52 @@ function isSafeName(name: string): boolean {
 }
 
 /**
- * Copy the whitelisted `files` that exist in `srcDir` into `destDir`,
+ * Outcome of a single staged copy.
+ * - `copied` — the item landed at its destination.
+ * - `missing-entry` — the source lacked its required entry file, so nothing
+ *   was written (the planner filters these out; reaching it means the source
+ *   changed under us).
+ * - `destination-exists` — something already occupies the destination. The
+ *   planner is supposed to make this unreachable, so hitting it means a race
+ *   or a guard bug — which must resolve to "leave the user's data alone", not
+ *   "delete it".
+ */
+type CopyOutcome = "copied" | "missing-entry" | "destination-exists";
+
+/**
+ * Move a fully-populated staging dir into place, or give up.
+ *
+ * This deliberately does NOT clear the destination first. An earlier version
+ * called `fsp.rm(destDir, {recursive: true, force: true})` here, which turned
+ * every gap in the "already present" guard into silent, unrecoverable deletion
+ * of an installed plugin/theme and its `data.json`. `rename(2)` refuses to
+ * replace a non-empty directory anyway, so there is nothing to gain and a
+ * user's install to lose.
+ */
+async function commitStaging(staging: string, destDir: string): Promise<CopyOutcome> {
+  if (await pathIsOccupied(destDir)) {
+    await fsp.rm(staging, { recursive: true, force: true });
+    return "destination-exists";
+  }
+  try {
+    await fsp.rename(staging, destDir);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // Lost a race between the check above and the rename.
+    if (code === "ENOTEMPTY" || code === "EEXIST") {
+      await fsp.rm(staging, { recursive: true, force: true });
+      return "destination-exists";
+    }
+    throw err;
+  }
+  return "copied";
+}
+
+/**
+ * Copy the whitelisted `files` that exist in `srcDir` into `<parentDir>/<name>`,
  * atomically: files are written to a sibling staging dir on the same volume,
  * then renamed into place, so a failure never leaves a half-written item.
- * Returns true if the required `entryFile` was present and copied.
+ * Only regular files are copied — symlinks in the source are ignored.
  */
 async function copyItem(
   srcDir: string,
@@ -243,25 +417,22 @@ async function copyItem(
   name: string,
   files: readonly string[],
   entryFile: string
-): Promise<boolean> {
+): Promise<CopyOutcome> {
   await fsp.mkdir(parentDir, { recursive: true });
   const staging = await fsp.mkdtemp(path.join(parentDir, ".import-"));
   try {
     let wroteEntry = false;
     for (const file of files) {
       const from = path.join(srcDir, file);
-      if (!(await exists(from))) continue;
+      if (!(await isRegularFile(from))) continue;
       await fsp.copyFile(from, path.join(staging, file));
       if (file === entryFile) wroteEntry = true;
     }
     if (!wroteEntry) {
       await fsp.rm(staging, { recursive: true, force: true });
-      return false;
+      return "missing-entry";
     }
-    const destDir = path.join(parentDir, name);
-    await fsp.rm(destDir, { recursive: true, force: true });
-    await fsp.rename(staging, destDir);
-    return true;
+    return await commitStaging(staging, path.join(parentDir, name));
   } catch (err) {
     await fsp.rm(staging, { recursive: true, force: true });
     throw err;
@@ -282,6 +453,7 @@ export async function importFromObsidianVault(root: string): Promise<ObsidianImp
     plugins: [],
     themes: [],
     enabledPluginIds: [],
+    pluginsToEnable: [],
     activeTheme: null,
     skipped: [],
   };
@@ -338,9 +510,30 @@ export async function importFromObsidianVault(root: string): Promise<ObsidianImp
   const enabledInObsidian = await readJsonArray(path.join(obsidianDir, "community-plugins.json"));
   const activeThemeInObsidian = await readCssTheme(path.join(obsidianDir, "appearance.json"));
   const existingGeodePlugins = await listDirNames(path.join(geodeDir, "plugins"));
+  // The overwrite guard has to see EVERY name that is taken under
+  // .geode/themes/, not just the ones that look like a finished theme. A dir
+  // holding manifest.json + assets/ but no theme.css (interrupted install,
+  // hand-edited theme, `theme.css.bak`) still owns its name.
+  const geodeThemesDir = path.join(geodeDir, "themes");
   const existingGeodeThemes: string[] = [];
-  for (const name of await listDirNames(path.join(geodeDir, "themes"))) {
-    if (await exists(path.join(geodeDir, "themes", name, "theme.css"))) existingGeodeThemes.push(name);
+  const renderableGeodeThemes: string[] = [];
+  let geodeThemeEntries: import("node:fs").Dirent[] = [];
+  try {
+    geodeThemeEntries = await fsp.readdir(geodeThemesDir, { withFileTypes: true });
+  } catch {
+    geodeThemeEntries = [];
+  }
+  for (const entry of geodeThemeEntries) {
+    if (entry.isDirectory()) {
+      existingGeodeThemes.push(entry.name);
+      if (await exists(path.join(geodeThemesDir, entry.name, "theme.css"))) {
+        renderableGeodeThemes.push(entry.name);
+      }
+    } else if (entry.name.toLowerCase().endsWith(".css")) {
+      // A bare `<name>.css` occupies `<name>` too — importing a `<name>/`
+      // folder alongside it would be ambiguous at best.
+      existingGeodeThemes.push(entry.name.slice(0, -".css".length));
+    }
   }
   const enabledInGeode = await readJsonArray(path.join(geodeDir, "plugins.json"));
 
@@ -352,36 +545,80 @@ export async function importFromObsidianVault(root: string): Promise<ObsidianImp
     activeThemeInObsidian,
     existingGeodePlugins,
     existingGeodeThemes,
+    renderableGeodeThemes,
     enabledInGeode,
   });
 
   // --- execute the copies ----------------------------------------------------
+  // The plan already excludes anything already present; these outcome branches
+  // only fire when the source or destination changed underneath us mid-import.
+  const skipped: SkippedItem[] = [...plan.skipped];
   const copiedPlugins: string[] = [];
   for (const { name: id } of plan.pluginsToCopy) {
-    const ok = await copyItem(
+    const outcome = await copyItem(
       path.join(obsidianPluginsDir, id),
       path.join(geodeDir, "plugins"),
       id,
       PLUGIN_FILES,
       "main.js"
     );
-    if (ok) copiedPlugins.push(id);
+    if (outcome === "copied") copiedPlugins.push(id);
+    else skipped.push({ kind: "plugin", name: id, reason: copyFailureReason("plugin", outcome) });
   }
 
   const copiedThemes: string[] = [];
   for (const { name } of plan.themesToCopy) {
     const source = themeSources.get(name);
-    if (!source) continue;
-    if (await copyTheme(source, path.join(geodeDir, "themes"), name)) copiedThemes.push(name);
+    if (!source) {
+      skipped.push({ kind: "theme", name, reason: "source files disappeared before the copy" });
+      continue;
+    }
+    const outcome = await copyTheme(source, geodeThemesDir, name);
+    if (outcome === "copied") copiedThemes.push(name);
+    else skipped.push({ kind: "theme", name, reason: copyFailureReason("theme", outcome) });
   }
+
+  // Only plugins that really landed on disk may be enabled.
+  const copiedPluginKeys = new Set(copiedPlugins.map(normalizeItemKey));
+  const pluginsToEnable = plan.pluginsToEnable.filter((id) =>
+    copiedPluginKeys.has(normalizeItemKey(id))
+  );
+
+  // Don't promise a theme that was never copied (and wasn't already there).
+  const planned = plan.activeTheme;
+  const plannedKey = planned === null ? "" : normalizeItemKey(planned);
+  const themeIsOnDisk =
+    planned !== null &&
+    (copiedThemes.some((n) => normalizeItemKey(n) === plannedKey) ||
+      renderableGeodeThemes.some((n) => normalizeItemKey(n) === plannedKey));
+  const activeTheme = themeIsOnDisk ? planned : null;
 
   return {
     plugins: copiedPlugins,
     themes: copiedThemes,
     enabledPluginIds: plan.enabledPluginIds,
-    activeTheme: plan.activeTheme,
-    skipped: plan.skipped,
+    pluginsToEnable,
+    activeTheme,
+    skipped,
   };
+}
+
+/**
+ * Human-readable reason for a copy that didn't land, for `skipped[]`.
+ *
+ * `destination-exists` is not only the mid-import race it might sound like.
+ * The common real case is an item the pre-scan structurally cannot see:
+ * `readdir(…, {withFileTypes: true})` reports a symlinked plugin directory as
+ * `isSymbolicLink()`, never `isDirectory()`, so `listDirNames` skips it and
+ * the planner believes the name is free. The wording says that.
+ */
+function copyFailureReason(kind: ImportItemType, outcome: Exclude<CopyOutcome, "copied">): string {
+  const where = kind === "plugin" ? ".geode/plugins/" : ".geode/themes/";
+  return outcome === "destination-exists"
+    ? `already present in ${where} — left as-is (not visible to the pre-scan: e.g. a symlink or a non-directory)`
+    : kind === "plugin"
+      ? "source lost its main.js before it could be copied"
+      : "source lost its theme.css before it could be copied";
 }
 
 /**
@@ -394,22 +631,19 @@ async function copyTheme(
   source: { cssPath: string; manifestPath?: string },
   parentDir: string,
   name: string
-): Promise<boolean> {
+): Promise<CopyOutcome> {
   await fsp.mkdir(parentDir, { recursive: true });
   const staging = await fsp.mkdtemp(path.join(parentDir, ".import-"));
   try {
-    if (!(await exists(source.cssPath))) {
+    if (!(await isRegularFile(source.cssPath))) {
       await fsp.rm(staging, { recursive: true, force: true });
-      return false;
+      return "missing-entry";
     }
     await fsp.copyFile(source.cssPath, path.join(staging, "theme.css"));
-    if (source.manifestPath && (await exists(source.manifestPath))) {
+    if (source.manifestPath && (await isRegularFile(source.manifestPath))) {
       await fsp.copyFile(source.manifestPath, path.join(staging, "manifest.json"));
     }
-    const destDir = path.join(parentDir, name);
-    await fsp.rm(destDir, { recursive: true, force: true });
-    await fsp.rename(staging, destDir);
-    return true;
+    return await commitStaging(staging, path.join(parentDir, name));
   } catch (err) {
     await fsp.rm(staging, { recursive: true, force: true });
     throw err;
