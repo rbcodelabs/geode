@@ -7,6 +7,7 @@ import {
   type PluginManifest,
 } from "./plugin-manifest";
 import * as GeodeAPI from "./api/obsidian";
+import { CommentService, StaleCommentWriteError } from "./comments/service";
 import { isPluginBlocked, type ManagedPolicy } from "./policy";
 import { measureOperation, recordMeasure } from "./perf-instrumentation";
 import {
@@ -73,7 +74,8 @@ const nodeRequire: ((id: string) => unknown) | undefined = (
 export function instantiatePluginClass(code: string, pluginId: string): PluginConstructor {
   const moduleObj: { exports: any } = { exports: {} };
   const requireShim = (specifier: string): unknown => {
-    if (specifier === "obsidian" || specifier === "geode") return GeodeAPI;
+    if (specifier === "obsidian") return GeodeAPI;
+    if (specifier === "geode") return { ...GeodeAPI, CommentService, StaleCommentWriteError };
     if (nodeRequire) {
       try {
         return nodeRequire(specifier);

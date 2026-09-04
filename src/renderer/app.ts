@@ -27,6 +27,7 @@ import { CanvasView } from "./views/canvas-view";
 import { serializeCanvas } from "./canvas/canvas-data";
 import { FileExplorerView } from "./views/file-explorer";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
+import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
 import { WebView } from "./views/web-view";
@@ -78,6 +79,8 @@ import type { HostServices } from "./host/contracts";
 import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
+import { stripCommentMetadata } from "./comments/model";
+import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface AppSettings {
@@ -1251,7 +1254,7 @@ class StatusBar {
       this.backlinksEl.textContent = "";
       return;
     }
-    const text = view.getText().replace(/^---\r?\n[\s\S]*?\r?\n---/, "");
+    const text = stripCommentMetadata(view.getText()).replace(/^---\r?\n[\s\S]*?\r?\n---/, "");
     const words = (text.match(/\S+/g) ?? []).length;
     this.wordCountEl.textContent = `${words} words · ${text.length} characters`;
     const backlinks = this.app.metadataCache.getBacklinks(view.file);
@@ -1266,6 +1269,7 @@ export class App {
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
   readonly webViewer: WebViewerService;
+  readonly comments: CommentService;
   vault: Vault;
   metadataCache: MetadataCache;
   fileManager = new FileManager(this);
@@ -1328,6 +1332,7 @@ export class App {
   private suppressReconcileModify = new Set<string>();
   private externalModifyInFlight = new Map<string, Promise<void>>();
   private webViewerLifecycleEnabled = false;
+  private commentsView?: CommentsView;
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
@@ -1343,6 +1348,14 @@ export class App {
     });
     this.vault = new Vault(host);
     this.metadataCache = new MetadataCache(this.vault);
+    this.comments = new CommentService(this.vault, (file) => {
+      if (!this.workspace) return null;
+      let found: MarkdownView | null = null;
+      this.workspace.iterateLeaves((leaf) => {
+        if (!found && leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path) found = leaf.view;
+      });
+      return found;
+    });
   }
 
   isDarkMode(): boolean {
@@ -1740,6 +1753,8 @@ export class App {
     this.workspace.rightSidebar.addView(new BacklinksView(this));
     this.workspace.rightSidebar.addView(new OutlineView(this));
     this.workspace.rightSidebar.addView(new TagPaneView(this));
+    this.commentsView = new CommentsView(this);
+    this.workspace.rightSidebar.addView(this.commentsView);
 
     // Bookmarks is a real plugin-facing ItemView (unlike the other built-ins
     // above, which draw their own .sidebar-view-header) so it needs a
@@ -2588,6 +2603,10 @@ export class App {
     c("toggle-right-sidebar", "Toggle right sidebar", "Mod+Shift+R", () =>
       this.workspace.rightSidebar.toggle()
     );
+    c("add-comment", "Comments: Add comment to selection", "Mod+Shift+M", () => {
+      const view = this.getActiveMarkdownView();
+      if (view) this.promptCommentForSelection(view);
+    });
     c("open-settings", "Open settings", "Mod+,", () => this.setting.open());
     c("open-another-vault", "Open another vault", undefined, () => this.openManageVaults());
     c("refresh-vault", "Refresh external vault", undefined, () => void this.reconcileVault("manual"));
@@ -3423,6 +3442,52 @@ export class App {
   getActiveMarkdownView(): MarkdownView | null {
     const view = this.workspace.getActiveLeaf()?.view;
     return view instanceof MarkdownView ? view : null;
+  }
+
+  promptCommentForSelection(view: MarkdownView): void {
+    const file = view.file;
+    const range = view.getSelectedRange();
+    if (!file || !range) { this.notify("Select plain Markdown text to add a comment"); return; }
+    new PromptModal(this, {
+      placeholder: "Add a comment…",
+      onSubmit: (body) => void this.comments.create(file, range, body, { type: "user", name: "You" })
+        .then((thread) => { this.showComments(); view.revealComment(thread.id); })
+        .catch((error) => this.notify(error instanceof Error ? error.message : "Could not add comment")),
+    }).open();
+  }
+
+  promptReplyComment(thread: CommentThread): void {
+    new PromptModal(this, {
+      placeholder: "Reply…",
+      onSubmit: (body) => void this.comments.reply(thread.file, thread.id, body, { type: "user", name: "You" })
+        .catch((error) => this.notify(error instanceof Error ? error.message : "Could not reply")),
+    }).open();
+  }
+
+  promptEditComment(thread: CommentThread, message: CommentMessage): void {
+    new PromptModal(this, {
+      placeholder: "Edit comment…",
+      initialValue: message.body,
+      onSubmit: (body) => void this.comments.editMessage(thread.file, thread.id, message.id, body)
+        .catch((error) => this.notify(error instanceof Error ? error.message : "Could not edit comment")),
+    }).open();
+  }
+
+  revealComment(thread: CommentThread): void {
+    void this.openFile(thread.file, false).then(() => this.getActiveMarkdownView()?.revealComment(thread.id));
+  }
+
+  reattachComment(thread: CommentThread): void {
+    const view = this.getActiveMarkdownView();
+    const range = view?.file?.path === thread.file.path ? view.getSelectedRange() : null;
+    if (!range) { this.notify("Select replacement text in the note first"); return; }
+    void this.comments.reattach(thread.file, thread.id, range)
+      .catch((error) => this.notify(error instanceof Error ? error.message : "Could not reattach comment"));
+  }
+
+  private showComments(): void {
+    if (!this.commentsView) return;
+    this.workspace.rightSidebar.show(this.commentsView);
   }
 
   revealOffsetInActiveMarkdownView(file: TFile, offset: number) {
