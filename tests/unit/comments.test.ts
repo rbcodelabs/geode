@@ -145,11 +145,26 @@ describe("comment range validation", () => {
     ["variable code span", "Use ``code ` within`` now", 7, 16],
     ["frontmatter property after blank line", "---\ntitle: one\n\nproperty: value\n---\nBody", 27, 30],
     ["block ID", "Plain paragraph ^block-id", 17, 22],
+    ["standalone block ID", "^block-id", 2, 7],
+    ["block ID on its own line after prose", "Paragraph text\n^block-id", 17, 22],
     ["inline LaTeX", "Math $x+y$ here", 6, 9],
     ["display LaTeX", "Before\n$$x+y$$\nAfter", 10, 13],
+    ["multiline display LaTeX after a blank line", "$$\nx\n\ny\n$$", 6, 7],
     ["Obsidian comment", "Visible %%hidden%% text", 11, 17],
+    ["multiline Obsidian comment after a blank line", "%%\nhidden\n\nstill hidden\n%%", 12, 17],
   ])("rejects semantic %s selections", (_name, source, from, to) => {
     expect(() => validateCommentRange(source, { from, to })).toThrow();
+  });
+
+  it("does not protect plain prose outside multiline math and comment blocks", () => {
+    const source = "Before\n\n$$\nx\n\ny\n$$\n\nBetween\n\n%%\nhidden\n\nstill hidden\n%%\n\nAfter";
+    for (const selected of ["Before", "Between", "After"]) {
+      const from = source.indexOf(selected);
+      expect(validateCommentRange(source, { from, to: from + selected.length })).toEqual({
+        from,
+        to: from + selected.length,
+      });
+    }
   });
 
   it.each([
@@ -173,5 +188,16 @@ describe("comment range validation", () => {
 
     expect(validateCommentRange(source, { from, to })).toEqual({ from, to });
     expect(await renderDocument(commented)).toBe(await renderDocument(source));
+  });
+
+  it("keeps a forced marker inside a multiline Obsidian comment suppressed by Geode rendering", async () => {
+    const source = "Visible\n\n%%\nhidden\n\nstill hidden\n%%\n\nTail";
+    const selected = "still hidden";
+    const from = source.indexOf(selected);
+    const markers = createCommentMarkers("render-multiline-comment", { messages: [] });
+    const forced = source.slice(0, from) + markers.open + selected + markers.close + source.slice(from + selected.length);
+
+    expect(await renderDocument(forced)).toBe(await renderDocument(source));
+    expect(() => validateCommentRange(source, { from, to: from + selected.length })).toThrow(CommentFormatError);
   });
 });

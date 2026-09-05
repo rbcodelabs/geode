@@ -1,4 +1,4 @@
-import { GFM, parser, type MarkdownConfig } from "@lezer/markdown";
+import { GFM, parser, type BlockParser, type MarkdownConfig } from "@lezer/markdown";
 import { getFrontMatterInfo } from "../api/frontmatter";
 
 export interface CommentAuthor {
@@ -251,8 +251,38 @@ function maskCommentSyntax(source: string): string {
   return result;
 }
 
+function delimitedBlockParser(name: string, node: string, delimiter: string): BlockParser {
+  const isDelimiterLine = (text: string, from: number) => text.slice(from).trim() === delimiter;
+  return {
+    name,
+    before: "FencedCode",
+    parse(cx, line) {
+      if (!isDelimiterLine(line.text, line.pos)) return false;
+      const from = cx.lineStart + line.pos;
+      let to = cx.lineStart + line.text.length;
+      while (cx.nextLine()) {
+        to = cx.lineStart + line.text.length;
+        if (isDelimiterLine(line.text, line.pos)) {
+          cx.nextLine();
+          break;
+        }
+      }
+      cx.addElement(cx.elt(node, from, to));
+      return true;
+    },
+  };
+}
+
 const geodeMarkdownSyntax: MarkdownConfig = {
-  defineNodes: ["WikiLink", "ObsidianTag", "Highlight", "TablePipe", "BlockID", "InlineMath", "ObsidianComment"],
+  defineNodes: [
+    "WikiLink", "ObsidianTag", "Highlight", "TablePipe", "BlockID", "InlineMath", "ObsidianComment",
+    { name: "MathBlock", block: true },
+    { name: "ObsidianCommentBlock", block: true },
+  ],
+  parseBlock: [
+    delimitedBlockParser("MathBlock", "MathBlock", "$$"),
+    delimitedBlockParser("ObsidianCommentBlock", "ObsidianCommentBlock", "%%"),
+  ],
   parseInline: [
     {
       name: "WikiLink",
@@ -295,7 +325,7 @@ const geodeMarkdownSyntax: MarkdownConfig = {
       parse(cx, next, pos) {
         if (next !== 94) return -1;
         const previous = pos === cx.offset ? "" : cx.slice(pos - 1, pos);
-        if (!/[ \t]/u.test(previous)) return -1;
+        if (pos !== cx.offset && !/[ \t\r\n]/u.test(previous)) return -1;
         const match = /^\^[A-Za-z0-9-]+(?=[ \t]*(?:\r?\n|$))/u.exec(cx.slice(pos, cx.end));
         return match ? cx.addElement(cx.elt("BlockID", pos, pos + match[0].length)) : -1;
       },
