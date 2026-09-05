@@ -1,4 +1,5 @@
 import { GFM, parser, type MarkdownConfig } from "@lezer/markdown";
+import { getFrontMatterInfo } from "../api/frontmatter";
 
 export interface CommentAuthor {
   type: "user" | "agent";
@@ -251,7 +252,7 @@ function maskCommentSyntax(source: string): string {
 }
 
 const geodeMarkdownSyntax: MarkdownConfig = {
-  defineNodes: ["WikiLink", "ObsidianTag", "Highlight", "TablePipe"],
+  defineNodes: ["WikiLink", "ObsidianTag", "Highlight", "TablePipe", "BlockID", "InlineMath", "ObsidianComment"],
   parseInline: [
     {
       name: "WikiLink",
@@ -289,6 +290,35 @@ const geodeMarkdownSyntax: MarkdownConfig = {
         return next === 124 ? cx.addElement(cx.elt("TablePipe", pos, pos + 1)) : -1;
       },
     },
+    {
+      name: "BlockID",
+      parse(cx, next, pos) {
+        if (next !== 94) return -1;
+        const previous = pos === cx.offset ? "" : cx.slice(pos - 1, pos);
+        if (!/[ \t]/u.test(previous)) return -1;
+        const match = /^\^[A-Za-z0-9-]+(?=[ \t]*(?:\r?\n|$))/u.exec(cx.slice(pos, cx.end));
+        return match ? cx.addElement(cx.elt("BlockID", pos, pos + match[0].length)) : -1;
+      },
+    },
+    {
+      name: "InlineMath",
+      parse(cx, next, pos) {
+        if (next !== 36) return -1;
+        const delimiter = cx.char(pos + 1) === 36 ? "$$" : "$";
+        const close = cx.slice(pos + delimiter.length, cx.end).indexOf(delimiter);
+        if (close < 0) return -1;
+        return cx.addElement(cx.elt("InlineMath", pos, pos + delimiter.length * 2 + close));
+      },
+    },
+    {
+      name: "ObsidianComment",
+      parse(cx, next, pos) {
+        if (next !== 37 || cx.char(pos + 1) !== 37) return -1;
+        const close = cx.slice(pos + 2, cx.end).indexOf("%%");
+        if (close < 0) return -1;
+        return cx.addElement(cx.elt("ObsidianComment", pos, pos + close + 4));
+      },
+    },
   ],
 };
 
@@ -296,6 +326,8 @@ const commentMarkdownParser = parser.configure([GFM, geodeMarkdownSyntax]);
 
 function protectedRanges(source: string): Array<{ from: number; to: number; kind: string }> {
   const ranges: Array<{ from: number; to: number; kind: string }> = [];
+  const frontmatter = getFrontMatterInfo(source);
+  if (frontmatter.exists) ranges.push({ from: 0, to: frontmatter.contentStart, kind: "frontmatter" });
   commentMarkdownParser.parse(source).iterate({
     enter(node) {
       if (node.name === "Document" || node.name === "Paragraph") return;

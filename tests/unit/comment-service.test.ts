@@ -9,6 +9,7 @@ function harness(initial = "Hello world") {
   let text = initial;
   const vault = {
     cachedRead: vi.fn(async () => text),
+    getCachedContent: vi.fn(() => text),
     modify: vi.fn(async (_file: TFile, next: string) => { text = next; }),
   };
   const service = new CommentService(vault as never);
@@ -103,6 +104,26 @@ describe("CommentService", () => {
     await service.create(file, { from: 0, to: 5 }, "note", { type: "user", name: "Rick" });
 
     current = "External plain text";
+
+    expect(service.list(file, { includeResolved: true })).toEqual([]);
+    expect(service.inspect(file)).toEqual({ threads: [], errors: [] });
+  });
+
+  it("does not resurrect mutation fallback content after an external edit evicts the Vault cache", async () => {
+    let cached: string | undefined = "Hello world";
+    let provider = cached;
+    const vault = {
+      cachedRead: vi.fn(async () => cached ?? provider),
+      read: vi.fn(async () => provider),
+      getCachedContent: vi.fn(() => cached),
+      modify: vi.fn(async (_file: TFile, next: string) => { cached = provider = next; }),
+    };
+    const service = new CommentService(vault as never);
+    await service.create(file, { from: 0, to: 5 }, "note", { type: "user", name: "Rick" });
+    expect(service.list(file, { includeResolved: true })).toHaveLength(1);
+
+    provider = "External plain text";
+    cached = undefined;
 
     expect(service.list(file, { includeResolved: true })).toEqual([]);
     expect(service.inspect(file)).toEqual({ threads: [], errors: [] });

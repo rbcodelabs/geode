@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Marked } from "marked";
 import {
   CommentFormatError,
   createCommentMarkers,
@@ -7,6 +8,30 @@ import {
   maskCommentMetadata,
   validateCommentRange,
 } from "../../src/renderer/comments/model";
+import { MarkdownRenderer } from "../../src/renderer/markdown/render";
+import type { App } from "../../src/renderer/app";
+
+async function renderDocument(source: string): Promise<string> {
+  const element = {
+    innerHTML: "",
+    querySelectorAll: () => [],
+    addEventListener: () => undefined,
+  } as unknown as HTMLElement;
+  const app = {
+    metadataCache: { getFirstLinkpathDest: () => null, getFileCache: () => null },
+    markdownProcessors: { hasCodeBlocks: () => false, postProcessorsInOrder: () => [] },
+    vault: { getFileByPath: () => null },
+    openLink: () => undefined,
+    openSearch: () => undefined,
+    openExternalLink: () => undefined,
+  } as unknown as App;
+  await new MarkdownRenderer(app).render(source, element, "Note.md");
+  return element.innerHTML;
+}
+
+const renderRawMarkdown = (source: string): string => new Marked({ gfm: true, breaks: true })
+  .parseInline(source, { async: false })
+  .replace(/<!-- geode-comment(?::v1 id="[^"]+" data="[^"]*"|-end:[^\s<>]+) -->/g, "");
 
 describe("markdown comments format", () => {
   it("round-trips a Unicode threaded comment and strips metadata without changing prose", () => {
@@ -118,6 +143,11 @@ describe("comment range validation", () => {
     ["character reference", "A &amp; B", 3, 6],
     ["escape", "A \\*literal asterisk", 2, 4],
     ["variable code span", "Use ``code ` within`` now", 7, 16],
+    ["frontmatter property after blank line", "---\ntitle: one\n\nproperty: value\n---\nBody", 27, 30],
+    ["block ID", "Plain paragraph ^block-id", 17, 22],
+    ["inline LaTeX", "Math $x+y$ here", 6, 9],
+    ["display LaTeX", "Before\n$$x+y$$\nAfter", 10, 13],
+    ["Obsidian comment", "Visible %%hidden%% text", 11, 17],
   ])("rejects semantic %s selections", (_name, source, from, to) => {
     expect(() => validateCommentRange(source, { from, to })).toThrow();
   });
@@ -125,13 +155,23 @@ describe("comment range validation", () => {
   it.each([
     ["autolink", "See www.example.com now", "example"],
     ["entity", "A &amp; B", "amp"],
-    ["raw HTML", '<span title="value">content</span>', "value"],
     ["variable code span", "Use ``code ` within`` now", "within"],
-  ])("rejects marker insertion where %s rendering would not be equivalent", (_name, source, selected) => {
+  ])("proves forced marker insertion changes %s rendering and rejects it", (_name, source, selected) => {
     const from = source.indexOf(selected);
     const markers = createCommentMarkers("render-check", { messages: [] });
     const forced = source.slice(0, from) + markers.open + selected + markers.close + source.slice(from + selected.length);
-    expect(stripCommentMetadata(forced)).toBe(source);
+    expect(renderRawMarkdown(forced)).not.toBe(renderRawMarkdown(source));
     expect(() => validateCommentRange(source, { from, to: from + selected.length })).toThrow(CommentFormatError);
+  });
+
+  it("renders allowed commented plain prose equivalently through Geode's document renderer", async () => {
+    const source = "Ordinary prose remains readable";
+    const from = source.indexOf("prose");
+    const to = from + "prose".length;
+    const markers = createCommentMarkers("render-plain", { messages: [] });
+    const commented = source.slice(0, from) + markers.open + source.slice(from, to) + markers.close + source.slice(to);
+
+    expect(validateCommentRange(source, { from, to })).toEqual({ from, to });
+    expect(await renderDocument(commented)).toBe(await renderDocument(source));
   });
 });

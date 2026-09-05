@@ -53,7 +53,6 @@ function replacePayload(source: string, thread: ParsedCommentThread, payload: Co
 
 export class CommentService extends Events {
   private queues = new Map<string, Promise<unknown>>();
-  private sources = new Map<string, string>();
 
   constructor(
     private vault: Pick<Vault, "cachedRead" | "modify"> & Partial<Pick<Vault, "read" | "getCachedContent">>,
@@ -66,14 +65,14 @@ export class CommentService extends Events {
   }
 
   list(file: TFile, options: { includeResolved?: boolean } = {}): CommentThread[] {
-    const source = this.openEditor(file)?.getText() ?? this.vault.getCachedContent?.(file.path) ?? this.sources.get(file.path) ?? "";
+    const source = this.openEditor(file)?.getText() ?? this.vault.getCachedContent?.(file.path) ?? "";
     return parseCommentThreads(source).threads
       .filter((thread) => options.includeResolved || !thread.resolvedAt)
       .map((thread) => ({ ...thread, file }));
   }
 
   inspect(file: TFile) {
-    const source = this.openEditor(file)?.getText() ?? this.vault.getCachedContent?.(file.path) ?? this.sources.get(file.path) ?? "";
+    const source = this.openEditor(file)?.getText() ?? this.vault.getCachedContent?.(file.path) ?? "";
     return parseCommentThreads(source);
   }
 
@@ -175,14 +174,11 @@ export class CommentService extends Events {
     const operation = previous.then(async () => {
       const editor = this.openEditor(file);
       if (editor) {
-        let result = editor.getText();
-        await editor.applyCommentMutation((source) => (result = transform(source)));
-        this.sources.set(file.path, result);
-        if (result !== editor.getText()) this.sources.set(file.path, editor.getText());
+        await editor.applyCommentMutation(transform);
       } else {
         const source = await this.vault.cachedRead(file);
         const result = transform(source);
-        if (result === source) { this.sources.set(file.path, source); return; }
+        if (result === source) return;
         // `cachedRead()` intentionally returns a warmed snapshot. The guard must
         // bypass it so provider/external edits are visible immediately. Hosts do
         // not currently expose compare-and-swap, so a small read→write TOCTOU
@@ -190,7 +186,6 @@ export class CommentService extends Events {
         const latest = this.vault.read ? await this.vault.read(file) : await this.vault.cachedRead(file);
         if (latest !== source) throw new StaleCommentWriteError("The note changed before the comment could be saved");
         await this.vault.modify(file, result);
-        this.sources.set(file.path, result);
       }
       this.trigger("changed", file);
     });
