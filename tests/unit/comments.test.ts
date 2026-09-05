@@ -150,15 +150,32 @@ describe("comment range validation", () => {
     ["inline LaTeX", "Math $x+y$ here", 6, 9],
     ["display LaTeX", "Before\n$$x+y$$\nAfter", 10, 13],
     ["multiline display LaTeX after a blank line", "$$\nx\n\ny\n$$", 6, 7],
+    ["attached multiline display LaTeX", "Before $$\nx\n\ny\n$$", 13, 14],
+    ["spaced multiline display LaTeX opener", "$$ x\n\ny\n$$", 6, 7],
     ["Obsidian comment", "Visible %%hidden%% text", 11, 17],
     ["multiline Obsidian comment after a blank line", "%%\nhidden\n\nstill hidden\n%%", 12, 17],
+    ["attached multiline Obsidian comment", "Before %%hidden\n\nstill hidden%% After", 17, 22],
+    ["spaced multiline Obsidian comment opener", "%% hidden\n\nstill hidden\n%%", 13, 18],
+    ["unclosed attached Obsidian comment", "Before %%hidden to EOF", 10, 16],
+    ["unclosed attached display LaTeX", "Before $$x\n\ny to EOF", 13, 14],
   ])("rejects semantic %s selections", (_name, source, from, to) => {
     expect(() => validateCommentRange(source, { from, to })).toThrow();
   });
 
   it("does not protect plain prose outside multiline math and comment blocks", () => {
-    const source = "Before\n\n$$\nx\n\ny\n$$\n\nBetween\n\n%%\nhidden\n\nstill hidden\n%%\n\nAfter";
-    for (const selected of ["Before", "Between", "After"]) {
+    const source = "Before $$\nx\n\ny\n$$ After\n\nBetween\n\nLead %%hidden\n\nstill hidden%% Tail";
+    for (const selected of ["Before", "After", "Between", "Lead", "Tail"]) {
+      const from = source.indexOf(selected);
+      expect(validateCommentRange(source, { from, to: from + selected.length })).toEqual({
+        from,
+        to: from + selected.length,
+      });
+    }
+  });
+
+  it("allows unpaired literal dollar and percent characters in ordinary prose", () => {
+    const source = "Price is $5 and progress is 100% complete";
+    for (const selected of ["Price", "progress", "complete"]) {
       const from = source.indexOf(selected);
       expect(validateCommentRange(source, { from, to: from + selected.length })).toEqual({
         from,
@@ -191,7 +208,7 @@ describe("comment range validation", () => {
   });
 
   it("keeps a forced marker inside a multiline Obsidian comment suppressed by Geode rendering", async () => {
-    const source = "Visible\n\n%%\nhidden\n\nstill hidden\n%%\n\nTail";
+    const source = "Visible %%hidden\n\nstill hidden%% Tail";
     const selected = "still hidden";
     const from = source.indexOf(selected);
     const markers = createCommentMarkers("render-multiline-comment", { messages: [] });

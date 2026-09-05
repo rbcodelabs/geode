@@ -354,10 +354,37 @@ const geodeMarkdownSyntax: MarkdownConfig = {
 
 const commentMarkdownParser = parser.configure([GFM, geodeMarkdownSyntax]);
 
+function delimitedSyntaxRanges(
+  source: string,
+  delimiter: "$$" | "%%",
+  kind: "display math" | "Obsidian comment",
+): Array<{ from: number; to: number; kind: string }> {
+  const ranges: Array<{ from: number; to: number; kind: string }> = [];
+  let searchFrom = 0;
+  while (searchFrom < source.length) {
+    const from = source.indexOf(delimiter, searchFrom);
+    if (from < 0) break;
+    const closeFrom = source.indexOf(delimiter, from + delimiter.length);
+    if (closeFrom < 0) {
+      ranges.push({ from, to: source.length, kind });
+      break;
+    }
+    const to = closeFrom + delimiter.length;
+    ranges.push({ from, to, kind });
+    searchFrom = to;
+  }
+  return ranges;
+}
+
 function protectedRanges(source: string): Array<{ from: number; to: number; kind: string }> {
   const ranges: Array<{ from: number; to: number; kind: string }> = [];
   const frontmatter = getFrontMatterInfo(source);
   if (frontmatter.exists) ranges.push({ from: 0, to: frontmatter.contentStart, kind: "frontmatter" });
+  // Lezer's inline parser intentionally ends a paragraph at a blank line.
+  // Geode's math and comment delimiters do not, so pair them across the raw
+  // document and conservatively treat an unclosed opener as extending to EOF.
+  ranges.push(...delimitedSyntaxRanges(source, "$$", "display math"));
+  ranges.push(...delimitedSyntaxRanges(source, "%%", "Obsidian comment"));
   commentMarkdownParser.parse(source).iterate({
     enter(node) {
       if (node.name === "Document" || node.name === "Paragraph") return;
