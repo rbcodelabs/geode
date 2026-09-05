@@ -102,11 +102,17 @@ type RootCapability =
   | "read"
   | "open";
 
+interface HostPhysicalIdentity {
+  device: string;
+  inode: string;
+}
+
 interface RootRecord {
   rootId: string;
   kind: RootKind;
   label: string;
   locator: HostRootLocator;
+  physicalIdentity: HostPhysicalIdentity;
   capabilities: ReadonlySet<RootCapability>;
   availability: "connected" | "missing" | "permission-revoked" | "unavailable";
   createdAt: number;
@@ -145,6 +151,9 @@ interface ResourceRef {
 - Resolve a `ResourceRef` through containment-safe host APIs.
 - Refresh cached directory listings and invalidate affected explorer nodes/tabs.
 - Deduplicate exact or nested Project roots without silently broadening access.
+- Own one application-lifetime store and serialized mutation queue. Per-window
+  operations use a main-created facade carrying the IPC sender's current vault
+  session; stale sessions cannot commit after a picker or confirmation.
 
 The registry does not parse Markdown, create `TFile`s, add metadata records, or
 decide Threads execution policy.
@@ -154,7 +163,8 @@ decide Threads execution policy.
 All requirements in ADR-0015 are normative. In addition:
 
 - Listing is lazy and bounded so attaching a large repository does not trigger a
-  full recursive scan.
+  full recursive scan. The host returns at most 250 immediate entries per page
+  through opaque 30-second cursors, capped at 16 live cursors per window.
 - Phase 1 hides only `.git` internals and `.DS_Store`; other dotfiles and large
   vendor/build directories remain visible but collapsed and are never scanned
   recursively without user navigation.
@@ -214,8 +224,11 @@ All requirements in ADR-0015 are normative. In addition:
 - Disabling or uninstalling Threads removes its live integration UI contributions
   but does not corrupt the vault. Orphaned local root grants remain visible and
   removable in core settings; they are never garbage-collected silently.
-- No existing community plugin receives root enumeration or read capability in
-  Phase 1. A public workspace-resource API is a separate decision.
+- Phase 1 adds no supported external-root surface to the Obsidian-compatible
+  `App`, `Vault`, `TFile`, adapter, or public plugin APIs. Desktop plugins are
+  trusted same-world code with Node access, so this is a compatibility/API
+  boundary rather than malicious-plugin isolation. A sandboxed plugin runtime or
+  public workspace-resource API is a separate decision.
 
 ## Migration and compatibility
 
@@ -275,12 +288,16 @@ All requirements in ADR-0015 are normative. In addition:
 - [ ] Every external entry and tab is addressed by normalized
   `{rootId, relativePath}` with no absolute-path or `../` fallback.
 - [ ] Restart preserves root and resource identities.
+- [ ] Multiple vault windows share one registry/persistence queue while applying
+  overlap checks against each calling window's own active vault.
 
 ### Attachment and reconnect
 
 - [ ] A Project cwd outside the vault appears disconnected until the user chooses
   **Attach folder…** and confirms read-only access.
 - [ ] Cancel changes neither root state nor the active vault/workspace.
+- [ ] Switching or closing the originating vault window while its native picker
+  or confirmation is open makes that request stale and commits no change.
 - [ ] Missing, moved, revoked, and mobile-unavailable roots remain visible with
   correct recovery messaging.
 - [ ] Reconnect can preserve `rootId` only through explicit replacement
@@ -306,6 +323,8 @@ All requirements in ADR-0015 are normative. In addition:
   the existing File Explorer.
 - [ ] Directory enumeration is lazy; expanding one directory does not recursively
   scan the root.
+- [ ] Directory enumeration pages contain at most 250 immediate entries; opaque
+  cursors expire and never expose or persist an absolute locator.
 - [ ] Opening a supported external file produces a read-only tab whose identity
   and source root are unambiguous.
 - [ ] UTF-8 text files at or below 2 MiB open as source in a distinct resource

@@ -127,6 +127,44 @@ Roots appear in a window only when an integration active in that window
 contributes a binding. Root grants are reusable across windows without making
 every external root visible in every vault workspace.
 
+### Application ownership and multi-window context
+
+Geode owns one application-lifetime `RootRegistry` engine and one serialized
+mutation queue for the device-global store. It must not create independent
+per-window registries over the same persistence file.
+
+Window-originated operations use a thin, session-scoped facade derived by the
+main process from the IPC sender's current vault session. The facade supplies the
+calling window's canonical vault root for overlap checks; renderer input never
+supplies a window id or vault authority. A picker or confirmation that outlives
+its originating vault session fails as stale and commits no registry change.
+
+The current Electron community-plugin runtime is trusted same-world code with
+Node integration. Therefore “vault-only plugin APIs” is an API-support and
+compatibility boundary, not malicious-plugin filesystem isolation: Phase 1 adds
+no supported external-root surface to Obsidian-compatible `App`, `Vault`,
+`TFile`, adapter, or plugin APIs. Strong runtime isolation would require a
+separate plugin-sandbox decision.
+
+### Host I/O clarification
+
+- Main owns attach and reconnect ceremonies, including the native picker and
+  confirmation. A renderer may suggest a starting location but cannot register
+  an arbitrary locator.
+- The granted root retains canonical path plus device/inode evidence. Ordinary
+  attach reuses a root only while fresh realpath and physical identity still
+  match; missing, unavailable, or replaced roots require explicit reconnect.
+- Lazy directory enumeration uses fixed 250-entry pages and opaque, ephemeral
+  cursors scoped to the sender, root, and directory. Cursors expire after 30
+  seconds, with at most 16 live cursors per window.
+- Phase 1 bounded reads use read-only file handles, repeated containment and
+  physical-identity validation, fatal UTF-8 decoding, an inclusive 2 MiB byte
+  limit, and rejection of NUL-containing content. Special filesystem nodes are
+  never openable.
+- These checks fail closed on detected replacement but are not an `openat`-style
+  sandbox against a hostile local process. A stronger descriptor-relative
+  traversal design is a revisit condition, not implicit Phase 1 scope.
+
 Portable plugin state may retain a Project id, label, repository hint, and legacy
 cwd path, but a local path never establishes authority on another device. A moved,
 missing, or ungranted directory remains as a disconnected root until explicitly
