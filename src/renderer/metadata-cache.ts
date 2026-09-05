@@ -3,7 +3,7 @@ import { Events } from "./events";
 import { Vault } from "./vault";
 import { projectCanvasFileLinks } from "./canvas/canvas-data";
 import { recordMeasure, withPerfMark } from "./perf-instrumentation";
-import { stripCommentMetadata } from "./comments/model";
+import { maskCommentMetadata } from "./comments/model";
 import {
   CachedMetadata,
   HeadingCache,
@@ -575,7 +575,7 @@ export function parseMetadata(
   text: string,
   maxBodyBytesForScan: number = DEFAULT_METADATA_SCAN_CAP_BYTES
 ): CachedMetadata {
-  text = stripCommentMetadata(text);
+  text = maskCommentMetadata(text);
   const meta: CachedMetadata = {
     // Left undefined (key absent) unless real frontmatter is parsed below —
     // matches Obsidian, whose plugins guard on `frontmatter !== undefined`.

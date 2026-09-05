@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
+import { createCommentMarkers } from "../../src/renderer/comments/model";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
@@ -103,6 +104,42 @@ test("comments persist on disk, decorate Live Preview, hide in Reading view, and
       try { await app.comments.create(view.file, { from: 0, to: 1 }, "blocked", { type: "user", name: "Rick" }); return "mutated"; }
       catch (error) { return String(error); }
     })).toContain("Repair malformed comment markers");
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("plain Enter edits prose inside an existing comment anchor", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-comments-enter-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-comments-enter-ud-"));
+  const markers = createCommentMarkers("enter-thread", { messages: [] });
+  fs.writeFileSync(path.join(vaultDir, "Review.md"), `# Review\n\n${markers.open}Comment this passage${markers.close}.\n`);
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.locator('.nav-file-title[data-path="Review.md"]').click();
+    const editor = window.getByRole("textbox", { name: "Note editor" });
+    await expect(editor).toHaveAttribute("contenteditable", "true");
+    await window.evaluate(() => {
+      const app = (window as any).app;
+      const view = app.getActiveMarkdownView();
+      const thread = app.comments.list(view.file, { includeResolved: true })[0];
+      view.editor.focus();
+      view.editor.dispatch({ selection: { anchor: thread.from + 7 }, scrollIntoView: true });
+    });
+    await expect(editor).toBeFocused();
+
+    await window.keyboard.press("Enter");
+
+    expect(await window.evaluate(() => {
+      const app = (window as any).app;
+      const view = app.getActiveMarkdownView();
+      return app.comments.list(view.file, { includeResolved: true })[0].anchorText;
+    })).toBe("Comment\nthis passage");
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });

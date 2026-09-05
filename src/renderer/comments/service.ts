@@ -66,14 +66,14 @@ export class CommentService extends Events {
   }
 
   list(file: TFile, options: { includeResolved?: boolean } = {}): CommentThread[] {
-    const source = this.openEditor(file)?.getText() ?? this.sources.get(file.path) ?? this.vault.getCachedContent?.(file.path) ?? "";
+    const source = this.openEditor(file)?.getText() ?? this.vault.getCachedContent?.(file.path) ?? this.sources.get(file.path) ?? "";
     return parseCommentThreads(source).threads
       .filter((thread) => options.includeResolved || !thread.resolvedAt)
       .map((thread) => ({ ...thread, file }));
   }
 
   inspect(file: TFile) {
-    const source = this.openEditor(file)?.getText() ?? this.sources.get(file.path) ?? this.vault.getCachedContent?.(file.path) ?? "";
+    const source = this.openEditor(file)?.getText() ?? this.vault.getCachedContent?.(file.path) ?? this.sources.get(file.path) ?? "";
     return parseCommentThreads(source);
   }
 

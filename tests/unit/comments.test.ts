@@ -86,6 +86,10 @@ describe("comment range validation", () => {
 
   it("accepts ordinary prose and adjacent comment ranges", () => {
     expect(validateCommentRange("Hello world", { from: 0, to: 5 })).toEqual({ from: 0, to: 5 });
+    const markers = createCommentMarkers("existing", { messages: [] });
+    const source = `${markers.open}Hello${markers.close}.`;
+    const from = source.lastIndexOf(".");
+    expect(validateCommentRange(source, { from, to: from + 1 })).toEqual({ from, to: from + 1 });
   });
 
   it("rejects ranges spanning text blocks or containing Markdown delimiters", () => {
@@ -104,7 +108,30 @@ describe("comment range validation", () => {
     ["tag text", "A #topic here", 3, 8],
     ["URL text", "See https://example.com now", 12, 19],
     ["emphasis content", "A *word* here", 3, 7],
+    ["raw HTML", '<span title="value">content</span>', 13, 18],
+    ["reference definition", "[ref]: https://example.com", 8, 15],
+    ["image destination", "![alt](image.png)", 8, 13],
+    ["footnote definition", "[^note]: explanation", 2, 6],
+    ["WWW autolink", "See www.example.com now", 8, 15],
+    ["email autolink", "Mail person@example.com now", 7, 13],
+    ["angle email autolink", "Mail <person@example.com> now", 7, 13],
+    ["character reference", "A &amp; B", 3, 6],
+    ["escape", "A \\*literal asterisk", 2, 4],
+    ["variable code span", "Use ``code ` within`` now", 7, 16],
   ])("rejects semantic %s selections", (_name, source, from, to) => {
     expect(() => validateCommentRange(source, { from, to })).toThrow();
+  });
+
+  it.each([
+    ["autolink", "See www.example.com now", "example"],
+    ["entity", "A &amp; B", "amp"],
+    ["raw HTML", '<span title="value">content</span>', "value"],
+    ["variable code span", "Use ``code ` within`` now", "within"],
+  ])("rejects marker insertion where %s rendering would not be equivalent", (_name, source, selected) => {
+    const from = source.indexOf(selected);
+    const markers = createCommentMarkers("render-check", { messages: [] });
+    const forced = source.slice(0, from) + markers.open + selected + markers.close + source.slice(from + selected.length);
+    expect(stripCommentMetadata(forced)).toBe(source);
+    expect(() => validateCommentRange(source, { from, to: from + selected.length })).toThrow(CommentFormatError);
   });
 });

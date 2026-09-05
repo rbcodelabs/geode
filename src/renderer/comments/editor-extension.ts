@@ -9,12 +9,6 @@ export const commentDecorations = StateField.define<DecorationSet>({
 });
 
 export function commentInteractions(onActivate: (threadId: string) => void) {
-  const activateAt = (view: EditorView, pos: number): boolean => {
-    const thread = parseCommentThreads(view.state.doc.toString()).threads.find((item) => pos >= item.from && pos <= item.to);
-    if (!thread) return false;
-    onActivate(thread.id);
-    return true;
-  };
   return EditorView.domEventHandlers({
     click(event, view) {
       const target = event.target as HTMLElement;
@@ -22,10 +16,6 @@ export function commentInteractions(onActivate: (threadId: string) => void) {
       if (!id) return false;
       onActivate(id);
       return true;
-    },
-    keydown(event, view) {
-      if (event.key !== "Enter" || event.metaKey || event.ctrlKey || event.altKey) return false;
-      return activateAt(view, view.state.selection.main.head);
     },
   });
 }

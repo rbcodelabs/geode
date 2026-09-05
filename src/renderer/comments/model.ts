@@ -1,3 +1,5 @@
+import { GFM, parser, type MarkdownConfig } from "@lezer/markdown";
+
 export interface CommentAuthor {
   type: "user" | "agent";
   name: string;
@@ -156,6 +158,66 @@ export function stripCommentMetadata(source: string): string {
   return result;
 }
 
+export interface StrippedCommentMetadata {
+  text: string;
+  /** Map an offset in marker-stripped text back to the original Markdown. */
+  toSourceOffset(offset: number): number;
+}
+
+/**
+ * Strip valid comment markers while retaining a compact mapping back to raw
+ * source offsets. Search operates on contiguous prose, but navigation must
+ * address the marker-bearing editor document.
+ */
+export function stripCommentMetadataWithMap(source: string): StrippedCommentMetadata {
+  const parsed = parseCommentThreads(source);
+  if (parsed.errors.length || !parsed.threads.length) {
+    return { text: source, toSourceOffset: (offset) => offset };
+  }
+  const removals = parsed.threads
+    .flatMap((thread) => [
+      { from: thread.openFrom, to: thread.openTo },
+      { from: thread.closeFrom, to: thread.closeTo },
+    ])
+    .sort((a, b) => a.from - b.from);
+  const segments: Array<{ strippedFrom: number; sourceFrom: number; length: number }> = [];
+  const chunks: string[] = [];
+  let sourceFrom = 0;
+  let strippedFrom = 0;
+  for (const removal of removals) {
+    if (removal.from > sourceFrom) {
+      const chunk = source.slice(sourceFrom, removal.from);
+      chunks.push(chunk);
+      segments.push({ strippedFrom, sourceFrom, length: chunk.length });
+      strippedFrom += chunk.length;
+    }
+    sourceFrom = removal.to;
+  }
+  if (sourceFrom < source.length) {
+    const chunk = source.slice(sourceFrom);
+    chunks.push(chunk);
+    segments.push({ strippedFrom, sourceFrom, length: chunk.length });
+  }
+  const text = chunks.join("");
+  return {
+    text,
+    toSourceOffset(offset: number): number {
+      if (offset <= 0) return segments[0]?.sourceFrom ?? 0;
+      if (offset >= text.length) return source.length;
+      let low = 0;
+      let high = segments.length - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        const segment = segments[mid];
+        if (offset < segment.strippedFrom) high = mid - 1;
+        else if (offset >= segment.strippedFrom + segment.length) low = mid + 1;
+        else return segment.sourceFrom + offset - segment.strippedFrom;
+      }
+      return source.length;
+    },
+  };
+}
+
 /** Hide valid marker bytes while preserving UTF-16 offsets and line endings for metadata positions. */
 export function maskCommentMetadata(source: string): string {
   const parsed = parseCommentThreads(source);
@@ -169,30 +231,89 @@ export function maskCommentMetadata(source: string): string {
   return result;
 }
 
+function maskCommentSyntax(source: string): string {
+  const parsed = parseCommentThreads(source);
+  if (parsed.errors.length) return source;
+  let result = source;
+  const neutral = (value: string) => {
+    let started = false;
+    return value.replace(/[^\r\n]/g, () => {
+      if (started) return " ";
+      started = true;
+      return "x";
+    });
+  };
+  for (const thread of [...parsed.threads].sort((a, b) => b.markerFrom - a.markerFrom)) {
+    result = result.slice(0, thread.closeFrom) + neutral(result.slice(thread.closeFrom, thread.closeTo)) + result.slice(thread.closeTo);
+    result = result.slice(0, thread.openFrom) + neutral(result.slice(thread.openFrom, thread.openTo)) + result.slice(thread.openTo);
+  }
+  return result;
+}
+
+const geodeMarkdownSyntax: MarkdownConfig = {
+  defineNodes: ["WikiLink", "ObsidianTag", "Highlight", "TablePipe"],
+  parseInline: [
+    {
+      name: "WikiLink",
+      before: "Link",
+      parse(cx, next, pos) {
+        if (next !== 91 || cx.char(pos + 1) !== 91) return -1;
+        const close = cx.slice(pos + 2, cx.end).indexOf("]]");
+        if (close < 0) return -1;
+        return cx.addElement(cx.elt("WikiLink", pos, pos + close + 4));
+      },
+    },
+    {
+      name: "ObsidianTag",
+      parse(cx, next, pos) {
+        if (next !== 35) return -1;
+        const previous = pos === cx.offset ? "" : cx.slice(pos - 1, pos);
+        if (previous && !/[\s(]/u.test(previous)) return -1;
+        const match = /^[\p{L}\p{N}_\/-]*[\p{L}_\/-][\p{L}\p{N}_\/-]*/u.exec(cx.slice(pos + 1, cx.end));
+        if (!match) return -1;
+        return cx.addElement(cx.elt("ObsidianTag", pos, pos + 1 + match[0].length));
+      },
+    },
+    {
+      name: "Highlight",
+      parse(cx, next, pos) {
+        if (next !== 61 || cx.char(pos + 1) !== 61) return -1;
+        const close = cx.slice(pos + 2, cx.end).indexOf("==");
+        if (close < 0) return -1;
+        return cx.addElement(cx.elt("Highlight", pos, pos + close + 4));
+      },
+    },
+    {
+      name: "TablePipe",
+      parse(cx, next, pos) {
+        return next === 124 ? cx.addElement(cx.elt("TablePipe", pos, pos + 1)) : -1;
+      },
+    },
+  ],
+};
+
+const commentMarkdownParser = parser.configure([GFM, geodeMarkdownSyntax]);
+
 function protectedRanges(source: string): Array<{ from: number; to: number; kind: string }> {
   const ranges: Array<{ from: number; to: number; kind: string }> = [];
-  const addMatches = (re: RegExp, kind: string, group = 0) => {
-    for (const match of source.matchAll(re)) {
-      const wholeFrom = match.index!;
-      const relative = group ? match[0].indexOf(match[group]) : 0;
-      ranges.push({ from: wholeFrom + relative, to: wholeFrom + relative + match[group].length, kind });
-    }
-  };
-  const frontmatter = source.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
-  if (frontmatter) ranges.push({ from: 0, to: frontmatter[0].length, kind: "frontmatter" });
-  addMatches(/(?:```|~~~)[\s\S]*?(?:```|~~~|$)/g, "fenced code");
-  addMatches(/(`+)[^`\n]*\1/g, "inline code");
-  addMatches(/^(?: {4}|\t).*$/gm, "indented code");
-  addMatches(/<!--(?! geode-comment:)[\s\S]*?-->/g, "HTML comment");
-  addMatches(/\[[^\]\n]*\]\(([^)\n]*)\)/g, "link destination", 1);
-  addMatches(/\[[^\]\n]*\]\[[^\]\n]*\]/g, "reference link");
-  addMatches(/!?\[\[[^\]\n]+\]\]/g, "wikilink");
-  addMatches(/https?:\/\/[^\s<>]+/g, "URL");
-  addMatches(/(?:\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_)/g, "inline formatting");
-  addMatches(/(^|[\s(])(#[\p{L}\p{N}_\/-]+)/gmu, "tag", 2);
-  addMatches(/^.*\|.*$/gm, "table syntax");
-  addMatches(/^.*\r?\n {0,3}(?:=+|-+)[ \t]*$/gm, "setext heading");
-  addMatches(/^ {0,3}(?:#{1,6}\s+|>|[-+*]\s+|\d+[.)]\s+|```|~~~).*$/gm, "structural Markdown");
+  commentMarkdownParser.parse(source).iterate({
+    enter(node) {
+      if (node.name === "Document" || node.name === "Paragraph") return;
+      ranges.push({ from: node.from, to: node.to, kind: node.name });
+      // Inline HTML's tags are sibling nodes around their content. Treat the
+      // containing paragraph conservatively, since text between paired tags
+      // is still part of the raw HTML construct.
+      if (node.name === "HTMLTag" || node.name === "TablePipe") {
+        let parent = node.node.parent;
+        while (parent && parent.name !== "Paragraph") parent = parent.parent;
+        if (parent) ranges.push({
+          from: parent.from,
+          to: parent.to,
+          kind: node.name === "HTMLTag" ? "raw HTML" : "table syntax",
+        });
+      }
+    },
+  });
   return ranges;
 }
 
@@ -206,7 +327,10 @@ export function validateCommentRange(source: string, range: { from: number; to: 
   for (const thread of parsed.threads) {
     if (from < thread.markerTo && to > thread.markerFrom) throw new CommentFormatError("Comment ranges cannot overlap existing comments");
   }
-  for (const protectedRange of protectedRanges(source)) {
+  // Valid Geode markers are storage metadata, not Markdown syntax. Mask them
+  // before parsing so a marker at line start cannot turn the whole line into
+  // a Lezer CommentBlock; masking preserves every source offset.
+  for (const protectedRange of protectedRanges(maskCommentSyntax(source))) {
     if (from < protectedRange.to && to > protectedRange.from) {
       throw new CommentFormatError(`Comments are not supported inside ${protectedRange.kind}`);
     }

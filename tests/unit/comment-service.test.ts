@@ -91,6 +91,23 @@ describe("CommentService", () => {
     expect(vault.modify).not.toHaveBeenCalled();
   });
 
+  it("prefers the current Vault cache over its mutation fallback after an external edit", async () => {
+    let current = "Hello world";
+    const vault = {
+      cachedRead: vi.fn(async () => current),
+      read: vi.fn(async () => current),
+      getCachedContent: vi.fn(() => current),
+      modify: vi.fn(async (_file: TFile, next: string) => { current = next; }),
+    };
+    const service = new CommentService(vault as never);
+    await service.create(file, { from: 0, to: 5 }, "note", { type: "user", name: "Rick" });
+
+    current = "External plain text";
+
+    expect(service.list(file, { includeResolved: true })).toEqual([]);
+    expect(service.inspect(file)).toEqual({ threads: [], errors: [] });
+  });
+
   it("reattaches a detached thread to a valid new selection", async () => {
     const h = harness();
     const thread = await h.service.create(file, { from: 0, to: 5 }, "note", { type: "user", name: "Rick" });
