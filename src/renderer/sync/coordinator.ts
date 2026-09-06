@@ -18,13 +18,14 @@ export class SyncCoordinator extends Events implements SyncApi {
   private running?: Promise<unknown>;
   private operationClaimed = false;
   private activeRegistration?: { owner: string; provider: SyncProvider };
-  private readonly hydration: Promise<void>;
-  constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly now: () => number = Date.now) { super(); this.hydration = this.hydrate(); }
+  private hydration: Promise<void> = Promise.resolve();
+  constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly now: () => number = Date.now) { super(); }
 
   register(owner: string, provider: SyncProvider): () => Promise<void> {
     if (!provider.id || this.providers.has(provider.id)) throw new Error(`Sync provider already registered: ${provider.id}`);
     this.validateCapabilities(provider);
     this.providers.set(provider.id, { owner, provider });
+    this.hydration = this.hydration.then(() => this.hydrate());
     return () => this.unregister(provider.id, owner);
   }
   listProviders() { return [...this.providers.values()].map(({ provider }) => ({ id: provider.id, name: provider.name })); }
