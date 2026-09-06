@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, protocol, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, protocol, safeStorage, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -10,7 +10,7 @@ import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import type { DataWriteOptions } from "../renderer/vault";
 import { withPathLock } from "./path-lock";
-import { writeVaultFile } from "./vault-write";
+import { writeVaultFile, writeVaultBinary } from "./vault-write";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { checkForUpdatesManually, initAutoUpdater } from "./auto-updater";
 import { getProcessMetricsSnapshot } from "./process-metrics";
@@ -496,6 +496,34 @@ function registerIpc() {
     const abs = resolveVaultPath(win, rel);
     return withPathLock([abs], () => writeVaultFile(abs, data, options));
   });
+
+  ipcMain.handle("vault-write-binary", async (e, rel: string, data: ArrayBuffer, options?: DataWriteOptions) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const abs = resolveVaultPath(win, rel);
+    return withPathLock([abs], () => writeVaultBinary(abs, data, options));
+  });
+
+  const stateFile = (key: string) => {
+    if (!key || key.includes("\0")) throw new Error("Invalid device-state key");
+    return path.join(app.getPath("userData"), "device-state", Buffer.from(key).toString("base64url") + ".json");
+  };
+  const secretFile = (namespace: string, key: string) => {
+    if (!namespace || !key || namespace.includes("\0") || key.includes("\0")) throw new Error("Invalid secret key");
+    return path.join(app.getPath("userData"), "secrets", Buffer.from(`${namespace}\0${key}`).toString("base64url") + ".bin");
+  };
+  ipcMain.handle("device-state-read", async (_e, key: string) => JSON.parse(await fsp.readFile(stateFile(key), "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return "null"; throw error; })));
+  ipcMain.handle("device-state-write", async (_e, key: string, value: unknown) => { const target = stateFile(key); await fsp.mkdir(path.dirname(target), { recursive: true }); await writeJsonAtomic(target, value); });
+  ipcMain.handle("device-state-remove", async (_e, key: string) => { await fsp.rm(stateFile(key), { force: true }); });
+  ipcMain.handle("secret-read", async (_e, namespace: string, key: string) => {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const encrypted = await fsp.readFile(secretFile(namespace, key)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
+    return encrypted ? safeStorage.decryptString(encrypted) : null;
+  });
+  ipcMain.handle("secret-write", async (_e, namespace: string, key: string, value: string) => {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure secret storage is unavailable");
+    const target = secretFile(namespace, key); await fsp.mkdir(path.dirname(target), { recursive: true }); await fsp.writeFile(target, safeStorage.encryptString(value), { mode: 0o600 });
+  });
+  ipcMain.handle("secret-remove", async (_e, namespace: string, key: string) => { await fsp.rm(secretFile(namespace, key), { force: true }); });
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;

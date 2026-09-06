@@ -78,6 +78,7 @@ import type { HostServices } from "./host/contracts";
 import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
+import { SyncCoordinator } from "./sync/coordinator";
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface AppSettings {
@@ -368,8 +369,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "advanced" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "advanced", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "sync" | "advanced" | "performance";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "sync", "advanced", "performance"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -463,6 +464,8 @@ class SettingsModal extends Modal {
       this.renderCorePluginsTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
+    } else if (id === "sync") {
+      this.renderSyncTab(this.contentContainerEl);
     } else if (id === "advanced") {
       this.renderAdvancedTab(this.contentContainerEl);
     } else if (id === "performance") {
@@ -513,6 +516,7 @@ class SettingsModal extends Modal {
     addNavItem("daily-notes", "Daily Notes", this.navEl);
     addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
+    addNavItem("sync", "Sync", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
@@ -1198,6 +1202,27 @@ class SettingsModal extends Modal {
     );
   }
 
+  private renderSyncTab(container: HTMLElement): void {
+    container.innerHTML = `<h2>Sync</h2>`;
+    const providers = this.geodeApp.sync.listProviders();
+    const active = this.geodeApp.sync.getActiveProvider();
+    const status = this.geodeApp.sync.getStatus();
+    const { control } = this.addRow(container, "Sync provider", active ? `Connected to ${active.name}` : "Select a plugin-provided full-vault transport.");
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Sync provider");
+    select.append(new Option("Not connected", ""), ...providers.map(provider => new Option(provider.name, provider.id)));
+    select.value = active?.id ?? "";
+    select.addEventListener("change", () => { void (select.value ? this.geodeApp.sync.activate(select.value) : this.geodeApp.sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
+    control.appendChild(select);
+    this.addRow(container, "Status", status.message ?? status.state).control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
+    const actions = document.createElement("div"); actions.className = "setting-item-control";
+    const addAction = (label: string, action: () => Promise<unknown>) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => { button.disabled = true; void action().then(result => { if (result) this.geodeApp.notify(typeof result === "object" ? JSON.stringify(result) : String(result)); }).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))).finally(() => this.renderSyncTab(container)); }); actions.appendChild(button); };
+    addAction("Preview", () => this.geodeApp.sync.preview());
+    addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }));
+    addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
+    container.appendChild(actions);
+  }
+
   onClose(): void {
     if (!(BUILTIN_TAB_IDS as string[]).includes(this.activeTabId)) {
       const activeTab = this.geodeApp.settingTabs.get(this.activeTabId);
@@ -1269,6 +1294,7 @@ export class App {
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
   readonly webViewer: WebViewerService;
+  readonly sync: SyncCoordinator;
   vault: Vault;
   metadataCache: MetadataCache;
   fileManager = new FileManager(this);
@@ -1339,6 +1365,7 @@ export class App {
     this.host = host;
     this.dailyNotes = new DailyNotesService(host.config);
     this.webViewer = new WebViewerService(host.config, () => this.applyWebViewerLifecycle());
+    this.sync = new SyncCoordinator(host, () => this.vault.root);
     this.settings.webViewer = this.webViewer.options;
     this.commands = new CommandRegistry(host.config, () => {
       const source = this.guestHotkeySource;
@@ -1648,6 +1675,7 @@ export class App {
   }
 
   private async openVaultMeasured(path: string, rootEl: HTMLElement) {
+    await this.sync.cancel();
     try {
       await this.vault.open(path);
     } catch (err) {

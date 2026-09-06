@@ -3,7 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeVaultFile, validateMtime, type VaultWriteDeps } from "../../src/main/vault-write";
+import { writeVaultBinary, writeVaultFile, validateMtime, type VaultWriteDeps } from "../../src/main/vault-write";
 import { birthtimeOf } from "../../src/main/fs-utils";
 
 const temporaryRoots: string[] = [];
@@ -131,6 +131,19 @@ describe("validateMtime", () => {
     expect(() => validateMtime(Infinity)).toThrow();
     expect(() => validateMtime(-Infinity)).toThrow();
     expect(() => validateMtime("not a number" as unknown as number)).toThrow();
+  });
+});
+
+describe("writeVaultBinary", () => {
+  it("preserves every byte without text transcoding", async () => {
+    const root = makeVault();
+    const target = path.join(root, "asset.bin");
+    const bytes = new Uint8Array([0, 1, 127, 128, 255]);
+
+    const result = await writeVaultBinary(target, bytes.buffer);
+
+    expect(result.size).toBe(bytes.byteLength);
+    expect([...await fsp.readFile(target)]).toEqual([...bytes]);
   });
 });
 

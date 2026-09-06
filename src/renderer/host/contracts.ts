@@ -71,6 +71,12 @@ export interface VaultFilesService {
   list(): Promise<VaultFileEntry[]>;
   read(path: string): Promise<string>;
   readBinary(path: string): Promise<ArrayBuffer>;
+  writeBinary(
+    path: string,
+    data: ArrayBuffer,
+    options?: { mtime?: number; ctime?: number },
+    mutationId?: string,
+  ): Promise<{ mtime: number; ctime: number; size: number }>;
   write(
     path: string,
     data: string,
@@ -90,6 +96,21 @@ export interface VaultFilesService {
     entries: VaultFileEntry[];
     errorCode?: string;
   }>;
+}
+
+/** Device-local structured state. Implementations must keep this outside the active vault. */
+export interface DeviceStateService {
+  read<T>(key: string): Promise<T | null>;
+  write(key: string, value: unknown): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+/** Host-backed secret storage. `available=false` means callers must disable credentialed features. */
+export interface SecureSecretService {
+  readonly available: boolean;
+  get(namespace: string, key: string): Promise<string | null>;
+  set(namespace: string, key: string, value: string): Promise<void>;
+  remove(namespace: string, key: string): Promise<void>;
 }
 
 export interface ConfigService {
@@ -152,6 +173,8 @@ export interface HostServices {
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;
   readonly vaultFiles: VaultFilesService;
+  readonly deviceState: DeviceStateService;
+  readonly secrets: SecureSecretService;
   readonly config: ConfigService;
   readonly metadataIndex: MetadataIndexService;
   readonly navigation: NavigationService;

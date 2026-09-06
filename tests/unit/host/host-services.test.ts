@@ -24,6 +24,7 @@ function createElectronPreloadFixture(): ElectronPreloadApi {
     openVaultWindow: vi.fn(async () => ({ action: "created" })),
     read: vi.fn(async () => "A"),
     readBinary: vi.fn(async () => new ArrayBuffer(1)),
+    writeBinary: vi.fn(async () => ({ mtime: 2, ctime: 1, size: 1 })),
     write: vi.fn(async () => ({ mtime: 2, ctime: 1, size: 1 })),
     mkdir: vi.fn(async () => {}),
     trash: vi.fn(async () => {}),
@@ -149,6 +150,21 @@ describe("HostServices", () => {
     await reloaded.vaultRegistry.openVault("managed://default");
     await expect(reloaded.vaultFiles.read("Reload.md")).resolves.toBe("survives reload");
     await expect(reloaded.config.read("workspace")).resolves.toEqual({ active: "Reload.md" });
+  });
+
+  it("keeps device state durable but refuses plaintext browser secrets", async () => {
+    const values = new Map<string, string>();
+    const storage: BrowserHostStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); } };
+    const state = createBrowserHostState({ storage });
+    const first = createBrowserHost(state);
+    await first.vaultRegistry.openVault("managed://default");
+    await first.deviceState.write("sync/vault", { cursor: "opaque" });
+    const restarted = createBrowserHost(createBrowserHostState({ storage }));
+    await restarted.vaultRegistry.openVault("managed://default");
+    await expect(restarted.deviceState.read("sync/vault")).resolves.toEqual({ cursor: "opaque" });
+    expect(restarted.secrets.available).toBe(false);
+    await expect(restarted.secrets.set("plugin", "token", "sentinel")).rejects.toThrow(/unavailable/i);
+    expect(JSON.stringify([...values])).not.toContain("sentinel");
   });
 
   it("rejects a quota-failed proof write without corrupting the last durable snapshot", async () => {

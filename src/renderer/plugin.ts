@@ -6,6 +6,7 @@ import type { PluginManifest } from "./plugin-manifest";
 import type { EventRef } from "./events";
 import type { EditorView } from "@codemirror/view";
 import type { MarkdownView } from "./views/markdown-view";
+import type { SyncProvider } from "./sync/types";
 
 export type { PluginManifest } from "./plugin-manifest";
 
@@ -140,6 +141,31 @@ export abstract class Plugin extends Component {
   /** Unregister a command added via `addCommand` (pass the unprefixed id). */
   removeCommand(id: string): void {
     this.app.commands.remove(this.prefixed(id));
+  }
+
+  /** Register a full-vault remote transport owned by this plugin. */
+  registerSyncProvider(provider: SyncProvider): void {
+    this.assertHostGeneration();
+    const unregister = this.app.sync.register(this.manifest.id, provider);
+    this.register(unregister);
+  }
+
+  /** Read a secret from this plugin's host-enforced namespace. */
+  async loadSecret(key: string): Promise<string | null> {
+    this.assertHostGeneration();
+    return this.app.host.secrets.get(this.manifest.id, key);
+  }
+
+  /** Persist a secret outside the vault using the native platform store. */
+  async saveSecret(key: string, value: string): Promise<void> {
+    this.assertHostGeneration();
+    if (!this.app.host.secrets.available) throw new Error("Secure secret storage is unavailable on this host");
+    await this.app.host.secrets.set(this.manifest.id, key, value);
+  }
+
+  async removeSecret(key: string): Promise<void> {
+    this.assertHostGeneration();
+    await this.app.host.secrets.remove(this.manifest.id, key);
   }
 
   /**

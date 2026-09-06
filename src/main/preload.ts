@@ -60,6 +60,8 @@ const api = {
     ipcRenderer.invoke("plugin-files-replace", id, expectedManifest, replacement),
   readBinary: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("vault-read-binary", path),
+  writeBinary: (path: string, data: ArrayBuffer, options?: { mtime?: number; ctime?: number }): Promise<{ mtime: number; ctime: number; size: number }> =>
+    ipcRenderer.invoke("vault-write-binary", path, data, options),
   write: (
     path: string,
     data: string,
@@ -96,6 +98,13 @@ const api = {
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),
+  readDeviceState: <T>(key: string): Promise<T | null> => ipcRenderer.invoke("device-state-read", key),
+  writeDeviceState: (key: string, data: unknown): Promise<void> => ipcRenderer.invoke("device-state-write", key, data),
+  removeDeviceState: (key: string): Promise<void> => ipcRenderer.invoke("device-state-remove", key),
+  isSecretStorageAvailable: (): boolean => process.platform !== "linux" || Boolean(process.env.DBUS_SESSION_BUS_ADDRESS),
+  readSecret: (namespace: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", namespace, key),
+  writeSecret: (namespace: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", namespace, key, value),
+  removeSecret: (namespace: string, key: string): Promise<void> => ipcRenderer.invoke("secret-remove", namespace, key),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   openLocalFile: (href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }

@@ -10,10 +10,15 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
   | "publishHotkeys" | "onGuestHotkey"
->;
+  | "writeBinary"
+> & Partial<Pick<GeodeApi,
+  "list" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
+>>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
   let openFiles: VaultFileEntry[] = [];
+  const fallbackDeviceState = new Map<string, unknown>();
   return {
     capabilities: Object.freeze({
       multipleWindows: true,
@@ -52,9 +57,10 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       closeVault: async () => {},
     },
     vaultFiles: {
-      list: async () => openFiles,
+      list: async () => preload.list?.() ?? openFiles,
       read: (path) => preload.read(path),
       readBinary: (path) => preload.readBinary(path),
+      writeBinary: (path, data, options) => preload.writeBinary(path, data, options),
       // Electron IPC does not echo renderer-originated mutation IDs, so it's
       // dropped here too — see the `settleMutation` no-op below.
       write: (path, data, options) => preload.write(path, data, options),
@@ -65,7 +71,18 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       settleMutation: async () => {},
       exists: (path) => preload.exists(path),
       onChange: (cb) => preload.onVaultEvent(cb),
-      reconcileScan: async () => ({ status: "complete", entries: openFiles }),
+      reconcileScan: async () => ({ status: "complete", entries: await (preload.list?.() ?? openFiles) }),
+    },
+    deviceState: {
+      read: async <T>(key: string) => preload.readDeviceState ? preload.readDeviceState<T>(key) : structuredClone(fallbackDeviceState.get(key) ?? null) as T | null,
+      write: async (key, value) => { if (preload.writeDeviceState) await preload.writeDeviceState(key, value); else fallbackDeviceState.set(key, structuredClone(value)); },
+      remove: async key => { if (preload.removeDeviceState) await preload.removeDeviceState(key); else fallbackDeviceState.delete(key); },
+    },
+    secrets: {
+      available: preload.isSecretStorageAvailable?.() ?? false,
+      get: (namespace, key) => preload.readSecret?.(namespace, key) ?? Promise.resolve(null),
+      set: (namespace, key, value) => preload.writeSecret?.(namespace, key, value) ?? Promise.reject(new Error("Secure secret storage is unavailable")),
+      remove: (namespace, key) => preload.removeSecret?.(namespace, key) ?? Promise.resolve(),
     },
     config: {
       read: (name) => preload.readConfig(name),
