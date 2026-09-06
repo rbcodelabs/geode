@@ -5,25 +5,30 @@ import type { SyncProvider, SyncRemoteEntry } from "../../src/renderer/sync/type
 
 function memoryHost(files: Record<string, string> = {}): HostServices {
   const data = new Map(Object.entries(files).map(([path, value]) => [path, new TextEncoder().encode(value)]));
+  const mtimes = new Map([...data.keys()].map(path => [path, 1]));
   const state = new Map<string, unknown>();
   const host = {
     capabilities: {} as HostServices["capabilities"],
     runtime: { runtime: "browser", platform: "test", formFactor: "desktop", getWindowChromeState: async () => ({ platform: "test", isFullScreen: false }), onWindowChromeState: () => () => {}, onDeepLink: () => () => {}, onForeground: () => () => {} },
     vaultRegistry: {} as HostServices["vaultRegistry"],
     vaultFiles: {
-      list: async () => [...data].map(([path, bytes]) => ({ path, isFolder: false, ctime: 1, mtime: 1, size: bytes.byteLength })),
+      list: async () => [...data].map(([path, bytes]) => ({ path, isFolder: false, ctime: 1, mtime: mtimes.get(path) ?? 1, size: bytes.byteLength })),
       read: async path => new TextDecoder().decode(data.get(path)), readBinary: async path => data.get(path)!.buffer.slice(0),
       write: async () => ({ ctime: 1, mtime: 1, size: 0 }),
-      writeBinary: async (path, bytes) => { data.set(path, new Uint8Array(bytes)); return { ctime: 1, mtime: 1, size: bytes.byteLength }; },
+      writeBinary: async (path, bytes) => { data.set(path, new Uint8Array(bytes)); const mtime = (mtimes.get(path) ?? 1) + 1; mtimes.set(path, mtime); return { ctime: 1, mtime, size: bytes.byteLength }; },
       mkdir: async () => {}, trash: async path => { data.delete(path); }, rename: async () => {}, settleMutation: async () => {},
       exists: async path => data.has(path), onChange: () => () => {},
-      reconcileScan: async () => ({ status: "complete" as const, entries: [...data].map(([path, bytes]) => ({ path, isFolder: false, ctime: 1, mtime: 1, size: bytes.byteLength })) }),
+      reconcileScan: async () => ({ status: "complete" as const, entries: [...data].map(([path, bytes]) => ({ path, isFolder: false, ctime: 1, mtime: mtimes.get(path) ?? 1, size: bytes.byteLength })) }),
     },
     deviceState: { read: async key => state.get(key) ?? null, write: async (key, value) => { state.set(key, structuredClone(value)); }, remove: async key => { state.delete(key); } },
     secrets: { available: false, get: async () => null, set: async () => { throw new Error("unavailable"); }, remove: async () => {} },
     config: {} as HostServices["config"], metadataIndex: {} as HostServices["metadataIndex"], navigation: {} as HostServices["navigation"], plugins: {} as HostServices["plugins"],
   } satisfies HostServices;
-  return host;
+  return Object.assign(host, {
+    testWrite(path: string, value: string) { data.set(path, new TextEncoder().encode(value)); mtimes.set(path, (mtimes.get(path) ?? 1) + 1); },
+    testDelete(path: string) { data.delete(path); mtimes.delete(path); },
+    testRead(path: string) { const bytes = data.get(path); return bytes ? new TextDecoder().decode(bytes) : undefined; },
+  });
 }
 
 function provider(entries: SyncRemoteEntry[] = []): SyncProvider {
@@ -43,6 +48,15 @@ function provider(entries: SyncRemoteEntry[] = []): SyncProvider {
 }
 
 describe("SyncCoordinator", () => {
+  it("claims the run mutex synchronously before loading state", async () => {
+    const coordinator = new SyncCoordinator(memoryHost(), () => "vault-a");
+    coordinator.register("plugin-a", provider());
+    await coordinator.activate("test.remote");
+
+    const first = coordinator.preview();
+    await expect(coordinator.preview()).rejects.toThrow(/already running/i);
+    await first;
+  });
   it("allows many registered providers but only one active provider for a vault", async () => {
     const coordinator = new SyncCoordinator(memoryHost(), () => "vault-a");
     coordinator.register("plugin-a", provider());
@@ -104,5 +118,53 @@ describe("SyncCoordinator", () => {
     await running;
     expect(observedAbort).toBe(true);
     expect(coordinator.listProviders()).toEqual([]);
+  });
+
+  it("does not overwrite a local edit made after planning a remote download", async () => {
+    const host = memoryHost() as HostServices & { testWrite(path: string, value: string): void; testRead(path: string): string | undefined };
+    const remote = provider([{ id: "remote-1", path: "Note.md", kind: "file", revision: "1", size: 14 }]);
+    remote.open = async () => ({
+      ...(await provider().open({ vaultId: "vault-a" })),
+      scan: async () => ({ status: "complete", mode: "snapshot", entries: [{ id: "remote-1", path: "Note.md", kind: "file", revision: "1", size: 14 }] }),
+      read: async () => { host.testWrite("Note.md", "typed locally"); return new TextEncoder().encode("remote version").buffer; },
+    });
+    const coordinator = new SyncCoordinator(host, () => "vault-a", () => 123);
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await coordinator.preview();
+
+    const result = await coordinator.run({ approvePreview: true });
+    expect(host.testRead("Note.md")).toBe("typed locally");
+    expect(host.testRead("Note.sync-conflict-123.md")).toBe("remote version");
+    expect(result.conflicts).toBe(1);
+  });
+
+  it("treats a local deletion against a newer remote revision as a conflict", async () => {
+    const host = memoryHost({ "Note.md": "same" }) as HostServices & { testDelete(path: string): void; testRead(path: string): string | undefined };
+    const entries: SyncRemoteEntry[] = [];
+    const remote = provider(entries);
+    const coordinator = new SyncCoordinator(host, () => "vault-a", () => 456);
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await coordinator.preview();
+    await coordinator.run({ approvePreview: true });
+    host.testDelete("Note.md");
+    entries.push({ id: "id:Note.md", path: "Note.md", kind: "file", revision: "2", size: 14 });
+
+    const result = await coordinator.run();
+    expect(result.conflicts).toBe(1);
+    expect(host.testRead("Note.sync-conflict-456.md")).toBe("remote:Note.md");
+  });
+
+  it("rejects duplicate exact paths and file-folder kind collisions", async () => {
+    const duplicates: SyncRemoteEntry[] = [
+      { id: "1", path: "same", kind: "file", revision: "1" },
+      { id: "2", path: "same", kind: "folder", revision: "1" },
+    ];
+    const coordinator = new SyncCoordinator(memoryHost(), () => "vault-a");
+    const remote = provider(duplicates);
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await expect(coordinator.preview()).rejects.toThrow(/collision/i);
   });
 });
