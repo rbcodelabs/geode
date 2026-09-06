@@ -18,11 +18,11 @@ export class SyncCoordinator extends Events implements SyncApi {
   private running?: Promise<unknown>;
   constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly now: () => number = Date.now) { super(); }
 
-  register(owner: string, provider: SyncProvider): () => void {
+  register(owner: string, provider: SyncProvider): () => Promise<void> {
     if (!provider.id || this.providers.has(provider.id)) throw new Error(`Sync provider already registered: ${provider.id}`);
     this.validateCapabilities(provider);
     this.providers.set(provider.id, { owner, provider });
-    return () => { void this.unregister(provider.id, owner); };
+    return () => this.unregister(provider.id, owner);
   }
   listProviders() { return [...this.providers.values()].map(({ provider }) => ({ id: provider.id, name: provider.name })); }
   getActiveProvider() { const found = this.status.providerId ? this.providers.get(this.status.providerId)?.provider : undefined; return found ? { id: found.id, name: found.name } : null; }
@@ -45,21 +45,21 @@ export class SyncCoordinator extends Events implements SyncApi {
   async cancel(): Promise<void> { this.activeAbort?.abort(); await this.running?.catch(() => undefined); await this.activeSession?.close().catch(() => undefined); this.activeAbort = undefined; this.activeSession = undefined; }
 
   async preview(): Promise<SyncPreview> {
-    const plan = await this.withSession(async (session, state, signal) => { const next = await this.plan(session, state, signal); state.previewSignature = this.planSignature(next); await this.saveState(state); return next; });
+    const plan = await this.withSession(async (session, state, signal, vaultId) => { const next = await this.plan(session, state, signal, vaultId); state.previewSignature = this.planSignature(next); await this.saveState(state); return next; });
     const preview = this.toPreview(plan);
     this.setStatus({ state: "preview", providerId: this.status.providerId, conflicts: preview.conflicts });
     return preview;
   }
 
   async run(options: { approvePreview?: boolean } = {}): Promise<SyncRunResult> {
-    return this.withSession(async (session, state, signal) => {
+    return this.withSession(async (session, state, signal, vaultId) => {
       if (state.paused) throw new Error("Sync is paused");
-      const plan = await this.plan(session, state, signal);
+      const plan = await this.plan(session, state, signal, vaultId);
       if (!state.approved && (!options.approvePreview || state.previewSignature !== this.planSignature(plan))) throw new Error("Preview this exact first sync before approving it");
       state.approved = true;
       state.previewSignature = undefined;
       this.setStatus({ state: "syncing", providerId: state.providerId, conflicts: 0 });
-      await this.execute(session, state, plan, signal);
+      await this.execute(session, state, plan, signal, vaultId);
       state.cursor = plan.cursor;
       await this.saveState(state);
       const result = { ...this.toPreview(plan), cursor: state.cursor };
@@ -70,22 +70,23 @@ export class SyncCoordinator extends Events implements SyncApi {
   }
 
   private async unregister(id: string, owner: string) { const registered = this.providers.get(id); if (!registered || registered.owner !== owner) return; this.providers.delete(id); if (this.status.providerId === id) { await this.cancel(); this.setStatus({ state: "error", providerId: id, conflicts: 0, message: "Sync provider unloaded" }); } }
-  private async withSession<T>(fn: (session: SyncSession, state: SyncState, signal: AbortSignal) => Promise<T>): Promise<T> {
+  private async withSession<T>(fn: (session: SyncSession, state: SyncState, signal: AbortSignal, vaultId: string) => Promise<T>): Promise<T> {
     if (this.running) throw new Error("A sync operation is already running");
     const state = await this.loadState(); const provider = state.providerId ? this.providers.get(state.providerId)?.provider : undefined;
     if (!provider) throw new Error("No sync provider is active");
-    const controller = new AbortController(); this.activeAbort = controller;
-    const work = (async () => { const session = await provider.open({ vaultId: this.vaultId() }); this.activeSession = session; try { return await fn(session, state, controller.signal); } finally { await session.close(); } })();
+    const controller = new AbortController(); this.activeAbort = controller; const vaultId = this.vaultId();
+    const work = (async () => { const session = await provider.open({ vaultId }); this.assertContext(controller.signal, vaultId); this.activeSession = session; try { return await fn(session, state, controller.signal, vaultId); } finally { await session.close(); } })();
     this.running = work;
     try { return await work; } catch (error) { if (!controller.signal.aborted) this.setStatus({ state: "error", providerId: state.providerId, conflicts: 0, message: error instanceof Error ? error.message : String(error) }); throw error; }
     finally { if (this.running === work) this.running = undefined; this.activeAbort = undefined; this.activeSession = undefined; }
   }
 
-  private async plan(session: SyncSession, state: SyncState, signal: AbortSignal): Promise<Plan> {
+  private async plan(session: SyncSession, state: SyncState, signal: AbortSignal, vaultId: string): Promise<Plan> {
     const localScan = await this.host.vaultFiles.reconcileScan();
+    this.assertContext(signal, vaultId);
     if (localScan.status !== "complete") throw new Error(`A complete local scan is required (${localScan.status})`);
     const remoteScan = await session.scan(state.cursor, signal);
-    if (signal.aborted) throw new DOMException("Sync cancelled", "AbortError");
+    this.assertContext(signal, vaultId);
     if (remoteScan.status !== "complete") throw new Error(`A complete remote scan is required (${remoteScan.status})`);
     await this.recoverJournal(state, localScan.entries, remoteScan.entries, remoteScan.mode);
     const local = localScan.entries.filter(e => !e.isFolder && isPathInSyncScope(e.path, state.scope));
@@ -118,11 +119,11 @@ export class SyncCoordinator extends Events implements SyncApi {
     return plan;
   }
 
-  private async execute(session: SyncSession, state: SyncState, plan: Plan, signal: AbortSignal) {
+  private async execute(session: SyncSession, state: SyncState, plan: Plan, signal: AbortSignal, vaultId: string) {
     for (const entry of plan.uploads) {
       this.assertActive(signal); const op = await this.prepare(state, "upload", entry.path); const data = await this.host.vaultFiles.readBinary(entry.path); const prior = state.baseline[entry.path];
       try {
-        const remote = prior ? await session.update({ id: prior.remoteId, path: entry.path, data, expectedRevision: prior.remoteRevision, signal, operationKey: op.id }) : await session.create({ path: entry.path, data, signal, operationKey: op.id });
+        const remote = prior ? await session.update({ id: prior.remoteId, path: entry.path, data, expectedRevision: prior.remoteRevision, signal, operationKey: op.id }) : await session.create({ path: entry.path, data, signal, operationKey: op.id }); this.assertContext(signal, vaultId);
         state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(entry), remoteId: remote.id, remoteRevision: remote.revision, kind: "file" }; await this.ack(state, op);
       } catch (error) {
         if (!prior || !(error instanceof Error) || error.name !== "SyncPreconditionError") throw error;
@@ -132,10 +133,10 @@ export class SyncCoordinator extends Events implements SyncApi {
         plan.conflicts.push({ local: entry, remote: current }); await this.ack(state, op);
       }
     }
-    for (const entry of plan.downloads) { this.assertActive(signal); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); const data = await session.read(entry, signal); await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(stat), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
+    for (const entry of plan.downloads) { this.assertContext(signal, vaultId); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); const data = await session.read(entry, signal); this.assertContext(signal, vaultId); await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); this.assertContext(signal, vaultId); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(stat), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
     for (const entry of plan.localTrash) { const path = entry.deletedPath ?? entry.path; const op = await this.prepare(state, "local-trash", path, entry); await this.host.vaultFiles.trash(path, op.id); delete state.baseline[path]; await this.ack(state, op); }
     for (const entry of plan.remoteTrash) { const op = await this.prepare(state, "remote-trash", entry.path, { id: entry.remoteId, path: entry.path, kind: "file", revision: entry.remoteRevision }); await session.trash({ id: entry.remoteId, expectedRevision: entry.remoteRevision, signal }); delete state.baseline[entry.path]; await this.ack(state, op); }
-    for (const conflict of plan.conflicts) { if (conflict.remote.kind === "tombstone") continue; const bytes = await session.read(conflict.remote, signal); const path = this.conflictPath(conflict.remote.path); await this.host.vaultFiles.writeBinary(path, bytes, undefined, this.operationId()); }
+    for (const conflict of plan.conflicts) { if (conflict.remote.kind === "tombstone") continue; const bytes = await session.read(conflict.remote, signal); this.assertContext(signal, vaultId); const path = this.conflictPath(conflict.remote.path); await this.host.vaultFiles.writeBinary(path, bytes, undefined, this.operationId()); }
   }
 
   private fingerprint(entry: VaultFileEntry) { return `${entry.size}:${entry.mtime}`; }
@@ -164,6 +165,7 @@ export class SyncCoordinator extends Events implements SyncApi {
   }
   private planSignature(plan: Plan) { return JSON.stringify({ cursor: plan.cursor, uploads: plan.uploads.map(e => [e.path, this.fingerprint(e)]), downloads: plan.downloads.map(e => [e.id, e.revision, e.path]), localTrash: plan.localTrash.map(e => [e.id, e.revision]), remoteTrash: plan.remoteTrash.map(e => [e.remoteId, e.remoteRevision]), conflicts: plan.conflicts.map(e => [e.local.path, e.remote.id, e.remote.revision]) }); }
   private assertActive(signal: AbortSignal) { if (signal.aborted) throw new DOMException("Sync cancelled", "AbortError"); }
+  private assertContext(signal: AbortSignal, vaultId: string) { this.assertActive(signal); if (this.vaultId() !== vaultId) throw new DOMException("Vault changed during sync", "AbortError"); }
   private toPreview(plan: Plan): SyncPreview { return { uploads: plan.uploads.length, downloads: plan.downloads.length, deletes: plan.localTrash.length + plan.remoteTrash.length, conflicts: plan.conflicts.length, skipped: plan.skipped, requiresApproval: true }; }
   private validateCapabilities(provider: SyncProvider) { const c = provider.capabilities; if (!c.binary || !c.conditionalWrites || (!c.delta && !c.completeSnapshots) || !c.trash) throw new Error(`Sync provider ${provider.id} does not meet Geode's safety contract`); }
   private rejectCollisions(entries: SyncRemoteEntry[]) { const seen = new Map<string, string>(); for (const entry of entries) { if (entry.kind === "tombstone") continue; validateSyncPath(entry.path); const key = entry.path.normalize("NFC").toLocaleLowerCase("en-US"); const prior = seen.get(key); if (prior && prior !== entry.path) throw new Error(`Remote path collision: ${prior} and ${entry.path}`); seen.set(key, entry.path); } }

@@ -147,7 +147,7 @@ export abstract class Plugin extends Component {
   registerSyncProvider(provider: SyncProvider): void {
     this.assertHostGeneration();
     const unregister = this.app.sync.register(this.manifest.id, provider);
-    this.register(unregister);
+    this.register(() => this.trackTeardown(Promise.resolve(unregister())));
   }
 
   /** Read a secret from this plugin's host-enforced namespace. */

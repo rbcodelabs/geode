@@ -9,7 +9,7 @@ const provider: SyncProvider = {
 
 describe("Plugin.registerSyncProvider", () => {
   it("registers with plugin ownership and automatically unregisters on unload", async () => {
-    const unregister = vi.fn();
+    const unregister = vi.fn(async () => {});
     const app = { sync: { register: vi.fn(() => unregister) } };
     const plugin = new (class extends Plugin {})(app as never, { id: "gdocs", name: "GDocs", version: "1.0.0", minAppVersion: "0.1.0" });
     plugin.activateHostGeneration();
