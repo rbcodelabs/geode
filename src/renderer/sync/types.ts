@@ -72,7 +72,7 @@ export interface SyncApi {
   getScope(): Promise<SyncScope>;
   updateScope(patch: Partial<SyncScope>): Promise<void>;
   listConflicts(): Promise<SyncConflict[]>;
-  resolveConflict(id: string): Promise<void>;
+  resolveConflict(id: string, resolution: "keep-local" | "accept-remote"): Promise<void>;
   activate(providerId: string): Promise<void>;
   disconnect(): Promise<void>;
   preview(): Promise<SyncPreview>;

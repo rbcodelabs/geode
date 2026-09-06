@@ -358,7 +358,7 @@ export function createBrowserHost(
     },
     secrets: {
       available: false,
-      forOwner: () => ({ get: async () => null, set: async () => { throw new Error("Secure secret storage is unavailable in the browser host"); }, remove: async () => {} }),
+      fromCapability: () => ({ get: async () => null, set: async () => { throw new Error("Secure secret storage is unavailable in the browser host"); }, remove: async () => {} }),
     },
     config: {
       read: async (name) => structuredClone(activeState.config.get(name) ?? null),

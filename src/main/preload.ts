@@ -28,6 +28,7 @@ export interface TimedPluginReadResult {
   mainReceivedAt: number;
   fsStartedAt: number;
   fsFinishedAt: number;
+  secretCapability?: string;
 }
 export interface PluginFileSet { manifest: string; main: string; styles: string | null }
 
@@ -102,7 +103,6 @@ const api = {
   writeDeviceState: (key: string, data: unknown): Promise<void> => ipcRenderer.invoke("device-state-write", key, data),
   removeDeviceState: (key: string): Promise<void> => ipcRenderer.invoke("device-state-remove", key),
   isSecretStorageAvailable: (): boolean => process.platform !== "linux" || Boolean(process.env.DBUS_SESSION_BUS_ADDRESS),
-  claimSecretCapability: (owner: string): Promise<string> => ipcRenderer.invoke("secret-capability-claim", owner),
   readSecret: (capability: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", capability, key),
   writeSecret: (capability: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", capability, key, value),
   removeSecret: (capability: string, key: string): Promise<void> => ipcRenderer.invoke("secret-remove", capability, key),

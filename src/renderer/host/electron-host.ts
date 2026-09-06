@@ -13,7 +13,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
   "list" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
-  "isSecretStorageAvailable" | "claimSecretCapability" | "readSecret" | "writeSecret" | "removeSecret"
+  "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
 >>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
@@ -80,12 +80,11 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
     },
     secrets: {
       available: preload.isSecretStorageAvailable?.() ?? false,
-      forOwner: (owner) => {
-        const capability = preload.claimSecretCapability?.(owner);
+      fromCapability: (capability) => {
         return {
-          get: async key => capability && preload.readSecret ? preload.readSecret(await capability, key) : null,
-          set: async (key, value) => { if (!capability || !preload.writeSecret) throw new Error("Secure secret storage is unavailable"); await preload.writeSecret(await capability, key, value); },
-          remove: async key => { if (capability && preload.removeSecret) await preload.removeSecret(await capability, key); },
+          get: async key => preload.readSecret ? preload.readSecret(capability, key) : null,
+          set: async (key, value) => { if (!preload.writeSecret) throw new Error("Secure secret storage is unavailable"); await preload.writeSecret(capability, key, value); },
+          remove: async key => { if (preload.removeSecret) await preload.removeSecret(capability, key); },
         };
       },
     },

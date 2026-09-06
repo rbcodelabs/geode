@@ -163,7 +163,7 @@ describe("HostServices", () => {
     await restarted.vaultRegistry.openVault("managed://default");
     await expect(restarted.deviceState.read("sync/vault")).resolves.toEqual({ cursor: "opaque" });
     expect(restarted.secrets.available).toBe(false);
-    await expect(restarted.secrets.forOwner("plugin").set("token", "sentinel")).rejects.toThrow(/unavailable/i);
+    await expect(restarted.secrets.fromCapability("opaque").set("token", "sentinel")).rejects.toThrow(/unavailable/i);
     expect(JSON.stringify([...values])).not.toContain("sentinel");
   });
 

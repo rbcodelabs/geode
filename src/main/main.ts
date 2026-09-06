@@ -269,6 +269,7 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 }
 
 function registerIpc() {
+  const secretCapabilities = new Map<string, { senderId: number; owner: string }>();
   ipcMain.handle("window-chrome-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false };
@@ -432,7 +433,10 @@ function registerIpc() {
       const injectedDelayMs = Number(process.env.GEODE_TEST_PLUGIN_IO_DELAY_MS ?? 0);
       if (injectedDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, injectedDelayMs));
       const content = await fsp.readFile(resolveVaultPath(win, rel), "utf8");
-      return { ok: true, content, mainReceivedAt, fsStartedAt, fsFinishedAt: Date.now() };
+      const match = /^\.geode\/plugins\/([a-z0-9][a-z0-9-]*)\/main\.js$/.exec(rel.replace(/\\/g, "/"));
+      let secretCapability: string | undefined;
+      if (match) { secretCapability = randomUUID(); secretCapabilities.set(secretCapability, { senderId: e.sender.id, owner: match[1] }); }
+      return { ok: true, content, secretCapability, mainReceivedAt, fsStartedAt, fsFinishedAt: Date.now() };
     } catch (error) {
       return {
         ok: false,
@@ -511,16 +515,11 @@ function registerIpc() {
     if (!namespace || !key || namespace.includes("\0") || key.includes("\0")) throw new Error("Invalid secret key");
     return path.join(app.getPath("userData"), "secrets", Buffer.from(`${namespace}\0${key}`).toString("base64url") + ".bin");
   };
-  const secretCapabilities = new Map<string, { senderId: number; owner: string }>();
   const secretOwner = (senderId: number, capability: string) => {
     const claimed = secretCapabilities.get(capability);
     if (!claimed || claimed.senderId !== senderId) throw new Error("Invalid secret capability");
     return claimed.owner;
   };
-  ipcMain.handle("secret-capability-claim", (e, owner: string) => {
-    if (!owner || owner.includes("\0")) throw new Error("Invalid secret owner");
-    const capability = crypto.randomUUID(); secretCapabilities.set(capability, { senderId: e.sender.id, owner }); return capability;
-  });
   ipcMain.handle("device-state-read", async (_e, key: string) => JSON.parse(await fsp.readFile(stateFile(key), "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return "null"; throw error; })));
   ipcMain.handle("device-state-write", async (_e, key: string, value: unknown) => { const target = stateFile(key); await fsp.mkdir(path.dirname(target), { recursive: true }); await writeJsonAtomic(target, value); });
   ipcMain.handle("device-state-remove", async (_e, key: string) => { await fsp.rm(stateFile(key), { force: true }); });

@@ -21,7 +21,7 @@ function memoryHost(files: Record<string, string> = {}, sharedState = new Map<st
       reconcileScan: async () => ({ status: "complete" as const, entries: [...data].map(([path, bytes]) => ({ path, isFolder: false, ctime: 1, mtime: mtimes.get(path) ?? 1, size: bytes.byteLength })) }),
     },
     deviceState: { read: async key => state.get(key) ?? null, write: async (key, value) => { state.set(key, structuredClone(value)); }, remove: async key => { state.delete(key); } },
-    secrets: { available: false, forOwner: () => ({ get: async () => null, set: async () => { throw new Error("unavailable"); }, remove: async () => {} }) },
+    secrets: { available: false, fromCapability: () => ({ get: async () => null, set: async () => { throw new Error("unavailable"); }, remove: async () => {} }) },
     config: {} as HostServices["config"], metadataIndex: {} as HostServices["metadataIndex"], navigation: {} as HostServices["navigation"], plugins: {} as HostServices["plugins"],
   } satisfies HostServices;
   return Object.assign(host, {

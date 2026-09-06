@@ -39,6 +39,7 @@ export abstract class Plugin extends Component {
   private errorHandler?: PluginErrorHandler;
   private hostGeneration: "constructing" | "active" | "inactive" = "constructing";
   private pendingTeardowns = new Set<Promise<void>>();
+  private secretCapability?: string;
 
   constructor(app: App, manifest: PluginManifest) {
     super();
@@ -61,6 +62,9 @@ export abstract class Plugin extends Component {
     if (this.hostGeneration === "inactive") throw new Error(`Plugin "${this.manifest.id}" generation is no longer active`);
     this.hostGeneration = "active";
   }
+  /** @internal Installed only from the capability returned with this plugin's main.js. */
+  bindSecretCapability(capability: string | undefined): void { this.secretCapability = capability; }
+  private ownedSecrets() { if (!this.secretCapability) throw new Error("Secure secret storage is unavailable for this plugin generation"); return this.app.host.secrets.fromCapability(this.secretCapability); }
 
   private assertHostGeneration(): void {
     if (this.hostGeneration === "inactive") {
@@ -153,19 +157,19 @@ export abstract class Plugin extends Component {
   /** Read a secret from this plugin's host-enforced namespace. */
   async loadSecret(key: string): Promise<string | null> {
     this.assertHostGeneration();
-    return this.app.host.secrets.forOwner(this.manifest.id).get(key);
+    return this.ownedSecrets().get(key);
   }
 
   /** Persist a secret outside the vault using the native platform store. */
   async saveSecret(key: string, value: string): Promise<void> {
     this.assertHostGeneration();
     if (!this.app.host.secrets.available) throw new Error("Secure secret storage is unavailable on this host");
-    await this.app.host.secrets.forOwner(this.manifest.id).set(key, value);
+    await this.ownedSecrets().set(key, value);
   }
 
   async removeSecret(key: string): Promise<void> {
     this.assertHostGeneration();
-    await this.app.host.secrets.forOwner(this.manifest.id).remove(key);
+    await this.ownedSecrets().remove(key);
   }
 
   /**

@@ -113,6 +113,7 @@ interface LoadedPlugin {
  * equivalent). One `PluginManager` per open vault, owned by `App`.
  */
 export class PluginManager {
+  private secretCapabilities = new Map<string, string>();
   private manifests = new Map<string, PluginManifest>();
   private manifestSources = new Map<string, string>();
   private loadErrors = new Map<string, string>();
@@ -362,6 +363,7 @@ export class PluginManager {
       throw error;
     }
     const instance = new PluginClass(this.app, manifest);
+    instance.bindSecretCapability(this.secretCapabilities.get(id));
     instance.setErrorHandler((boundary, error) => this.containPluginError(id, boundary, error));
     instance.activateHostGeneration();
     this.loadErrors.delete(id);
@@ -479,6 +481,7 @@ export class PluginManager {
     if (!api.readPluginFile) return api.read(`${pluginDir(id)}/${fileName}`);
     const rendererSentAt = Date.now();
     const result = await api.readPluginFile(`${pluginDir(id)}/${fileName}`, rendererSentAt);
+    if (fileName === "main.js" && result.secretCapability) this.secretCapabilities.set(id, result.secretCapability);
     const rendererReceivedAt = Date.now();
     recordMeasure(`plugin-read-main-queue:${id}:${fileName}`, Math.max(0, result.mainReceivedAt - rendererSentAt));
     recordMeasure(`plugin-read-filesystem:${id}:${fileName}`, Math.max(0, result.fsFinishedAt - result.fsStartedAt));
