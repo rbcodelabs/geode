@@ -511,19 +511,31 @@ function registerIpc() {
     if (!namespace || !key || namespace.includes("\0") || key.includes("\0")) throw new Error("Invalid secret key");
     return path.join(app.getPath("userData"), "secrets", Buffer.from(`${namespace}\0${key}`).toString("base64url") + ".bin");
   };
+  const secretCapabilities = new Map<string, { senderId: number; owner: string }>();
+  const secretOwner = (senderId: number, capability: string) => {
+    const claimed = secretCapabilities.get(capability);
+    if (!claimed || claimed.senderId !== senderId) throw new Error("Invalid secret capability");
+    return claimed.owner;
+  };
+  ipcMain.handle("secret-capability-claim", (e, owner: string) => {
+    if (!owner || owner.includes("\0")) throw new Error("Invalid secret owner");
+    const capability = crypto.randomUUID(); secretCapabilities.set(capability, { senderId: e.sender.id, owner }); return capability;
+  });
   ipcMain.handle("device-state-read", async (_e, key: string) => JSON.parse(await fsp.readFile(stateFile(key), "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return "null"; throw error; })));
   ipcMain.handle("device-state-write", async (_e, key: string, value: unknown) => { const target = stateFile(key); await fsp.mkdir(path.dirname(target), { recursive: true }); await writeJsonAtomic(target, value); });
   ipcMain.handle("device-state-remove", async (_e, key: string) => { await fsp.rm(stateFile(key), { force: true }); });
-  ipcMain.handle("secret-read", async (_e, namespace: string, key: string) => {
+  ipcMain.handle("secret-read", async (e, capability: string, key: string) => {
     if (!safeStorage.isEncryptionAvailable()) return null;
+    const namespace = secretOwner(e.sender.id, capability);
     const encrypted = await fsp.readFile(secretFile(namespace, key)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
     return encrypted ? safeStorage.decryptString(encrypted) : null;
   });
-  ipcMain.handle("secret-write", async (_e, namespace: string, key: string, value: string) => {
+  ipcMain.handle("secret-write", async (e, capability: string, key: string, value: string) => {
     if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure secret storage is unavailable");
+    const namespace = secretOwner(e.sender.id, capability);
     const target = secretFile(namespace, key); await fsp.mkdir(path.dirname(target), { recursive: true }); await writeBufferAtomic(target, safeStorage.encryptString(value));
   });
-  ipcMain.handle("secret-remove", async (_e, namespace: string, key: string) => { await fsp.rm(secretFile(namespace, key), { force: true }); });
+  ipcMain.handle("secret-remove", async (e, capability: string, key: string) => { await fsp.rm(secretFile(secretOwner(e.sender.id, capability), key), { force: true }); });
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;

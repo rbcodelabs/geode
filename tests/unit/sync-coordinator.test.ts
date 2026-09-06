@@ -21,7 +21,7 @@ function memoryHost(files: Record<string, string> = {}, sharedState = new Map<st
       reconcileScan: async () => ({ status: "complete" as const, entries: [...data].map(([path, bytes]) => ({ path, isFolder: false, ctime: 1, mtime: mtimes.get(path) ?? 1, size: bytes.byteLength })) }),
     },
     deviceState: { read: async key => state.get(key) ?? null, write: async (key, value) => { state.set(key, structuredClone(value)); }, remove: async key => { state.delete(key); } },
-    secrets: { available: false, get: async () => null, set: async () => { throw new Error("unavailable"); }, remove: async () => {} },
+    secrets: { available: false, forOwner: () => ({ get: async () => null, set: async () => { throw new Error("unavailable"); }, remove: async () => {} }) },
     config: {} as HostServices["config"], metadataIndex: {} as HostServices["metadataIndex"], navigation: {} as HostServices["navigation"], plugins: {} as HostServices["plugins"],
   } satisfies HostServices;
   return Object.assign(host, {
@@ -37,7 +37,7 @@ function provider(entries: SyncRemoteEntry[] = []): SyncProvider {
     id: "test.remote", name: "Test remote",
     capabilities: { binary: true, conditionalWrites: true, delta: true, completeSnapshots: true, atomicMoves: true, trash: true },
     open: async () => ({
-      scan: async () => ({ status: "complete", entries, cursor: "next" }),
+      scan: async () => ({ status: "complete", mode: "snapshot", entries, cursor: "next" }),
       read: async entry => new TextEncoder().encode(`remote:${entry.path}`).buffer,
       create,
       update: vi.fn(async input => ({ id: input.id, path: input.path, kind: "file", revision: "2", size: input.data.byteLength })),
@@ -252,5 +252,29 @@ describe("SyncCoordinator", () => {
     expect(result.conflicts).toBe(1);
     expect(host.testRead("Note.sync-conflict-999.md")).toBe("remote-2");
     expect((await coordinator.listConflicts())[0]).toMatchObject({ path: "Note.md", remoteRevision: "2" });
+  });
+
+  it("creates remote folders locally without trying to read them as files", async () => {
+    const host = memoryHost();
+    const mkdir = vi.spyOn(host.vaultFiles, "mkdir");
+    const remote = provider([{ id: "dir", path: "Folder", kind: "folder", revision: "1" }]);
+    const read = vi.fn();
+    remote.open = async () => ({ ...(await provider().open({ vaultId: "vault-a" })), read, scan: async () => ({ status: "complete", mode: "snapshot", entries: [{ id: "dir", path: "Folder", kind: "folder", revision: "1" }] }) });
+    const coordinator = new SyncCoordinator(host, () => "vault-a");
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await coordinator.preview();
+    await coordinator.run({ approvePreview: true });
+    expect(mkdir).toHaveBeenCalledWith("Folder", expect.any(String));
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("rejects scan modes the provider did not advertise", async () => {
+    const remote = { ...provider(), capabilities: { ...provider().capabilities, delta: false, completeSnapshots: true } } as SyncProvider;
+    remote.open = async () => ({ ...(await provider().open({ vaultId: "vault-a" })), scan: async () => ({ status: "complete", mode: "delta", entries: [] }) });
+    const coordinator = new SyncCoordinator(memoryHost(), () => "vault-a");
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await expect(coordinator.preview()).rejects.toThrow(/unadvertised delta/i);
   });
 });

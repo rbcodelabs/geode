@@ -4,7 +4,7 @@ import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope
 import type { SyncApi, SyncConflict, SyncPreview, SyncProvider, SyncRemoteEntry, SyncRunResult, SyncSession, SyncStatus } from "./types";
 
 interface BaselineEntry { path: string; localFingerprint: string; remoteId: string; remoteRevision: string; kind: "file" | "folder"; }
-interface SyncState { providerId?: string; cursor?: string; approved: boolean; paused: boolean; previewSignature?: string; baseline: Record<string, BaselineEntry>; remoteIndex: Record<string, SyncRemoteEntry>; conflicts: Record<string, { remote: SyncRemoteEntry; conflictPath: string }>; scope: SyncScope; journal: JournalOperation[]; }
+interface SyncState { stateKey: string; vaultId: string; providerId?: string; cursor?: string; approved: boolean; paused: boolean; previewSignature?: string; baseline: Record<string, BaselineEntry>; remoteIndex: Record<string, SyncRemoteEntry>; conflicts: Record<string, { remote: SyncRemoteEntry; conflictPath: string }>; scope: SyncScope; journal: JournalOperation[]; }
 interface JournalOperation { id: string; type: "upload" | "download" | "local-trash" | "remote-trash"; path: string; remote?: SyncRemoteEntry; phase: "prepared" | "applied"; }
 interface Plan { uploads: VaultFileEntry[]; downloads: SyncRemoteEntry[]; localTrash: SyncRemoteEntry[]; remoteTrash: BaselineEntry[]; conflicts: Array<{ local?: VaultFileEntry; remote: SyncRemoteEntry }>; skipped: number; remoteEntries: SyncRemoteEntry[]; nextRemoteIndex: Record<string, SyncRemoteEntry>; expectedLocal: Record<string, string | undefined>; cursor?: string; }
 
@@ -18,7 +18,8 @@ export class SyncCoordinator extends Events implements SyncApi {
   private running?: Promise<unknown>;
   private operationClaimed = false;
   private activeRegistration?: { owner: string; provider: SyncProvider };
-  constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly now: () => number = Date.now) { super(); }
+  private readonly hydration: Promise<void>;
+  constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly now: () => number = Date.now) { super(); this.hydration = this.hydrate(); }
 
   register(owner: string, provider: SyncProvider): () => Promise<void> {
     if (!provider.id || this.providers.has(provider.id)) throw new Error(`Sync provider already registered: ${provider.id}`);
@@ -90,10 +91,12 @@ export class SyncCoordinator extends Events implements SyncApi {
     this.operationClaimed = true;
     let work: Promise<T> | undefined;
     try {
-      const state = await this.loadState(); const registration = state.providerId ? this.providers.get(state.providerId) : undefined;
+      await this.hydration;
+      const vaultId = this.vaultId();
+      const state = await this.loadState(vaultId); this.assertVault(vaultId); const registration = state.providerId ? this.providers.get(state.providerId) : undefined;
       if (!registration) throw new Error("No sync provider is active");
       const provider = registration.provider;
-      const controller = new AbortController(); this.activeAbort = controller; const vaultId = this.vaultId();
+      const controller = new AbortController(); this.activeAbort = controller;
       this.activeRegistration = registration;
       work = (async () => { const session = await provider.open({ vaultId }); this.assertContext(controller.signal, vaultId); this.activeSession = session; try { return await fn(session, state, controller.signal, vaultId); } finally { await session.close(); } })();
       this.running = work;
@@ -111,8 +114,13 @@ export class SyncCoordinator extends Events implements SyncApi {
     const remoteScan = await session.scan(state.cursor, signal);
     this.assertContext(signal, vaultId);
     if (remoteScan.status !== "complete") throw new Error(`A complete remote scan is required (${remoteScan.status})`);
+    const capabilities = this.activeRegistration!.provider.capabilities;
+    if (remoteScan.mode === "delta" && !capabilities.delta) throw new Error("Provider returned an unadvertised delta scan");
+    if (remoteScan.mode === "snapshot" && !capabilities.completeSnapshots) throw new Error("Provider returned an unadvertised complete snapshot");
+    if (!remoteScan.mode) throw new Error("Provider must declare snapshot or delta scan mode");
     await this.recoverJournal(state, localScan.entries, remoteScan.entries, remoteScan.mode);
-    const local = localScan.entries.filter(e => !e.isFolder && isPathInSyncScope(e.path, state.scope));
+    const localAll = localScan.entries.filter(e => isPathInSyncScope(e.path, state.scope));
+    const local = localAll.filter(e => !e.isFolder);
     const nextRemoteIndex = remoteScan.mode === "delta" ? { ...state.remoteIndex } : {};
     for (const change of remoteScan.entries) {
       if (change.kind === "tombstone") delete nextRemoteIndex[change.id];
@@ -124,7 +132,7 @@ export class SyncCoordinator extends Events implements SyncApi {
     ].filter(e => e.kind === "tombstone" || isPathInSyncScope(e.path, state.scope));
     this.rejectCollisions(remote);
     const byPath = new Map(remote.filter(e => e.kind !== "tombstone").map(e => [e.path, e]));
-    const localByPath = new Map(local.map(e => [e.path, e]));
+    const localByPath = new Map(localAll.map(e => [e.path, e]));
     const plan: Plan = { uploads: [], downloads: [], localTrash: [], remoteTrash: [], conflicts: [], skipped: 0, remoteEntries: remote, nextRemoteIndex, expectedLocal: {}, cursor: remoteScan.cursor };
     for (const entry of local) {
       const remoteEntry = byPath.get(entry.path); const baseline = state.baseline[entry.path];
@@ -169,11 +177,11 @@ export class SyncCoordinator extends Events implements SyncApi {
         plan.conflicts.push({ local: entry, remote: current }); await this.ack(state, op);
       }
     }
-    for (const entry of plan.downloads) { this.assertContext(signal, vaultId); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); const data = await session.read(entry, signal); this.assertContext(signal, vaultId); const beforeWrite = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); const actual = beforeWrite ? this.fingerprint(beforeWrite) : undefined; if (actual !== plan.expectedLocal[entry.path]) { plan.conflicts.push({ local: beforeWrite, remote: entry }); await this.ack(state, op); continue; } await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); this.assertContext(signal, vaultId); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(stat), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
+    for (const entry of plan.downloads) { this.assertContext(signal, vaultId); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); if (entry.kind === "folder") { await this.host.vaultFiles.mkdir(entry.path, op.id); this.assertContext(signal, vaultId); state.baseline[entry.path] = { path: entry.path, localFingerprint: "folder", remoteId: entry.id, remoteRevision: entry.revision, kind: "folder" }; await this.ack(state, op); continue; } const data = await session.read(entry, signal); this.assertContext(signal, vaultId); const beforeWrite = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); const actual = beforeWrite ? this.fingerprint(beforeWrite) : undefined; if (actual !== plan.expectedLocal[entry.path]) { plan.conflicts.push({ local: beforeWrite, remote: entry }); await this.ack(state, op); continue; } await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); this.assertContext(signal, vaultId); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(stat), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
     for (const entry of plan.localTrash) { const path = entry.deletedPath ?? entry.path; const baseline = state.baseline[path]; const current = (await this.host.vaultFiles.list()).find(e => e.path === path); if (!baseline || !current || this.fingerprint(current) !== baseline.localFingerprint) { if (current) plan.conflicts.push({ local: current, remote: entry }); continue; } const op = await this.prepare(state, "local-trash", path, entry); await this.host.vaultFiles.trash(path, op.id); delete state.baseline[path]; await this.ack(state, op); }
     for (const entry of plan.remoteTrash) { this.assertContext(signal, vaultId); const op = await this.prepare(state, "remote-trash", entry.path, { id: entry.remoteId, path: entry.path, kind: "file", revision: entry.remoteRevision }); await session.trash({ id: entry.remoteId, expectedRevision: entry.remoteRevision, signal }); this.assertContext(signal, vaultId); delete state.baseline[entry.path]; delete plan.nextRemoteIndex[entry.remoteId]; await this.ack(state, op); }
     for (const conflict of plan.conflicts) {
-      if (conflict.remote.kind === "tombstone") continue;
+      if (conflict.remote.kind !== "file") continue;
       const conflictId = `${conflict.remote.id}:${conflict.remote.revision}:${conflict.remote.path}`;
       if (state.conflicts[conflictId]) continue;
       const bytes = await session.read(conflict.remote, signal); this.assertContext(signal, vaultId);
@@ -213,10 +221,12 @@ export class SyncCoordinator extends Events implements SyncApi {
   private assertActive(signal: AbortSignal) { if (signal.aborted) throw new DOMException("Sync cancelled", "AbortError"); }
   private assertContext(signal: AbortSignal, vaultId: string) { this.assertActive(signal); if (this.vaultId() !== vaultId) throw new DOMException("Vault changed during sync", "AbortError"); const registration = this.activeRegistration; if (!registration || this.providers.get(registration.provider.id) !== registration) throw new DOMException("Sync provider changed during sync", "AbortError"); }
   private toPreview(plan: Plan): SyncPreview { return { uploads: plan.uploads.length, downloads: plan.downloads.length, deletes: plan.localTrash.length + plan.remoteTrash.length, conflicts: plan.conflicts.length, skipped: plan.skipped, requiresApproval: true }; }
-  private validateCapabilities(provider: SyncProvider) { const c = provider.capabilities; if (!c.binary || !c.conditionalWrites || (!c.delta && !c.completeSnapshots) || !c.trash) throw new Error(`Sync provider ${provider.id} does not meet Geode's safety contract`); }
+  private validateCapabilities(provider: SyncProvider) { const c = provider.capabilities; if (!c.binary || !c.conditionalWrites || (!c.delta && !c.completeSnapshots) || !c.atomicMoves || !c.trash) throw new Error(`Sync provider ${provider.id} does not meet Geode's safety contract`); }
   private rejectCollisions(entries: SyncRemoteEntry[]) { const seen = new Map<string, SyncRemoteEntry>(); for (const entry of entries) { if (entry.kind === "tombstone") continue; validateSyncPath(entry.path); const key = entry.path.normalize("NFC").toLocaleLowerCase("en-US"); const prior = seen.get(key); if (prior) throw new Error(`Remote path collision: ${prior.path} (${prior.kind}) and ${entry.path} (${entry.kind})`); seen.set(key, entry); } }
-  private stateKey() { return `sync/${encodeURIComponent(this.vaultId())}`; }
-  private async loadState(): Promise<SyncState> { const stored = await this.host.deviceState.read<Partial<SyncState>>(this.stateKey()); return { approved: false, paused: false, baseline: {}, remoteIndex: {}, conflicts: {}, journal: [], scope: { ...DEFAULT_SYNC_SCOPE, excludedFolders: [] }, ...stored }; }
-  private saveState(state: SyncState) { return this.host.deviceState.write(this.stateKey(), state); }
+  private stateKey(vaultId: string) { return `sync/${encodeURIComponent(vaultId)}`; }
+  private async loadState(vaultId = this.vaultId()): Promise<SyncState> { const stateKey = this.stateKey(vaultId); const stored = await this.host.deviceState.read<Partial<SyncState>>(stateKey); return { approved: false, paused: false, baseline: {}, remoteIndex: {}, conflicts: {}, journal: [], scope: { ...DEFAULT_SYNC_SCOPE, excludedFolders: [] }, ...stored, stateKey, vaultId }; }
+  private async saveState(state: SyncState) { this.assertVault(state.vaultId); await this.host.deviceState.write(state.stateKey, state); this.assertVault(state.vaultId); }
+  private assertVault(vaultId: string) { if (this.vaultId() !== vaultId) throw new DOMException("Vault changed during sync", "AbortError"); }
+  private async hydrate() { const vaultId = this.vaultId(); const state = await this.loadState(vaultId); if (this.vaultId() !== vaultId) return; this.setStatus(state.providerId ? { state: state.paused ? "paused" : "idle", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length } : EMPTY_STATUS); }
   private setStatus(status: SyncStatus) { this.status = status; this.trigger("status", this.getStatus()); }
 }

@@ -108,9 +108,11 @@ export interface DeviceStateService {
 /** Host-backed secret storage. `available=false` means callers must disable credentialed features. */
 export interface SecureSecretService {
   readonly available: boolean;
-  get(namespace: string, key: string): Promise<string | null>;
-  set(namespace: string, key: string, value: string): Promise<void>;
-  remove(namespace: string, key: string): Promise<void>;
+  forOwner(owner: string): {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+    remove(key: string): Promise<void>;
+  };
 }
 
 export interface ConfigService {

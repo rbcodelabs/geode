@@ -20,14 +20,16 @@ describe("Plugin.registerSyncProvider", () => {
   });
 
   it("namespaces secrets to the owning plugin", async () => {
-    const secrets = { available: true, get: vi.fn(async () => "value"), set: vi.fn(async () => {}), remove: vi.fn(async () => {}) };
+    const scoped = { get: vi.fn(async () => "value"), set: vi.fn(async () => {}), remove: vi.fn(async () => {}) };
+    const secrets = { available: true, forOwner: vi.fn(() => scoped) };
     const plugin = new (class extends Plugin {})({ host: { secrets }, sync: { register: vi.fn() } } as never, { id: "gdocs", name: "GDocs", version: "1.0.0", minAppVersion: "0.1.0" });
     plugin.activateHostGeneration();
     await plugin.saveSecret("oauth", "sentinel");
     await plugin.loadSecret("oauth");
     await plugin.removeSecret("oauth");
-    expect(secrets.set).toHaveBeenCalledWith("gdocs", "oauth", "sentinel");
-    expect(secrets.get).toHaveBeenCalledWith("gdocs", "oauth");
-    expect(secrets.remove).toHaveBeenCalledWith("gdocs", "oauth");
+    expect(secrets.forOwner).toHaveBeenCalledWith("gdocs");
+    expect(scoped.set).toHaveBeenCalledWith("oauth", "sentinel");
+    expect(scoped.get).toHaveBeenCalledWith("oauth");
+    expect(scoped.remove).toHaveBeenCalledWith("oauth");
   });
 });

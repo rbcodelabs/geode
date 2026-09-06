@@ -102,9 +102,10 @@ const api = {
   writeDeviceState: (key: string, data: unknown): Promise<void> => ipcRenderer.invoke("device-state-write", key, data),
   removeDeviceState: (key: string): Promise<void> => ipcRenderer.invoke("device-state-remove", key),
   isSecretStorageAvailable: (): boolean => process.platform !== "linux" || Boolean(process.env.DBUS_SESSION_BUS_ADDRESS),
-  readSecret: (namespace: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", namespace, key),
-  writeSecret: (namespace: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", namespace, key, value),
-  removeSecret: (namespace: string, key: string): Promise<void> => ipcRenderer.invoke("secret-remove", namespace, key),
+  claimSecretCapability: (owner: string): Promise<string> => ipcRenderer.invoke("secret-capability-claim", owner),
+  readSecret: (capability: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", capability, key),
+  writeSecret: (capability: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", capability, key, value),
+  removeSecret: (capability: string, key: string): Promise<void> => ipcRenderer.invoke("secret-remove", capability, key),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   openLocalFile: (href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }

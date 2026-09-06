@@ -153,19 +153,19 @@ export abstract class Plugin extends Component {
   /** Read a secret from this plugin's host-enforced namespace. */
   async loadSecret(key: string): Promise<string | null> {
     this.assertHostGeneration();
-    return this.app.host.secrets.get(this.manifest.id, key);
+    return this.app.host.secrets.forOwner(this.manifest.id).get(key);
   }
 
   /** Persist a secret outside the vault using the native platform store. */
   async saveSecret(key: string, value: string): Promise<void> {
     this.assertHostGeneration();
     if (!this.app.host.secrets.available) throw new Error("Secure secret storage is unavailable on this host");
-    await this.app.host.secrets.set(this.manifest.id, key, value);
+    await this.app.host.secrets.forOwner(this.manifest.id).set(key, value);
   }
 
   async removeSecret(key: string): Promise<void> {
     this.assertHostGeneration();
-    await this.app.host.secrets.remove(this.manifest.id, key);
+    await this.app.host.secrets.forOwner(this.manifest.id).remove(key);
   }
 
   /**
