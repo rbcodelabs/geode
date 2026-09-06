@@ -1,4 +1,5 @@
 import type { EventRef } from "../events";
+import type { SyncScope } from "./scope";
 
 export interface SyncProviderCapabilities {
   binary: boolean;
@@ -62,11 +63,16 @@ export type SyncStatusState = "disconnected" | "idle" | "preview" | "syncing" | 
 export interface SyncStatus { state: SyncStatusState; providerId?: string; message?: string; conflicts: number; }
 export interface SyncPreview { uploads: number; downloads: number; deletes: number; conflicts: number; skipped: number; requiresApproval: boolean; }
 export interface SyncRunResult extends Omit<SyncPreview, "requiresApproval"> { cursor?: string; }
+export interface SyncConflict { id: string; path: string; conflictPath: string; remoteRevision: string; }
 
 export interface SyncApi {
   listProviders(): Array<{ id: string; name: string }>;
   getActiveProvider(): { id: string; name: string } | null;
   getStatus(): SyncStatus;
+  getScope(): Promise<SyncScope>;
+  updateScope(patch: Partial<SyncScope>): Promise<void>;
+  listConflicts(): Promise<SyncConflict[]>;
+  resolveConflict(id: string): Promise<void>;
   activate(providerId: string): Promise<void>;
   disconnect(): Promise<void>;
   preview(): Promise<SyncPreview>;

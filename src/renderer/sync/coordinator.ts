@@ -1,7 +1,7 @@
 import { Events } from "../events";
 import type { HostServices, VaultFileEntry } from "../host/contracts";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope } from "./scope";
-import type { SyncApi, SyncPreview, SyncProvider, SyncRemoteEntry, SyncRunResult, SyncSession, SyncStatus } from "./types";
+import type { SyncApi, SyncConflict, SyncPreview, SyncProvider, SyncRemoteEntry, SyncRunResult, SyncSession, SyncStatus } from "./types";
 
 interface BaselineEntry { path: string; localFingerprint: string; remoteId: string; remoteRevision: string; kind: "file" | "folder"; }
 interface SyncState { providerId?: string; cursor?: string; approved: boolean; paused: boolean; previewSignature?: string; baseline: Record<string, BaselineEntry>; remoteIndex: Record<string, SyncRemoteEntry>; conflicts: Record<string, { remote: SyncRemoteEntry; conflictPath: string }>; scope: SyncScope; journal: JournalOperation[]; }
@@ -29,6 +29,18 @@ export class SyncCoordinator extends Events implements SyncApi {
   listProviders() { return [...this.providers.values()].map(({ provider }) => ({ id: provider.id, name: provider.name })); }
   getActiveProvider() { const found = this.status.providerId ? this.providers.get(this.status.providerId)?.provider : undefined; return found ? { id: found.id, name: found.name } : null; }
   getStatus() { return { ...this.status }; }
+  async getScope(): Promise<SyncScope> { const state = await this.loadState(); return { ...state.scope, excludedFolders: [...state.scope.excludedFolders] }; }
+  async updateScope(patch: Partial<SyncScope>): Promise<void> {
+    const state = await this.loadState();
+    const excludedFolders = patch.excludedFolders?.map(folder => folder.trim().replace(/\/$/, ""));
+    if (excludedFolders) for (const folder of excludedFolders) validateSyncPath(folder);
+    state.scope = { ...state.scope, ...patch, ...(excludedFolders ? { excludedFolders } : {}) };
+    state.approved = false;
+    state.previewSignature = undefined;
+    await this.saveState(state);
+  }
+  async listConflicts(): Promise<SyncConflict[]> { const state = await this.loadState(); return Object.entries(state.conflicts).map(([id, conflict]) => ({ id, path: conflict.remote.path, conflictPath: conflict.conflictPath, remoteRevision: conflict.remote.revision })); }
+  async resolveConflict(id: string): Promise<void> { const state = await this.loadState(); delete state.conflicts[id]; await this.saveState(state); }
   override on(event: "status", callback: (status: SyncStatus) => void) { return super.on(event, callback); }
 
   async activate(providerId: string): Promise<void> {
@@ -148,16 +160,29 @@ export class SyncCoordinator extends Events implements SyncApi {
         state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(entry), remoteId: remote.id, remoteRevision: remote.revision, kind: "file" }; await this.ack(state, op);
       } catch (error) {
         if (!prior || !(error instanceof Error) || error.name !== "SyncPreconditionError") throw error;
-        const current = plan.remoteEntries.find(remote => remote.id === prior.remoteId && remote.kind === "file");
+        const refreshed = await session.scan(state.cursor, signal);
+        this.assertContext(signal, vaultId);
+        if (refreshed.status !== "complete") throw error;
+        const current = refreshed.entries.find(remote => remote.id === prior.remoteId && remote.kind === "file");
         if (!current) throw error;
-        state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(entry), remoteId: current.id, remoteRevision: current.revision, kind: "file" };
+        plan.nextRemoteIndex[current.id] = current;
         plan.conflicts.push({ local: entry, remote: current }); await this.ack(state, op);
       }
     }
-    for (const entry of plan.downloads) { this.assertContext(signal, vaultId); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); const data = await session.read(entry, signal); this.assertContext(signal, vaultId); const beforeWrite = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); const actual = beforeWrite ? this.fingerprint(beforeWrite) : undefined; if (actual !== plan.expectedLocal[entry.path]) { plan.conflicts.push({ local: beforeWrite, remote: entry }); const path = this.conflictPath(entry.path); await this.host.vaultFiles.writeBinary(path, data, undefined, this.operationId()); await this.ack(state, op); continue; } await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); this.assertContext(signal, vaultId); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(stat), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
+    for (const entry of plan.downloads) { this.assertContext(signal, vaultId); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); const data = await session.read(entry, signal); this.assertContext(signal, vaultId); const beforeWrite = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); const actual = beforeWrite ? this.fingerprint(beforeWrite) : undefined; if (actual !== plan.expectedLocal[entry.path]) { plan.conflicts.push({ local: beforeWrite, remote: entry }); await this.ack(state, op); continue; } await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); this.assertContext(signal, vaultId); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(stat), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
     for (const entry of plan.localTrash) { const path = entry.deletedPath ?? entry.path; const baseline = state.baseline[path]; const current = (await this.host.vaultFiles.list()).find(e => e.path === path); if (!baseline || !current || this.fingerprint(current) !== baseline.localFingerprint) { if (current) plan.conflicts.push({ local: current, remote: entry }); continue; } const op = await this.prepare(state, "local-trash", path, entry); await this.host.vaultFiles.trash(path, op.id); delete state.baseline[path]; await this.ack(state, op); }
     for (const entry of plan.remoteTrash) { this.assertContext(signal, vaultId); const op = await this.prepare(state, "remote-trash", entry.path, { id: entry.remoteId, path: entry.path, kind: "file", revision: entry.remoteRevision }); await session.trash({ id: entry.remoteId, expectedRevision: entry.remoteRevision, signal }); this.assertContext(signal, vaultId); delete state.baseline[entry.path]; delete plan.nextRemoteIndex[entry.remoteId]; await this.ack(state, op); }
-    for (const conflict of plan.conflicts) { if (conflict.remote.kind === "tombstone") continue; const existingConflict = this.conflictPath(conflict.remote.path); if (await this.host.vaultFiles.exists(existingConflict)) continue; const bytes = await session.read(conflict.remote, signal); this.assertContext(signal, vaultId); await this.host.vaultFiles.writeBinary(existingConflict, bytes, undefined, this.operationId()); }
+    for (const conflict of plan.conflicts) {
+      if (conflict.remote.kind === "tombstone") continue;
+      const conflictId = `${conflict.remote.id}:${conflict.remote.revision}:${conflict.remote.path}`;
+      if (state.conflicts[conflictId]) continue;
+      const bytes = await session.read(conflict.remote, signal); this.assertContext(signal, vaultId);
+      let conflictPath = this.conflictPath(conflict.remote.path); let suffix = 2;
+      while (await this.host.vaultFiles.exists(conflictPath)) conflictPath = this.conflictPath(conflict.remote.path).replace(/(\.[^./]+)?$/, `-${suffix++}$1`);
+      await this.host.vaultFiles.writeBinary(conflictPath, bytes, undefined, this.operationId()); this.assertContext(signal, vaultId);
+      state.conflicts[conflictId] = { remote: conflict.remote, conflictPath };
+      await this.saveState(state);
+    }
   }
 
   private fingerprint(entry: VaultFileEntry) { return `${entry.size}:${entry.mtime}`; }

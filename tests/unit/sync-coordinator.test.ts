@@ -214,4 +214,43 @@ describe("SyncCoordinator", () => {
     expect(scanCalled).toBe(false);
     expect(restarted.getStatus()).toMatchObject({ state: "error", providerId: remote.id });
   });
+
+  it("persists device-local scope changes and invalidates first-sync approval", async () => {
+    const sharedState = new Map<string, unknown>();
+    const coordinator = new SyncCoordinator(memoryHost({}, sharedState), () => "vault-a");
+    const remote = provider();
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await coordinator.preview();
+    await coordinator.updateScope({ images: false, excludedFolders: ["Private"] });
+
+    await expect(coordinator.getScope()).resolves.toMatchObject({ images: false, excludedFolders: ["Private"] });
+    await expect(coordinator.run({ approvePreview: true })).rejects.toThrow(/preview/i);
+  });
+
+  it("rescans after a remote precondition race and preserves the current remote bytes without advancing the baseline", async () => {
+    const host = memoryHost({ "Note.md": "local" }) as HostServices & { testWrite(path: string, value: string): void; testRead(path: string): string | undefined };
+    let revision = "1";
+    let exists = false;
+    const update = vi.fn(async () => { revision = "2"; const error = new Error("changed"); error.name = "SyncPreconditionError"; throw error; });
+    const remote = provider();
+    remote.open = async () => ({
+      ...(await provider().open({ vaultId: "vault-a" })),
+      scan: async () => ({ status: "complete", mode: "snapshot", entries: exists ? [{ id: "r", path: "Note.md", kind: "file", revision, size: 6 }] : [] }),
+      create: async input => { exists = true; return { id: "r", path: input.path, kind: "file", revision: "1", operationKey: input.operationKey }; },
+      read: async entry => new TextEncoder().encode(`remote-${entry.revision}`).buffer,
+      update,
+    });
+    const coordinator = new SyncCoordinator(host, () => "vault-a", () => 999);
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await coordinator.preview();
+    await coordinator.run({ approvePreview: true });
+    host.testWrite("Note.md", "edited");
+
+    const result = await coordinator.run();
+    expect(result.conflicts).toBe(1);
+    expect(host.testRead("Note.sync-conflict-999.md")).toBe("remote-2");
+    expect((await coordinator.listConflicts())[0]).toMatchObject({ path: "Note.md", remoteRevision: "2" });
+  });
 });

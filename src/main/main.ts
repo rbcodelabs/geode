@@ -44,7 +44,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
 import { nodeHotkeyPlatform, resolveGuestHotkey } from "../shared/hotkey";
-import { writeJsonAtomic } from "./config-file";
+import { writeBufferAtomic, writeJsonAtomic } from "./config-file";
 import { selectVaultWindowAction } from "./vault-window-selection";
 import { handleWatchdogPowerEvent, isRendererHeartbeatStale } from "./renderer-watchdog";
 import { listVaultFiles, type VaultFileEntry } from "./vault-files";
@@ -521,7 +521,7 @@ function registerIpc() {
   });
   ipcMain.handle("secret-write", async (_e, namespace: string, key: string, value: string) => {
     if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure secret storage is unavailable");
-    const target = secretFile(namespace, key); await fsp.mkdir(path.dirname(target), { recursive: true }); await fsp.writeFile(target, safeStorage.encryptString(value), { mode: 0o600 });
+    const target = secretFile(namespace, key); await fsp.mkdir(path.dirname(target), { recursive: true }); await writeBufferAtomic(target, safeStorage.encryptString(value));
   });
   ipcMain.handle("secret-remove", async (_e, namespace: string, key: string) => { await fsp.rm(secretFile(namespace, key), { force: true }); });
 

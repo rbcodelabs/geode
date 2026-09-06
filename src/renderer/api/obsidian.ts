@@ -1392,12 +1392,6 @@ export function installObsidianAppCompat(app: App): void {
 // runs `Plugin`'s constructor below, so it only sees a populated
 // `app.plugins` if `installObsidianAppCompat` ran earlier, at `App.start()`.
 export { GeodePlugin };
-export { SyncPreconditionError } from "../sync/types";
-export type {
-  SyncApi, SyncProvider, SyncProviderCapabilities, SyncRemoteEntry, SyncScanResult,
-  SyncSession, SyncStatus, SyncPreview, SyncRunResult, SyncWriteInput,
-} from "../sync/types";
-
 export abstract class Plugin extends GeodePlugin {
   constructor(app: App, manifest: import("../plugin-manifest").PluginManifest) {
     super(app, manifest);

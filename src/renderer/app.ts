@@ -1221,6 +1221,23 @@ class SettingsModal extends Modal {
     addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }));
     addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
     container.appendChild(actions);
+    void this.geodeApp.sync.getScope().then(scope => {
+      const labels: Array<[keyof typeof scope, string]> = [
+        ["markdown", "Notes and Canvas/Base files"], ["images", "Images"], ["audio", "Audio"], ["video", "Video"], ["pdfs", "PDFs"], ["other", "Other file types"],
+        ["mainSettings", "Main settings"], ["appearance", "Appearance"], ["themesAndSnippets", "Themes and snippets"], ["hotkeys", "Hotkeys"], ["corePlugins", "Core plugin settings"],
+        ["communityPlugins", "Installed community plugins"], ["communityPluginData", "Community plugin data"],
+      ];
+      for (const [key, label] of labels) {
+        const { control: scopeControl } = this.addRow(container, label, "Device-local selective sync setting.");
+        const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = Boolean(scope[key]);
+        checkbox.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ [key]: checkbox.checked }).catch(error => this.geodeApp.notify(String(error))); });
+        scopeControl.appendChild(checkbox);
+      }
+      const { control: excludedControl } = this.addRow(container, "Excluded folders", "Comma-separated vault-relative folders. Changing scope does not delete already-uploaded remote files.");
+      const excluded = document.createElement("input"); excluded.type = "text"; excluded.value = scope.excludedFolders.join(", ");
+      excluded.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ excludedFolders: excluded.value.split(",").map(value => value.trim()).filter(Boolean) }).catch(error => this.geodeApp.notify(String(error))); });
+      excludedControl.appendChild(excluded);
+    }).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error)));
   }
 
   onClose(): void {
@@ -2307,6 +2324,7 @@ export class App {
 
   async dispose(): Promise<void> {
     this.reconcileGeneration += 1;
+    await this.sync.cancel();
     for (const dispose of this.hostDisposers) dispose();
     this.hostDisposers.clear();
     const activeReconcile = this.reconcileInFlight;
