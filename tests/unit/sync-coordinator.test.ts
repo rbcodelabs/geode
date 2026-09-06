@@ -3,10 +3,10 @@ import { SyncCoordinator } from "../../src/renderer/sync/coordinator";
 import type { HostServices } from "../../src/renderer/host/contracts";
 import type { SyncProvider, SyncRemoteEntry } from "../../src/renderer/sync/types";
 
-function memoryHost(files: Record<string, string> = {}): HostServices {
+function memoryHost(files: Record<string, string> = {}, sharedState = new Map<string, unknown>()): HostServices {
   const data = new Map(Object.entries(files).map(([path, value]) => [path, new TextEncoder().encode(value)]));
   const mtimes = new Map([...data.keys()].map(path => [path, 1]));
-  const state = new Map<string, unknown>();
+  const state = sharedState;
   const host = {
     capabilities: {} as HostServices["capabilities"],
     runtime: { runtime: "browser", platform: "test", formFactor: "desktop", getWindowChromeState: async () => ({ platform: "test", isFullScreen: false }), onWindowChromeState: () => () => {}, onDeepLink: () => () => {}, onForeground: () => () => {} },
@@ -166,5 +166,52 @@ describe("SyncCoordinator", () => {
     coordinator.register("plugin-a", remote);
     await coordinator.activate(remote.id);
     await expect(coordinator.preview()).rejects.toThrow(/collision/i);
+  });
+
+  it("reconciles delta scans against the persisted remote index", async () => {
+    const host = memoryHost({ "Note.md": "one" }) as HostServices & { testWrite(path: string, value: string): void };
+    let scanNumber = 0;
+    const update = vi.fn(async input => ({ id: input.id, path: input.path, kind: "file" as const, revision: "2" }));
+    const remote = provider();
+    remote.open = async () => ({
+      ...(await provider().open({ vaultId: "vault-a" })),
+      scan: async () => scanNumber++ < 2
+        ? { status: "complete", mode: "snapshot", entries: [], cursor: "c1" } as const
+        : { status: "complete", mode: "delta", entries: [], cursor: "c2" } as const,
+      create: async input => ({ id: "remote-note", path: input.path, kind: "file", revision: "1", operationKey: input.operationKey }),
+      update,
+    });
+    const coordinator = new SyncCoordinator(host, () => "vault-a");
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await coordinator.preview();
+    await coordinator.run({ approvePreview: true });
+    host.testWrite("Note.md", "two");
+
+    await coordinator.run();
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: "remote-note", expectedRevision: "1" }));
+  });
+
+  it("cancels an operation for a persisted active provider after restart and unload", async () => {
+    const sharedState = new Map<string, unknown>();
+    const first = new SyncCoordinator(memoryHost({}, sharedState), () => "vault-a");
+    const remote = provider();
+    first.register("plugin-a", remote);
+    await first.activate(remote.id);
+
+    let releaseOpen!: () => void;
+    const waiting = new Promise<void>(resolve => { releaseOpen = resolve; });
+    let scanCalled = false;
+    remote.open = async () => { await waiting; return { ...(await provider().open({ vaultId: "vault-a" })), scan: async () => { scanCalled = true; return { status: "complete", mode: "snapshot", entries: [] }; } }; };
+    const restarted = new SyncCoordinator(memoryHost({}, sharedState), () => "vault-a");
+    const unregister = restarted.register("plugin-a", remote);
+    const run = restarted.preview().catch(() => undefined);
+    await Promise.resolve();
+    const unloading = unregister();
+    releaseOpen();
+    await unloading;
+    await run;
+    expect(scanCalled).toBe(false);
+    expect(restarted.getStatus()).toMatchObject({ state: "error", providerId: remote.id });
   });
 });
