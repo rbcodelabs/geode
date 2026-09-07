@@ -52,6 +52,11 @@ const api = {
     detach: (projectId) => invokeExternalRoot("external-roots-detach", projectId),
     listDirectory: (ref, options) => invokeExternalRoot("external-roots-list", ref, options),
     readText: (ref) => invokeExternalRoot("external-roots-read", ref),
+    onChange: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on("external-roots-changed", listener);
+      return () => ipcRenderer.removeListener("external-roots-changed", listener);
+    },
   } satisfies ExternalRootsHost) : undefined),
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
   acquirePowerSaveBlocker: (): Promise<string> =>

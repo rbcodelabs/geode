@@ -26,6 +26,8 @@ import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { CanvasView } from "./views/canvas-view";
 import { serializeCanvas } from "./canvas/canvas-data";
 import { FileExplorerView } from "./views/file-explorer";
+import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
+import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
@@ -1768,6 +1770,9 @@ export class App {
     // obsidian_open_url) opens a tab here too. Must be registered before
     // restoreWorkspaceLayout() below, which resolves saved leaves by type.
     await this.applyWebViewerLifecycle();
+    // Register on all platforms: unavailable external identities restore honestly
+    // instead of being interpreted as vault file paths.
+    this.workspace.registerViewFactory("geode-external-source", (leaf) => new ExternalSourceView(this, leaf));
     if (this.host.capabilities.artifacts) {
       this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
     }
@@ -2712,6 +2717,20 @@ export class App {
   }
 
   // --- File opening -------------------------------------------------------
+
+  async openExternalResource(ref: ResourceRef, rootLabel: string, newTab = false): Promise<void> {
+    const state = validateExternalSourceViewState({ version: 1, ref, rootLabel });
+    if (!state) { this.notify("External source unavailable: invalid resource identity"); return; }
+    if (!newTab) {
+      const existing = this.workspace.getLeavesOfType("geode-external-source").find(leaf => {
+        const saved = validateExternalSourceViewState(leaf.view?.getState?.());
+        return saved?.ref.rootId === state.ref.rootId && saved.ref.relativePath === state.ref.relativePath;
+      });
+      if (existing) { this.workspace.revealLeaf(existing); return; }
+    }
+    const leaf = this.workspace.getLeaf(newTab);
+    await leaf.runDocumentNavigation(() => leaf.setViewState({ type: "geode-external-source", state, active: true }));
+  }
 
   async openFile(file: TFile, newTab: boolean): Promise<void> {
     if (file.extension === "canvas") {

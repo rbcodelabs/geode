@@ -2,8 +2,9 @@
 
 This is the second implementation slice of [ADR-0015](../adr/0015-external-project-roots.md)
 and the [Phase 1 spec](external-project-roots-phase-1.md). It supplies the internal
-desktop service, not the Projects explorer or read-only source view. No external
-file editing, indexing, watching, execution, or vault semantics are enabled.
+desktop service. The additive [explorer/source-view slice](external-projects-explorer.md)
+uses this boundary without enabling external file editing, indexing, watching,
+execution, or vault semantics.
 
 ## Ownership and internal contract
 
@@ -81,5 +82,6 @@ Unit tests cover registry persistence/overlap, containment, symlinks, bounded
 reads/pages, stale sessions/contributions, fingerprints, and per-vault access.
 Electron integration tests use throwaway vaults and stub native dialogs to check
 the preload/main route, denied guest access, vault-file isolation, and cancellation
-when a pending picker outlives its vault. Explorer/source-view UX and real native
-dialog visual verification are not claimed by this backend slice.
+when a pending picker outlives its vault. Explorer/source-view verification is
+described in its separate slice; real native-dialog visual verification is not
+claimed by these stubbed-dialog tests.

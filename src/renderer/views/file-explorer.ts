@@ -3,6 +3,7 @@ import type { View } from "../workspace";
 import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
 import { VAULT_FILE_DRAG_MIME } from "../file-drag";
+import { ProjectsSection } from "./projects-section";
 
 export type SortOrder = "name-asc" | "name-desc";
 
@@ -33,6 +34,7 @@ export class FileExplorerView implements View {
   private selected = new Set<string>();
   /** Anchor for Shift-range selection: the last row clicked without Shift. */
   private lastClicked: string | null = null;
+  private readonly projects: ProjectsSection;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -97,6 +99,19 @@ export class FileExplorerView implements View {
     this.treeEl = document.createElement("div");
     this.treeEl.className = "nav-files-container";
     this.containerEl.appendChild(this.treeEl);
+    this.projects = new ProjectsSection({
+      host: app.host.externalRoots,
+      openResource: (ref, label, newTab) => app.openExternalResource(ref, label, newTab),
+      revealVaultFolder: (relativePath) => {
+        const parts = relativePath.split("/");
+        for (let length = 1; length <= parts.length; length++) this.expanded.add(parts.slice(0, length).join("/"));
+        this.render();
+        for (const row of this.treeEl.querySelectorAll<HTMLElement>(".nav-folder-title")) {
+          if (row.dataset.path === relativePath) { row.scrollIntoView({ block: "nearest" }); break; }
+        }
+      },
+    });
+    this.containerEl.appendChild(this.projects.containerEl);
 
     for (const ev of ["create", "delete", "rename"]) {
       app.vault.on(ev, () => this.render());
@@ -117,9 +132,10 @@ export class FileExplorerView implements View {
 
   onOpen(): void {
     this.render();
+    void this.projects.refresh();
   }
 
-  onClose(): void {}
+  onClose(): void { this.projects.dispose(); }
 
   private render() {
     this.treeEl.innerHTML = "";

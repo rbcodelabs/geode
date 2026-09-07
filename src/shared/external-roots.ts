@@ -22,4 +22,6 @@ export interface ExternalRootsHost {
   detach(projectId: string): Promise<boolean>;
   listDirectory(ref: RootDirectoryRef, options?: { cursor?: string }): Promise<ExternalRootDirectoryPage>;
   readText(ref: ResourceRef): Promise<string>;
+  /** Contribution/grant lifecycle only; never a filesystem watch. */
+  onChange?(callback: () => void): () => void;
 }

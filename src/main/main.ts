@@ -317,11 +317,27 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 
 function registerIpc() {
   // Narrow internal desktop integration. No Vault/TFile or arbitrary-path API.
-  ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[]) => externalRootReply(async () => (await externalRootSession(e.sender)).contribute(projects)));
+  const notifyExternalRoots = () => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      const session = sessions.get(win.id);
+      if (!win.isDestroyed() && !win.webContents.isDestroyed() && session && !session.externalRootsInvalidated) {
+        win.webContents.send("external-roots-changed");
+      }
+    }
+  };
+  ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[]) => externalRootReply(async () => {
+    const result = await (await externalRootSession(e.sender)).contribute(projects);
+    notifyExternalRoots();
+    return result;
+  }));
   ipcMain.handle("external-roots-projects", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listProjects()));
-  ipcMain.handle("external-roots-attach", (e, projectId: string) => externalRootReply(async () => (await externalRootSession(e.sender)).attach(projectId)));
-  ipcMain.handle("external-roots-reconnect", (e, projectId: string) => externalRootReply(async () => (await externalRootSession(e.sender)).reconnect(projectId)));
-  ipcMain.handle("external-roots-detach", (e, projectId: string) => externalRootReply(async () => (await externalRootSession(e.sender)).detach(projectId)));
+  for (const action of ["attach", "reconnect", "detach"] as const) {
+    ipcMain.handle(`external-roots-${action}`, (e, projectId: string) => externalRootReply(async () => {
+      const result = await (await externalRootSession(e.sender))[action](projectId);
+      if (result) notifyExternalRoots();
+      return result;
+    }));
+  }
   ipcMain.handle("external-roots-list", (e, ref: RootDirectoryRef, options?: { cursor?: string }) => externalRootReply(async () => (await externalRootSession(e.sender)).listDirectory(ref, options)));
   ipcMain.handle("external-roots-read", (e, ref: ResourceRef) => externalRootReply(async () => (await externalRootSession(e.sender)).readText(ref)));
   ipcMain.handle("window-chrome-state", (e) => {
