@@ -10,6 +10,13 @@ cloud, no lock-in.
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
+## Upcoming in this branch
+
+- **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
+  threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
+  recovery. Comments travel inside the note; Live Preview and Reading view hide
+  their markers, while Source mode exposes them. Not yet in the v0.12.4 release.
+
 ## Features (v0.12.4)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent

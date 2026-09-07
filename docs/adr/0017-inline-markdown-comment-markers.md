@@ -1,4 +1,4 @@
-# ADR-0015: Inline Markdown comment markers
+# ADR-0017: Inline Markdown comment markers
 
 **Date:** 2026-09-04
 **Status:** Accepted
