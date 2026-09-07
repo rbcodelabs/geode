@@ -15,7 +15,14 @@
 ## Notes System
 
 - **Tool:** Obsidian (raw capture / historical only -- see Legacy Sources below)
-- **Vault path:** /Users/rickbowman/Documents/Personal
+- **Vault path:** `/Users/rickbowman/Library/Mobile Documents/com~apple~CloudDocs/Documents/Personal`
+  - This is the real vault: it is the folder containing `.obsidian/`, `Daily/`, and `Products/`.
+  - **`~/Documents/Personal` is NOT the vault.** A folder exists at that path, but it holds only unrelated
+    subfolders and none of the vault structure. Agents that assume it and get `No such file or directory`
+    have been misled into reporting that a note is missing when it exists. If a vault lookup comes back
+    empty, re-check the path before concluding the file is absent.
+  - Note the path contains spaces -- quote it in shell commands.
+- **Run reports:** `<vault>/Products/Geode/Runs/geode-<YYYY-MM-DD>-<slug>.md`
 - **Product folder:** Not scaffolded -- Compass is the discovery/roadmap layer for this product; no Obsidian PM scaffolding is used.
 
 ---
