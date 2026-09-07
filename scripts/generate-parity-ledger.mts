@@ -5,6 +5,7 @@ import {
   renderParityLedger,
   type EvidenceMap,
 } from "./parity-ledger.mts";
+import { MissingCorpusError, preflightCorpora } from "./parity-corpus.mts";
 
 interface CliOptions {
   helpRoot: string;
@@ -49,13 +50,40 @@ function parseArguments(argv: string[]): CliOptions {
 
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2));
+  const helpRoot = resolve(options.helpRoot);
+  const developerRoot = resolve(options.developerRoot);
+  const apiRoot = resolve(options.apiRoot);
+
+  // Fail with an actionable message before the walk, rather than a raw ENOENT
+  // from readdir once we're several frames deep in buildParityLedger.
+  await preflightCorpora([
+    {
+      label: "Obsidian help",
+      path: helpRoot,
+      flag: "--help-root",
+      repo: "https://github.com/obsidianmd/obsidian-help",
+    },
+    {
+      label: "Obsidian developer docs",
+      path: developerRoot,
+      flag: "--developer-root",
+      repo: "https://github.com/obsidianmd/obsidian-developer-docs",
+    },
+    {
+      label: "Obsidian API",
+      path: apiRoot,
+      flag: "--api-root",
+      repo: "https://github.com/obsidianmd/obsidian-api",
+    },
+  ]);
+
   const evidence = JSON.parse(
     await readFile(resolve(options.evidencePath), "utf8"),
   ) as EvidenceMap;
   const ledger = await buildParityLedger({
-    helpRoot: resolve(options.helpRoot),
-    developerRoot: resolve(options.developerRoot),
-    apiRoot: resolve(options.apiRoot),
+    helpRoot,
+    developerRoot,
+    apiRoot,
     evidence,
   });
   const rendered = renderParityLedger(ledger);
@@ -76,4 +104,14 @@ async function main(): Promise<void> {
   console.log(`Wrote ${options.outputPath} (${ledger.summary.total} requirements).`);
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  if (error instanceof MissingCorpusError) {
+    // Expected, recurring, and not a code fault — print the guidance without a
+    // stack trace, which would only bury it.
+    console.error(error.message);
+    process.exit(1);
+  }
+  throw error;
+}
