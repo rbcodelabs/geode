@@ -36,3 +36,9 @@ Device state lives under host application data, never in the vault. Electron sec
 - Providers must honor `expectedRevision` and stable `operationKey` values; services unable to do so cannot advertise the required capabilities.
 - File identity must handle case, Unicode, and rename ambiguity conservatively. Ambiguity becomes a conflict, never an overwrite.
 - Native Keychain support is required before credentialed providers can run on iOS.
+- Desktop plugins are trusted privileged code. Encrypted storage outside the vault and renderer-bound namespace handles do not provide isolation against a malicious installed plugin.
+- The experimental beta checks SHA-256 content before local mutation; the existing filesystem host cannot atomically compare content and replace/trash it. Concurrent external writers can still race the final check. Test only on disposable vault copies until that host primitive is available.
+
+## Beta readiness follow-up (2026-09-07)
+
+The user approved adding conflict actions and content-hash fencing before review. Existing SyncApi and provider semantics are retained. Legacy metadata fingerprints are conservatively treated as changed; recovery records the transferred-byte hash. The tradeoff is additional local reads on every scan, with no new dependencies. Conflict siblings remain available after resolution and are excluded from subsequent uploads.

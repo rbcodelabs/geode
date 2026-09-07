@@ -1202,7 +1202,7 @@ class SettingsModal extends Modal {
     );
   }
 
-  private renderSyncTab(container: HTMLElement): void {
+  private renderSyncTab(container: HTMLElement, summary = ""): void {
     container.innerHTML = `<h2>Sync</h2>`;
     const providers = this.geodeApp.sync.listProviders();
     const active = this.geodeApp.sync.getActiveProvider();
@@ -1215,12 +1215,34 @@ class SettingsModal extends Modal {
     select.addEventListener("change", () => { void (select.value ? this.geodeApp.sync.activate(select.value) : this.geodeApp.sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
     control.appendChild(select);
     this.addRow(container, "Status", status.message ?? status.state).control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
+    if (summary) { const result = document.createElement("p"); result.setAttribute("role", "status"); result.textContent = summary; container.appendChild(result); }
     const actions = document.createElement("div"); actions.className = "setting-item-control";
-    const addAction = (label: string, action: () => Promise<unknown>) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => { button.disabled = true; void action().then(result => { if (result) this.geodeApp.notify(typeof result === "object" ? JSON.stringify(result) : String(result)); }).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))).finally(() => this.renderSyncTab(container)); }); actions.appendChild(button); };
+    const perform = (action: () => Promise<unknown>) => {
+      container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button,input,select").forEach(control => { control.disabled = true; });
+      void action().then(result => {
+        if (result && typeof result === "object" && "uploads" in result && "downloads" in result && "deletes" in result && "conflicts" in result && "skipped" in result) {
+          summary = `${result.uploads} upload, ${result.downloads} download, ${result.deletes} deletions, ${result.conflicts} conflict, ${result.skipped} skipped. Review before approving the first sync.`;
+        } else summary = "Sync settings updated.";
+      }).catch(error => { summary = error instanceof Error ? error.message : String(error); this.geodeApp.notify(summary); })
+        .finally(() => { if (container.isConnected) this.renderSyncTab(container, summary); });
+    };
+    const addAction = (label: string, action: () => Promise<unknown>) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action)); actions.appendChild(button); };
     addAction("Preview", () => this.geodeApp.sync.preview());
     addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }));
     addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
     container.appendChild(actions);
+    const conflictContainer = document.createElement("div"); container.appendChild(conflictContainer);
+    void this.geodeApp.sync.listConflicts().then(conflicts => {
+      if (!conflictContainer.isConnected) return;
+      for (const conflict of conflicts) {
+        const row = this.addRow(conflictContainer, conflict.path, conflict.conflictPath ? `Remote copy: ${conflict.conflictPath}. Keep local sends your current version; Accept remote restores the remote version. Copies are retained for recovery.` : "Deleted remotely. Keep local uploads this file again; Accept remote moves the local file to trash.");
+        row.control.parentElement?.setAttribute("data-sync-conflict", conflict.id);
+        for (const [label, resolution] of [["Keep local", "keep-local"], ["Accept remote", "accept-remote"]] as const) {
+          const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active;
+          button.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveConflict(conflict.id, resolution))); row.control.appendChild(button);
+        }
+      }
+    }).catch(error => this.geodeApp.notify(String(error)));
     void this.geodeApp.sync.getScope().then(scope => {
       const labels: Array<[keyof typeof scope, string]> = [
         ["markdown", "Notes and Canvas/Base files"], ["images", "Images"], ["audio", "Audio"], ["video", "Video"], ["pdfs", "PDFs"], ["other", "Other file types"],

@@ -5,7 +5,7 @@ import type { SyncApi, SyncConflict, SyncPreview, SyncProvider, SyncRemoteEntry,
 
 interface BaselineEntry { path: string; localFingerprint: string; remoteId: string; remoteRevision: string; kind: "file" | "folder"; }
 interface SyncState { stateKey: string; vaultId: string; providerId?: string; cursor?: string; approved: boolean; paused: boolean; previewSignature?: string; baseline: Record<string, BaselineEntry>; remoteIndex: Record<string, SyncRemoteEntry>; conflicts: Record<string, { remote: SyncRemoteEntry; conflictPath: string }>; scope: SyncScope; journal: JournalOperation[]; }
-interface JournalOperation { id: string; type: "upload" | "download" | "local-trash" | "remote-trash"; path: string; remote?: SyncRemoteEntry; phase: "prepared" | "applied"; }
+interface JournalOperation { id: string; type: "upload" | "download" | "local-trash" | "remote-trash"; path: string; remote?: SyncRemoteEntry; localFingerprint?: string; phase: "prepared" | "applied"; }
 interface Plan { uploads: VaultFileEntry[]; downloads: SyncRemoteEntry[]; localTrash: SyncRemoteEntry[]; remoteTrash: BaselineEntry[]; conflicts: Array<{ local?: VaultFileEntry; remote: SyncRemoteEntry }>; skipped: number; remoteEntries: SyncRemoteEntry[]; nextRemoteIndex: Record<string, SyncRemoteEntry>; expectedLocal: Record<string, string | undefined>; cursor?: string; }
 
 const EMPTY_STATUS: SyncStatus = { state: "disconnected", conflicts: 0 };
@@ -46,18 +46,46 @@ export class SyncCoordinator extends Events implements SyncApi {
     return this.withSession(async (session, state, signal, vaultId) => {
       const conflict = state.conflicts[id]; if (!conflict) throw new Error("Unknown sync conflict");
       const opId = this.operationId(); let remote = conflict.remote;
+      const before = await this.currentFingerprint(remote.path); this.assertContext(signal, vaultId);
+      const scan = await session.scan(undefined, signal); this.assertContext(signal, vaultId);
+      if (scan.status !== "complete" || scan.mode !== "snapshot") throw new Error("Conflict resolution requires a complete current snapshot");
+      const current = scan.entries.find(entry => entry.id === remote.id && entry.kind !== "tombstone");
+      if (remote.kind === "tombstone" ? Boolean(current) : !current || current.revision !== remote.revision) throw new Error("Remote conflict changed; sync again before resolving");
+      if (remote.kind === "tombstone") {
+        if (resolution === "keep-local") {
+          const bytes = await this.host.vaultFiles.readBinary(remote.path); const fingerprint = await this.hash(bytes); this.assertContext(signal, vaultId);
+          remote = await session.create({ path: remote.path, data: bytes, operationKey: opId, signal }); this.assertContext(signal, vaultId);
+          state.baseline[remote.path] = { path: remote.path, localFingerprint: fingerprint, remoteId: remote.id, remoteRevision: remote.revision, kind: "file" };
+          state.remoteIndex[remote.id] = remote;
+        } else {
+          if (await this.currentFingerprint(remote.path) !== before) throw new Error("Local conflict changed; try resolving again");
+          this.assertContext(signal, vaultId); if (before !== undefined) await this.host.vaultFiles.trash(remote.path, opId); this.assertContext(signal, vaultId);
+          delete state.baseline[remote.path]; delete state.remoteIndex[remote.id];
+        }
+        delete state.conflicts[id]; await this.saveState(state);
+        this.setStatus({ state: Object.keys(state.conflicts).length ? "conflict" : "idle", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length });
+        return;
+      }
+      let fingerprint: string;
       if (resolution === "accept-remote") {
-        const bytes = await this.host.vaultFiles.readBinary(conflict.conflictPath); this.assertContext(signal, vaultId);
+        const bytes = await session.read(remote, signal); fingerprint = await this.hash(bytes); this.assertContext(signal, vaultId);
+        if (await this.currentFingerprint(remote.path) !== before) throw new Error("Local conflict changed; try resolving again");
+        this.assertContext(signal, vaultId);
         await this.host.vaultFiles.writeBinary(remote.path, bytes, undefined, opId); this.assertContext(signal, vaultId);
       } else {
-        const bytes = await this.host.vaultFiles.readBinary(remote.path); this.assertContext(signal, vaultId);
+        if (before === undefined) {
+          await session.trash({ id: remote.id, expectedRevision: remote.revision, signal }); this.assertContext(signal, vaultId);
+          delete state.baseline[remote.path]; delete state.remoteIndex[remote.id]; delete state.conflicts[id]; await this.saveState(state);
+          this.setStatus({ state: Object.keys(state.conflicts).length ? "conflict" : "idle", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length }); return;
+        }
+        const bytes = await this.host.vaultFiles.readBinary(remote.path); fingerprint = await this.hash(bytes); this.assertContext(signal, vaultId);
         remote = await session.update({ id: remote.id, path: remote.path, data: bytes, expectedRevision: remote.revision, operationKey: opId, signal }); this.assertContext(signal, vaultId);
       }
       const canonical = (await this.host.vaultFiles.list()).find(entry => entry.path === remote.path);
       if (!canonical) throw new Error("Canonical conflict file is missing");
-      state.baseline[remote.path] = { path: remote.path, localFingerprint: this.fingerprint(canonical), remoteId: remote.id, remoteRevision: remote.revision, kind: "file" };
+      state.baseline[remote.path] = { path: remote.path, localFingerprint: fingerprint, remoteId: remote.id, remoteRevision: remote.revision, kind: "file" };
       state.remoteIndex[remote.id] = remote;
-      this.assertContext(signal, vaultId); await this.host.vaultFiles.trash(conflict.conflictPath, opId); this.assertContext(signal, vaultId);
+      // Preserve the conflict copy: it may have been edited manually while resolving.
       delete state.conflicts[id]; await this.saveState(state);
       this.setStatus({ state: Object.keys(state.conflicts).length ? "conflict" : "idle", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length });
     });
@@ -121,7 +149,7 @@ export class SyncCoordinator extends Events implements SyncApi {
       this.activeRegistration = registration;
       work = (async () => { const session = await provider.open({ vaultId }); this.assertContext(controller.signal, vaultId); this.activeSession = session; try { return await fn(session, state, controller.signal, vaultId); } finally { await session.close(); } })();
       this.running = work;
-      try { return await work; } catch (error) { if (!controller.signal.aborted) this.setStatus({ state: "error", providerId: state.providerId, conflicts: 0, message: error instanceof Error ? error.message : String(error) }); throw error; }
+      try { return await work; } catch (error) { if (!controller.signal.aborted) this.setStatus({ state: "error", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length, message: error instanceof Error ? error.message : String(error) }); throw error; }
       finally { if (this.running === work) this.running = undefined; this.activeAbort = undefined; this.activeSession = undefined; this.activeRegistration = undefined; }
     } finally {
       this.operationClaimed = false;
@@ -139,8 +167,15 @@ export class SyncCoordinator extends Events implements SyncApi {
     if (remoteScan.mode === "delta" && !capabilities.delta) throw new Error("Provider returned an unadvertised delta scan");
     if (remoteScan.mode === "snapshot" && !capabilities.completeSnapshots) throw new Error("Provider returned an unadvertised complete snapshot");
     if (!remoteScan.mode) throw new Error("Provider must declare snapshot or delta scan mode");
+    for (const entry of localScan.entries) {
+      if (isPathInSyncScope(entry.path, state.scope) && (entry.isFolder || this.isWithinLimit(entry.size))) {
+        (entry as VaultFileEntry & { syncFingerprint: string }).syncFingerprint = entry.isFolder ? "folder" : await this.hash(await this.host.vaultFiles.readBinary(entry.path));
+        this.assertContext(signal, vaultId);
+      }
+    }
     await this.recoverJournal(state, localScan.entries, remoteScan.entries, remoteScan.mode);
-    const localAll = localScan.entries.filter(e => isPathInSyncScope(e.path, state.scope));
+    const conflictCopies = new Set(Object.values(state.conflicts).map(conflict => conflict.conflictPath).filter(Boolean));
+    const localAll = localScan.entries.filter(e => isPathInSyncScope(e.path, state.scope) && !conflictCopies.has(e.path) && !/\.sync-conflict-\d+/.test(e.path));
     const local = localAll.filter(e => !e.isFolder);
     const nextRemoteIndex = remoteScan.mode === "delta" ? { ...state.remoteIndex } : {};
     for (const change of remoteScan.entries) {
@@ -183,6 +218,9 @@ export class SyncCoordinator extends Events implements SyncApi {
   private async execute(session: SyncSession, state: SyncState, plan: Plan, signal: AbortSignal, vaultId: string) {
     for (const entry of plan.uploads) {
       this.assertContext(signal, vaultId); const op = await this.prepare(state, "upload", entry.path); const data = await this.host.vaultFiles.readBinary(entry.path); this.assertContext(signal, vaultId); const prior = state.baseline[entry.path];
+      op.localFingerprint = await this.hash(data);
+      if (op.localFingerprint !== this.fingerprint(entry)) throw new Error("Local file changed after preview; preview sync again");
+      await this.saveState(state); this.assertContext(signal, vaultId);
       try {
         const remote = prior ? await session.update({ id: prior.remoteId, path: entry.path, data, expectedRevision: prior.remoteRevision, signal, operationKey: op.id }) : await session.create({ path: entry.path, data, signal, operationKey: op.id }); this.assertContext(signal, vaultId);
         plan.nextRemoteIndex[remote.id] = remote;
@@ -198,13 +236,17 @@ export class SyncCoordinator extends Events implements SyncApi {
         plan.conflicts.push({ local: entry, remote: current }); await this.ack(state, op);
       }
     }
-    for (const entry of plan.downloads) { this.assertContext(signal, vaultId); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); if (entry.kind === "folder") { await this.host.vaultFiles.mkdir(entry.path, op.id); this.assertContext(signal, vaultId); state.baseline[entry.path] = { path: entry.path, localFingerprint: "folder", remoteId: entry.id, remoteRevision: entry.revision, kind: "folder" }; await this.ack(state, op); continue; } const data = await session.read(entry, signal); this.assertContext(signal, vaultId); const beforeWrite = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); const actual = beforeWrite ? this.fingerprint(beforeWrite) : undefined; if (actual !== plan.expectedLocal[entry.path]) { plan.conflicts.push({ local: beforeWrite, remote: entry }); await this.ack(state, op); continue; } await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); this.assertContext(signal, vaultId); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(stat), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
-    for (const entry of plan.localTrash) { const path = entry.deletedPath ?? entry.path; const baseline = state.baseline[path]; const current = (await this.host.vaultFiles.list()).find(e => e.path === path); if (!baseline || !current || this.fingerprint(current) !== baseline.localFingerprint) { if (current) plan.conflicts.push({ local: current, remote: entry }); continue; } const op = await this.prepare(state, "local-trash", path, entry); this.assertContext(signal, vaultId); await this.host.vaultFiles.trash(path, op.id); this.assertContext(signal, vaultId); delete state.baseline[path]; await this.ack(state, op); }
-    for (const entry of plan.remoteTrash) { this.assertContext(signal, vaultId); const op = await this.prepare(state, "remote-trash", entry.path, { id: entry.remoteId, path: entry.path, kind: "file", revision: entry.remoteRevision }); await session.trash({ id: entry.remoteId, expectedRevision: entry.remoteRevision, signal }); this.assertContext(signal, vaultId); delete state.baseline[entry.path]; delete plan.nextRemoteIndex[entry.remoteId]; await this.ack(state, op); }
+    for (const entry of plan.downloads) { this.assertContext(signal, vaultId); validateSyncPath(entry.path); const op = await this.prepare(state, "download", entry.path, entry); if (entry.kind === "folder") { await this.host.vaultFiles.mkdir(entry.path, op.id); this.assertContext(signal, vaultId); state.baseline[entry.path] = { path: entry.path, localFingerprint: "folder", remoteId: entry.id, remoteRevision: entry.revision, kind: "folder" }; await this.ack(state, op); continue; } const data = await session.read(entry, signal); this.assertContext(signal, vaultId); const beforeWrite = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); const actual = await this.currentFingerprint(entry.path); this.assertContext(signal, vaultId); if (actual !== plan.expectedLocal[entry.path]) { plan.conflicts.push({ local: beforeWrite, remote: entry }); await this.ack(state, op); continue; } await this.host.vaultFiles.writeBinary(entry.path, data, undefined, op.id); this.assertContext(signal, vaultId); const stat = (await this.host.vaultFiles.list()).find(e => e.path === entry.path); if (stat) state.baseline[entry.path] = { path: entry.path, localFingerprint: await this.hash(data), remoteId: entry.id, remoteRevision: entry.revision, kind: "file" }; await this.ack(state, op); }
+    for (const entry of plan.localTrash) { const path = entry.deletedPath ?? entry.path; const baseline = state.baseline[path]; const current = (await this.host.vaultFiles.list()).find(e => e.path === path); this.assertContext(signal, vaultId); if (!baseline || !current || await this.currentFingerprint(path) !== baseline.localFingerprint) { if (current) plan.conflicts.push({ local: current, remote: entry }); continue; } const op = await this.prepare(state, "local-trash", path, entry); if (await this.currentFingerprint(path) !== baseline.localFingerprint) { plan.conflicts.push({ local: current, remote: entry }); await this.ack(state, op); continue; } this.assertContext(signal, vaultId); await this.host.vaultFiles.trash(path, op.id); this.assertContext(signal, vaultId); delete state.baseline[path]; await this.ack(state, op); }
+    for (const entry of plan.remoteTrash) { this.assertContext(signal, vaultId); const op = await this.prepare(state, "remote-trash", entry.path, { id: entry.remoteId, path: entry.path, kind: "file", revision: entry.remoteRevision }); if (await this.host.vaultFiles.exists(entry.path)) { await this.ack(state, op); throw new Error("Local file was restored; sync again"); } this.assertContext(signal, vaultId); await session.trash({ id: entry.remoteId, expectedRevision: entry.remoteRevision, signal }); this.assertContext(signal, vaultId); delete state.baseline[entry.path]; delete plan.nextRemoteIndex[entry.remoteId]; await this.ack(state, op); }
     for (const conflict of plan.conflicts) {
-      if (conflict.remote.kind !== "file") continue;
       const conflictId = `${conflict.remote.id}:${conflict.remote.revision}:${conflict.remote.path}`;
       if (state.conflicts[conflictId]) continue;
+      if (conflict.remote.kind === "tombstone") {
+        state.conflicts[conflictId] = { remote: conflict.remote, conflictPath: "" };
+        await this.saveState(state); continue;
+      }
+      if (conflict.remote.kind !== "file") throw new Error("Cannot reconcile a folder conflict automatically");
       const bytes = await session.read(conflict.remote, signal); this.assertContext(signal, vaultId);
       let conflictPath = this.conflictPath(conflict.remote.path); let suffix = 2;
       while (await this.host.vaultFiles.exists(conflictPath)) conflictPath = this.conflictPath(conflict.remote.path).replace(/(\.[^./]+)?$/, `-${suffix++}$1`);
@@ -214,7 +256,16 @@ export class SyncCoordinator extends Events implements SyncApi {
     }
   }
 
-  private fingerprint(entry: VaultFileEntry) { return `${entry.size}:${entry.mtime}`; }
+  private fingerprint(entry: VaultFileEntry) { return (entry as VaultFileEntry & { syncFingerprint?: string }).syncFingerprint ?? (entry.isFolder ? "folder" : "unknown"); }
+  private async hash(bytes: ArrayBuffer): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return `sha256:${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  private async currentFingerprint(path: string): Promise<string | undefined> {
+    if (!await this.host.vaultFiles.exists(path)) return undefined;
+    const entry = (await this.host.vaultFiles.list()).find(item => item.path === path);
+    return entry?.isFolder ? "folder" : await this.hash(await this.host.vaultFiles.readBinary(path));
+  }
   private isWithinLimit(size: number | undefined) { const provider = this.status.providerId ? this.providers.get(this.status.providerId)?.provider : undefined; return size === undefined || provider?.capabilities.maxFileSize === undefined || size <= provider.capabilities.maxFileSize; }
   private conflictPath(path: string) { const dot = path.lastIndexOf("."); const suffix = `.sync-conflict-${this.now()}`; return dot > path.lastIndexOf("/") ? `${path.slice(0, dot)}${suffix}${path.slice(dot)}` : `${path}${suffix}`; }
   private operationId() { return `sync:${this.now()}:${Math.random().toString(36).slice(2)}`; }
@@ -229,7 +280,7 @@ export class SyncCoordinator extends Events implements SyncApi {
       if (op.type === "upload") {
         const uploaded = remote.find(entry => entry.operationKey === op.id && entry.kind !== "tombstone");
         const localEntry = localByPath.get(op.path);
-        if (uploaded && localEntry) { state.baseline[op.path] = { path: op.path, localFingerprint: this.fingerprint(localEntry), remoteId: uploaded.id, remoteRevision: uploaded.revision, kind: "file" }; state.journal = state.journal.filter(candidate => candidate.id !== op.id); changed = true; }
+        if (uploaded && localEntry) { state.baseline[op.path] = { path: op.path, localFingerprint: op.localFingerprint ?? "unknown", remoteId: uploaded.id, remoteRevision: uploaded.revision, kind: "file" }; state.journal = state.journal.filter(candidate => candidate.id !== op.id); changed = true; }
       } else if (op.type === "local-trash" && !localByPath.has(op.path)) {
         delete state.baseline[op.path]; state.journal = state.journal.filter(candidate => candidate.id !== op.id); changed = true;
       } else if (op.type === "remote-trash" && mode === "snapshot" && op.remote && !remoteById.has(op.remote.id)) {

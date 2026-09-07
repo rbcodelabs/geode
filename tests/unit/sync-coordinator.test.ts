@@ -27,6 +27,7 @@ function memoryHost(files: Record<string, string> = {}, sharedState = new Map<st
   return Object.assign(host, {
     testWrite(path: string, value: string) { data.set(path, new TextEncoder().encode(value)); mtimes.set(path, (mtimes.get(path) ?? 1) + 1); },
     testDelete(path: string) { data.delete(path); mtimes.delete(path); },
+    testSilentWrite(path: string, value: string) { data.set(path, new TextEncoder().encode(value)); },
     testRead(path: string) { const bytes = data.get(path); return bytes ? new TextDecoder().decode(bytes) : undefined; },
   });
 }
@@ -48,6 +49,65 @@ function provider(entries: SyncRemoteEntry[] = []): SyncProvider {
 }
 
 describe("SyncCoordinator", () => {
+  it("does not overwrite an equal-size equal-timestamp edit during a download", async () => {
+    const host = memoryHost() as HostServices & { testSilentWrite(path: string, value: string): void };
+    let revision = "1"; let race = false;
+    const remote = provider();
+    remote.open = async () => ({ ...(await provider().open({ vaultId: "vault-a" })),
+      scan: async () => ({ status: "complete", mode: "snapshot", entries: [{ id: "r", path: "Note.md", kind: "file", revision }] }),
+      read: async () => { if (race) host.testSilentWrite("Note.md", "two"); return new TextEncoder().encode("one").buffer; },
+    });
+    const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", remote); await coordinator.activate(remote.id);
+    await coordinator.preview(); await coordinator.run({ approvePreview: true }); revision = "2"; race = true;
+    await coordinator.run(); expect(await host.vaultFiles.read("Note.md")).toBe("two"); expect(await coordinator.listConflicts()).toHaveLength(1);
+    expect((await coordinator.preview()).uploads).toBe(0);
+  });
+
+  it("retains conflicts after a failed conditional resolution", async () => {
+    const host = memoryHost({ "Note.md": "local" }); const remote = provider([{ id: "r", path: "Note.md", kind: "file", revision: "1" }]);
+    const session = await remote.open({ vaultId: "vault-a" }); remote.open = async () => ({ ...session, update: async () => { throw new Error("Remote changed"); } });
+    const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", remote); await coordinator.activate(remote.id);
+    await coordinator.preview(); await coordinator.run({ approvePreview: true });
+    const [conflict] = await coordinator.listConflicts();
+    await expect(coordinator.resolveConflict(conflict.id, "keep-local")).rejects.toThrow("Remote changed");
+    expect(await coordinator.listConflicts()).toHaveLength(1); expect(coordinator.getStatus().conflicts).toBe(1);
+  });
+
+  it("recovers the uploaded-byte baseline without blessing a later local edit", async () => {
+    const state = new Map<string, unknown>(); const host = memoryHost({ "Note.md": "two" }, state);
+    state.set("sync/vault-a", { providerId: "test.remote", approved: true, baseline: {}, remoteIndex: {}, conflicts: {}, journal: [{ id: "op1", type: "upload", path: "Note.md", phase: "prepared", localFingerprint: "sha256:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed" }] });
+    const remote = provider([{ id: "r", path: "Note.md", kind: "file", revision: "1", operationKey: "op1" }]);
+    const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", remote);
+    expect((await coordinator.preview()).uploads).toBe(1);
+  });
+  it("detects equal-size edits with unchanged timestamps and preserves deletion conflicts across restart", async () => {
+    const state = new Map<string, unknown>();
+    const host = memoryHost({ "Note.md": "one" }, state) as HostServices & { testSilentWrite(path: string, value: string): void };
+    const remote = provider();
+    const coordinator = new SyncCoordinator(host, () => "vault-a");
+    coordinator.register("plugin-a", remote);
+    await coordinator.activate(remote.id);
+    await coordinator.preview(); await coordinator.run({ approvePreview: true });
+    host.testSilentWrite("Note.md", "two");
+    const result = await coordinator.run();
+    expect(result.conflicts).toBe(1);
+    expect(await host.vaultFiles.read("Note.md")).toBe("two");
+    const restarted = new SyncCoordinator(host, () => "vault-a");
+    restarted.register("plugin-a", remote);
+    expect(await restarted.listConflicts()).toHaveLength(1);
+    const [conflict] = await restarted.listConflicts();
+    await restarted.resolveConflict(conflict.id, "keep-local");
+    expect(await restarted.listConflicts()).toHaveLength(0);
+    expect(await host.vaultFiles.read("Note.md")).toBe("two");
+  });
+
+  it("invalidates preview approval after same-size same-timestamp edits", async () => {
+    const host = memoryHost({ "Note.md": "one" }) as HostServices & { testSilentWrite(path: string, value: string): void };
+    const coordinator = new SyncCoordinator(host, () => "vault-a");
+    coordinator.register("plugin-a", provider()); await coordinator.activate("test.remote");
+    await coordinator.preview(); host.testSilentWrite("Note.md", "two");
+    await expect(coordinator.run({ approvePreview: true })).rejects.toThrow(/preview/i);
+  });
   it("claims the run mutex synchronously before loading state", async () => {
     const coordinator = new SyncCoordinator(memoryHost(), () => "vault-a");
     coordinator.register("plugin-a", provider());
