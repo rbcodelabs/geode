@@ -85,12 +85,18 @@ const binding = (projectId: string, label = projectId) => ({
 
 /** Test-only bypass for the future Tranche 2 realpath producer. Never use in host production code. */
 const canonical = (value: string): TrustedCanonicalRootPath => value as TrustedCanonicalRootPath;
+const rootLocation = (value: string) => ({
+  canonicalPath: canonical(value),
+  physicalIdentity: { dev: 1, ino: 1 },
+});
 
 // These compile-time assertions guard the trust boundary; they never execute.
-if (false) {
+async function assertTrustedPathTypeBoundary(): Promise<void> {
+  const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
   // @ts-expect-error ordinary strings have not passed the host canonical-real-path boundary
-  void RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: "/vault" });
+  void registry.attachProjectRoot({ canonicalPath: "/repo", physicalIdentity: { dev: 1, ino: 1 }, ...binding("p") });
 }
+void assertTrustedPathTypeBoundary;
 
 describe("external resource path identity", () => {
   it("does not export a lexical caster that can manufacture trusted canonical paths", async () => {
@@ -128,13 +134,40 @@ describe("external resource path identity", () => {
 });
 
 describe("RootRegistry attachment and binding lifecycle", () => {
+  it("persists an opaque source fingerprint for new and reused project bindings", async () => {
+    const { repo, packageDir } = await makeTree();
+    const store = new MemoryRootRegistryStore();
+    const registry = await RootRegistry.open({ store });
+    await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("a"), sourceFingerprint: "a".repeat(64) });
+    await registry.attachProjectRoot({ ...rootLocation(packageDir), ...binding("b"), sourceFingerprint: "b".repeat(64) });
+    const restored = await RootRegistry.open({ store });
+    expect(restored.listBindings().map((entry) => entry.sourceFingerprint)).toEqual(["a".repeat(64), "b".repeat(64)]);
+  });
+
+  it("does not silently replace the source fingerprint of an existing binding", async () => {
+    const { repo } = await makeTree();
+    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
+    await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("a"), sourceFingerprint: "a".repeat(64) });
+    await expect(registry.attachProjectRoot({ ...rootLocation(repo), ...binding("a"), sourceFingerprint: "b".repeat(64) }))
+      .rejects.toBeInstanceOf(BindingRetargetError);
+  });
+
+  it("rejects a malformed source fingerprint before persisting a binding", async () => {
+    const { repo } = await makeTree();
+    const store = new MemoryRootRegistryStore();
+    const registry = await RootRegistry.open({ store });
+    await expect(registry.attachProjectRoot({ ...rootLocation(repo), ...binding("a"), sourceFingerprint: "/private/project" }))
+      .rejects.toThrow("Invalid root integration source fingerprint");
+    expect(store.value).toBeNull();
+  });
+
   it("creates an opaque stable UUID and persists the read-only grant", async () => {
     const { repo, vault } = await makeTree();
     const store = new MemoryRootRegistryStore();
-    const registry = await RootRegistry.open({ store, activeVaultPath: canonical(vault), now: () => 1234 });
+    const registry = await RootRegistry.open({ store, now: () => 1234 });
 
     const result = await registry.attachProjectRoot({
-      canonicalPath: canonical(repo),
+      ...rootLocation(repo),
       ...binding("project-a", "Geode"),
     });
 
@@ -156,14 +189,13 @@ describe("RootRegistry attachment and binding lifecycle", () => {
 
   it("exactly deduplicates a canonical target", async () => {
     const { repo, vault } = await makeTree();
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
+    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
 
-    const first = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    const second = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-b") });
+    const first = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
+    const second = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-b") });
 
     expect(first.kind).toBe("attached");
     expect(second.kind).toBe("reused");
-    if (first.kind === "inside-vault" || second.kind === "inside-vault") throw new Error("unexpected vault result");
     expect(second.root.rootId).toBe(first.root.rootId);
     expect(second.binding.relativeBase).toBe("");
     expect(registry.listRoots()).toHaveLength(1);
@@ -172,13 +204,12 @@ describe("RootRegistry attachment and binding lifecycle", () => {
 
   it("reuses an ancestor grant with a normalized relative base", async () => {
     const { repo, packageDir, vault } = await makeTree();
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
-    const first = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
+    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
+    const first = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
 
-    const child = await registry.attachProjectRoot({ canonicalPath: canonical(packageDir), ...binding("project-b") });
+    const child = await registry.attachProjectRoot({ ...rootLocation(packageDir), ...binding("project-b") });
 
     expect(child.kind).toBe("reused");
-    if (first.kind === "inside-vault" || child.kind === "inside-vault") throw new Error("unexpected vault result");
     expect(child.root.rootId).toBe(first.root.rootId);
     expect(child.binding.relativeBase).toBe("packages/app");
     expect(registry.listRoots()).toHaveLength(1);
@@ -186,12 +217,11 @@ describe("RootRegistry attachment and binding lifecycle", () => {
 
   it("blocks a parent attachment that would broaden an existing grant", async () => {
     const { repo, packageDir, vault } = await makeTree();
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
-    const child = await registry.attachProjectRoot({ canonicalPath: canonical(packageDir), ...binding("project-a") });
-    if (child.kind === "inside-vault") throw new Error("unexpected vault result");
+    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
+    const child = await registry.attachProjectRoot({ ...rootLocation(packageDir), ...binding("project-a") });
 
     await expect(
-      registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-b") })
+      registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-b") })
     ).rejects.toMatchObject<Partial<RootOverlapError>>({
       name: "RootOverlapError",
       conflictingRootIds: [child.root.rootId],
@@ -200,35 +230,10 @@ describe("RootRegistry attachment and binding lifecycle", () => {
     expect(registry.listBindings()).toHaveLength(1);
   });
 
-  it("returns a vault-relative base instead of mounting a directory inside the active vault", async () => {
-    const { vault } = await makeTree();
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
-
-    const result = await registry.attachProjectRoot({
-      canonicalPath: canonical(path.join(vault, "Projects", "inside")),
-      ...binding("project-a"),
-    });
-
-    expect(result).toEqual({ kind: "inside-vault", relativeBase: "Projects/inside" });
-    expect(registry.listRoots()).toEqual([]);
-    expect(registry.listBindings()).toEqual([]);
-  });
-
-  it("blocks an external root that would envelop and duplicate the active vault", async () => {
-    const { base, vault } = await makeTree();
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
-
-    await expect(
-      registry.attachProjectRoot({ canonicalPath: canonical(base), ...binding("project-a") })
-    ).rejects.toBeInstanceOf(RootOverlapError);
-    expect(registry.listRoots()).toEqual([]);
-  });
-
   it("removes only the requested integration binding and retains orphaned grants", async () => {
     const { repo, vault } = await makeTree();
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
-    const attached = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    if (attached.kind === "inside-vault") throw new Error("unexpected vault result");
+    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
+    const attached = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
 
     expect(await registry.removeBinding(binding("project-a"))).toBe(true);
 
@@ -241,12 +246,11 @@ describe("RootRegistry attachment and binding lifecycle", () => {
     const { base, repo, vault } = await makeTree();
     const other = path.join(base, "other");
     await fs.mkdir(other);
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
-    const first = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    if (first.kind === "inside-vault") throw new Error("unexpected vault result");
+    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
+    const first = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
 
     await expect(
-      registry.attachProjectRoot({ canonicalPath: canonical(other), ...binding("project-a") })
+      registry.attachProjectRoot({ ...rootLocation(other), ...binding("project-a") })
     ).rejects.toBeInstanceOf(BindingRetargetError);
     expect(registry.listRoots()).toHaveLength(1);
     expect(registry.listBindings()).toEqual([first.binding]);
@@ -256,44 +260,21 @@ describe("RootRegistry attachment and binding lifecycle", () => {
     const { base, repo, vault } = await makeTree();
     const moved = path.join(base, "repo-moved");
     await fs.mkdir(moved);
-    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore(), activeVaultPath: canonical(vault) });
-    const attached = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    if (attached.kind === "inside-vault") throw new Error("unexpected vault result");
+    const registry = await RootRegistry.open({ store: new MemoryRootRegistryStore() });
+    const attached = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
 
     await registry.setAvailability(attached.root.rootId, "missing");
     expect(registry.getRoot(attached.root.rootId)?.availability).toBe("missing");
 
+    const movedLocation = rootLocation(moved);
     const reconnected = await registry.reconnectRoot(attached.root.rootId, {
-      canonicalPath: canonical(moved),
+      canonicalPath: movedLocation.canonicalPath,
       chosenPath: path.join(base, "friendly-repo"),
-    });
+    }, movedLocation.physicalIdentity);
     expect(reconnected.rootId).toBe(attached.root.rootId);
     expect(reconnected.locator).toEqual({ canonicalPath: moved, chosenPath: path.join(base, "friendly-repo") });
     expect(reconnected.availability).toBe("connected");
   });
-
-  it.each(["equal", "descendant", "ancestor"] as const)(
-    "rejects reconnect to the active vault %s",
-    async (relationship) => {
-      const { base, repo, vault } = await makeTree();
-      const registry = await RootRegistry.open({
-        store: new MemoryRootRegistryStore(),
-        activeVaultPath: canonical(vault),
-      });
-      const attached = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-      if (attached.kind === "inside-vault") throw new Error("unexpected vault result");
-      const target = relationship === "equal"
-        ? vault
-        : relationship === "descendant"
-          ? path.join(vault, "Projects", "inside")
-          : base;
-
-      await expect(
-        registry.reconnectRoot(attached.root.rootId, { canonicalPath: canonical(target) })
-      ).rejects.toBeInstanceOf(RootOverlapError);
-      expect(registry.getRoot(attached.root.rootId)?.locator.canonicalPath).toBe(repo);
-    }
-  );
 
   it("keeps in-memory state unchanged when persistence fails", async () => {
     const { repo, vault } = await makeTree();
@@ -301,10 +282,10 @@ describe("RootRegistry attachment and binding lifecycle", () => {
       load: async () => null,
       save: async () => { throw new Error("disk full"); },
     };
-    const registry = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
+    const registry = await RootRegistry.open({ store });
 
     await expect(
-      registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") })
+      registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") })
     ).rejects.toThrow("disk full");
     expect(registry.listRoots()).toEqual([]);
     expect(registry.listBindings()).toEqual([]);
@@ -315,12 +296,11 @@ describe("RootRegistry attachment and binding lifecycle", () => {
     const store = new MemoryRootRegistryStore();
     const registry = await RootRegistry.open({
       store,
-      activeVaultPath: canonical(vault),
       createRootId: () => "predictable-id",
     });
 
     await expect(
-      registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") })
+      registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") })
     ).rejects.toThrow(/UUID/i);
     expect(store.value).toBeNull();
     expect(registry.listRoots()).toEqual([]);
@@ -329,15 +309,15 @@ describe("RootRegistry attachment and binding lifecycle", () => {
   it("rejects invalid integration metadata and display paths before persisting", async () => {
     const { repo, vault } = await makeTree();
     const store = new MemoryRootRegistryStore();
-    const registry = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
+    const registry = await RootRegistry.open({ store });
 
     await expect(registry.attachProjectRoot({
-      canonicalPath: canonical(repo),
+      ...rootLocation(repo),
       ...binding("project-a"),
       integrationId: "",
     })).rejects.toThrow(/binding/i);
     await expect(registry.attachProjectRoot({
-      canonicalPath: canonical(repo),
+      ...rootLocation(repo),
       chosenPath: "relative/repo",
       ...binding("project-a"),
     })).rejects.toThrow(/absolute path/i);
@@ -348,9 +328,8 @@ describe("RootRegistry attachment and binding lifecycle", () => {
     const { base, repo, vault } = await makeTree();
     const moved = path.join(base, "moved");
     const store = new MemoryRootRegistryStore();
-    const registry = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
-    const attached = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    if (attached.kind === "inside-vault") throw new Error("unexpected vault result");
+    const registry = await RootRegistry.open({ store });
+    const attached = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
     const persisted = structuredClone(store.value);
 
     store.failNext = true;
@@ -364,9 +343,10 @@ describe("RootRegistry attachment and binding lifecycle", () => {
     expect(store.value).toEqual(persisted);
 
     store.failNext = true;
+    const movedLocation = rootLocation(moved);
     await expect(registry.reconnectRoot(attached.root.rootId, {
-      canonicalPath: canonical(moved),
-    })).rejects.toThrow("disk full");
+      canonicalPath: movedLocation.canonicalPath,
+    }, movedLocation.physicalIdentity)).rejects.toThrow("disk full");
     expect(registry.getRoot(attached.root.rootId)?.locator.canonicalPath).toBe(repo);
     expect(store.value).toEqual(persisted);
   });
@@ -375,10 +355,8 @@ describe("RootRegistry attachment and binding lifecycle", () => {
     const { repo, vault } = await makeTree();
     const registry = await RootRegistry.open({
       store: new MemoryRootRegistryStore(),
-      activeVaultPath: canonical(vault),
-    });
-    const attached = await registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    if (attached.kind === "inside-vault") throw new Error("unexpected vault result");
+      });
+    const attached = await registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
 
     const descriptor = registry.getRootDescriptor(attached.root.rootId);
     expect(descriptor).toMatchObject({
@@ -395,10 +373,10 @@ describe("RootRegistry mutation serialization", () => {
   it("retains both bindings when concurrent exact attachments share a grant", async () => {
     const { repo, vault } = await makeTree();
     const store = new ControlledRootRegistryStore();
-    const registry = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
+    const registry = await RootRegistry.open({ store });
 
-    const first = registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    const second = registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-b") });
+    const first = registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
+    const second = registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-b") });
     await vi.waitFor(() => expect(store.pending).toHaveLength(1));
     store.succeedNext();
     await first;
@@ -416,10 +394,10 @@ describe("RootRegistry mutation serialization", () => {
     const { base, repo, vault } = await makeTree();
     const other = path.join(base, "other");
     const store = new ControlledRootRegistryStore();
-    const registry = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
+    const registry = await RootRegistry.open({ store });
 
-    const first = registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    const second = registry.attachProjectRoot({ canonicalPath: canonical(other), ...binding("project-b") });
+    const first = registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
+    const second = registry.attachProjectRoot({ ...rootLocation(other), ...binding("project-b") });
     await vi.waitFor(() => expect(store.pending).toHaveLength(1));
     store.succeedNext();
     await first;
@@ -435,10 +413,10 @@ describe("RootRegistry mutation serialization", () => {
     const { base, repo, vault } = await makeTree();
     const other = path.join(base, "other");
     const store = new ControlledRootRegistryStore();
-    const registry = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
+    const registry = await RootRegistry.open({ store });
 
-    const failed = registry.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    const recovered = registry.attachProjectRoot({ canonicalPath: canonical(other), ...binding("project-b") });
+    const failed = registry.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
+    const recovered = registry.attachProjectRoot({ ...rootLocation(other), ...binding("project-b") });
     const failedOutcome = failed.catch((error) => error);
     await vi.waitFor(() => expect(store.pending).toHaveLength(1));
     store.failNext();
@@ -461,6 +439,7 @@ describe("root registry persistence", () => {
     kind: "project-cwd" as const,
     label: rootId,
     locator: { canonicalPath: canonical(canonicalPath) },
+    physicalIdentity: { dev: 1, ino: 1 },
     capabilities: ["browse", "read", "open"] as const,
     availability: "connected" as const,
     createdAt: 1,
@@ -470,11 +449,10 @@ describe("root registry persistence", () => {
     const { base, repo, vault } = await makeTree();
     const userDataDir = path.join(base, "user-data");
     const store = new JsonRootRegistryStore(userDataDir);
-    const first = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
-    const attached = await first.attachProjectRoot({ canonicalPath: canonical(repo), ...binding("project-a") });
-    if (attached.kind === "inside-vault") throw new Error("unexpected vault result");
+    const first = await RootRegistry.open({ store });
+    const attached = await first.attachProjectRoot({ ...rootLocation(repo), ...binding("project-a") });
 
-    const restored = await RootRegistry.open({ store, activeVaultPath: canonical(vault) });
+    const restored = await RootRegistry.open({ store });
 
     expect(restored.getRoot(attached.root.rootId)).toEqual(attached.root);
     expect(restored.listBindings()).toEqual([attached.binding]);
@@ -484,8 +462,8 @@ describe("root registry persistence", () => {
 
   it.each([
     { schemaVersion: 99, roots: [], bindings: [] },
-    { schemaVersion: 1, roots: "not-an-array", bindings: [] },
-    { schemaVersion: 1, roots: [], bindings: [{ integrationId: "x", instanceId: "y", projectId: "z", rootId: "missing", relativeBase: "", label: "z" }] },
+    { schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION, roots: "not-an-array", bindings: [] },
+    { schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION, roots: [], bindings: [{ integrationId: "x", instanceId: "y", projectId: "z", rootId: "missing", relativeBase: "", label: "z" }] },
   ])("fails closed on corrupt or future state without rewriting it", async (invalid) => {
     const { base } = await makeTree();
     const userDataDir = path.join(base, "user-data");
@@ -505,7 +483,7 @@ describe("root registry persistence", () => {
       const child = persistedRoot(rootIdB, "/workspace/repo/packages/app");
       const roots = order === "parent-first" ? [parent, child] : [child, parent];
       const store: RootRegistryStore = {
-        load: async () => ({ schemaVersion: 1, roots, bindings: [] }),
+        load: async () => ({ schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION, roots, bindings: [] }),
         save: async () => { throw new Error("must not save"); },
       };
 
@@ -516,7 +494,7 @@ describe("root registry persistence", () => {
   it("allows sibling canonical paths that merely share a string prefix", async () => {
     const store: RootRegistryStore = {
       load: async () => ({
-        schemaVersion: 1,
+        schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION,
         roots: [
           persistedRoot(rootIdA, "/workspace/repo"),
           persistedRoot(rootIdB, "/workspace/repository"),
@@ -537,7 +515,7 @@ describe("root registry persistence", () => {
   ])("rejects unsupported Phase 1 persisted $field values", async ({ field, value }) => {
     const root = { ...persistedRoot(rootIdA, "/workspace/repo"), [field]: value };
     const store: RootRegistryStore = {
-      load: async () => ({ schemaVersion: 1, roots: [root], bindings: [] }),
+      load: async () => ({ schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION, roots: [root], bindings: [] }),
       save: async () => { throw new Error("must not save"); },
     };
 

@@ -148,6 +148,8 @@ export interface DesktopHostService {
 }
 
 export interface HostServices {
+  /** Internal desktop-only Project integration; absent on mobile/browser. */
+  externalRoots?: import("../../shared/external-roots").ExternalRootsHost;
   readonly capabilities: Readonly<HostCapabilities>;
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;

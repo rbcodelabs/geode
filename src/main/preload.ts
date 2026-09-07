@@ -7,6 +7,13 @@ import type { ProcessMetric } from "./process-metrics";
 import type { CrashDiagnostic } from "./crash-journal";
 import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
+import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
+
+async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
+  if (reply.ok) return reply.value;
+  throw Object.assign(new Error(`External root: ${reply.error}`), { code: reply.error });
+}
 
 export interface VaultFileEntry {
   path: string;
@@ -36,6 +43,16 @@ export interface UpdaterCheckResult {
 }
 
 const api = {
+  externalRoots: (process.platform === "darwin" ? Object.freeze({
+    version: 1,
+    contribute: (projects) => invokeExternalRoot("external-roots-contribute", projects),
+    listProjects: () => invokeExternalRoot("external-roots-projects"),
+    attach: (projectId) => invokeExternalRoot("external-roots-attach", projectId),
+    reconnect: (projectId) => invokeExternalRoot("external-roots-reconnect", projectId),
+    detach: (projectId) => invokeExternalRoot("external-roots-detach", projectId),
+    listDirectory: (ref, options) => invokeExternalRoot("external-roots-list", ref, options),
+    readText: (ref) => invokeExternalRoot("external-roots-read", ref),
+  } satisfies ExternalRootsHost) : undefined),
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
   acquirePowerSaveBlocker: (): Promise<string> =>
     ipcRenderer.invoke("power-save-blocker-acquire"),
@@ -198,8 +215,9 @@ type ElectronOnlyGeodeApi = typeof api;
  */
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
-  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback"
+  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots"
 > & {
+  externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];

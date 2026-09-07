@@ -53,6 +53,10 @@ import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 import { DeepLinkDispatcher } from "./deep-link";
 import type { PluginFileSet } from "./preload";
+import { ExternalRootService, externalRootReply, type ExternalRootServiceSession } from "./external-root-service";
+import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
+import type { ExternalProjectContribution } from "../shared/external-roots";
+import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -87,6 +91,8 @@ app.on("second-instance", (_event, argv) => {
 });
 
 interface VaultSession {
+  externalRoots?: Promise<ExternalRootServiceSession>;
+  externalRootsInvalidated?: boolean;
   root: string;
   watcher: VaultWatcherHandle | null;
   indexer: MetadataIndexerHost | null;
@@ -102,6 +108,47 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
+const externalRootService = new ExternalRootService(() => RootRegistry.open({ store: new JsonRootRegistryStore(app.getPath("userData")) }));
+
+function externalRootSession(sender: Electron.WebContents): Promise<ExternalRootServiceSession> {
+  const win = BrowserWindow.fromWebContents(sender);
+  const session = win && sessions.get(win.id);
+  if (!win || win.webContents !== sender || !session || session.externalRootsInvalidated || process.platform !== "darwin") {
+    throw new Error("External roots unavailable for this vault session");
+  }
+  return session.externalRoots ??= externalRootService.createSession({
+    activeVaultPath: session.root,
+    isSessionCurrent: () => !win.isDestroyed() && win.webContents === sender && sessions.get(win.id) === session && !session.externalRootsInvalidated,
+    pickDirectory: async (purpose, details) => {
+      const result = await dialog.showOpenDialog(win, {
+        title: purpose === "attach" ? "Attach Project folder read-only" : "Reconnect Project folder",
+        properties: ["openDirectory"],
+        ...(details.suggestedPath ? { defaultPath: details.suggestedPath } : {}),
+      });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+    confirmDirectory: async ({ purpose, label, selectedPath }) => {
+      const result = await dialog.showMessageBox(win, {
+        type: "question", title: purpose === "attach" ? "Attach Project folder?" : "Replace Project folder?",
+        message: `${purpose === "attach" ? "Attach" : "Reconnect"} ${label}`,
+        detail: `${selectedPath}\n\nGeode may browse and open files read-only. Agent execution permission is separate. This does not change the Project working directory.${purpose === "reconnect" ? " This folder replaces the previous location for the existing root and its tabs." : ""}`,
+        buttons: ["Cancel", purpose === "attach" ? "Attach read-only" : "Reconnect read-only"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      return result.response === 1;
+    },
+    confirmDetach: async (label) => (await dialog.showMessageBox(win, {
+      type: "question", title: "Detach from Geode?", message: `Detach ${label}?`,
+      detail: "This removes only the local Project attachment. Files, the Threads Project, its working directory, and execution permission are unchanged.",
+      buttons: ["Cancel", "Detach"], defaultId: 0, cancelId: 0, noLink: true,
+    })).response === 1,
+  });
+}
+
+function invalidateExternalRoots(session: VaultSession | undefined): void {
+  if (!session) return;
+  session.externalRootsInvalidated = true;
+  void session.externalRoots?.then((roots) => roots.dispose()).catch(() => undefined);
+}
 /** Explicit vault requested for a window that has not completed open-vault yet. */
 const launchTargets = new Map<number, string>();
 /**
@@ -269,6 +316,14 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 }
 
 function registerIpc() {
+  // Narrow internal desktop integration. No Vault/TFile or arbitrary-path API.
+  ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[]) => externalRootReply(async () => (await externalRootSession(e.sender)).contribute(projects)));
+  ipcMain.handle("external-roots-projects", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listProjects()));
+  ipcMain.handle("external-roots-attach", (e, projectId: string) => externalRootReply(async () => (await externalRootSession(e.sender)).attach(projectId)));
+  ipcMain.handle("external-roots-reconnect", (e, projectId: string) => externalRootReply(async () => (await externalRootSession(e.sender)).reconnect(projectId)));
+  ipcMain.handle("external-roots-detach", (e, projectId: string) => externalRootReply(async () => (await externalRootSession(e.sender)).detach(projectId)));
+  ipcMain.handle("external-roots-list", (e, ref: RootDirectoryRef, options?: { cursor?: string }) => externalRootReply(async () => (await externalRootSession(e.sender)).listDirectory(ref, options)));
+  ipcMain.handle("external-roots-read", (e, ref: ResourceRef) => externalRootReply(async () => (await externalRootSession(e.sender)).readText(ref)));
   ipcMain.handle("window-chrome-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false };
@@ -310,6 +365,7 @@ function registerIpc() {
     const st = await fsp.stat(vaultPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(`Not a folder: ${vaultPath}`);
     const prev = sessions.get(win.id);
+    invalidateExternalRoots(prev);
     if (prev?.watcher) await prev.watcher.close();
     if (prev?.indexer) await prev.indexer.shutdown();
     prev?.metadataDb?.close();
@@ -1079,6 +1135,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     void artifactRuntime.unregisterOwner(ownerWebContentsId);
     const session = sessions.get(win.id);
     session?.watcher?.close();
+    invalidateExternalRoots(session);
     if (session?.indexer) void session.indexer.shutdown();
     session?.metadataDb?.close();
     sessions.delete(win.id);

@@ -26,6 +26,52 @@ export interface ResourceRef {
   relativePath: string;
 }
 
+export interface RootDirectoryRef {
+  rootId: RootId;
+  /** Empty denotes the root itself; all other values use ResourceRef validation. */
+  relativePath: string;
+}
+
+export type ExternalRootDirectoryEntryKind =
+  | "file"
+  | "directory"
+  | "file-symlink"
+  | "directory-symlink"
+  | "unavailable-link";
+
+export interface ExternalRootDirectoryEntry {
+  name: string;
+  ref: ResourceRef;
+  kind: ExternalRootDirectoryEntryKind;
+  size: number;
+  modifiedAt: number;
+  unavailableReason?: "outside-root" | "broken" | "loop" | "permission-denied" | "unavailable";
+}
+
+export interface ExternalRootDirectoryPage {
+  entries: ExternalRootDirectoryEntry[];
+  nextCursor?: string;
+  /** Entries intentionally omitted by host policy, such as .git and .DS_Store. */
+  omittedCount: number;
+}
+
+export type ExternalRootAccessErrorCode =
+  | "root-not-found"
+  | "root-missing"
+  | "root-unavailable"
+  | "permission-denied"
+  | "not-found"
+  | "invalid-path"
+  | "outside-root"
+  | "not-directory"
+  | "directory-symlink"
+  | "unavailable-link"
+  | "unsupported-file"
+  | "too-large"
+  | "invalid-utf8"
+  | "invalid-cursor"
+  | "unavailable";
+
 export interface RootIntegrationBindingKey {
   integrationId: string;
   instanceId: string;
@@ -33,6 +79,8 @@ export interface RootIntegrationBindingKey {
 }
 
 export interface RootIntegrationBinding extends RootIntegrationBindingKey {
+  /** Opaque digest of the integration's requested cwd at explicit attachment. */
+  sourceFingerprint?: string;
   rootId: RootId;
   relativeBase: string;
   label: string;

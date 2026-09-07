@@ -63,6 +63,19 @@ function createElectronPreloadFixture(): ElectronPreloadApi {
 }
 
 describe("HostServices", () => {
+  it("exposes the narrow external-root service only when provided by desktop", () => {
+    const preload = createElectronPreloadFixture();
+    expect(createElectronHost(preload).externalRoots).toBeUndefined();
+    expect(createBrowserHost(createBrowserHostState()).externalRoots).toBeUndefined();
+    const roots = {
+      version: 1 as const, contribute: vi.fn(async () => []), listProjects: vi.fn(async () => []),
+      attach: vi.fn(async () => null), reconnect: vi.fn(async () => null), detach: vi.fn(async () => false),
+      listDirectory: vi.fn(async () => ({ entries: [], omittedCount: 0 })), readText: vi.fn(async () => "text"),
+    };
+    const host = createElectronHost({ ...preload, externalRoots: roots });
+    expect(host.externalRoots).toBe(roots);
+    expect(host.vaultFiles).not.toHaveProperty("externalRoots");
+  });
   it("atomically replaces the exact browser plugin set including stylesheet absence", async () => {
     const state = createBrowserHostState({ files: {
       ".geode/plugins/probe/manifest.json": "old-manifest",
