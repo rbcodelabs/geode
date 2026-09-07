@@ -13,7 +13,13 @@
  *   - provenance + update policy  → .geode/community.json (this module)
  */
 
-import { GEODE_API_VERSION, compareVersions, isVersionAtLeast } from "../plugin-manifest";
+import {
+  GEODE_API_VERSION,
+  compareVersions,
+  isPluginManifestCompatible,
+  isVersionAtLeast,
+  type PluginRuntimePlatform,
+} from "../plugin-manifest";
 
 export type ItemType = "plugin" | "theme";
 
@@ -177,17 +183,29 @@ export interface UpdateDecision {
 export function shouldUpdate(
   item: CommunityItem,
   remoteVersion: string,
-  opts: { minAppVersion?: string; apiVersion?: string } = {}
+  opts: {
+    id?: string;
+    type?: ItemType;
+    minAppVersion?: string;
+    apiVersion?: string;
+    platform?: PluginRuntimePlatform;
+  } = {}
 ): UpdateDecision {
   if (item.pinnedVersion) return { update: false, reason: "pinned" };
 
+  if (opts.minAppVersion) {
+    const apiVersion = opts.apiVersion ?? GEODE_API_VERSION;
+    const compatible = opts.type === "plugin" && opts.id
+      ? isPluginManifestCompatible({
+          id: opts.id,
+          version: remoteVersion,
+          minAppVersion: opts.minAppVersion,
+        }, opts.platform ?? "desktop").compatible
+      : isVersionAtLeast(apiVersion, opts.minAppVersion);
+    if (!compatible) return { update: false, reason: "requires-newer-app" };
+  }
   const cmp = compareVersions(remoteVersion, item.installedVersion);
   if (cmp === 0) return { update: false, reason: "up-to-date" };
   if (cmp < 0) return { update: false, reason: "downgrade" };
-
-  const apiVersion = opts.apiVersion ?? GEODE_API_VERSION;
-  if (opts.minAppVersion && !isVersionAtLeast(apiVersion, opts.minAppVersion)) {
-    return { update: false, reason: "requires-newer-app" };
-  }
   return { update: true, reason: "update-available" };
 }

@@ -446,8 +446,16 @@ export class ToggleComponent extends ValueComponent<boolean> {
     super();
     this.toggleEl = document.createElement("div");
     this.toggleEl.className = "checkbox-container";
+    this.toggleEl.setAttribute("role", "switch");
+    this.toggleEl.setAttribute("tabindex", "0");
+    this.toggleEl.setAttribute("aria-checked", "false");
     container.appendChild(this.toggleEl);
     this.toggleEl.addEventListener("click", () => this.setValue(!this.value, true));
+    this.toggleEl.addEventListener("keydown", (event) => {
+      if (event.key !== " " && event.key !== "Enter") return;
+      event.preventDefault();
+      this.setValue(!this.value, true);
+    });
   }
   getValue(): boolean {
     return this.value;
@@ -455,6 +463,7 @@ export class ToggleComponent extends ValueComponent<boolean> {
   setValue(value: boolean, fireChange = false): this {
     this.value = value;
     this.toggleEl.classList.toggle("is-enabled", value);
+    this.toggleEl.setAttribute("aria-checked", String(value));
     if (fireChange) this.changeCb?.(value);
     return this;
   }
@@ -465,6 +474,7 @@ export class DropdownComponent extends ValueComponent<string> {
   constructor(container: HTMLElement) {
     super();
     this.selectEl = document.createElement("select");
+    this.selectEl.className = "dropdown";
     container.appendChild(this.selectEl);
     this.selectEl.addEventListener("change", () => this.changeCb?.(this.selectEl.value));
   }
@@ -486,6 +496,73 @@ export class DropdownComponent extends ValueComponent<string> {
     this.selectEl.value = value;
     return this;
   }
+}
+
+export class SliderComponent extends ValueComponent<number> {
+  sliderEl: HTMLInputElement;
+  private displayEl: HTMLElement;
+  private displayFormat: (value: number) => string = String;
+
+  constructor(container: HTMLElement) {
+    super();
+    this.sliderEl = document.createElement("input");
+    this.sliderEl.type = "range";
+    this.sliderEl.className = "slider";
+    this.displayEl = document.createElement("span");
+    this.displayEl.className = "slider-value";
+    container.append(this.sliderEl, this.displayEl);
+    this.sliderEl.addEventListener("input", () => {
+      const value = this.normalize(Number(this.sliderEl.value));
+      this.sliderEl.value = String(value);
+      this.updateDisplay();
+      this.changeCb?.(value);
+    });
+  }
+
+  setLimits(min: number, max: number, step: number | "any"): this {
+    this.sliderEl.min = String(min);
+    this.sliderEl.max = String(max);
+    this.sliderEl.step = String(step);
+    this.setValue(this.getValue());
+    return this;
+  }
+
+  getValue(): number { return Number(this.sliderEl.value); }
+
+  setValue(value: number): this {
+    this.sliderEl.value = String(this.normalize(value));
+    this.updateDisplay();
+    return this;
+  }
+
+  override setDisabled(disabled: boolean): this {
+    super.setDisabled(disabled);
+    this.sliderEl.disabled = disabled;
+    return this;
+  }
+
+  setDisplayFormat(format: (value: number) => string): this {
+    this.displayFormat = format;
+    this.updateDisplay();
+    return this;
+  }
+
+  getValuePretty(): string { return this.displayFormat(this.getValue()); }
+
+  private normalize(value: number): number {
+    const min = Number(this.sliderEl.min || 0);
+    const max = Number(this.sliderEl.max || 100);
+    const stepValue = this.sliderEl.step;
+    let normalized = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+    if (stepValue && stepValue !== "any") {
+      const step = Number(stepValue);
+      if (step > 0) normalized = min + Math.round((normalized - min) / step) * step;
+    }
+    const precision = stepValue.includes(".") ? stepValue.split(".")[1].length : 0;
+    return Number(Math.min(max, Math.max(min, normalized)).toFixed(precision));
+  }
+
+  private updateDisplay(): void { this.displayEl.textContent = this.getValuePretty(); }
 }
 
 export class SecretComponent extends TextComponent {
@@ -574,6 +651,12 @@ export class Setting {
     cb(c);
     return this;
   }
+  addSlider(cb: (c: SliderComponent) => any): this {
+    const c = new SliderComponent(this.controlEl);
+    this.components.push(c);
+    cb(c);
+    return this;
+  }
   addSearch(cb: (c: SearchComponent) => any): this {
     const c = new SearchComponent(this.controlEl);
     this.components.push(c);
@@ -590,7 +673,28 @@ export class Setting {
 // PluginSettingTab
 // ---------------------------------------------------------------------------
 
-export abstract class PluginSettingTab {
+interface DeclarativeControlDefinition {
+  type: string;
+  key: string;
+  options?: Record<string, string>;
+}
+
+interface DeclarativeSettingDefinition {
+  type?: string;
+  heading?: string;
+  name?: string;
+  desc?: string;
+  items?: DeclarativeSettingDefinition[];
+  control?: DeclarativeControlDefinition;
+  render?: (setting: Setting) => void;
+}
+
+interface SettingsBackedPlugin {
+  settings?: Record<string, unknown>;
+  saveData?: (data: unknown) => Promise<void>;
+}
+
+export class PluginSettingTab {
   app: App;
   plugin: unknown;
   containerEl: HTMLElement;
@@ -602,7 +706,74 @@ export abstract class PluginSettingTab {
     this.containerEl.className = "vertical-tab-content";
   }
 
-  abstract display(): void;
+  getSettingDefinitions?(): DeclarativeSettingDefinition[];
+
+  display(): void {
+    this.containerEl.empty();
+    const definitions = this.getSettingDefinitions?.();
+    if (!definitions) return;
+    this.renderDefinitions(definitions, this.containerEl);
+  }
+
+  getControlValue(key: string): unknown {
+    return (this.plugin as SettingsBackedPlugin).settings?.[key];
+  }
+
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    const plugin = this.plugin as SettingsBackedPlugin;
+    plugin.settings ??= {};
+    plugin.settings[key] = value;
+    await plugin.saveData?.(plugin.settings);
+  }
+
+  update(): void { this.display(); }
+
+  private renderDefinitions(definitions: DeclarativeSettingDefinition[], container: HTMLElement): void {
+    for (const definition of definitions) {
+      if (definition.type === "group") {
+        const group = document.createElement("div");
+        group.className = "setting-item-group";
+        if (definition.heading) {
+          const heading = document.createElement("h3");
+          heading.className = "setting-item-group-heading";
+          heading.textContent = definition.heading;
+          group.appendChild(heading);
+        }
+        container.appendChild(group);
+        this.renderDefinitions(definition.items ?? [], group);
+        continue;
+      }
+      if (definition.type) {
+        const message = `Unsupported declarative setting definition type "${definition.type}"`;
+        console.error(message);
+        new Setting(container).setClass("setting-item-error").setDesc(message);
+        continue;
+      }
+      const setting = new Setting(container);
+      if (definition.name) setting.setName(definition.name);
+      if (definition.desc) setting.setDesc(definition.desc);
+      if (definition.render) {
+        definition.render(setting);
+        continue;
+      }
+      const control = definition.control;
+      if (!control) continue;
+      if (control.type === "toggle") {
+        setting.addToggle((component) => component
+          .setValue(Boolean(this.getControlValue(control.key)))
+          .onChange((value) => { void this.setControlValue(control.key, value); }));
+      } else if (control.type === "dropdown") {
+        setting.addDropdown((component) => component
+          .addOptions(control.options ?? {})
+          .setValue(String(this.getControlValue(control.key) ?? ""))
+          .onChange((value) => { void this.setControlValue(control.key, value); }));
+      } else {
+        const message = `Unsupported declarative setting control type "${control.type}"`;
+        console.error(message);
+        setting.setClass("setting-item-error").setDesc(message);
+      }
+    }
+  }
   hide(): void {
     this.containerEl.empty();
   }
