@@ -16,6 +16,7 @@
 
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
+import { parseManifest } from "../renderer/plugin-manifest";
 import {
   DEFAULT_API_BASE,
   DEFAULT_RAW_BASE,
@@ -75,6 +76,30 @@ function toPreview(spec: RepoSpec, resolved: ResolvedItem): CommunityPreview {
 function assertSafeId(id: string): void {
   if (!id || id.includes("/") || id.includes("\\") || id.includes("..") || id.startsWith(".")) {
     throw new Error(`Unsafe item id: "${id}"`);
+  }
+}
+
+/** Validate resolver metadata and downloaded manifest bytes before the atomic destination swap. */
+export function validateInstallCandidate(
+  expected: CommunityPreview,
+  actual: CommunityPreview,
+  manifestRaw: string,
+): void {
+  const changed = actual.repo !== expected.repo || actual.type !== expected.type ||
+    actual.id !== expected.id || actual.version !== expected.version ||
+    actual.minAppVersion !== expected.minAppVersion || actual.source !== expected.source ||
+    actual.ref !== expected.ref;
+  if (changed) {
+    throw new Error(`Community item changed after admission: expected ${expected.id}@${expected.version} (${expected.ref})`);
+  }
+  if (expected.type === "plugin") {
+    const manifest = parseManifest(manifestRaw, expected.id);
+    if (manifest.version !== expected.version || manifest.minAppVersion !== expected.minAppVersion) {
+      throw new Error(
+        `Staged manifest changed after admission: expected ${expected.id}@${expected.version} ` +
+        `(minAppVersion ${expected.minAppVersion ?? "none"})`
+      );
+    }
   }
 }
 
@@ -153,6 +178,11 @@ export async function installCommunity(
 
     if (!wroteManifest) throw new Error("Install failed: no manifest.json");
     if (!wroteEntry) throw new Error(`Install failed: no ${entryFile}`);
+
+    if (opts.expected) {
+      const stagedManifest = await fsp.readFile(path.join(staging, "manifest.json"), "utf8");
+      validateInstallCandidate(opts.expected, toPreview(spec, resolved), stagedManifest);
+    }
 
     await preserveItemState(destDir, staging);
     await fsp.rm(destDir, { recursive: true, force: true });

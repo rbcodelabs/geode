@@ -570,6 +570,45 @@ describe("PluginManager", () => {
     expect(pm.isEnabled("foo")).toBe(false);
   });
 
+  it("enable() admits the exact desktop Minimal Theme Settings certificate", async () => {
+    const fs = installFakeGeode(["obsidian-minimal-settings"]);
+    fs.files.set(".geode/plugins/obsidian-minimal-settings/manifest.json", manifestJson(
+      "obsidian-minimal-settings",
+      { version: "9.0.0", minAppVersion: "1.13.0" },
+    ));
+    fs.files.set(".geode/plugins/obsidian-minimal-settings/main.js", mainJsSource("obsidian-minimal-settings"));
+    const pm = new PluginManager(fakeApp);
+    await pm.initialize();
+    await expect(pm.enable("obsidian-minimal-settings")).resolves.toBeUndefined();
+    expect(pm.isEnabled("obsidian-minimal-settings")).toBe(true);
+  });
+
+  it.each([
+    ["obsidian-minimal-settings", "9.0.1", "1.13.0"],
+    ["obsidian-minimal-settings", "8.9.9", "1.13.0"],
+    ["obsidian-minimal-settings", "9.0.0", "1.13.1"],
+    ["unverified-modern", "9.0.0", "1.13.0"],
+  ])("enable() rejects uncertified manifest %s@%s requiring %s", async (id, version, minAppVersion) => {
+    const fs = installFakeGeode([id]);
+    fs.files.set(`.geode/plugins/${id}/manifest.json`, manifestJson(id, { version, minAppVersion }));
+    fs.files.set(`.geode/plugins/${id}/main.js`, mainJsSource(id));
+    const pm = new PluginManager(fakeApp);
+    await pm.initialize();
+    await expect(pm.enable(id)).rejects.toThrow(/requires Geode/);
+    expect(pm.isEnabled(id)).toBe(false);
+  });
+
+  it("enable() rejects the desktop-only certificate on mobile", async () => {
+    const fs = installFakeGeode(["obsidian-minimal-settings"]);
+    fs.files.set(".geode/plugins/obsidian-minimal-settings/manifest.json", manifestJson(
+      "obsidian-minimal-settings", { version: "9.0.0", minAppVersion: "1.13.0" },
+    ));
+    fs.files.set(".geode/plugins/obsidian-minimal-settings/main.js", mainJsSource("obsidian-minimal-settings"));
+    const pm = new PluginManager({ ...fakeApp, host: { runtime: { runtime: "capacitor" } } } as any);
+    await pm.initialize();
+    await expect(pm.enable("obsidian-minimal-settings")).rejects.toThrow(/requires Geode/);
+  });
+
   it("enable() surfaces an error and does not register the plugin when main.js doesn't export a Plugin class", async () => {
     const fs = installFakeGeode(["foo"]);
     fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));

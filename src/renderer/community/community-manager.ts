@@ -147,8 +147,19 @@ export class CommunityManager {
       summary.checked++;
       try {
         const preview = await this.resolve(item.repo, { type: item.type });
+        if (preview.repo !== item.repo || preview.type !== item.type || preview.id !== item.id) {
+          throw new Error(
+            `Tracked ${item.type} "${item.id}" resolved as ${preview.type} "${preview.id}" from ${preview.repo}`
+          );
+        }
+        if (preview.type === "plugin" && !preview.minAppVersion) {
+          throw new Error(`Plugin "${preview.id}" update is missing minAppVersion`);
+        }
         const decision = shouldUpdate(item, preview.version, {
+          id: preview.id,
+          type: preview.type,
           minAppVersion: preview.minAppVersion,
+          platform: this.app.pluginManager.isMobileRuntime() ? "mobile" : "desktop",
         });
 
         if (!decision.update) {
@@ -156,7 +167,22 @@ export class CommunityManager {
           continue;
         }
 
-        const installed = await window.geode.installCommunity(item.repo, { type: item.type });
+        const installOpts: ResolveOpts = preview.source === "release"
+          ? { type: item.type, tag: preview.ref, expected: preview }
+          : { type: item.type, expected: preview };
+        const installed = await window.geode.installCommunity(item.repo, installOpts);
+        const changedIdentity = installed.repo !== preview.repo ||
+          installed.type !== preview.type ||
+          installed.id !== preview.id ||
+          installed.version !== preview.version ||
+          installed.minAppVersion !== preview.minAppVersion;
+        if (changedIdentity) {
+          throw new Error(
+            `Community item changed after admission: expected ${preview.id}@${preview.version} ` +
+            `(minAppVersion ${preview.minAppVersion ?? "none"}), received ${installed.id}@${installed.version} ` +
+            `(minAppVersion ${installed.minAppVersion ?? "none"})`
+          );
+        }
         config = upsertItem(config, {
           ...item,
           installedVersion: installed.version,
