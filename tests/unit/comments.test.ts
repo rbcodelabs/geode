@@ -185,6 +185,22 @@ describe("comment range validation", () => {
   });
 
   it.each([
+    ["display math delimiter in inline code", "Use `$$` then ordinary words"],
+    ["Obsidian comment delimiter in inline code", "Use `%%` then ordinary words"],
+    ["display math delimiter in fenced code", "```text\n$$\n```\n\nordinary words"],
+    ["Obsidian comment delimiter in fenced code", "```text\n%%\n```\n\nordinary words"],
+    ["escaped display math delimiter", "Use \\$$ then ordinary words"],
+    ["escaped Obsidian comment delimiter", "Use \\%% then ordinary words"],
+  ])("allows plain prose after %s", (_name, source) => {
+    const selected = "ordinary";
+    const from = source.indexOf(selected);
+    expect(validateCommentRange(source, { from, to: from + selected.length })).toEqual({
+      from,
+      to: from + selected.length,
+    });
+  });
+
+  it.each([
     ["autolink", "See www.example.com now", "example"],
     ["entity", "A &amp; B", "amp"],
     ["variable code span", "Use ``code ` within`` now", "within"],
