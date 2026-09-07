@@ -3,7 +3,7 @@ import type { HostServices, VaultFileEntry } from "./contracts";
 
 export type ElectronPreloadApi = Pick<GeodeApi,
   | "chooseVault" | "openVault" | "getRecentVaults" | "getLaunchVault" | "openVaultWindow"
-  | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rename" | "exists" | "onVaultEvent"
+  | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rename" | "exists" | "reveal" | "onVaultEvent"
   | "readConfig" | "writeConfig" | "readMetadataCache" | "writeMetadataCache"
   | "startMetadataIndexer" | "onMetadataIndexerMessage" | "openExternal" | "openLocalFile"
   | "listPluginIds" | "listThemes" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
@@ -97,6 +97,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       setWindowBackgroundColor: (color) => preload.setWindowBackgroundColor(color),
       publishHotkeys: (combos) => preload.publishHotkeys(combos),
       onGuestHotkey: (cb) => preload.onGuestHotkey(cb),
+      revealInFileManager: (path) => preload.reveal(path),
     },
   };
 }
