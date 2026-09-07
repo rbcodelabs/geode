@@ -36,6 +36,7 @@ import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { FileSystemAdapter, TFile, TFolder, isTFile, pathName } from "./types";
 import { RenderContext } from "./api/bases-values";
+import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
 import {
   addBookmark,
   createEmptyRoot,
@@ -1301,6 +1302,15 @@ export class App {
    * store-only — Geode has no hover-preview infrastructure yet.
    */
   renderContext = new RenderContext();
+  /**
+   * Bases view layouts registered by plugins (`Plugin.registerBasesView`),
+   * keyed by view type — the `type:` of a view inside a `.base` file.
+   *
+   * Unlike `hoverLinkSources`/`editorSuggests` above, this one is *read*:
+   * `BaseView.renderActiveView` looks the current view's type up here and
+   * hands rendering to the registered layout.
+   */
+  basesViews = new Map<string, BasesViewRegistration>();
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;
@@ -1410,6 +1420,23 @@ export class App {
     const serialized = JSON.stringify(data);
     if (serialized === undefined) throw new TypeError("App local storage data must be JSON-serializable");
     localStorage.setItem(storageKey, serialized);
+  }
+
+  /**
+   * Register a Bases view layout. Mirrors `Workspace.registerViewFactory`,
+   * including its refusal to let a plugin claim a built-in type — a plugin
+   * that captured `"table"` would leave no way to get the table view back.
+   *
+   * @returns true if registered; false if the type was already taken.
+   * @throws if `viewType` is a built-in.
+   */
+  registerBasesView(viewType: string, registration: BasesViewRegistration): boolean {
+    return registerBasesViewIn(this.basesViews, viewType, registration);
+  }
+
+  /** Remove a Bases view layout, if `registration` is still the one registered. */
+  unregisterBasesView(viewType: string, registration: BasesViewRegistration): void {
+    unregisterBasesViewIn(this.basesViews, viewType, registration);
   }
 
   registerProtocolHandler(action: string, handler: (params: Record<string, string>) => unknown): void {

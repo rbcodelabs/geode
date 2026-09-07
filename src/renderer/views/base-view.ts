@@ -16,6 +16,9 @@ import { openSortGroupMenu, type SortGroupValue } from "./bases/sort-group-menu"
 import { BasesTableView, type RowHeight } from "./bases/table-view";
 import { BasesCardsView } from "./bases/cards-view";
 import { BasesToolbar, type ToolbarHandlers } from "./bases/toolbar";
+import { BasesPluginViewHost } from "./bases/plugin-view-host";
+import { parseExpression } from "../bases/parser";
+import type { Expr } from "../bases/ast";
 
 const DEFAULT_CARD_ASPECT_RATIO = 16 / 9;
 const DEFAULT_CARD_SIZE = 240;
@@ -62,6 +65,7 @@ export class BaseView implements View {
   private toolbar: BasesToolbar;
   private tableView: BasesTableView;
   private cardsView: BasesCardsView;
+  private pluginViewHost: BasesPluginViewHost;
 
   private def: BaseDefinition | null = null;
   private currentViewName = "";
@@ -199,7 +203,16 @@ export class BaseView implements View {
     this.saveStatusEl.className = "bases-save-status";
     this.saveStatusEl.setAttribute("role", "status");
     this.saveStatusEl.setAttribute("aria-live", "polite");
-    this.bodyEl.append(this.toolbar.containerEl, this.saveStatusEl, this.errorEl, this.tableView.containerEl, this.cardsView.containerEl);
+    this.pluginViewHost = new BasesPluginViewHost(app, () => void this.persist());
+
+    this.bodyEl.append(
+      this.toolbar.containerEl,
+      this.saveStatusEl,
+      this.errorEl,
+      this.tableView.containerEl,
+      this.cardsView.containerEl,
+      this.pluginViewHost.containerEl
+    );
 
     this.containerEl.append(this.headerEl, this.bodyEl);
     if (document.body.classList.contains("is-mobile") && window.visualViewport) {
@@ -265,6 +278,7 @@ export class BaseView implements View {
     if (requireValid && "error" in parsed) throw new Error(`Couldn't parse base: ${parsed.error}`);
     this.tableView.resetForFile();
     this.cardsView.destroy();
+    this.pluginViewHost.destroy();
     this.sourceEdit = null;
     this.sourceWritePath = null;
     this.sourceConflictReadOnly = false;
@@ -366,6 +380,7 @@ export class BaseView implements View {
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
     this.cardsView.destroy();
+    this.pluginViewHost.destroy();
     this.sourceEdit = null;
     for (const cleanup of this.mobileCleanups.splice(0)) cleanup();
   }
@@ -400,6 +415,20 @@ export class BaseView implements View {
   private knownPropertyKeys(): string[] {
     const files = this.app.vault.getMarkdownFiles();
     return enumerateFrontmatterKeys(files, (f) => this.app.metadataCache.getFileCache(f)?.frontmatter ?? null);
+  }
+
+  /**
+   * Base-level formulas, parsed. A plugin view's entries evaluate lazily and
+   * may reference `formula.*`, so they need the same parsed formula map
+   * `runQuery` builds internally.
+   */
+  private parsedFormulas(): Record<string, Expr> {
+    const out: Record<string, Expr> = {};
+    for (const [name, text] of Object.entries(this.def?.formulas ?? {})) {
+      const parsed = parseExpression(text);
+      if ("expr" in parsed) out[name] = parsed.expr;
+    }
+    return out;
   }
 
   private allPropertyPaths(): string[] {
@@ -449,9 +478,34 @@ export class BaseView implements View {
     this.renderActiveView(view, result, columns);
   }
 
-  /** Dispatch rendering to the Table or Cards view based on `view.type`, keeping only the active one visible. */
+  /**
+   * Dispatch rendering by `view.type`, keeping only the active layout visible.
+   *
+   * Plugin-registered layouts are looked up first, then the built-ins. This
+   * used to be a hardcoded `type === "cards" ? cards : table`, which — since
+   * `BaseViewDefinition.type` is an open `string` — meant an unrecognised type
+   * silently rendered as a table rather than reporting that nothing could
+   * render it.
+   */
   private renderActiveView(view: BaseViewDefinition, result: QueryResult, columns: string[]): void {
     if (!this.def) return;
+
+    if (this.pluginViewHost.registrationFor(view.type)) {
+      this.tableView.containerEl.style.display = "none";
+      this.cardsView.containerEl.style.display = "none";
+      const rendered = this.pluginViewHost.render({
+        def: this.def,
+        view,
+        result,
+        columns,
+        allPropertyPaths: this.allPropertyPaths(),
+        formulas: this.parsedFormulas(),
+        thisFile: this.file,
+      });
+      if (rendered) return;
+    }
+    this.pluginViewHost.hide();
+
     const isCards = view.type === "cards";
     this.tableView.containerEl.style.display = isCards ? "none" : "";
     this.cardsView.containerEl.style.display = isCards ? "" : "none";

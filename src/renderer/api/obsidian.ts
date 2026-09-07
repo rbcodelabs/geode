@@ -20,6 +20,7 @@ import type {
   MarkdownPostProcessorContext,
 } from "../markdown/processor-registry";
 import { Scope, EditorSuggest } from "./suggest";
+import type { BasesViewRegistration } from "./bases-view";
 import { createDismissibleNotice } from "../notice";
 import moment from "moment";
 
@@ -105,6 +106,20 @@ export { Keymap } from "./keymap";
 export type { PaneType, UserEvent, Modifier } from "./keymap";
 export { parsePropertyId } from "./bases-property-id";
 export type { BasesProperty, BasesPropertyId, BasesPropertyType } from "./bases-property-id";
+export { BasesView, QueryController } from "./bases-view";
+export type {
+  BasesViewFactory,
+  BasesViewRegistration,
+  // `BasesAllOptions` is the real name for a view's option descriptors. There
+  // is no `ViewOption` in the Obsidian API despite plugins importing it; being
+  // type-only it erases at build time, so those plugins still load.
+  BasesAllOptions,
+  BasesOptions,
+  BasesOptionGroup,
+  IconName,
+} from "./bases-view";
+export { BasesEntry, BasesEntryGroup, BasesQueryResult, BasesViewConfig } from "./bases-data";
+export type { BasesSortConfig } from "./bases-data";
 
 // ---------------------------------------------------------------------------
 // Utility functions
@@ -145,8 +160,31 @@ export { addIcon, setIcon };
  */
 export { loadMermaid } from "../internal-plugins/mermaid/load-mermaid";
 export { moment };
-export function setTooltip(el: HTMLElement, tooltip: string): void {
+export type TooltipPlacement = "bottom" | "right" | "left" | "top";
+
+export interface TooltipOptions {
+  placement?: TooltipPlacement;
+  /** Extra classes applied to the tooltip element. */
+  classes?: string[];
+  /** Gap in px between the tooltip and its anchor. */
+  gap?: number;
+  /** Delay in ms before the tooltip appears. */
+  delay?: number;
+}
+
+/**
+ * Geode renders tooltips through the native `aria-label` affordance rather
+ * than a custom popover, so the options are recorded as data attributes for a
+ * theme/stylesheet to act on rather than being interpreted here. That keeps
+ * `setTooltip(el, text, opts)` from silently discarding its third argument.
+ */
+export function setTooltip(el: HTMLElement, tooltip: string, options?: TooltipOptions): void {
   el.setAttribute("aria-label", tooltip);
+  if (!options) return;
+  if (options.placement) el.setAttribute("data-tooltip-position", options.placement);
+  if (options.classes?.length) el.setAttribute("data-tooltip-classes", options.classes.join(" "));
+  if (options.gap !== undefined) el.setAttribute("data-tooltip-gap", String(options.gap));
+  if (options.delay !== undefined) el.setAttribute("data-tooltip-delay", String(options.delay));
 }
 
 export { sanitizeHTMLToDom } from "./obsidian-dom";
@@ -217,9 +255,19 @@ export class Notice {
   noticeEl: HTMLElement;
   private readonly notice: ReturnType<typeof createDismissibleNotice>;
 
+  /**
+   * `noticeEl` is deprecated upstream in favour of `messageEl`; both point at
+   * the same element here. `containerEl` is the notice stack this toast lives
+   * in — plugins position or restyle relative to it.
+   */
+  containerEl: HTMLElement;
+  messageEl: HTMLElement;
+
   constructor(message: string | DocumentFragment, duration = 4000) {
     this.notice = createDismissibleNotice(message, duration);
     this.noticeEl = this.notice.noticeEl;
+    this.messageEl = this.notice.noticeEl;
+    this.containerEl = this.notice.noticeEl.parentElement ?? this.notice.noticeEl;
   }
 
   setMessage(message: string | DocumentFragment): this {
@@ -272,6 +320,19 @@ export class Modal {
   close(): void {
     this.onClose();
     this.containerEl.remove();
+    this.closeCallback?.();
+  }
+
+  private closeCallback?: () => unknown;
+
+  /**
+   * Register a callback fired after the modal closes. Distinct from
+   * overriding `onClose()`: a caller that *opens* someone else's modal can
+   * observe its dismissal without subclassing it.
+   */
+  setCloseCallback(callback: () => unknown): this {
+    this.closeCallback = callback;
+    return this;
   }
 
   setTitle(title: string): this {
@@ -1504,6 +1565,22 @@ export abstract class Plugin extends GeodePlugin {
   registerHoverLinkSource(id: string, info: unknown): void {
     (this.app as any).hoverLinkSources?.set(id, info);
     this.register(() => (this.app as any).hoverLinkSources?.delete(id));
+  }
+
+  /**
+   * Register a custom Bases view layout, rendered for any view in a `.base`
+   * file whose `type:` matches `viewId`. Auto-unregistered on `onunload()`.
+   *
+   * Unlike the store-only registrations above, this one is genuinely wired:
+   * `BaseView` looks the type up in `app.basesViews` and hands rendering over.
+   *
+   * @returns true if registered; false if another plugin already claimed the
+   * type. Throws for a built-in type, matching `registerView`'s guard.
+   */
+  registerBasesView(viewId: string, registration: BasesViewRegistration): boolean {
+    const registered = this.app.registerBasesView(viewId, registration);
+    if (registered) this.register(() => this.app.unregisterBasesView(viewId, registration));
+    return registered;
   }
 
   /**

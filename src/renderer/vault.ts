@@ -574,6 +574,23 @@ export class Vault extends Events {
     this.trigger("modify", file);
   }
 
+  /**
+   * Copy a file to `newPath`, returning the new file.
+   *
+   * Files only. Copying a folder means recursively recreating its whole
+   * subtree, which this doesn't do — and it rejects rather than silently
+   * copying nothing, so a caller finds out immediately.
+   */
+  async copy<T extends TFile>(file: T, newPath: string): Promise<TFile> {
+    if ((file as TFile | TFolder).kind !== "file") {
+      throw new Error(`Vault.copy only supports files; "${file.path}" is a folder`);
+    }
+    if (this.files.has(newPath) || this.folders.has(newPath)) {
+      throw new Error(`File already exists: ${newPath}`);
+    }
+    return this.create(newPath, await this.read(file));
+  }
+
   async trash(item: TFile | TFolder): Promise<void> {
     await this.withHostMutation((id) => this.host.vaultFiles.trash(item.path, id));
     this.acknowledgedPathsSinceManifest.add(item.path);

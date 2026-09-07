@@ -111,6 +111,29 @@ export interface CachedMetadata {
    * existed). Present when the note has any block content.
    */
   sections?: SectionCache[];
+  /**
+   * Inline footnote references (`[^id]`). ABSENT when the note has none,
+   * following the same "present only when found" convention as `listItems`
+   * and `sections` above.
+   */
+  footnoteRefs?: FootnoteRefCache[];
+  /** Markdown reference links (`[text][id]`, `[text][]`). ABSENT when the note has none. */
+  referenceLinks?: ReferenceLinkCache[];
+}
+
+// NOTE: Geode's `Loc` is the {start, end} span (what Obsidian calls `Pos`),
+// and Geode's `Pos` is the {line, ch, offset} point. `position: Loc` here is
+// the span, consistent with every other cache type in this file.
+export interface FootnoteRefCache {
+  id: string;
+  position: Loc;
+}
+
+export interface ReferenceLinkCache {
+  id: string;
+  /** The link text, i.e. what is displayed. */
+  link: string;
+  position: Loc;
 }
 
 export const MARKDOWN_EXTENSIONS = new Set(["md"]);

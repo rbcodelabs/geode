@@ -99,8 +99,23 @@ describe("manifest compatibility admission", () => {
       ...overrides,
     }, platform);
 
-  it("keeps the advertised baseline at Obsidian 1.8.0", () => {
-    expect(GEODE_API_VERSION).toBe("1.8.0");
+  /**
+   * Raised from 1.8.0 when the Bases plugin API landed. Of the 54 top-level
+   * exports Obsidian added across 1.8.0 -> 1.10.2, 51 are that Bases surface;
+   * the remainder are closed in the same change. Deliberately still short of
+   * 1.13, so the certificate machinery below keeps doing its job.
+   */
+  it("advertises the Obsidian 1.10.2 baseline", () => {
+    expect(GEODE_API_VERSION).toBe("1.10.2");
+  });
+
+  it("now admits a plugin that requires the Bases API, and still blocks anything newer", () => {
+    // kanban-bases-view's manifest — the plugin this baseline exists to host.
+    expect(compatible({ id: "kanban-bases-view", minAppVersion: "1.10.2" })).toEqual({
+      compatible: true,
+      certified: false,
+    });
+    expect(compatible({ id: "kanban-bases-view", minAppVersion: "1.10.3" }).compatible).toBe(false);
   });
 
   it("admits only the exact desktop Minimal Theme Settings certificate", () => {
