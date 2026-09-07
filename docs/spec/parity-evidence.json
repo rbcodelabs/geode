@@ -33,97 +33,135 @@
   },
   "API-MEMBER-6ce4cacfbaac": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "A plugin constructs SearchComponent into a supplied container and observes the resulting host DOM."
   },
   "API-MEMBER-d7628f019bce": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The public clearButtonEl is observed with its native class and accessible label, clearing once and returning focus."
   },
   "API-MEMBER-23a7c4b539d4": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "Input and clear interactions observe SearchComponent.onChanged updating clear state and invoking the registered callback exactly once."
   },
   "API-MEMBER-88d5ab6de9d4": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "A plugin directly focuses, blurs, fills, and inspects the public inputEl."
   },
   "API-MEMBER-89b04bdd1320": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The inherited text value is observed after programmatic, input, and clear changes."
   },
   "API-MEMBER-095afeb777e7": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "Programmatic setValue updates the input and clear state without invoking onChange."
   },
   "API-MEMBER-2ec4907e36ec": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "A plugin sets and observes the SearchComponent placeholder."
   },
   "API-MEMBER-eba3c5939d22": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "A plugin observes exactly one callback for user input and native clear, with no callback for setValue."
   },
   "API-MEMBER-fa075629067e": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "SearchComponent input and clear paths exercise the public onChanged hook."
   },
   "API-MEMBER-89fb0f9c2690": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "setDisabled synchronizes the input disabled state and blocks the clear control."
   },
   "API-MEMBER-2b9698a7e163": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The inherited disabled state controls SearchComponent input and clear interaction behavior."
   },
   "API-MEMBER-bb1bb5466e89": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "A plugin invokes the fluent inherited setDisabled method and observes the disabled component."
   },
   "API-MEMBER-dca08c50ca0c": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "A plugin observes then() receiving and returning the same concrete SearchComponent instance."
   },
   "API-MEMBER-c045058aba9a": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The generic value getter contract is observed through SearchComponent's inherited text implementation."
   },
   "API-MEMBER-a44904fa485a": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The generic value setter contract is observed through SearchComponent's inherited text implementation."
   },
   "DEV-28a3c73a8e81": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The documented SearchComponent surface is observed end to end through a real plugin fixture."
   },
   "DEV-e073a348e0f0": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The documented constructor behavior is observed through a real plugin fixture."
   },
   "DEV-1775cdd75db1": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The documented clearButtonEl surface and interaction are observed through a real plugin fixture."
   },
   "DEV-b9821c48dc3a": {
     "status": "verified",
-    "evidence": ["tests/e2e/search-component.spec.ts"],
+    "evidence": [
+      "tests/e2e/search-component.spec.ts"
+    ],
     "notes": "The documented onChanged behavior is observed for typing and clear activation."
   },
   "API-005c3c0b05aa": {
@@ -1919,5 +1957,640 @@
       "tests/e2e/mermaid.spec.ts"
     ],
     "notes": "Matches Obsidian's `loadMermaid(): Promise<any>` declaration: a zero-argument function exported from the compatibility module returning a promise for the Mermaid library. Plugins receive the same memoized instance Geode's own Mermaid renderer uses, so a plugin's mermaid.initialize() and Geode's diagrams cannot diverge."
+  },
+  "API-MEMBER-961ffa5c1077": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "Plugin.registerBasesView registers a layout for a .base view type; BaseView looks the type up in app.basesViews and dispatches to it instead of the built-in Table/Cards renderers. Built-in types (table/cards) are refused, mirroring registerView's guard. The e2e spec loads the real third-party kanban-bases-view bundle and renders a board from a .base file."
+  },
+  "DEV-665fc5371785": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "registerBasesView is implemented and wired, not stored: the registry is read by BaseView.renderActiveView on every query run."
+  },
+  "API-578fb9a516dd": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesView is a real subclassable abstract class extending Component, constructed from a QueryController by the registration factory."
+  },
+  "DEV-746e022d27ea": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesView is a real subclassable abstract class extending Component, constructed from a QueryController by the registration factory."
+  },
+  "API-MEMBER-78f254e0d6a2": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "The protected constructor takes a QueryController and reads app, config, data and allProperties out of the host wiring it carries. QueryController itself has no public members (its documented class body is empty), so Geode defines its internals."
+  },
+  "API-MEMBER-99233dced9b3": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "The abstract `type` field is declared by the subclass and is the key the host registry dispatches on."
+  },
+  "API-MEMBER-c4b02965441f": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesView.app is the live App instance."
+  },
+  "API-MEMBER-3c1c42c4c2bd": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesView.config is a BasesViewConfig, rebuilt on each render because reloadFromDisk replaces the parsed definition objects wholesale; a config captured at construction time would keep writing into an orphaned view object."
+  },
+  "API-MEMBER-7b1dca8c6e69": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesView.data is a BasesQueryResult replaced wholesale on each update, matching the documented contract that views must not retain a reference to it."
+  },
+  "API-MEMBER-5c1265cc324a": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesView.allProperties lists every property available in the dataset, normalized to prefixed BasesPropertyId form."
+  },
+  "API-MEMBER-7d823d5567cc": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "onDataUpdated is called after every query run; the view instance is reused across updates rather than rebuilt, which is what makes the hook meaningful."
+  },
+  "API-MEMBER-64cb7342ae0e": {
+    "status": "blocked",
+    "evidence": [
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "createFileForView is part of the Bases write path, which Geode does not implement. It rejects with an explanatory error rather than resolving to nothing, so a view's add-card affordance fails loudly instead of appearing to work while creating no file. Blocked rather than partial: there is no partially-correct behaviour here, only a deliberate refusal."
+  },
+  "API-6fb273fe23d7": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesViewFactory is invoked with (controller, containerEl) and its returned view is loaded, rendered and unloaded by the host."
+  },
+  "DEV-48ba81ab9497": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesViewFactory is invoked with (controller, containerEl) by the host."
+  },
+  "API-dc2de8bbc493": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "name, icon and factory are honoured. `options` is accepted and stored but not rendered: Geode has no view-options UI for plugin views yet. That is inert data rather than a stubbed behaviour, because a view reads its settings through config.get, which works regardless of what wrote them."
+  },
+  "DEV-bc952f5ec0d7": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "name, icon and factory are honoured; `options` descriptors are stored but no settings UI renders them yet."
+  },
+  "API-MEMBER-0facedf2ed19": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesViewRegistration.name is stored with the registration."
+  },
+  "API-MEMBER-a898a403cdb7": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesViewRegistration.icon is stored with the registration."
+  },
+  "API-MEMBER-80cde7d15d2e": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "BasesViewRegistration.factory is called to build the view instance."
+  },
+  "API-MEMBER-3eb76b4692d8": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/bases-view-registry.test.ts"
+    ],
+    "notes": "The options callback is accepted and its BasesAllOptions descriptors stored, but Geode renders no view-options UI for plugin views, so nothing writes settings through it. Views still read their settings via config.get."
+  },
+  "API-d0cb55a7c379": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesViewConfig reads and writes through the `.base` per-view passthrough bag, which is what lets a plugin-registered view type persist settings at all."
+  },
+  "DEV-573b4aef5c98": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesViewConfig reads and writes through the `.base` per-view passthrough bag."
+  },
+  "API-MEMBER-0343650c3642": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesViewConfig.name returns the view's user-facing name."
+  },
+  "API-MEMBER-640d26406b65": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "get() reads unknown-to-Geode keys out of the view definition. Those keys survive a read/write round trip only because `.base` parsing and serialization now preserve unrecognised keys instead of dropping them."
+  },
+  "API-MEMBER-e7ec0a778bdd": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "set() writes into the passthrough bag and persists; set(key, null) deletes the key rather than writing a null into the user's YAML."
+  },
+  "API-MEMBER-9afbafd9b6a0": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "getAsPropertyId normalizes a stored setting to prefixed BasesPropertyId form and returns null for an absent or unusable value, so a bad value reads as 'not configured' rather than as a broken id. The e2e board groups its columns by exactly this path."
+  },
+  "API-MEMBER-0c12cd241e4d": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "getOrder returns the resolved column paths as prefixed ids, going through the same resolveColumns fallback the built-in views use."
+  },
+  "API-MEMBER-02e90fc3ad78": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "getSort normalizes property ids and drops invalid entries, per the documented contract."
+  },
+  "API-MEMBER-5b6b46f74357": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "getDisplayName prefers the user's properties[...].displayName override (matched under either the prefixed id or the bare name, since a hand-authored .base may key it either way) and otherwise returns the name with its source prefix removed."
+  },
+  "API-MEMBER-ed44da5b19c0": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "getEvaluatedFormula parses a stored setting as a Bases expression and evaluates it against the contextual file, degrading to NullValue for an absent key or a malformed formula rather than throwing."
+  },
+  "API-d6893ed0df73": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntry wraps one query row. getValue evaluates lazily rather than reading a precomputed map, which is required: the engine only materializes the paths named in view.order, and a view routinely asks for a property deliberately excluded from it."
+  },
+  "DEV-d08d92b6971b": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntry wraps one query row with a lazily-evaluating, memoized getValue."
+  },
+  "API-MEMBER-5516d431a0c2": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntry.file is the TFile backing the row."
+  },
+  "API-MEMBER-312b7491458a": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "getValue accepts prefixed or bare ids, evaluates on demand against a retained per-row EvalContext, memoizes, and returns NullValue for a property that is merely unset (null is reserved for an id that is not a parseable property expression). The e2e board groups by a property that is NOT in view.order, which is the case a precomputed map fails."
+  },
+  "DEV-050466f56ac7": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "getValue evaluates on demand and memoizes; unset properties yield NullValue."
+  },
+  "DEV-eebaf6369e13": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntry.file is the TFile backing the row."
+  },
+  "API-03dd5f56e027": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntryGroup buckets entries by the groupBy value; entry instances are shared with BasesQueryResult.data rather than duplicated."
+  },
+  "DEV-a1eefabcf4af": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntryGroup buckets entries by the groupBy value."
+  },
+  "API-MEMBER-a271396b6565": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntryGroup.entries holds the group's rows."
+  },
+  "DEV-a411db2f810a": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntryGroup.entries holds the group's rows."
+  },
+  "API-MEMBER-1d85c0e7e9cb": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntryGroup.key is the groupBy value, absent for the synthetic single group returned when no groupBy is configured."
+  },
+  "DEV-91476df44a1a": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesEntryGroup.key is the groupBy value for the group."
+  },
+  "API-MEMBER-0c444efdb3a3": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "hasKey() is false both for an absent key and for an explicit NullValue key."
+  },
+  "DEV-98a4f0e78a86": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "hasKey() is false both for an absent key and for an explicit NullValue key."
+  },
+  "API-a8f9bc3a095e": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "data, groupedData and properties are implemented. getSummaryValue supports named summary formulas from the base's summaries block but not Obsidian's built-in aggregations (Average/Sum/Median/...), which Geode's engine does not implement; those return NullValue rather than a guessed result, matching how runQuery already skips them."
+  },
+  "DEV-cf3c44e69bfb": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "data, groupedData and properties are implemented; getSummaryValue covers named summary formulas but not Obsidian's built-in aggregations."
+  },
+  "API-MEMBER-13d9452796a8": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesQueryResult.data is the ungrouped, sorted, limited entry list."
+  },
+  "API-MEMBER-fc8d6a589857": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "groupedData returns a single keyless group when no groupBy is configured, per the documented contract, so a view can iterate it without branching."
+  },
+  "API-MEMBER-4973d692a4c6": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "BasesQueryResult.properties lists visible properties in user-configured order as prefixed ids."
+  },
+  "API-MEMBER-88f3ffc8b426": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/bases-data-adapters.test.ts"
+    ],
+    "notes": "Named summary formulas from the base's summaries block are evaluated. Obsidian's built-in aggregation names return NullValue rather than a guessed computation, because Geode's summary engine does not implement them."
+  },
+  "API-101dd09719d8": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-property-id.test.ts"
+    ],
+    "notes": "parsePropertyId splits on the first dot only (so a nested frontmatter path survives) and treats an unrecognised prefix or a bare id as frontmatter shorthand. This is load-bearing beyond typing: a view uses parsePropertyId(id).name to choose the frontmatter key it writes to."
+  },
+  "DEV-1f91fec66c50": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-property-id.test.ts"
+    ],
+    "notes": "parsePropertyId splits a prefixed id into its source and name, first dot only."
+  },
+  "API-5334fc27aa90": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "Value is the abstract base of the boundary representation handed to views. Every wrapper defers toString/isTruthy to the expression engine's own coercion rules, so the API layer cannot disagree with the engine about what a value means."
+  },
+  "DEV-e36b06fc6f8c": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "Value is the abstract base class of the Bases value hierarchy."
+  },
+  "API-MEMBER-905de1975fb1": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "Value.type is the static discriminator on each concrete subclass."
+  },
+  "API-MEMBER-974c62f635ff": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "toString() delegates to the engine's valueToDisplayString for every arm."
+  },
+  "API-MEMBER-8b0761571075": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "isTruthy() delegates to the engine's isTruthy for every arm."
+  },
+  "API-MEMBER-cec918cfe8e9": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "equals() is type-strict and null-safe in both its instance and static forms."
+  },
+  "API-MEMBER-6f15e5e4ecbc": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "looseEquals() uses the engine's cross-type comparison rules, which relate a link to the file it resolves to."
+  },
+  "API-MEMBER-0508e7d1f7e0": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "renderTo() paints a value into an element: plain text by default, with richer overrides for lists, images, HTML and links. LinkValue emits <a class=\"internal-link\" data-href=\"...\">, which is load-bearing rather than cosmetic because views wire navigation with a delegated on('click', 'a.internal-link') handler that reads data-href. Observed in real Electron: the e2e board's card property values are painted through renderTo."
+  },
+  "API-6ce8cee0c451": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NotNullValue is the marker base for every non-null arm; NullValue deliberately does not extend it."
+  },
+  "DEV-7390a5043dab": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NotNullValue is the marker base for every non-null arm."
+  },
+  "API-35f3098121a4": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NullValue is a true singleton: NullValue.value is the only instance the adapters produce, so a view's `value instanceof NullValue` check and an identity check agree. A structurally-identical parallel type would silently never match."
+  },
+  "DEV-0b28790097f4": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NullValue is a singleton reachable as NullValue.value."
+  },
+  "API-MEMBER-e30705ce9d48": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NullValue.value is the shared singleton instance."
+  },
+  "API-MEMBER-01dc662d169a": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NullValue.toString() is the empty string."
+  },
+  "API-MEMBER-58c58219ebe4": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NullValue.isTruthy() is false."
+  },
+  "API-ecfc386dea81": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "PrimitiveValue<T> is the base for the single-JS-primitive arms and exposes the wrapped value."
+  },
+  "API-079c8b562904": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "StringValue wraps the engine's string arm."
+  },
+  "API-f2b4205fb907": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "NumberValue wraps the engine's number arm."
+  },
+  "API-0c569c5fb2a3": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "BooleanValue wraps the engine's boolean arm."
+  },
+  "API-e26c62e1b555": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "DateValue wraps the engine's date arm (epoch milliseconds)."
+  },
+  "API-05ca0d5d6326": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "DurationValue wraps the engine's duration arm (amount plus canonical unit letter)."
+  },
+  "API-608524794e43": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "ListValue wraps the engine's list arm, lifting items recursively, and renders each item through its own renderTo so a list of links stays clickable."
+  },
+  "API-643d302169b4": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "ObjectValue wraps the engine's object arm; get() returns NullValue for a missing key rather than undefined."
+  },
+  "API-b37d4e49e950": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-plugin-view.spec.ts",
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "LinkValue extends StringValue as documented, stringifies to its display text, and renders internal-link markup."
+  },
+  "API-834d3048b075": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "FileValue wraps the engine's file arm and renders as a link to the file itself."
+  },
+  "API-d85584bddffe": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "ImageValue extends StringValue as documented and renders an <img>."
+  },
+  "API-9009e7ce9ab5": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "HTMLValue extends StringValue as documented and renders through the shared HTML sanitizer. Note the capitalisation: the class must be HTMLValue, not HtmlValue, or a view's `instanceof HTMLValue` check can never match."
+  },
+  "API-3a0ea02ef223": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-values.test.ts"
+    ],
+    "notes": "RegExpValue wraps the engine's regexp arm. Capitalisation matters here for the same instanceof reason as HTMLValue."
+  },
+  "API-6244c4a8a4b8": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/bases-property-id.test.ts"
+    ],
+    "notes": "The two documented static helpers (isModEvent, isModifier) are implemented. The instance scope-stack methods pushScope/popScope need scope infrastructure Geode does not have and are deliberately absent rather than stubbed, so calling them raises a TypeError instead of silently pretending to bind a keymap."
+  },
+  "DEV-3c09e9409b53": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/bases-property-id.test.ts"
+    ],
+    "notes": "isModEvent and isModifier are implemented; pushScope/popScope are absent rather than stubbed."
+  },
+  "API-MEMBER-bae88d974fd9": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-property-id.test.ts"
+    ],
+    "notes": "isModEvent returns 'tab' for the platform Mod key or a middle-click, 'split' for Mod+Alt, 'window' for Mod+Alt+Shift, and false otherwise, per the documented rules. The Mod key is Cmd on macOS and Ctrl elsewhere, strictly one or the other, since Ctrl-click on macOS is the context-menu gesture."
+  },
+  "DEV-22bec1688869": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-property-id.test.ts"
+    ],
+    "notes": "isModEvent implements the documented tab/split/window/false mapping, including middle-click as 'tab'."
+  },
+  "API-MEMBER-41402f88fd45": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/bases-property-id.test.ts"
+    ],
+    "notes": "isModifier reads each named modifier off the event, resolving 'Mod' to the platform key."
   }
 }

@@ -4,7 +4,7 @@ import {
   DateValue,
   DurationValue,
   FileValue,
-  HtmlValue,
+  HTMLValue,
   ImageValue,
   LinkValue,
   ListValue,
@@ -12,7 +12,7 @@ import {
   NullValue,
   NumberValue,
   ObjectValue,
-  RegexpValue,
+  RegExpValue,
   StringValue,
   Value,
   toApiValue,
@@ -58,8 +58,8 @@ const samples: Array<{ base: BaseValue; ctor: Function; label: string }> = [
   { base: { type: "object", value: { k: { type: "number", value: 1 } } }, ctor: ObjectValue, label: "object" },
   { base: { type: "link", value: { raw: "A", display: "Alpha", resolved: file } }, ctor: LinkValue, label: "link" },
   { base: { type: "file", value: file }, ctor: FileValue, label: "file" },
-  { base: { type: "regexp", value: { source: "a+", flags: "i" } }, ctor: RegexpValue, label: "regexp" },
-  { base: { type: "html", value: "<b>x</b>" }, ctor: HtmlValue, label: "html" },
+  { base: { type: "regexp", value: { source: "a+", flags: "i" } }, ctor: RegExpValue, label: "regexp" },
+  { base: { type: "html", value: "<b>x</b>" }, ctor: HTMLValue, label: "html" },
   { base: { type: "image", value: { source: "cover.png" } }, ctor: ImageValue, label: "image" },
 ];
 

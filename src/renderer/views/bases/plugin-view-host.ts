@@ -60,7 +60,6 @@ export class BasesPluginViewHost {
       return false;
     }
 
-    const config = new BasesViewConfig(update.view, update.def, () => update.columns, this.persist);
     const summaryDeps: SummaryDeps = {
       vault: this.app.vault,
       metadataCache: this.app.metadataCache,
@@ -70,6 +69,13 @@ export class BasesPluginViewHost {
       summaries: update.def.summaries,
       anchorFile: update.thisFile ?? update.result.rows[0]?.file ?? null,
     };
+    const config = new BasesViewConfig(
+      update.view,
+      update.def,
+      () => update.columns,
+      this.persist,
+      summaryDeps
+    );
     const data = toBasesQueryResult(update.result, update.columns, summaryDeps);
     const allProperties: BasesPropertyId[] = update.allPropertyPaths.map(toPropertyId);
 
@@ -88,7 +94,11 @@ export class BasesPluginViewHost {
     try {
       view.onDataUpdated();
     } catch (error) {
+      // Report the failure rather than claiming a successful render: the
+      // container is most likely empty or half-populated, and a blank pane
+      // tells the user nothing.
       console.error(`Bases view "${update.view.type}" failed to render:`, error);
+      return false;
     }
     return true;
   }

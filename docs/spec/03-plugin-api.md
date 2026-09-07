@@ -175,7 +175,38 @@ interface PluginManifest {
 }
 ```
 
-Newer additions (1.13+): `registerCliHandler(command, description, flags, handler)` and `registerBasesView(viewId, registration)` — low priority for a clone.
+Newer additions (1.13+): `registerCliHandler(command, description, flags, handler)` — low priority for a clone.
+
+`registerBasesView(viewId, registration)` (1.10.0) **is implemented**. A plugin
+registers a layout for a `.base` view `type`, and `BaseView` dispatches to it
+instead of the built-in Table/Cards renderers:
+
+```ts
+plugin.registerBasesView('kanban-view', {
+  name: 'Kanban',
+  icon: 'columns',
+  factory: (controller, containerEl) => new MyKanbanView(controller, containerEl),
+  options: (config) => [...],   // BasesAllOptions[] — stored, not yet rendered
+});
+```
+
+The supporting surface — `BasesView`, `QueryController`, `BasesEntry`,
+`BasesEntryGroup`, `BasesQueryResult`, `BasesViewConfig`, the `Value` class
+hierarchy, `parsePropertyId`, `Keymap` — ships alongside it. Built-in types
+(`table`, `cards`) are reserved and cannot be claimed, mirroring
+`registerView`'s guard.
+
+Two deliberate gaps, both loud rather than silent:
+
+- **The Bases write path is not implemented.** `BasesView.createFileForView`
+  rejects with an explanatory error rather than resolving to nothing.
+- **View options are not rendered.** A registration's `options` descriptors are
+  accepted and stored but no settings UI reads them; a view still reads its
+  settings through `config.get`, which works regardless of what wrote them.
+
+Note the option descriptor type is `BasesAllOptions`. There is no `ViewOption`
+in the Obsidian API, despite some plugins importing that name — being type-only
+it erases at build time, so those plugins still load.
 
 Command interface:
 

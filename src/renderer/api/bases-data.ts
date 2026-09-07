@@ -196,7 +196,9 @@ export class BasesViewConfig {
     /** Resolved column paths for this view (already through `resolveColumns`). */
     private readonly resolvedColumns: () => string[],
     /** Persist the mutated definition back to the `.base` file. */
-    private readonly persist: () => void
+    private readonly persist: () => void,
+    /** Evaluation context for `getEvaluatedFormula`. */
+    private readonly deps: EntryEvalDeps
   ) {}
 
   get name(): string {
@@ -229,6 +231,36 @@ export class BasesViewConfig {
     const raw = this.get(key);
     if (typeof raw !== "string" || raw.trim() === "") return null;
     return toPropertyId(raw.trim());
+  }
+
+  /**
+   * Read a stored setting and evaluate it as a formula in the context of the
+   * current base — the contextual file (`this`), which for an embedded or
+   * sidebar base is the currently active note.
+   *
+   * @returns the resulting value, or `NullValue` if the key is absent or the
+   * formula is invalid. Never throws: a malformed formula in a config file
+   * should degrade to "no value", not break the view rendering it.
+   */
+  getEvaluatedFormula(_view: unknown, key: string): Value {
+    const raw = this.get(key);
+    if (typeof raw !== "string" || raw.trim() === "") return NullValue.value;
+
+    const parsed = parseExpression(raw);
+    if (!("expr" in parsed)) return NullValue.value;
+
+    const anchor = this.deps.thisFile;
+    if (!anchor) return NullValue.value;
+
+    const ctx = createRowContext(
+      anchor,
+      this.deps.vault,
+      this.deps.metadataCache,
+      this.deps.formulas,
+      this.deps.thisFile,
+      this.deps.now
+    );
+    return toApiValue(evaluate(parsed.expr, ctx));
   }
 
   /** Visible properties in user-configured order, normalized to prefixed ids. */

@@ -256,11 +256,11 @@ export class ImageValue extends StringValue {
 }
 
 /**
- * Geode extension. The Obsidian API publishes no class for the engine's
- * `regexp` arm, but `toApiValue` must be total — an unmapped arm would mean a
- * view silently receiving the wrong type.
+ * A RegExp pattern. Note the capitalisation: Obsidian's class is `RegExpValue`,
+ * not `RegExpValue` — a view doing `value instanceof RegExpValue` would never
+ * match a differently-named class.
  */
-export class RegexpValue extends NotNullValue {
+export class RegExpValue extends NotNullValue {
   static override type = "regexp";
   readonly baseValue: BaseValue;
   constructor(readonly source: string, readonly flags: string) {
@@ -269,12 +269,15 @@ export class RegexpValue extends NotNullValue {
   }
 }
 
-/** Geode extension, for the engine's `html` arm — see `RegexpValue`. */
-export class HtmlValue extends NotNullValue {
+/**
+ * Raw HTML. `HTMLValue`, not `HTMLValue` — same `instanceof` reasoning as
+ * `RegExpValue`. Obsidian models it as a `StringValue` subclass.
+ */
+export class HTMLValue extends StringValue {
   static override type = "html";
   readonly baseValue: BaseValue;
   constructor(readonly html: string) {
-    super();
+    super(html);
     this.baseValue = { type: "html", value: html };
   }
 
@@ -314,9 +317,9 @@ export function toApiValue(v: BaseValue): Value {
     case "file":
       return new FileValue(v.value);
     case "regexp":
-      return new RegexpValue(v.value.source, v.value.flags);
+      return new RegExpValue(v.value.source, v.value.flags);
     case "html":
-      return new HtmlValue(v.value);
+      return new HTMLValue(v.value);
     case "image":
       return new ImageValue(v.value.source);
     default: {

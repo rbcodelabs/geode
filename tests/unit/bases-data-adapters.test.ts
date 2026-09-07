@@ -194,7 +194,10 @@ describe("BasesViewConfig", () => {
       views: [v],
     };
     let persisted = 0;
-    const config = new BasesViewConfig(v, d, () => columns, () => void persisted++);
+    const config = new BasesViewConfig(v, d, () => columns, () => void persisted++, {
+      ...deps,
+      thisFile: files[0],
+    });
     return { config, view: v, persistCount: () => persisted };
   }
 
@@ -266,5 +269,24 @@ describe("BasesViewConfig", () => {
   it("exposes the view name", () => {
     const { config } = makeConfig();
     expect(config.name).toBe("Board");
+  });
+
+  describe("getEvaluatedFormula", () => {
+    it("evaluates a stored formula against the contextual file", () => {
+      // files[0] is A.md, whose frontmatter has status "To Do".
+      const { config } = makeConfig({ extra: { label: 'note.status + " (" + file.name + ")"' } });
+      expect(config.getEvaluatedFormula(null, "label").toString()).toBe("To Do (A.md)");
+    });
+
+    it("degrades to NullValue rather than throwing on a malformed formula", () => {
+      const { config } = makeConfig({ extra: { label: "note.status +++" } });
+      expect(config.getEvaluatedFormula(null, "label")).toBe(NullValue.value);
+    });
+
+    it("returns NullValue for an absent or non-string key", () => {
+      const { config } = makeConfig({ extra: { label: 7 } });
+      expect(config.getEvaluatedFormula(null, "label")).toBe(NullValue.value);
+      expect(config.getEvaluatedFormula(null, "absent")).toBe(NullValue.value);
+    });
   });
 });

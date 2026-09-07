@@ -394,18 +394,23 @@ export class BaseView implements View {
     });
   }
 
+  /** Show `message` instead of any layout — including a plugin-rendered one, which would otherwise stay on screen under the error. */
   private showError(message: string): void {
     this.errorEl.textContent = message;
     this.errorEl.style.display = "";
     this.tableView.containerEl.style.display = "none";
     this.cardsView.containerEl.style.display = "none";
+    this.pluginViewHost.hide();
   }
 
+  /**
+   * Hide the error. Layout visibility is deliberately NOT set here — it is
+   * `renderActiveView`'s job, and it runs immediately after. Deciding it in
+   * both places meant this one showed the table for any non-cards type,
+   * including a plugin-rendered view that renderActiveView then had to undo.
+   */
   private clearError(): void {
     this.errorEl.style.display = "none";
-    const isCards = this.currentView()?.type === "cards";
-    this.tableView.containerEl.style.display = isCards ? "none" : "";
-    this.cardsView.containerEl.style.display = isCards ? "" : "none";
   }
 
   private currentView(): BaseViewDefinition | null {
@@ -471,6 +476,7 @@ export class BaseView implements View {
       viewNames: this.def.views.map((v) => v.name),
       currentViewName: this.currentViewName,
       currentViewType: view.type === "cards" ? "cards" : "table",
+      currentViewIsBuiltin: !this.pluginViewHost.registrationFor(view.type),
       resultCount: result.rows.length,
       rowHeight: this.rowHeights.get(this.currentViewName) ?? "medium",
     });
@@ -490,7 +496,8 @@ export class BaseView implements View {
   private renderActiveView(view: BaseViewDefinition, result: QueryResult, columns: string[]): void {
     if (!this.def) return;
 
-    if (this.pluginViewHost.registrationFor(view.type)) {
+    const registration = this.pluginViewHost.registrationFor(view.type);
+    if (registration) {
       this.tableView.containerEl.style.display = "none";
       this.cardsView.containerEl.style.display = "none";
       const rendered = this.pluginViewHost.render({
@@ -503,6 +510,13 @@ export class BaseView implements View {
         thisFile: this.file,
       });
       if (rendered) return;
+      // The plugin owns this view type but its view failed to construct.
+      // Falling through to the table would silently show a plausible-looking
+      // wrong layout — the exact failure this dispatch replaced. Say so.
+      this.showError(
+        `The "${registration.name}" view could not be loaded. See the developer console for details.`
+      );
+      return;
     }
     this.pluginViewHost.hide();
 

@@ -98,8 +98,8 @@ export {
   LinkValue,
   FileValue,
   ImageValue,
-  RegexpValue,
-  HtmlValue,
+  RegExpValue,
+  HTMLValue,
   RenderContext,
 } from "./bases-values";
 export { Keymap } from "./keymap";
