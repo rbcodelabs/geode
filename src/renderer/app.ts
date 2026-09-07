@@ -35,6 +35,7 @@ import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { FileSystemAdapter, TFile, TFolder, isTFile, pathName } from "./types";
+import { RenderContext } from "./api/bases-values";
 import {
   addBookmark,
   createEmptyRoot,
@@ -1293,6 +1294,13 @@ export class App {
    * dropping it. Nothing reads it to drive behavior yet.
    */
   editorSuggests = new Set<unknown>();
+  /**
+   * Shared context handed to `Value.renderTo` when a Bases view renders a
+   * cell (`app.renderContext` in the Obsidian API). Carries hover-preview
+   * state there; here it is inert for the same reason `hoverLinkSources` is
+   * store-only — Geode has no hover-preview infrastructure yet.
+   */
+  renderContext = new RenderContext();
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;

@@ -182,6 +182,20 @@ function createElOn<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
+/**
+ * Sanitize an HTML string into a DocumentFragment (Obsidian uses this for
+ * untrusted HTML). Lives here rather than in `./obsidian.ts` so the low-level
+ * value classes in `./bases-values.ts` can use it without an import cycle;
+ * `./obsidian.ts` re-exports it, which is where plugins get it from.
+ */
+export function sanitizeHTMLToDom(html: string): DocumentFragment {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  // Strip script elements defensively.
+  template.content.querySelectorAll("script").forEach((s) => s.remove());
+  return template.content;
+}
+
 function define(proto: object, name: string, value: (...args: any[]) => any): void {
   if (Object.prototype.hasOwnProperty.call(proto, name)) return;
   Object.defineProperty(proto, name, { value, writable: true, configurable: true, enumerable: false });

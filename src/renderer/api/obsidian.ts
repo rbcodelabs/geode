@@ -78,6 +78,34 @@ export type {
   EditorSuggestTriggerInfo,
 } from "./suggest";
 
+// --- Bases API -------------------------------------------------------------
+// The `Value` hierarchy has to be exported as real classes, not types: views
+// branch on it with `value instanceof NullValue`, so a structurally-identical
+// parallel type would silently never match. See ./bases-values.
+export {
+  Value,
+  NotNullValue,
+  PrimitiveValue,
+  NullValue,
+  StringValue,
+  NumberValue,
+  BooleanValue,
+  DateValue,
+  DurationValue,
+  ListValue,
+  ObjectValue,
+  LinkValue,
+  FileValue,
+  ImageValue,
+  RegexpValue,
+  HtmlValue,
+  RenderContext,
+} from "./bases-values";
+export { Keymap } from "./keymap";
+export type { PaneType, UserEvent, Modifier } from "./keymap";
+export { parsePropertyId } from "./bases-property-id";
+export type { BasesProperty, BasesPropertyId, BasesPropertyType } from "./bases-property-id";
+
 // ---------------------------------------------------------------------------
 // Utility functions
 // ---------------------------------------------------------------------------
@@ -121,14 +149,7 @@ export function setTooltip(el: HTMLElement, tooltip: string): void {
   el.setAttribute("aria-label", tooltip);
 }
 
-/** Sanitize an HTML string into a DocumentFragment (Obsidian uses this for untrusted HTML). */
-export function sanitizeHTMLToDom(html: string): DocumentFragment {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  // Strip script elements defensively.
-  template.content.querySelectorAll("script").forEach((s) => s.remove());
-  return template.content;
-}
+export { sanitizeHTMLToDom } from "./obsidian-dom";
 
 export interface RequestUrlParam {
   url: string;
