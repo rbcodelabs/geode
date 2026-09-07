@@ -13,6 +13,11 @@ from the canonical vault path; renderer input cannot choose a vault/window owner
 Switching vaults or closing a window invalidates its facade and closes directory
 cursors. Embedded guest contents cannot call these IPC endpoints.
 
+Grant persistence stages JSON first, then rechecks the session/contribution just
+before initiating the atomic rename. That rename is the commit point: invalidation
+before it cancels the staged write; an already initiated commit is not rolled back
+by a later window switch. Registry mutations remain serialized throughout.
+
 The optional `HostServices.externalRoots` service is macOS-only. It offers
 contribution/listing, attach/reconnect/detach, directory pages, and bounded UTF-8
 reads. It is a narrow internal integration, not an Obsidian `App`, `Vault`,
@@ -62,6 +67,9 @@ management and the Threads lifecycle adapter remain later Phase 1 work.
   modification, or session change discards the result. These are fail-closed
   checks on detected races, not a descriptor-relative sandbox against a hostile
   local process, as the ADR states.
+- In-flight reads and pages also compare the current registry grant to their
+  captured root after I/O/handle closure, rejecting content from a previous
+  locator when another window reconnects that root ID.
 
 Availability is probed on explicit listing/refresh without a watcher. Missing or
 revoked roots keep their stable descriptor and expose a recovery state. No external

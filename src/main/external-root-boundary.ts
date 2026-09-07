@@ -179,6 +179,7 @@ export class ExternalRootDesktopBoundary {
       throw new ExternalRootAccessError("root-unavailable", "Selected root changed during attachment");
     }
     return this.registry.attachProjectRoot({
+      commitGuard: () => this.assertCurrentSession(request.isCurrent),
       beforeCommit: async () => {
         const current = await realCanonicalDirectory(selectedPath);
         if (!samePhysicalProof(proof, current)) {
@@ -232,7 +233,7 @@ export class ExternalRootDesktopBoundary {
         throw new ExternalRootAccessError("root-unavailable", "Selected root changed before reconnect committed");
       }
       this.assertCurrentSession(isCurrent);
-    });
+    }, () => this.assertCurrentSession(isCurrent));
   }
 
   detachIntegration(binding: RootIntegrationBindingKey, isCurrent?: () => boolean): Promise<boolean> {
@@ -277,6 +278,7 @@ export class ExternalRootDesktopBoundary {
       }
     }
     let retained = false;
+    let completed = false;
     try {
       await this.validateDirectory(root, relativePath, target);
       const entries: ExternalRootDirectoryEntry[] = [];
@@ -290,22 +292,31 @@ export class ExternalRootDesktopBoundary {
         else omittedCount++;
       }
       await this.validateDirectory(root, relativePath, target);
+      this.assertCurrentSession();
+      this.assertRootCurrent(root);
       entries.sort((a, b) => a.name.localeCompare(b.name));
-      if (done) return { entries, omittedCount };
+      if (done) { completed = true; return { entries, omittedCount }; }
       while (this.cursors.size >= MAX_SESSION_CURSORS) {
         await this.closeCursor(this.cursors.keys().next().value!);
       }
+      this.assertCurrentSession();
+      this.assertRootCurrent(root);
       const nextCursor = randomUUID();
       const timer = setTimeout(() => { void this.closeCursor(nextCursor); }, CURSOR_TTL_MS);
       timer.unref();
       this.cursors.set(nextCursor, { directoryKey, directory, target, omittedCount, expiresAt: this.now() + CURSOR_TTL_MS, timer });
       retained = true;
+      completed = true;
       return { entries, omittedCount, nextCursor };
     } catch (error) {
       if (error instanceof ExternalRootAccessError) throw error;
       throw mapExternalRootFsError(error, "target");
     } finally {
       if (!retained) await directory.close().catch(() => undefined);
+      if (completed) {
+        this.assertCurrentSession();
+        this.assertRootCurrent(root);
+      }
     }
   }
 
@@ -324,6 +335,7 @@ export class ExternalRootDesktopBoundary {
     }
     const target = await this.resolveTarget(root, relativePath, "file");
     let handle: fs.FileHandle | undefined;
+    let completed = false;
     try {
       // O_NONBLOCK prevents a substituted FIFO from blocking before fstat can reject it.
       handle = await fs.open(target.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
@@ -372,12 +384,18 @@ export class ExternalRootDesktopBoundary {
         throw new ExternalRootAccessError("unavailable", "Resource changed during the read");
       }
       this.assertCurrentSession();
+      this.assertRootCurrent(root);
+      completed = true;
       return text;
     } catch (error) {
       if (error instanceof ExternalRootAccessError) throw error;
       throw mapExternalRootFsError(error, "target");
     } finally {
       await handle?.close().catch(() => undefined);
+      if (completed) {
+        this.assertCurrentSession();
+        this.assertRootCurrent(root);
+      }
     }
   }
 
@@ -393,6 +411,7 @@ export class ExternalRootDesktopBoundary {
   }
 
   private async proveCurrentRoot(root: RootRecord): Promise<void> {
+    this.assertRootCurrent(root);
     if (root.availability !== "connected") {
       throw new ExternalRootAccessError("root-unavailable", "External root requires explicit reconnect");
     }
@@ -405,9 +424,20 @@ export class ExternalRootDesktopBoundary {
         || stat.ino !== root.physicalIdentity.ino) {
         throw new ExternalRootAccessError("root-unavailable", "External root identity changed; reconnect explicitly");
       }
+      this.assertRootCurrent(root);
     } catch (error) {
       if (error instanceof ExternalRootAccessError) throw error;
       throw mapExternalRootFsError(error, "root");
+    }
+  }
+
+  private assertRootCurrent(root: RootRecord): void {
+    const current = this.registry.getRoot(root.rootId);
+    if (!current || current.locator.canonicalPath !== root.locator.canonicalPath
+      || current.physicalIdentity.dev !== root.physicalIdentity.dev
+      || current.physicalIdentity.ino !== root.physicalIdentity.ino
+      || current.availability !== root.availability) {
+      throw new ExternalRootAccessError("root-unavailable", "External root grant changed during the operation");
     }
   }
 
@@ -427,6 +457,7 @@ export class ExternalRootDesktopBoundary {
       throw new ExternalRootAccessError("unavailable", "Directory changed while listing");
     }
     this.assertCurrentSession();
+    this.assertRootCurrent(root);
   }
 
   private async closeCursor(cursor: string): Promise<void> {

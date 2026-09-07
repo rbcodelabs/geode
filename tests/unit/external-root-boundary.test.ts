@@ -10,7 +10,7 @@ import {
   MAX_EXTERNAL_TEXT_BYTES,
   mapExternalRootFsError,
 } from "../../src/main/external-root-boundary";
-import { RootRegistry, type PersistedRootRegistry, type RootRegistryStore } from "../../src/main/root-registry";
+import { JsonRootRegistryStore, RootRegistry, type PersistedRootRegistry, type RootRegistryStore } from "../../src/main/root-registry";
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...await importOriginal<typeof import("node:fs/promises")>(),
@@ -63,6 +63,24 @@ async function attachRepo(boundary: ExternalRootDesktopBoundary) {
 }
 
 describe("ExternalRootDesktopBoundary grants", () => {
+  it("cancels a grant if the session changes while its config write is staged", async () => {
+    const { base, repo, vault } = await fixture();
+    const registry = await RootRegistry.open({ store: new JsonRootRegistryStore(base) });
+    let current = true;
+    const boundary = await ExternalRootDesktopBoundary.create(registry, {
+      activeVaultPath: vault, pickDirectory: async () => repo, confirmDirectory: async () => true,
+      isSessionCurrent: () => current,
+    });
+    const writeFile = fs.writeFile;
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      await writeFile(...args);
+      current = false;
+    });
+    await expect(boundary.attach(attachment())).rejects.toMatchObject({ code: "root-unavailable" });
+    expect(registry.listRoots()).toEqual([]);
+    await expect(fs.stat(path.join(base, "external-roots.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("reports a missing root on refresh without losing its stable descriptor", async () => {
     const { base, repo, boundary } = await fixture();
     const attached = await attachRepo(boundary);
@@ -402,6 +420,50 @@ describe("ExternalRootDesktopBoundary listing", () => {
 });
 
 describe("ExternalRootDesktopBoundary text reads", () => {
+  it("does not return old text when its root reconnects while the handle closes", async () => {
+    const { base, repo, boundary, selectPath } = await fixture();
+    await fs.writeFile(path.join(repo, "note.txt"), "old folder");
+    const replacement = path.join(base, "replacement");
+    await fs.mkdir(replacement);
+    const attached = await attachRepo(boundary);
+    const originalOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+        await close();
+        selectPath(replacement);
+        await boundary.reconnect(attached.root.rootId);
+      });
+      return handle;
+    });
+    await expect(boundary.readText({ rootId: attached.root.rootId, relativePath: "note.txt" }))
+      .rejects.toMatchObject({ code: "root-unavailable" });
+  });
+
+  it("discards an in-flight read if another operation reconnects its root ID", async () => {
+    const { base, repo, boundary, selectPath } = await fixture();
+    await fs.writeFile(path.join(repo, "note.txt"), "old folder");
+    const replacement = path.join(base, "replacement");
+    await fs.mkdir(replacement);
+    await fs.writeFile(path.join(replacement, "note.txt"), "new folder");
+    const attached = await attachRepo(boundary);
+    const originalOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      const read = handle.read.bind(handle);
+      vi.spyOn(handle, "read").mockImplementationOnce(async (...parameters: any[]) => {
+        const result = await read(parameters[0], parameters[1], parameters[2], parameters[3]);
+        selectPath(replacement);
+        await boundary.reconnect(attached.root.rootId);
+        return result as any;
+      });
+      return handle;
+    });
+    await expect(boundary.readText({ rootId: attached.root.rootId, relativePath: "note.txt" }))
+      .rejects.toMatchObject({ code: "root-unavailable" });
+  });
+
   it("opens nonblocking so a last-moment FIFO substitution cannot hang the host", async () => {
     const { repo, boundary } = await fixture();
     await fs.writeFile(path.join(repo, "note.txt"), "hello");

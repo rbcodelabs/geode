@@ -55,7 +55,8 @@ export interface PersistedRootRegistry {
 
 export interface RootRegistryStore {
   load(): Promise<unknown | null>;
-  save(value: PersistedRootRegistry): Promise<void>;
+  /** Invoke commitGuard immediately before committing staged persistence, if supplied. */
+  save(value: PersistedRootRegistry, commitGuard?: () => void): Promise<void>;
 }
 
 export interface RootRegistryOpenOptions {
@@ -68,6 +69,8 @@ export interface AttachProjectRootRequest extends RootIntegrationBindingKey {
   sourceFingerprint?: string;
   /** Host-only validation run inside the serialized mutation queue. */
   beforeCommit?: () => Promise<void>;
+  /** Synchronous lifetime check at the persistence commit point. */
+  commitGuard?: () => void;
   /** Canonical path established by the Tranche 2 grant/containment boundary. */
   canonicalPath: TrustedCanonicalRootPath;
   physicalIdentity: RootPhysicalIdentity;
@@ -111,9 +114,14 @@ export class JsonRootRegistryStore implements RootRegistryStore {
     }
   }
 
-  async save(value: PersistedRootRegistry): Promise<void> {
+  async save(value: PersistedRootRegistry, commitGuard?: () => void): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeJsonAtomic(this.filePath, value);
+    await writeJsonAtomic(this.filePath, value, {
+      rename: (from, to) => {
+        commitGuard?.();
+        return fs.rename(from, to);
+      },
+    });
   }
 }
 
@@ -245,7 +253,7 @@ export class RootRegistry {
       this.assertBindingDoesNotRetarget(binding);
       const nextBindings = new Map(this.bindings);
       nextBindings.set(bindingIdentity(binding), binding);
-      await this.save(this.roots, nextBindings);
+      await this.save(this.roots, nextBindings, request.commitGuard);
       this.replaceBindings(nextBindings);
       return { kind: "reused", root: cloneRoot(reusable), binding: { ...binding } };
     }
@@ -285,7 +293,7 @@ export class RootRegistry {
     this.assertBindingDoesNotRetarget(binding);
     const nextRoots = new Map(this.roots).set(root.rootId, root);
     const nextBindings = new Map(this.bindings).set(bindingIdentity(binding), binding);
-    await this.save(nextRoots, nextBindings);
+    await this.save(nextRoots, nextBindings, request.commitGuard);
     this.replaceRoots(nextRoots);
     this.replaceBindings(nextBindings);
     return { kind: "attached", root: cloneRoot(root), binding: { ...binding } };
@@ -294,16 +302,16 @@ export class RootRegistry {
   async removeBinding(key: RootIntegrationBindingKey, beforeCommit?: () => void): Promise<boolean> {
     return this.enqueueMutation(() => {
       beforeCommit?.();
-      return this.removeBindingMutation(key);
+      return this.removeBindingMutation(key, beforeCommit);
     });
   }
 
-  private async removeBindingMutation(key: RootIntegrationBindingKey): Promise<boolean> {
+  private async removeBindingMutation(key: RootIntegrationBindingKey, commitGuard?: () => void): Promise<boolean> {
     const identity = bindingIdentity(key);
     if (!this.bindings.has(identity)) return false;
     const nextBindings = new Map(this.bindings);
     nextBindings.delete(identity);
-    await this.save(this.roots, nextBindings);
+    await this.save(this.roots, nextBindings, commitGuard);
     this.replaceBindings(nextBindings);
     return true;
   }
@@ -321,14 +329,14 @@ export class RootRegistry {
     this.replaceRoots(nextRoots);
   }
 
-  async reconnectRoot(rootId: string, locator: HostRootLocator, physicalIdentity: RootPhysicalIdentity, beforeCommit?: () => Promise<void>): Promise<RootRecord> {
+  async reconnectRoot(rootId: string, locator: HostRootLocator, physicalIdentity: RootPhysicalIdentity, beforeCommit?: () => Promise<void>, commitGuard?: () => void): Promise<RootRecord> {
     return this.enqueueMutation(async () => {
       await beforeCommit?.();
-      return this.reconnectRootMutation(rootId, locator, physicalIdentity);
+      return this.reconnectRootMutation(rootId, locator, physicalIdentity, commitGuard);
     });
   }
 
-  private async reconnectRootMutation(rootId: string, locator: HostRootLocator, physicalIdentity: RootPhysicalIdentity): Promise<RootRecord> {
+  private async reconnectRootMutation(rootId: string, locator: HostRootLocator, physicalIdentity: RootPhysicalIdentity, commitGuard?: () => void): Promise<RootRecord> {
     const current = this.requireRoot(rootId);
     const canonicalPath = locator.canonicalPath;
     validateCanonicalPath(canonicalPath, "reconnected root");
@@ -351,20 +359,22 @@ export class RootRegistry {
       lastConnectedAt: timestamp,
     };
     const nextRoots = new Map(this.roots).set(rootId, updated);
-    await this.save(nextRoots, this.bindings);
+    await this.save(nextRoots, this.bindings, commitGuard);
     this.replaceRoots(nextRoots);
     return cloneRoot(updated);
   }
 
   private async save(
     roots: ReadonlyMap<string, RootRecord>,
-    bindings: ReadonlyMap<string, RootIntegrationBinding>
+    bindings: ReadonlyMap<string, RootIntegrationBinding>,
+    commitGuard?: () => void,
   ): Promise<void> {
+    commitGuard?.();
     await this.store.save({
       schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION,
       roots: [...roots.values()].map(toPersistedRoot),
       bindings: [...bindings.values()].map((binding) => ({ ...binding })),
-    });
+    }, commitGuard);
   }
 
   private replaceRoots(roots: ReadonlyMap<string, RootRecord>): void {
