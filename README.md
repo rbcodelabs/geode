@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.12.2). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.12.3). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.12.2)
+## Features (v0.12.3)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -55,8 +55,9 @@ cloud, no lock-in.
   stacked and independently resizable sidebar groups, recursive layout persistence,
   independent session-only back/forward document history in each tab,
   a hideable left ribbon with persistent Settings and
-  plugin-contributed actions, shared document actions across tab, view, command,
-  and File Explorer menus, pinned-safe bulk tab closing, and status-bar word
+  plugin-contributed actions, shared document actions (including reveal-in-Finder/
+  system-file-manager) across tab, view, command, and File Explorer menus,
+  pinned-safe bulk tab closing, and status-bar word
   count; tab bar and view header DOM/CSS match real Obsidian so community themes
   and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), and Daily Notes (Cmd+D) with per-vault enable, folder, date-format, and template-path settings,
