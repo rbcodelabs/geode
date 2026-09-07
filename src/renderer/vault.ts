@@ -27,6 +27,11 @@ export interface DataWriteOptions {
   mtime?: number;
 }
 
+export interface VaultConfigAdapter {
+  get(key: string): unknown;
+  set(key: string, value: unknown): Promise<void>;
+}
+
 /**
  * Bounded content cache with least-recently-used eviction. Backs
  * `cachedRead`/`getCachedContent`/`primeCachedContent`: without a cap, this
@@ -94,7 +99,10 @@ export class Vault extends Events {
   private hasDurableReconcileBaseline = false;
   private acknowledgedPathsSinceManifest = new Set<string>();
 
-  constructor(readonly host: HostServices = getHostServices()) {
+  constructor(
+    readonly host: HostServices = getHostServices(),
+    private readonly configAdapter?: VaultConfigAdapter,
+  ) {
     super();
   }
 
@@ -461,8 +469,15 @@ export class Vault extends Events {
    * throw. Always returns `undefined` — callers already treat that as "no
    * preference set", Obsidian's own convention for an absent config key.
    */
-  getConfig(_key: string): unknown {
-    return undefined;
+  getConfig(key: string): unknown {
+    return this.configAdapter?.get(key);
+  }
+
+  setConfig(key: string, value: unknown): Promise<void> {
+    if (!this.configAdapter) return Promise.resolve();
+    return this.configAdapter.set(key, value).catch((error) => {
+      console.error(`Failed to persist vault config "${key}"`, error);
+    });
   }
 
   /**

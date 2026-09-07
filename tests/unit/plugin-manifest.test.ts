@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  GEODE_API_VERSION,
   ManifestError,
   compareVersions,
   isVersionAtLeast,
   parseManifest,
 } from "../../src/renderer/plugin-manifest";
+import * as manifestCompat from "../../src/renderer/plugin-manifest";
 
 const valid = {
   id: "example-plugin",
@@ -84,6 +86,36 @@ describe("compareVersions", () => {
 
   it("treats a missing patch component as 0", () => {
     expect(compareVersions("1.2", "1.2.0")).toBe(0);
+  });
+});
+
+describe("manifest compatibility admission", () => {
+  const compatible = (overrides: Record<string, unknown> = {}, platform: "desktop" | "mobile" = "desktop") =>
+    (manifestCompat as any).isPluginManifestCompatible({
+      ...valid,
+      id: "obsidian-minimal-settings",
+      version: "9.0.0",
+      minAppVersion: "1.13.0",
+      ...overrides,
+    }, platform);
+
+  it("keeps the advertised baseline at Obsidian 1.8.0", () => {
+    expect(GEODE_API_VERSION).toBe("1.8.0");
+  });
+
+  it("admits only the exact desktop Minimal Theme Settings certificate", () => {
+    expect(compatible()).toEqual({ compatible: true, certified: true });
+    expect(compatible({ version: "9.0.1" }).compatible).toBe(false);
+    expect(compatible({ minAppVersion: "1.13.1" }).compatible).toBe(false);
+    expect(compatible({}, "mobile").compatible).toBe(false);
+  });
+
+  it("continues to block arbitrary 1.13 plugins while preserving baseline admission", () => {
+    expect(compatible({ id: "unverified-modern-plugin" }).compatible).toBe(false);
+    expect(compatible({ id: "baseline-plugin", minAppVersion: "1.8.0" })).toEqual({
+      compatible: true,
+      certified: false,
+    });
   });
 });
 

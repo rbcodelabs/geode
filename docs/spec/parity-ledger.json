@@ -29,9 +29,9 @@
     "unknown"
   ],
   "summary": {
-    "total": 2852,
+    "total": 2853,
     "byKind": {
-      "help-page": 175,
+      "help-page": 176,
       "developer-page": 1319,
       "changelog-delta": 50,
       "api-declaration": 299,
@@ -43,7 +43,7 @@
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2588
+      "unknown": 2589
     }
   },
   "requirements": [
@@ -110,6 +110,17 @@
       "title": "Cards view",
       "sourcePath": "obsidian-help/en/Bases/Layouts/Cards view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Layouts/Cards%20view.md",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "HELP-cd06d684e91a",
+      "kind": "help-page",
+      "surface": "logic",
+      "category": "Bases",
+      "title": "Kanban view",
+      "sourcePath": "obsidian-help/en/Bases/Layouts/Kanban view.md",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Layouts/Kanban%20view.md",
       "status": "unknown",
       "evidence": []
     },

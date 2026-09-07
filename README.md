@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.12.2). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.12.4). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.12.2)
+## Features (v0.12.4)
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -55,8 +55,9 @@ cloud, no lock-in.
   stacked and independently resizable sidebar groups, recursive layout persistence,
   independent session-only back/forward document history in each tab,
   a hideable left ribbon with persistent Settings and
-  plugin-contributed actions, shared document actions across tab, view, command,
-  and File Explorer menus, pinned-safe bulk tab closing, and status-bar word
+  plugin-contributed actions, shared document actions (including reveal-in-Finder/
+  system-file-manager) across tab, view, command, and File Explorer menus,
+  pinned-safe bulk tab closing, and status-bar word
   count; tab bar and view header DOM/CSS match real Obsidian so community themes
   and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), and Daily Notes (Cmd+D) with per-vault enable, folder, date-format, and template-path settings,
@@ -77,7 +78,10 @@ cloud, no lock-in.
   Obsidian's full `Editor` adapter. `FileManager.processFrontMatter` safely
   serializes same-file calls within one renderer runtime; it does not lock out
   direct vault/external writes, and forwarded timestamp options are not yet
-  applied by the host
+  applied by the host. **Minimal Theme Settings 9.0.0** is certified on desktop,
+  including its settings controls and theme/font preferences. This exact-version
+  exception preserves the global Obsidian API baseline at 1.8.0; newer Minimal
+  Settings versions and other plugins requiring 1.13 remain unverified
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
   once with community plugins suppressed and reversible restart controls

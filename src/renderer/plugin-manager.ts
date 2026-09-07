@@ -2,7 +2,7 @@ import type { App } from "./app";
 import { Plugin } from "./plugin";
 import {
   GEODE_API_VERSION,
-  isVersionAtLeast,
+  isPluginManifestCompatible,
   parseManifest,
   type PluginManifest,
 } from "./plugin-manifest";
@@ -548,7 +548,8 @@ export class PluginManager {
 
   private assertCanEnable(id: string, manifest: PluginManifest): void {
     if (this.isBlocked(id)) throw new Error(`Plugin "${id}" is blocked by administrator policy`);
-    if (!isVersionAtLeast(GEODE_API_VERSION, manifest.minAppVersion)) {
+    const platform = this.isMobileRuntime() ? "mobile" : "desktop";
+    if (!isPluginManifestCompatible(manifest, platform).compatible) {
       throw new Error(`Plugin "${id}" requires Geode ${manifest.minAppVersion}+ (running ${GEODE_API_VERSION})`);
     }
     if (!this.isMobileRuntime()) return;

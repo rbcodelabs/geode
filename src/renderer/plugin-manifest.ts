@@ -35,6 +35,29 @@ export interface PluginManifest {
  */
 export const GEODE_API_VERSION = "1.8.0";
 
+export type PluginRuntimePlatform = "desktop" | "mobile";
+
+export interface PluginCompatibilityResult {
+  compatible: boolean;
+  certified: boolean;
+}
+
+interface PluginCompatibilityCertificate {
+  id: string;
+  version: string;
+  maxMinAppVersion: string;
+  platform: PluginRuntimePlatform;
+}
+
+const PLUGIN_COMPATIBILITY_CERTIFICATES: readonly PluginCompatibilityCertificate[] = [
+  {
+    id: "obsidian-minimal-settings",
+    version: "9.0.0",
+    maxMinAppVersion: "1.13.0",
+    platform: "desktop",
+  },
+];
+
 export class ManifestError extends Error {
   constructor(message: string) {
     super(message);
@@ -121,4 +144,21 @@ export function compareVersions(a: string, b: string): number {
 /** True if `current` is greater than or equal to `required`. */
 export function isVersionAtLeast(current: string, required: string): boolean {
   return compareVersions(current, required) >= 0;
+}
+
+/** Central admission policy for plugin enable and community-update paths. */
+export function isPluginManifestCompatible(
+  manifest: Pick<PluginManifest, "id" | "version" | "minAppVersion">,
+  platform: PluginRuntimePlatform,
+): PluginCompatibilityResult {
+  if (isVersionAtLeast(GEODE_API_VERSION, manifest.minAppVersion)) {
+    return { compatible: true, certified: false };
+  }
+  const certificate = PLUGIN_COMPATIBILITY_CERTIFICATES.find((candidate) =>
+    candidate.id === manifest.id &&
+    candidate.version === manifest.version &&
+    candidate.platform === platform &&
+    isVersionAtLeast(candidate.maxMinAppVersion, manifest.minAppVersion)
+  );
+  return { compatible: certificate !== undefined, certified: certificate !== undefined };
 }

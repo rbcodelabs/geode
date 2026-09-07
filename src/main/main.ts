@@ -531,6 +531,14 @@ function registerIpc() {
     }
   });
 
+  // Obsidian's "Show in system explorer" / "Reveal in Finder": highlight the
+  // file or folder in the OS file manager. Desktop-only — no equivalent on
+  // browser/mobile hosts, see HostServices.desktop in host/contracts.ts.
+  ipcMain.handle("vault-reveal", async (e, rel: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    shell.showItemInFolder(resolveVaultPath(win, rel));
+  });
+
   ipcMain.handle("metadata-cache-read", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
