@@ -191,6 +191,10 @@ describe("comment range validation", () => {
     ["Obsidian comment delimiter in fenced code", "```text\n%%\n```\n\nordinary words"],
     ["escaped display math delimiter", "Use \\$$ then ordinary words"],
     ["escaped Obsidian comment delimiter", "Use \\%% then ordinary words"],
+    ["display math delimiter in an Obsidian comment", "Visible %%hidden $$ literal%% then ordinary words"],
+    ["Obsidian comment delimiter in display math", "Before $$ x %% literal $$ then ordinary words"],
+    ["display math delimiter in a highlight", "Use ==$$== then ordinary words"],
+    ["Obsidian comment delimiter in a highlight", "Use ==%%== then ordinary words"],
   ])("allows plain prose after %s", (_name, source) => {
     const selected = "ordinary";
     const from = source.indexOf(selected);

@@ -353,10 +353,12 @@ const geodeMarkdownSyntax: MarkdownConfig = {
 };
 
 const commentMarkdownParser = parser.configure([GFM, geodeMarkdownSyntax]);
-const delimiterContextParser = parser.configure(GFM);
 
-function maskNonPlainDelimiterContexts(source: string): string {
+function maskNonPlainDelimiterContexts(source: string, delimiter: "$$" | "%%"): string {
   const masked = source.split("");
+  const delimiterNodes = delimiter === "$$"
+    ? new Set(["InlineMath", "MathBlock"])
+    : new Set(["ObsidianComment", "ObsidianCommentBlock"]);
   const mask = (from: number, to: number): void => {
     for (let index = from; index < to; index += 1) {
       if (masked[index] !== "\n" && masked[index] !== "\r") masked[index] = " ";
@@ -364,9 +366,9 @@ function maskNonPlainDelimiterContexts(source: string): string {
   };
   const frontmatter = getFrontMatterInfo(source);
   if (frontmatter.exists) mask(0, frontmatter.contentStart);
-  delimiterContextParser.parse(source).iterate({
+  commentMarkdownParser.parse(source).iterate({
     enter(node) {
-      if (node.name === "Document" || node.name === "Paragraph") return;
+      if (node.name === "Document" || node.name === "Paragraph" || delimiterNodes.has(node.name)) return;
       mask(node.from, node.to);
     },
   });
@@ -402,11 +404,11 @@ function protectedRanges(source: string): Array<{ from: number; to: number; kind
   // Lezer's inline parser intentionally ends a paragraph at a blank line.
   // Geode's math and comment delimiters do not, so pair them across the raw
   // document and conservatively treat an unclosed opener as extending to EOF.
-  // Mask other parsed Markdown first so literal delimiters in code or escapes
-  // cannot become false openers while keeping every source offset unchanged.
-  const delimiterSource = maskNonPlainDelimiterContexts(source);
-  ranges.push(...delimitedSyntaxRanges(delimiterSource, "$$", "display math"));
-  ranges.push(...delimitedSyntaxRanges(delimiterSource, "%%", "Obsidian comment"));
+  // Mask other parsed Markdown and Geode syntax separately for each delimiter
+  // so literal delimiters cannot become false openers while keeping every
+  // source offset unchanged.
+  ranges.push(...delimitedSyntaxRanges(maskNonPlainDelimiterContexts(source, "$$"), "$$", "display math"));
+  ranges.push(...delimitedSyntaxRanges(maskNonPlainDelimiterContexts(source, "%%"), "%%", "Obsidian comment"));
   commentMarkdownParser.parse(source).iterate({
     enter(node) {
       if (node.name === "Document" || node.name === "Paragraph") return;
