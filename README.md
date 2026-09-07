@@ -77,7 +77,10 @@ cloud, no lock-in.
   Obsidian's full `Editor` adapter. `FileManager.processFrontMatter` safely
   serializes same-file calls within one renderer runtime; it does not lock out
   direct vault/external writes, and forwarded timestamp options are not yet
-  applied by the host
+  applied by the host. **Minimal Theme Settings 9.0.0** is certified on desktop,
+  including its settings controls and theme/font preferences. This exact-version
+  exception preserves the global Obsidian API baseline at 1.8.0; newer Minimal
+  Settings versions and other plugins requiring 1.13 remain unverified
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
   once with community plugins suppressed and reversible restart controls

@@ -692,11 +692,15 @@ component disables its input and prevents clear activation. `Setting.addSearch()
 constructs this same public component.
 
 ```ts
-abstract class PluginSettingTab extends SettingTab {
+class PluginSettingTab extends SettingTab {
   plugin: Plugin;
   containerEl: HTMLElement;
   constructor(app: App, plugin: Plugin);
-  abstract display(): void;   // re-build settings UI; called each time tab opens
+  display(): void;            // renders getSettingDefinitions(), if supplied
+  getSettingDefinitions?(): DeclarativeSettingDefinition[];
+  getControlValue(key: string): unknown;
+  setControlValue(key: string, value: unknown): Promise<void>;
+  update(): void;
   hide(): void;
 }
 
@@ -738,7 +742,24 @@ async loadSettings() {
 async saveSettings() { await this.saveData(this.settings); }
 ```
 
-Note: Obsidian 1.13 added a declarative settings system (`getSettingDefinitions()` returning typed control definitions with `key` binding, `visible`/`disabled` predicates, groups/lists/sub-pages, automatic persistence). The imperative `display()` + `Setting` builder remains the compatibility baseline.
+Obsidian 1.13 added a declarative settings system. Geode implements the narrow,
+tested slice used by Minimal Theme Settings 9.0.0: flat render callbacks,
+recursive `group` definitions, bound toggle/dropdown controls, default
+`plugin.settings[key]` persistence via `saveData`, `getControlValue`, async
+`setControlValue`, and idempotent `update`. Unsupported control types render a
+visible diagnostic and log the exact type. Predicates, lists, sub-pages, and
+other declarative control types remain unsupported. Legacy subclasses that
+override imperative `display()` retain their existing behavior.
+
+`SliderComponent` exposes `sliderEl`, `setLimits`, silent programmatic
+`setValue`, `getValue`, user-input `onChange`, `setDisabled`,
+`setDisplayFormat`, and `getValuePretty`. Values clamp to the configured range
+and snap to the configured step.
+
+Geode continues to advertise API compatibility `1.8.0`. A centralized,
+desktop-only compatibility certificate admits exactly
+`obsidian-minimal-settings@9.0.0` when its declared `minAppVersion` is no higher
+than `1.13.0`; this does not imply general Obsidian 1.13 compatibility.
 
 ### 3.3 Notice, Menu, icons
 

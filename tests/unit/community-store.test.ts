@@ -220,4 +220,31 @@ describe("shouldUpdate", () => {
     });
     expect(d.update).toBe(true);
   });
+
+  it("uses the same exact Minimal Settings certificate as enable admission", () => {
+    expect(shouldUpdate(item({ id: "obsidian-minimal-settings", installedVersion: "8.0.0" }), "9.0.0", {
+      id: "obsidian-minimal-settings",
+      type: "plugin",
+      minAppVersion: "1.13.0",
+      platform: "desktop",
+    }).update).toBe(true);
+    expect(shouldUpdate(item({ id: "obsidian-minimal-settings", installedVersion: "9.0.0" }), "9.0.1", {
+      id: "obsidian-minimal-settings",
+      type: "plugin",
+      minAppVersion: "1.13.0",
+      platform: "desktop",
+    }).reason).toBe("requires-newer-app");
+    expect(shouldUpdate(item({ id: "obsidian-minimal-settings", installedVersion: "9.0.0" }), "9.0.0", {
+      id: "obsidian-minimal-settings",
+      type: "plugin",
+      minAppVersion: "1.13.1",
+      platform: "desktop",
+    }).reason).toBe("requires-newer-app");
+    expect(shouldUpdate(item({ id: "other", installedVersion: "1.0.0" }), "2.0.0", {
+      id: "other",
+      type: "plugin",
+      minAppVersion: "1.13.0",
+      platform: "desktop",
+    }).reason).toBe("requires-newer-app");
+  });
 });

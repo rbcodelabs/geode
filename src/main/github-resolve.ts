@@ -109,6 +109,8 @@ export interface ResolveOpts {
   tag?: string;
   /** Include prereleases when picking the newest release. Default true (BRAT-style). */
   includePrerelease?: boolean;
+  /** Renderer-admitted immutable identity, revalidated against staged bytes before replacement. */
+  expected?: CommunityPreview;
 }
 
 export const DEFAULT_API_BASE = "https://api.github.com";

@@ -83,6 +83,9 @@ import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, typ
 interface AppSettings {
   theme: "dark" | "light";
   readableLineLength: boolean;
+  baseFontSize: number;
+  foldHeading: boolean;
+  showLineNumber: boolean;
   showRibbon: boolean;
   showStatusBar: boolean;
   /** Selected community theme name ("" = built-in default). */
@@ -1306,6 +1309,9 @@ export class App {
   settings: AppSettings = {
     theme: "dark",
     readableLineLength: true,
+    baseFontSize: 16,
+    foldHeading: false,
+    showLineNumber: false,
     showRibbon: true,
     showStatusBar: true,
     cssTheme: "",
@@ -1341,7 +1347,10 @@ export class App {
       if (!(view instanceof MarkdownView) || view.mode === "reading" || !view.editor) return null;
       return { editor: view.editor, context: view };
     });
-    this.vault = new Vault(host);
+    this.vault = new Vault(host, {
+      get: (key) => this.getVaultConfig(key),
+      set: (key, value) => this.setVaultConfig(key, value),
+    });
     this.metadataCache = new MetadataCache(this.vault);
   }
 
@@ -1657,6 +1666,13 @@ export class App {
       this.settings = {
         ...this.settings,
         ...saved,
+        theme: saved.theme === "light" || saved.theme === "dark" ? saved.theme : this.settings.theme,
+        readableLineLength: typeof saved.readableLineLength === "boolean" ? saved.readableLineLength : this.settings.readableLineLength,
+        baseFontSize: typeof saved.baseFontSize === "number" && Number.isFinite(saved.baseFontSize) && saved.baseFontSize > 0
+          ? saved.baseFontSize
+          : this.settings.baseFontSize,
+        foldHeading: typeof saved.foldHeading === "boolean" ? saved.foldHeading : this.settings.foldHeading,
+        showLineNumber: typeof saved.showLineNumber === "boolean" ? saved.showLineNumber : this.settings.showLineNumber,
         webViewer: this.webViewer.options,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
@@ -3649,12 +3665,13 @@ export class App {
     this.showMenu(new MouseEvent("click", { clientX: 0, clientY: 0 }), items, { anchor: leaf.tabEl });
   }
 
-  applySettings() {
+  applySettings(emitCssChange = true) {
     document.body.classList.toggle("theme-dark", this.settings.theme === "dark");
     document.body.classList.toggle("theme-light", this.settings.theme === "light");
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
     document.body.classList.toggle("show-ribbon", this.settings.showRibbon);
     document.body.classList.toggle("show-status-bar", this.settings.showStatusBar);
+    document.body.style?.setProperty("--font-text-size", `${this.settings.baseFontSize}px`);
     // Real Obsidian hides .view-header entirely unless <body> has this class
     // (`body:not(.show-view-header):not(.is-phone) .view-header { display: none }`).
     // Geode always shows it — there's no settings toggle for this yet.
@@ -3665,7 +3682,71 @@ export class App {
     // re-derives it here instead of keeping the colors it was born with.
     // Optional-chained defensively: `workspace` is only assigned once a vault
     // is opened, and applySettings() is reachable from the settings tab.
+    if (emitCssChange) this.workspace?.trigger("css-change");
+  }
+
+  private getVaultConfig(key: string): unknown {
+    switch (key) {
+      case "baseFontSize": return this.settings.baseFontSize;
+      case "foldHeading": return this.settings.foldHeading;
+      case "showLineNumber": return this.settings.showLineNumber;
+      case "readableLineLength": return this.settings.readableLineLength;
+      case "theme": return this.settings.theme === "dark" ? "obsidian" : "moonstone";
+      default: return undefined;
+    }
+  }
+
+  private async setVaultConfig(key: string, value: unknown): Promise<void> {
+    const previousSettings = { ...this.settings };
+    let changed = false;
+    switch (key) {
+      case "baseFontSize":
+        if (typeof value === "number" && Number.isFinite(value) && value > 0 && value !== this.settings.baseFontSize) {
+          this.settings.baseFontSize = value;
+          changed = true;
+        }
+        break;
+      case "foldHeading":
+      case "showLineNumber":
+      case "readableLineLength":
+        if (typeof value === "boolean" && value !== this.settings[key]) {
+          this.settings[key] = value;
+          changed = true;
+        }
+        break;
+      case "theme": {
+        const mapped = value === "obsidian" ? "dark" : value === "moonstone" ? "light" : null;
+        if (mapped && mapped !== this.settings.theme) {
+          this.settings.theme = mapped;
+          changed = true;
+        }
+        break;
+      }
+      default:
+        if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
+          console.warn(`Ignored unsupported vault config key "${key}"`);
+        }
+    }
+    if (!changed) return;
+    this.applySettings(false);
+    try {
+      await this.host.config.write("app", this.settings);
+    } catch (error) {
+      this.settings = previousSettings;
+      this.applySettings(false);
+      console.error(`Failed to persist app setting "${key}"`, error);
+      throw error;
+    }
+    this.vault.trigger("config-changed");
     this.workspace?.trigger("css-change");
+  }
+
+  setTheme(theme: string): Promise<void> {
+    return this.setVaultConfig("theme", theme).catch(() => {});
+  }
+
+  updateFontSize(): Promise<void> {
+    return this.setVaultConfig("baseFontSize", this.settings.baseFontSize).catch(() => {});
   }
 
   /** Keep macOS's rounded native window corners aligned with theme-owned chrome. */
