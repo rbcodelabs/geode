@@ -12,7 +12,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "list" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "list" | "scanForSync" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
 >>;
 
@@ -71,7 +71,11 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       settleMutation: async () => {},
       exists: (path) => preload.exists(path),
       onChange: (cb) => preload.onVaultEvent(cb),
-      reconcileScan: async () => ({ status: "complete", entries: await (preload.list?.() ?? openFiles) }),
+      reconcileScan: async () => {
+        if (!preload.scanForSync) return { status: "unavailable", entries: [], errorCode: "strict-scan-unavailable" };
+        try { return { status: "complete", entries: await preload.scanForSync() }; }
+        catch { return { status: "unavailable", entries: [], errorCode: "local-scan-failed" }; }
+      },
     },
     deviceState: {
       read: async <T>(key: string) => preload.readDeviceState ? preload.readDeviceState<T>(key) : structuredClone(fallbackDeviceState.get(key) ?? null) as T | null,

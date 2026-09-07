@@ -19,6 +19,19 @@ afterEach(() => {
 });
 
 describe("listVaultFiles", () => {
+  it("refuses to infer deletion from unsupported symbolic links in a sync scan", async () => {
+    const root = makeVault(); fs.symlinkSync("missing-target", path.join(root, "Note.md"));
+    await expect(listVaultFiles(root, { strictSync: true })).rejects.toThrow(/symbolic/i);
+  });
+  it("fails strict sync scans instead of interpreting unreadable directories as empty", async () => {
+    await expect(listVaultFiles(path.join(makeVault(), "missing"), { strictSync: true } as never)).rejects.toThrow();
+  });
+  it("includes configuration in strict sync scans without changing explorer visibility", async () => {
+    const root = makeVault(); fs.mkdirSync(path.join(root, ".geode")); fs.writeFileSync(path.join(root, ".geode", "app.json"), "{}");
+    const entries = await listVaultFiles(root, { strictSync: true } as never);
+    expect(entries.map(entry => entry.path)).toContain(".geode/app.json");
+    expect(await listVaultFiles(root)).toEqual([]);
+  });
   it("preserves recursive file/folder metadata and excludes hidden entries", async () => {
     const root = makeVault();
     fs.mkdirSync(path.join(root, "Folder"));

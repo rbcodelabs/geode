@@ -18,6 +18,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     getPluginPolicy: () => host.plugins.getPolicy() as never,
     getVaultRoot: async () => (await host.vaultRegistry.getLaunchVault()),
     list: () => host.vaultFiles.list(),
+    scanForSync: async () => { const scan = await host.vaultFiles.reconcileScan(); if (scan.status !== "complete") throw new Error("Complete sync scan unavailable"); return scan.entries; },
     read: (path) => host.vaultFiles.read(path),
     readPluginFile: (path, sent) => host.plugins.readPluginFile(path, sent),
     replacePluginFiles: (id, expected, replacement) => host.plugins.replacePluginFiles(id, expected, replacement),

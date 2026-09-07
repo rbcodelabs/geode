@@ -12,6 +12,8 @@ export interface VaultFileEntry {
 }
 
 export interface ListVaultFilesOptions {
+  /** Sync must never mistake unreadable files/subtrees for deletion. */
+  strictSync?: boolean;
   ioDelayMs?: number;
   yieldEveryOperations?: number;
   yieldToEventLoop?: () => Promise<void>;
@@ -82,19 +84,21 @@ export async function listVaultFiles(
         await injectDelay();
         return fsp.readdir(dir, { withFileTypes: true });
       });
-    } catch {
+    } catch (error) {
+      if (options.strictSync) throw error;
       return [];
     }
     const nested = await Promise.all(entries.map(async (entry): Promise<VaultFileEntry[]> => {
       // Pruning during traversal, so a segment test is enough here — but it
       // must be the same rule the watcher applies (see ./vault-ignore).
-      if (isIgnoredSegment(entry.name)) return [];
+      if (isIgnoredSegment(entry.name) && !(options.strictSync && dir === root && entry.name === ".geode")) return [];
       const abs = path.join(dir, entry.name);
+      if (options.strictSync && entry.isSymbolicLink()) throw new Error(`Sync scan does not support symbolic links: ${toRel(root, abs)}`);
       if (entry.isDirectory()) {
         const [st, children] = await Promise.all([
           limited(async () => {
             await injectDelay();
-            return fsp.stat(abs).catch(() => null);
+            return fsp.stat(abs).catch(error => { if (options.strictSync) throw error; return null; });
           }),
           walk(abs),
         ]);
@@ -109,7 +113,7 @@ export async function listVaultFiles(
       if (entry.isFile()) {
         const st = await limited(async () => {
           await injectDelay();
-          return fsp.stat(abs).catch(() => null);
+          return fsp.stat(abs).catch(error => { if (options.strictSync) throw error; return null; });
         });
         return [{
           path: toRel(root, abs),

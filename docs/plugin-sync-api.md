@@ -52,6 +52,8 @@ Settings lists persisted conflicts with **Keep local** and **Accept remote** act
 
 Local baselines use SHA-256 of transferred bytes. Planning hashes eligible files, including same-size/same-timestamp edits. Legacy metadata-only baselines are treated as changed rather than trusted for deletion. Upload recovery uses the journal's transferred-byte hash, never the current file's hash.
 
+Electron uses a separate strict scan for synchronization. Unlike the explorer's tolerant list, it includes configuration files and fails on traversal/stat errors or unsupported symbolic links. These failures never prove deletion. Conflict resolution refreshes either a snapshot or the persisted index plus delta; new remote revisions supersede old conflict metadata while retaining recovery copies. Recovery verifies remote bytes before trusting an upload receipt's revision.
+
 ## Experimental beta limits
 
 Use a disposable copy of a vault. The filesystem host currently has no atomic compare-and-write/trash primitive: content and context are checked immediately before local mutations, but another process can still write in the final check-to-mutation interval. SHA-256 scanning reads every eligible file and can be expensive for large vaults. This framework requires a compatible provider; Google Drive groundwork currently declares no atomic conditional writes and therefore cannot activate full-vault sync.

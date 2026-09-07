@@ -49,6 +49,35 @@ function provider(entries: SyncRemoteEntry[] = []): SyncProvider {
 }
 
 describe("SyncCoordinator", () => {
+  it("keeps unresolved conflicts actionable after both sides delete the canonical file", async () => {
+    const host = memoryHost({ "Note.md": "local" }) as HostServices & { testDelete(path: string): void };
+    const entries: SyncRemoteEntry[] = [{ id: "r", path: "Note.md", kind: "file", revision: "1" }];
+    const remote = provider(entries); const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", remote); await coordinator.activate(remote.id);
+    await coordinator.preview(); await coordinator.run({ approvePreview: true });
+    host.testDelete("Note.md"); entries.length = 0; await coordinator.run();
+    const [conflict] = await coordinator.listConflicts(); expect(conflict.conflictPath).toBe("");
+    await coordinator.resolveConflict(conflict.id, "accept-remote"); expect(await coordinator.listConflicts()).toHaveLength(0);
+  });
+  it("supersedes stale conflict metadata and resolves delta-only providers", async () => {
+    const host = memoryHost({ "Note.md": "local" }); let revision = "1";
+    const remote = provider(); remote.capabilities.completeSnapshots = false;
+    remote.open = async () => ({ ...(await provider().open({ vaultId: "vault-a" })),
+      scan: async () => ({ status: "complete", mode: "delta", entries: [{ id: "r", path: "Note.md", kind: "file", revision }] }),
+    });
+    const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", remote); await coordinator.activate(remote.id);
+    await coordinator.preview(); await coordinator.run({ approvePreview: true }); revision = "2";
+    await coordinator.run();
+    const conflicts = await coordinator.listConflicts(); expect(conflicts).toHaveLength(1); expect(conflicts[0].remoteRevision).toBe("2");
+    await coordinator.resolveConflict(conflicts[0].id, "accept-remote"); expect(await coordinator.listConflicts()).toHaveLength(0);
+  });
+
+  it("does not treat a remotely edited upload receipt as the transferred common ancestor", async () => {
+    const state = new Map<string, unknown>(); const host = memoryHost({ "Note.md": "two" }, state);
+    state.set("sync/vault-a", { providerId: "test.remote", approved: true, baseline: {}, remoteIndex: {}, conflicts: {}, journal: [{ id: "op1", type: "upload", path: "Note.md", phase: "prepared", localFingerprint: "sha256:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed" }] });
+    const remote = provider([{ id: "r", path: "Note.md", kind: "file", revision: "2", operationKey: "op1" }]);
+    const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", remote);
+    expect((await coordinator.preview()).conflicts).toBe(1);
+  });
   it("does not overwrite an equal-size equal-timestamp edit during a download", async () => {
     const host = memoryHost() as HostServices & { testSilentWrite(path: string, value: string): void };
     let revision = "1"; let race = false;
@@ -77,6 +106,7 @@ describe("SyncCoordinator", () => {
     const state = new Map<string, unknown>(); const host = memoryHost({ "Note.md": "two" }, state);
     state.set("sync/vault-a", { providerId: "test.remote", approved: true, baseline: {}, remoteIndex: {}, conflicts: {}, journal: [{ id: "op1", type: "upload", path: "Note.md", phase: "prepared", localFingerprint: "sha256:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed" }] });
     const remote = provider([{ id: "r", path: "Note.md", kind: "file", revision: "1", operationKey: "op1" }]);
+    const session = await remote.open({ vaultId: "vault-a" }); remote.open = async () => ({ ...session, read: async () => new TextEncoder().encode("one").buffer });
     const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", remote);
     expect((await coordinator.preview()).uploads).toBe(1);
   });

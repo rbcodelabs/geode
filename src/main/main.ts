@@ -413,6 +413,15 @@ function registerIpc() {
   // already-running process picks up a just-changed policy immediately.
   ipcMain.handle("get-plugin-policy", () => loadManagedPolicy());
 
+  ipcMain.handle("vault-sync-scan", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const entries = await listVaultFiles(session.root, { strictSync: true });
+    if (sessions.get(win.id) !== session) throw new Error("Vault changed during sync scan");
+    return entries;
+  });
+
   ipcMain.handle("vault-list", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
