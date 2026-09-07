@@ -20,10 +20,65 @@ export interface BaseViewDefinition {
   imageAspectRatio?: number;
   /** Minimum card width in px, driving the responsive grid. */
   cardSize?: number;
+  /**
+   * Every key of this view that Geode itself does not model, preserved
+   * verbatim so writing the file back never destroys it.
+   *
+   * `.base` files are hand-editable, and plugin-registered view types (see
+   * `Plugin.registerBasesView`) store their own settings here — a Kanban view
+   * keeps `columnOrders`, `columnColors`, `collapsedLanes` and friends. The
+   * schema below is therefore open, not closed: anything unrecognised lands
+   * here on read and is spread back out on write.
+   *
+   * `undefined` (not `{}`) when the view had no unknown keys, so a plain
+   * table view round-trips byte-identically.
+   */
+  extra?: Record<string, unknown>;
 }
+
+/** View keys this module models explicitly; everything else goes to `BaseViewDefinition.extra`. */
+const KNOWN_VIEW_KEYS: ReadonlySet<string> = new Set([
+  "type",
+  "name",
+  "limit",
+  "groupBy",
+  "filters",
+  "order",
+  "sort",
+  "summaries",
+  "image",
+  "imageFit",
+  "imageAspectRatio",
+  "cardSize",
+]);
 
 export interface BasePropertyConfig {
   displayName?: string;
+  /**
+   * Per-property config keys Geode does not model (property type hints,
+   * per-value colours, …), preserved for the same reason as
+   * `BaseViewDefinition.extra`. `undefined` when there are none.
+   */
+  extra?: Record<string, unknown>;
+}
+
+/** Per-property keys this module models explicitly; everything else goes to `BasePropertyConfig.extra`. */
+const KNOWN_PROPERTY_KEYS: ReadonlySet<string> = new Set(["displayName"]);
+
+/**
+ * Split a raw record into the keys `known` covers and everything else.
+ * Returns `undefined` for the remainder when nothing is left over, so callers
+ * can leave the `extra` field unset rather than writing an empty object.
+ */
+function unknownKeys(rec: Record<string, unknown>, known: ReadonlySet<string>): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  let any = false;
+  for (const [k, v] of Object.entries(rec)) {
+    if (known.has(k)) continue;
+    out[k] = v;
+    any = true;
+  }
+  return any ? out : undefined;
 }
 
 export interface BaseDefinition {
@@ -86,6 +141,12 @@ function parseView(raw: unknown): BaseViewDefinition | null {
   if (typeof rec.imageAspectRatio === "number" && rec.imageAspectRatio > 0) view.imageAspectRatio = rec.imageAspectRatio;
   if (typeof rec.cardSize === "number" && rec.cardSize > 0) view.cardSize = rec.cardSize;
 
+  // Note the asymmetry: a *known* key holding a malformed value is still
+  // dropped (this parser's long-standing lenient normalization, documented on
+  // `parseBaseFile`). Only genuinely unrecognised keys are preserved.
+  const extra = unknownKeys(rec, KNOWN_VIEW_KEYS);
+  if (extra) view.extra = extra;
+
   return view;
 }
 
@@ -121,7 +182,8 @@ export function parseBaseFile(yamlText: string): { def: BaseDefinition } | { err
     for (const [key, val] of Object.entries(propsRec)) {
       const valRec = asRecord(val);
       const displayName = valRec && typeof valRec.displayName === "string" ? valRec.displayName : undefined;
-      properties[key] = { displayName };
+      const extra = valRec ? unknownKeys(valRec, KNOWN_PROPERTY_KEYS) : undefined;
+      properties[key] = extra ? { displayName, extra } : { displayName };
     }
   }
 
