@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
@@ -28,6 +29,83 @@ async function runCommand(window: import("@playwright/test").Page, name: string)
   await window.keyboard.press(isMac ? "Meta+P" : "Control+P");
   await window.locator(".prompt-input").fill(name);
   await window.getByText(name, { exact: true }).click();
+}
+
+async function listen(server: http.Server): Promise<number> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Web Viewer popup fixture did not bind to TCP");
+  return address.port;
+}
+
+async function close(server: http.Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+for (const popup of [
+  { name: "target=_blank", selector: "#target-blank", targetPath: "/target-blank" },
+  { name: "window.open", selector: "#window-open", targetPath: "/window-open" },
+]) {
+  test(`${popup.name} creates a Web Viewer tab instead of a BrowserWindow`, async () => {
+    const server = http.createServer((request, response) => {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      if (request.url === "/source") {
+        response.end(`<!doctype html><html><head><title>Popup source</title></head><body>
+          <a id="target-blank" href="/target-blank" target="_blank">Target blank</a>
+          <button id="window-open" onclick="window.open('/window-open', '_blank')">Window open</button>
+        </body></html>`);
+        return;
+      }
+      response.end(`<!doctype html><html><head><title>${request.url}</title></head><body>${request.url}</body></html>`);
+    });
+    const port = await listen(server);
+    const sourceUrl = `http://127.0.0.1:${port}/source`;
+    const targetUrl = `http://127.0.0.1:${port}${popup.targetPath}`;
+    const { app, window, userDataDir } = await launch();
+
+    try {
+      await window.evaluate(async (url) => {
+        const geodeApp = (window as any).app;
+        const sourceGroup = geodeApp.workspace.addGroup(geodeApp.workspace.activeGroup);
+        const sourceLeaf = sourceGroup.createLeaf();
+        await sourceLeaf.setViewState({ type: "webviewer", active: true, state: { url } });
+      }, sourceUrl);
+
+      const frame = window.locator('.web-view-frame[src="' + sourceUrl + '"]');
+      await expect(frame).toBeVisible();
+      await expect.poll(() => frame.evaluate((guest) =>
+        (guest as unknown as { executeJavaScript(script: string): Promise<unknown> }).executeJavaScript("document.title")
+      )).toBe("Popup source");
+
+      const initialWindows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+      const sourceGroupIndex = await window.evaluate((url) => {
+        const geodeApp = (window as any).app;
+        return geodeApp.workspace.groups.findIndex((group: any) =>
+          group.leaves.some((leaf: any) => leaf.view?.getState?.().url === url));
+      }, sourceUrl);
+      await app.evaluate(({ webContents }, { url, selector }) => {
+        const guest = webContents.getAllWebContents().find((contents) => contents.getType() === "webview" && contents.getURL() === url);
+        if (!guest) throw new Error(`Missing source guest for ${url}`);
+        void guest.executeJavaScript(`document.querySelector(${JSON.stringify(selector)}).click()`).catch(() => {});
+      }, { url: sourceUrl, selector: popup.selector });
+
+      await expect.poll(() => window.evaluate(({ index, url }) => {
+        const group = (window as any).app.workspace.groups[index];
+        return group.leaves.filter((leaf: any) => leaf.view?.getState?.().url === url).length;
+      }, { index: sourceGroupIndex, url: targetUrl })).toBe(1);
+      expect(await window.evaluate(({ index, url }) => {
+        const group = (window as any).app.workspace.groups[index];
+        return group.active?.view?.getState?.().url === url;
+      }, { index: sourceGroupIndex, url: targetUrl })).toBe(true);
+      expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(initialWindows);
+    } finally {
+      await close(server);
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((browserWindow) => browserWindow.destroy()));
+      await app.close();
+      fs.rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
 }
 
 test("Open web viewer mounts a <webview> tab in its own persist:webviewer session, loads the home URL, and tracks the page title", async () => {

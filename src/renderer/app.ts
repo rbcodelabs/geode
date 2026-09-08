@@ -2290,6 +2290,22 @@ export class App {
       }
     });
     if (stopGuestHotkeys) this.hostDisposers.add(stopGuestHotkeys);
+    const stopGuestWindowOpen = this.host.desktop?.onGuestWindowOpen((request) => {
+      void this.openGuestWindowInTab(request);
+    });
+    if (stopGuestWindowOpen) this.hostDisposers.add(stopGuestWindowOpen);
+  }
+
+  private async openGuestWindowInTab(request: {
+    url: string;
+    guestId: number;
+    disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
+  }): Promise<void> {
+    const sourceLeaf = this.leafOwningGuest(request.guestId);
+    if (!sourceLeaf || !(sourceLeaf.view instanceof WebView) || !(sourceLeaf.group instanceof TabGroup)) return;
+    const leaf = sourceLeaf.group.createLeaf();
+    await leaf.setViewState({ type: "webviewer", active: true, state: { url: request.url } });
+    if (request.disposition === "background-tab") sourceLeaf.group.setActiveLeaf(sourceLeaf);
   }
 
   async dispose(): Promise<void> {
