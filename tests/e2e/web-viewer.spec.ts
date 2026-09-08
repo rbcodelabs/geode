@@ -8,11 +8,11 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const testVaultPath = path.join(repoRoot, "test-vault");
 const isMac = process.platform === "darwin";
 
-async function launch() {
+async function launch(vaultPath = testVaultPath) {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-e2e-"));
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
-    JSON.stringify({ recentVaults: [testVaultPath], lastVault: testVaultPath })
+    JSON.stringify({ recentVaults: [vaultPath], lastVault: vaultPath })
   );
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   const window = await app.firstWindow();
@@ -62,7 +62,8 @@ for (const popup of [
     const port = await listen(server);
     const sourceUrl = `http://127.0.0.1:${port}/source`;
     const targetUrl = `http://127.0.0.1:${port}${popup.targetPath}`;
-    const { app, window, userDataDir, consoleErrors } = await launch();
+    const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-popup-vault-"));
+    const { app, window, userDataDir, consoleErrors } = await launch(vaultDir);
 
     try {
       await window.evaluate(async (url) => {
@@ -105,12 +106,14 @@ for (const popup of [
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((browserWindow) => browserWindow.destroy()));
       await app.close();
       fs.rmSync(userDataDir, { recursive: true, force: true });
+      fs.rmSync(vaultDir, { recursive: true, force: true });
     }
   });
 }
 
 test("a background popup does not override a tab the user selects while the destination opens", async () => {
-  const { app, window, userDataDir, consoleErrors } = await launch();
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-background-vault-"));
+  const { app, window, userDataDir, consoleErrors } = await launch(vaultDir);
   try {
     await window.evaluate(async () => {
       const geodeApp = (window as any).app;
@@ -162,6 +165,7 @@ test("a background popup does not override a tab the user selects while the dest
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(vaultDir, { recursive: true, force: true });
   }
 });
 

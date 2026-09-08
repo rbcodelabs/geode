@@ -2291,7 +2291,9 @@ export class App {
     });
     if (stopGuestHotkeys) this.hostDisposers.add(stopGuestHotkeys);
     const stopGuestWindowOpen = this.host.desktop?.onGuestWindowOpen((request) => {
-      void this.openGuestWindowInTab(request);
+      void this.openGuestWindowInTab(request).catch((error) => {
+        console.error("Failed to open guest window in a Web Viewer tab", error);
+      });
     });
     if (stopGuestWindowOpen) this.hostDisposers.add(stopGuestWindowOpen);
   }
