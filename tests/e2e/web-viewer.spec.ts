@@ -62,7 +62,7 @@ for (const popup of [
     const port = await listen(server);
     const sourceUrl = `http://127.0.0.1:${port}/source`;
     const targetUrl = `http://127.0.0.1:${port}${popup.targetPath}`;
-    const { app, window, userDataDir } = await launch();
+    const { app, window, userDataDir, consoleErrors } = await launch();
 
     try {
       await window.evaluate(async (url) => {
@@ -99,6 +99,7 @@ for (const popup of [
         return group.active?.view?.getState?.().url === url;
       }, { index: sourceGroupIndex, url: targetUrl })).toBe(true);
       expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(initialWindows);
+      expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
     } finally {
       await close(server);
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((browserWindow) => browserWindow.destroy()));
@@ -107,6 +108,62 @@ for (const popup of [
     }
   });
 }
+
+test("a background popup does not override a tab the user selects while the destination opens", async () => {
+  const { app, window, userDataDir, consoleErrors } = await launch();
+  try {
+    await window.evaluate(async () => {
+      const geodeApp = (window as any).app;
+      const group = geodeApp.workspace.activeGroup;
+      (window as any).__backgroundPopupUserChoice = group.active;
+      const source = group.createLeaf();
+      await source.setViewState({ type: "webviewer", active: true, state: { url: "https://example.com/source" } });
+      const originalCreateLeaf = group.createLeaf.bind(group);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      (window as any).__releaseBackgroundPopup = release;
+      group.createLeaf = () => {
+        const leaf = originalCreateLeaf();
+        const originalSetViewState = leaf.setViewState.bind(leaf);
+        leaf.setViewState = async (state: any) => {
+          if (state.state?.url === "https://example.com/background") await gate;
+          return originalSetViewState(state);
+        };
+        return leaf;
+      };
+      (window as any).__backgroundPopupGroup = group;
+      (window as any).__backgroundPopupSource = source;
+    });
+    const frame = window.locator('.web-view-frame[src="https://example.com/source"]');
+    await expect(frame).toBeVisible();
+    const guestId = await frame.evaluate((guest) =>
+      (guest as unknown as { getWebContentsId(): number }).getWebContentsId()
+    );
+    const leavesBefore = await window.evaluate(() => (window as any).__backgroundPopupGroup.leaves.length);
+
+    await app.evaluate(({ BrowserWindow }, request) => {
+      BrowserWindow.getAllWindows()[0].webContents.send("guest-window-open", request);
+    }, { url: "https://example.com/background", guestId, disposition: "background-tab" });
+    await expect.poll(() => window.evaluate(() => (window as any).__backgroundPopupGroup.leaves.length)).toBe(leavesBefore + 1);
+    await window.evaluate(() => {
+      const current = window as any;
+      const group = current.__backgroundPopupGroup;
+      group.setActiveLeaf(current.__backgroundPopupUserChoice);
+      current.__releaseBackgroundPopup();
+    });
+    await expect.poll(() => window.evaluate(() =>
+      (window as any).__backgroundPopupGroup.leaves.some((leaf: any) => leaf.view?.getState?.().url === "https://example.com/background")
+    )).toBe(true);
+    expect(await window.evaluate(() => {
+      const current = window as any;
+      return current.__backgroundPopupGroup.active === current.__backgroundPopupUserChoice;
+    })).toBe(true);
+    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
 
 test("Open web viewer mounts a <webview> tab in its own persist:webviewer session, loads the home URL, and tracks the page title", async () => {
   const { app, window, userDataDir, consoleErrors } = await launch();

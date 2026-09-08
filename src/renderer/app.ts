@@ -2303,9 +2303,24 @@ export class App {
   }): Promise<void> {
     const sourceLeaf = this.leafOwningGuest(request.guestId);
     if (!sourceLeaf || !(sourceLeaf.view instanceof WebView) || !(sourceLeaf.group instanceof TabGroup)) return;
-    const leaf = sourceLeaf.group.createLeaf();
-    await leaf.setViewState({ type: "webviewer", active: true, state: { url: request.url } });
-    if (request.disposition === "background-tab") sourceLeaf.group.setActiveLeaf(sourceLeaf);
+    const group = sourceLeaf.group;
+    if (!group.leaves.includes(sourceLeaf)) return;
+    const opensInBackground = request.disposition === "background-tab";
+    const previouslyActive = group.active;
+    const leaf = group.createLeaf();
+    if (opensInBackground && previouslyActive && group.leaves.includes(previouslyActive)) {
+      group.setActiveLeaf(previouslyActive);
+    }
+    try {
+      await leaf.setViewState({
+        type: "webviewer",
+        active: !opensInBackground,
+        state: { url: request.url },
+      });
+    } catch (error) {
+      if (group.leaves.includes(leaf)) await leaf.detach();
+      throw error;
+    }
   }
 
   async dispose(): Promise<void> {
