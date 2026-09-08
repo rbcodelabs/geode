@@ -110,8 +110,10 @@ test('uncommitted Base source-cell draft blocks the underlying note write', asyn
     await cell.locator('.bases-cell-input').fill('9');
     expect(await second.evaluate(async () => Boolean(await (window as any).app.workspace.activeLeaf.view.getDirtySourceConflict('Source.md')))).toBe(true);
     await expect(apply('Source.md', sourceText, '---\npriority: 2\n---\nRemote source\n')).rejects.toThrow(/Base|unsaved/i);
-    // Releasing the guard may commit the user's draft; it must never replace
-    // it with the remote version that was rejected while the draft was dirty.
+    // Release can leave the draft open or blur-commit it. If still open,
+    // verify it survived before explicitly committing as the user would.
+    const draft = cell.locator('.bases-cell-input');
+    if (await draft.isVisible()) { await expect(draft).toHaveValue('9'); await draft.press('Enter'); }
     await expect.poll(() => fs.readFileSync(path.join(vault, 'Source.md'), 'utf8')).toContain('priority: 9');
     expect(fs.readFileSync(path.join(vault, 'Source.md'), 'utf8')).toContain('Original source');
   });
