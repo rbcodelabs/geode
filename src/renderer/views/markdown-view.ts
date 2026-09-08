@@ -23,6 +23,8 @@ import type { HeadingCache, TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 import { resolveBlockBoundary } from "../block-boundary";
 import { PagePreviewController } from "../page-preview";
+import { commentDecorations, commentInteractions } from "../comments/editor-extension";
+import { parseCommentThreads, validateCommentRange } from "../comments/model";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, class: "cm-header-1" },
@@ -75,12 +77,14 @@ export class MarkdownView implements View {
   private editorHostEl: HTMLElement;
   private saveTimer: number | null = null;
   private lastSavedText = "";
+  private lineEnding: "\n" | "\r\n" = "\n";
   private pendingSaveText: string | null = null;
   private flushInFlight: Promise<void> | null = null;
   private vaultSwitching = false;
   private conflictReadOnly = false;
   private conflictBanner: HTMLElement | null = null;
   private pagePreview: PagePreviewController;
+  private commentButton: HTMLButtonElement;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -144,6 +148,13 @@ export class MarkdownView implements View {
     this.bodyEl.className = "markdown-view-body";
     this.editorHostEl = document.createElement("div");
     this.editorHostEl.className = "markdown-source-view";
+    this.commentButton = document.createElement("button");
+    this.commentButton.type = "button";
+    this.commentButton.className = "comment-selection-button";
+    this.commentButton.textContent = "Comment";
+    this.commentButton.hidden = true;
+    this.commentButton.addEventListener("click", () => this.app.promptCommentForSelection(this));
+    this.editorHostEl.appendChild(this.commentButton);
     this.readingEl = document.createElement("div");
     this.readingEl.className = "markdown-reading-view markdown-rendered";
     this.bodyEl.appendChild(this.editorHostEl);
@@ -172,7 +183,9 @@ export class MarkdownView implements View {
   async setFile(file: TFile): Promise<void> {
     this.pagePreview.hide();
     await this.flush();
-    const text = await this.app.vault.read(file);
+    const diskText = await this.app.vault.read(file);
+    this.lineEnding = diskText.includes("\r\n") ? "\r\n" : "\n";
+    const text = diskText.replace(/\r\n/g, "\n");
     this.file = file;
     this.titleEl.textContent = file.basename;
     this.titleParentEl.innerHTML = "";
@@ -235,7 +248,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? livePreview(this.app, () => this.file?.path ?? "")
+            ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion] }),
@@ -256,6 +269,7 @@ export class MarkdownView implements View {
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...completionKeymap, indentWithTab]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) this.scheduleSave();
+          if (update.docChanged || update.selectionSet) this.updateCommentButton();
         }),
         EditorView.domEventHandlers({
           mousedown(e, v) {
@@ -273,6 +287,15 @@ export class MarkdownView implements View {
           contextmenu(e, v) {
             const file = view.file;
             if (!file) return false;
+            const selection = v.state.selection.main;
+            if (selection.from !== selection.to) {
+              try {
+                validateCommentRange(v.state.doc.toString(), selection);
+                e.preventDefault();
+                app.showMenu(e, [{ title: "Add comment", icon: "message-square", action: () => app.promptCommentForSelection(view) }]);
+                return true;
+              } catch { /* fall through to heading actions */ }
+            }
             const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
             if (pos == null) return false;
             const line = v.state.doc.lineAt(pos).number - 1; // 0-based
@@ -295,6 +318,53 @@ export class MarkdownView implements View {
     this.editor.contentDOM.setAttribute("role", "textbox");
     this.editor.contentDOM.setAttribute("aria-label", "Note editor");
     this.editor.contentDOM.setAttribute("aria-multiline", "true");
+  }
+
+  private updateCommentButton(): void {
+    if (!this.editor || this.mode !== "live") { this.commentButton.hidden = true; return; }
+    const selection = this.editor.state.selection.main;
+    try {
+      validateCommentRange(this.editor.state.doc.toString(), selection);
+      const coords = this.editor.coordsAtPos(selection.to);
+      if (!coords) throw new Error("Selection is not visible");
+      const host = this.editorHostEl.getBoundingClientRect();
+      this.commentButton.style.left = `${Math.min(host.width - 90, Math.max(8, coords.left - host.left))}px`;
+      this.commentButton.style.top = `${Math.max(8, coords.bottom - host.top + 4)}px`;
+      this.commentButton.hidden = false;
+    } catch { this.commentButton.hidden = true; }
+  }
+
+  async applyCommentMutation(mutator: (source: string) => string): Promise<void> {
+    if (!this.editor) throw new Error("The note editor is not available");
+    const source = this.editor.state.doc.toString();
+    const next = mutator(source);
+    if (next === source) return;
+    this.editor.dispatch({ changes: { from: 0, to: source.length, insert: next } });
+    await this.flush();
+  }
+
+  getSelectedRange(): { from: number; to: number } | null {
+    if (!this.editor || this.mode === "reading") return null;
+    const { from, to } = this.editor.state.selection.main;
+    try { return validateCommentRange(this.editor.state.doc.toString(), { from, to }); }
+    catch { return null; }
+  }
+
+  revealComment(threadId: string): void {
+    const thread = parseCommentThreads(this.getText()).threads.find((item) => item.id === threadId);
+    if (!thread) return;
+    if (this.mode !== "live") {
+      this.mode = "live";
+      this.lastEditingMode = "live";
+      this.editor?.dispatch({ effects: this.editingCompartment.reconfigure([
+        livePreview(this.app, () => this.file?.path ?? ""),
+        commentDecorations,
+        commentInteractions((id) => this.app.selectComment(id)),
+      ]) });
+      this.applyMode();
+    }
+    this.editor?.dispatch({ selection: { anchor: thread.from, head: thread.to }, scrollIntoView: true });
+    this.editor?.focus();
   }
 
   private wikilinkAt(text: string, pos: number): string | null {
@@ -335,7 +405,8 @@ export class MarkdownView implements View {
     if (text === this.lastSavedText) return;
     const file = this.file;
     this.pendingSaveText = text;
-    const write = this.app.vault.modify(file, text);
+    const persistedText = this.serializeText(text);
+    const write = this.app.vault.modify(file, persistedText);
     this.flushInFlight = write;
     try {
       await write;
@@ -378,8 +449,10 @@ export class MarkdownView implements View {
     this.pagePreview.hide();
     this.clearConflictState();
     this.pendingSaveText = null;
-    this.lastSavedText = text;
-    this.buildEditor(text);
+    this.lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+    const normalized = text.replace(/\r\n/g, "\n");
+    this.lastSavedText = normalized;
+    this.buildEditor(normalized);
     if (this.mode === "reading") void this.renderReading();
     this.applyMode();
   }
@@ -490,7 +563,11 @@ export class MarkdownView implements View {
    * required here.
    */
   getLastKnownText(): string {
-    return this.pendingSaveText ?? this.lastSavedText;
+    return this.serializeText(this.pendingSaveText ?? this.lastSavedText);
+  }
+
+  private serializeText(text: string): string {
+    return this.lineEnding === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
   }
 
   /** Cmd/Ctrl+E: flip between editing (live or source) and reading. */
@@ -509,7 +586,7 @@ export class MarkdownView implements View {
     this.lastEditingMode = this.mode;
     this.editor?.dispatch({
       effects: this.editingCompartment.reconfigure(
-        this.mode === "live" ? livePreview(this.app, () => this.file?.path ?? "") : []
+        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations, commentInteractions((id) => this.app.selectComment(id))] : []
       ),
     });
     this.applyMode();
