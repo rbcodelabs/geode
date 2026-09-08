@@ -385,10 +385,9 @@ Decision guidance:
 The sample is directional rather than statistically generalizable. Its purpose is
 to choose the next slice and catch a wrong product model cheaply.
 
-## Expected implementation surface after approval
+## Approved implementation surface
 
-No implementation is authorized by this proposed spec. The likely affected areas
-are listed only to bound future planning:
+The separately authorized engineering work is bounded to these areas:
 
 - main-process root registry, persistence, directory picker, containment resolver,
   and lazy listing/reading;
