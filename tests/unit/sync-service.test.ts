@@ -157,6 +157,21 @@ it("clears a persisted append selection even when that plugin is unregistered", 
   await service.disconnect(); expect(state.has(key)).toBe(false);
 });
 
+it("does not admit append restoration during disconnect cleanup", async () => {
+  let finishRead: ((value: unknown) => void) | undefined; let finishRemove!: () => void;
+  const service = new SyncService({ deviceState: {
+    read: async (key: string) => key.startsWith('sync/') ? null : new Promise(resolve => { finishRead = resolve; }),
+    write: async () => {}, remove: async () => new Promise<void>(resolve => { finishRemove = resolve; }),
+  }, syncSafety: {}, vaultFiles: { onChange: () => () => {} } } as never, () => '/synthetic/vault');
+  const disconnecting = service.disconnect();
+  await vi.waitFor(() => expect(finishRemove).toBeTypeOf('function'));
+  service.register('owner', { id: 'history', name: 'History', protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 } } as never);
+  finishRemove(); await disconnecting;
+  finishRead?.({ schema: 1, localRoot: '/synthetic/vault', providerId: 'history', paused: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(service.getActiveProvider()).toBeNull();
+});
+
 it("cancels conditional initialization before opening a session and switching protocols", async () => {
   let reads = 0; let finish!: (value: unknown) => void;
   const open = vi.fn(async () => { throw new Error('Old provider session opened'); });

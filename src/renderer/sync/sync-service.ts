@@ -57,7 +57,7 @@ export class SyncService extends Events implements SyncApi {
     }
     const unregister = isHistory(provider) ? undefined : this.conditional.register(owner, provider);
     this.providers.set(provider.id, provider);
-    if (isHistory(provider)) {
+    if (isHistory(provider) && !this.closing && !this.cancellations && !this.running && !this.selected) {
       const root = this.vaultId(), generation = this.generation;
       void this.restore(provider).catch(error => {
         if (this.providers.get(provider.id) !== provider || root !== this.vaultId() || generation !== this.generation) return;
