@@ -18,7 +18,6 @@ const isHistory = (provider: Provider): provider is AppendOnlySyncProvider => "p
 export class SyncService extends Events implements SyncApi {
   private readonly conditional: SyncCoordinator;
   private readonly providers = new Map<string, Provider>();
-  private readonly restoring = new Set<AppendOnlySyncProvider>();
   private selected?: AppendOnlySyncProvider;
   private status: SyncStatus = { state: "disconnected", conflicts: 0 };
   private details?: HistoryPreview;
@@ -33,11 +32,14 @@ export class SyncService extends Events implements SyncApi {
   private stopObserving?: () => void;
   private renameHints = new Map<string, string>();
   private observedRoot?: string;
-  private setupTarget?: AppendOnlySyncProvider;
+  private setupTarget?: Provider;
+  // Existing conditional hydration settles first; later registrations cannot
+  // select a second protocol while the append binding is being persisted.
+  private appendSetupReady = false;
   private closing = false;
   private cancellations = 0;
   constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly portableChanged: () => Promise<void> = async () => {}) {
-    super(); this.conditional = new SyncCoordinator(host, vaultId);
+    super(); this.conditional = new SyncCoordinator(host, vaultId, Date.now, () => !this.selected && !this.closing && !this.cancellations && !(this.setupTarget && isHistory(this.setupTarget) && this.appendSetupReady));
     this.conditional.on("status", status => { if (!this.selected) this.trigger("status", status); });
   }
   private observe() {
@@ -57,11 +59,10 @@ export class SyncService extends Events implements SyncApi {
     this.providers.set(provider.id, provider);
     if (isHistory(provider)) {
       const root = this.vaultId(), generation = this.generation;
-      this.restoring.add(provider);
       void this.restore(provider).catch(error => {
         if (this.providers.get(provider.id) !== provider || root !== this.vaultId() || generation !== this.generation) return;
         this.setStatus({ state: "error", providerId: provider.id, conflicts: 0, message: error instanceof Error ? error.message : "Reconnect required" }); this.schedule(this.retryDelay);
-      }).finally(() => this.restoring.delete(provider));
+      });
     }
     return async () => { if (this.providers.get(provider.id) !== provider) return; if (this.selected === provider || this.setupTarget === provider) { await this.cancel(); if (this.selected === provider) this.selected = undefined; this.setStatus({ state: "error", conflicts: 0, providerId: provider.id, message: "Sync provider unloaded; reconnect explicitly" }); } this.providers.delete(provider.id); await unregister?.(); };
   }
@@ -81,7 +82,8 @@ export class SyncService extends Events implements SyncApi {
   private async save(value: BindingState) { const root = value.localRoot; if (this.vaultId() !== root) throw new Error("Vault changed"); await this.host.deviceState.write(this.key(root), value); if (this.vaultId() !== root) throw new Error("Vault changed"); }
   private async restore(provider: AppendOnlySyncProvider): Promise<void> {
     const root = this.vaultId(); const generation = this.generation; const state = await this.load();
-    if (this.vaultId() !== root || this.generation !== generation || this.selected || state.providerId !== provider.id || this.providers.get(provider.id) !== provider) return;
+    await this.conditional.waitUntilReady();
+    if (this.vaultId() !== root || this.generation !== generation || this.selected || this.running || this.closing || this.cancellations || this.conditional.getActiveProvider() || state.providerId !== provider.id || this.providers.get(provider.id) !== provider) return;
     this.selected = provider; this.observe();
     if (state.paused) { this.setStatus({ state: "paused", providerId: provider.id, conflicts: 0 }); return; }
     if (!state.binding) { this.setStatus({ state: "preview", providerId: provider.id, conflicts: 0, message: "Create or join a shared vault" }); return; }
@@ -96,9 +98,10 @@ export class SyncService extends Events implements SyncApi {
   }
   async activate(id: string): Promise<void> {
     const provider = this.providers.get(id); if (!provider) throw new Error("Unknown sync provider");
-    if (!isHistory(provider)) { if (this.selected) throw new Error("Disconnect before changing providers"); return this.conditional.activate(id); }
+    if (!isHistory(provider)) { if (this.selected) throw new Error("Disconnect before changing providers"); return this.setup(async (_signal, assert) => { await this.conditional.waitUntilReady(); assert(); await this.conditional.activate(id); assert(); }, provider); }
     if (this.conditional.getActiveProvider() || this.selected && this.selected !== provider) throw new Error("Disconnect before changing providers");
     return this.setup(async (_signal, assert) => {
+    await this.conditional.waitUntilReady(); assert(); this.appendSetupReady = true; if (this.conditional.getActiveProvider()) throw new Error("Disconnect before changing providers");
     const state = await this.load(); assert();
     if (state.providerId && state.providerId !== id) throw new Error("Disconnect before changing providers");
     state.providerId = id; await this.save(state); assert(); this.selected = provider; this.observe();
@@ -109,13 +112,14 @@ export class SyncService extends Events implements SyncApi {
     const provider = this.selected; if (!provider) throw new Error("Select an append-only provider");
     return this.setup(async (signal, assert) => { const result = await provider.discover(signal); assert(); return result; });
   }
-  private async setup<T>(action: (signal: AbortSignal, assert: () => void) => Promise<T>, target = this.selected): Promise<T> {
+  private async setup<T>(action: (signal: AbortSignal, assert: () => void) => Promise<T>, target: Provider | undefined = this.selected): Promise<T> {
     if (this.running || this.closing || this.cancellations) throw new Error("Sync already running or disconnecting");
+    this.generation++;
     const root = this.vaultId(); const generation = this.generation; const provider = this.selected; const abort = new AbortController(); this.abort = abort;
     const registered = target && this.providers.get(target.id) === target; this.setupTarget = target;
     const assert = () => { if (abort.signal.aborted || root !== this.vaultId() || generation !== this.generation || provider !== this.selected || registered && this.providers.get(target!.id) !== target) throw new Error("Sync context changed"); };
     const work = action(abort.signal, assert); this.running = work;
-    try { return await work; } finally { if (this.running === work) { this.running = undefined; this.setupTarget = undefined; } if (this.abort === abort) this.abort = undefined; }
+    try { return await work; } finally { if (this.running === work) { this.running = undefined; this.setupTarget = undefined; this.appendSetupReady = false; } if (this.abort === abort) this.abort = undefined; }
   }
   async createVault(name: string): Promise<void> {
     const provider = this.selected; if (!provider) throw new Error("Select an append-only provider");
@@ -146,7 +150,7 @@ export class SyncService extends Events implements SyncApi {
   }
   async getScope() { return this.selected ? (await this.load()).scope : this.conditional.getScope(); }
   async updateScope(patch: Partial<SyncScope>) {
-    if (!this.selected) return this.conditional.updateScope(patch);
+    if (!this.selected) return this.withConditional(() => this.conditional.updateScope(patch));
     if (patch.communityPlugins || patch.communityPluginData) throw new Error("Community plugin configuration is excluded from immutable sync");
     for (const path of patch.excludedFolders ?? []) validateSyncPath(path);
     const root = this.vaultId(); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed");
@@ -261,9 +265,14 @@ export class SyncService extends Events implements SyncApi {
     this.setStatus({ state: value.blocked.length || value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: value.blocked.length ? value.blocked.map(item => `${item.path}: ${item.reason}`).join("; ") : value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
     return { uploads: value.uploads, downloads: value.downloads, deletes: value.deletions, conflicts: value.conflicts.length, skipped: value.excluded.length + value.blocked.length, requiresApproval: value.requiresApproval };
   }
-  async preview(): Promise<SyncPreview> { return this.selected ? this.summarize(await this.withController((controller, signal) => controller.preview(signal))) : this.conditional.preview(); }
+  private async withConditional<T>(action: () => Promise<T>): Promise<T> {
+    const active = this.conditional.getActiveProvider();
+    const target = active ? this.providers.get(active.id) : undefined;
+    return this.setup(async (_signal, assert) => { await this.conditional.waitUntilReady(); assert(); if (this.selected) throw new Error("Disconnect before changing providers"); const result = await action(); assert(); return result; }, target);
+  }
+  async preview(): Promise<SyncPreview> { return this.selected ? this.summarize(await this.withController((controller, signal) => controller.preview(signal))) : this.withConditional(() => this.conditional.preview()); }
   async run(options: { approvePreview?: boolean } = {}): Promise<SyncRunResult> {
-    if (!this.selected) return this.conditional.run(options);
+    if (!this.selected) return this.withConditional(() => this.conditional.run(options));
     const result = this.summarize(await this.withController((controller, signal) => controller.run(options, signal))); this.retryDelay = 2000; this.renameHints.clear(); this.observe();
     this.polling ??= setInterval(() => this.schedule(0), 30_000); if (this.status.state === "pending") this.schedule(0); return result;
   }
@@ -273,7 +282,7 @@ export class SyncService extends Events implements SyncApi {
   }
   async resolveHistoryConflict(resolution: HistoryResolution) { return this.summarize(await this.withController((controller, signal) => controller.resolve(resolution, signal))); }
   async resolveConflict(id: string, resolution: "keep-local" | "accept-remote") {
-    if (!this.selected) return this.conditional.resolveConflict(id, resolution);
+    if (!this.selected) return this.withConditional(() => this.conditional.resolveConflict(id, resolution));
     if (resolution !== "keep-local") throw new Error("Choose an explicit immutable version to accept");
     const [entityId, heads] = JSON.parse(id); await this.resolveHistoryConflict({ entityId, heads, choice: { kind: "current" } });
   }
@@ -288,14 +297,13 @@ export class SyncService extends Events implements SyncApi {
       void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return; this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.retryDelay = Math.min(this.retryDelay * 2, 60_000); this.schedule(this.retryDelay); });
     }, delay);
   }
-  async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; await this.conditional.cancel(); } finally { this.cancellations--; } }
+  async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }
   async disconnect() {
-    if (!this.selected && !this.setupTarget && !this.restoring.size) { await this.cancel(); return this.conditional.disconnect(); }
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;
-    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
+    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
     finally { this.closing = false; }
   }
-  async pause() { if (!this.selected) return this.conditional.pause(); const root = this.vaultId(); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); return this.setup(async (_signal, assert) => { const state = await this.load(); assert(); state.paused = true; await this.save(state); assert(); this.setStatus({ ...this.status, state: "paused" }); }); }
-  async resume() { if (!this.selected) return this.conditional.resume(); return this.setup(async (_signal, assert) => { const state = await this.load(); assert(); state.paused = false; await this.save(state); assert(); this.observe(); this.setStatus({ ...this.status, state: "preview", message: "Preview before resuming" }); }); }
+  async pause() { if (!this.selected) return this.withConditional(() => this.conditional.pause()); const root = this.vaultId(); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); return this.setup(async (_signal, assert) => { const state = await this.load(); assert(); state.paused = true; await this.save(state); assert(); this.setStatus({ ...this.status, state: "paused" }); }); }
+  async resume() { if (!this.selected) return this.withConditional(() => this.conditional.resume()); return this.setup(async (_signal, assert) => { const state = await this.load(); assert(); state.paused = false; await this.save(state); assert(); this.observe(); this.setStatus({ ...this.status, state: "preview", message: "Preview before resuming" }); }); }
 }

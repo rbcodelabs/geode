@@ -32,6 +32,15 @@ function memoryHost(files: Record<string, string> = {}, sharedState = new Map<st
   });
 }
 
+for (const action of ['pause', 'disconnect'] as const) it(`pins the original vault through conditional ${action} cancellation`, async () => {
+  let root = 'original'; let release!: () => void;
+  const host = memoryHost(); const write = vi.spyOn(host.deviceState, 'write');
+  const coordinator = new SyncCoordinator(host, () => root);
+  coordinator.cancel = () => new Promise(resolve => { release = resolve; });
+  const work = coordinator[action](); root = 'new'; release();
+  await expect(work).rejects.toThrow(/Vault changed/); expect(write).not.toHaveBeenCalled();
+});
+
 function provider(entries: SyncRemoteEntry[] = []): SyncProvider {
   const create = vi.fn(async input => ({ id: `id:${input.path}`, path: input.path, kind: "file" as const, revision: "1", size: input.data.byteLength }));
   const remote = {

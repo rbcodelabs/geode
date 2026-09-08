@@ -22,7 +22,7 @@ it("cancels discovery and rejects late results when the vault changes", async ()
 it("does not resurrect a binding when disconnect races the join state read", async () => {
   const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Shared" };
   const writes: unknown[] = []; let finish!: (value: unknown) => void;
-  const service = new SyncService({ deviceState: { read: () => new Promise(resolve => { finish = resolve; }), write: async (_key: string, value: unknown) => { writes.push(value); }, remove: async () => {} } } as never, () => "/synthetic/vault");
+  const service = new SyncService({ deviceState: { read: (key: string) => key.startsWith('sync/') ? Promise.resolve(null) : new Promise(resolve => { finish = resolve; }), write: async (key: string, value: unknown) => { if (!key.startsWith('sync/')) writes.push(value); }, remove: async () => {} } } as never, () => "/synthetic/vault");
   (service as any).selected = { id: "history", discover: async () => [descriptor] };
   const joining = service.joinVault(descriptor as never); const rejected = expect(joining).rejects.toThrow();
   await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
@@ -31,13 +31,14 @@ it("does not resurrect a binding when disconnect races the join state read", asy
 });
 
 for (const action of ["disconnect", "unregister"] as const) it(`cancels first activation when ${action} happens before selection`, async () => {
-  let finish!: (value: unknown) => void; const write = vi.fn(async () => {});
-  const service = new SyncService({ deviceState: { read: () => new Promise(resolve => { finish = resolve; }), write, remove: async () => {} }, syncSafety: {}, vaultFiles: { onChange: () => () => {} } } as never, () => "/synthetic/vault");
+  let finish!: (value: unknown) => void; const write = vi.fn(async (_key: string, _value: unknown) => {});
+  const service = new SyncService({ deviceState: { read: (key: string) => key.startsWith('sync/') ? Promise.resolve(null) : new Promise(resolve => { finish = resolve; }), write, remove: async () => {} }, syncSafety: {}, vaultFiles: { onChange: () => () => {} } } as never, () => "/synthetic/vault");
   (service as any).restore = async () => {};
   const unregister = service.register("owner", { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 } } as never);
   const activation = service.activate("history"); const rejection = expect(activation).rejects.toThrow(/changed/);
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
   const closing = action === "disconnect" ? service.disconnect() : unregister(); finish(null);
-  await rejection; await closing; expect(write).not.toHaveBeenCalled(); expect(service.getActiveProvider()).toBeNull();
+  await rejection; await closing; expect(write.mock.calls.filter(([key]) => !key.startsWith('sync/'))).toEqual([]); expect(service.getActiveProvider()).toBeNull();
 });
 
 it("does not restore a persisted binding after disconnect during the registration read", async () => {
@@ -51,6 +52,128 @@ it("does not restore a persisted binding after disconnect during the registratio
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(service.getActiveProvider()).toBeNull();
   expect(remove).toHaveBeenCalledWith("sync-history-binding//synthetic/vault");
+});
+
+it("disconnects the conditional provider even while an append-only restore is pending", async () => {
+  let finish!: (value: unknown) => void;
+  const service = new SyncService({ deviceState: { read: () => new Promise(resolve => { finish = resolve; }), remove: async () => {} }, syncSafety: {} } as never, () => "/synthetic/vault");
+  const disconnect = vi.fn(async () => {});
+  (service as any).conditional.getActiveProvider = () => ({ id: "conditional", name: "Conditional" });
+  (service as any).conditional.disconnect = disconnect;
+  service.register("owner", { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 } } as never);
+  await service.disconnect(); finish(null);
+  expect(disconnect).toHaveBeenCalledOnce();
+});
+
+it("conditional activation invalidates a pending history restoration", async () => {
+  let finish!: (value: unknown) => void; let active: unknown = null;
+  const service = new SyncService({ deviceState: { read: () => new Promise(resolve => { finish = resolve; }) }, syncSafety: {}, vaultFiles: { onChange: () => () => {} } } as never, () => "/synthetic/vault");
+  const conditional = { id: "conditional", name: "Conditional" };
+  (service as any).providers.set(conditional.id, conditional);
+  (service as any).conditional.activate = async () => { active = conditional; };
+  (service as any).conditional.getActiveProvider = () => active;
+  service.register("owner", { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 } } as never);
+  await service.activate("conditional");
+  finish({ schema: 1, localRoot: "/synthetic/vault", providerId: "history", paused: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(service.getActiveProvider()).toEqual(conditional); expect(service.isAppendOnly()).toBe(false);
+});
+
+it("rejects conditional activation while the first history activation is pending", async () => {
+  let finish!: (value: unknown) => void;
+  const service = new SyncService({ deviceState: { read: () => new Promise(resolve => { finish = resolve; }), write: async () => {} }, vaultFiles: { onChange: () => () => {} } } as never, () => "/synthetic/vault");
+  (service as any).providers.set("history", { id: "history", protocol: APPEND_ONLY_PROTOCOL });
+  (service as any).providers.set("conditional", { id: "conditional" });
+  (service as any).conditional.activate = vi.fn(async () => {});
+  const activating = service.activate("history");
+  try { await expect(service.activate("conditional")).rejects.toThrow(/running|disconnect/i); }
+  finally { finish(null); await activating; }
+  expect((service as any).conditional.activate).not.toHaveBeenCalled();
+});
+
+const conditionalCapabilities = { binary: true, conditionalWrites: true, delta: true, completeSnapshots: true, atomicMoves: true, trash: true };
+
+it("waits for conditional hydration before allowing append activation", async () => {
+  let finish!: (value: unknown) => void;
+  const service = new SyncService({ deviceState: { read: (key: string) => key.startsWith('sync/') ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(null), write: async () => {} }, syncSafety: {}, vaultFiles: { onChange: () => () => {} } } as never, () => "/synthetic/vault");
+  service.register("owner", { id: "conditional", name: "Conditional", capabilities: conditionalCapabilities } as never);
+  (service as any).providers.set("history", { id: "history", protocol: APPEND_ONLY_PROTOCOL });
+  const activation = service.activate("history"); const rejection = expect(activation).rejects.toThrow(/disconnect/i);
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function')); finish({ providerId: 'conditional' });
+  await rejection; expect(service.isAppendOnly()).toBe(false);
+});
+
+it("suppresses conditional hydration when an append provider already owns the facade", async () => {
+  const service = new SyncService({ deviceState: { read: async () => ({ providerId: 'conditional' }) } } as never, () => "/synthetic/vault");
+  (service as any).selected = { id: 'history' };
+  service.register("owner", { id: "conditional", name: "Conditional", capabilities: conditionalCapabilities } as never);
+  await (service as any).conditional.hydration;
+  expect((service as any).conditional.getActiveProvider()).toBeNull();
+});
+
+for (const boundary of ['read', 'write'] as const) it(`suppresses a newly registered conditional provider during append activation ${boundary}`, async () => {
+  let release!: () => void;
+  const service = new SyncService({ deviceState: {
+    read: async (key: string) => key.startsWith('sync/') ? { providerId: 'conditional' } : boundary === 'read' ? new Promise(resolve => { release = () => resolve(null); }) : null,
+    write: async () => { if (boundary === 'write') await new Promise<void>(resolve => { release = resolve; }); },
+  }, vaultFiles: { onChange: () => () => {} } } as never, () => "/synthetic/vault");
+  (service as any).providers.set('history', { id: 'history', protocol: APPEND_ONLY_PROTOCOL });
+  const activating = service.activate('history');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  service.register('owner', { id: 'conditional', name: 'Conditional', capabilities: conditionalCapabilities } as never);
+  await (service as any).conditional.hydration;
+  release(); await activating;
+  expect(service.isAppendOnly()).toBe(true); expect((service as any).conditional.getActiveProvider()).toBeNull();
+});
+
+it("does not revive conditional hydration admitted during disconnect cleanup", async () => {
+  let reads = 0; let finishRead!: (value: unknown) => void; let finishWrite!: () => void;
+  const service = new SyncService({ deviceState: {
+    read: async () => ++reads === 1 ? null : new Promise(resolve => { finishRead = resolve; }),
+    write: async () => new Promise<void>(resolve => { finishWrite = resolve; }),
+    remove: async () => {},
+  } } as never, () => '/synthetic/vault');
+  const disconnecting = service.disconnect();
+  await vi.waitFor(() => expect(finishWrite).toBeTypeOf('function'));
+  service.register('owner', { id: 'conditional', name: 'Conditional', capabilities: conditionalCapabilities } as never);
+  await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
+  finishWrite(); await disconnecting;
+  finishRead({ providerId: 'conditional' }); await (service as any).conditional.hydration;
+  expect(service.getActiveProvider()).toBeNull();
+});
+
+it("clears a persisted conditional selection even when that plugin is unregistered", async () => {
+  const state = new Map<string, any>([['sync/%2Fsynthetic%2Fvault', { providerId: 'unregistered' }]]);
+  const service = new SyncService({ deviceState: { read: async (key: string) => state.get(key) ?? null, write: async (key: string, value: unknown) => { state.set(key, value); }, remove: async (key: string) => { state.delete(key); } } } as never, () => '/synthetic/vault');
+  (service as any).selected = { id: 'history' };
+  await service.disconnect();
+  expect(state.get('sync/%2Fsynthetic%2Fvault').providerId).toBeUndefined();
+});
+
+it("clears a persisted append selection even when that plugin is unregistered", async () => {
+  const key = 'sync-history-binding//synthetic/vault';
+  const state = new Map<string, unknown>([[key, { providerId: 'unregistered' }]]);
+  const service = new SyncService({ deviceState: { read: async (key: string) => state.get(key) ?? null, write: async (key: string, value: unknown) => { state.set(key, value); }, remove: async (key: string) => { state.delete(key); } } } as never, () => '/synthetic/vault');
+  await service.disconnect(); expect(state.has(key)).toBe(false);
+});
+
+it("cancels conditional initialization before opening a session and switching protocols", async () => {
+  let reads = 0; let finish!: (value: unknown) => void;
+  const open = vi.fn(async () => { throw new Error('Old provider session opened'); });
+  const service = new SyncService({ deviceState: { read: async (key: string) => {
+    if (!key.startsWith('sync/')) return null;
+    reads++; if (reads === 2) return new Promise(resolve => { finish = resolve; });
+    return reads === 1 ? { providerId: 'conditional' } : null;
+  }, write: async () => {}, remove: async () => {} }, vaultFiles: { onChange: () => () => {} } } as never, () => "/synthetic/vault");
+  service.register('owner', { id: 'conditional', name: 'Conditional', capabilities: conditionalCapabilities, open } as never);
+  await (service as any).conditional.hydration;
+  const running = service.run(); const rejection = expect(running).rejects.toThrow();
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+  const disconnecting = service.disconnect(); finish({ providerId: 'conditional', approved: true });
+  await rejection; await disconnecting;
+  (service as any).providers.set('history', { id: 'history', protocol: APPEND_ONLY_PROTOCOL });
+  await service.activate('history');
+  expect(open).not.toHaveBeenCalled(); expect(service.isAppendOnly()).toBe(true);
 });
 
 it("does not rearm retries or replace paused status from an old scheduled failure", async () => {

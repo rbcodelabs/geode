@@ -50,6 +50,8 @@ The optional `excludePath(path, bytes?)` hook declares ownership exclusions. Geo
 
 Registration belongs to the plugin generation and disappears during unload. A vault can have one active provider. First run requires `app.sync.preview()` followed by `app.sync.run({ approvePreview: true })`; Geode rejects approval if the vault, provider, cursor, or plan changed. Settings → Sync exposes selection, preview/approval, pause/resume, conflicts, and errors.
 
+Conditional and append-only providers share lifecycle arbitration from initial hydration through operation settlement. Disconnect cancels pending initialization and clears both device-local provider selections, including selections whose plugin is temporarily unregistered. Registering another plugin during activation or cleanup cannot silently select a second protocol.
+
 ## Secrets and state
 
 Use `Plugin.loadSecret`, `Plugin.saveSecret`, and `Plugin.removeSecret`. The host namespaces calls to the owning plugin. Electron encrypts values outside the vault. Hosts without native secure storage reject writes instead of falling back to local storage or `data.json`.

@@ -19,16 +19,20 @@ export class SyncCoordinator extends Events implements SyncApi {
   private operationClaimed = false;
   private activeRegistration?: { owner: string; provider: SyncProvider };
   private hydration: Promise<void> = Promise.resolve();
-  constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly now: () => number = Date.now) { super(); }
+  private generation = 0;
+  constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly now: () => number = Date.now, private readonly restoreAllowed: () => boolean = () => true) { super(); }
 
   register(owner: string, provider: SyncProvider): () => Promise<void> {
     if (!provider.id || this.providers.has(provider.id)) throw new Error(`Sync provider already registered: ${provider.id}`);
     this.validateCapabilities(provider);
     this.providers.set(provider.id, { owner, provider });
-    this.hydration = this.hydration.then(() => this.hydrate());
+    const generation = this.generation;
+    const eligible = this.restoreAllowed();
+    this.hydration = this.hydration.then(() => this.hydrate(generation, eligible));
     return () => this.unregister(provider.id, owner);
   }
   listProviders() { return [...this.providers.values()].map(({ provider }) => ({ id: provider.id, name: provider.name })); }
+  async waitUntilReady(): Promise<void> { while (true) { const pending = this.hydration; await pending; if (pending === this.hydration) return; } }
   getActiveProvider() { const found = this.status.providerId ? this.providers.get(this.status.providerId)?.provider : undefined; return found ? { id: found.id, name: found.name } : null; }
   getStatus() { return { ...this.status }; }
   async getScope(): Promise<SyncScope> { const state = await this.loadState(); return { ...state.scope, excludedFolders: [...state.scope.excludedFolders] }; }
@@ -104,10 +108,10 @@ export class SyncCoordinator extends Events implements SyncApi {
     this.setStatus({ state: state.paused ? "paused" : "idle", providerId, conflicts: 0 });
   }
 
-  async disconnect(): Promise<void> { await this.cancel(); const state = await this.loadState(); delete state.providerId; state.approved = false; state.cursor = undefined; state.baseline = {}; state.remoteIndex = {}; state.conflicts = {}; state.journal = []; await this.saveState(state); this.setStatus(EMPTY_STATUS); }
-  async pause(): Promise<void> { await this.cancel(); const state = await this.loadState(); state.paused = true; await this.saveState(state); this.setStatus({ ...this.status, state: "paused" }); }
+  async disconnect(): Promise<void> { const vaultId = this.vaultId(); await this.cancel(); this.assertVault(vaultId); const state = await this.loadState(vaultId); delete state.providerId; state.approved = false; state.cursor = undefined; state.baseline = {}; state.remoteIndex = {}; state.conflicts = {}; state.journal = []; await this.saveState(state); this.setStatus(EMPTY_STATUS); }
+  async pause(): Promise<void> { const vaultId = this.vaultId(); await this.cancel(); this.assertVault(vaultId); const state = await this.loadState(vaultId); state.paused = true; await this.saveState(state); this.setStatus({ ...this.status, state: "paused" }); }
   async resume(): Promise<void> { const state = await this.loadState(); state.paused = false; await this.saveState(state); this.setStatus({ ...this.status, state: state.providerId ? "idle" : "disconnected" }); }
-  async cancel(): Promise<void> { this.activeAbort?.abort(); await this.running?.catch(() => undefined); await this.activeSession?.close().catch(() => undefined); this.activeAbort = undefined; this.activeSession = undefined; }
+  async cancel(): Promise<void> { this.generation++; this.activeAbort?.abort(); await this.hydration.catch(() => undefined); await this.running?.catch(() => undefined); await this.activeSession?.close().catch(() => undefined); this.activeAbort = undefined; this.activeSession = undefined; }
 
   async preview(): Promise<SyncPreview> {
     const plan = await this.withSession(async (session, state, signal, vaultId) => { const next = await this.plan(session, state, signal, vaultId); state.previewSignature = this.planSignature(next); await this.saveState(state); return next; });
@@ -140,22 +144,25 @@ export class SyncCoordinator extends Events implements SyncApi {
   private async withSession<T>(fn: (session: SyncSession, state: SyncState, signal: AbortSignal, vaultId: string) => Promise<T>): Promise<T> {
     if (this.operationClaimed) throw new Error("A sync operation is already running");
     this.operationClaimed = true;
-    let work: Promise<T> | undefined;
-    try {
+    const controller = new AbortController(); this.activeAbort = controller;
+    const vaultId = this.vaultId();
+    let state: SyncState | undefined;
+    const assertInitializing = () => { this.assertVault(vaultId); if (controller.signal.aborted) throw new DOMException("Sync cancelled", "AbortError"); };
+    const work = (async () => {
       await this.hydration;
-      const vaultId = this.vaultId();
-      const state = await this.loadState(vaultId); this.assertVault(vaultId); const registration = state.providerId ? this.providers.get(state.providerId) : undefined;
+      assertInitializing();
+      state = await this.loadState(vaultId); assertInitializing(); const registration = state.providerId ? this.providers.get(state.providerId) : undefined;
       if (!registration) throw new Error("No sync provider is active");
       const provider = registration.provider;
-      const controller = new AbortController(); this.activeAbort = controller;
       this.activeRegistration = registration;
-      work = (async () => { const session = await provider.open({ vaultId }); this.assertContext(controller.signal, vaultId); this.activeSession = session; try { return await fn(session, state, controller.signal, vaultId); } finally { await session.close(); } })();
-      this.running = work;
-      try { return await work; } catch (error) { if (!controller.signal.aborted) this.setStatus({ state: "error", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length, message: error instanceof Error ? error.message : String(error) }); throw error; }
-      finally { if (this.running === work) this.running = undefined; this.activeAbort = undefined; this.activeSession = undefined; this.activeRegistration = undefined; }
-    } finally {
-      this.operationClaimed = false;
-    }
+      const session = await provider.open({ vaultId }); this.activeSession = session;
+      try { this.assertContext(controller.signal, vaultId); return await fn(session, state, controller.signal, vaultId); }
+      finally { await session.close(); }
+    })();
+    this.running = work;
+    try { const result = await work; assertInitializing(); return result; }
+    catch (error) { if (!controller.signal.aborted && this.vaultId() === vaultId) this.setStatus({ state: "error", providerId: state?.providerId, conflicts: Object.keys(state?.conflicts ?? {}).length, message: error instanceof Error ? error.message : String(error) }); throw error; }
+    finally { if (this.running === work) this.running = undefined; if (this.activeAbort === controller) this.activeAbort = undefined; this.activeSession = undefined; this.activeRegistration = undefined; this.operationClaimed = false; }
   }
 
   private async plan(session: SyncSession, state: SyncState, signal: AbortSignal, vaultId: string): Promise<Plan> {
@@ -328,6 +335,6 @@ export class SyncCoordinator extends Events implements SyncApi {
   private async loadState(vaultId = this.vaultId()): Promise<SyncState> { const stateKey = this.stateKey(vaultId); const stored = await this.host.deviceState.read<Partial<SyncState>>(stateKey); return { approved: false, paused: false, baseline: {}, remoteIndex: {}, conflicts: {}, journal: [], scope: { ...DEFAULT_SYNC_SCOPE, excludedFolders: [] }, ...stored, stateKey, vaultId }; }
   private async saveState(state: SyncState) { this.assertVault(state.vaultId); await this.host.deviceState.write(state.stateKey, state); this.assertVault(state.vaultId); }
   private assertVault(vaultId: string) { if (this.vaultId() !== vaultId) throw new DOMException("Vault changed during sync", "AbortError"); }
-  private async hydrate() { const vaultId = this.vaultId(); const state = await this.loadState(vaultId); if (this.vaultId() !== vaultId) return; this.setStatus(state.providerId ? { state: state.paused ? "paused" : "idle", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length } : EMPTY_STATUS); }
+  private async hydrate(generation: number, eligible: boolean) { const vaultId = this.vaultId(); const state = await this.loadState(vaultId); if (!eligible || this.vaultId() !== vaultId || generation !== this.generation || !this.restoreAllowed()) return; this.setStatus(state.providerId ? { state: state.paused ? "paused" : "idle", providerId: state.providerId, conflicts: Object.keys(state.conflicts).length } : EMPTY_STATUS); }
   private setStatus(status: SyncStatus) { this.status = status; this.trigger("status", this.getStatus()); }
 }
