@@ -4,6 +4,7 @@ import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
 import { VAULT_FILE_DRAG_MIME } from "../file-drag";
 import { ProjectsSection } from "./projects-section";
+import { threadsProjectSource } from "../integrations/threads-projects";
 
 export type SortOrder = "name-asc" | "name-desc";
 
@@ -101,6 +102,7 @@ export class FileExplorerView implements View {
     this.containerEl.appendChild(this.treeEl);
     this.projects = new ProjectsSection({
       host: app.host.externalRoots,
+      ...(app.host.runtime.runtime !== "electron" ? { mobileProjects: threadsProjectSource(app.vault) } : {}),
       openResource: (ref, label, newTab) => app.openExternalResource(ref, label, newTab),
       revealVaultFolder: (relativePath) => {
         const parts = relativePath.split("/");

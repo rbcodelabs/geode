@@ -53,9 +53,9 @@ import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 import { DeepLinkDispatcher } from "./deep-link";
 import type { PluginFileSet } from "./preload";
-import { ExternalRootService, externalRootReply, type ExternalRootServiceSession } from "./external-root-service";
+import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
-import type { ExternalProjectContribution } from "../shared/external-roots";
+import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
@@ -141,13 +141,28 @@ function externalRootSession(sender: Electron.WebContents): Promise<ExternalRoot
       detail: "This removes only the local Project attachment. Files, the Threads Project, its working directory, and execution permission are unchanged.",
       buttons: ["Cancel", "Detach"], defaultId: 0, cancelId: 0, noLink: true,
     })).response === 1,
+    confirmManagement: async ({ kind, label, selectedPath }) => (await dialog.showMessageBox(win, {
+      type: "question", title: kind === "remove-root" ? "Remove folder grant?" : "Remove stale Project association?",
+      message: kind === "remove-root" ? "Remove this unassigned folder grant?" : `Remove association for ${label}?`,
+      detail: `${selectedPath}\n\nOnly Geode's local ${kind === "remove-root" ? "grant record" : "Project association"} will be removed. External files, Threads Projects, working directories, and execution permissions are unchanged.`,
+      buttons: ["Cancel", "Remove"], defaultId: 0, cancelId: 0, noLink: true,
+    })).response === 1,
   });
 }
 
 function invalidateExternalRoots(session: VaultSession | undefined): void {
   if (!session) return;
   session.externalRootsInvalidated = true;
-  void session.externalRoots?.then((roots) => roots.dispose()).catch(() => undefined);
+  void session.externalRoots?.then(async (roots) => { await roots.dispose(); notifyExternalRoots(); }).catch(() => undefined);
+}
+
+function notifyExternalRoots(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    const session = sessions.get(win.id);
+    if (!win.isDestroyed() && !win.webContents.isDestroyed() && session && !session.externalRootsInvalidated) {
+      win.webContents.send("external-roots-changed");
+    }
+  }
 }
 /** Explicit vault requested for a window that has not completed open-vault yet. */
 const launchTargets = new Map<number, string>();
@@ -317,20 +332,18 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 
 function registerIpc() {
   // Narrow internal desktop integration. No Vault/TFile or arbitrary-path API.
-  const notifyExternalRoots = () => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      const session = sessions.get(win.id);
-      if (!win.isDestroyed() && !win.webContents.isDestroyed() && session && !session.externalRootsInvalidated) {
-        win.webContents.send("external-roots-changed");
-      }
-    }
-  };
-  ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[]) => externalRootReply(async () => {
-    const result = await (await externalRootSession(e.sender)).contribute(projects);
-    notifyExternalRoots();
-    return result;
+  ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[], options?: ExternalProjectContributionOptions) => externalRootReply(async () => {
+    return submitExternalProjects(await externalRootSession(e.sender), projects, options, notifyExternalRoots);
   }));
   ipcMain.handle("external-roots-projects", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listProjects()));
+  ipcMain.handle("external-roots-grants", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listGrants()));
+  for (const [channel, action] of [["remove-association", "removeStaleAssociation"], ["remove-orphan", "removeOrphanGrant"]] as const) {
+    ipcMain.handle(`external-roots-${channel}`, (e, id: string) => externalRootReply(async () => {
+      const removed = await (await externalRootSession(e.sender))[action](id);
+      if (removed) notifyExternalRoots();
+      return removed;
+    }));
+  }
   for (const action of ["attach", "reconnect", "detach"] as const) {
     ipcMain.handle(`external-roots-${action}`, (e, projectId: string) => externalRootReply(async () => {
       const result = await (await externalRootSession(e.sender))[action](projectId);

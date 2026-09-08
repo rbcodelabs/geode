@@ -1,7 +1,7 @@
 # Spec: External project roots — Phase 1 read-only explorer
 
-**Status:** Approved design baseline; implementation remains blocked pending
-separate approval of the bounded implementation breakdown.
+**Status:** Approved design baseline; bounded Phase 1 implementation authorized
+on the isolated feature PR. Merge and release require separate approval.
 
 **Approach:** Add a core, host-owned `RootRegistry` and stable
 `{rootId, relativePath}` resource identities, then show explicitly attached
@@ -403,6 +403,7 @@ are listed only to bound future planning:
 ## Approval gate
 
 The ADR and this Phase 1 spec were approved as the design baseline on 2026-09-04.
-Implementation must not begin until engineering produces a bounded, test-first
-implementation breakdown and receives separate approval. Implementation must use
-the repository's normal isolated-worktree and verification workflow.
+The subsequent bounded implementation and remaining Phase 1 lifecycle/management
+work were separately authorized in the originating thread. Implementation uses
+the repository's normal isolated-worktree and verification workflow. This approval
+does not authorize broader external-file semantics, merging, or a release.

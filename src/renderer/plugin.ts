@@ -6,6 +6,7 @@ import type { PluginManifest } from "./plugin-manifest";
 import type { EventRef } from "./events";
 import type { EditorView } from "@codemirror/view";
 import type { MarkdownView } from "./views/markdown-view";
+import { notifyThreadsDataSaved } from "./integrations/threads-projects";
 
 export type { PluginManifest } from "./plugin-manifest";
 
@@ -226,6 +227,7 @@ export abstract class Plugin extends Component {
   /** Persist this plugin's settings to `<plugin dir>/data.json`. */
   async saveData(data: unknown): Promise<void> {
     await window.geode.write(this.dataPath(), JSON.stringify(data, null, 2));
+    notifyThreadsDataSaved(this, data);
   }
 
   /** Called once when the plugin is enabled (including on app startup, if already enabled). Register everything here. */

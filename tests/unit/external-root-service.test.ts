@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ExternalRootService, externalRootReply } from "../../src/main/external-root-service";
+import { ExternalRootService, externalRootReply, submitExternalProjects } from "../../src/main/external-root-service";
 import { RootRegistry } from "../../src/main/root-registry";
 
 const dirs: string[] = [];
@@ -98,6 +98,24 @@ it("fresh listing reports a moved root without losing its identity", async () =>
   if (project.state !== "bound") throw new Error("Expected bound");
   expect(project.root.rootId).toBe(attached.root.rootId);
   expect(project.root.availability).toBe("missing");
+});
+it("classifies an in-vault cwd using existing vault authority without asking for a grant", async () => {
+  const s = await setup();
+  const folder = path.join(s.vault, "notes"); await fs.mkdir(folder);
+  expect(await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: folder }]))
+    .toEqual([{ projectId: "p", label: "Project", state: "inside-vault", relativeBase: "notes" }]);
+  expect(s.pickDirectory).not.toHaveBeenCalled(); expect(s.confirmDirectory).not.toHaveBeenCalled();
+});
+it("broadcasts contribution revocation before a delayed probe completes", async () => {
+  let finish!: (value: []) => void;
+  const contribute = vi.fn(() => new Promise<[]>(resolve => { finish = resolve; }));
+  const notify = vi.fn();
+  const result = submitExternalProjects({ contribute }, [], undefined, notify);
+  expect(contribute).toHaveBeenCalledTimes(1);
+  expect(notify).toHaveBeenCalledTimes(1);
+  finish([]);
+  await result;
+  expect(notify).toHaveBeenCalledTimes(2);
 });
 it("clears inside-vault association when cwd changes", async () => {
   const s = await setup(); s.pickDirectory.mockResolvedValueOnce(s.vault);

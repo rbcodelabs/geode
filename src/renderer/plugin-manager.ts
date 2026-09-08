@@ -16,6 +16,7 @@ import {
   type MobilePluginAdmission,
 } from "./mobile-plugin-runtime";
 import type { PluginFileSet } from "./host/contracts";
+import { ThreadsProjectsAdapter, threadsProjectSource, portableThreadsProjects, observeThreadsData } from "./integrations/threads-projects";
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
@@ -122,6 +123,13 @@ export class PluginManager {
   private recoveryMode = false;
   private containing = new Set<string>();
   private mobileOptIns = new Set<string>();
+  private threadsAdapter?: ThreadsProjectsAdapter;
+  private threadsDataOff?: () => void;
+  private portableThreadsEnabled = false;
+  private portableRevision = 0;
+  private closing = false;
+  private readonly integrationVault = this.app.vault;
+  private readonly inactiveIntegrations = new WeakSet<Plugin>();
 
   constructor(
     private app: App,
@@ -152,6 +160,12 @@ export class PluginManager {
 
     const enabledIds = (enabledConfig as string[] | null) ?? [];
     if (this.recoveryMode) return;
+    if (this.isMobileRuntime() && enabledIds.includes("claude-threads") && this.manifests.has("claude-threads")
+      && !this.quarantine["claude-threads"] && !this.isBlocked("claude-threads")) {
+      this.portableThreadsEnabled = true;
+      this.portableSource()?.setRefresh(() => this.refreshPortableThreads());
+      await this.refreshPortableThreads();
+    }
     await Promise.all(enabledIds.map(async (id) => {
       if (!this.manifests.has(id)) return;
       if (this.quarantine[id]) return;
@@ -242,6 +256,7 @@ export class PluginManager {
     for (const id of [...this.manifests.keys()]) {
       if (!present.has(id) && !this.loaded.has(id)) this.manifests.delete(id);
     }
+    if (!present.has("claude-threads")) this.clearPortableThreads();
   }
 
   /**
@@ -384,6 +399,10 @@ export class PluginManager {
       await this.recordAndQuarantine(id, "onload", err);
       throw err;
     }
+    // Subscribe to Threads' existing manager contract only after initialization.
+    // A desktop soft timeout may settle later; current-instance checks fence it.
+    if (onloadResult === undefined) this.startThreadsIntegration(id, instance);
+    else void Promise.resolve(onloadResult).then(() => this.startThreadsIntegration(id, instance), () => {});
 
     // Await a possibly-async onload before considering the plugin fully started,
     // so registrations made after an `await` inside onload (registerView,
@@ -495,8 +514,19 @@ export class PluginManager {
   /** Call `onunload()` (reversing everything the plugin registered) and drop the instance. */
   async disable(id: string, opts: { persist?: boolean } = {}): Promise<void> {
     const { persist = true } = opts;
+    if (id === "claude-threads") {
+      const instance = this.loaded.get(id)?.instance;
+      if (instance) this.inactiveIntegrations.add(instance);
+      this.clearPortableThreads();
+      const adapter = this.threadsAdapter;
+      this.threadsAdapter = undefined;
+      await adapter?.dispose();
+    }
     const entry = this.loaded.get(id);
-    if (!entry) return;
+    if (!entry) {
+      if (id === "claude-threads" && persist) await this.persistEnabled();
+      return;
+    }
     try {
       await entry.instance.unloadAndWait();
     } catch (error) {
@@ -509,7 +539,57 @@ export class PluginManager {
   }
 
   async dispose(): Promise<void> {
+    this.closing = true;
+    this.clearPortableThreads();
     for (const id of [...this.loaded.keys()]) await this.disable(id, { persist: false });
+  }
+
+  private portableSource() {
+    return this.integrationVault && typeof this.integrationVault === "object" ? threadsProjectSource(this.integrationVault) : undefined;
+  }
+
+  private clearPortableThreads(): void {
+    this.portableThreadsEnabled = false;
+    this.portableRevision++;
+    this.threadsDataOff?.();
+    this.threadsDataOff = undefined;
+    this.portableSource()?.setRefresh(undefined);
+    this.portableSource()?.publish([]);
+  }
+
+  private async refreshPortableThreads(): Promise<void> {
+    if (!this.portableThreadsEnabled || this.closing) return;
+    const revision = ++this.portableRevision;
+    let projects = [] as ReturnType<typeof portableThreadsProjects>;
+    // Plugin-code readers intentionally allow only manifest/main/styles. Settings
+    // use the existing vault data reader, just like Plugin.loadData on mobile.
+    try { projects = portableThreadsProjects(JSON.parse(await window.geode.read(`${pluginDir("claude-threads")}/data.json`))); }
+    catch { /* Unreadable metadata provides no portable projects or authority. */ }
+    if (revision === this.portableRevision && this.portableThreadsEnabled && !this.closing && this.app.vault === this.integrationVault) {
+      this.portableSource()?.publish(projects);
+    }
+  }
+
+  private startThreadsIntegration(id: string, instance: Plugin): void {
+    if (id !== "claude-threads" || this.closing || this.loaded.get(id)?.instance !== instance
+      || this.inactiveIntegrations.has(instance) || this.quarantine[id] || this.app.vault !== this.integrationVault) return;
+    if (this.isMobileRuntime()) {
+      this.portableThreadsEnabled = true;
+      this.portableSource()?.setRefresh(() => this.refreshPortableThreads());
+      this.portableSource()?.publish(portableThreadsProjects(instance.settings));
+      this.threadsDataOff?.();
+      this.threadsDataOff = observeThreadsData(instance, data => {
+        if (this.portableThreadsEnabled && this.loaded.get(id)?.instance === instance && this.app.vault === this.integrationVault) {
+          this.portableRevision++;
+          this.portableSource()?.publish(portableThreadsProjects(data));
+        }
+      });
+    } else if (this.app.host?.externalRoots && !this.threadsAdapter) {
+      this.threadsAdapter = new ThreadsProjectsAdapter(this.app.host.externalRoots,
+        () => this.loaded.get(id)?.instance === instance && this.app.vault === this.integrationVault);
+      try { this.threadsAdapter.connect(instance); }
+      catch { console.warn("Threads Project integration could not subscribe to this plugin version."); }
+    }
   }
 
   private async containPluginError(id: string, boundary: string, error: unknown): Promise<void> {
@@ -528,6 +608,7 @@ export class PluginManager {
     const normalized = error instanceof Error ? error : new Error(String(error));
     const entry = { at: Date.now(), boundary, message: normalized.message };
     this.quarantine[id] = entry;
+    if (id === "claude-threads") this.clearPortableThreads();
     const results = await Promise.allSettled([
       window.geode.writeConfig(QUARANTINE_KEY, this.quarantine),
       window.geode.reportCrashDiagnostic?.({
@@ -541,7 +622,11 @@ export class PluginManager {
   }
 
   private async persistEnabled(): Promise<void> {
-    await window.geode.writeConfig(CONFIG_KEY, this.enabledIds());
+    const ids = this.enabledIds();
+    // A desktop-only Threads bundle may still supply opted-in portable labels.
+    // Toggling an unrelated plugin must not silently revoke that preference.
+    if (this.portableThreadsEnabled && !ids.includes("claude-threads")) ids.push("claude-threads");
+    await window.geode.writeConfig(CONFIG_KEY, ids);
   }
 
   private assertCanEnable(id: string, manifest: PluginManifest): void {

@@ -122,6 +122,23 @@ export class ExternalRootDesktopBoundary {
     return new ExternalRootDesktopBoundary(registry, vault.canonicalPath, options);
   }
 
+  /** A cwd inside the already-authorized vault needs no external attachment. */
+  async classifyVaultDirectory(suggestedPath: string | undefined): Promise<string | undefined> {
+    this.assertCurrentSession();
+    if (!suggestedPath || !path.isAbsolute(suggestedPath) || suggestedPath.includes("\0")) return undefined;
+    let relative: string | undefined;
+    try {
+      const proof = await realCanonicalDirectory(suggestedPath);
+      if (isWithinOrEqual(this.activeVaultPath, proof.canonicalPath)) {
+        relative = path.relative(this.activeVaultPath, proof.canonicalPath).split(path.sep).join("/");
+      }
+    } catch (error) {
+      if (!(error instanceof ExternalRootAccessError)) throw error;
+    }
+    this.assertCurrentSession();
+    return relative;
+  }
+
   /** Refresh display availability without discarding the persisted grant or its identity. */
   async probeRoot(rootId: string): Promise<RootDescriptor> {
     this.assertCurrentSession();

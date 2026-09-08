@@ -36,6 +36,7 @@ import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
+import { renderExternalRootsTab } from "./settings/external-roots-tab";
 import { FileSystemAdapter, TFile, TFolder, isTFile, pathName } from "./types";
 import {
   addBookmark,
@@ -370,8 +371,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "advanced" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "advanced", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "advanced" | "performance" | "project-folders";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "advanced", "performance", "project-folders"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -382,6 +383,7 @@ class SettingsModal extends Modal {
   private stopHotkeyRecorder: (() => void) | null = null;
   /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
   private stopPerformanceTab: (() => void) | null = null;
+  private stopExternalRootsTab: (() => void) | null = null;
 
   constructor(private geodeApp: App) {
     super(geodeApp);
@@ -447,6 +449,8 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab = null;
     }
     this.unsubscribeHotkeys?.();
+    this.stopExternalRootsTab?.();
+    this.stopExternalRootsTab = null;
     this.unsubscribeHotkeys = null;
     this.stopHotkeyRecorder?.();
     this.stopHotkeyRecorder = null;
@@ -467,6 +471,10 @@ class SettingsModal extends Modal {
       this.renderCommunityTab(this.contentContainerEl);
     } else if (id === "advanced") {
       this.renderAdvancedTab(this.contentContainerEl);
+    } else if (id === "project-folders") {
+      const roots = this.geodeApp.host.externalRoots;
+      if (!roots?.listGrants || !roots.removeStaleAssociation || !roots.removeOrphanGrant) { this.activateTab("appearance"); return; }
+      this.stopExternalRootsTab = renderExternalRootsTab(this.contentContainerEl, roots);
     } else if (id === "performance") {
       if (!this.geodeApp.host.capabilities.processDiagnostics) {
         this.activateTab("appearance");
@@ -516,6 +524,7 @@ class SettingsModal extends Modal {
     addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
+    if (this.geodeApp.host.externalRoots?.listGrants) addNavItem("project-folders", "Project folders", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
     }
@@ -1219,6 +1228,8 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab = null;
     }
     this.unsubscribeSettingTabs?.();
+    this.stopExternalRootsTab?.();
+    this.stopExternalRootsTab = null;
     this.unsubscribeSettingTabs = null;
     this.unsubscribeHotkeys?.();
     this.unsubscribeHotkeys = null;

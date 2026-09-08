@@ -2,8 +2,9 @@
 
 This slice builds on the [desktop boundary](external-root-desktop-boundary.md)
 and implements the explorer/source-view portion of
-[Phase 1](external-project-roots-phase-1.md). It does not complete the Threads
-adapter or authorize a release.
+[Phase 1](external-project-roots-phase-1.md), including the internal Threads
+adapter and local grant management. Implementation approval does not authorize
+merging or a release.
 
 ## Browsing contributed Projects
 
@@ -51,13 +52,39 @@ External files are not `TFile`s. Existing vault files, metadata, search, wikilin
 backlinks, graph, Canvas, Bases, bookmarks, and Obsidian-compatible plugin APIs
 retain their vault-only behavior.
 
-## Remaining Phase 1 integration
+## Threads lifecycle and mobile
 
-The real Threads lifecycle adapter, portable mobile Project metadata, and core
-settings management of orphan grants remain separate work. Until the adapter is
-connected, existing Threads Projects are not automatically contributed to this
-section. Tests exercise contributions through the internal host contract; that
-does not establish completion of the production Threads integration.
+Geode's internal version-1 adapter subscribes to the loaded Threads manager's
+Project lifecycle. Existing Projects appear after startup, including a slow plugin
+load; create, rename, cwd changes, and deletion update the section. These are
+contributions only: historical cwd settings never authorize external reads.
+Unsupported manager shapes fail closed. No Threads methods are patched, and no
+filesystem watcher or polling loop is introduced.
+
+Deleting a Project removes its local association but retains the root grant.
+Disabling or unloading Threads withdraws live contributions and access while
+retaining associations for later enablement. Stale plugin instances cannot
+republish after disable, quarantine, or a vault switch.
+
+Mobile displays portable Project IDs and labels as **Available on desktop**.
+Configured, enabled Threads metadata can be read without executing an unsupported
+desktop bundle. Explicit Refresh reloads metadata; there is no external filesystem
+authority, desktop-path display, Files attachment, or remote proxy.
+
+## Local folder grants
+
+Core Settings → **Project folders** remains available when Threads is disabled.
+It lists this vault's associations and unassigned grants, with counts (not labels)
+for other-vault associations. Active associations must be detached from Projects;
+inactive associations and unreferenced grants can be removed after native
+confirmation. The native dialog identifies the exact folder, defaults to Cancel,
+and makes clear that external files and execution settings are unchanged.
+
+Confirmation and persistence recheck session ownership, active references, and
+concurrent lifecycle changes. An active association in another same-vault window
+cannot be removed as stale; removing a grant cannot remove a referenced root.
+Grant/contribution notifications refresh affected views across windows without
+watching the external filesystem.
 
 Native picker/confirmation behavior is covered through dialog stubs in Electron
 tests. Explorer/source-view screenshots verify renderer UI, not native dialogs.

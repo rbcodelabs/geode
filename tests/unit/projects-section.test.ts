@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalRootsHost, ExternalProjectDescriptor } from "../../src/shared/external-roots";
 import type { ExternalRootDirectoryPage } from "../../src/shared/root-registry";
+import { PortableProjectSource } from "../../src/renderer/integrations/threads-projects";
 import { groupProjectRoots, ProjectsSection, type BoundProject } from "../../src/renderer/views/projects-section";
 
 function project(id: string, rootId: string, relativeBase = ""): BoundProject {
@@ -55,6 +56,19 @@ function setup() {
 beforeEach(() => vi.stubGlobal("document", { createElement: () => new Element() }));
 afterEach(() => vi.unstubAllGlobals());
 describe("Projects section lifecycle and lazy browsing", () => {
+  it("shows only portable desktop-unavailable project labels without a filesystem host", async () => {
+    const source = new PortableProjectSource();
+    const section = new ProjectsSection({ mobileProjects: source, openResource: vi.fn(), revealVaultFolder: vi.fn() });
+    source.publish([{ projectId: "p", label: "Portable Project" }]);
+    await section.refresh();
+    const elements = nodes(section.containerEl as unknown as Element);
+    expect(elements.map(node => node.textContent).join("\n")).toContain("Available on desktop");
+    expect(elements.map(node => node.textContent).join("\n")).not.toContain("Attach folder");
+    elements.find(node => node.textContent === "Portable Project")!.click();
+    expect(nodes(section.containerEl as unknown as Element).map(node => node.textContent).join("\n")).toContain("not synchronized");
+    source.publish([]);
+    expect(section.containerEl.hidden).toBe(true);
+  });
   it("keeps directory and unavailable links disabled and marks contained file links", async () => {
     const h = setup();
     h.host.listDirectory.mockResolvedValueOnce({ entries: ["directory-symlink", "unavailable-link", "file-symlink"].map(kind => ({ name: kind, kind: kind as "directory-symlink" | "unavailable-link" | "file-symlink", ref: { rootId: "root", relativePath: kind }, size: 1, modifiedAt: 0 })), omittedCount: 0 });

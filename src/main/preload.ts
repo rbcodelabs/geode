@@ -45,13 +45,16 @@ export interface UpdaterCheckResult {
 const api = {
   externalRoots: (process.platform === "darwin" ? Object.freeze({
     version: 1,
-    contribute: (projects) => invokeExternalRoot("external-roots-contribute", projects),
+    contribute: (projects, options) => invokeExternalRoot("external-roots-contribute", projects, options),
     listProjects: () => invokeExternalRoot("external-roots-projects"),
     attach: (projectId) => invokeExternalRoot("external-roots-attach", projectId),
     reconnect: (projectId) => invokeExternalRoot("external-roots-reconnect", projectId),
     detach: (projectId) => invokeExternalRoot("external-roots-detach", projectId),
     listDirectory: (ref, options) => invokeExternalRoot("external-roots-list", ref, options),
     readText: (ref) => invokeExternalRoot("external-roots-read", ref),
+    listGrants: () => invokeExternalRoot("external-roots-grants"),
+    removeStaleAssociation: (projectId) => invokeExternalRoot("external-roots-remove-association", projectId),
+    removeOrphanGrant: (rootId) => invokeExternalRoot("external-roots-remove-orphan", rootId),
     onChange: (callback) => {
       const listener = () => callback();
       ipcRenderer.on("external-roots-changed", listener);

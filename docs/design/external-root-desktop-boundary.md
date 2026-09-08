@@ -20,8 +20,8 @@ before it cancels the staged write; an already initiated commit is not rolled ba
 by a later window switch. Registry mutations remain serialized throughout.
 
 The optional `HostServices.externalRoots` service is macOS-only. It offers
-contribution/listing, attach/reconnect/detach, directory pages, and bounded UTF-8
-reads. It is a narrow internal integration, not an Obsidian `App`, `Vault`,
+contribution/listing, attach/reconnect/detach, directory pages, bounded UTF-8
+reads, and core grant management. It is a narrow internal integration, not an Obsidian `App`, `Vault`,
 `TFile`, or adapter API. Browser and mobile hosts do not provide this service.
 
 Contributions contain a Project ID, display label, and optional native-picker
@@ -44,8 +44,13 @@ detach followed by attachment. This also works after restart and does not mistak
 a user-selected directory for a silent change to Threads' execution cwd.
 
 Removing a live contribution immediately removes its access from that session.
-Stored bindings and orphan grants are not silently deleted. Their core settings
-management and the Threads lifecycle adapter remain later Phase 1 work.
+Disable/unload retains stored bindings. An observed Project deletion removes only
+the matching current-vault binding through guarded, serialized persistence; it
+retains the root grant and other-vault bindings. Initial or malformed snapshots
+never infer deletions. Core Settings exposes explicit removal of inactive
+associations and unreferenced grants, guarded against same-vault active windows,
+stale confirmations, and changed references. Renderer descriptors omit host
+locators and other-vault Project labels.
 
 ## I/O guarantees and limits
 

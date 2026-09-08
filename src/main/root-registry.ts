@@ -316,6 +316,25 @@ export class RootRegistry {
     return true;
   }
 
+  /** Removes only an unreferenced grant record, never external files or live associations. */
+  async removeOrphanRoot(rootId: string, commitGuard: () => void): Promise<boolean> {
+    return this.enqueueMutation(async () => {
+      const check = () => {
+        commitGuard();
+        const root = this.requireRoot(rootId);
+        if (root.kind !== "project-cwd" || [...this.bindings.values()].some((binding) => binding.rootId === rootId)) {
+          throw new Error("Only unreferenced external root grants can be removed");
+        }
+      };
+      check();
+      const nextRoots = new Map(this.roots);
+      nextRoots.delete(rootId);
+      await this.save(nextRoots, this.bindings, check);
+      this.replaceRoots(nextRoots);
+      return true;
+    });
+  }
+
   async setAvailability(rootId: string, availability: RootAvailability): Promise<void> {
     return this.enqueueMutation(() => this.setAvailabilityMutation(rootId, availability));
   }

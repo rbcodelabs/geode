@@ -1,10 +1,12 @@
 import type { ExternalProjectDescriptor } from "../../shared/external-roots";
 import type { ExternalRootsHost } from "../../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef, ExternalRootDirectoryEntry } from "../../shared/root-registry";
+import type { PortableProjectSource } from "../integrations/threads-projects";
 export type BoundProject = Extract<ExternalProjectDescriptor, { state: "bound" }>;
 export interface ProjectRootGroup { rootId: string; projects: BoundProject[]; relativeBase: string }
 export interface ProjectsSectionOptions {
   host?: ExternalRootsHost;
+  mobileProjects?: PortableProjectSource;
   openResource(ref: ResourceRef, rootLabel: string, newTab: boolean): Promise<void>;
   revealVaultFolder(relativePath: string): void;
 }
@@ -20,9 +22,15 @@ export class ProjectsSection {
     this.containerEl.hidden = true;
     this.containerEl.setAttribute("aria-label", "External Projects");
     this.unsubscribe = options.host?.onChange?.(() => { void this.refresh(); });
+    if (!options.host && options.mobileProjects) this.unsubscribe = options.mobileProjects.subscribe(() => this.renderMobile());
   }
   async refresh(): Promise<void> {
-    if (this.disposed || !this.options.host) return;
+    if (this.disposed) return;
+    if (!this.options.host) {
+      await this.options.mobileProjects?.refresh();
+      if (!this.disposed) this.renderMobile();
+      return;
+    }
     const generation = ++this.generation;
     // Lifecycle changes invalidate both pending reads and previously displayed trees.
     this.containerEl.replaceChildren();
@@ -91,6 +99,27 @@ export class ProjectsSection {
       } else if (project.needsDetach) {
         row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", project.projectId));
       } else row.append(this.actionButton("Attach folder…", "attach", project.projectId));
+      this.containerEl.append(row);
+    }
+  }
+  private renderMobile(): void {
+    if (this.disposed) return;
+    const projects = this.options.mobileProjects?.getProjects() ?? [];
+    this.containerEl.replaceChildren();
+    this.containerEl.hidden = projects.length === 0;
+    if (!projects.length) return;
+    const header = document.createElement("div");
+    header.className = "projects-section-header";
+    const label = document.createElement("span");
+    label.textContent = "Projects";
+    header.append(label, this.button("Refresh Projects", () => { void this.refresh(); }));
+    this.containerEl.append(header);
+    for (const project of projects) {
+      const row = document.createElement("div");
+      row.className = "projects-unbound";
+      row.append(this.button(project.label, () => {
+        row.append(this.message("Available on desktop. Project files are not synchronized to this device; browse them in desktop Geode."));
+      }), this.message("Available on desktop"));
       this.containerEl.append(row);
     }
   }

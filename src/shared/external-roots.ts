@@ -8,14 +8,25 @@ export interface ExternalProjectContribution {
   /** Native picker hint only, never a filesystem grant or resource identity. */
   suggestedPath?: string;
 }
+export interface ExternalProjectContributionOptions {
+  /** Only manager-observed Project deletions, never plugin disable or initial snapshots. */
+  deletedProjectIds?: string[];
+}
 export type ExternalProjectDescriptor = { projectId: string; label: string } & (
   | { state: "unbound"; needsDetach?: true }
   | { state: "inside-vault"; relativeBase: string }
   | { state: "bound"; root: RootDescriptor; relativeBase: string }
 );
+/** Core settings metadata. Other-vault association names and locators are omitted. */
+export interface ExternalGrantDescriptor {
+  root: RootDescriptor;
+  associations: { projectId: string; label: string; active: boolean }[];
+  sharedBindingCount: number;
+  removable: boolean;
+}
 export interface ExternalRootsHost {
   readonly version: 1;
-  contribute(projects: ExternalProjectContribution[]): Promise<ExternalProjectDescriptor[]>;
+  contribute(projects: ExternalProjectContribution[], options?: ExternalProjectContributionOptions): Promise<ExternalProjectDescriptor[]>;
   listProjects(): Promise<ExternalProjectDescriptor[]>;
   attach(projectId: string): Promise<ExternalProjectDescriptor | null>;
   reconnect(projectId: string): Promise<ExternalProjectDescriptor | null>;
@@ -24,4 +35,7 @@ export interface ExternalRootsHost {
   readText(ref: ResourceRef): Promise<string>;
   /** Contribution/grant lifecycle only; never a filesystem watch. */
   onChange?(callback: () => void): () => void;
+  listGrants?(): Promise<ExternalGrantDescriptor[]>;
+  removeStaleAssociation?(projectId: string): Promise<boolean>;
+  removeOrphanGrant?(rootId: string): Promise<boolean>;
 }
