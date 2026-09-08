@@ -31,6 +31,12 @@ export interface TimedPluginReadResult {
 }
 export interface PluginFileSet { manifest: string; main: string; styles: string | null }
 
+export interface GuestWindowOpenRequest {
+  url: string;
+  guestId: number;
+  disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
+}
+
 export interface UpdaterCheckResult {
   status: "checking" | "disabled";
 }
@@ -171,6 +177,12 @@ const api = {
     const listener = (_e: Electron.IpcRendererEvent, combo: string, guestId: number) => cb(combo, guestId);
     ipcRenderer.on("guest-hotkey", listener);
     return () => { ipcRenderer.removeListener("guest-hotkey", listener); };
+  },
+  /** A web URL that a `<webview>` guest requested in a new browsing context. */
+  onGuestWindowOpen: (cb: (request: GuestWindowOpenRequest) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, request: GuestWindowOpenRequest) => cb(request);
+    ipcRenderer.on("guest-window-open", listener);
+    return () => { ipcRenderer.removeListener("guest-window-open", listener); };
   },
   checkForUpdates: (): Promise<UpdaterCheckResult> => ipcRenderer.invoke("updater-check"),
 };
