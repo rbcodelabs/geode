@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.13.1). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.13.2). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.13.1)
+## Features (v0.13.2)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
@@ -86,7 +86,10 @@ cloud, no lock-in.
   applied by the host. **Minimal Theme Settings 9.0.0** is certified on desktop,
   including its settings controls and theme/font preferences. This exact-version
   exception preserves the global Obsidian API baseline at 1.8.0; newer Minimal
-  Settings versions and other plugins requiring 1.13 remain unverified
+  Settings versions and other plugins requiring 1.13 remain unverified.
+  Desktop plugins can make HTTP(S) requests through `requestUrl()`, including
+  text, JSON, and binary responses; requests use the main process while raw
+  renderer `fetch()` remains subject to the existing Content Security Policy
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
   once with community plugins suppressed and reversible restart controls
