@@ -1,4 +1,5 @@
-import * as GeodeAPI from "./api/obsidian";
+import * as ObsidianAPI from "./api/obsidian";
+import * as GeodeAPI from "./api/geode";
 import * as CodeMirrorState from "@codemirror/state";
 import * as CodeMirrorView from "@codemirror/view";
 import * as CodeMirrorCommands from "@codemirror/commands";
@@ -71,7 +72,7 @@ export function setMobilePluginLexerForTests(init: PromiseLike<unknown>, parser:
 }
 
 const MOBILE_MODULES: Readonly<Record<string, unknown>> = Object.freeze({
-  obsidian: GeodeAPI,
+  obsidian: ObsidianAPI,
   geode: GeodeAPI,
   "@codemirror/state": CodeMirrorState,
   "@codemirror/view": CodeMirrorView,

@@ -6,7 +6,8 @@ import {
   parseManifest,
   type PluginManifest,
 } from "./plugin-manifest";
-import * as GeodeAPI from "./api/obsidian";
+import * as ObsidianAPI from "./api/obsidian";
+import * as GeodeAPI from "./api/geode";
 import { isPluginBlocked, type ManagedPolicy } from "./policy";
 import { measureOperation, recordMeasure } from "./perf-instrumentation";
 import {
@@ -61,8 +62,8 @@ const nodeRequire: ((id: string) => unknown) | undefined = (
  *
  * Obsidian bundles plugins against `require('obsidian')` plus Node/Electron
  * builtins. Geode mirrors that host contract:
- *  - `require('obsidian')` and `require('geode')` both resolve to Geode's
- *    Obsidian-compatible API surface (`GeodeAPI`).
+ *  - `require('obsidian')` resolves to the compatibility API; `require('geode')`
+ *    adds Geode-native exports through a shared, stable namespace.
  *  - every other specifier is delegated to the renderer's real Node
  *    `require` (available because the window runs with Node integration),
  *    so `fs`/`path`/`child_process`/`electron`/… work as the plugin expects.
@@ -74,7 +75,8 @@ const nodeRequire: ((id: string) => unknown) | undefined = (
 export function instantiatePluginClass(code: string, pluginId: string): PluginConstructor {
   const moduleObj: { exports: any } = { exports: {} };
   const requireShim = (specifier: string): unknown => {
-    if (specifier === "obsidian" || specifier === "geode") return GeodeAPI;
+    if (specifier === "obsidian") return ObsidianAPI;
+    if (specifier === "geode") return GeodeAPI;
     if (nodeRequire) {
       try {
         return nodeRequire(specifier);

@@ -3,6 +3,7 @@ import { projectCanvasForSearch } from "../canvas/canvas-data";
 import type { View } from "../workspace";
 import { TFile, TagCache } from "../types";
 import { setIcon } from "../api/icons";
+import { stripCommentMetadataWithMap } from "../comments/model";
 
 export interface SearchTerm {
   op: "text" | "file" | "path" | "tag" | "content" | "line";
@@ -58,7 +59,17 @@ export function matchFileAgainstTerms(
   getTags: (file: TFile) => TagCache[]
 ): SearchMatch | null {
   const snippets: { text: string; offset: number }[] = [];
+  const searchable = content === null ? null : stripCommentMetadataWithMap(content);
+  if (searchable) content = searchable.text;
+  const rawContent = content;
   const lower = content?.toLowerCase() ?? "";
+  const addSnippet = (index: number, len: number) => {
+    const raw = rawContent ?? "";
+    const lineStart = raw.lastIndexOf("\n", index) + 1;
+    let lineEnd = raw.indexOf("\n", index + len);
+    if (lineEnd < 0) lineEnd = raw.length;
+    snippets.push({ offset: searchable?.toSourceOffset(index) ?? index, text: raw.slice(lineStart, lineEnd).trim().slice(0, 250) });
+  };
   for (const term of terms) {
     let hit = false;
     switch (term.op) {
@@ -86,13 +97,13 @@ export function matchFileAgainstTerms(
           const m = term.regex.exec(content);
           if (m) {
             hit = true;
-            if (!term.negated) snippets.push(snippetAt(content, m.index, m[0].length));
+            if (!term.negated) addSnippet(m.index, m[0].length);
           }
         } else {
           const idx = lower.indexOf(term.value);
           if (idx !== -1) {
             hit = true;
-            if (!term.negated) snippets.push(snippetAt(content, idx, term.value.length));
+            if (!term.negated) addSnippet(idx, term.value.length);
           }
         }
         break;
