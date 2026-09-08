@@ -91,3 +91,5 @@ Use disposable vault copies only. Main-process guards serialize cooperative Geod
 Local staged bytes/journals/preimages and remote immutable history are retained; garbage collection is not part of this beta and storage usage grows. Keep enough space for retained history and recovery copies. Actual authenticated multi-client Drive behavior, independent authorization discovery, interrupted transfer durability, and a 24-hour soak remain release gates. Passing synthetic/provider tests does not satisfy those live gates; the Google provider remains disabled in the distributed beta until they pass.
 
 Folder rename currently republishes descendant records whose derived paths change. This is conservative but adds work for large subtrees and can conflict with an independent child edit; the parent-only publication optimization is deferred.
+
+The experimental Settings panel refreshes status after actions or reopening, not continuously during background sync. Reopen Sync to inspect newly detected background conflicts/errors. Version choices currently show record-ID prefixes rather than content previews; inspect the retained versions before resolving an unfamiliar conflict.
