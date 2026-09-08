@@ -24,7 +24,12 @@ test("immutable setup requires explicit create and preview through real settings
     await modal.getByRole("button", { name: "Preview", exact: true }).click();
     await expect(modal).toContainText("upload");
     expect(fs.readFileSync(path.join(vault, "Note.md"), "utf8")).toBe("local");
-    await page.setViewportSize({ width: 800, height: 800 }); await page.screenshot({ path: info.outputPath("immutable-setup-small.png") });
+    await page.setViewportSize({ width: 800, height: 800 });
+    const setup = modal.locator('.setting-item').filter({ has: page.getByText('Shared vault setup', { exact: true }) });
+    expect((await setup.locator('.setting-item-info').boundingBox())!.width).toBeGreaterThanOrEqual(240);
+    expect(await modal.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await expect(setup.getByRole('button', { name: 'Create shared vault', exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath("immutable-setup-small.png") });
     await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: info.outputPath("immutable-setup-large.png") });
   } finally { await app.close(); fs.rmSync(vault, { recursive: true, force: true }); fs.rmSync(profile, { recursive: true, force: true }); }
 });

@@ -1233,6 +1233,7 @@ class SettingsModal extends Modal {
     container.appendChild(actions);
     if (this.geodeApp.sync.isAppendOnly()) {
       const setup = this.addRow(container, "Shared vault setup", "Experimental immutable history. Create a new shared vault or explicitly join an existing one. Files over 100 MiB are blocked; secrets and plugin data are excluded.");
+      setup.control.parentElement?.classList.add("sync-wrapped-setting");
       const name = document.createElement("input"); name.type = "text"; name.setAttribute("aria-label", "Shared vault name"); name.placeholder = "Shared vault name";
       const create = document.createElement("button"); create.type = "button"; create.textContent = "Create shared vault"; create.addEventListener("click", () => perform(() => this.geodeApp.sync.createVault(name.value)));
       const discover = document.createElement("button"); discover.type = "button"; discover.textContent = "Find shared vaults";
@@ -1250,10 +1251,12 @@ class SettingsModal extends Modal {
       for (const item of [...(details?.blocked ?? []), ...(details?.excluded ?? [])].slice(0, 100)) this.addRow(container, item.path, item.reason);
       if (status.state === "error") {
         const recovery = this.addRow(container, "Pending recovery", "Stopping retries preserves frozen bytes and preimages. This does not undo remote records that may already be published; review the new preview before continuing.");
+        recovery.control.parentElement?.classList.add("sync-wrapped-setting");
         const stop = document.createElement("button"); stop.type = "button"; stop.textContent = "Stop pending retries & preview"; stop.addEventListener("click", () => perform(() => this.geodeApp.sync.abandonPending())); recovery.control.appendChild(stop);
       }
       for (const conflict of details?.conflicts ?? []) {
         const row = this.addRow(container, conflict.path, `${conflict.reason}. Choose the current local content or an explicit immutable version; unseen concurrent versions remain conflicts.`);
+        row.control.parentElement?.classList.add("sync-wrapped-setting");
         const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep local"; keep.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "current" } }))); row.control.appendChild(keep);
         for (const recordId of conflict.heads) { const accept = document.createElement("button"); accept.type = "button"; accept.textContent = `Accept version ${recordId.slice(0, 8)}`; accept.title = recordId; accept.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "version", recordId } }))); row.control.appendChild(accept); }
       }
