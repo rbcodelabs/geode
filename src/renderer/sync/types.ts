@@ -53,13 +53,14 @@ export interface SyncSession {
 }
 
 export interface SyncProvider {
+  readonly protocol?: "conditional-mutation-v1";
   readonly id: string;
   readonly name: string;
   readonly capabilities: Readonly<SyncProviderCapabilities>;
   open(context: { vaultId: string }): Promise<SyncSession>;
 }
 
-export type SyncStatusState = "disconnected" | "idle" | "preview" | "syncing" | "paused" | "conflict" | "error";
+export type SyncStatusState = "disconnected" | "idle" | "preview" | "pending" | "syncing" | "paused" | "conflict" | "error";
 export interface SyncStatus { state: SyncStatusState; providerId?: string; message?: string; conflicts: number; }
 export interface SyncPreview { uploads: number; downloads: number; deletes: number; conflicts: number; skipped: number; requiresApproval: boolean; }
 export interface SyncRunResult extends Omit<SyncPreview, "requiresApproval"> { cursor?: string; }

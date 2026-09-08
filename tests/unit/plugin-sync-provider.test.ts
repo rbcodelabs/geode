@@ -8,6 +8,14 @@ const provider: SyncProvider = {
 };
 
 describe("Plugin.registerSyncProvider", () => {
+  it("stores transport journals in device state rather than vault plugin data", async () => {
+    const deviceState = { read: vi.fn(async () => ({ operation: "one" })), write: vi.fn(async () => {}) };
+    const plugin = new (class extends Plugin {})({ host: { deviceState } } as never, { id: "gdocs", name: "GDocs", version: "1.0.0", minAppVersion: "0.1.0" });
+    plugin.activateHostGeneration();
+    await (plugin as any).saveDeviceState("account/vault", { operation: "one" });
+    expect(await (plugin as any).loadDeviceState("account/vault")).toEqual({ operation: "one" });
+    expect(deviceState.write).toHaveBeenCalledWith("plugin/gdocs/account%2Fvault", { operation: "one" });
+  });
   it("registers with plugin ownership and automatically unregisters on unload", async () => {
     const unregister = vi.fn(async () => {});
     const app = { sync: { register: vi.fn(() => unregister) } };

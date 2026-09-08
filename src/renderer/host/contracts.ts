@@ -7,6 +7,8 @@ export interface VaultFileEntry {
 }
 
 export interface VaultEvent {
+  /** Trusted completed host rename; native watcher guesses must not set this. */
+  renamedFrom?: string;
   event: "create" | "modify" | "delete" | "create-folder" | "delete-folder";
   path: string;
   /** Correlates the immediate echo of an app-originated mutation. */
@@ -171,6 +173,8 @@ export interface DesktopHostService {
 }
 
 export interface HostServices {
+  readonly syncSafety?: import("../../shared/sync-safety").SyncSafetyService;
+  readonly network?: { request(input: import("../../shared/network").HostHttpRequest, signal?: AbortSignal): Promise<import("../../shared/network").HostHttpResponse>; };
   readonly capabilities: Readonly<HostCapabilities>;
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;

@@ -12,7 +12,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "list" | "scanForSync" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "list" | "scanForSync" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
 >>;
 
@@ -20,6 +20,22 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
   let openFiles: VaultFileEntry[] = [];
   const fallbackDeviceState = new Map<string, unknown>();
   return {
+    syncSafety: preload.claimSyncOwner && preload.releaseSyncOwner && preload.applySyncMutation && preload.onSyncPrepare && preload.onSyncRelease ? {
+      storage: (token, binding, request) => { if (!preload.privateSyncStorage) throw new Error("Private sync storage unavailable"); return preload.privateSyncStorage(token, binding, request); },
+      claimOwner: () => preload.claimSyncOwner!(), releaseOwner: token => preload.releaseSyncOwner!(token), apply: (token, input) => preload.applySyncMutation!(token, input),
+      onPrepare: handler => preload.onSyncPrepare!(handler), onRelease: handler => preload.onSyncRelease!(handler),
+    } : undefined,
+    network: {
+      request: async (input, signal) => {
+        if (!preload.httpRequest) throw new Error("Host networking unavailable");
+        if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+        const id = crypto.randomUUID();
+        const cancel = () => preload.cancelHttpRequest?.(id);
+        signal?.addEventListener("abort", cancel, { once: true });
+        try { const result = await preload.httpRequest(id, input); if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError"); return result; }
+        finally { signal?.removeEventListener("abort", cancel); }
+      },
+    },
     capabilities: Object.freeze({
       multipleWindows: true,
       nodePlugins: true,

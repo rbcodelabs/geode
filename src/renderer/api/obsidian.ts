@@ -22,6 +22,7 @@ import type {
 import { Scope, EditorSuggest } from "./suggest";
 import { createDismissibleNotice } from "../notice";
 import moment from "moment";
+import { getHostServices } from "../host/registry";
 
 // Ensure the DOM helpers exist the moment the compat module is first
 // evaluated (i.e. when a plugin requires 'obsidian'), even if the host
@@ -131,6 +132,8 @@ export function sanitizeHTMLToDom(html: string): DocumentFragment {
 }
 
 export interface RequestUrlParam {
+  /** Geode extension; cancelled calls reject late host responses. */
+  signal?: AbortSignal;
   url: string;
   method?: string;
   headers?: Record<string, string>;
@@ -145,26 +148,36 @@ export interface RequestUrlResponse {
   json: any;
   text: string;
 }
-/** HTTP client matching Obsidian's requestUrl, implemented over the renderer's fetch. */
+/** Desktop requests execute through the host, outside renderer CSP. */
 export async function requestUrl(param: RequestUrlParam | string): Promise<RequestUrlResponse> {
   const p: RequestUrlParam = typeof param === "string" ? { url: param } : param;
   const headers = { ...(p.headers ?? {}) };
   if (p.contentType) headers["Content-Type"] = p.contentType;
-  const res = await fetch(p.url, { method: p.method ?? "GET", headers, body: p.body as any });
-  const buf = await res.arrayBuffer();
-  const text = new TextDecoder().decode(buf);
+  const network = getHostServices().network;
+  const result = network ? await network.request({ url: p.url, method: p.method, headers, body: p.body }, p.signal) : undefined;
+  const res = result ? undefined : await fetch(p.url, { method: p.method ?? "GET", headers, body: p.body, signal: p.signal });
+  const buf = result?.body ?? await res!.arrayBuffer();
+  let text: string | undefined;
+  const readText = () => text ??= new TextDecoder().decode(buf);
   const respHeaders: Record<string, string> = {};
-  res.headers.forEach((v, k) => (respHeaders[k] = v));
+  if (result) Object.assign(respHeaders, result.headers); else res!.headers.forEach((v, k) => (respHeaders[k] = v));
+  const status = result?.status ?? res!.status;
   let json: any = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    /* not json */
+  let parsed = false;
+  if (p.throw !== false && status >= 400) {
+    throw new Error(`requestUrl failed: ${status}`);
   }
-  if (p.throw !== false && res.status >= 400) {
-    throw new Error(`requestUrl ${p.url} failed: ${res.status}`);
-  }
-  return { status: res.status, headers: respHeaders, arrayBuffer: buf, json, text };
+  return {
+    status, headers: respHeaders, arrayBuffer: buf,
+    get text() { return readText(); },
+    get json() {
+      if (!parsed) {
+        parsed = true;
+        try { json = JSON.parse(readText()); } catch { /* not json */ }
+      }
+      return json;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

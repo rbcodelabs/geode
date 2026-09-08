@@ -148,10 +148,24 @@ export abstract class Plugin extends Component {
   }
 
   /** Register a full-vault remote transport owned by this plugin. */
-  registerSyncProvider(provider: SyncProvider): void {
+  registerSyncProvider(provider: SyncProvider | import("./sync/history-types").AppendOnlySyncProvider): void {
     this.assertHostGeneration();
     const unregister = this.app.sync.register(this.manifest.id, provider);
     this.register(() => this.trackTeardown(Promise.resolve(unregister())));
+  }
+
+  /** Read device-local journal/config from this plugin's namespace. */
+  async loadDeviceState<T>(key: string): Promise<T | null> {
+    this.assertHostGeneration();
+    const value = await this.app.host.deviceState.read<T>(`plugin/${encodeURIComponent(this.manifest.id)}/${encodeURIComponent(key)}`);
+    this.assertHostGeneration(); return value;
+  }
+
+  /** Device-local journal/config; never stored in the vault or plugin data.json. */
+  async saveDeviceState(key: string, value: unknown): Promise<void> {
+    this.assertHostGeneration();
+    await this.app.host.deviceState.write(`plugin/${encodeURIComponent(this.manifest.id)}/${encodeURIComponent(key)}`, value);
+    this.assertHostGeneration();
   }
 
   /** Read a secret from this plugin's host-enforced namespace. */

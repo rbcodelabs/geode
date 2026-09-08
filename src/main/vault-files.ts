@@ -113,7 +113,9 @@ export async function listVaultFiles(
       if (entry.isFile()) {
         const st = await limited(async () => {
           await injectDelay();
-          return fsp.stat(abs).catch(error => { if (options.strictSync) throw error; return null; });
+          const stat = await (options.strictSync ? fsp.lstat(abs) : fsp.stat(abs)).catch(error => { if (options.strictSync) throw error; return null; });
+          if (options.strictSync && !stat?.isFile()) throw new Error(`Unsupported sync entry: ${toRel(root, abs)}`);
+          return stat;
         });
         return [{
           path: toRel(root, abs),
@@ -123,6 +125,7 @@ export async function listVaultFiles(
           size: st?.size ?? 0,
         }];
       }
+      if (options.strictSync) throw new Error(`Unsupported sync entry: ${toRel(root, abs)}`);
       return [];
     }));
     return nested.flat();
