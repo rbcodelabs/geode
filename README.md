@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.13.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.13.1). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.13.0)
+## Features (v0.13.1)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
@@ -93,6 +93,9 @@ cloud, no lock-in.
 - **Web Viewer** — an enabled-by-default, per-vault core plugin for opening web
   pages and local `.html`/`.htm` vault files in an in-app tab (`webview`-backed,
   its own session). Disabling it preserves open viewer tabs for later restore.
+  Web links requesting a new window open as tabs in the source tab group;
+  background openings preserve your current tab selection. Popup destinations
+  must use HTTP or HTTPS.
   It also includes a one-time "Import
   cookies from Chrome" option so viewer tabs open already logged in. App
   hotkeys (command palette, quick switcher, tab switching) keep working while
