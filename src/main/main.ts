@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, protocol, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -53,6 +53,8 @@ import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 import { DeepLinkDispatcher } from "./deep-link";
 import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
+import { performRequestUrl } from "./request-url";
+import type { PrivilegedRequestUrlParam } from "../shared/request-url";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -269,6 +271,9 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 }
 
 function registerIpc() {
+  ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
+    performRequestUrl(request, (input, init) => net.fetch(input, init)),
+  );
   ipcMain.handle("window-chrome-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false };

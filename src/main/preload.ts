@@ -7,6 +7,7 @@ import type { ProcessMetric } from "./process-metrics";
 import type { CrashDiagnostic } from "./crash-journal";
 import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
+import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
 
 export interface VaultFileEntry {
   path: string;
@@ -43,6 +44,8 @@ export interface UpdaterCheckResult {
 
 const api = {
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
+  requestUrl: (request: PrivilegedRequestUrlParam): Promise<PrivilegedRequestUrlResponse> =>
+    ipcRenderer.invoke("request-url", request),
   acquirePowerSaveBlocker: (): Promise<string> =>
     ipcRenderer.invoke("power-save-blocker-acquire"),
   releasePowerSaveBlocker: (token: string): Promise<boolean> =>
@@ -210,11 +213,12 @@ type ElectronOnlyGeodeApi = typeof api;
  */
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
-  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback"
+  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "requestUrl"
 > & {
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
+  requestUrl?: ElectronOnlyGeodeApi["requestUrl"];
 };
 
 // The renderer runs with contextIsolation disabled (see main.ts's
