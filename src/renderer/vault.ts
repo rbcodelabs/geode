@@ -450,6 +450,38 @@ export class Vault extends Events {
     return this._adapter;
   }
 
+  /**
+   * Obsidian's `vault.getResourcePath(file)`: a URL the browser engine can load
+   * a vault file from, for example as an `<img src>`.
+   *
+   * Distinct from the identically named `vault.adapter.getResourcePath(path)`,
+   * which takes a normalized path string. Plugins call this `TFile` overload —
+   * `kanban-bases-view` uses it for card cover images — and passing a `TFile` to
+   * the adapter form would have produced `file://<root>/[object Object]`.
+   *
+   * Geode's renderer document is itself served over `file://`, so its
+   * `img-src 'self'` CSP admits `file://` URLs (verified in
+   * `tests/e2e/bases-kanban-interaction.spec.ts`, which asserts a cover image
+   * reaches a non-zero `naturalWidth`). That is why this can hand back a direct
+   * `file://` URL instead of needing the custom `app://local/` scheme Obsidian
+   * registers.
+   *
+   * @throws when the platform has no filesystem adapter (mobile). There is no
+   * synchronous URL for vault bytes there — `loadEmbedBlobUrl()` is the async
+   * route Geode's own views use — and returning an unloadable URL would render
+   * as a permanently broken image with no error anywhere.
+   */
+  getResourcePath(file: TFile): string {
+    const adapter = this.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      throw new Error(
+        `Vault.getResourcePath is only available where the vault is backed by the filesystem; ` +
+          `cannot resolve "${file?.path}" on this platform.`
+      );
+    }
+    return adapter.getResourcePath(file.path);
+  }
+
   getRoot(): TFolder {
     return this.folders.get("")!;
   }

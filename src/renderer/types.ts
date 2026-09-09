@@ -236,9 +236,24 @@ export class FileSystemAdapter extends DataAdapter {
   }
 
   getResourcePath(normalizedPath: string): string {
-    return `file://${this.basePath}/${normalizedPath}`.replace(/ /g, "%20");
+    return `file://${encodeFileUrlPath(`${this.basePath}/${normalizedPath}`)}`;
   }
 
+}
+
+/**
+ * Percent-encode a filesystem path for use in a `file://` URL, one segment at a
+ * time so the separators survive.
+ *
+ * Escaping only spaces (the previous behaviour) is not enough: `#` starts a
+ * fragment, so `Board/photo#1.png` used to yield a URL truncated at `photo`,
+ * and `?` would open a query string. Both silently resolve to "file not found"
+ * — an `<img>` that never loads with nothing in the console explaining why.
+ * `encodeURIComponent` still renders a space as `%20`, so ordinary paths are
+ * byte-for-byte unchanged.
+ */
+export function encodeFileUrlPath(absolutePath: string): string {
+  return absolutePath.split("/").map(encodeURIComponent).join("/");
 }
 
 /**

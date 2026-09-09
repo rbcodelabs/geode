@@ -2,6 +2,7 @@ import { Events } from "./events";
 import type { App } from "./app";
 import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
+import type { PaneType } from "./api/keymap";
 import { markStart, markEnd } from "./perf-instrumentation";
 import { DeferredView, isDeferredView } from "./views/deferred-view";
 import {
@@ -92,6 +93,45 @@ export interface LeafContainer {
 
 let leafIdCounter = 0;
 const DOCUMENT_NAVIGATION_HISTORY_LIMIT = 100;
+
+/**
+ * First natively focusable thing inside a view, in the order a user would
+ * expect focus to land: the editor surface, then a text input, then anything
+ * explicitly in the tab order.
+ */
+const LEAF_FOCUS_TARGET_SELECTOR = [
+  ".cm-content",
+  "[contenteditable='true']",
+  "input:not([type='hidden']):not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(", ");
+
+/**
+ * Move keyboard focus into a leaf's content, backing `Workspace.setActiveLeaf`'s
+ * `{ focus: true }`.
+ *
+ * Activating a leaf and focusing it are separate things in Obsidian, and they
+ * are separate here: `TabGroup.setActiveLeaf` only makes a tab visible. Views
+ * that want focus on first open take it themselves in `onOpen()` (e.g.
+ * `MarkdownView` focuses its editor), which does nothing on a *re*-activation —
+ * so `{ focus: true }` needs its own implementation rather than riding along.
+ *
+ * The container is made programmatically focusable (`tabindex="-1"`) only as a
+ * fallback, when the view holds nothing natively focusable. That keeps it out
+ * of the tab order while still giving the keypress target somewhere real to
+ * land, so `{ focus: true }` never silently does nothing.
+ */
+function focusLeafContent(leaf: WorkspaceLeaf): void {
+  const root = leaf.view?.containerEl ?? leaf.contentEl;
+  const target = root.querySelector<HTMLElement>(LEAF_FOCUS_TARGET_SELECTOR);
+  if (target) {
+    target.focus({ preventScroll: true });
+    return;
+  }
+  if (!root.hasAttribute("tabindex")) root.setAttribute("tabindex", "-1");
+  root.focus({ preventScroll: true });
+}
 
 /** The leaf currently being dragged, shared across containers during a drag-and-drop. */
 let draggingLeaf: WorkspaceLeaf | null = null;
@@ -254,7 +294,19 @@ export class WorkspaceLeaf {
   }
 
   /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
-  async openFile(file: TFile): Promise<void> {
+  /**
+   * @param state Obsidian's `OpenViewState`. Only `active` is honoured:
+   * `{ active: false }` opens the file without letting the new view take
+   * keyboard focus, which is what "open in a background tab" means. Mounting a
+   * view never changes which tab is *visible* (`setView` does not activate the
+   * leaf), but `MarkdownView.onOpen()` focuses its editor — so without this the
+   * caret would jump into a pane the user cannot see. Focus is only restored if
+   * the newly mounted view actually took it, so an unrelated concurrent focus
+   * change is left alone.
+   */
+  async openFile(file: TFile, state?: { active?: boolean }): Promise<void> {
+    const keepFocus = state?.active === false;
+    const focusBefore = keepFocus ? (document.activeElement as HTMLElement | null) : null;
     await this.runDocumentNavigation(async () => {
       const previousPath = this.view?.getFile?.()?.path;
       const view = this.app.createMarkdownView();
@@ -263,6 +315,9 @@ export class WorkspaceLeaf {
       if (previousPath) this.recordDocumentNavigation(previousPath);
       this.recordDocumentNavigation(file.path);
     });
+    if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) {
+      focusBefore.focus({ preventScroll: true });
+    }
   }
 
   /** Record a normal file navigation in this leaf without persisting it. */
@@ -2430,11 +2485,102 @@ export class Workspace extends Events {
     return view instanceof type ? view : null;
   }
 
-  /** Get a leaf for opening a file: reuse active unless newTab/pinned. */
-  getLeaf(newTab: boolean): WorkspaceLeaf {
+  /**
+   * Obsidian's `workspace.getLeaf(newLeaf?, direction?)`.
+   *
+   * The documented argument is a `PaneType | boolean`, not a bare boolean, and
+   * plugins pass the string form — `getLeaf('tab')` is the idiomatic "open in a
+   * new tab". Accepting only a boolean happened to work for `'tab'` purely
+   * because a non-empty string is truthy; `'split'` would have silently
+   * produced a tab, which is the wrong pane in the wrong place.
+   *
+   * - `'tab'` / `true` — a new leaf in the active group. It becomes the group's
+   *   visible tab (via `createLeaf()`), matching Obsidian. Callers that want the
+   *   new tab to stay in the background restore the previous leaf afterwards
+   *   with `setActiveLeaf(previous, { focus: false })`.
+   * - `false` / omitted — reuse the active leaf unless it is pinned.
+   * - `'split'` — a new group beside the active one (`splitActiveLeaf`).
+   * - `'window'` — throws. Geode has no pop-out windows, and handing back an
+   *   ordinary tab would put the plugin's content somewhere the user did not
+   *   ask for while reporting success.
+   *
+   * `direction` is forwarded to `splitActiveLeaf()`, which currently only
+   * produces side-by-side (vertical) splits.
+   */
+  getLeaf(newLeaf?: PaneType | boolean, direction?: "vertical" | "horizontal"): WorkspaceLeaf {
+    if (newLeaf === "window") {
+      throw new Error(
+        "Workspace.getLeaf('window') is not supported: Geode has no pop-out windows. " +
+          "Use 'tab' or 'split' instead."
+      );
+    }
+    if (newLeaf === "split") return this.splitActiveLeaf(direction);
+    const newTab = newLeaf === true || newLeaf === "tab";
     const active = this.getActiveLeaf();
     if (!newTab && active && !active.pinned) return active;
     return this.activeGroup.createLeaf();
+  }
+
+  /**
+   * Obsidian's `workspace.getMostRecentLeaf(root?)`: the most recently active
+   * leaf in the main area, so a plugin can act on the document pane even while
+   * a sidebar pane holds focus.
+   *
+   * Geode can answer this exactly rather than approximate it: `activeGroup` is
+   * only ever a main-area `TabGroup` (`TabGroup.setActiveLeaf` calls
+   * `workspace.setActiveGroup(this)` only when `!this.sidebar`, and `Sidebar`
+   * never assigns it), so `activeGroup.active` *is* the most recently active
+   * root-split leaf. The scan over `groups` is the tie-breaker for the moment
+   * before any leaf in the active group has been selected.
+   *
+   * @param root Restrict the search to one tab group. Obsidian types this as a
+   * `WorkspaceParent`, a `WorkspaceItem` protocol Geode deliberately does not
+   * shim (see `leftSplit`/`rightSplit`), so anything other than a `TabGroup`
+   * throws instead of quietly searching the whole workspace and returning a
+   * leaf from somewhere the caller excluded.
+   */
+  getMostRecentLeaf(root?: TabGroup): WorkspaceLeaf | null {
+    if (root !== undefined) {
+      if (!(root instanceof TabGroup)) {
+        throw new Error(
+          "Workspace.getMostRecentLeaf(root) only accepts a Geode TabGroup: Geode does not model " +
+            "Obsidian's WorkspaceParent/WorkspaceItem tree."
+        );
+      }
+      return root.active ?? null;
+    }
+    const active = this.getActiveLeaf();
+    if (active) return active;
+    for (const group of this.groups) {
+      if (group.active) return group.active;
+    }
+    return null;
+  }
+
+  /**
+   * Obsidian's `workspace.setActiveLeaf(leaf, params?)` — the workspace-level
+   * entry point, distinct from the `LeafContainer.setActiveLeaf(leaf)` that
+   * `TabGroup`/`Sidebar` implement. Plugins call this one, with the options
+   * object: `setActiveLeaf(leaf, { focus: false })` activates a pane without
+   * pulling keyboard focus (and the scroll-into-view that comes with it).
+   *
+   * `focus` defaults to false, matching Obsidian. When true, keyboard focus is
+   * moved into the leaf's content — see `focusLeafContent`. The deprecated
+   * three-argument form is accepted because plugins built against older APIs
+   * still use it; `pushHistory` is ignored, as Geode records document history
+   * per leaf on navigation rather than on activation.
+   */
+  setActiveLeaf(leaf: WorkspaceLeaf, params?: { focus?: boolean }): void;
+  setActiveLeaf(leaf: WorkspaceLeaf, pushHistory: boolean, focus: boolean): void;
+  setActiveLeaf(
+    leaf: WorkspaceLeaf,
+    paramsOrPushHistory?: { focus?: boolean } | boolean,
+    legacyFocus?: boolean
+  ): void {
+    const focus =
+      typeof paramsOrPushHistory === "boolean" ? !!legacyFocus : !!paramsOrPushHistory?.focus;
+    leaf.group.setActiveLeaf(leaf);
+    if (focus) focusLeafContent(leaf);
   }
 
   /**
