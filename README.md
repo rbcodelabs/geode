@@ -59,6 +59,8 @@ cloud, no lock-in.
   pointer- and keyboard-resizable persisted proportions, pinned tabs, vertically
   stacked and independently resizable sidebar groups, recursive layout persistence,
   independent session-only back/forward document history in each tab,
+  [durable companion splits](docs/design/companion-panes.md) for plugins that
+  feature-detect Geode's workspace extension,
   a hideable left ribbon with persistent Settings and
   plugin-contributed actions, shared document actions (including reveal-in-Finder/
   system-file-manager) across tab, view, command, and File Explorer menus,
