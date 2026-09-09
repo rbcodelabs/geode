@@ -294,6 +294,47 @@ test("a plugin Bases view can write the vault: drag, quick-add, open and cover i
     await expect(window.locator(".obk-board")).toBeHidden();
     await expect(window.locator(".view-header-title").first()).toHaveText("Ship the passthrough");
 
+    // ---------------------------------------------------------------------
+    // `setActiveLeaf`'s `focus` option, both ways. The plugin only ever passes
+    // `false`, so `true` would otherwise be an untested claim — and "accepted
+    // and ignored" is exactly the silent no-op this API surface must not have.
+    // Activating a leaf and focusing it are separate operations in Geode
+    // (`TabGroup.setActiveLeaf` only makes a tab visible), so this is real
+    // behaviour with its own implementation, not a side effect of activation.
+    // ---------------------------------------------------------------------
+    const focusOutcome = await window.evaluate(() => {
+      const app = (window as unknown as { app: any }).app;
+      const leaves: any[] = [];
+      app.workspace.iterateAllLeaves((leaf: any) => leaves.push(leaf));
+      const target = leaves.find(
+        (leaf) => leaf.view?.getFile?.()?.path === "Board/Wire the registry.md"
+      );
+      if (!target) return { error: "no leaf holds the background-opened note" };
+
+      // Start from a known state: nothing in the document focused.
+      (document.activeElement as HTMLElement | null)?.blur();
+      const baseline = document.activeElement?.className ?? "<none>";
+
+      app.workspace.setActiveLeaf(target, { focus: false });
+      const afterQuiet = target.contentEl.contains(document.activeElement);
+
+      app.workspace.setActiveLeaf(target, { focus: true });
+      const afterFocus = target.contentEl.contains(document.activeElement);
+
+      return {
+        baseline,
+        afterQuiet,
+        afterFocus,
+        focused: document.activeElement?.className ?? "<none>",
+      };
+    });
+
+    expect(focusOutcome.error).toBeUndefined();
+    // `{ focus: false }` activates without pulling the caret...
+    expect(focusOutcome.afterQuiet, `focus:false moved focus to ${focusOutcome.focused}`).toBe(false);
+    // ...and `{ focus: true }` actually lands it inside the leaf's content.
+    expect(focusOutcome.afterFocus, `focus:true left focus at ${focusOutcome.focused}`).toBe(true);
+
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
     await app.close();

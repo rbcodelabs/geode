@@ -37,6 +37,32 @@ const FILE_NAMESPACE_FIELDS = [
   "file.embeds",
 ];
 
+/**
+ * Whether a freshly-read `.base` text should be discarded rather than parsed.
+ *
+ * A zero-length read of a file we already hold a definition for is not an empty
+ * base — it is a read that observed a write in flight, because writing a file
+ * truncates it before it refills. The window is small but it is hit in normal
+ * use: a plugin-provided view persists its own settings into the `.base` (the
+ * Kanban board writes column and card order on every drag), each write raises a
+ * `modify` event, and the reload that event triggers can land inside it.
+ *
+ * Parsing `""` yields a definition with no views, which `applyText` would
+ * "repair" by synthesizing the default table view and switching to it — hiding
+ * a plugin's board behind a table. Worse, `this.def` is what the next persist
+ * writes back, so that synthesized default would overwrite the user's real view
+ * configuration, along with every passthrough key commit 2 exists to preserve.
+ * Data loss, from a read that happened to be early.
+ *
+ * A base with genuinely no views is only reachable on first load, before any
+ * definition exists — which is why the guard requires one. The trade is that
+ * emptying a `.base` externally (`> Board.base`) is ignored until it has
+ * content again; keeping the last good definition is the safer failure.
+ */
+export function shouldIgnoreBaseReload(text: string, currentViewCount: number): boolean {
+  return text.trim() === "" && currentViewCount > 0;
+}
+
 function defaultBaseYaml(): string {
   return stringifyBaseFile({
     filters: undefined,
@@ -343,6 +369,9 @@ export class BaseView implements View {
 
   /** Parse `text` (freshly read from disk) into `this.def` and re-render. Records `text` as the current known-good state (see `lastKnownText`). */
   private async applyText(text: string): Promise<void> {
+    // Leave `lastKnownText` alone too: this read told us nothing, so the next
+    // one must still count as a change.
+    if (shouldIgnoreBaseReload(text, this.def?.views.length ?? 0)) return;
     this.lastKnownText = text;
     const parsed = parseBaseFile(text);
     if ("error" in parsed) {
