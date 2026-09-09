@@ -47,6 +47,7 @@ test("real Agent Threads retains one companion across tab closure, plugin reload
       await win.evaluate(async () => {
         const a = (window as any).app;
         const plugin = a.pluginManager.getPlugin("claude-threads");
+        await new Promise<void>((resolve) => a.workspace.onLayoutReady(resolve));
         await plugin.activateView();
         await plugin.contextPanel.openLinkText("Context.md");
       });
@@ -87,7 +88,7 @@ test("real Agent Threads retains one companion across tab closure, plugin reload
       const destination = group.leaves.find((l: any) => l.companionOwner === key);
       const sibling = group.createLeaf();
       await sibling.openFile(a.vault.getFileByPath("Sibling.md"));
-      destination.detach();
+      await destination.detach();
     }, owner);
     await openContext(win);
     await assertLayout(win);
