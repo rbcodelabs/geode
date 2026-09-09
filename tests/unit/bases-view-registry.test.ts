@@ -133,12 +133,23 @@ describe("BasesView", () => {
     expect(() => view.unload()).not.toThrow();
   });
 
-  it("rejects from createFileForView rather than resolving quietly", async () => {
-    // The Bases write path is not implemented. A silent no-op would let an
-    // "add card" button appear to work while creating nothing.
-    const createFileForView = vi.fn(() => Promise.reject(new Error("Geode does not support")));
+  it("forwards createFileForView to the host, name and frontmatter processor intact", async () => {
+    const createFileForView = vi.fn(() => Promise.resolve());
     const view = new TestView(new QueryController(makeHost({ createFileForView })));
-    await expect(view.createFileForView("New card")).rejects.toThrow(/does not support/);
-    expect(createFileForView).toHaveBeenCalledWith("New card", undefined);
+    const processor = (fm: Record<string, unknown>) => {
+      fm.status = "Doing";
+    };
+
+    await expect(view.createFileForView("Board/New card", processor)).resolves.toBeUndefined();
+    expect(createFileForView).toHaveBeenCalledWith("Board/New card", processor);
+  });
+
+  it("propagates a host rejection rather than resolving quietly", async () => {
+    // A silent no-op would let an "add card" button appear to work while
+    // creating nothing — the failure mode the host's loud errors exist to avoid.
+    const createFileForView = vi.fn(() => Promise.reject(new Error("the folder does not exist")));
+    const view = new TestView(new QueryController(makeHost({ createFileForView })));
+    await expect(view.createFileForView("Nope/New card")).rejects.toThrow(/folder does not exist/);
+    expect(createFileForView).toHaveBeenCalledWith("Nope/New card", undefined);
   });
 });

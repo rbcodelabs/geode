@@ -2045,11 +2045,13 @@
     "notes": "onDataUpdated is called after every query run; the view instance is reused across updates rather than rebuilt, which is what makes the hook meaningful."
   },
   "API-MEMBER-64cb7342ae0e": {
-    "status": "blocked",
+    "status": "verified",
     "evidence": [
+      "tests/e2e/bases-kanban-interaction.spec.ts",
+      "tests/unit/bases-create-file-for-view.test.ts",
       "tests/unit/bases-view-registry.test.ts"
     ],
-    "notes": "createFileForView is part of the Bases write path, which Geode does not implement. It rejects with an explanatory error rather than resolving to nothing, so a view's add-card affordance fails loudly instead of appearing to work while creating no file. Blocked rather than partial: there is no partially-correct behaviour here, only a deliberate refusal."
+    "notes": "Implemented, replacing the earlier deliberate rejection. The real kanban-bases-view plugin quick-adds a card in Electron and the note appears on disk in the view-configured folder, with the clicked column value already in its frontmatter. Composed as a single vault.create so a failed frontmatter step cannot leave a half-made note on the board. Requests Geode cannot honour exactly reject instead of falling back to the vault root: no file name (Obsidian would open its new-note menu, for which Geode has no surface), a folder that does not exist, or a path escaping the vault."
   },
   "API-6fb273fe23d7": {
     "status": "verified",
@@ -2592,5 +2594,45 @@
       "tests/unit/bases-property-id.test.ts"
     ],
     "notes": "isModifier reads each named modifier off the event, resolving 'Mod' to the platform key."
+  },
+  "API-MEMBER-ab70653f1ffc": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-kanban-interaction.spec.ts",
+      "tests/unit/vault-adapter.test.ts"
+    ],
+    "notes": "The TFile overload plugins actually call, distinct from the adapter path-string form. A card cover image rendered by the real kanban-bases-view plugin is observed reaching a non-zero naturalWidth in Electron, so the URL is loadable rather than merely well-formed. Throws where no filesystem adapter exists (mobile) instead of returning a URL that would render as a permanently broken image."
+  },
+  "API-MEMBER-790bb8b3d573": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-kanban-interaction.spec.ts",
+      "tests/unit/vault-adapter.test.ts"
+    ],
+    "notes": "Percent-encodes each path segment rather than escaping only spaces, so a name containing # or ? no longer yields a URL truncated at the fragment or query. Ordinary paths are byte-for-byte unchanged."
+  },
+  "API-MEMBER-f7b0709fe093": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/bases-kanban-interaction.spec.ts",
+      "tests/unit/workspace-public-contracts.test.ts"
+    ],
+    "notes": "Accepts the documented PaneType | boolean rather than a bare boolean: getLeaf('tab') previously worked only because a non-empty string is truthy, and 'split' would have silently produced a tab. Partial, not verified: 'window' throws because Geode has no pop-out windows, and the 'split' overload ignores its SplitDirection because Geode's main area only produces side-by-side groups."
+  },
+  "API-MEMBER-b56a77763692": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/bases-kanban-interaction.spec.ts",
+      "tests/unit/workspace-public-contracts.test.ts"
+    ],
+    "notes": "The no-argument form is exact: Geode's activeGroup is only ever a main-area TabGroup, so activeGroup.active is the most recently active root-split leaf. Observed in Electron via the real kanban-bases-view plugin, which uses it to keep the board in front while opening a note behind it. Partial because the optional root argument is typed WorkspaceParent in Obsidian, a WorkspaceItem tree Geode deliberately does not shim; anything other than a Geode TabGroup throws rather than silently searching a wider scope than the caller asked for."
+  },
+  "API-MEMBER-38fb23749c97": {
+    "status": "verified",
+    "evidence": [
+      "tests/e2e/bases-kanban-interaction.spec.ts",
+      "tests/unit/workspace-public-contracts.test.ts"
+    ],
+    "notes": "Added at the Workspace level, where plugins call it: setActiveLeaf previously existed only on TabGroup and Sidebar, and took no options. Both documented forms are accepted, the options object and the deprecated (leaf, pushHistory, focus) triple. focus defaults to false and, when true, moves keyboard focus into the leaf content rather than being accepted and ignored. Observed in Electron restoring the kanban board in front of a note opened behind it."
   }
 }
