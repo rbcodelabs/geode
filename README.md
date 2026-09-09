@@ -5,12 +5,12 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.13.2). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.13.3). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.13.2)
+## Features (v0.13.3)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
@@ -92,7 +92,9 @@ cloud, no lock-in.
   renderer `fetch()` remains subject to the existing Content Security Policy
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
-  once with community plugins suppressed and reversible restart controls
+  once with community plugins suppressed and reversible restart controls.
+  Heartbeat monitoring pauses during system sleep and gives the renderer a
+  fresh grace period on wake, preventing false recovery caused by suspension
 - **Web Viewer** — an enabled-by-default, per-vault core plugin for opening web
   pages and local `.html`/`.htm` vault files in an in-app tab (`webview`-backed,
   its own session). Disabling it preserves open viewer tabs for later restore.
