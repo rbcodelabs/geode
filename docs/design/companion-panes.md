@@ -43,3 +43,17 @@ existing debounced workspace-save guarantee.
 Unmarked panes from older plugins are never adopted heuristically. Users may
 close pre-existing duplicates manually. Disabling a plugin does not close its
 companion content. See [ADR-0018](../adr/0018-durable-companion-panes.md).
+
+## Verification
+
+Build the updated Agent Threads distributable, then run this from the Geode repo:
+
+```sh
+GEODE_AGENT_THREADS_DIST=/path/to/agent-threads/dist npm run test:e2e -- tests/e2e/companion-plugin-integration.spec.ts
+```
+
+The integration loads the actual `main.js`, `manifest.json`, and `styles.css`
+through Geode's plugin manager in a disposable vault. It checks companion reuse
+through destination closure, plugin reload, and two app relaunches. No agent
+sessions or credentials are needed. The test skips by default when the artifact
+directory environment variable is absent; ordinary host lifecycle tests still run.
