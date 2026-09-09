@@ -100,13 +100,21 @@ export abstract class BasesView extends Component {
   abstract onDataUpdated(): void;
 
   /**
-   * Display the new-note flow for a file, optionally modifying its
-   * frontmatter first.
+   * Create a note for this view, optionally setting its frontmatter first —
+   * how a view's quick-add affordance puts a new entry straight into the group
+   * the user clicked.
    *
-   * NOT IMPLEMENTED. This is part of the Bases *write* path, which Geode does
-   * not support yet. It throws rather than resolving quietly: a silent no-op
-   * here would let a view's "add card" button appear to work while creating
-   * nothing, which is exactly the failure mode a loud error avoids.
+   * Obsidian describes this as displaying the "new note menu": the built-in
+   * cards view creates the note and drops its title into inline rename. Geode
+   * has no inline-rename surface for a plugin-hosted Bases view, so it
+   * implements the half it can honour exactly — create the named note with the
+   * requested frontmatter — and rejects a call that omits `baseFileName`,
+   * because that is the case where the name could only have come from the menu.
+   * Callers that do pass a name (`kanban-bases-view` collects one in its own
+   * modal first) get the complete behaviour.
+   *
+   * Rejects rather than resolving quietly on any failure: a silent no-op would
+   * let an "add card" button appear to work while creating nothing.
    */
   createFileForView(baseFileName?: string, frontmatterProcessor?: (frontmatter: any) => void): Promise<void> {
     return this.host.createFileForView(baseFileName, frontmatterProcessor);

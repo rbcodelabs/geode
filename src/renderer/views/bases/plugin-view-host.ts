@@ -10,6 +10,7 @@ import type { App } from "../../app";
 import { BasesQueryResult, BasesViewConfig, toBasesQueryResult, type SummaryDeps } from "../../api/bases-data";
 import { toPropertyId, type BasesPropertyId } from "../../api/bases-property-id";
 import { QueryController, type BasesView, type BasesViewRegistration } from "../../api/bases-view";
+import { createFileForView } from "./create-file-for-view";
 import type { BaseDefinition, BaseViewDefinition } from "../../bases/base-file";
 import type { QueryResult } from "../../bases/query-engine";
 import type { Expr } from "../../bases/ast";
@@ -141,13 +142,12 @@ export class BasesPluginViewHost {
       config,
       data,
       allProperties,
-      createFileForView: () =>
-        Promise.reject(
-          new Error(
-            `Bases view "${definition.type}" called createFileForView, which Geode does not support yet ` +
-              `(the Bases write path is not implemented).`
-          )
-        ),
+      // Resolves to void, matching the public signature: the view's contract is
+      // "the note now exists", and the board picks it up through the vault
+      // `create` event like any other new file.
+      createFileForView: async (baseFileName, frontmatterProcessor) => {
+        await createFileForView(this.app.vault, definition.type, baseFileName, frontmatterProcessor);
+      },
     });
 
     let view: BasesView;
