@@ -60,8 +60,8 @@ test("real Agent Threads retains one companion across tab closure, plugin reload
         return {
           groups: w.groups.length, owned: groups.length,
           chat: w.getLeavesOfType("claude-threads:chat").length,
-          context: group?.leaves.filter((l: any) => l.getViewState().state?.file === "Context.md").length,
-          sibling: group?.leaves.filter((l: any) => l.getViewState().state?.file === "Sibling.md").length,
+          context: group?.leaves.filter((l: any) => l.view?.getFile?.()?.path === "Context.md").length,
+          sibling: group?.leaves.filter((l: any) => l.view?.getFile?.()?.path === "Sibling.md").length,
           designated: group?.leaves.filter((l: any) => l.companionOwner === key).length,
         };
       }, owner)).toEqual({ groups: 2, owned: 1, chat: 1, context: 1, sibling: 1, designated: 1 });
