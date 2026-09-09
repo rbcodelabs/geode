@@ -170,4 +170,24 @@ describe("companion layout metadata", () => {
     expect(mounted).toEqual([[owner, owner], [owner, undefined]]);
     expect(workspace.getOrCreateCompanionLeaf(owner, workspace.groups[0].leaves[1], 0.3).reused).toBe(true);
   });
+
+  it("restores an empty owned group with one reusable designated placeholder", async () => {
+    const { workspace, anchor } = setup();
+    (anchor.group as TabGroup).leaves.length = 0;
+    Object.assign(workspace, { iterateLeaves() {}, restoreSidebar: async () => {}, layoutCenterGroups() {},
+      app: { createEmptyView: () => ({ viewType: "empty" }) },
+    });
+    const setView = vi.spyOn(WorkspaceLeaf.prototype, "setView").mockResolvedValue(undefined);
+    try {
+      expect(await workspace.deserialize({ version: 3,
+        center: { root: { type: "tabs", active: 0, leaves: [], companionOwner: owner } },
+        left: { root: null }, right: { root: null },
+      })).toBe(true);
+      const restored = workspace.groups[0].leaves[0];
+      expect(workspace.getOrCreateCompanionLeaf(owner, restored, 0.3)).toEqual({ leaf: restored, reused: true });
+      expect(workspace.groups[0].leaves).toHaveLength(1);
+    } finally {
+      setView.mockRestore();
+    }
+  });
 });

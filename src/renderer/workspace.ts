@@ -3026,7 +3026,7 @@ export class Workspace extends Events {
     this.iterateLeaves((leaf) => preExisting.add(leaf));
     const centerNodes = state.center.root?.type === "split" ? state.center.root.children : state.center.root ? [state.center.root] : [];
     const hasContent =
-      centerNodes.some((node) => node.type === "tabs" && node.leaves.length) ||
+      centerNodes.some((node) => node.type === "tabs" && (node.leaves.length || node.companionOwner)) ||
       !!state.left.root || !!state.right.root;
 
     // Restore sidebar chrome (width/collapsed/docked leaves) unconditionally,
@@ -3107,7 +3107,7 @@ export class Workspace extends Events {
         }
       }
       if (group.leaves.length === 0) {
-        const leaf = group.createLeaf();
+        const leaf = group.createLeaf(group.companionOwner);
         await leaf.setView(this.app.createEmptyView());
       }
       const active = group.active || group.leaves[0];
