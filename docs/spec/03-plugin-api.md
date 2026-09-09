@@ -196,13 +196,26 @@ hierarchy, `parsePropertyId`, `Keymap` — ships alongside it. Built-in types
 (`table`, `cards`) are reserved and cannot be claimed, mirroring
 `registerView`'s guard.
 
-Two deliberate gaps, both loud rather than silent:
+The write path works: a view can move an entry between groups by rewriting its
+note's frontmatter through `fileManager.processFrontMatter`, and can add one
+with `BasesView.createFileForView`, which creates the named note with the
+requested frontmatter in a single write.
 
-- **The Bases write path is not implemented.** `BasesView.createFileForView`
-  rejects with an explanatory error rather than resolving to nothing.
+Remaining gaps, all loud rather than silent:
+
+- **`createFileForView()` with no file name rejects.** Obsidian would open its
+  new-note menu to collect one; Geode has no such surface for a plugin-hosted
+  Bases view, and an invented "Untitled" would put an unnamed note on the
+  user's board. A folder that does not exist, or a path escaping the vault,
+  rejects too, rather than falling back to the vault root.
 - **View options are not rendered.** A registration's `options` descriptors are
   accepted and stored but no settings UI reads them; a view still reads its
   settings through `config.get`, which works regardless of what wrote them.
+
+A view that persists its own settings into the `.base` file should expect its
+writes to raise `modify` events it will see again; Geode discards a reload that
+reads zero bytes, so a read landing inside its own write cannot replace the
+view definition with a default.
 
 Note the option descriptor type is `BasesAllOptions`. There is no `ViewOption`
 in the Obsidian API, despite some plugins importing that name — being type-only
