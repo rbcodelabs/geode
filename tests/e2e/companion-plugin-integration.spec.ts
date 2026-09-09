@@ -39,7 +39,7 @@ test("real Agent Threads retains one companion across tab closure, plugin reload
       const win = await app.firstWindow();
       await expect.poll(() => win.evaluate(() => {
         const a = (window as any).app;
-        return a?.pluginManager.isEnabled("claude-threads");
+        return a?.pluginManager?.isEnabled("claude-threads");
       }), { timeout: 30_000 }).toBe(true);
       return win;
     };
