@@ -5,12 +5,17 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.12.4). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.13.3). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.12.4)
+## Features (v0.13.3)
+
+- **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
+  threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
+  recovery. Comments travel inside the note; Live Preview and Reading view hide
+  their markers, while Source mode exposes them.
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -81,13 +86,21 @@ cloud, no lock-in.
   applied by the host. **Minimal Theme Settings 9.0.0** is certified on desktop,
   including its settings controls and theme/font preferences. This exact-version
   exception preserves the global Obsidian API baseline at 1.8.0; newer Minimal
-  Settings versions and other plugins requiring 1.13 remain unverified
+  Settings versions and other plugins requiring 1.13 remain unverified.
+  Desktop plugins can make HTTP(S) requests through `requestUrl()`, including
+  text, JSON, and binary responses; requests use the main process while raw
+  renderer `fetch()` remains subject to the existing Content Security Policy
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
-  once with community plugins suppressed and reversible restart controls
+  once with community plugins suppressed and reversible restart controls.
+  Heartbeat monitoring pauses during system sleep and gives the renderer a
+  fresh grace period on wake, preventing false recovery caused by suspension
 - **Web Viewer** — an enabled-by-default, per-vault core plugin for opening web
   pages and local `.html`/`.htm` vault files in an in-app tab (`webview`-backed,
   its own session). Disabling it preserves open viewer tabs for later restore.
+  Web links requesting a new window open as tabs in the source tab group;
+  background openings preserve your current tab selection. Popup destinations
+  must use HTTP or HTTPS.
   It also includes a one-time "Import
   cookies from Chrome" option so viewer tabs open already logged in. App
   hotkeys (command palette, quick switcher, tab switching) keep working while

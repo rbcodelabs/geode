@@ -17,7 +17,12 @@ Geode keeps the compatible in-process model and adds two layers:
 1. The main process records a bounded, machine-local crash journal under the
    Electron user-data directory. `render-process-gone` captures Chromium's
    reason and exit code plus the last reported enabled-plugin set. A renderer
-   heartbeat detects a non-responsive event loop. One automatic reload starts
+   heartbeat detects a non-responsive event loop. Heartbeat hang detection is
+   disabled process-wide between system suspend and resume, including for
+   windows created during suspension. Resume resets each live window's heartbeat
+   baseline, granting a fresh timeout before hang recovery can trigger. Actual
+   renderer-crash events remain eligible for recovery during suspension.
+   One automatic reload starts
    in recovery mode with community plugins suppressed, preserving the vault's
    enabled-plugin configuration. A visible banner lets the user explicitly
    retry with plugins; a second automatic reload is prohibited to avoid loops.

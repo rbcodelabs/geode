@@ -204,16 +204,29 @@ export interface RequestUrlResponse {
   json: any;
   text: string;
 }
-/** HTTP client matching Obsidian's requestUrl, implemented over the renderer's fetch. */
+/** HTTP client matching Obsidian's requestUrl. Electron delegates across IPC to bypass renderer CSP/CORS. */
 export async function requestUrl(param: RequestUrlParam | string): Promise<RequestUrlResponse> {
   const p: RequestUrlParam = typeof param === "string" ? { url: param } : param;
-  const headers = { ...(p.headers ?? {}) };
-  if (p.contentType) headers["Content-Type"] = p.contentType;
-  const res = await fetch(p.url, { method: p.method ?? "GET", headers, body: p.body as any });
-  const buf = await res.arrayBuffer();
+  const privilegedRequest = window.geode?.requestUrl;
+  const res = privilegedRequest
+    ? await privilegedRequest({
+        url: p.url,
+        method: p.method,
+        headers: p.headers,
+        body: p.body,
+        contentType: p.contentType,
+      })
+    : await fetch(p.url, {
+        method: p.method ?? "GET",
+        headers: p.contentType ? { ...(p.headers ?? {}), "Content-Type": p.contentType } : p.headers,
+        body: p.body,
+      }).then(async (response) => {
+        const headers: Record<string, string> = {};
+        response.headers.forEach((value, name) => { headers[name] = value; });
+        return { status: response.status, headers, arrayBuffer: await response.arrayBuffer() };
+      });
+  const buf = res.arrayBuffer;
   const text = new TextDecoder().decode(buf);
-  const respHeaders: Record<string, string> = {};
-  res.headers.forEach((v, k) => (respHeaders[k] = v));
   let json: any = null;
   try {
     json = JSON.parse(text);
@@ -223,7 +236,7 @@ export async function requestUrl(param: RequestUrlParam | string): Promise<Reque
   if (p.throw !== false && res.status >= 400) {
     throw new Error(`requestUrl ${p.url} failed: ${res.status}`);
   }
-  return { status: res.status, headers: respHeaders, arrayBuffer: buf, json, text };
+  return { status: res.status, headers: res.headers, arrayBuffer: buf, json, text };
 }
 
 // ---------------------------------------------------------------------------

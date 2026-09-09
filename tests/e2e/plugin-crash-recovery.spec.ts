@@ -5,6 +5,64 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+test("sleep pauses hang recovery and resume gives plugins a fresh heartbeat grace period", async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-sleep-e2e-"));
+  const vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), "geode-sleep-vault-"));
+  const pluginDir = path.join(vaultPath, ".geode", "plugins", "sleep-probe");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultPath], lastVault: vaultPath }));
+  fs.writeFileSync(path.join(vaultPath, ".geode", "plugins.json"), JSON.stringify(["sleep-probe"]));
+  fs.writeFileSync(path.join(pluginDir, "manifest.json"), JSON.stringify({
+    id: "sleep-probe", name: "Sleep Probe", version: "1.0.0", minAppVersion: "0.1.0", description: "test", author: "test",
+  }));
+  fs.writeFileSync(path.join(pluginDir, "main.js"), "module.exports = class extends require('geode').Plugin {};");
+
+  const app = await electron.launch({
+    args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot,
+    env: { ...process.env, GEODE_TEST_WATCHDOG_INTERVAL_MS: "50" },
+  });
+  const window = await app.firstWindow();
+  try {
+    await expect(window.locator(".workspace")).toBeVisible();
+    await expect.poll(() => window.evaluate(() => (window as any).app.pluginManager.isEnabled("sleep-probe"))).toBe(true);
+
+    await app.evaluate(({ ipcMain, powerMonitor }) => {
+      // Model a renderer unable to send heartbeats while asleep. Advance wall
+      // time but let real watchdog intervals run before delivering resume.
+      ipcMain.removeAllListeners("renderer-heartbeat");
+      powerMonitor.emit("suspend");
+      const originalNow = Date.now;
+      Date.now = () => originalNow() + 60_000;
+    });
+    await window.waitForTimeout(300);
+    expect(window.isClosed()).toBe(false);
+    expect(await window.evaluate(() => (window as any).app.pluginManager.isEnabled("sleep-probe"))).toBe(true);
+    await expect(window.locator(".crash-recovery-banner")).toHaveCount(0);
+    expect(fs.existsSync(path.join(userDataDir, "crash-journal.json"))).toBe(false);
+
+    await app.evaluate(({ powerMonitor }) => { powerMonitor.emit("resume"); });
+    await window.waitForTimeout(300);
+    expect(window.isClosed()).toBe(false);
+    expect(await window.evaluate(() => (window as any).app.pluginManager.isEnabled("sleep-probe"))).toBe(true);
+
+    // Still no heartbeat after the fresh grace period: a genuine hang must
+    // recover, proving suspend did not permanently disable the watchdog.
+    const replacementPromise = app.waitForEvent("window");
+    await app.evaluate(() => {
+      const resumedNow = Date.now;
+      Date.now = () => resumedNow() + 20_001;
+    });
+    const recoveredWindow = await replacementPromise;
+    await expect(recoveredWindow.locator(".crash-recovery-banner")).toBeVisible();
+    const journal = JSON.parse(fs.readFileSync(path.join(userDataDir, "crash-journal.json"), "utf8"));
+    expect(journal.at(-1)).toMatchObject({ type: "renderer-hang", activePlugins: ["sleep-probe"] });
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  }
+});
+
 test("a throwing plugin command quarantines only that plugin and Settings can restore it", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-recovery-e2e-"));
   const vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), "geode-recovery-vault-"));
