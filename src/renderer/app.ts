@@ -79,6 +79,7 @@ import type { HostServices } from "./host/contracts";
 import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
+import { SyncService } from "./sync/sync-service";
 import { stripCommentMetadata } from "./comments/model";
 import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
 
@@ -371,8 +372,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "advanced" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "advanced", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "sync" | "advanced" | "performance";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "sync", "advanced", "performance"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -466,6 +467,8 @@ class SettingsModal extends Modal {
       this.renderCorePluginsTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
       this.renderCommunityTab(this.contentContainerEl);
+    } else if (id === "sync") {
+      this.renderSyncTab(this.contentContainerEl);
     } else if (id === "advanced") {
       this.renderAdvancedTab(this.contentContainerEl);
     } else if (id === "performance") {
@@ -516,6 +519,7 @@ class SettingsModal extends Modal {
     addNavItem("daily-notes", "Daily Notes", this.navEl);
     addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
+    addNavItem("sync", "Sync", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
@@ -1201,6 +1205,97 @@ class SettingsModal extends Modal {
     );
   }
 
+  private renderSyncTab(container: HTMLElement, summary = ""): void {
+    container.innerHTML = `<h2>Sync</h2>`;
+    const providers = this.geodeApp.sync.listProviders();
+    const active = this.geodeApp.sync.getActiveProvider();
+    const status = this.geodeApp.sync.getStatus();
+    const { control } = this.addRow(container, "Sync provider", active ? `Connected to ${active.name}` : "Select a plugin-provided full-vault transport.");
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Sync provider");
+    select.append(new Option("Not connected", ""), ...providers.map(provider => new Option(provider.name, provider.id)));
+    select.value = active?.id ?? "";
+    select.addEventListener("change", () => { void (select.value ? this.geodeApp.sync.activate(select.value) : this.geodeApp.sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
+    control.appendChild(select);
+    this.addRow(container, "Status", status.message ?? status.state).control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
+    if (summary) { const result = document.createElement("p"); result.setAttribute("role", "status"); result.textContent = summary; container.appendChild(result); }
+    const actions = document.createElement("div"); actions.className = "setting-item-control";
+    const perform = (action: () => Promise<unknown>) => {
+      container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button,input,select").forEach(control => { control.disabled = true; });
+      void action().then(result => {
+        if (result && typeof result === "object" && "uploads" in result && "downloads" in result && "deletes" in result && "conflicts" in result && "skipped" in result) {
+          summary = `${result.uploads} upload, ${result.downloads} download, ${result.deletes} deletions, ${result.conflicts} conflict, ${result.skipped} skipped. Review before approving the first sync.`;
+        } else summary = "Sync settings updated.";
+      }).catch(error => { summary = error instanceof Error ? error.message : String(error); this.geodeApp.notify(summary); })
+        .finally(() => { if (container.isConnected) this.renderSyncTab(container, summary); });
+    };
+    const addAction = (label: string, action: () => Promise<unknown>) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action)); actions.appendChild(button); };
+    addAction("Preview", () => this.geodeApp.sync.preview());
+    addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }));
+    addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
+    container.appendChild(actions);
+    if (this.geodeApp.sync.isAppendOnly()) {
+      const setup = this.addRow(container, "Shared vault setup", "Experimental immutable history. Create a new shared vault or explicitly join an existing one. Files over 100 MiB are blocked; secrets and plugin data are excluded.");
+      setup.control.parentElement?.classList.add("sync-wrapped-setting");
+      const name = document.createElement("input"); name.type = "text"; name.setAttribute("aria-label", "Shared vault name"); name.placeholder = "Shared vault name";
+      const create = document.createElement("button"); create.type = "button"; create.textContent = "Create shared vault"; create.addEventListener("click", () => perform(() => this.geodeApp.sync.createVault(name.value)));
+      const discover = document.createElement("button"); discover.type = "button"; discover.textContent = "Find shared vaults";
+      const choices = document.createElement("div");
+      discover.addEventListener("click", () => {
+        discover.disabled = true;
+        void this.geodeApp.sync.discoverVaults().then(vaults => {
+          choices.replaceChildren();
+          if (!vaults.length) choices.textContent = "No accessible shared vaults found.";
+          for (const vault of vaults) { const join = document.createElement("button"); join.type = "button"; join.textContent = `Join ${vault.name}`; join.title = vault.vaultId; join.addEventListener("click", () => perform(() => this.geodeApp.sync.joinVault(vault))); choices.appendChild(join); }
+        }).catch(error => { choices.textContent = error instanceof Error ? error.message : "Discovery unavailable"; }).finally(() => { discover.disabled = false; });
+      });
+      setup.control.append(name, create, discover, choices);
+      const details = this.geodeApp.sync.getHistoryDetails();
+      for (const item of [...(details?.blocked ?? []), ...(details?.excluded ?? [])].slice(0, 100)) this.addRow(container, item.path, item.reason);
+      if (status.state === "error") {
+        const recovery = this.addRow(container, "Pending recovery", "Stopping retries preserves frozen bytes and preimages. This does not undo remote records that may already be published; review the new preview before continuing.");
+        recovery.control.parentElement?.classList.add("sync-wrapped-setting");
+        const stop = document.createElement("button"); stop.type = "button"; stop.textContent = "Stop pending retries & preview"; stop.addEventListener("click", () => perform(() => this.geodeApp.sync.abandonPending())); recovery.control.appendChild(stop);
+      }
+      for (const conflict of details?.conflicts ?? []) {
+        const row = this.addRow(container, conflict.path, `${conflict.reason}. Choose the current local content or an explicit immutable version; unseen concurrent versions remain conflicts.`);
+        row.control.parentElement?.classList.add("sync-wrapped-setting");
+        const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep local"; keep.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "current" } }))); row.control.appendChild(keep);
+        for (const recordId of conflict.heads) { const accept = document.createElement("button"); accept.type = "button"; accept.textContent = `Accept version ${recordId.slice(0, 8)}`; accept.title = recordId; accept.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "version", recordId } }))); row.control.appendChild(accept); }
+      }
+    }
+    const conflictContainer = document.createElement("div"); container.appendChild(conflictContainer);
+    void this.geodeApp.sync.listConflicts().then(conflicts => {
+      if (!conflictContainer.isConnected || this.geodeApp.sync.isAppendOnly()) return;
+      for (const conflict of conflicts) {
+        const row = this.addRow(conflictContainer, conflict.path, conflict.conflictPath ? `Remote copy: ${conflict.conflictPath}. Keep local sends your current version; Accept remote restores the remote version. Copies are retained for recovery.` : "Deleted remotely. Keep local uploads this file again; Accept remote moves the local file to trash.");
+        row.control.parentElement?.setAttribute("data-sync-conflict", conflict.id);
+        for (const [label, resolution] of [["Keep local", "keep-local"], ["Accept remote", "accept-remote"]] as const) {
+          const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active;
+          button.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveConflict(conflict.id, resolution))); row.control.appendChild(button);
+        }
+      }
+    }).catch(error => this.geodeApp.notify(String(error)));
+    void this.geodeApp.sync.getScope().then(scope => {
+      const labels: Array<[keyof typeof scope, string]> = [
+        ["markdown", "Notes and Canvas/Base files"], ["images", "Images"], ["audio", "Audio"], ["video", "Video"], ["pdfs", "PDFs"], ["other", "Other file types"],
+        ["mainSettings", "Main settings"], ["appearance", "Appearance"], ["themesAndSnippets", "Themes and snippets"], ["hotkeys", "Hotkeys"], ["corePlugins", "Core plugin settings"],
+        ["communityPlugins", "Installed community plugins"], ["communityPluginData", "Community plugin data"],
+      ];
+      for (const [key, label] of labels) {
+        const { control: scopeControl } = this.addRow(container, label, "Device-local selective sync setting.");
+        const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = Boolean(scope[key]);
+        if (this.geodeApp.sync.isAppendOnly() && (key === "communityPlugins" || key === "communityPluginData")) { checkbox.disabled = true; checkbox.checked = false; }
+        checkbox.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ [key]: checkbox.checked }).catch(error => this.geodeApp.notify(String(error))); });
+        scopeControl.appendChild(checkbox);
+      }
+      const { control: excludedControl } = this.addRow(container, "Excluded folders", "Comma-separated vault-relative folders. Changing scope does not delete already-uploaded remote files.");
+      const excluded = document.createElement("input"); excluded.type = "text"; excluded.value = scope.excludedFolders.join(", ");
+      excluded.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ excludedFolders: excluded.value.split(",").map(value => value.trim()).filter(Boolean) }).catch(error => this.geodeApp.notify(String(error))); });
+      excludedControl.appendChild(excluded);
+    }).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error)));
+  }
+
   onClose(): void {
     if (!(BUILTIN_TAB_IDS as string[]).includes(this.activeTabId)) {
       const activeTab = this.geodeApp.settingTabs.get(this.activeTabId);
@@ -1272,6 +1367,7 @@ export class App {
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
   readonly webViewer: WebViewerService;
+  readonly sync: SyncService;
   readonly comments: CommentService;
   vault: Vault;
   metadataCache: MetadataCache;
@@ -1331,6 +1427,8 @@ export class App {
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
   private communityUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   private hostDisposers = new Set<() => void>();
+  private syncRefreshRecoveries = new Set<() => void>();
+  private successfulReconciles = 0;
   private vaultSwitchInFlight: Promise<void> | null = null;
   private vaultSwitchTarget: string | null = null;
   private reconcileInFlight: Promise<void> | null = null;
@@ -1344,6 +1442,7 @@ export class App {
     this.host = host;
     this.dailyNotes = new DailyNotesService(host.config);
     this.webViewer = new WebViewerService(host.config, () => this.applyWebViewerLifecycle());
+    this.sync = new SyncService(host, () => this.vault.root, () => this.reloadPortableSettings());
     this.settings.webViewer = this.webViewer.options;
     this.commands = new CommandRegistry(host.config, () => {
       const source = this.guestHotkeySource;
@@ -1661,6 +1760,7 @@ export class App {
   }
 
   private async openVaultMeasured(path: string, rootEl: HTMLElement) {
+    await this.sync.cancel();
     try {
       await this.vault.open(path);
     } catch (err) {
@@ -1756,6 +1856,64 @@ export class App {
     main.appendChild(ribbon);
 
     this.workspace = new Workspace(this, main);
+    const syncWorkspace = this.workspace;
+    const syncGuards = new Set<string>(); let previousInert = false; let syncDisposed = false;
+    const staleViews = new Map<HTMLElement, { original: boolean; count: number }>();
+    const finishGuard = (token: string) => { syncGuards.delete(token); this.comments.releaseMutationHold(token); syncWorkspace.releaseAutosaveHold(token); if (!syncGuards.size && this.workspace === syncWorkspace) document.body.inert = previousInert; };
+    const stopPrepare = this.host.syncSafety?.onPrepare(async (token, relative) => {
+      if (syncDisposed || this.workspace !== syncWorkspace) return "Vault window changed";
+      if (!syncGuards.size) previousInert = document.body.inert;
+      syncGuards.add(token); document.body.inert = true;
+      await this.comments.holdMutations(token);
+      if (!syncGuards.has(token) || syncDisposed || this.workspace !== syncWorkspace) return "Editor guard was released";
+      if (!await syncWorkspace.holdAutosave(token) || syncDisposed || this.workspace !== syncWorkspace) return "Editor guard was released";
+      let reason: string | null = null;
+      for (const leaf of this.workspace.getLeavesOfType("markdown")) {
+        const view = leaf.view;
+        if (view instanceof MarkdownView && view.file && (view.file.path === relative || view.file.path.startsWith(relative + "/")) && view.hasUnacknowledgedChanges()) reason = "Unsaved editor changes block incoming sync";
+      }
+      for (const leaf of this.workspace.getLeavesOfType("canvas")) {
+        const view = leaf.view;
+        if (view instanceof CanvasView && view.file && (view.file.path === relative || view.file.path.startsWith(relative + "/")) && view.hasUnacknowledgedChanges()) reason = "Unsaved Canvas changes block incoming sync";
+      }
+      for (const leaf of this.workspace.getLeavesOfType("base")) if (leaf.view instanceof BaseView && await leaf.view.getDirtySourceConflict(relative, true)) reason = "Unsaved Base changes block incoming sync";
+      return reason;
+    });
+    const stopRelease = this.host.syncSafety?.onRelease(async token => {
+      if (!syncGuards.has(token)) return;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const before = this.successfulReconciles;
+      try {
+        await Promise.race([this.reconcileVault("manual"), new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error("Editor refresh timed out")), 4000);
+        })]);
+        if (this.successfulReconciles === before) throw new Error("Editor refresh incomplete");
+        if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed");
+        await this.reloadPortableSettings();
+        finishGuard(token);
+      } catch (error) {
+        // Keep stale writers paused/read-only, but restore the surrounding app so
+        // Retry refresh and vault switching remain available after a timeout.
+        if (syncDisposed || this.workspace !== syncWorkspace) throw error;
+        const elements: HTMLElement[] = [];
+        syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
+          const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
+          held.count++; staleViews.set(element, held); elements.push(element); element.inert = true;
+        } });
+        const recover = () => {
+          this.syncRefreshRecoveries.delete(recover); this.hostDisposers.delete(recover);
+          for (const element of elements) { const held = staleViews.get(element); if (held && --held.count === 0) { element.inert = held.original; staleViews.delete(element); } }
+          finishGuard(token);
+        };
+        this.syncRefreshRecoveries.add(recover);
+        this.hostDisposers.add(recover);
+        document.body.inert = previousInert;
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+    this.hostDisposers.add(() => { syncDisposed = true; stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
     this.statusBar = new StatusBar(this, shell);
     const mobileNavigation = this.createMobileNavigation();
     mobileNavigation.inert = true;
@@ -1973,6 +2131,7 @@ export class App {
       }
       if (!result.manifest || generation !== this.reconcileGeneration) return;
       const publish: Array<() => void> = [];
+      const refreshEditors: Array<() => void | Promise<void>> = [];
       for (let index = 0; index < result.changes.length; index += 1) {
         const change = result.changes[index];
         if (change.event === "modify") {
@@ -1999,7 +2158,7 @@ export class App {
               await this.vault.create(conflictPath, baseSource.text);
               const present = () => baseSource!.view.presentSourceConflict(conflictPath);
               preparedConflictPresentations.push(present);
-              publish.push(present);
+              refreshEditors.push(present);
             } catch (writeError) {
               baseSource.view.presentSourceConflict(null, true);
               const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(baseSource.file.path)}`;
@@ -2016,9 +2175,9 @@ export class App {
             if (view.hasUnacknowledgedChanges()) {
               const present = await this.prepareConflict(view, file, externalText, file.path);
               preparedConflictPresentations.push(present);
-              publish.push(present);
+              refreshEditors.push(present);
             } else {
-              publish.push(() => view.acceptExternalText(externalText));
+              refreshEditors.push(() => view.acceptExternalText(externalText));
             }
           } else if (view instanceof BaseView && externalText !== undefined) {
             try {
@@ -2035,10 +2194,10 @@ export class App {
         } else if (change.event === "delete" || change.event === "delete-folder") {
           const prepared = await this.prepareExternalDelete(change.path, change.event === "delete-folder");
           preparedConflictPresentations.push(...prepared.conflicts);
-          publish.push(...prepared.conflicts);
+          refreshEditors.push(...prepared.conflicts);
+          refreshEditors.push(async () => { for (const leaf of prepared.cleanLeaves) await leaf.detach(); });
           publish.push(() => {
             this.vault.applyReconcileChange(change);
-            for (const leaf of prepared.cleanLeaves) void leaf.detach().catch(() => {});
           });
         } else {
           publish.push(() => this.vault.applyReconcileChange(change));
@@ -2046,11 +2205,16 @@ export class App {
         if (index > 0 && index % 100 === 0) await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       }
       if (generation !== this.reconcileGeneration) return;
+      try {
+        for (const refresh of refreshEditors) { await refresh(); if (generation !== this.reconcileGeneration) return; }
+      } catch (error) { holdViewsForRetry = true; throw error; }
       await this.vault.commitReconcileManifest(result.manifest);
       this.clearReconcileState();
       for (const apply of publish) {
         try { apply(); } catch { /* Durable decisions must not be rolled back by view rendering. */ }
       }
+      this.successfulReconciles++;
+      for (const recover of [...this.syncRefreshRecoveries]) recover();
     } catch (error) {
       for (const present of preparedConflictPresentations) {
         try { present(); } catch { /* Preserve the remaining local editor state below. */ }
@@ -2075,7 +2239,20 @@ export class App {
     const leaf = this.workspace.findLeafForFile(file.path);
     const view = leaf?.view;
     if (!(view instanceof MarkdownView) || !view.file) return;
-    const text = suppliedText ?? await this.host.vaultFiles.read(file.path);
+    let text = suppliedText;
+    if (text === undefined) {
+      while (true) {
+        await view.waitForPendingSave();
+        if (view.file?.path !== file.path) return;
+        if (view.hasPendingSave()) continue;
+        const known = view.getLastKnownText();
+        text = await this.host.vaultFiles.read(file.path);
+        if (view.file?.path !== file.path) return;
+        // A later own save can overtake an earlier notification's read. Compare
+        // only a read taken against the same saved snapshot, not stale bytes.
+        if (!view.hasPendingSave() && known === view.getLastKnownText()) break;
+      }
+    }
     if (!hasExternalChange(text, view.getLastKnownText())) return;
     if (!view.hasUnacknowledgedChanges()) {
       view.acceptExternalText(text);
@@ -2327,6 +2504,7 @@ export class App {
 
   async dispose(): Promise<void> {
     this.reconcileGeneration += 1;
+    await this.sync.cancel();
     for (const dispose of this.hostDisposers) dispose();
     this.hostDisposers.clear();
     const activeReconcile = this.reconcileInFlight;
@@ -3858,6 +4036,16 @@ export class App {
 
   setTheme(theme: string): Promise<void> {
     return this.setVaultConfig("theme", theme).catch(() => {});
+  }
+
+  private async reloadPortableSettings(): Promise<void> {
+    const root = this.vault.root; const saved = await this.host.config.read("app");
+    if (this.vault.root !== root) throw new Error("Vault changed during settings refresh");
+    if (saved && typeof saved === "object") Object.assign(this.settings, saved);
+    this.applySettings(false); await this.commands.loadHotkeys(); await this.dailyNotes.load();
+    if (this.vault.root !== root) throw new Error("Vault changed during settings refresh");
+    await this.themeManager.apply(this.settings.cssTheme);
+    this.vault.trigger("config-changed"); this.workspace.trigger("css-change");
   }
 
   updateFontSize(): Promise<void> {

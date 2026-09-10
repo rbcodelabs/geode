@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
-const testVaultPath = path.join(repoRoot, "test-vault");
+const fixtureVaultPath = path.join(repoRoot, "test-vault");
 
 /**
  * Canvas contents aren't DOM-inspectable, so this test leans on the
@@ -14,6 +14,8 @@ const testVaultPath = path.join(repoRoot, "test-vault");
  * where those are set.
  */
 test("opens the graph view, builds nodes/edges from the vault, and click-to-opens a note", async () => {
+  const testVaultPath = fs.mkdtempSync(path.join(os.tmpdir(), "geode-graph-vault-"));
+  fs.cpSync(fixtureVaultPath, testVaultPath, { recursive: true, filter: source => !path.relative(fixtureVaultPath, source).split(path.sep).includes(".geode") });
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-graph-e2e-"));
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
@@ -116,5 +118,6 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(testVaultPath, { recursive: true, force: true });
   }
 });

@@ -359,6 +359,12 @@ a tag, useful for testing the pipeline.
 
 ## Documentation
 
+The [experimental plugin sync API](docs/plugin-sync-api.md) supports conditional
+transports and immutable causal history, with explicit setup, previews, and
+guarded local application. Test only with disposable vault copies. The Google
+Drive provider remains disabled in distributed beta builds until authenticated
+multi-client and durability gates pass; this is not a production sync service.
+
 The full reverse-engineered specification of the target feature set lives in
 [`docs/spec/`](docs/spec/00-overview.md) — core app behavior, all 30 core
 plugins, the plugin API surface, and on-disk file formats. It doubles as the

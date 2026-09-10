@@ -2,9 +2,10 @@ import type { HostServices, VaultEvent, VaultFileEntry } from "./contracts";
 
 export interface BrowserHostState {
   readonly vaultName: string;
-  readonly files: Map<string, { data: string; ctime: number; mtime: number }>;
+  readonly files: Map<string, { data: string; ctime: number; mtime: number; binary?: boolean }>;
   readonly folders: Map<string, { ctime: number; mtime: number }>;
   readonly config: Map<string, unknown>;
+  readonly deviceState: Map<string, unknown>;
   metadataCache: unknown | null;
   clock: number;
   persist(): void;
@@ -17,9 +18,10 @@ export interface BrowserHostStorage {
 
 interface SerializedBrowserHostState {
   vaultName: string;
-  files: Array<[string, { data: string; ctime: number; mtime: number }]>;
+  files: Array<[string, { data: string; ctime: number; mtime: number; binary?: boolean }]>;
   folders: Array<[string, { ctime: number; mtime: number }]>;
   config: Array<[string, unknown]>;
+  deviceState?: Array<[string, unknown]>;
   metadataCache: unknown | null;
   clock: number;
 }
@@ -41,6 +43,7 @@ export function createBrowserHostState(options: {
         files: new Map(parsed.files.map(([path, file]) => [normalizeVaultPath(path), file])),
         folders: new Map(parsed.folders.map(([path, stat]) => [normalizeVaultPath(path), stat])),
         config: new Map(parsed.config),
+        deviceState: new Map(parsed.deviceState ?? []),
         metadataCache: parsed.metadataCache,
         clock: parsed.clock,
         persist: () => persistBrowserHostState(state, options.storage),
@@ -51,7 +54,7 @@ export function createBrowserHostState(options: {
     }
   }
   let clock = 1;
-  const files = new Map<string, { data: string; ctime: number; mtime: number }>();
+  const files = new Map<string, { data: string; ctime: number; mtime: number; binary?: boolean }>();
   for (const [path, data] of Object.entries(options.files ?? { "Welcome.md": "# Welcome to Geode Mobile\n" })) {
     files.set(normalizeVaultPath(path), { data, ctime: clock, mtime: clock++ });
   }
@@ -60,6 +63,7 @@ export function createBrowserHostState(options: {
     files,
     folders: new Map(),
     config: new Map(),
+    deviceState: new Map(),
     metadataCache: null,
     clock,
     persist: () => persistBrowserHostState(state, options.storage),
@@ -79,6 +83,7 @@ function persistBrowserHostState(state: BrowserHostState, storage?: BrowserHostS
     files: [...state.files],
     folders: [...state.folders],
     config: [...state.config].map(([key, value]) => [key, structuredClone(value)]),
+    deviceState: [...state.deviceState].map(([key, value]) => [key, structuredClone(value)]),
     metadataCache: structuredClone(state.metadataCache),
     clock: state.clock,
   };
@@ -206,7 +211,23 @@ export function createBrowserHost(
       },
       readBinary: async (path) => {
         const data = await createBrowserHostReader(activeState, requireOpen, path);
-        return new TextEncoder().encode(data).buffer;
+        const file = activeState.files.get(normalizeVaultPath(path));
+        return file?.binary ? Uint8Array.from(file.data, character => character.charCodeAt(0)).buffer : new TextEncoder().encode(data).buffer;
+      },
+      writeBinary: async (path, bytes, writeOptions, mutationId) => {
+        // BrowserHost is a deterministic proof host. The production mobile
+        // host bridges exact bytes natively; this representation preserves
+        // all byte values through a one-code-unit-per-byte string.
+        const binary = String.fromCharCode(...new Uint8Array(bytes));
+        requireOpen();
+        const key = normalizeVaultPath(path);
+        const prior = activeState.files.get(key);
+        const timestamp = now();
+        const file = { data: binary, binary: true, ctime: prior?.ctime ?? timestamp, mtime: writeOptions?.mtime ?? timestamp };
+        activeState.files.set(key, file);
+        activeState.persist();
+        emit({ event: prior ? "modify" : "create", path: key, mutationId });
+        return { mtime: file.mtime, ctime: file.ctime, size: bytes.byteLength };
       },
       write: async (path, data, writeOptions, mutationId) => {
         requireOpen();
@@ -218,7 +239,7 @@ export function createBrowserHost(
         // ctime is intentionally never taken from writeOptions — this in-memory
         // host mirrors the real fs write path's documented limitation that a
         // file's birthtime can't be set independently of its mtime.
-        const file = { data, ctime: prior?.ctime ?? timestamp, mtime: writeOptions?.mtime ?? timestamp };
+        const file = { data, binary: false, ctime: prior?.ctime ?? timestamp, mtime: writeOptions?.mtime ?? timestamp };
         activeState.files.set(key, file);
         activeState.persist();
         emit({ event: prior ? "modify" : "create", path: key, mutationId });
@@ -329,6 +350,15 @@ export function createBrowserHost(
         const entries = listActive();
         return options.reconcileScan?.(activeVaultId, entries) ?? { status: "complete", entries };
       },
+    },
+    deviceState: {
+      read: async <T>(key: string) => activeState.deviceState.has(key) ? structuredClone(activeState.deviceState.get(key)) as T : null,
+      write: async (key, value) => { activeState.deviceState.set(key, structuredClone(value)); activeState.persist(); },
+      remove: async key => { activeState.deviceState.delete(key); activeState.persist(); },
+    },
+    secrets: {
+      available: false,
+      fromCapability: () => ({ get: async () => null, set: async () => { throw new Error("Secure secret storage is unavailable in the browser host"); }, remove: async () => {} }),
     },
     config: {
       read: async (name) => structuredClone(activeState.config.get(name) ?? null),
