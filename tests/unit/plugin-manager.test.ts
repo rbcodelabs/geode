@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PluginManager } from "../../src/renderer/plugin-manager";
+import { instantiatePluginClass, PluginManager } from "../../src/renderer/plugin-manager";
+import { resolveMobilePluginModule } from "../../src/renderer/mobile-plugin-runtime";
 import type { App } from "../../src/renderer/app";
 import { GEODE_API_VERSION } from "../../src/renderer/plugin-manifest";
 import { clearMeasures, getRecentMeasures } from "../../src/renderer/perf-instrumentation";
@@ -201,6 +202,17 @@ function mobileApp(overrides: Record<string, unknown> = {}): App {
 }
 
 describe("PluginManager", () => {
+  it("keeps the geode namespace identity stable across requires and plugin loaders", () => {
+    const Probe = instantiatePluginClass(`
+      module.exports = class {
+        static first = require('geode');
+        static second = require('geode');
+      };
+    `, "namespace-probe") as unknown as { first: unknown; second: unknown };
+    expect(Probe.first).toBe(Probe.second);
+    expect(Probe.first).toBe(resolveMobilePluginModule("namespace-probe", "geode"));
+  });
+
   beforeEach(() => {
     (globalThis as any).__pluginLog = [];
     clearMeasures();

@@ -27,6 +27,7 @@ export { Vault } from "../vault";
 export { Workspace, WorkspaceLeaf, TabGroup, Sidebar } from "../workspace";
 export { MetadataCache, parseMetadata } from "../metadata-cache";
 export { MarkdownView } from "../views/markdown-view";
+export { CommentService, StaleCommentWriteError } from "../comments/service";
 export { isTFile, isTFolder, pathParent, pathName } from "../types";
 export {
   parseManifest,
@@ -44,6 +45,7 @@ export type { Command } from "../commands";
 export type { EventRef, EventCallback } from "../events";
 export type { PluginManifest } from "../plugin-manifest";
 export type { PluginCommand } from "../plugin";
+export type { CommentAuthor, CommentMessage, CommentThread, OpenCommentEditor } from "../comments/service";
 export type {
   SyncApi, SyncProvider, SyncProviderCapabilities, SyncRemoteEntry, SyncScanResult,
   SyncSession, SyncStatus, SyncPreview, SyncRunResult, SyncWriteInput, SyncConflict,

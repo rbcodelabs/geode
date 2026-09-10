@@ -60,6 +60,7 @@ function createElectronPreloadFixture(): ElectronPreloadApi {
     setWindowBackgroundColor: vi.fn(async () => {}),
     publishHotkeys: vi.fn(async () => {}),
     onGuestHotkey: vi.fn(() => () => {}),
+    onGuestWindowOpen: vi.fn(() => () => {}),
   };
 }
 
@@ -255,6 +256,19 @@ describe("HostServices", () => {
     expect(disposeVaultListener).toHaveBeenCalledOnce();
     expect(host.capabilities.nodePlugins).toBe(true);
     expect(host.desktop).toBeDefined();
+  });
+
+  it("forwards and disposes guest window-open events through the Electron adapter", () => {
+    const preload = createElectronPreloadFixture();
+    const dispose = vi.fn();
+    preload.onGuestWindowOpen = vi.fn(() => dispose);
+    const host = createElectronHost(preload);
+    const callback = vi.fn();
+
+    const stop = host.desktop!.onGuestWindowOpen(callback);
+    expect(preload.onGuestWindowOpen).toHaveBeenCalledWith(callback);
+    stop();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("disposes the metadata index listener forwarded through Electron", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { classifyMobilePlugin, compileMobilePluginModule, instantiateMobilePluginClass, MAX_MOBILE_PLUGIN_SOURCE_BYTES, resolveMobilePluginModule, setMobilePluginLexerForTests, validateMobilePluginModule } from "../../src/renderer/mobile-plugin-runtime";
 import type { PluginManifest } from "../../src/renderer/plugin-manifest";
+import { CommentService, StaleCommentWriteError } from "../../src/renderer/comments/service";
 
 function manifest(isDesktopOnly?: boolean): PluginManifest {
   return { id: "probe", name: "Probe", version: "1.0.0", minAppVersion: "1.0.0", description: "probe", author: "test", ...(isDesktopOnly === undefined ? {} : { isDesktopOnly }) };
@@ -19,6 +20,21 @@ describe("mobile plugin admission", () => {
 });
 
 describe("mobile CommonJS resolver", () => {
+  it("exposes comment runtime exports to evaluated mobile plugins without changing obsidian", async () => {
+    const Probe = await instantiateMobilePluginClass(`
+      module.exports = class {
+        static geode = require('geode');
+        static obsidian = require('obsidian');
+      };
+    `, "comments-probe") as unknown as { geode: Record<string, unknown>; obsidian: Record<string, unknown> };
+    expect(Probe.geode.CommentService).toBe(CommentService);
+    expect(Probe.geode.StaleCommentWriteError).toBe(StaleCommentWriteError);
+    expect(Probe.geode.Plugin).toBe(Probe.obsidian.Plugin);
+    expect(Probe.obsidian).not.toHaveProperty("CommentService");
+    expect(Probe.obsidian).not.toHaveProperty("StaleCommentWriteError");
+    expect(Probe.geode).toBe(resolveMobilePluginModule("another-probe", "geode"));
+  });
+
   it.each(["obsidian", "geode", "@codemirror/state", "@codemirror/view", "@codemirror/commands", "@codemirror/language", "@codemirror/autocomplete", "@lezer/common", "@lezer/highlight"])("resolves approved module %s", (specifier) => {
     expect(resolveMobilePluginModule("probe", specifier)).toBeTruthy();
   });
