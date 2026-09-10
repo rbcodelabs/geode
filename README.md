@@ -5,7 +5,7 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.13.3). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.13.4). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
@@ -28,7 +28,7 @@ watching, indexing, search, rendered Markdown, wikilinks, backlinks, or `TFile`
 access. Directory symlinks cannot be traversed; file symlinks must remain inside
 the granted root. See the [workflow and limitations](docs/design/external-projects-explorer.md).
 
-## Features (v0.13.3)
+## Features (v0.13.4)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
@@ -77,6 +77,8 @@ the granted root. See the [workflow and limitations](docs/design/external-projec
   pointer- and keyboard-resizable persisted proportions, pinned tabs, vertically
   stacked and independently resizable sidebar groups, recursive layout persistence,
   independent session-only back/forward document history in each tab,
+  [durable companion splits](docs/design/companion-panes.md) for plugins that
+  feature-detect Geode's workspace extension,
   a hideable left ribbon with persistent Settings and
   plugin-contributed actions, shared document actions (including reveal-in-Finder/
   system-file-manager) across tab, view, command, and File Explorer menus,

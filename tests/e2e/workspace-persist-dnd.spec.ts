@@ -55,6 +55,91 @@ async function launch(userDataDir: string): Promise<ElectronApplication> {
   return electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
 }
 
+test("keeps companion split ownership across tab closure, drag, deferred restore and hydration", async () => {
+  const { vaultDir, userDataDir } = makeVault();
+  const owner = "pane-probe:context";
+  let app: ElectronApplication | undefined;
+  try {
+    app = await launch(userDataDir);
+    let win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    expect(await win.evaluate(async (owner) => {
+      const a = (window as any).app;
+      const w = a.workspace;
+      await new Promise<void>((resolve) => w.onLayoutReady(resolve));
+      await a.openFile(a.vault.getFileByPath("Alpha.md"), false);
+      const anchor = w.activeLeaf;
+      const destination = w.getOrCreateCompanionLeaf(owner, anchor, 0.3).leaf;
+      await destination.openFile(a.vault.getFileByPath("Beta.md"));
+      const group = destination.group;
+      const sibling = group.createLeaf();
+      await sibling.openFile(a.vault.getFileByPath("Alpha.md"));
+      await destination.detach();
+      const next = w.getOrCreateCompanionLeaf(owner, anchor, 0.3);
+      await next.leaf.setViewState({ type: "probe-pane", state: { cursor: 17 } });
+      return { groups: w.groups.length, sameGroup: next.leaf.group === group, reused: next.reused,
+        sibling: sibling.view.getFile().path };
+    }, owner)).toEqual({ groups: 2, sameGroup: true, reused: false, sibling: "Alpha.md" });
+    const readCenter = () => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "workspace.json"), "utf8")).center.root;
+    await expect.poll(() => {
+      try { return readCenter().children?.[1]?.leaves?.find((l: any) => l.companionOwner === owner)?.state; }
+      catch { return null; }
+    }).toEqual({ cursor: 17 });
+    await app.close();
+    app = undefined;
+    fs.writeFileSync(path.join(vaultDir, ".geode", "plugins.json"), "[]");
+
+    app = await launch(userDataDir);
+    win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    expect(await win.evaluate(async (owner) => {
+      const w = (window as any).app.workspace;
+      await new Promise<void>((resolve) => w.onLayoutReady(resolve));
+      const result = w.getOrCreateCompanionLeaf(owner, w.groups[0].leaves[0], 0.3);
+      return { groups: w.groups.length, reused: result.reused, deferred: result.leaf.view.constructor.name,
+        state: result.leaf.getViewState().state };
+    }, owner)).toEqual({ groups: 2, reused: true, deferred: "DeferredView", state: { cursor: 17 } });
+    await app.close();
+    app = undefined;
+    fs.writeFileSync(path.join(vaultDir, ".geode", "plugins.json"), '["pane-probe"]');
+
+    app = await launch(userDataDir);
+    win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    expect(await win.evaluate(async (owner) => {
+      const w = (window as any).app.workspace;
+      await new Promise<void>((resolve) => w.onLayoutReady(resolve));
+      const anchor = w.groups[0].leaves[0];
+      const result = w.getOrCreateCompanionLeaf(owner, anchor, 0.3);
+      const group = result.leaf.group;
+      // Remove the sibling, then move the sole destination. The original
+      // empty split remains owned and must survive another save/relaunch.
+      for (const leaf of [...group.leaves]) if (leaf !== result.leaf) await leaf.detach();
+      w.moveLeaf(result.leaf, anchor.group);
+      return { groups: w.groups.length, remaining: group.leaves.length, owner: group.companionOwner,
+        movedOwner: result.leaf.companionOwner ?? null, deferred: result.leaf.view.constructor.name === "DeferredView" };
+    }, owner)).toEqual({ groups: 2, remaining: 0, owner, movedOwner: null, deferred: false });
+    await expect.poll(() => readCenter().children?.[1]?.leaves?.length).toBe(0);
+    expect(readCenter().children[1].companionOwner).toBe(owner);
+    await app.close();
+    app = undefined;
+
+    app = await launch(userDataDir);
+    win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
+    expect(await win.evaluate(async (owner) => {
+      const w = (window as any).app.workspace;
+      await new Promise<void>((resolve) => w.onLayoutReady(resolve));
+      const result = w.getOrCreateCompanionLeaf(owner, w.groups[0].leaves[0], 0.3);
+      return { groups: w.groups.length, tabs: result.leaf.group.leaves.length, owner: result.leaf.group.companionOwner };
+    }, owner)).toEqual({ groups: 2, tabs: 1, owner });
+  } finally {
+    if (app) await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("persists workspace layout (tabs + docked plugin pane) across a relaunch", async () => {
   const { vaultDir, userDataDir } = makeVault();
   try {
