@@ -59,6 +59,11 @@ import type { ExternalProjectContribution, ExternalProjectContributionOptions } 
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performRequestUrl } from "./request-url";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
+import {
+  admitSupportedPluginInstall,
+  SUPPORTED_PLUGIN_CATALOG_URL,
+  SupportedPluginCatalogService,
+} from "./supported-plugin-catalog";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -189,6 +194,16 @@ const powerSaveBlockerOwners = new Set<number>();
 const artifactRuntime = new ArtifactRuntime();
 let journal: CrashJournal | undefined;
 let diagnosticLog: DiagnosticLog | undefined;
+let supportedPluginCatalog: SupportedPluginCatalogService | undefined;
+
+function supportedPluginCatalogService(): SupportedPluginCatalogService {
+  const testUrl = isHeadless ? process.env.GEODE_TEST_SUPPORTED_PLUGIN_CATALOG_URL : undefined;
+  return (supportedPluginCatalog ??= new SupportedPluginCatalogService({
+    cachePath: path.join(app.getPath("userData"), "supported-plugins-v1-cache.json"),
+    fetch: (input, init) => net.fetch(input, init),
+    url: testUrl || SUPPORTED_PLUGIN_CATALOG_URL,
+  }));
+}
 
 function crashJournal(): CrashJournal {
   return (journal ??= new CrashJournal(path.join(app.getPath("userData"), "crash-journal.json")));
@@ -355,6 +370,22 @@ function registerIpc() {
   }
   ipcMain.handle("external-roots-list", (e, ref: RootDirectoryRef, options?: { cursor?: string }) => externalRootReply(async () => (await externalRootSession(e.sender)).listDirectory(ref, options)));
   ipcMain.handle("external-roots-read", (e, ref: ResourceRef) => externalRootReply(async () => (await externalRootSession(e.sender)).readText(ref)));
+  ipcMain.handle("supported-plugin-catalog", async () => ({
+    currentGeodeVersion: app.getVersion(),
+    ...await supportedPluginCatalogService().load(),
+  }));
+  ipcMain.handle("supported-plugin-install", async (e, pluginId: unknown, release: unknown) => {
+    if (typeof pluginId !== "string" || (release !== "tested" && release !== "latest")) {
+      throw new Error("Invalid supported-plugin install request");
+    }
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const state = await supportedPluginCatalogService().load();
+    if (state.status === "unavailable") throw new Error("Supported plugin catalog is unavailable");
+    const request = admitSupportedPluginInstall(state.catalog, pluginId, release, app.getVersion());
+    return installCommunity(session.root, request.repo, request.options);
+  });
   ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
     performRequestUrl(request, (input, init) => net.fetch(input, init)),
   );

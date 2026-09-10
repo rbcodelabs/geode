@@ -103,6 +103,22 @@ export class CommunityManager {
   async install(spec: string, opts: ResolveOpts = {}): Promise<InstalledResult> {
     const installed = await window.geode.installCommunity(spec, opts);
 
+    await this.recordInstalled(installed);
+    return installed;
+  }
+
+  /** Install a main-process-admitted catalog entry without trusting renderer-supplied metadata. */
+  async installSupported(
+    pluginId: string,
+    release: "tested" | "latest" = "tested",
+  ): Promise<InstalledResult> {
+    if (!window.geode.installSupportedPlugin) throw new Error("Supported plugin catalog is unavailable");
+    const installed = await window.geode.installSupportedPlugin(pluginId, release);
+    await this.recordInstalled(installed, release === "tested" ? installed.version : undefined);
+    return installed;
+  }
+
+  private async recordInstalled(installed: InstalledResult, pinnedVersion?: string): Promise<void> {
     const item: CommunityItem = {
       repo: installed.repo,
       type: installed.type,
@@ -111,6 +127,7 @@ export class CommunityManager {
       source: installed.source,
       ref: installed.ref,
       autoUpdate: false,
+      ...(pinnedVersion ? { pinnedVersion } : {}),
     };
     await this.save(upsertItem(await this.load(), item));
 
@@ -119,7 +136,6 @@ export class CommunityManager {
     if (installed.type === "plugin") {
       await this.app.pluginManager.rescan();
     }
-    return installed;
   }
 
   /**

@@ -9,6 +9,7 @@ import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
 import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
 import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
+import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
   const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
@@ -138,6 +139,12 @@ const api = {
   > => ipcRenderer.invoke("open-local-file", href),
   listPluginIds: (): Promise<string[]> => ipcRenderer.invoke("plugins-list-ids"),
   listThemes: (): Promise<string[]> => ipcRenderer.invoke("themes-list"),
+  getSupportedPluginCatalog: (): Promise<SupportedPluginCatalogIpcState> =>
+    ipcRenderer.invoke("supported-plugin-catalog"),
+  installSupportedPlugin: (
+    pluginId: string,
+    release: "tested" | "latest",
+  ): Promise<InstalledResult> => ipcRenderer.invoke("supported-plugin-install", pluginId, release),
   resolveCommunity: (spec: string, opts?: ResolveOpts): Promise<CommunityPreview> =>
     ipcRenderer.invoke("community-resolve", spec, opts ?? {}),
   installCommunity: (spec: string, opts?: ResolveOpts): Promise<InstalledResult> =>
@@ -238,13 +245,16 @@ type ElectronOnlyGeodeApi = typeof api;
  */
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
-  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" | "requestUrl"
+  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
+  "requestUrl" | "getSupportedPluginCatalog" | "installSupportedPlugin"
 > & {
   externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
   requestUrl?: ElectronOnlyGeodeApi["requestUrl"];
+  getSupportedPluginCatalog?: ElectronOnlyGeodeApi["getSupportedPluginCatalog"];
+  installSupportedPlugin?: ElectronOnlyGeodeApi["installSupportedPlugin"];
 };
 
 // The renderer runs with contextIsolation disabled (see main.ts's

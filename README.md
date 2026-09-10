@@ -111,7 +111,9 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
   plugins can add their own tabs with `Plugin.addSettingTab`
 - **Community plugins & themes** — install from GitHub or safely import from
   an existing Obsidian vault without overwriting installed items or changing
-  their enabled state; enable/disable,
+  their enabled state; browse a fail-closed supported-plugin catalog whose
+  default installs are pinned to tested release bytes (with an explicit
+  unverified opt-in for the latest upstream release); enable/disable,
   auto-update; broad plugin-API compatibility (`EditorSuggest`, `Scope`,
   `BaseComponent`, `ValueComponent`, `AbstractTextComponent`, `SearchComponent`,
   metadata cache with list items/sections + frontmatter tag helpers) so real

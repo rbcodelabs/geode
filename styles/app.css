@@ -3105,6 +3105,51 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   padding: 3px 8px;
 }
 
+.supported-plugin-catalog {
+  margin: 18px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.supported-plugin-catalog h3 { margin: 0 0 4px; }
+.supported-plugin-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.supported-plugin-info { min-width: 0; }
+.supported-plugin-heading { display: flex; align-items: center; gap: 8px; }
+.supported-plugin-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 230px;
+}
+.supported-release-badge.is-unverified { color: var(--text-warning, #d99b3d); }
+.supported-latest-warning {
+  max-width: 280px;
+  color: var(--text-warning, #d99b3d);
+  font-size: var(--font-ui-smaller);
+}
+.supported-plugin-status {
+  min-height: 1.2em;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.supported-plugin-status.is-error { color: var(--text-error, #e06c75); }
+
+@media (max-width: 700px) {
+  .mod-settings .supported-plugin-item { flex-direction: column; }
+  .mod-settings .supported-plugin-controls {
+    min-width: 0;
+    width: 100%;
+    align-items: stretch;
+  }
+  .mod-settings .supported-latest-warning { max-width: none; }
+}
+
 /* Settings → Performance tab */
 .performance-tab-section {
   margin-bottom: 24px;
