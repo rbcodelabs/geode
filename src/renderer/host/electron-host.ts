@@ -10,11 +10,12 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen"
->;
+> & Partial<Pick<GeodeApi, "externalRoots">>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
   let openFiles: VaultFileEntry[] = [];
   return {
+    ...(preload.externalRoots ? { externalRoots: preload.externalRoots } : {}),
     capabilities: Object.freeze({
       multipleWindows: true,
       nodePlugins: true,

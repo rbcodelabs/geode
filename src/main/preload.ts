@@ -7,7 +7,14 @@ import type { ProcessMetric } from "./process-metrics";
 import type { CrashDiagnostic } from "./crash-journal";
 import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
+import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
 import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
+
+async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
+  if (reply.ok) return reply.value;
+  throw Object.assign(new Error(`External root: ${reply.error}`), { code: reply.error });
+}
 
 export interface VaultFileEntry {
   path: string;
@@ -43,6 +50,24 @@ export interface UpdaterCheckResult {
 }
 
 const api = {
+  externalRoots: (process.platform === "darwin" ? Object.freeze({
+    version: 1,
+    contribute: (projects, options) => invokeExternalRoot("external-roots-contribute", projects, options),
+    listProjects: () => invokeExternalRoot("external-roots-projects"),
+    attach: (projectId) => invokeExternalRoot("external-roots-attach", projectId),
+    reconnect: (projectId) => invokeExternalRoot("external-roots-reconnect", projectId),
+    detach: (projectId) => invokeExternalRoot("external-roots-detach", projectId),
+    listDirectory: (ref, options) => invokeExternalRoot("external-roots-list", ref, options),
+    readText: (ref) => invokeExternalRoot("external-roots-read", ref),
+    listGrants: () => invokeExternalRoot("external-roots-grants"),
+    removeStaleAssociation: (projectId) => invokeExternalRoot("external-roots-remove-association", projectId),
+    removeOrphanGrant: (rootId) => invokeExternalRoot("external-roots-remove-orphan", rootId),
+    onChange: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on("external-roots-changed", listener);
+      return () => ipcRenderer.removeListener("external-roots-changed", listener);
+    },
+  } satisfies ExternalRootsHost) : undefined),
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
   requestUrl: (request: PrivilegedRequestUrlParam): Promise<PrivilegedRequestUrlResponse> =>
     ipcRenderer.invoke("request-url", request),
@@ -213,8 +238,9 @@ type ElectronOnlyGeodeApi = typeof api;
  */
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
-  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "requestUrl"
+  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" | "requestUrl"
 > & {
+  externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];

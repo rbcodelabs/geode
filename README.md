@@ -5,12 +5,30 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.13.3). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.14.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.13.3)
+## New in v0.14.0: external Project folders
+
+Claude Threads Projects can appear in a separate **Projects** section of the
+File Explorer. On macOS, choose **Attach folder…**, select the directory, and
+confirm read-only access. Existing Project working directories are never granted
+access automatically. Expand folders to browse and open UTF-8 text files up to
+2 MiB in a distinct **Read-only · External source** tab.
+
+Use **Refresh** to see filesystem changes or **Reconnect…** for a moved folder.
+**Settings → Project folders** manages inactive associations and unassigned
+grants; removing these records never deletes files or changes an agent's working
+directory. Mobile shows **Available on desktop** labels, not synchronized files.
+
+External source stays separate from vault notes: no editing, autosave, filesystem
+watching, indexing, search, rendered Markdown, wikilinks, backlinks, or `TFile`
+access. Directory symlinks cannot be traversed; file symlinks must remain inside
+the granted root. See the [workflow and limitations](docs/design/external-projects-explorer.md).
+
+## Features (v0.14.0)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
@@ -59,6 +77,8 @@ cloud, no lock-in.
   pointer- and keyboard-resizable persisted proportions, pinned tabs, vertically
   stacked and independently resizable sidebar groups, recursive layout persistence,
   independent session-only back/forward document history in each tab,
+  [durable companion splits](docs/design/companion-panes.md) for plugins that
+  feature-detect Geode's workspace extension,
   a hideable left ribbon with persistent Settings and
   plugin-contributed actions, shared document actions (including reveal-in-Finder/
   system-file-manager) across tab, view, command, and File Explorer menus,

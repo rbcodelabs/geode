@@ -146,6 +146,8 @@ export class WorkspaceLeaf {
   leafEl: HTMLElement;
   contentEl: HTMLElement;
   pinned = false;
+  /** Geode companion destination; independent of the mounted view. */
+  companionOwner?: string;
   /** Split-local Phase 1 collection membership. Never carried across containers. */
   collectionId?: string;
   private opened = false;
@@ -561,6 +563,8 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
 
 /** A group of tabs sharing one content area. */
 export class TabGroup implements LeafContainer {
+  /** Geode companion split ownership; survives loss of its destination tab. */
+  companionOwner?: string;
   readonly isSidebar: boolean;
   leaves: WorkspaceLeaf[] = [];
   active: WorkspaceLeaf | null = null;
@@ -784,10 +788,11 @@ export class TabGroup implements LeafContainer {
     return tabs.length;
   }
 
-  createLeaf(): WorkspaceLeaf {
+  createLeaf(companionOwner?: string): WorkspaceLeaf {
     markStart("leaf-create");
     try {
       const leaf = new WorkspaceLeaf(this, this.app);
+      leaf.companionOwner = companionOwner;
       this.leaves.push(leaf);
       this.setActiveLeaf(leaf);
       this.workspace.trigger("layout-change");
@@ -1780,6 +1785,7 @@ export class Sidebar implements LeafContainer {
 
 /** One serialized leaf in the persisted workspace layout. */
 export interface PersistedLeaf {
+  companionOwner?: string;
   type: string;
   /** For markdown views: the file path. */
   file?: string;
@@ -1889,6 +1895,7 @@ export interface PersistedWorkspaceV1 {
 }
 
 export interface PersistedTabNode {
+  companionOwner?: string;
   type: "tabs";
   leaves: PersistedLeaf[];
   active: number;
@@ -1958,7 +1965,7 @@ export type PersistedWorkspace = PersistedWorkspaceV1 | PersistedWorkspaceV2 | P
 
 /** Remove empty branches and redundant one-child splits after moves/closes. */
 export function normalizeWorkspaceNode(node: WorkspaceTreeNode, keepEmptyRoot = false): WorkspaceTreeNode | null {
-  if (node.type === "tabs") return node.leaves.length || keepEmptyRoot ? node : null;
+  if (node.type === "tabs") return node.leaves.length || node.companionOwner || keepEmptyRoot ? node : null;
   const children = node.children
     .map((child) => normalizeWorkspaceNode(child, false))
     .filter((child): child is WorkspaceTreeNode => child !== null);
@@ -1975,6 +1982,7 @@ export function normalizeWorkspaceNode(node: WorkspaceTreeNode, keepEmptyRoot = 
 
 /** Upgrade the old flat v1 layout without dropping any user-visible state. */
 export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWorkspaceV3 {
+  const companionOwners = new Set<string>();
   const normalizeNode = (node: WorkspaceTreeNode | null, center: boolean): WorkspaceTreeNode | null => {
     if (!node || (node as WorkspaceTreeNode).type !== "tabs" && (node as WorkspaceTreeNode).type !== "split") return null;
     if (node.type === "split") {
@@ -1983,10 +1991,23 @@ export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWork
         : [];
       return { ...node, children, sizes: Array.isArray(node.sizes) ? node.sizes : children.map(() => 1 / Math.max(1, children.length)) };
     }
-    const rawLeaves = Array.isArray(node.leaves) ? node.leaves : [];
+    const owner = center && typeof node.companionOwner === "string" && node.companionOwner.trim()
+      && !companionOwners.has(node.companionOwner) ? node.companionOwner : undefined;
+    if (owner) companionOwners.add(owner);
+    let designated = false;
+    const rawLeaves = (Array.isArray(node.leaves) ? node.leaves : []).map((leaf) => {
+      const { companionOwner, ...rest } = leaf;
+      if (owner && companionOwner === owner && !designated) {
+        designated = true;
+        return { ...rest, companionOwner: owner };
+      }
+      return rest;
+    });
+    const { companionOwner: _ignoredOwner, ...nodeWithoutOwner } = node;
+    const ownedNode = owner ? { ...nodeWithoutOwner, companionOwner: owner } : nodeWithoutOwner;
     if (!center) {
       return {
-        ...node,
+        ...ownedNode,
         leaves: rawLeaves.map(({ collectionId: _ignored, ...leaf }) => leaf),
         active: Number.isInteger(node.active) && node.active >= 0 && node.active < rawLeaves.length ? node.active : 0,
       };
@@ -1996,7 +2017,7 @@ export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWork
     const normalized = normalizeTabCollections(tagged, Array.isArray(node.collections) ? node.collections : []);
     const leaves = normalized.leaves.map(({ id: _ignored, ...leaf }) => leaf);
     const active = activeLeaf ? normalized.leaves.findIndex((leaf) => rawLeaves[Number(leaf.id.slice(10))] === activeLeaf) : -1;
-    return { ...node, leaves, active: active >= 0 ? active : 0, collections: normalized.collections };
+    return { ...ownedNode, leaves, active: active >= 0 ? active : 0, collections: normalized.collections };
   };
 
   if (state.version === 2 || state.version === 3) {
@@ -2295,8 +2316,10 @@ export class Workspace extends Events {
     return this.rightSidebar;
   }
 
-  addGroup(after?: TabGroup, leadingRatio = 0.5): TabGroup {
+  addGroup(after?: TabGroup, leadingRatio = 0.5, companionOwner?: string): TabGroup {
     const group = new TabGroup(this, this.app);
+    // Publish ownership before layout/activation events can reenter the API.
+    group.companionOwner = companionOwner;
     const donorIndex = after ? this.groups.indexOf(after) : Math.max(0, this.groups.length - 1);
     this.centerGroupSizes = insertCenterGroupSize(this.centerGroupSizes, donorIndex, leadingRatio);
     if (after) {
@@ -2435,6 +2458,7 @@ export class Workspace extends Events {
   }
 
   groupEmptied(group: TabGroup) {
+    group.companionOwner = undefined;
     if (group.sidebar) {
       group.sidebar.removeSplitGroup(group);
       this.trigger("layout-change");
@@ -2608,6 +2632,31 @@ export class Workspace extends Events {
   splitActiveLeafWithRatio(_direction: "vertical" | "horizontal", leadingRatio: number): WorkspaceLeaf {
     const group = this.addGroup(this.activeGroup, leadingRatio);
     return group.createLeaf();
+  }
+
+  /**
+   * Geode extension (not Obsidian API): resolve a durable, workspace-wide
+   * companion split and destination. Call after onLayoutReady. Explicit
+   * targeting reuses a pinned destination just like WorkspaceLeaf.openFile.
+   */
+  getOrCreateCompanionLeaf(
+    ownerKey: string,
+    anchorLeaf: WorkspaceLeaf,
+    leadingRatio: number,
+  ): { leaf: WorkspaceLeaf; reused: boolean } {
+    if (!this.layoutReady || this.restoringLayout) throw new Error("Workspace layout is not ready");
+    if (typeof ownerKey !== "string" || !ownerKey.trim()) throw new Error("Companion owner must be a nonempty string");
+    const anchor = anchorLeaf?.group;
+    if (!(anchor instanceof TabGroup) || !this.groups.includes(anchor) || !anchor.leaves.includes(anchorLeaf)) {
+      throw new Error("Companion anchor must be an attached center leaf");
+    }
+    const group = this.groups.find((candidate) => candidate.companionOwner === ownerKey)
+      ?? this.addGroup(anchor, leadingRatio, ownerKey);
+    // addGroup may synchronously trigger another caller that already created
+    // the destination, so resolve the leaf only after the group is published.
+    const existing = group.leaves.find((leaf) => leaf.companionOwner === ownerKey);
+    if (existing) return { leaf: existing, reused: true };
+    return { leaf: group.createLeaf(ownerKey), reused: false };
   }
 
   /** Find an open leaf already displaying the given file. */
@@ -2855,6 +2904,7 @@ export class Workspace extends Events {
 
   private layoutReadyCbs: (() => void)[] = [];
   private layoutReady = false;
+  private restoringLayout = false;
 
   /**
    * Obsidian defers plugin work until the initial layout is ready — crucially,
@@ -2918,10 +2968,13 @@ export class Workspace extends Events {
       arr.splice(Math.max(0, Math.min(ins, arr.length)), 0, leaf);
       target.renderTabs();
     } else if (from !== target) {
+      leaf.companionOwner = undefined;
       from.extractLeaf(leaf);
       target.insertLeaf(leaf, index);
       target.setActiveLeaf(leaf);
-      if (from instanceof TabGroup && from.leaves.length === 0) this.groupEmptied(from);
+      // Moving a destination does not close its companion split. Retain the
+      // empty group so subsequent navigation creates its replacement there.
+      if (from instanceof TabGroup && from.leaves.length === 0 && !from.companionOwner) this.groupEmptied(from);
     }
     this.trigger("layout-change");
   }
@@ -2930,16 +2983,20 @@ export class Workspace extends Events {
 
   private serializeLeaf(leaf: WorkspaceLeaf): PersistedLeaf | null {
     const v = leaf.view;
-    if (!v) return null;
+    const companion = leaf.group instanceof TabGroup && !leaf.group.sidebar
+      && leaf.companionOwner === leaf.group.companionOwner && leaf.companionOwner
+      ? { companionOwner: leaf.companionOwner } : {};
+    if (!v || v.viewType === "empty") {
+      return companion.companionOwner ? { type: "empty", pinned: leaf.pinned, ...companion } : null;
+    }
     // Empty/placeholder tabs (and markdown tabs whose file vanished) aren't
     // worth persisting — and persisting them caused empties to accumulate
     // across launches (restore recreated them, then a fresh one was added).
-    if (v.viewType === "empty") return null;
     if (v.viewType === "markdown" || v.viewType === "canvas") {
       // No title/icon here: the file path is the source of truth for these,
       // and they always have a restore branch, so they're never deferred.
       const file = v.getFile?.()?.path;
-      return file ? { type: v.viewType, file, pinned: leaf.pinned } : null;
+      return file ? { type: v.viewType, file, pinned: leaf.pinned, ...companion } : null;
     }
     // A `DeferredView` needs no special case: it impersonates its persisted
     // type and returns its persisted state/title/icon, so a leaf that is still
@@ -2949,6 +3006,7 @@ export class Workspace extends Events {
       type: v.viewType,
       state: leaf.getViewState().state,
       pinned: leaf.pinned,
+      ...companion,
       ...describeViewForPlaceholder(v),
     };
   }
@@ -2976,6 +3034,7 @@ export class Workspace extends Events {
         : item.persisted);
       return {
         type: "tabs",
+        ...(container instanceof TabGroup && !container.sidebar && container.companionOwner ? { companionOwner: container.companionOwner } : {}),
         leaves: persistedLeaves,
         active,
         ...(container instanceof TabGroup && !container.sidebar ? { collections: subset.collections.map((collection) => ({ ...collection })) } : {}),
@@ -3093,6 +3152,15 @@ export class Workspace extends Events {
    * content, so the caller can fall back to opening an empty tab.
    */
   async deserialize(input: PersistedWorkspace): Promise<boolean> {
+    this.restoringLayout = true;
+    try {
+      return await this.restoreLayout(input);
+    } finally {
+      this.restoringLayout = false;
+    }
+  }
+
+  private async restoreLayout(input: PersistedWorkspace): Promise<boolean> {
     const state = migrateWorkspaceLayout(input);
     // Snapshot the leaves that exist *before* this pass. The `existingBuiltin`
     // lookups below match on `leaf.view.viewType`, and a `DeferredView` created
@@ -3104,7 +3172,7 @@ export class Workspace extends Events {
     this.iterateLeaves((leaf) => preExisting.add(leaf));
     const centerNodes = state.center.root?.type === "split" ? state.center.root.children : state.center.root ? [state.center.root] : [];
     const hasContent =
-      centerNodes.some((node) => node.type === "tabs" && node.leaves.length) ||
+      centerNodes.some((node) => node.type === "tabs" && (node.leaves.length || node.companionOwner)) ||
       !!state.left.root || !!state.right.root;
 
     // Restore sidebar chrome (width/collapsed/docked leaves) unconditionally,
@@ -3129,6 +3197,7 @@ export class Workspace extends Events {
     for (let gi = 0; gi < this.groups.length; gi++) {
       const group = this.groups[gi];
       const gs = centerNodes[gi];
+      group.companionOwner = gs?.type === "tabs" ? gs.companionOwner : undefined;
       if (gs?.type === "tabs") {
         // Do not install the registry until all leaves exist: createLeaf()
         // renders/normalizes after each addition, when no restored membership
@@ -3153,11 +3222,12 @@ export class Workspace extends Events {
               : undefined;
             if (existingBuiltin) {
               this.moveLeaf(existingBuiltin, group);
+              existingBuiltin.companionOwner = ls.companionOwner;
               if (ls.pinned) existingBuiltin.setPinned(true);
               existingBuiltin.collectionId = ls.collectionId;
               restored.push({ leaf: existingBuiltin, sourceIndex, collectionId: ls.collectionId });
             } else {
-              const leaf = group.createLeaf();
+              const leaf = group.createLeaf(ls.companionOwner);
               await this.restoreLeafView(leaf, ls);
               leaf.collectionId = ls.collectionId;
               restored.push({ leaf, sourceIndex, collectionId: ls.collectionId });
@@ -3183,7 +3253,7 @@ export class Workspace extends Events {
         }
       }
       if (group.leaves.length === 0) {
-        const leaf = group.createLeaf();
+        const leaf = group.createLeaf(group.companionOwner);
         await leaf.setView(this.app.createEmptyView());
       }
       const active = group.active || group.leaves[0];

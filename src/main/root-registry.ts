@@ -12,7 +12,7 @@ import {
   type RootKind,
 } from "../shared/root-registry";
 
-export const ROOT_REGISTRY_SCHEMA_VERSION = 1 as const;
+export const ROOT_REGISTRY_SCHEMA_VERSION = 2 as const;
 const READ_ONLY_CAPABILITIES = ["browse", "read", "open"] as const satisfies readonly RootCapability[];
 
 declare const canonicalRootPathBrand: unique symbol;
@@ -24,12 +24,18 @@ export interface HostRootLocator {
   chosenPath?: string;
 }
 
+export interface RootPhysicalIdentity {
+  dev: number;
+  ino: number;
+}
+
 /** Host-private grant record. Absolute locators must never cross renderer/plugin boundaries. */
 export interface RootRecord {
   rootId: string;
   kind: RootKind;
   label: string;
   locator: HostRootLocator;
+  physicalIdentity: RootPhysicalIdentity;
   capabilities: ReadonlySet<RootCapability>;
   availability: RootAvailability;
   createdAt: number;
@@ -49,26 +55,31 @@ export interface PersistedRootRegistry {
 
 export interface RootRegistryStore {
   load(): Promise<unknown | null>;
-  save(value: PersistedRootRegistry): Promise<void>;
+  /** Invoke commitGuard immediately before committing staged persistence, if supplied. */
+  save(value: PersistedRootRegistry, commitGuard?: () => void): Promise<void>;
 }
 
 export interface RootRegistryOpenOptions {
   store: RootRegistryStore;
-  activeVaultPath?: TrustedCanonicalRootPath;
   now?: () => number;
   createRootId?: () => string;
 }
 
 export interface AttachProjectRootRequest extends RootIntegrationBindingKey {
+  sourceFingerprint?: string;
+  /** Host-only validation run inside the serialized mutation queue. */
+  beforeCommit?: () => Promise<void>;
+  /** Synchronous lifetime check at the persistence commit point. */
+  commitGuard?: () => void;
   /** Canonical path established by the Tranche 2 grant/containment boundary. */
   canonicalPath: TrustedCanonicalRootPath;
+  physicalIdentity: RootPhysicalIdentity;
   chosenPath?: string;
   label: string;
 }
 
 export type AttachProjectRootResult =
-  | { kind: "attached" | "reused"; root: RootRecord; binding: RootIntegrationBinding }
-  | { kind: "inside-vault"; relativeBase: string };
+  { kind: "attached" | "reused"; root: RootRecord; binding: RootIntegrationBinding };
 
 export class RootOverlapError extends Error {
   readonly conflictingRootIds: string[];
@@ -103,9 +114,14 @@ export class JsonRootRegistryStore implements RootRegistryStore {
     }
   }
 
-  async save(value: PersistedRootRegistry): Promise<void> {
+  async save(value: PersistedRootRegistry, commitGuard?: () => void): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeJsonAtomic(this.filePath, value);
+    await writeJsonAtomic(this.filePath, value, {
+      rename: (from, to) => {
+        commitGuard?.();
+        return fs.rename(from, to);
+      },
+    });
   }
 }
 
@@ -127,6 +143,7 @@ function cloneRoot(root: RootRecord): RootRecord {
   return {
     ...root,
     locator: { ...root.locator },
+    physicalIdentity: { ...root.physicalIdentity },
     capabilities: new Set(root.capabilities),
   };
 }
@@ -147,6 +164,7 @@ function toPersistedRoot(root: RootRecord): PersistedRootRecord {
   return {
     ...root,
     locator: { ...root.locator },
+    physicalIdentity: { ...root.physicalIdentity },
     capabilities: [...root.capabilities],
   };
 }
@@ -158,6 +176,7 @@ function fromPersistedRoot(root: PersistedRootRecord): RootRecord {
       canonicalPath: hydratePersistedCanonicalRootPath(root.locator.canonicalPath),
       ...(root.locator.chosenPath ? { chosenPath: root.locator.chosenPath } : {}),
     },
+    physicalIdentity: { ...root.physicalIdentity },
     capabilities: new Set(root.capabilities),
   };
 }
@@ -166,21 +185,18 @@ export class RootRegistry {
   private readonly roots = new Map<string, RootRecord>();
   private readonly bindings = new Map<string, RootIntegrationBinding>();
   private readonly store: RootRegistryStore;
-  private readonly activeVaultPath?: TrustedCanonicalRootPath;
   private readonly now: () => number;
   private readonly createRootId: () => string;
   private mutationTail: Promise<void> = Promise.resolve();
 
-  private constructor(options: RootRegistryOpenOptions, activeVaultPath?: TrustedCanonicalRootPath) {
+  private constructor(options: RootRegistryOpenOptions) {
     this.store = options.store;
-    this.activeVaultPath = activeVaultPath;
     this.now = options.now ?? Date.now;
     this.createRootId = options.createRootId ?? randomUUID;
   }
 
   static async open(options: RootRegistryOpenOptions): Promise<RootRegistry> {
-    if (options.activeVaultPath) validateCanonicalPath(options.activeVaultPath, "active vault");
-    const registry = new RootRegistry(options, options.activeVaultPath);
+    const registry = new RootRegistry(options);
     const persisted = parsePersistedRootRegistry(await options.store.load());
     for (const root of persisted.roots) registry.roots.set(root.rootId, fromPersistedRoot(root));
     for (const binding of persisted.bindings) {
@@ -216,17 +232,11 @@ export class RootRegistry {
   }
 
   private async attachProjectRootMutation(request: AttachProjectRootRequest): Promise<AttachProjectRootResult> {
+    await request.beforeCommit?.();
     validateBindingMetadata(request);
     const canonicalPath = request.canonicalPath;
     validateCanonicalPath(canonicalPath, "external root");
     if (request.chosenPath !== undefined) validateAbsolutePath(request.chosenPath, "chosen root path");
-
-    if (this.activeVaultPath && isWithinOrEqual(this.activeVaultPath, canonicalPath)) {
-      return { kind: "inside-vault", relativeBase: relativeBase(this.activeVaultPath, canonicalPath) };
-    }
-    if (this.activeVaultPath && isWithinOrEqual(canonicalPath, this.activeVaultPath)) {
-      throw new RootOverlapError([]);
-    }
 
     const existing = [...this.roots.values()];
     const reusable = existing.find((root) => isWithinOrEqual(root.locator.canonicalPath, canonicalPath));
@@ -236,13 +246,14 @@ export class RootRegistry {
         instanceId: request.instanceId,
         projectId: request.projectId,
         label: request.label,
+        ...(request.sourceFingerprint ? { sourceFingerprint: request.sourceFingerprint } : {}),
         rootId: reusable.rootId,
         relativeBase: relativeBase(reusable.locator.canonicalPath, canonicalPath),
       };
       this.assertBindingDoesNotRetarget(binding);
       const nextBindings = new Map(this.bindings);
       nextBindings.set(bindingIdentity(binding), binding);
-      await this.save(this.roots, nextBindings);
+      await this.save(this.roots, nextBindings, request.commitGuard);
       this.replaceBindings(nextBindings);
       return { kind: "reused", root: cloneRoot(reusable), binding: { ...binding } };
     }
@@ -264,6 +275,7 @@ export class RootRegistry {
         canonicalPath,
         ...(request.chosenPath ? { chosenPath: request.chosenPath } : {}),
       },
+      physicalIdentity: { ...request.physicalIdentity },
       capabilities: new Set(READ_ONLY_CAPABILITIES),
       availability: "connected",
       createdAt: timestamp,
@@ -275,29 +287,52 @@ export class RootRegistry {
       projectId: request.projectId,
       label: request.label,
       rootId: root.rootId,
+      ...(request.sourceFingerprint ? { sourceFingerprint: request.sourceFingerprint } : {}),
       relativeBase: "",
     };
     this.assertBindingDoesNotRetarget(binding);
     const nextRoots = new Map(this.roots).set(root.rootId, root);
     const nextBindings = new Map(this.bindings).set(bindingIdentity(binding), binding);
-    await this.save(nextRoots, nextBindings);
+    await this.save(nextRoots, nextBindings, request.commitGuard);
     this.replaceRoots(nextRoots);
     this.replaceBindings(nextBindings);
     return { kind: "attached", root: cloneRoot(root), binding: { ...binding } };
   }
 
-  async removeBinding(key: RootIntegrationBindingKey): Promise<boolean> {
-    return this.enqueueMutation(() => this.removeBindingMutation(key));
+  async removeBinding(key: RootIntegrationBindingKey, beforeCommit?: () => void): Promise<boolean> {
+    return this.enqueueMutation(() => {
+      beforeCommit?.();
+      return this.removeBindingMutation(key, beforeCommit);
+    });
   }
 
-  private async removeBindingMutation(key: RootIntegrationBindingKey): Promise<boolean> {
+  private async removeBindingMutation(key: RootIntegrationBindingKey, commitGuard?: () => void): Promise<boolean> {
     const identity = bindingIdentity(key);
     if (!this.bindings.has(identity)) return false;
     const nextBindings = new Map(this.bindings);
     nextBindings.delete(identity);
-    await this.save(this.roots, nextBindings);
+    await this.save(this.roots, nextBindings, commitGuard);
     this.replaceBindings(nextBindings);
     return true;
+  }
+
+  /** Removes only an unreferenced grant record, never external files or live associations. */
+  async removeOrphanRoot(rootId: string, commitGuard: () => void): Promise<boolean> {
+    return this.enqueueMutation(async () => {
+      const check = () => {
+        commitGuard();
+        const root = this.requireRoot(rootId);
+        if (root.kind !== "project-cwd" || [...this.bindings.values()].some((binding) => binding.rootId === rootId)) {
+          throw new Error("Only unreferenced external root grants can be removed");
+        }
+      };
+      check();
+      const nextRoots = new Map(this.roots);
+      nextRoots.delete(rootId);
+      await this.save(nextRoots, this.bindings, check);
+      this.replaceRoots(nextRoots);
+      return true;
+    });
   }
 
   async setAvailability(rootId: string, availability: RootAvailability): Promise<void> {
@@ -313,21 +348,18 @@ export class RootRegistry {
     this.replaceRoots(nextRoots);
   }
 
-  async reconnectRoot(rootId: string, locator: HostRootLocator): Promise<RootRecord> {
-    return this.enqueueMutation(() => this.reconnectRootMutation(rootId, locator));
+  async reconnectRoot(rootId: string, locator: HostRootLocator, physicalIdentity: RootPhysicalIdentity, beforeCommit?: () => Promise<void>, commitGuard?: () => void): Promise<RootRecord> {
+    return this.enqueueMutation(async () => {
+      await beforeCommit?.();
+      return this.reconnectRootMutation(rootId, locator, physicalIdentity, commitGuard);
+    });
   }
 
-  private async reconnectRootMutation(rootId: string, locator: HostRootLocator): Promise<RootRecord> {
+  private async reconnectRootMutation(rootId: string, locator: HostRootLocator, physicalIdentity: RootPhysicalIdentity, commitGuard?: () => void): Promise<RootRecord> {
     const current = this.requireRoot(rootId);
     const canonicalPath = locator.canonicalPath;
     validateCanonicalPath(canonicalPath, "reconnected root");
     if (locator.chosenPath !== undefined) validateAbsolutePath(locator.chosenPath, "chosen root path");
-    if (this.activeVaultPath && isWithinOrEqual(this.activeVaultPath, canonicalPath)) {
-      throw new RootOverlapError([]);
-    }
-    if (this.activeVaultPath && isWithinOrEqual(canonicalPath, this.activeVaultPath)) {
-      throw new RootOverlapError([]);
-    }
     const conflicts = [...this.roots.values()]
       .filter((root) => root.rootId !== rootId)
       .filter((root) =>
@@ -341,24 +373,27 @@ export class RootRegistry {
     const updated: RootRecord = {
       ...current,
       locator: { canonicalPath, ...(locator.chosenPath ? { chosenPath: locator.chosenPath } : {}) },
+      physicalIdentity: { ...physicalIdentity },
       availability: "connected",
       lastConnectedAt: timestamp,
     };
     const nextRoots = new Map(this.roots).set(rootId, updated);
-    await this.save(nextRoots, this.bindings);
+    await this.save(nextRoots, this.bindings, commitGuard);
     this.replaceRoots(nextRoots);
     return cloneRoot(updated);
   }
 
   private async save(
     roots: ReadonlyMap<string, RootRecord>,
-    bindings: ReadonlyMap<string, RootIntegrationBinding>
+    bindings: ReadonlyMap<string, RootIntegrationBinding>,
+    commitGuard?: () => void,
   ): Promise<void> {
+    commitGuard?.();
     await this.store.save({
       schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION,
       roots: [...roots.values()].map(toPersistedRoot),
       bindings: [...bindings.values()].map((binding) => ({ ...binding })),
-    });
+    }, commitGuard);
   }
 
   private replaceRoots(roots: ReadonlyMap<string, RootRecord>): void {
@@ -379,7 +414,8 @@ export class RootRegistry {
 
   private assertBindingDoesNotRetarget(next: RootIntegrationBinding): void {
     const current = this.bindings.get(bindingIdentity(next));
-    if (current && (current.rootId !== next.rootId || current.relativeBase !== next.relativeBase)) {
+    if (current && (current.rootId !== next.rootId || current.relativeBase !== next.relativeBase
+      || current.sourceFingerprint !== next.sourceFingerprint)) {
       throw new BindingRetargetError();
     }
   }
@@ -434,7 +470,12 @@ function parsePersistedRootRegistry(value: unknown | null): PersistedRootRegistr
   }
   return {
     schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION,
-    roots: candidate.roots.map((root) => ({ ...root, locator: { ...root.locator }, capabilities: [...root.capabilities] })),
+    roots: candidate.roots.map((root) => ({
+      ...root,
+      locator: { ...root.locator },
+      physicalIdentity: { ...root.physicalIdentity },
+      capabilities: [...root.capabilities],
+    })),
     bindings: candidate.bindings.map((binding) => ({ ...binding })),
   };
 }
@@ -456,6 +497,13 @@ function validatePersistedRoot(value: unknown): asserts value is PersistedRootRe
   }
   if (!isRecord(value.locator) || typeof value.locator.canonicalPath !== "string") {
     throw new Error("Invalid persisted root locator");
+  }
+  if (!isRecord(value.physicalIdentity)
+    || !Number.isSafeInteger(value.physicalIdentity.dev)
+    || !Number.isSafeInteger(value.physicalIdentity.ino)
+    || (value.physicalIdentity.dev as number) < 0
+    || (value.physicalIdentity.ino as number) < 0) {
+    throw new Error("Invalid persisted root physical identity");
   }
   validateCanonicalPath(value.locator.canonicalPath, "persisted root");
   if (value.locator.chosenPath !== undefined) {
@@ -492,7 +540,12 @@ function validateBindingMetadata(value: {
   instanceId?: unknown;
   projectId?: unknown;
   label?: unknown;
+  sourceFingerprint?: unknown;
 }): void {
+  if (value.sourceFingerprint !== undefined
+    && (typeof value.sourceFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(value.sourceFingerprint))) {
+    throw new Error("Invalid root integration source fingerprint");
+  }
   for (const key of ["integrationId", "instanceId", "projectId", "label"] as const) {
     if (typeof value[key] !== "string" || value[key].length === 0) {
       throw new Error("Invalid root integration binding metadata");

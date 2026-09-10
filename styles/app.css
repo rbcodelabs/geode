@@ -5231,6 +5231,57 @@ body.is-mobile .page-preview {
 .canvas-view.has-error .canvas-selection-controls {
   display: none;
 }
+
+/* External Projects are deliberately separate from vault navigation/actions. */
+.projects-section {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 55%;
+  overflow: auto;
+  border-top: 1px solid var(--background-modifier-border);
+  padding: 8px;
+  font-size: var(--font-ui-small);
+}
+.projects-section[hidden] { display: none; }
+.projects-section-header, .projects-root-alias, .projects-unbound {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.projects-section-header { justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
+.projects-section button {
+  font-size: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.projects-root { margin-bottom: 10px; }
+.projects-root-alias, .projects-status { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 4px 0; overflow-wrap: anywhere; }
+.projects-root-alias button, .projects-section-header button { font-size: var(--font-ui-smaller); }
+.projects-directory-toggle, .projects-file {
+  display: block;
+  width: 100%;
+  box-shadow: none;
+  background: transparent;
+  padding: 4px 6px;
+}
+.projects-directory-toggle::before { content: "▸ "; color: var(--text-muted); }
+.projects-directory-toggle[aria-expanded="true"]::before { content: "▾ "; }
+.projects-directory-children { margin-left: 12px; border-left: 1px solid var(--background-modifier-border); padding-left: 4px; }
+.projects-directory-children[hidden] { display: none; }
+.projects-file:not(:disabled):hover, .projects-directory-toggle:hover { background: var(--background-modifier-hover); }
+.projects-file:disabled { opacity: .6; cursor: not-allowed; }
+.external-source-view { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; }
+.external-source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--background-modifier-border); }
+.external-source-readonly { font-size: var(--font-ui-small); color: var(--text-muted); }
+.external-source-identity { padding: 8px 16px; font-size: var(--font-ui-small); overflow-wrap: anywhere; color: var(--text-muted); }
+.external-source-body { flex: 1; min-height: 0; overflow: auto; }
+.external-source-text { margin: 0; padding: 16px; min-height: 100%; white-space: pre; font-family: var(--font-monospace); user-select: text; }
+.external-source-text code { font-family: inherit; white-space: inherit; background: transparent; }
+.external-source-status { padding: 16px; color: var(--text-muted); }
+.external-source-status.is-error { color: var(--text-error); }
+
 /* Anchored Markdown comments */
 .markdown-source-view { position: relative; }
 .cm-comment-anchor {

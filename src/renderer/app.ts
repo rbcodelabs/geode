@@ -26,6 +26,8 @@ import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { CanvasView } from "./views/canvas-view";
 import { serializeCanvas } from "./canvas/canvas-data";
 import { FileExplorerView } from "./views/file-explorer";
+import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
+import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
@@ -35,6 +37,7 @@ import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
+import { renderExternalRootsTab } from "./settings/external-roots-tab";
 import { FileSystemAdapter, TFile, TFolder, isTFile, pathName } from "./types";
 import { RenderContext } from "./api/bases-values";
 import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
@@ -373,8 +376,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "advanced" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "advanced", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "advanced" | "performance" | "project-folders";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "advanced", "performance", "project-folders"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -385,6 +388,7 @@ class SettingsModal extends Modal {
   private stopHotkeyRecorder: (() => void) | null = null;
   /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
   private stopPerformanceTab: (() => void) | null = null;
+  private stopExternalRootsTab: (() => void) | null = null;
 
   constructor(private geodeApp: App) {
     super(geodeApp);
@@ -450,6 +454,8 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab = null;
     }
     this.unsubscribeHotkeys?.();
+    this.stopExternalRootsTab?.();
+    this.stopExternalRootsTab = null;
     this.unsubscribeHotkeys = null;
     this.stopHotkeyRecorder?.();
     this.stopHotkeyRecorder = null;
@@ -470,6 +476,10 @@ class SettingsModal extends Modal {
       this.renderCommunityTab(this.contentContainerEl);
     } else if (id === "advanced") {
       this.renderAdvancedTab(this.contentContainerEl);
+    } else if (id === "project-folders") {
+      const roots = this.geodeApp.host.externalRoots;
+      if (!roots?.listGrants || !roots.removeStaleAssociation || !roots.removeOrphanGrant) { this.activateTab("appearance"); return; }
+      this.stopExternalRootsTab = renderExternalRootsTab(this.contentContainerEl, roots);
     } else if (id === "performance") {
       if (!this.geodeApp.host.capabilities.processDiagnostics) {
         this.activateTab("appearance");
@@ -519,6 +529,7 @@ class SettingsModal extends Modal {
     addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
+    if (this.geodeApp.host.externalRoots?.listGrants) addNavItem("project-folders", "Project folders", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
     }
@@ -1222,6 +1233,8 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab = null;
     }
     this.unsubscribeSettingTabs?.();
+    this.stopExternalRootsTab?.();
+    this.stopExternalRootsTab = null;
     this.unsubscribeSettingTabs = null;
     this.unsubscribeHotkeys?.();
     this.unsubscribeHotkeys = null;
@@ -1834,6 +1847,9 @@ export class App {
     // obsidian_open_url) opens a tab here too. Must be registered before
     // restoreWorkspaceLayout() below, which resolves saved leaves by type.
     await this.applyWebViewerLifecycle();
+    // Register on all platforms: unavailable external identities restore honestly
+    // instead of being interpreted as vault file paths.
+    this.workspace.registerViewFactory("geode-external-source", (leaf) => new ExternalSourceView(this, leaf));
     if (this.host.capabilities.artifacts) {
       this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
     }
@@ -2815,6 +2831,20 @@ export class App {
   }
 
   // --- File opening -------------------------------------------------------
+
+  async openExternalResource(ref: ResourceRef, rootLabel: string, newTab = false): Promise<void> {
+    const state = validateExternalSourceViewState({ version: 1, ref, rootLabel });
+    if (!state) { this.notify("External source unavailable: invalid resource identity"); return; }
+    if (!newTab) {
+      const existing = this.workspace.getLeavesOfType("geode-external-source").find(leaf => {
+        const saved = validateExternalSourceViewState(leaf.view?.getState?.());
+        return saved?.ref.rootId === state.ref.rootId && saved.ref.relativePath === state.ref.relativePath;
+      });
+      if (existing) { this.workspace.revealLeaf(existing); return; }
+    }
+    const leaf = this.workspace.getLeaf(newTab);
+    await leaf.runDocumentNavigation(() => leaf.setViewState({ type: "geode-external-source", state, active: true }));
+  }
 
   async openFile(file: TFile, newTab: boolean): Promise<void> {
     if (file.extension === "canvas") {
