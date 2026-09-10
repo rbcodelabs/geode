@@ -53,6 +53,10 @@ import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 import { DeepLinkDispatcher } from "./deep-link";
 import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
+import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
+import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
+import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
+import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performRequestUrl } from "./request-url";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
 
@@ -89,6 +93,8 @@ app.on("second-instance", (_event, argv) => {
 });
 
 interface VaultSession {
+  externalRoots?: Promise<ExternalRootServiceSession>;
+  externalRootsInvalidated?: boolean;
   root: string;
   watcher: VaultWatcherHandle | null;
   indexer: MetadataIndexerHost | null;
@@ -104,6 +110,62 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
+const externalRootService = new ExternalRootService(() => RootRegistry.open({ store: new JsonRootRegistryStore(app.getPath("userData")) }));
+
+function externalRootSession(sender: Electron.WebContents): Promise<ExternalRootServiceSession> {
+  const win = BrowserWindow.fromWebContents(sender);
+  const session = win && sessions.get(win.id);
+  if (!win || win.webContents !== sender || !session || session.externalRootsInvalidated || process.platform !== "darwin") {
+    throw new Error("External roots unavailable for this vault session");
+  }
+  return session.externalRoots ??= externalRootService.createSession({
+    activeVaultPath: session.root,
+    isSessionCurrent: () => !win.isDestroyed() && win.webContents === sender && sessions.get(win.id) === session && !session.externalRootsInvalidated,
+    pickDirectory: async (purpose, details) => {
+      const result = await dialog.showOpenDialog(win, {
+        title: purpose === "attach" ? "Attach Project folder read-only" : "Reconnect Project folder",
+        properties: ["openDirectory"],
+        ...(details.suggestedPath ? { defaultPath: details.suggestedPath } : {}),
+      });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+    confirmDirectory: async ({ purpose, label, selectedPath }) => {
+      const result = await dialog.showMessageBox(win, {
+        type: "question", title: purpose === "attach" ? "Attach Project folder?" : "Replace Project folder?",
+        message: `${purpose === "attach" ? "Attach" : "Reconnect"} ${label}`,
+        detail: `${selectedPath}\n\nGeode may browse and open files read-only. Agent execution permission is separate. This does not change the Project working directory.${purpose === "reconnect" ? " This folder replaces the previous location for the existing root and its tabs." : ""}`,
+        buttons: ["Cancel", purpose === "attach" ? "Attach read-only" : "Reconnect read-only"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      return result.response === 1;
+    },
+    confirmDetach: async (label) => (await dialog.showMessageBox(win, {
+      type: "question", title: "Detach from Geode?", message: `Detach ${label}?`,
+      detail: "This removes only the local Project attachment. Files, the Threads Project, its working directory, and execution permission are unchanged.",
+      buttons: ["Cancel", "Detach"], defaultId: 0, cancelId: 0, noLink: true,
+    })).response === 1,
+    confirmManagement: async ({ kind, label, selectedPath }) => (await dialog.showMessageBox(win, {
+      type: "question", title: kind === "remove-root" ? "Remove folder grant?" : "Remove stale Project association?",
+      message: kind === "remove-root" ? "Remove this unassigned folder grant?" : `Remove association for ${label}?`,
+      detail: `${selectedPath}\n\nOnly Geode's local ${kind === "remove-root" ? "grant record" : "Project association"} will be removed. External files, Threads Projects, working directories, and execution permissions are unchanged.`,
+      buttons: ["Cancel", "Remove"], defaultId: 0, cancelId: 0, noLink: true,
+    })).response === 1,
+  });
+}
+
+function invalidateExternalRoots(session: VaultSession | undefined): void {
+  if (!session) return;
+  session.externalRootsInvalidated = true;
+  void session.externalRoots?.then(async (roots) => { await roots.dispose(); notifyExternalRoots(); }).catch(() => undefined);
+}
+
+function notifyExternalRoots(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    const session = sessions.get(win.id);
+    if (!win.isDestroyed() && !win.webContents.isDestroyed() && session && !session.externalRootsInvalidated) {
+      win.webContents.send("external-roots-changed");
+    }
+  }
+}
 /** Explicit vault requested for a window that has not completed open-vault yet. */
 const launchTargets = new Map<number, string>();
 /**
@@ -271,6 +333,28 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 }
 
 function registerIpc() {
+  // Narrow internal desktop integration. No Vault/TFile or arbitrary-path API.
+  ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[], options?: ExternalProjectContributionOptions) => externalRootReply(async () => {
+    return submitExternalProjects(await externalRootSession(e.sender), projects, options, notifyExternalRoots);
+  }));
+  ipcMain.handle("external-roots-projects", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listProjects()));
+  ipcMain.handle("external-roots-grants", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listGrants()));
+  for (const [channel, action] of [["remove-association", "removeStaleAssociation"], ["remove-orphan", "removeOrphanGrant"]] as const) {
+    ipcMain.handle(`external-roots-${channel}`, (e, id: string) => externalRootReply(async () => {
+      const removed = await (await externalRootSession(e.sender))[action](id);
+      if (removed) notifyExternalRoots();
+      return removed;
+    }));
+  }
+  for (const action of ["attach", "reconnect", "detach"] as const) {
+    ipcMain.handle(`external-roots-${action}`, (e, projectId: string) => externalRootReply(async () => {
+      const result = await (await externalRootSession(e.sender))[action](projectId);
+      if (result) notifyExternalRoots();
+      return result;
+    }));
+  }
+  ipcMain.handle("external-roots-list", (e, ref: RootDirectoryRef, options?: { cursor?: string }) => externalRootReply(async () => (await externalRootSession(e.sender)).listDirectory(ref, options)));
+  ipcMain.handle("external-roots-read", (e, ref: ResourceRef) => externalRootReply(async () => (await externalRootSession(e.sender)).readText(ref)));
   ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
     performRequestUrl(request, (input, init) => net.fetch(input, init)),
   );
@@ -315,6 +399,7 @@ function registerIpc() {
     const st = await fsp.stat(vaultPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(`Not a folder: ${vaultPath}`);
     const prev = sessions.get(win.id);
+    invalidateExternalRoots(prev);
     if (prev?.watcher) await prev.watcher.close();
     if (prev?.indexer) await prev.indexer.shutdown();
     prev?.metadataDb?.close();
@@ -1093,6 +1178,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     void artifactRuntime.unregisterOwner(ownerWebContentsId);
     const session = sessions.get(win.id);
     session?.watcher?.close();
+    invalidateExternalRoots(session);
     if (session?.indexer) void session.indexer.shutdown();
     session?.metadataDb?.close();
     sessions.delete(win.id);
