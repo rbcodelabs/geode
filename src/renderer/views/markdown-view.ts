@@ -335,6 +335,7 @@ export class MarkdownView implements View {
   }
 
   async applyCommentMutation(mutator: (source: string) => string): Promise<void> {
+    if (this.vaultSwitching || this.conflictReadOnly) throw new Error("Comment editing is paused while the note is read-only");
     if (!this.editor) throw new Error("The note editor is not available");
     const source = this.editor.state.doc.toString();
     const next = mutator(source);

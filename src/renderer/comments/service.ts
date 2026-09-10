@@ -53,6 +53,17 @@ function replacePayload(source: string, thread: ParsedCommentThread, payload: Co
 
 export class CommentService extends Events {
   private queues = new Map<string, Promise<unknown>>();
+  private mutationHolds = new Set<string>();
+
+  /** Stop admission before draining writes so sync can safely check its preimage. */
+  async holdMutations(token: string): Promise<void> {
+    this.mutationHolds.add(token);
+    await Promise.all([...this.queues.values()]);
+  }
+
+  releaseMutationHold(token: string): void {
+    this.mutationHolds.delete(token);
+  }
 
   constructor(
     private vault: Pick<Vault, "cachedRead" | "modify"> & Partial<Pick<Vault, "read" | "getCachedContent">>,
@@ -170,6 +181,7 @@ export class CommentService extends Events {
   }
 
   private mutate(file: TFile, transform: (source: string) => string): Promise<void> {
+    if (this.mutationHolds.size) return Promise.reject(new Error("Comment editing is paused while sync refreshes the vault"));
     const previous = this.queues.get(file.path) ?? Promise.resolve();
     const operation = previous.then(async () => {
       const editor = this.openEditor(file);

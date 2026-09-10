@@ -183,6 +183,28 @@ test('nested reconciliation does not release the outer sync autosave hold', asyn
   });
 });
 
+for (const opened of [true, false]) {
+  test(`programmatic comments cannot write a ${opened ? 'open' : 'closed'} note during sync preparation`, async () => {
+    await isolated(async ({ second, vault, apply }) => {
+      if (opened) await open(second);
+      await gatePrepare(second);
+      const attempted = apply();
+      await second.waitForFunction(() => (window as any).guardEntered);
+      const result = await second.evaluate(async () => {
+        const app = (window as any).app;
+        try {
+          await app.comments.create(app.vault.getFileByPath('Note.md'), { from: 0, to: 3 }, 'agent comment', { type: 'agent', name: 'Test agent' });
+          return 'saved';
+        } catch (error) { return (error as Error).message; }
+      });
+      await second.evaluate(() => (window as any).guardContinue());
+      await attempted.catch(() => undefined);
+      expect(result).toMatch(/paused|read.only/i);
+      expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
+    });
+  });
+}
+
 for (const failure of ['throw', 'timeout'] as const) {
   test(`${failure} during refresh leaves stale writers paused until recovery`, async () => {
     await isolated(async ({ second, vault, apply }) => {
@@ -203,6 +225,10 @@ for (const failure of ['throw', 'timeout'] as const) {
       if (failure === 'throw') await expect(apply('Note.md', 'remote')).rejects.toThrow(/refresh incomplete/i);
       expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
       expect(await second.evaluate(() => ({ body: document.body.inert, editor: (window as any).app.workspace.activeLeaf.view.containerEl.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: false, editor: true, suspended: true });
+      await expect(second.evaluate(() => {
+        const app = (window as any).app;
+        return app.comments.create(app.vault.getFileByPath('Note.md'), { from: 0, to: 3 }, 'stale comment', { type: 'agent', name: 'Test agent' });
+      })).rejects.toThrow(/paused|read.only/i);
       await second.evaluate(() => {
         const view = (window as any).app.workspace.activeLeaf.view;
         view.editor.dispatch({ changes: { from: 0, to: view.editor.state.doc.length, insert: 'queued stale edit' } });

@@ -1859,11 +1859,13 @@ export class App {
     const syncWorkspace = this.workspace;
     const syncGuards = new Set<string>(); let previousInert = false; let syncDisposed = false;
     const staleViews = new Map<HTMLElement, { original: boolean; count: number }>();
-    const finishGuard = (token: string) => { syncGuards.delete(token); syncWorkspace.releaseAutosaveHold(token); if (!syncGuards.size && this.workspace === syncWorkspace) document.body.inert = previousInert; };
+    const finishGuard = (token: string) => { syncGuards.delete(token); this.comments.releaseMutationHold(token); syncWorkspace.releaseAutosaveHold(token); if (!syncGuards.size && this.workspace === syncWorkspace) document.body.inert = previousInert; };
     const stopPrepare = this.host.syncSafety?.onPrepare(async (token, relative) => {
       if (syncDisposed || this.workspace !== syncWorkspace) return "Vault window changed";
       if (!syncGuards.size) previousInert = document.body.inert;
       syncGuards.add(token); document.body.inert = true;
+      await this.comments.holdMutations(token);
+      if (!syncGuards.has(token) || syncDisposed || this.workspace !== syncWorkspace) return "Editor guard was released";
       if (!await syncWorkspace.holdAutosave(token) || syncDisposed || this.workspace !== syncWorkspace) return "Editor guard was released";
       let reason: string | null = null;
       for (const leaf of this.workspace.getLeavesOfType("markdown")) {
