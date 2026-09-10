@@ -111,6 +111,29 @@ export interface CachedMetadata {
    * existed). Present when the note has any block content.
    */
   sections?: SectionCache[];
+  /**
+   * Inline footnote references (`[^id]`). ABSENT when the note has none,
+   * following the same "present only when found" convention as `listItems`
+   * and `sections` above.
+   */
+  footnoteRefs?: FootnoteRefCache[];
+  /** Markdown reference links (`[text][id]`, `[text][]`). ABSENT when the note has none. */
+  referenceLinks?: ReferenceLinkCache[];
+}
+
+// NOTE: Geode's `Loc` is the {start, end} span (what Obsidian calls `Pos`),
+// and Geode's `Pos` is the {line, ch, offset} point. `position: Loc` here is
+// the span, consistent with every other cache type in this file.
+export interface FootnoteRefCache {
+  id: string;
+  position: Loc;
+}
+
+export interface ReferenceLinkCache {
+  id: string;
+  /** The link text, i.e. what is displayed. */
+  link: string;
+  position: Loc;
 }
 
 export const MARKDOWN_EXTENSIONS = new Set(["md"]);
@@ -213,9 +236,24 @@ export class FileSystemAdapter extends DataAdapter {
   }
 
   getResourcePath(normalizedPath: string): string {
-    return `file://${this.basePath}/${normalizedPath}`.replace(/ /g, "%20");
+    return `file://${encodeFileUrlPath(`${this.basePath}/${normalizedPath}`)}`;
   }
 
+}
+
+/**
+ * Percent-encode a filesystem path for use in a `file://` URL, one segment at a
+ * time so the separators survive.
+ *
+ * Escaping only spaces (the previous behaviour) is not enough: `#` starts a
+ * fragment, so `Board/photo#1.png` used to yield a URL truncated at `photo`,
+ * and `?` would open a query string. Both silently resolve to "file not found"
+ * — an `<img>` that never loads with nothing in the console explaining why.
+ * `encodeURIComponent` still renders a space as `%20`, so ordinary paths are
+ * byte-for-byte unchanged.
+ */
+export function encodeFileUrlPath(absolutePath: string): string {
+  return absolutePath.split("/").map(encodeURIComponent).join("/");
 }
 
 /**

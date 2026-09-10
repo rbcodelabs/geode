@@ -33,7 +33,7 @@ export interface PluginManifest {
  * 1.0.0), so this tracks that line rather than Geode's 0.x release number.
  * Bumped by hand as the emulated API surface grows.
  */
-export const GEODE_API_VERSION = "1.8.0";
+export const GEODE_API_VERSION = "1.10.2";
 
 export type PluginRuntimePlatform = "desktop" | "mobile";
 

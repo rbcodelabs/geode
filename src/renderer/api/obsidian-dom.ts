@@ -17,6 +17,26 @@ declare global {
     empty(): this;
     detach(): this;
     appendText(text: string): this;
+    /**
+     * Cross-window capable `instanceof`, per Obsidian's documented `Node`
+     * augmentation. A node adopted into a popout window is constructed by
+     * *that* window's realm, so a plain `instanceof HTMLElement` against the
+     * main window's constructor returns false. This checks the node's own
+     * realm too.
+     */
+    instanceOf<T>(type: { new (...args: any[]): T }): this is T;
+    /** The document this node belongs to, or the global document. */
+    readonly doc: Document;
+  }
+  interface Event {
+    /**
+     * Cross-window capable `instanceof` for events. Obsidian documents this
+     * on `UIEvent`; installing it on `Event` is a strict superset (there is
+     * no native `Event.prototype.instanceOf` to clobber) and means a plugin
+     * that reaches for it on a non-UI event gets working behaviour instead
+     * of a `TypeError`.
+     */
+    instanceOf<T>(type: { new (...args: any[]): T }): this is T;
   }
   interface Element {
     addClass(...classes: string[]): this;
@@ -41,6 +61,25 @@ declare global {
     setCssStyles(styles: Partial<CSSStyleDeclaration>): this;
     setCssProps(props: Record<string, string>): this;
     onClickEvent(cb: (ev: MouseEvent) => unknown): this;
+    /**
+     * Delegated event registration — Obsidian's 3-argument `on`. The
+     * listener fires only when the event's target is (or is inside) an
+     * element matching `selector` within this subtree, and receives that
+     * matched element as its second argument.
+     */
+    on<K extends keyof HTMLElementEventMap>(
+      type: K,
+      selector: string,
+      listener: (this: HTMLElement, ev: HTMLElementEventMap[K], delegateTarget: HTMLElement) => any,
+      options?: boolean | AddEventListenerOptions
+    ): void;
+    /** Remove a delegated listener previously registered with the same `type`/`selector`/`listener`. */
+    off<K extends keyof HTMLElementEventMap>(
+      type: K,
+      selector: string,
+      listener: (this: HTMLElement, ev: HTMLElementEventMap[K], delegateTarget: HTMLElement) => any,
+      options?: boolean | AddEventListenerOptions
+    ): void;
   }
   interface Document {
     createEl<K extends keyof HTMLElementTagNameMap>(
@@ -52,6 +91,18 @@ declare global {
     createSpan(o?: DomElementInfo | string, callback?: (el: HTMLSpanElement) => void): HTMLSpanElement;
     find(selector: string): HTMLElement | null;
     findAll(selector: string): HTMLElement[];
+    on<K extends keyof DocumentEventMap>(
+      type: K,
+      selector: string,
+      listener: (this: Document, ev: DocumentEventMap[K], delegateTarget: HTMLElement) => any,
+      options?: boolean | AddEventListenerOptions
+    ): void;
+    off<K extends keyof DocumentEventMap>(
+      type: K,
+      selector: string,
+      listener: (this: Document, ev: DocumentEventMap[K], delegateTarget: HTMLElement) => any,
+      options?: boolean | AddEventListenerOptions
+    ): void;
   }
   interface DocumentFragment {
     createEl<K extends keyof HTMLElementTagNameMap>(
@@ -131,9 +182,175 @@ function createElOn<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
+/**
+ * Sanitize an HTML string into a DocumentFragment (Obsidian uses this for
+ * untrusted HTML). Lives here rather than in `./obsidian.ts` so the low-level
+ * value classes in `./bases-values.ts` can use it without an import cycle;
+ * `./obsidian.ts` re-exports it, which is where plugins get it from.
+ */
+export function sanitizeHTMLToDom(html: string): DocumentFragment {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  // Strip script elements defensively.
+  template.content.querySelectorAll("script").forEach((s) => s.remove());
+  return template.content;
+}
+
 function define(proto: object, name: string, value: (...args: any[]) => any): void {
   if (Object.prototype.hasOwnProperty.call(proto, name)) return;
   Object.defineProperty(proto, name, { value, writable: true, configurable: true, enumerable: false });
+}
+
+/** Idempotent counterpart to `define` for accessor properties (`.doc`). */
+function defineGetter(proto: object, name: string, get: (this: any) => unknown): void {
+  if (Object.prototype.hasOwnProperty.call(proto, name)) return;
+  Object.defineProperty(proto, name, { get, configurable: true, enumerable: false });
+}
+
+/**
+ * Minimal structural view of the objects `crossRealmInstanceOf` inspects, so
+ * the predicate is unit-testable without a DOM. A real `Node` supplies
+ * `ownerDocument`; a real `UIEvent` supplies `view`; a plain `Event` supplies
+ * `target`.
+ */
+interface RealmBearer {
+  ownerDocument?: { defaultView?: unknown } | null;
+  view?: unknown;
+  target?: unknown;
+}
+
+/**
+ * Cross-window-capable `instanceof`, backing `Node.instanceOf` and
+ * `Event.instanceOf`.
+ *
+ * A DOM object created inside a popout window is an instance of *that*
+ * window's `HTMLElement`, not the main window's, so a plain `instanceof`
+ * against the imported global returns false. Obsidian's documented helper
+ * exists precisely to paper over that. We first try the cheap native check,
+ * then re-resolve the constructor by name from the object's own realm.
+ *
+ * Exported for unit testing; callers should use `node.instanceOf(Type)`.
+ */
+export function crossRealmInstanceOf(obj: unknown, type: { new (...args: any[]): any }): boolean {
+  if (obj === null || obj === undefined) return false;
+  if (obj instanceof type) return true;
+
+  const name = type.name;
+  if (!name) return false;
+
+  const bearer = obj as RealmBearer;
+  // A Node knows its document directly; a UIEvent exposes the originating
+  // window as `view`; anything else, fall back to the target node's document.
+  const targetDoc = (bearer.target as RealmBearer | undefined)?.ownerDocument;
+  const candidateWindows = [bearer.ownerDocument?.defaultView, bearer.view, targetDoc?.defaultView];
+
+  for (const win of candidateWindows) {
+    if (!win || typeof win !== "object") continue;
+    const ctor = (win as Record<string, unknown>)[name];
+    if (typeof ctor === "function" && obj instanceof (ctor as { new (...args: any[]): any })) return true;
+  }
+  return false;
+}
+
+/** Structural slice of the DOM API `resolveDelegateTarget` needs — keeps it unit-testable. */
+interface ClosestTarget {
+  closest(selector: string): ClosestTarget | null;
+}
+
+/**
+ * Resolve the delegated target for an event: the nearest ancestor-or-self of
+ * `target` matching `selector`, provided it is still inside `container`.
+ *
+ * Returns `null` when the event did not originate in a matching element, or
+ * when the match lies outside the container (which happens for events that
+ * bubble through a portal/popover reparented elsewhere in the document).
+ *
+ * Exported for unit testing; callers should use `el.on(type, selector, fn)`.
+ */
+export function resolveDelegateTarget<T extends ClosestTarget>(
+  target: unknown,
+  selector: string,
+  container: { contains(other: any): boolean }
+): T | null {
+  if (!target || typeof (target as ClosestTarget).closest !== "function") return null;
+  const match = (target as ClosestTarget).closest(selector);
+  if (!match) return null;
+  return container.contains(match) ? (match as T) : null;
+}
+
+type DelegatedListener = (ev: Event, delegateTarget: HTMLElement) => unknown;
+
+/**
+ * Registered delegated listeners, keyed so `off(type, selector, listener)`
+ * can find the wrapper that was actually handed to `addEventListener`.
+ * A `WeakMap` keyed on the host element means an element going out of scope
+ * takes its registrations with it — no leak, no manual cleanup required.
+ */
+const delegatedListeners = new WeakMap<EventTarget, Map<string, EventListener>>();
+
+function delegationKey(type: string, selector: string, listener: DelegatedListener, useCapture: boolean): string {
+  // The listener identity can't go in a string key, so registrations are
+  // bucketed by type/selector/capture and disambiguated by identity in `off`.
+  return `${type}\u0000${selector}\u0000${useCapture ? "1" : "0"}`;
+}
+
+function isCapture(options?: boolean | AddEventListenerOptions): boolean {
+  return typeof options === "boolean" ? options : (options?.capture ?? false);
+}
+
+function installDelegatedEvents(proto: object): void {
+  define(proto, "on", function (
+    this: EventTarget & { contains(other: any): boolean },
+    type: string,
+    selector: string,
+    listener: DelegatedListener,
+    options?: boolean | AddEventListenerOptions
+  ) {
+    const wrapper: EventListener = (ev: Event) => {
+      const delegateTarget = resolveDelegateTarget<HTMLElement>(ev.target, selector, this);
+      if (delegateTarget) listener.call(this, ev, delegateTarget);
+    };
+    let bucket = delegatedListeners.get(this);
+    if (!bucket) {
+      bucket = new Map();
+      delegatedListeners.set(this, bucket);
+    }
+    // One bucket entry per (type, selector, capture, listener-identity) pair.
+    bucket.set(`${delegationKey(type, selector, listener, isCapture(options))}\u0000${identityOf(listener)}`, wrapper);
+    this.addEventListener(type, wrapper, options);
+  });
+
+  define(proto, "off", function (
+    this: EventTarget,
+    type: string,
+    selector: string,
+    listener: DelegatedListener,
+    options?: boolean | AddEventListenerOptions
+  ) {
+    const bucket = delegatedListeners.get(this);
+    if (!bucket) return;
+    const key = `${delegationKey(type, selector, listener, isCapture(options))}\u0000${identityOf(listener)}`;
+    const wrapper = bucket.get(key);
+    if (!wrapper) return;
+    bucket.delete(key);
+    this.removeEventListener(type, wrapper, options);
+  });
+}
+
+/**
+ * Stable per-function id, so `off` can match the exact listener that `on`
+ * registered without stringifying function bodies (two distinct closures can
+ * share a source text).
+ */
+let identityCounter = 0;
+const identities = new WeakMap<object, string>();
+function identityOf(fn: object): string {
+  let id = identities.get(fn);
+  if (!id) {
+    id = String(++identityCounter);
+    identities.set(fn, id);
+  }
+  return id;
 }
 
 let installed = false;
@@ -265,6 +482,28 @@ export function installObsidianDomExtensions(): void {
     else (this as any).hide();
     return this;
   });
+
+  // --- cross-window instanceOf + owning document ---------------------------
+  // Obsidian documents `instanceOf` on `Node` and `UIEvent`, and `doc` on
+  // `Node`. Bases views lean on all three: the Kanban view resolves its
+  // delegated click targets with `cardEl.instanceOf(HTMLElement)` and creates
+  // its colour-picker popover through `anchorEl.doc.createElement`.
+  define(nodeProto, "instanceOf", function (this: Node, type: { new (...args: any[]): unknown }) {
+    return crossRealmInstanceOf(this, type);
+  });
+  defineGetter(nodeProto, "doc", function (this: Node) {
+    // `Document.ownerDocument` is null by spec, so a Document is its own doc.
+    return this.ownerDocument ?? (this as unknown as Document);
+  });
+  if (typeof Event !== "undefined") {
+    define(Event.prototype as any, "instanceOf", function (this: Event, type: { new (...args: any[]): unknown }) {
+      return crossRealmInstanceOf(this, type);
+    });
+  }
+
+  // --- delegated events: el.on(type, selector, handler) --------------------
+  installDelegatedEvents(htmlProto);
+  installDelegatedEvents(docProto);
 
   // --- globals: createEl / createDiv / createSpan / createFragment ----------
   const g = globalThis as any;

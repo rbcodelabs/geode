@@ -7,6 +7,11 @@ test-vault/.geode/*
 !test-vault/.geode/plugins/
 test-vault/.geode/plugins/*
 !test-vault/.geode/plugins/status-probe/
+# Third-party Bases plugin (MIT) used by tests/e2e/bases-plugin-view.spec.ts as
+# the real-world check that a Bases view registers and renders. Its shipped
+# bundle is checked in so the test exercises the actual published artifact
+# rather than a hand-written stand-in. Disabled by default, like status-probe.
+!test-vault/.geode/plugins/kanban-bases-view/
 test-results/
 playwright-report/
 .benchmark-vault/

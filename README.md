@@ -5,30 +5,34 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.14.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.15.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## New in v0.14.0: external Project folders
+## New in v0.15.0: interactive Bases views for plugins
 
-Claude Threads Projects can appear in a separate **Projects** section of the
-File Explorer. On macOS, choose **Attach folder…**, select the directory, and
-confirm read-only access. Existing Project working directories are never granted
-access automatically. Expand folders to browse and open UTF-8 text files up to
-2 MiB in a distinct **Read-only · External source** tab.
+A community plugin can now provide a Bases view that **writes to the vault**, not
+just renders one. `kanban-bases-view` runs unmodified in Geode: drag a card
+between columns and the note's frontmatter is rewritten on disk; the per-column
+**+** creates a note in the view's configured folder with that column's value
+already set; middle-click opens a card's note behind the board and a plain click
+opens it in place; card cover images resolve and load.
 
-Use **Refresh** to see filesystem changes or **Reconnect…** for a moved folder.
-**Settings → Project folders** manages inactive associations and unassigned
-grants; removing these records never deletes files or changes an agent's working
-directory. Mobile shows **Available on desktop** labels, not synchronized files.
+The plugin API surface behind that grew accordingly —
+`BasesView.createFileForView`, `Vault.getResourcePath(file)`,
+`Workspace.getMostRecentLeaf()`, `Workspace.setActiveLeaf(leaf, { focus })` and
+`Workspace.getLeaf(PaneType | boolean)` — and `GEODE_API_VERSION` advertises
+**1.10.2** (from 1.8.0), so plugins gating on the host's API version see the
+Bases surface they require.
 
-External source stays separate from vault notes: no editing, autosave, filesystem
-watching, indexing, search, rendered Markdown, wikilinks, backlinks, or `TFile`
-access. Directory symlinks cannot be traversed; file symlinks must remain inside
-the granted root. See the [workflow and limitations](docs/design/external-projects-explorer.md).
+Where Geode cannot honour a request exactly it refuses loudly rather than
+guessing: `createFileForView()` with no file name, a folder that does not exist,
+or a path escaping the vault all reject instead of writing a note somewhere the
+user did not configure; `getLeaf('window')` throws rather than substituting a
+tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
-## Features (v0.14.0)
+## Features (v0.15.0)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
