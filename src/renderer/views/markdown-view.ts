@@ -554,7 +554,11 @@ export class MarkdownView implements View {
 
   /** Wait for an already-started save without publishing any new editor edits. */
   async waitForPendingSave(): Promise<void> {
-    if (this.flushInFlight) await this.flushInFlight;
+    while (this.flushInFlight) await this.flushInFlight;
+  }
+
+  hasPendingSave(): boolean {
+    return this.flushInFlight !== null;
   }
 
   /**

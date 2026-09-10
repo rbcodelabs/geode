@@ -6,7 +6,7 @@ it.each([false, true])("rechecks an overtaken own-write read and preserves a gen
   const file = { path: "Note.md" };
   let saved = "first comment";
   const view = Object.assign(Object.create(MarkdownView.prototype), {
-    file,
+    file, flushInFlight: null,
     getLastKnownText: () => saved,
     hasUnacknowledgedChanges: () => true,
     acceptExternalText: vi.fn(),
@@ -31,7 +31,7 @@ it("waits for a pending own write before reading disk to classify a modification
   const file = { path: "Note.md" };
   let disk = "first comment";
   let finish!: () => void;
-  const write = new Promise<void>(resolve => { finish = () => { disk = "first comment and reply"; resolve(); }; });
+  const write = new Promise<void>(resolve => { finish = () => { disk = "first comment and reply"; view.flushInFlight = null; resolve(); }; });
   const view = Object.assign(Object.create(MarkdownView.prototype), {
     file,
     flushInFlight: write,
@@ -57,7 +57,7 @@ it("waits for a pending own write before reading disk to classify a modification
 it("does not apply an old file read to a view reused for another note", async () => {
   const file = { path: "Old.md" };
   const view = Object.assign(Object.create(MarkdownView.prototype), {
-    file,
+    file, flushInFlight: null,
     getLastKnownText: () => "unchanged",
     hasUnacknowledgedChanges: () => false,
     acceptExternalText: vi.fn(),
@@ -70,4 +70,36 @@ it("does not apply an old file read to a view reused for another note", async ()
   await app.processExternalModify(file);
   expect(view.acceptExternalText).not.toHaveBeenCalled();
   expect(app.preserveConflict).not.toHaveBeenCalled();
+});
+
+it("drains a second real editor flush queued behind the first before classifying its echo", async () => {
+  const file = { path: "Note.md" };
+  let disk = "initial", editorText = "A";
+  const finish: Array<() => void> = [];
+  const modify = vi.fn((_file, text) => new Promise<void>(resolve => {
+    finish.push(() => { disk = text; resolve(); });
+  }));
+  const view = Object.assign(Object.create(MarkdownView.prototype), {
+    file, lastSavedText: "initial", pendingSaveText: null, flushInFlight: null, saveTimer: null, lineEnding: "\n",
+    editor: { state: { doc: { toString: () => editorText } } },
+    app: { vault: { modify } }, acceptExternalText: vi.fn(),
+  });
+  const first = view.flush();
+  editorText = "B";
+  const second = view.flush();
+  const read = vi.fn(async () => disk);
+  const app = Object.assign(Object.create(App.prototype), {
+    workspace: { findLeafForFile: () => ({ view }) },
+    host: { vaultFiles: { read } }, preserveConflict: vi.fn(),
+  });
+  const processing = app.processExternalModify(file);
+  finish[0]();
+  await first;
+  await vi.waitFor(() => expect(modify).toHaveBeenCalledTimes(2));
+  const readsBeforeSecondSave = read.mock.calls.length;
+  finish[1]();
+  await Promise.all([second, processing]);
+  expect(readsBeforeSecondSave).toBe(0);
+  expect(app.preserveConflict).not.toHaveBeenCalled();
+  expect(view.acceptExternalText).not.toHaveBeenCalled();
 });

@@ -2241,16 +2241,17 @@ export class App {
     if (!(view instanceof MarkdownView) || !view.file) return;
     let text = suppliedText;
     if (text === undefined) {
-      let known: string;
-      do {
+      while (true) {
         await view.waitForPendingSave();
         if (view.file?.path !== file.path) return;
-        known = view.getLastKnownText();
+        if (view.hasPendingSave()) continue;
+        const known = view.getLastKnownText();
         text = await this.host.vaultFiles.read(file.path);
         if (view.file?.path !== file.path) return;
         // A later own save can overtake an earlier notification's read. Compare
         // only a read taken against the same saved snapshot, not stale bytes.
-      } while (known !== view.getLastKnownText());
+        if (!view.hasPendingSave() && known === view.getLastKnownText()) break;
+      }
     }
     if (!hasExternalChange(text, view.getLastKnownText())) return;
     if (!view.hasUnacknowledgedChanges()) {
