@@ -552,6 +552,11 @@ export class MarkdownView implements View {
     return this.editor?.state.doc.toString() ?? this.lastSavedText;
   }
 
+  /** Wait for an already-started save without publishing any new editor edits. */
+  async waitForPendingSave(): Promise<void> {
+    if (this.flushInFlight) await this.flushInFlight;
+  }
+
   /**
    * The text we last knew to be on disk for this file — set on load
    * (`setFile`) and after each successful autosave write (`flush`), BEFORE

@@ -2239,7 +2239,19 @@ export class App {
     const leaf = this.workspace.findLeafForFile(file.path);
     const view = leaf?.view;
     if (!(view instanceof MarkdownView) || !view.file) return;
-    const text = suppliedText ?? await this.host.vaultFiles.read(file.path);
+    let text = suppliedText;
+    if (text === undefined) {
+      let known: string;
+      do {
+        await view.waitForPendingSave();
+        if (view.file?.path !== file.path) return;
+        known = view.getLastKnownText();
+        text = await this.host.vaultFiles.read(file.path);
+        if (view.file?.path !== file.path) return;
+        // A later own save can overtake an earlier notification's read. Compare
+        // only a read taken against the same saved snapshot, not stale bytes.
+      } while (known !== view.getLastKnownText());
+    }
     if (!hasExternalChange(text, view.getLastKnownText())) return;
     if (!view.hasUnacknowledgedChanges()) {
       view.acceptExternalText(text);
