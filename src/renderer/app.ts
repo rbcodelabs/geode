@@ -2306,6 +2306,39 @@ export class App {
       }
     });
     if (stopGuestHotkeys) this.hostDisposers.add(stopGuestHotkeys);
+    const stopGuestWindowOpen = this.host.desktop?.onGuestWindowOpen((request) => {
+      void this.openGuestWindowInTab(request).catch((error) => {
+        console.error("Failed to open guest window in a Web Viewer tab", error);
+      });
+    });
+    if (stopGuestWindowOpen) this.hostDisposers.add(stopGuestWindowOpen);
+  }
+
+  private async openGuestWindowInTab(request: {
+    url: string;
+    guestId: number;
+    disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
+  }): Promise<void> {
+    const sourceLeaf = this.leafOwningGuest(request.guestId);
+    if (!sourceLeaf || !(sourceLeaf.view instanceof WebView) || !(sourceLeaf.group instanceof TabGroup)) return;
+    const group = sourceLeaf.group;
+    if (!group.leaves.includes(sourceLeaf)) return;
+    const opensInBackground = request.disposition === "background-tab";
+    const previouslyActive = group.active;
+    const leaf = group.createLeaf();
+    if (opensInBackground && previouslyActive && group.leaves.includes(previouslyActive)) {
+      group.setActiveLeaf(previouslyActive);
+    }
+    try {
+      await leaf.setViewState({
+        type: "webviewer",
+        active: !opensInBackground,
+        state: { url: request.url },
+      });
+    } catch (error) {
+      if (group.leaves.includes(leaf)) await leaf.detach();
+      throw error;
+    }
   }
 
   async dispose(): Promise<void> {

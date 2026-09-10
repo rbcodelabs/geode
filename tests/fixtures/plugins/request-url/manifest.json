@@ -1,0 +1,8 @@
+{
+  "id": "request-url-probe",
+  "name": "Request URL Probe",
+  "version": "1.0.0",
+  "minAppVersion": "0.1.0",
+  "description": "Exercises privileged requestUrl networking.",
+  "author": "geode"
+}

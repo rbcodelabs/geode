@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, protocol, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -52,11 +52,13 @@ import { startVaultWatcher, type VaultWatcherHandle, type VaultWatchEventName } 
 import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
 import { DeepLinkDispatcher } from "./deep-link";
-import type { PluginFileSet } from "./preload";
+import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
 import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
 import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
+import { performRequestUrl } from "./request-url";
+import type { PrivilegedRequestUrlParam } from "../shared/request-url";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -353,6 +355,9 @@ function registerIpc() {
   }
   ipcMain.handle("external-roots-list", (e, ref: RootDirectoryRef, options?: { cursor?: string }) => externalRootReply(async () => (await externalRootSession(e.sender)).listDirectory(ref, options)));
   ipcMain.handle("external-roots-read", (e, ref: ResourceRef) => externalRootReply(async () => (await externalRootSession(e.sender)).readText(ref)));
+  ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
+    performRequestUrl(request, (input, init) => net.fetch(input, init)),
+  );
   ipcMain.handle("window-chrome-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false };
@@ -1042,6 +1047,15 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     // Every guest, not just artifact guests: the Web Viewer and canvas
     // web-preview cards are <webview>s too and have the same dead-hotkey bug.
     bridgeGuestHotkeys(win, guest);
+    guest.setWindowOpenHandler(({ url, disposition }) => {
+      let protocol = "";
+      try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }
+      if ((protocol === "http:" || protocol === "https:") && !win.isDestroyed()) {
+        const request: GuestWindowOpenRequest = { url, guestId: guest.id, disposition };
+        win.webContents.send("guest-window-open", request);
+      }
+      return { action: "deny" };
+    });
   });
   const recoverRenderer = async (diagnostic: CrashDiagnostic) => {
     const state = crashStates.get(win.id);

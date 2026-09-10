@@ -8,6 +8,7 @@ import type { CrashDiagnostic } from "./crash-journal";
 import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
 import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
+import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
   const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
@@ -38,6 +39,12 @@ export interface TimedPluginReadResult {
 }
 export interface PluginFileSet { manifest: string; main: string; styles: string | null }
 
+export interface GuestWindowOpenRequest {
+  url: string;
+  guestId: number;
+  disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
+}
+
 export interface UpdaterCheckResult {
   status: "checking" | "disabled";
 }
@@ -62,6 +69,8 @@ const api = {
     },
   } satisfies ExternalRootsHost) : undefined),
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
+  requestUrl: (request: PrivilegedRequestUrlParam): Promise<PrivilegedRequestUrlResponse> =>
+    ipcRenderer.invoke("request-url", request),
   acquirePowerSaveBlocker: (): Promise<string> =>
     ipcRenderer.invoke("power-save-blocker-acquire"),
   releasePowerSaveBlocker: (token: string): Promise<boolean> =>
@@ -197,6 +206,12 @@ const api = {
     ipcRenderer.on("guest-hotkey", listener);
     return () => { ipcRenderer.removeListener("guest-hotkey", listener); };
   },
+  /** A web URL that a `<webview>` guest requested in a new browsing context. */
+  onGuestWindowOpen: (cb: (request: GuestWindowOpenRequest) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, request: GuestWindowOpenRequest) => cb(request);
+    ipcRenderer.on("guest-window-open", listener);
+    return () => { ipcRenderer.removeListener("guest-window-open", listener); };
+  },
   checkForUpdates: (): Promise<UpdaterCheckResult> => ipcRenderer.invoke("updater-check"),
 };
 
@@ -223,12 +238,13 @@ type ElectronOnlyGeodeApi = typeof api;
  */
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
-  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots"
+  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" | "requestUrl"
 > & {
   externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
+  requestUrl?: ElectronOnlyGeodeApi["requestUrl"];
 };
 
 // The renderer runs with contextIsolation disabled (see main.ts's

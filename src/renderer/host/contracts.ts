@@ -144,6 +144,11 @@ export interface DesktopHostService {
   setWindowBackgroundColor(color: string): Promise<void>;
   publishHotkeys(combos: string[]): Promise<void>;
   onGuestHotkey(cb: (combo: string, guestId: number) => void): () => void;
+  onGuestWindowOpen(cb: (request: {
+    url: string;
+    guestId: number;
+    disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
+  }) => void): () => void;
   revealInFileManager(path: string): Promise<void>;
 }
 
