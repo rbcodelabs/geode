@@ -4,5 +4,5 @@
     "lib": ["ES2022"],
     "types": ["node"]
   },
-  "include": ["src/wiki/**/*.ts", "scripts/headless-node-proof.mts"]
+  "include": ["src/wiki/**/*.ts", "scripts/headless-node-proof.mts", "scripts/local-wiki-node-proof.mts"]
 }
