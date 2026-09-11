@@ -44,6 +44,14 @@ export interface View {
   getFile?(): TFile | null;
 }
 
+interface StatefulView extends View {
+  setState(state: unknown, result: unknown): void | Promise<void>;
+}
+
+function isStatefulView(view: View | null): view is StatefulView {
+  return typeof (view as StatefulView | null)?.setState === "function";
+}
+
 /**
  * A view whose content can be reloaded in place: the Web Viewer and Artifact
  * views today. Implementing this is what makes the `web.reload` action (and
@@ -211,17 +219,24 @@ export class WorkspaceLeaf {
   /**
    * Obsidian-compatible view opener: resolve the registered factory for
    * `state.type` (from `Plugin.registerView`/`registerViewFactory`) and
-   * mount its view in this leaf. This is how Obsidian plugins open their
-   * own views (`leaf.setViewState({ type: MY_VIEW })`).
+   * mount its view in this leaf. A live same-type view that supports
+   * `setState` receives the new state in place, preserving view-owned
+   * resources such as a Web Viewer's guest navigation history. This is how
+   * Obsidian plugins open or update their own views
+   * (`leaf.setViewState({ type: MY_VIEW })`).
    */
   async setViewState(state: { type: string; active?: boolean; state?: unknown }): Promise<void> {
     this.viewState = { type: state.type, state: state.state };
     const factory = this.app.workspace.getViewFactory(state.type);
     if (!factory) throw new Error(`No view registered for type "${state.type}"`);
-    const view = factory(this);
-    await this.setView(view);
-    if ("state" in state && typeof (view as any).setState === "function") {
-      await (view as any).setState(state.state, {});
+    const currentView = this.view;
+    const canUpdateInPlace = currentView?.viewType === state.type
+      && !isDeferredView(currentView)
+      && isStatefulView(currentView);
+    const view = canUpdateInPlace ? currentView : factory(this);
+    if (!canUpdateInPlace) await this.setView(view);
+    if ("state" in state && isStatefulView(view)) {
+      await view.setState(state.state, {});
     }
     if (state.active) this.group.setActiveLeaf(this);
   }

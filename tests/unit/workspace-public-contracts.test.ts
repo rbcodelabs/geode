@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { View } from "../../src/renderer/api/obsidian";
 import { TabGroup, Workspace, WorkspaceLeaf } from "../../src/renderer/workspace";
+import { DeferredView } from "../../src/renderer/views/deferred-view";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -120,6 +121,20 @@ describe("Workspace active leaf events", () => {
 });
 
 describe("WorkspaceLeaf public state contracts", () => {
+  function stateLeaf(currentView: unknown, factoryView: unknown) {
+    const factory = vi.fn(() => factoryView);
+    const setView = vi.fn(async (next: unknown) => void ((leaf as any).view = next));
+    const setActiveLeaf = vi.fn();
+    const leaf = Object.create(WorkspaceLeaf.prototype) as WorkspaceLeaf;
+    Object.assign(leaf, {
+      app: { workspace: { getViewFactory: () => factory } },
+      group: { setActiveLeaf },
+      view: currentView,
+      setView,
+    });
+    return { leaf, factory, setView, setActiveLeaf };
+  }
+
   it("applies falsey view state and reports the view's current serialized state", async () => {
     const setState = vi.fn(async () => {});
     const view = {
@@ -139,6 +154,72 @@ describe("WorkspaceLeaf public state contracts", () => {
     await leaf.setViewState({ type: "probe", state: false });
     expect(setState).toHaveBeenCalledWith(false, {});
     expect(leaf.getViewState()).toEqual({ type: "probe", state: { current: 2 } });
+  });
+
+  it("updates a live same-type stateful view in place", async () => {
+    const setState = vi.fn(async () => {});
+    const currentView = { viewType: "probe", setState };
+    const replacement = { viewType: "probe", setState: vi.fn() };
+    const { leaf, factory, setView, setActiveLeaf } = stateLeaf(currentView, replacement);
+
+    await leaf.setViewState({ type: "probe", active: true, state: { cursor: 7 } });
+
+    expect(setState).toHaveBeenCalledWith({ cursor: 7 }, {});
+    expect(factory).not.toHaveBeenCalled();
+    expect(setView).not.toHaveBeenCalled();
+    expect(leaf.view).toBe(currentView);
+    expect(setActiveLeaf).toHaveBeenCalledWith(leaf);
+  });
+
+  it("remounts a deferred same-type view even if it exposes setState", async () => {
+    vi.stubGlobal("document", {
+      createElement: () => ({
+        className: "",
+        textContent: "",
+        hidden: false,
+        append() {},
+      }),
+    });
+    const deferred = new DeferredView({ type: "probe", state: { cursor: 1 } });
+    const deferredSetState = vi.fn();
+    Object.assign(deferred, { setState: deferredSetState });
+    const replacementSetState = vi.fn();
+    const replacement = { viewType: "probe", setState: replacementSetState };
+    const { leaf, factory, setView } = stateLeaf(deferred, replacement);
+
+    await leaf.setViewState({ type: "probe", state: { cursor: 2 } });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(setView).toHaveBeenCalledWith(replacement);
+    expect(deferredSetState).not.toHaveBeenCalled();
+    expect(replacementSetState).toHaveBeenCalledWith({ cursor: 2 }, {});
+  });
+
+  it("remounts when the requested type differs from the live view", async () => {
+    const currentSetState = vi.fn();
+    const currentView = { viewType: "first", setState: currentSetState };
+    const replacementSetState = vi.fn();
+    const replacement = { viewType: "second", setState: replacementSetState };
+    const { leaf, factory, setView } = stateLeaf(currentView, replacement);
+
+    await leaf.setViewState({ type: "second", state: { cursor: 3 } });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(setView).toHaveBeenCalledWith(replacement);
+    expect(currentSetState).not.toHaveBeenCalled();
+    expect(replacementSetState).toHaveBeenCalledWith({ cursor: 3 }, {});
+  });
+
+  it("remounts a same-type view that cannot apply state in place", async () => {
+    const currentView = { viewType: "probe" };
+    const replacement = { viewType: "probe" };
+    const { leaf, factory, setView } = stateLeaf(currentView, replacement);
+
+    await leaf.setViewState({ type: "probe", state: { cursor: 4 } });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(setView).toHaveBeenCalledWith(replacement);
+    expect(leaf.view).toBe(replacement);
   });
 
   it("opens and returns an existing view and toggles pinned state", async () => {
