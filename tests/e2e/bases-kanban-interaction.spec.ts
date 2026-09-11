@@ -69,11 +69,11 @@ function makeVault(): string {
   const boardDir = path.join(vaultDir, BOARD_FOLDER);
   fs.mkdirSync(boardDir, { recursive: true });
   fs.writeFileSync(path.join(boardDir, "cover.png"), COVER_PNG);
-  for (const { name, status, owner } of CARDS) {
+  for (const { name, owner } of CARDS) {
     fs.writeFileSync(
       path.join(boardDir, `${name}.md`),
       // `owner` is deliberately unrelated to the drag: it must survive untouched.
-      `---\nstatus: ${name === "Draft the spec" ? "Done" : status}\nowner: ${owner}\ncover: "[[cover.png]]"\n---\n\n# ${name}\n\nBody text.\n`
+      `---\nstatus: Doing\nowner: ${owner}\ncover: "[[cover.png]]"\n---\n\n# ${name}\n\nBody text.\n`
     );
   }
   fs.writeFileSync(path.join(vaultDir, "Board.base"), BASE_YAML);
@@ -113,13 +113,18 @@ async function dragCardToColumn(window: Page, cardPath: string, targetStatus: st
   const dragState = "__geodeKanbanDragTransfer";
 
   // Incrementally created columns attach Sortable on their first pointerdown.
-  // Finish that press before starting a separate drag, so the new listener
-  // receives its own pointerdown instead of missing the dispatch that added it.
-  await window.locator(`.obk-card[data-entry-path="${cardPath}"]`).evaluate((card) => {
-    card.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
-    card.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
-    card.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
-  });
+  // Initialize both the source and receiver before a separate drag: the source
+  // needs a fresh pointerdown, and the receiver must have a dragover listener.
+  for (const target of [
+    window.locator(`.obk-column[data-column-value="${targetStatus}"] .obk-column-body`),
+    window.locator(`.obk-card[data-entry-path="${cardPath}"]`),
+  ]) {
+    await target.evaluate((element) => {
+      element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
+      element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
+      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    });
+  }
 
   // Phase 1 — grab the card and start the drag.
   await window.evaluate(
@@ -228,12 +233,15 @@ test("a plugin Bases view can write the vault: drag, quick-add, open and cover i
       })
       .toBeGreaterThan(0);
 
-    // Cold metadata can add a column after the initial board render. Exercise
-    // that path deterministically: the plugin installs its Sortable listener
-    // lazily on the new column's first pointerdown.
+    // Cold metadata can add both columns after the initial board render.
+    // Exercise that path deterministically: each new column installs Sortable
+    // lazily on its first pointerdown, including the drag receiver.
     fs.writeFileSync(path.join(vaultDir, BOARD_FOLDER, "Draft the spec.md"),
-      readNote(vaultDir, "Draft the spec").replace("status: Done", "status: To Do"));
+      readNote(vaultDir, "Draft the spec").replace("status: Doing", "status: To Do"));
+    fs.writeFileSync(path.join(vaultDir, BOARD_FOLDER, "Ship the passthrough.md"),
+      readNote(vaultDir, "Ship the passthrough").replace("status: Doing", "status: Done"));
     await expect(window.locator('.obk-column[data-column-value="To Do"] .obk-card[data-entry-path="Board/Draft the spec.md"]')).toBeVisible();
+    await expect(window.locator('.obk-column[data-column-value="Done"] .obk-card[data-entry-path="Board/Ship the passthrough.md"]')).toBeVisible();
 
     // ---------------------------------------------------------------------
     // Drag "Draft the spec" from To Do to Done. The board updating is not the

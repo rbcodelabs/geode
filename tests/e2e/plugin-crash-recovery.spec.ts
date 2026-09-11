@@ -1,9 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron, expect, test, type Page } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
+
+async function waitForLayout(window: Page): Promise<void> {
+  // The shell and recovery banner appear before plugin loading and restoration.
+  await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady === true);
+}
 
 test("sleep pauses hang recovery and resume gives plugins a fresh heartbeat grace period", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-sleep-e2e-"));
@@ -23,6 +28,7 @@ test("sleep pauses hang recovery and resume gives plugins a fresh heartbeat grac
   });
   const window = await app.firstWindow();
   try {
+    await waitForLayout(window);
     await expect(window.locator(".workspace")).toBeVisible();
     await expect.poll(() => window.evaluate(() => (window as any).app.pluginManager.isEnabled("sleep-probe"))).toBe(true);
 
@@ -53,6 +59,7 @@ test("sleep pauses hang recovery and resume gives plugins a fresh heartbeat grac
       Date.now = () => resumedNow() + 20_001;
     });
     const recoveredWindow = await replacementPromise;
+    await waitForLayout(recoveredWindow);
     await expect(recoveredWindow.locator(".crash-recovery-banner")).toBeVisible();
     const journal = JSON.parse(fs.readFileSync(path.join(userDataDir, "crash-journal.json"), "utf8"));
     expect(journal.at(-1)).toMatchObject({ type: "renderer-hang", activePlugins: ["sleep-probe"] });
@@ -81,6 +88,7 @@ test("a throwing plugin command quarantines only that plugin and Settings can re
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   const window = await app.firstWindow();
   try {
+    await waitForLayout(window);
     await expect(window.locator(".workspace")).toBeVisible();
     await window.evaluate(() => (window as any).app.commands.execute("crashy:boom"));
     await expect.poll(() => window.evaluate(() => (window as any).app.pluginManager.isEnabled("crashy"))).toBe(false);
@@ -131,6 +139,7 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   const window = await app.firstWindow();
   try {
+    await waitForLayout(window);
     await expect(window.locator(".workspace")).toBeVisible();
     expect(await window.evaluate(() => (window as any).app.pluginManager.isEnabled("loaded-probe"))).toBe(true);
 
@@ -159,6 +168,7 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
     }).toContain("geode-e2e-before-controlled-crash");
     await window.evaluate(() => process.crash()).catch(() => {});
     const recoveredWindow = await replacementPromise;
+    await waitForLayout(recoveredWindow);
     await expect(recoveredWindow.locator(".crash-recovery-banner")).toBeVisible({ timeout: 10_000 });
 
     expect(await recoveredWindow.evaluate(() => (window as any).app.pluginManager.isRecoveryMode())).toBe(true);
