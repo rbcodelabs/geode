@@ -110,4 +110,19 @@ npm test
 The proof audits runtime inputs and starts fresh Node without Electron, `window`
 or `document`. It creates a disposable synthetic vault, exercises all seven
 operations, checks ambiguity/partial parsing, and proves disk changes cannot
-mutate results. Existing parser, types and desktop resolver are unchanged.
+mutate results. Existing parser and metadata types are unchanged. Desktop resolver
+behavior remains compatible, but its implementation and this snapshot now share
+the candidate-selection pipeline described in
+[desktop resolution adoption](shared-engine-desktop-resolution.md).
+
+For the same-policy desktop/Node parity proof, run:
+
+```sh
+node scripts/run-shared-link-node-proof.mjs
+npm run test:unit -- tests/unit/shared-link-resolution.test.ts
+```
+
+The snapshot still uses `agent-strict`; desktop navigation uses
+`desktop-compatibility`. Sharing machinery does not make ambiguous agent results
+choose a desktop winner, or make desktop links adopt strict traversal/subpath
+validation. This milestone does not route desktop storage through snapshots.

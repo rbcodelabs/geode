@@ -1,6 +1,8 @@
 import { parseDocument } from "yaml";
 import { DEFAULT_METADATA_SCAN_CAP_BYTES } from "../indexer/metadata-indexer";
 import { parseMetadata } from "./metadata";
+import { normalizeWikiPath, selectLinkCandidates } from "./link-candidates";
+export { normalizeWikiPath } from "./link-candidates";
 import type { CachedMetadata, LinkCache, Loc } from "./types";
 
 /** Internal capture boundary, not a supported public SDK. Attachment bytes are never supplied. */
@@ -75,17 +77,6 @@ export interface SearchResult {
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const folded = (s: string) => s.normalize("NFC").toLowerCase();
 const asciiFold = (s: string) => s.replace(/[A-Z]/g, c => c.toLowerCase());
-
-/** Pure path-component validation; deliberately no URL decoding or host filesystem lookup. */
-export function normalizeWikiPath(input: string): string | null {
-  if (!input || input.startsWith("/") || /^[A-Za-z]:/.test(input) || /[\\\0]/.test(input)) return null;
-  const segments: string[] = [];
-  for (const segment of input.split("/")) {
-    if (segment === "..") { if (!segments.length) return null; segments.pop(); }
-    else if (segment && segment !== ".") segments.push(segment);
-  }
-  return segments.length ? segments.join("/") : null;
-}
 
 /** YAML anchors may share objects or contain cycles. Never recurse without identity tracking. */
 function freeze<T>(value: T, seen = new WeakSet<object>()): T {
@@ -228,27 +219,13 @@ export function createWikiSnapshot(captured: readonly CapturedFile[], captureInf
     const hash = raw.indexOf("#");
     const filePart = hash < 0 ? raw : raw.slice(0, hash);
     const selector = hash < 0 ? undefined : raw.slice(hash + 1);
-    const parent = source.includes("/") ? source.slice(0, source.lastIndexOf("/") + 1) : "";
-    let candidates: string[] = [];
-    const exact = (path: string) => files.has(path) ? [path] : files.has(path + ".md") ? [path + ".md"] : [];
-    if (!filePart) candidates = [source];
-    else if (filePart.startsWith("./") || filePart.startsWith("../")) {
-      const path = normalizeWikiPath(parent + filePart);
-      if (!path) return result("invalid", { reason: "traversal" });
-      candidates = exact(path);
-    } else {
-      const path = normalizeWikiPath(filePart);
-      if (!path) return result("invalid", { reason: "invalid-target" });
-      candidates = exact(path);
-      if (!candidates.length && parent) {
-        const relative = normalizeWikiPath(parent + filePart);
-        if (relative) candidates = exact(relative);
-      }
-      if (!candidates.length) candidates = [...(byBasename.get(folded(filePart)) ?? [])].sort(compare);
-      if (!candidates.length) {
-        candidates = [...(byAlias.get(folded(filePart)) ?? [])].sort(compare);
-        if (!aliasCoverageComplete && candidates.length < 2) return result("unavailable", { reason: "alias-coverage", candidates });
-      }
+    const selection = selectLinkCandidates(filePart, source, {
+      getFileByPath: path => files.get(path) ?? null, byBasename, byAlias,
+    }, "agent-strict");
+    if (selection.invalid) return result("invalid", { reason: selection.invalid });
+    const { candidates } = selection;
+    if (selection.stage === "alias" && !aliasCoverageComplete && candidates.length < 2) {
+      return result("unavailable", { reason: "alias-coverage", candidates });
     }
     if (!candidates.length) return result("missing");
     if (candidates.length > 1) return result("ambiguous", { candidates });

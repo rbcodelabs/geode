@@ -15,7 +15,7 @@ try {
   });
   const sources = Object.keys(result.metafile.inputs).filter(path => path.startsWith("src/"));
   const permitted = new Set([
-    "src/wiki/local-filesystem.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts",
+    "src/wiki/local-filesystem.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts", "src/wiki/link-candidates.ts",
     "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts", "src/indexer/metadata-indexer.ts",
   ]);
   for (const path of sources) assert.ok(permitted.has(path), `Unexpected runtime dependency: ${path}`);
