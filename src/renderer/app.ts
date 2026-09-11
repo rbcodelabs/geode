@@ -155,6 +155,26 @@ class EmptyView implements View {
   onClose(): void {}
 }
 
+/** Item spec accepted by `App.showMenu` / `App.buildMenu`. `ComposedMenuItem` (built-in menus) is a superset of this. */
+export type ContextMenuItemSpec = {
+  title: string | DocumentFragment;
+  action?: () => void;
+  submenu?: Array<{
+    title: string | DocumentFragment;
+    action: () => void;
+    icon?: string | null;
+    checked?: boolean;
+    disabled?: boolean;
+    section?: string;
+    warning?: boolean;
+  }>;
+  icon?: string | null;
+  checked?: boolean;
+  disabled?: boolean;
+  section?: string;
+  warning?: boolean;
+};
+
 export interface AppActionContext {
   file?: TFile | null;
   resource?: TFile | TFolder | null;
@@ -3806,33 +3826,24 @@ export class App {
     createDismissibleNotice(message, timeout);
   }
 
-  showMenu(
-    e: MouseEvent,
-    items: Array<{
-      title: string | DocumentFragment;
-      action?: () => void;
-      submenu?: Array<{
-        title: string | DocumentFragment;
-        action: () => void;
-        icon?: string | null;
-        checked?: boolean;
-        disabled?: boolean;
-        section?: string;
-        warning?: boolean;
-      }>;
-      icon?: string | null;
-      checked?: boolean;
-      disabled?: boolean;
-      section?: string;
-      warning?: boolean;
-    }>,
-    options: { anchor?: HTMLElement; horizontalAlign?: "start" | "end"; menuClass?: string } = {}
-  ): Menu {
+  /**
+   * Build (but do not show) a Menu populated with `items`. Factored out of
+   * `showMenu` so callers that need plugins to add items via a workspace
+   * event (`file-menu`, `editor-menu`) can populate the built-ins, fire the
+   * event synchronously so plugin `menu.addItem(...)` calls land in the same
+   * `entries` list, and only then show the merged menu. Menu items added
+   * without an explicit `.setSection(...)` (as plugins typically do) get no
+   * `data-section`, which differs from built-ins' `"default"` section — the
+   * Menu's group renderer already inserts a separator whenever the section
+   * changes between adjacent entries, so plugin items automatically land
+   * after a separator following the built-ins with no extra bookkeeping here.
+   */
+  buildMenu(items: ContextMenuItemSpec[], menuClass?: string): Menu {
     const menu = new Menu();
     // Keep the pre-v0.8 selectors during the core-menu migration. The shared
     // Obsidian-compatible DOM remains canonical (`.menu` / `.menu-item`).
     menu.dom.classList.add("context-menu");
-    if (options.menuClass) menu.dom.classList.add(options.menuClass);
+    if (menuClass) menu.dom.classList.add(menuClass);
     for (const item of items) {
       menu.addItem((menuItem) => {
         menuItem.dom.classList.add("context-menu-item");
@@ -3850,6 +3861,15 @@ export class App {
         menuItem.dom.classList.toggle("is-warning", item.warning ?? false);
       });
     }
+    return menu;
+  }
+
+  showMenu(
+    e: MouseEvent,
+    items: ContextMenuItemSpec[],
+    options: { anchor?: HTMLElement; horizontalAlign?: "start" | "end"; menuClass?: string } = {}
+  ): Menu {
+    const menu = this.buildMenu(items, options.menuClass);
     if (options.anchor) {
       menu.showAtElement(options.anchor, { horizontalAlign: options.horizontalAlign });
     } else {
