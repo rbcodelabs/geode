@@ -348,7 +348,7 @@ test("disposes canonical renderer work on dismissal, replacement, staleness, and
         ids.set(el, id);
         if (id === "slow") {
           (window as any).slowCanonicalRenderStarted = true;
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise<void>((resolve) => { (window as any).releaseSlowCanonicalRender = resolve; });
         }
         if (id === "reject") throw new Error("intentional preview renderer rejection");
         return originalRender(markdown, el, sourcePath);
@@ -375,12 +375,11 @@ test("disposes canonical renderer work on dismissal, replacement, staleness, and
     await expect(preview).toHaveCount(0);
     await expect.poll(() => window.evaluate(() => (window as any).previewDisposals.length)).toBe(beforeReplacement + 1);
 
-    await window.waitForTimeout(325);
-    expect(await window.evaluate(() => (window as any).slowCanonicalRenderStarted)).toBe(true);
+    await expect.poll(() => window.evaluate(() => (window as any).slowCanonicalRenderStarted)).toBe(true);
     await fast.hover();
     await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
-    await window.waitForTimeout(550);
-    expect(await window.evaluate(() =>
+    await window.evaluate(() => (window as any).releaseSlowCanonicalRender());
+    await expect.poll(() => window.evaluate(() =>
       (window as any).previewDisposals.filter((id: string) => id === "slow").length
     )).toBeGreaterThanOrEqual(2);
     await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
@@ -388,11 +387,10 @@ test("disposes canonical renderer work on dismissal, replacement, staleness, and
     await window.mouse.move(0, 0);
     await expect(preview).toHaveCount(0);
     await reject.hover();
-    await window.waitForTimeout(400);
-    await expect(preview).toHaveCount(0);
-    expect(await window.evaluate(() =>
+    await expect.poll(() => window.evaluate(() =>
       (window as any).previewDisposals.filter((id: string) => id === "reject").length
     )).toBeGreaterThanOrEqual(1);
+    await expect(preview).toHaveCount(0);
     expect(pageErrors).toEqual([]);
   } finally {
     await closeFixture(app, vaultDir, userDataDir);

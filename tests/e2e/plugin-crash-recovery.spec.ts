@@ -150,10 +150,14 @@ test("a crashed renderer journals evidence and reloads once with plugins suppres
     const preCrashLayout = fs.readFileSync(workspaceFile, "utf8");
 
     const replacementPromise = app.waitForEvent("window");
-    await window.evaluate(() => {
-      console.error("geode-e2e-before-controlled-crash");
-      process.crash();
-    }).catch(() => {});
+    await window.evaluate(() => console.error("geode-e2e-before-controlled-crash"));
+    // console-message reaches the main process asynchronously. Establish that
+    // the diagnostic consumer received this breadcrumb before killing its sender.
+    await expect.poll(() => {
+      const file = path.join(userDataDir, "diagnostic.log");
+      return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    }).toContain("geode-e2e-before-controlled-crash");
+    await window.evaluate(() => process.crash()).catch(() => {});
     const recoveredWindow = await replacementPromise;
     await expect(recoveredWindow.locator(".crash-recovery-banner")).toBeVisible({ timeout: 10_000 });
 
