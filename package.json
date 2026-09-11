@@ -19,6 +19,9 @@
     "dev": "node esbuild.config.mjs --watch",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
+    "typecheck:headless": "tsc --noEmit -p tsconfig.headless.json",
+    "proof:headless": "npm run typecheck:headless && node scripts/run-headless-node-proof.mjs",
+    "proof:headless:postgres": "node scripts/headless-postgres-proof.mjs",
     "dist": "npm run build && electron-builder --mac",
     "release": "npm run build && electron-builder --mac --publish always"
   },
