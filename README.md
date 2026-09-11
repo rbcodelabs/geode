@@ -5,7 +5,7 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.15.3). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.15.4). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
@@ -45,7 +45,11 @@ or a path escaping the vault all reject instead of writing a note somewhere the
 user did not configure; `getLeaf('window')` throws rather than substituting a
 tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
-## Features (v0.15.3)
+## Features (v0.15.4)
+
+- **Image tabs** — open vault images from File Explorer, Markdown links, or
+  plugins in a read-only image view. Images fit within the pane, use normal tab
+  navigation, and restore when the workspace reopens.
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
