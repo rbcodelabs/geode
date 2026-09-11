@@ -5,10 +5,16 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.15.1). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.15.2). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.15.2: a unified file explorer
+
+External Projects now share one scrolling panel with vault files. Matching
+headers, standard folder and file rows, and quieter refresh and detach actions
+keep the explorer consistent across narrow and wide sidebars and light/dark themes.
 
 ## New in v0.15.1: preserved Web Viewer history
 
@@ -39,7 +45,7 @@ or a path escaping the vault all reject instead of writing a note somewhere the
 user did not configure; `getLeaf('window')` throws rather than substituting a
 tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
-## Features (v0.15.1)
+## Features (v0.15.2)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
