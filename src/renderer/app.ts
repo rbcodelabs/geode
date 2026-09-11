@@ -14,6 +14,7 @@ import { ThemeManager } from "./theme-manager";
 import { CommunityManager } from "./community/community-manager";
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
+import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
 import { MarkdownRenderer } from "./markdown/render";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import {
@@ -843,6 +844,17 @@ class SettingsModal extends Modal {
         this.renderCommunityList(listEl)
       ).open();
     });
+
+    if (this.geodeApp.host.capabilities.nodePlugins) {
+      const catalogEl = document.createElement("section");
+      catalogEl.className = "supported-plugin-catalog";
+      container.appendChild(catalogEl);
+      void renderSupportedPluginCatalog(catalogEl, {
+        load: () => window.geode.getSupportedPluginCatalog!(),
+        install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
+        onInstalled: () => { void this.renderCommunityList(listEl); },
+      });
+    }
 
     // One-shot importer for users pointing Geode at a vault that already has an
     // Obsidian `.obsidian/` folder of community plugins/themes.

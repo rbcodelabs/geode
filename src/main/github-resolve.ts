@@ -84,6 +84,17 @@ export interface CommunityPreview {
 /** Result of a completed install — same shape as the preview. */
 export type InstalledResult = CommunityPreview;
 
+export interface CertifiedArtifactHashes {
+  "manifest.json": string;
+  "main.js": string;
+  "styles.css"?: string;
+}
+
+export type CommunityInstallExpectation = CommunityPreview & {
+  /** Exact catalog-certified distributable bytes, checked in staging before replacement. */
+  artifactHashes?: CertifiedArtifactHashes;
+};
+
 /** Minimal HTTP response shape the resolver needs from its injected client. */
 export interface HttpResponse {
   status: number;
@@ -109,8 +120,8 @@ export interface ResolveOpts {
   tag?: string;
   /** Include prereleases when picking the newest release. Default true (BRAT-style). */
   includePrerelease?: boolean;
-  /** Renderer-admitted immutable identity, revalidated against staged bytes before replacement. */
-  expected?: CommunityPreview;
+  /** Admitted immutable identity, revalidated against staged bytes before replacement. */
+  expected?: CommunityInstallExpectation;
 }
 
 export const DEFAULT_API_BASE = "https://api.github.com";
