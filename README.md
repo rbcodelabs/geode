@@ -5,10 +5,17 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.15.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.15.1). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.15.1: preserved Web Viewer history
+
+Opening another URL in the same Web Viewer tab now keeps its live browser and
+Back/Forward history. Rapid navigation and redirects preserve the newest
+requested URL, and a later navigation can restore the viewer after its browser
+process exits.
 
 ## New in v0.15.0: interactive Bases views for plugins
 
@@ -32,7 +39,7 @@ or a path escaping the vault all reject instead of writing a note somewhere the
 user did not configure; `getLeaf('window')` throws rather than substituting a
 tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
-## Features (v0.15.0)
+## Features (v0.15.1)
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
@@ -121,7 +128,8 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
   fresh grace period on wake, preventing false recovery caused by suspension
 - **Web Viewer** — an enabled-by-default, per-vault core plugin for opening web
   pages and local `.html`/`.htm` vault files in an in-app tab (`webview`-backed,
-  its own session). Disabling it preserves open viewer tabs for later restore.
+  its own session). Updating the URL in the same viewer preserves its live
+  browser and Back/Forward history. Disabling it preserves open viewer tabs for later restore.
   Web links requesting a new window open as tabs in the source tab group;
   background openings preserve your current tab selection. Popup destinations
   must use HTTP or HTTPS.
