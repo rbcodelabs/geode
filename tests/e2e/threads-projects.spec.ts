@@ -56,7 +56,20 @@ test("restores a granted Threads source across a full app restart without a new 
       dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
     }, project);
     await section.getByRole("button", { name: "Attach folder…", exact: true }).click();
+    const explorerScroll = page.locator(".file-explorer-view > .nav-files-container");
+    await expect(explorerScroll).toHaveCount(1);
+    await expect(explorerScroll.locator(":scope > .nav-files-tree")).toHaveCount(1);
+    await expect(explorerScroll.locator(":scope > .projects-section")).toHaveCount(1);
+    await expect(section.locator(".projects-section-header.sidebar-view-header")).toContainText("Projects");
+    await expect(section.getByRole("button", { name: "Refresh Projects", exact: true })).toHaveAttribute("title", "Refresh Projects");
     await section.getByRole("button", { name: "First Project", exact: true }).click();
+    await expect(section.getByRole("button", { name: "First Project", exact: true })).toHaveClass(/nav-folder-title/);
+    await expect(section.getByRole("button", { name: "Welcome.md", exact: true })).toHaveClass(/nav-file-title/);
+    expect(await page.evaluate(() => {
+      const explorer = document.querySelector<HTMLElement>(".file-explorer-view > .nav-files-container")!;
+      const projects = document.querySelector<HTMLElement>(".projects-section")!;
+      return { explorerOverflow: getComputedStyle(explorer).overflowY, projectsOverflow: getComputedStyle(projects).overflowY };
+    })).toEqual({ explorerOverflow: "auto", projectsOverflow: "visible" });
     await section.getByRole("button", { name: "Welcome.md", exact: true }).click();
     await expect(page.locator(".external-source-view code")).toHaveText(sourceText);
     const savedState = await page.evaluate(() => window.app.workspace.getLeavesOfType("geode-external-source")[0].view?.getState?.());

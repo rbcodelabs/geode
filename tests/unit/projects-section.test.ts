@@ -30,12 +30,15 @@ describe("Project root grouping", () => {
 });
 
 class Element {
-  className = ""; textContent = ""; hidden = false; disabled = false; type = "";
+  className = ""; textContent = ""; innerHTML = ""; hidden = false; disabled = false; type = ""; title = ""; tabIndex = -1;
   children: Element[] = []; attributes: Record<string, string> = {}; dataset: Record<string, string> = {};
   listeners = new Map<string, (event: { metaKey: boolean; ctrlKey: boolean }) => void>();
   append(...children: Element[]): void { this.children.push(...children); }
+  prepend(...children: Element[]): void { this.children.unshift(...children); }
   replaceChildren(...children: Element[]): void { this.children = children; }
   setAttribute(name: string, value: string): void { this.attributes[name] = value; }
+  querySelector(): Element | null { return null; }
+  classList = { add: (...names: string[]) => { this.className = [...new Set([...this.className.split(" ").filter(Boolean), ...names])].join(" "); } };
   addEventListener(name: string, action: (event: { metaKey: boolean; ctrlKey: boolean }) => void): void { this.listeners.set(name, action); }
   click(): void { this.listeners.get("click")?.({ metaKey: false, ctrlKey: false }); }
 }
@@ -51,11 +54,29 @@ function setup() {
   const openResource = vi.fn(async () => {});
   const section = new ProjectsSection({ host: host as unknown as ExternalRootsHost, openResource, revealVaultFolder: vi.fn() });
   const all = () => nodes(section.containerEl as unknown as Element);
-  return { host, section, all, unsubscribe, openResource, change: () => change(), text: () => all().map(node => node.textContent).join("\n"), button: (text: string) => all().find(node => node.textContent === text)! };
+  return { host, section, all, unsubscribe, openResource, change: () => change(), text: () => all().map(node => node.textContent).join("\n"), button: (text: string) => all().find(node => node.textContent === text || node.attributes["aria-label"] === text)! };
 }
 beforeEach(() => vi.stubGlobal("document", { createElement: () => new Element() }));
 afterEach(() => vi.unstubAllGlobals());
 describe("Projects section lifecycle and lazy browsing", () => {
+  it("uses explorer header and tree-row semantics with an accessible icon refresh action", async () => {
+    const h = setup();
+    await h.section.refresh();
+    const header = h.all().find(node => node.className.includes("sidebar-view-header"))!;
+    const refresh = h.all().find(node => node.attributes["aria-label"] === "Refresh Projects")!;
+    const root = h.button("Main");
+    expect(header.className).toContain("projects-section-header");
+    expect(refresh.className).toContain("clickable-icon");
+    expect(refresh.title).toBe("Refresh Projects");
+    expect(root.className).toContain("nav-folder-title");
+    expect(root.className).toContain("nav-item");
+    expect(root.children[0].attributes["data-icon"]).toBe("chevron-right");
+    root.click(); await settle();
+    expect(root.children[0].attributes["data-icon"]).toBe("chevron-down");
+    const file = h.button("README.md");
+    expect(file.className).toContain("nav-file-title");
+    expect(file.className).toContain("nav-item");
+  });
   it("shows only portable desktop-unavailable project labels without a filesystem host", async () => {
     const source = new PortableProjectSource();
     const section = new ProjectsSection({ mobileProjects: source, openResource: vi.fn(), revealVaultFolder: vi.fn() });

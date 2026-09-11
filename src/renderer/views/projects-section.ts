@@ -2,6 +2,7 @@ import type { ExternalProjectDescriptor } from "../../shared/external-roots";
 import type { ExternalRootsHost } from "../../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef, ExternalRootDirectoryEntry } from "../../shared/root-registry";
 import type { PortableProjectSource } from "../integrations/threads-projects";
+import { setIcon } from "../api/icons";
 export type BoundProject = Extract<ExternalProjectDescriptor, { state: "bound" }>;
 export interface ProjectRootGroup { rootId: string; projects: BoundProject[]; relativeBase: string }
 export interface ProjectsSectionOptions {
@@ -42,7 +43,7 @@ export class ProjectsSection {
     } catch {
       if (this.disposed || generation !== this.generation) return;
       this.containerEl.hidden = false;
-      this.containerEl.append(this.message("Projects unavailable. Try Refresh."), this.button("Refresh Projects", () => { void this.refresh(); }));
+      this.containerEl.append(this.header(), this.message("Projects unavailable. Try Refresh."));
     }
   }
   dispose(): void {
@@ -56,12 +57,7 @@ export class ProjectsSection {
     this.containerEl.replaceChildren();
     this.containerEl.hidden = this.projects.length === 0;
     if (!this.projects.length) return;
-    const header = document.createElement("div");
-    header.className = "projects-section-header";
-    const title = document.createElement("span");
-    title.textContent = "Projects";
-    header.append(title, this.button("Refresh Projects", () => { void this.refresh(); }));
-    this.containerEl.append(header);
+    this.containerEl.append(this.header());
     for (const group of groupProjectRoots(this.projects)) {
       const wrapper = document.createElement("div");
       wrapper.className = "projects-root";
@@ -108,12 +104,7 @@ export class ProjectsSection {
     this.containerEl.replaceChildren();
     this.containerEl.hidden = projects.length === 0;
     if (!projects.length) return;
-    const header = document.createElement("div");
-    header.className = "projects-section-header";
-    const label = document.createElement("span");
-    label.textContent = "Projects";
-    header.append(label, this.button("Refresh Projects", () => { void this.refresh(); }));
-    this.containerEl.append(header);
+    this.containerEl.append(this.header());
     for (const project of projects) {
       const row = document.createElement("div");
       row.className = "projects-unbound";
@@ -165,7 +156,9 @@ export class ProjectsSection {
         if (!current(id)) return;
         entries = [...new Map([...entries, ...page.entries].map(entry => [entry.ref.relativePath, entry])).values()];
         cursor = page.nextCursor;
-        contents.replaceChildren(this.button("Refresh folder", () => { void load(); }));
+        const refresh = this.button("Refresh folder", () => { void load(); });
+        refresh.className = "projects-inline-action";
+        contents.replaceChildren(refresh);
         const sorted = [...entries].sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         for (const entry of sorted) {
           if (entry.kind === "directory") {
@@ -177,32 +170,57 @@ export class ProjectsSection {
                 if (current(id)) contents.append(this.message("File unavailable. Refresh and try again."));
               });
             });
-            button.className = "projects-file";
+            button.className = "projects-file nav-file-title nav-item";
             button.disabled = entry.kind === "directory-symlink" || entry.kind === "unavailable-link";
             if (linked) button.title = entry.kind === "directory-symlink" ? "Directory link: traversal is disabled" : entry.kind === "unavailable-link" ? "Unavailable link: target cannot be safely opened" : "Contained file link · Read-only";
             contents.append(button);
           }
         }
         if (!entries.length && !cursor) contents.append(this.message("Folder is empty."));
-        if (cursor) contents.append(this.button("Load more", () => { void load(true); }));
+        if (cursor) {
+          const more = this.button("Load more", () => { void load(true); });
+          more.className = "projects-inline-action";
+          contents.append(more);
+        }
       } catch {
         if (!current(id)) return;
         cursor = undefined;
-        contents.replaceChildren(this.message("Folder unavailable. Refresh Projects to check its connection, or retry."), this.button("Retry folder", () => { void load(); }));
+        const retry = this.button("Retry folder", () => { void load(); });
+        retry.className = "projects-inline-action";
+        contents.replaceChildren(this.message("Folder unavailable. Refresh Projects to check its connection, or retry."), retry);
       }
     };
     const toggle = this.button(label, () => {
       expanded = !expanded;
       toggle.setAttribute("aria-expanded", String(expanded));
+      setIcon(arrow, expanded ? "chevron-down" : "chevron-right");
       contents.hidden = !expanded;
       if (expanded) void load();
       else { request++; contents.replaceChildren(); }
     });
-    toggle.className = "projects-directory-toggle";
+    toggle.className = "projects-directory-toggle nav-folder-title nav-item";
     toggle.setAttribute("aria-label", label);
     toggle.setAttribute("aria-expanded", "false");
+    const arrow = document.createElement("span");
+    arrow.className = "nav-folder-arrow";
+    setIcon(arrow, "chevron-right");
+    toggle.prepend(arrow);
     wrapper.append(toggle, contents);
     return wrapper;
+  }
+  private header(): HTMLElement {
+    const header = document.createElement("div");
+    header.className = "projects-section-header sidebar-view-header";
+    const title = document.createElement("span");
+    title.className = "sidebar-view-title";
+    title.textContent = "Projects";
+    const refresh = this.button("Refresh Projects", () => { void this.refresh(); });
+    refresh.className = "clickable-icon";
+    refresh.title = "Refresh Projects";
+    refresh.setAttribute("aria-label", "Refresh Projects");
+    setIcon(refresh, "refresh-cw");
+    header.append(title, refresh);
+    return header;
   }
   private button(label: string, action: (event: MouseEvent) => void): HTMLButtonElement {
     const button = document.createElement("button");
