@@ -5232,14 +5232,10 @@ body.is-mobile .page-preview {
   display: none;
 }
 
-/* External Projects are deliberately separate from vault navigation/actions. */
+/* External Projects share the file explorer's single scrolling tree while
+   remaining a distinct, read-only source. */
 .projects-section {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 55%;
-  overflow: auto;
-  border-top: 1px solid var(--background-modifier-border);
-  padding: 8px;
+  padding-top: 8px;
   font-size: var(--font-ui-small);
 }
 .projects-section[hidden] { display: none; }
@@ -5249,29 +5245,39 @@ body.is-mobile .page-preview {
   flex-wrap: wrap;
   gap: 6px;
 }
-.projects-section-header { justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
+.projects-section-header { justify-content: space-between; margin: 0 -4px 2px; padding: 6px 10px; }
 .projects-section button {
   font-size: inherit;
   white-space: normal;
   overflow-wrap: anywhere;
   text-align: left;
+  border: 0;
+  box-shadow: none;
 }
-.projects-root { margin-bottom: 10px; }
-.projects-root-alias, .projects-status { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 4px 0; overflow-wrap: anywhere; }
+.projects-root { margin-bottom: 6px; }
+.projects-root-alias, .projects-status { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 3px 8px 3px 26px; overflow-wrap: anywhere; }
 .projects-root-alias button, .projects-section-header button { font-size: var(--font-ui-smaller); }
 .projects-directory-toggle, .projects-file {
-  display: block;
   width: 100%;
-  box-shadow: none;
   background: transparent;
-  padding: 4px 6px;
 }
-.projects-directory-toggle::before { content: "▸ "; color: var(--text-muted); }
-.projects-directory-toggle[aria-expanded="true"]::before { content: "▾ "; }
-.projects-directory-children { margin-left: 12px; border-left: 1px solid var(--background-modifier-border); padding-left: 4px; }
+.projects-directory-children { margin-left: 12px; }
 .projects-directory-children[hidden] { display: none; }
-.projects-file:not(:disabled):hover, .projects-directory-toggle:hover { background: var(--background-modifier-hover); }
 .projects-file:disabled { opacity: .6; cursor: not-allowed; }
+.projects-inline-action,
+.projects-root-alias button,
+.projects-unbound button {
+  background: transparent;
+  color: var(--text-accent);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.projects-inline-action:hover,
+.projects-root-alias button:hover,
+.projects-unbound button:hover { background: var(--background-modifier-hover); }
+.projects-directory-toggle:focus-visible,
+.projects-file:focus-visible,
+.projects-inline-action:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
 .external-source-view { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; }
 .external-source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--background-modifier-border); }
 .external-source-readonly { font-size: var(--font-ui-small); color: var(--text-muted); }

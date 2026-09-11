@@ -28,6 +28,7 @@ export class FileExplorerView implements View {
   readonly viewType = "file-explorer";
   containerEl: HTMLElement;
   private treeEl: HTMLElement;
+  private vaultTreeEl: HTMLElement;
   private expanded = new Set<string>();
   private activePath: string | null = null;
   private sortOrder: SortOrder = "name-asc";
@@ -99,6 +100,9 @@ export class FileExplorerView implements View {
 
     this.treeEl = document.createElement("div");
     this.treeEl.className = "nav-files-container";
+    this.vaultTreeEl = document.createElement("div");
+    this.vaultTreeEl.className = "nav-files-tree";
+    this.treeEl.appendChild(this.vaultTreeEl);
     this.containerEl.appendChild(this.treeEl);
     this.projects = new ProjectsSection({
       host: app.host.externalRoots,
@@ -113,7 +117,7 @@ export class FileExplorerView implements View {
         }
       },
     });
-    this.containerEl.appendChild(this.projects.containerEl);
+    this.treeEl.appendChild(this.projects.containerEl);
 
     for (const ev of ["create", "delete", "rename"]) {
       app.vault.on(ev, () => this.render());
@@ -140,11 +144,11 @@ export class FileExplorerView implements View {
   onClose(): void { this.projects.dispose(); }
 
   private render() {
-    this.treeEl.innerHTML = "";
+    this.vaultTreeEl.innerHTML = "";
     const root = this.app.vault.getRoot();
     const children = sortChildren(root.children, this.sortOrder);
     for (const child of children) {
-      this.treeEl.appendChild(this.renderItem(child as TFile | TFolder));
+      this.vaultTreeEl.appendChild(this.renderItem(child as TFile | TFolder));
     }
     this.highlightActive();
   }
