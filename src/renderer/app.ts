@@ -24,6 +24,7 @@ import {
 import { hasExternalChange, MarkdownView } from "./views/markdown-view";
 import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { CanvasView } from "./views/canvas-view";
+import { ImageView } from "./views/image-view";
 import { serializeCanvas } from "./canvas/canvas-data";
 import { FileExplorerView } from "./views/file-explorer";
 import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
@@ -38,7 +39,7 @@ import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { renderExternalRootsTab } from "./settings/external-roots-tab";
-import { FileSystemAdapter, TFile, TFolder, isTFile, pathName } from "./types";
+import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName } from "./types";
 import { RenderContext } from "./api/bases-values";
 import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
 import {
@@ -2878,7 +2879,7 @@ export class App {
       });
       return;
     }
-    if (file.extension === "base" || file.extension === "md") {
+    if (file.extension === "base" || file.extension === "md" || IMAGE_EXTENSIONS.has(file.extension)) {
       const existing = this.workspace.findLeafForFile(file.path);
       if (existing && !newTab) {
         existing.group.setActiveLeaf(existing);
@@ -2891,7 +2892,7 @@ export class App {
     this.notify(`Cannot open .${file.extension} files yet`);
   }
 
-  /** Open a supported document in a specific leaf; every load is serialized by that leaf. */
+  /** Open a vault file in a specific leaf; every load is serialized by that leaf. */
   async openFileInLeaf(
     leaf: WorkspaceLeaf,
     file: TFile,
@@ -2935,8 +2936,28 @@ export class App {
         await view.setFile(file);
         await leaf.setView(view);
       }
+    } else if (IMAGE_EXTENSIONS.has(file.extension)) {
+      if (leaf.view instanceof ImageView) {
+        await leaf.view.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new ImageView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     } else {
-      throw new Error(`Unsupported document history file extension: .${file.extension}`);
+      // Preserve Obsidian's plugin-facing `leaf.openFile()` fallback for file
+      // types Geode does not have a dedicated built-in view for yet.
+      if (leaf.view instanceof MarkdownView) {
+        await leaf.view.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new MarkdownView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     }
     if (recordHistory) {
       if (previousPath) leaf.recordDocumentNavigation(previousPath);
@@ -3553,6 +3574,11 @@ export class App {
   /** Construct a fresh file-backed JSON Canvas view (used during workspace restore). */
   createCanvasView(): CanvasView {
     return new CanvasView(this);
+  }
+
+  /** Construct a fresh file-backed image view (used during workspace restore). */
+  createImageView(): ImageView {
+    return new ImageView(this);
   }
 
   /** Construct the "No file is open" placeholder view (used when restoring/cleaning up empty leaves). */

@@ -1931,6 +1931,31 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   min-height: 0;
 }
 
+.image-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--background-primary);
+}
+
+.image-view-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: var(--size-4-4);
+}
+
+.image-view-image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 /* ---- View header (breadcrumb/actions bar above each leaf's content) ----
    Real Obsidian DOM: .view-header > .view-header-left (nav buttons only) +
    .view-header-title-container + .view-actions. The title-container is a
