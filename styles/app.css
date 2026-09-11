@@ -2626,7 +2626,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 .markdown-rendered table {
   margin: 0 0 1em;
 }
-.markdown-rendered li { margin: 0.15em 0; }
+.markdown-rendered li { margin: 0.45em 0; }
 .markdown-rendered li > ul,
 .markdown-rendered li > ol { margin-bottom: 0; }
 
