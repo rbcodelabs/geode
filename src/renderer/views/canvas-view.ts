@@ -756,14 +756,16 @@ export class CanvasView implements View {
   private async loadFileMedia(file: TFile, media: HTMLImageElement | HTMLAudioElement | HTMLVideoElement, version: number): Promise<void> {
     try {
       const url = await loadEmbedBlobUrl(this.app, file);
-      if (version !== this.renderVersion || !media.isConnected) {
+      // Restore loads a view before attaching it to the workspace. Ownership
+      // within this render, rather than document connection, defines liveness.
+      if (version !== this.renderVersion || !this.viewportEl.contains(media)) {
         URL.revokeObjectURL(url);
         return;
       }
       this.objectUrls.add(url);
       media.src = url;
     } catch {
-      if (version === this.renderVersion && media.isConnected) this.renderFileFallback(media.parentElement!, file.name, "Could not load file");
+      if (version === this.renderVersion && this.viewportEl.contains(media)) this.renderFileFallback(media.parentElement!, file.name, "Could not load file");
     }
   }
 

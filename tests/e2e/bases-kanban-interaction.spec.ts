@@ -125,14 +125,17 @@ async function dragCardToColumn(window: Page, cardPath: string, targetStatus: st
     },
     { cardPath, dragState }
   );
-  // Let Sortable's deferred `_dragStarted` run and publish `Sortable.active`.
-  await window.waitForTimeout(100);
+  // `_dragStarted` applies this class immediately before publishing active.
+  // A fixed delay can expire before that callback on a loaded hosted runner.
+  await expect(window.locator(`.obk-card[data-entry-path="${cardPath}"]`)).toHaveClass(/\bobk-card-ghost\b/);
 
   // Phase 2 — hover the destination. Sortable decides the insertion point from
   // the event target plus its coordinates, so aim at the bottom edge of the
-  // column's last card (or the empty body) to append.
-  await window.evaluate(
-    ({ targetStatus: status, dragState: key }) => {
+  // column's last card (or the empty body) to append. A browser sends repeated
+  // dragover events; keep doing that while Sortable's animation guards reject
+  // insertion, and do not drop until it reports the move through the DOM.
+  await expect.poll(() => window.evaluate(
+    ({ targetStatus: status, dragState: key, cardPath: from }) => {
       const body = document.querySelector<HTMLElement>(
         `.obk-column[data-column-value="${status}"] .obk-column-body`
       );
@@ -152,10 +155,10 @@ async function dragCardToColumn(window: Page, cardPath: string, targetStatus: st
         );
       fire("dragenter");
       fire("dragover");
+      return body.querySelector(`.obk-card[data-entry-path="${from}"]`) !== null;
     },
-    { targetStatus, dragState }
-  );
-  await window.waitForTimeout(100);
+    { targetStatus, dragState, cardPath }
+  ), { message: "Sortable never moved the dragged card into the destination" }).toBe(true);
 
   // Phase 3 — drop. `onEnd` is what calls back into the plugin's write path.
   await window.evaluate(

@@ -153,10 +153,20 @@ test("restores the artifact root and responsive viewport after relaunch", async 
   try {
     let window = await app.firstWindow();
     await expect(window.locator(".workspace")).toBeVisible();
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
     await window.evaluate((root) => (window as any).app.openArtifact(root), artifactRoot);
     await window.locator('[data-viewport="mobile"]').click();
     await expect(window.locator(".artifact-view-frame")).toHaveCSS("width", "390px");
-    await window.waitForTimeout(400);
+    await expect.poll(() => {
+      const file = path.join(vaultPath, ".geode", "workspace.json");
+      if (!fs.existsSync(file)) return null;
+      return JSON.parse(fs.readFileSync(file, "utf8")).center.root;
+    }).toEqual(expect.objectContaining({
+      leaves: expect.arrayContaining([expect.objectContaining({
+        type: "geode-artifact",
+        state: expect.objectContaining({ root: artifactRoot, viewport: { preset: "mobile", width: 390, height: 844 } }),
+      })]),
+    }));
     await app.close();
 
     app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
