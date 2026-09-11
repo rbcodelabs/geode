@@ -54,7 +54,7 @@ test("renders live isolated web-page previews in valid Canvas link cards", async
 
     await expect(preview).toHaveCount(1);
     await expect(invalid.locator("webview")).toHaveCount(0);
-    await expect(preview).toHaveAttribute("partition", "persist:webviewer");
+    await expect(preview).toHaveAttribute("partition", "persist:canvas-preview");
     await expect(preview).toHaveAttribute("src", canonical);
     await expect(preview).not.toHaveAttribute("nodeintegration", /.*/);
     await expect(preview).not.toHaveAttribute("preload", /.*/);
