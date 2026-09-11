@@ -310,7 +310,7 @@ export class WorkspaceLeaf {
     return this.viewState.state;
   }
 
-  /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
+  /** Open a vault file in *this* leaf (Obsidian `leaf.openFile`). */
   /**
    * @param state Obsidian's `OpenViewState`. Only `active` is honoured:
    * `{ active: false }` opens the file without letting the new view take
@@ -324,14 +324,7 @@ export class WorkspaceLeaf {
   async openFile(file: TFile, state?: { active?: boolean }): Promise<void> {
     const keepFocus = state?.active === false;
     const focusBefore = keepFocus ? (document.activeElement as HTMLElement | null) : null;
-    await this.runDocumentNavigation(async () => {
-      const previousPath = this.view?.getFile?.()?.path;
-      const view = this.app.createMarkdownView();
-      await view.setFile(file);
-      await this.setView(view);
-      if (previousPath) this.recordDocumentNavigation(previousPath);
-      this.recordDocumentNavigation(file.path);
-    });
+    await this.app.openFileInLeaf(this, file);
     if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) {
       focusBefore.focus({ preventScroll: true });
     }
@@ -1802,7 +1795,7 @@ export class Sidebar implements LeafContainer {
 export interface PersistedLeaf {
   companionOwner?: string;
   type: string;
-  /** For markdown views: the file path. */
+  /** For built-in file-backed views: the file path. */
   file?: string;
   /** For plugin views: the view's serialized state (from `getViewState`). */
   state?: unknown;
@@ -1825,7 +1818,7 @@ export interface PersistedLeaf {
 
 /**
  * Types that must never be replaced by a deferred placeholder, regardless of
- * factory registration. `empty`/`markdown`/`canvas` have dedicated restore
+ * factory registration. `empty`/`markdown`/`canvas`/`image` have dedicated restore
  * branches; `graph`/`base` are core app views whose factories are registered
  * unconditionally at boot. Minting a placeholder for any of these would
  * create a ghost leaf that persists forever and breaks callers that cast
@@ -1835,6 +1828,7 @@ export const RESERVED_VIEW_TYPES: ReadonlySet<string> = new Set([
   "empty",
   "markdown",
   "canvas",
+  "image",
   "graph",
   "base",
 ]);
@@ -3007,7 +3001,7 @@ export class Workspace extends Events {
     // Empty/placeholder tabs (and markdown tabs whose file vanished) aren't
     // worth persisting — and persisting them caused empties to accumulate
     // across launches (restore recreated them, then a fresh one was added).
-    if (v.viewType === "markdown" || v.viewType === "canvas") {
+    if (v.viewType === "markdown" || v.viewType === "canvas" || v.viewType === "image") {
       // No title/icon here: the file path is the source of truth for these,
       // and they always have a restore branch, so they're never deferred.
       const file = v.getFile?.()?.path;
@@ -3091,6 +3085,15 @@ export class Workspace extends Events {
       const file = this.app.vault.getFileByPath(ls.file);
       if (file) {
         const view = this.app.createCanvasView();
+        await view.setFile(file);
+        await leaf.setView(view);
+      } else {
+        await leaf.setView(this.app.createEmptyView());
+      }
+    } else if (ls.type === "image" && ls.file) {
+      const file = this.app.vault.getFileByPath(ls.file);
+      if (file) {
+        const view = this.app.createImageView();
         await view.setFile(file);
         await leaf.setView(view);
       } else {
