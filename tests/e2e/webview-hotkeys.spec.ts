@@ -36,6 +36,7 @@ async function launch() {
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   const window = await app.firstWindow();
   await expect(window.locator(".workspace")).toBeVisible();
+  await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
   const cleanup = () => {
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });

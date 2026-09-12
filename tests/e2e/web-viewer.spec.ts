@@ -22,6 +22,7 @@ async function launch(vaultPath = testVaultPath) {
   });
   window.on("pageerror", (err) => consoleErrors.push(String(err)));
   await expect(window.locator(".workspace")).toBeVisible();
+  await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
   return { app, window, userDataDir, consoleErrors };
 }
 

@@ -385,6 +385,16 @@ node scripts/geode-update.mts --help       # full usage
 
 ## Develop
 
+The internal [read-only local wiki engine](docs/design/local-wiki-usage.md)
+opens a bounded folder snapshot in plain Node for metadata, literal search,
+strict link resolution and backlinks. Results disclose ambiguity and incomplete
+parsing. Run `npm run proof:local-wiki` for its fresh-Node acceptance demo.
+
+The [Geode Headless Phase 0 report](docs/design/headless-phase0.md) documents
+the portable parser/resolver extraction and disposable PostgreSQL transaction
+proof. Run `npm run proof:headless` for the Node-only proof; this is an engineering
+spike, not a released cloud service.
+
 ```bash
 npm install
 npm run build      # bundle main/preload/renderer with esbuild

@@ -124,6 +124,9 @@ const api = {
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),
   reveal: (path: string): Promise<void> => ipcRenderer.invoke("vault-reveal", path),
   readMetadataCache: (): Promise<unknown | null> => ipcRenderer.invoke("metadata-cache-read"),
+  beginMetadataCacheRead: (): Promise<{ token: string; schemaVersion: number }> => ipcRenderer.invoke("metadata-cache-begin"),
+  readMetadataCachePage: (token: string, sequence: number): Promise<import("./metadata-cache-reader").MetadataCachePage> => ipcRenderer.invoke("metadata-cache-page", token, sequence),
+  cancelMetadataCacheRead: (token: string): Promise<void> => ipcRenderer.invoke("metadata-cache-cancel", token),
   writeMetadataCache: (data: unknown): Promise<void> => ipcRenderer.invoke("metadata-cache-write", data),
   /**
    * Upsert one bounded batch of entries (a partial snapshot, not the whole
@@ -292,8 +295,11 @@ export type GeodeApi = Omit<
   "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
-  "isSecretEncryptionAvailable"
+  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead"
 > & {
+  beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
+  readMetadataCachePage?: ElectronOnlyGeodeApi["readMetadataCachePage"];
+  cancelMetadataCacheRead?: ElectronOnlyGeodeApi["cancelMetadataCacheRead"];
   externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
