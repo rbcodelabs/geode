@@ -2640,7 +2640,7 @@
     "evidence": [
       "tests/e2e/file-editor-menu-events.spec.ts"
     ],
-    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. The optional fourth leaf argument is not passed, and the event is not yet fired from Obsidian’s other sources such as tab headers, pane-more-options, or link context menus."
+    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. Also now observed firing from the tab-header right-click menu (source \"tab-header\") and the view-header \"more options\" ⋮ button (source \"more-options\"), both passing the optional fourth leaf argument; a tab with no file (e.g. Graph) still shows its built-in menu without firing the event. Remaining gap: Geode has no link/embed context menu at all yet, so the event is not fired from that Obsidian source."
   },
   "DEV-407dfa8627cb": {
     "status": "partial",
