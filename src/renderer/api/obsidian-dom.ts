@@ -183,16 +183,142 @@ function createElOn<K extends keyof HTMLElementTagNameMap>(
 }
 
 /**
+ * Elements `sanitizeHTMLToDom` removes outright.
+ *
+ * Obsidian's sanitizer is DOMPurify with its stock configuration, so this
+ * tracks DOMPurify's default policy rather than inventing one: `script`,
+ * `iframe`, `object` and `embed` are not in its default tag allowlist (its
+ * threat model calls out `object`/`embed` explicitly, for loading arbitrary
+ * external content via `data=`/`src=`), and `link`/`meta`/`base` are
+ * document-head elements that are not in the default body allowlist. `base`
+ * matters most of the three here: it re-points relative-URL resolution for
+ * the *whole* document a fragment is appended into.
+ *
+ * Two tags are deliberately *not* listed, to stay compatible with real
+ * Obsidian rather than be gratuitously stricter than it:
+ * - `style` — DOMPurify default-allows it.
+ * - `form` — DOMPurify's default attribute allowlist includes `action` and
+ *   `enctype`, so forms survive its default config. `action`/`formaction`
+ *   are scheme-checked below instead.
+ */
+export const SANITIZE_FORBIDDEN_TAGS: ReadonlySet<string> = new Set([
+  "script",
+  "iframe",
+  "object",
+  "embed",
+  "link",
+  "meta",
+  "base",
+]);
+
+/** Attributes whose value is a URL, and therefore carries a scheme to vet. */
+const URL_ATTRIBUTES = new Set(["href", "src", "xlink:href", "action", "formaction"]);
+
+/**
+ * Elements that may legitimately carry an inline `data:` payload —
+ * DOMPurify's `DEFAULT_DATA_URI_TAGS`. This is the case that keeps
+ * `![alt](data:image/png;base64,…)` markdown rendering.
+ */
+const DATA_URI_TAGS = new Set(["img", "audio", "video", "source", "image", "track"]);
+
+/** The attributes those elements carry that payload in (`image` is SVG's). */
+const DATA_URI_ATTRIBUTES = new Set(["src", "href", "xlink:href"]);
+
+/** Media types allowed in a `data:` URI on one of `DATA_URI_TAGS`. */
+const SAFE_DATA_URI_MEDIA = /^data:(?:image|audio|video)\//;
+
+/**
+ * Reduce a URL to a form the scheme test can trust.
+ *
+ * The HTML URL parser discards ASCII tab, LF and CR from *anywhere* in a URL
+ * and trims leading/trailing C0 controls and spaces, so `java&#9;script:x`,
+ * `\n javascript:x` and `JaVaScRiPt:x` are all live navigations that a naive
+ * `startsWith("javascript:")` misses. Stripping the whole C0 range plus DEL
+ * is broader than the parser, which is the safe direction: it can only make
+ * a value look *more* dangerous, and a benign URL with a space in its path
+ * still does not start with a blocked scheme afterwards.
+ */
+function normalizeUrlForSchemeCheck(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    // Codes at or below 0x20 are the C0 controls plus space; 0x7f is DEL.
+    if (code > 0x20 && code !== 0x7f) out += ch;
+  }
+  return out.toLowerCase();
+}
+
+/** Whether `name` is an inline event handler (`onclick`, `onerror`, …). */
+export function isEventHandlerAttribute(name: string): boolean {
+  return name.toLowerCase().startsWith("on");
+}
+
+/**
+ * Whether a URL-bearing attribute's value must be dropped.
+ *
+ * Scheme handling is a denylist rather than DOMPurify's allowlist on
+ * purpose: Geode and its plugins legitimately emit `app://`, `geode://` and
+ * `obsidian://` URLs into sanitized HTML, and an allowlist would silently
+ * break them. The executable schemes are what matter for XSS.
+ *
+ * @param tag Lower-cased tag name of the element carrying the attribute.
+ * @param attr Attribute name; compared case-insensitively.
+ */
+export function isUnsafeUrlAttribute(tag: string, attr: string, value: string): boolean {
+  const name = attr.toLowerCase();
+  if (!URL_ATTRIBUTES.has(name)) return false;
+  const url = normalizeUrlForSchemeCheck(value);
+  if (url.startsWith("javascript:") || url.startsWith("vbscript:")) return true;
+  if (!url.startsWith("data:")) return false;
+  // Anything outside the media cases is a navigation into attacker-authored
+  // content — `<a href="data:text/html,<script>…">` most of all.
+  return !(
+    DATA_URI_ATTRIBUTES.has(name) &&
+    DATA_URI_TAGS.has(tag) &&
+    SAFE_DATA_URI_MEDIA.test(url)
+  );
+}
+
+/**
+ * Strip unsafe elements and attributes from an already-parsed tree, in place.
+ *
+ * Split out from `sanitizeHTMLToDom` so callers that build a fragment some
+ * other way can reuse the same policy.
+ */
+export function scrubUnsafeHTML(root: ParentNode): void {
+  // Snapshot: the walk mutates the tree, and removing a forbidden element
+  // detaches descendants that are still in the list (harmless — the
+  // remaining operations on a detached node are no-ops).
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    const tag = el.tagName.toLowerCase();
+    if (SANITIZE_FORBIDDEN_TAGS.has(tag)) {
+      el.remove();
+      continue;
+    }
+    for (const attr of Array.from(el.attributes)) {
+      if (isEventHandlerAttribute(attr.name) || isUnsafeUrlAttribute(tag, attr.name, attr.value)) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  }
+}
+
+/**
  * Sanitize an HTML string into a DocumentFragment (Obsidian uses this for
  * untrusted HTML). Lives here rather than in `./obsidian.ts` so the low-level
  * value classes in `./bases-values.ts` can use it without an import cycle;
  * `./obsidian.ts` re-exports it, which is where plugins get it from.
+ *
+ * Plugins feed this `marked.parse()` output — markdown-derived, so only as
+ * trustworthy as the note or conversation it came from. The app's CSP
+ * currently blocks inline handlers anyway, but that is an unrelated control
+ * that a popout window, a webview or a custom-protocol page can be served
+ * under a looser copy of; the sanitizer has to stand on its own.
  */
 export function sanitizeHTMLToDom(html: string): DocumentFragment {
   const template = document.createElement("template");
   template.innerHTML = html;
-  // Strip script elements defensively.
-  template.content.querySelectorAll("script").forEach((s) => s.remove());
+  scrubUnsafeHTML(template.content);
   return template.content;
 }
 
