@@ -52,7 +52,16 @@ function makeVault(): { vaultDir: string; userDataDir: string } {
 }
 
 async function launch(userDataDir: string): Promise<ElectronApplication> {
-  return electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    // File explorer entries exist before plugin registration and layout restore.
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
+    return app;
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
 }
 
 test("keeps companion split ownership across tab closure, drag, deferred restore and hydration", async () => {
@@ -209,9 +218,10 @@ function persistedLeaves(vaultDir: string): { type: string; state?: any; title?:
 test("keeps a docked plugin pane as a labelled placeholder when the plugin is disabled, and rehydrates it on re-enable", async () => {
   const { vaultDir, userDataDir } = makeVault();
   const pluginsJson = path.join(vaultDir, ".geode", "plugins.json");
+  let app: ElectronApplication | undefined;
   try {
     // 1. Dock the pane with the plugin enabled and let the layout save.
-    let app = await launch(userDataDir);
+    app = await launch(userDataDir);
     let win = await app.firstWindow();
     await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
     await win.evaluate(async () => {
@@ -281,7 +291,9 @@ test("keeps a docked plugin pane as a labelled placeholder when the plugin is di
     ).toBe(1);
     await expect(win.locator(".deferred-view-placeholder")).toHaveCount(0);
     await app.close();
+    app = undefined;
   } finally {
+    if (app) await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }

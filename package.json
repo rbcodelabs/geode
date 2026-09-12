@@ -1,6 +1,6 @@
 {
   "name": "geode",
-  "version": "0.17.3",
+  "version": "0.18.0",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
   "scripts": {
@@ -12,6 +12,8 @@
     "parity:generate": "node scripts/generate-parity-ledger.mts",
     "parity:check": "node scripts/generate-parity-ledger.mts --check",
     "benchmark:metadata": "node scripts/run-metadata-benchmark.mjs",
+    "generate:stress-vault": "node scripts/generate-synthetic-vault.mjs",
+    "benchmark:stress-vault": "node scripts/run-large-vault-benchmark.mjs",
     "benchmark:offset-to-loc": "node scripts/run-offset-to-loc-benchmark.mjs",
     "build": "node esbuild.config.mjs",
     "build:mobile": "node esbuild.config.mjs --mobile-only",
@@ -19,6 +21,10 @@
     "dev": "node esbuild.config.mjs --watch",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
+    "typecheck:headless": "tsc --noEmit -p tsconfig.headless.json",
+    "proof:headless": "npm run typecheck:headless && node scripts/run-headless-node-proof.mjs",
+    "proof:local-wiki": "npm run typecheck:headless && node scripts/run-local-wiki-node-proof.mjs",
+    "proof:headless:postgres": "node scripts/headless-postgres-proof.mjs",
     "dist": "npm run build && electron-builder --mac",
     "release": "npm run build && electron-builder --mac --publish always"
   },
