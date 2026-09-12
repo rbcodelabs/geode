@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -58,6 +58,7 @@ import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
 import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performRequestUrl } from "./request-url";
+import { SecretStore } from "./secret-store";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
 import {
   admitSupportedPluginInstall,
@@ -291,6 +292,18 @@ function loadManagedPolicy(): ManagedPolicy | null {
     return null;
   }
   return validatePolicy(raw);
+}
+
+/**
+ * App-wide keychain-backed secret storage behind `app.secretStorage`. Built
+ * lazily because `app.getPath("userData")` is only meaningful once the app is
+ * ready, and shared across windows — secrets are per-installation, not
+ * per-vault.
+ */
+let secretStore: SecretStore | undefined;
+function getSecretStore(): SecretStore {
+  secretStore ??= new SecretStore(path.join(app.getPath("userData"), "secrets.json"), safeStorage);
+  return secretStore;
 }
 
 /** Resolve a vault-relative path and refuse anything escaping the vault root. */
@@ -768,6 +781,49 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     return sessions.get(win.id)?.root ?? null;
   });
+
+  // Secret storage (`app.secretStorage`). Obsidian's API is SYNCHRONOUS —
+  // `getSecret(id): string | null` — and hosted plugins use it that way:
+  // obsidian-claude-threads calls `.startsWith('sk-')` straight on the result
+  // and builds a subprocess env map out of several reads with no await
+  // anywhere. So the renderer keeps an in-memory mirror, hydrated once through
+  // this single blocking `sendSync`, and serves reads from it while writing
+  // back through the async handlers below. The hydrate payload also carries
+  // any plaintext entries the renderer is migrating out of the pre-keychain
+  // localStorage store; they are only dropped there once this reports
+  // `available`.
+  ipcMain.on("secrets-read-all", (e, legacy: unknown) => {
+    const migrating = legacy && typeof legacy === "object" ? (legacy as Record<string, string>) : {};
+    try {
+      e.returnValue = getSecretStore().hydrate(migrating);
+    } catch (error) {
+      console.error("Secret storage: failed to hydrate", error);
+      e.returnValue = { available: false, secrets: {} };
+    }
+  });
+
+  ipcMain.handle("secrets-get", (_e, id: unknown) =>
+    typeof id === "string" ? getSecretStore().get(id) : null);
+
+  ipcMain.handle("secrets-list", () => getSecretStore().list());
+
+  ipcMain.handle("secrets-set", async (_e, id: unknown, value: unknown) => {
+    if (typeof id !== "string" || typeof value !== "string") {
+      throw new Error("Secret storage: id and value must be strings");
+    }
+    const store = getSecretStore();
+    store.set(id, value);
+    await store.flush();
+  });
+
+  ipcMain.handle("secrets-delete", async (_e, id: unknown) => {
+    if (typeof id !== "string") return;
+    const store = getSecretStore();
+    store.delete(id);
+    await store.flush();
+  });
+
+  ipcMain.handle("secrets-encryption-available", () => getSecretStore().isEncryptionAvailable());
 
   // Plugin discovery: list subfolders of <vault>/.geode/plugins/ that look
   // like a plugin (contain a manifest.json). Reading/writing manifest.json,

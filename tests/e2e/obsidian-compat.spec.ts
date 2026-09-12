@@ -40,6 +40,18 @@ const MAIN_JS = `
       this.app.secretStorage.setSecret('probe-key', 'sekret');
       const got = this.app.secretStorage.getSecret('probe-key');
       wrap.createEl('div', { cls: 'probe-secret', text: 'secret:' + got });
+      wrap.createEl('div', { cls: 'probe-secret-list', text: 'list:' + this.app.secretStorage.listSecrets().join(',') });
+      wrap.createEl('div', {
+        cls: 'probe-secret-encrypted',
+        text: 'encrypted:' + this.app.secretStorage.isEncryptionAvailable(),
+      });
+      // SecretComponent takes (app, containerEl) in Obsidian. Constructing it
+      // the way a real plugin does used to throw synchronously here.
+      const pickerHost = wrap.createDiv({ cls: 'probe-picker' });
+      const picker = new obsidian.SecretComponent(this.app, pickerHost);
+      picker.onChange((id) => {
+        wrap.createEl('div', { cls: 'probe-picked', text: 'picked:' + id });
+      });
     }
   }
 
@@ -169,6 +181,37 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
     ).toHaveCount(0); // definitely not in the main tab area
     await expect(window.locator(".probe-instanceof")).toHaveText("isTFile:true");
     await expect(window.locator(".probe-secret")).toHaveText("secret:sekret");
+    await expect(window.locator(".probe-secret-list")).toHaveText("list:probe-key");
+    // safeStorage is backed by the OS keychain on the platforms CI runs on, so
+    // the claim plugins surface to users ("stored in your OS keychain") is true.
+    await expect(window.locator(".probe-secret-encrypted")).toHaveText("encrypted:true");
+    // No plaintext copy is left behind in localStorage.
+    expect(
+      await window.evaluate(() =>
+        Object.keys(localStorage).filter((key) => key.startsWith("geode:secret:"))
+      )
+    ).toEqual([]);
+    // …and what main actually wrote to disk is ciphertext, not the value.
+    const secretsFile = path.join(userDataDir, "secrets.json");
+    await expect.poll(() => fs.existsSync(secretsFile)).toBe(true);
+    const persistedSecrets = JSON.parse(fs.readFileSync(secretsFile, "utf8"));
+    expect(Object.keys(persistedSecrets.secrets)).toEqual(["probe-key"]);
+    expect(fs.readFileSync(secretsFile, "utf8")).not.toContain("sekret");
+    expect(
+      Buffer.from(persistedSecrets.secrets["probe-key"], "base64").toString("utf8")
+    ).not.toContain("sekret");
+
+    // SecretComponent(app, containerEl) renders a button that opens a picker
+    // over the stored secret ids and reports the chosen id (never its value).
+    const pickerButton = window.locator(".probe-picker button");
+    await expect(pickerButton).toBeVisible();
+    await expect(pickerButton).toHaveText("Select secret…");
+    await pickerButton.click();
+    const pickerItem = window.locator(".menu .menu-item", { hasText: "probe-key" });
+    await expect(pickerItem).toBeVisible();
+    await pickerItem.click();
+    await expect(window.locator(".probe-picked")).toHaveText("picked:probe-key");
+    await expect(pickerButton).toHaveText("probe-key");
     // os.hostname() returned a non-empty string via the real Node require.
     await expect(window.locator(".probe-host")).not.toHaveText("host:0");
 

@@ -22,6 +22,7 @@ import type {
 import { Scope, EditorSuggest } from "./suggest";
 import type { BasesViewRegistration } from "./bases-view";
 import { createDismissibleNotice } from "../notice";
+import { createSecretStorage } from "../secret-storage";
 import moment from "moment";
 
 // Ensure the DOM helpers exist the moment the compat module is first
@@ -1422,34 +1423,17 @@ export { TFileClass as TFile, TFolderClass as TFolder } from "../types";
 
 /**
  * Add the app-level Obsidian APIs Geode's `App` doesn't natively have but
- * that hosted plugins expect on `this.app`: `secretStorage` (async secret
- * get/set, persisted in localStorage — a fuller keychain-backed store is a
- * follow-up), and the `plugins`/`internalPlugins` registries. Idempotent;
- * runs when the first Obsidian-compat plugin is constructed.
+ * that hosted plugins expect on `this.app`: `secretStorage` (keychain-backed
+ * secret get/set — see `../secret-storage`), and the
+ * `plugins`/`internalPlugins` registries. Idempotent; runs when the first
+ * Obsidian-compat plugin is constructed.
  */
 export function installObsidianAppCompat(app: App): void {
   const a = app as any;
-  if (!a.secretStorage) {
-    // Obsidian's secretStorage.getSecret/setSecret are synchronous (plugins
-    // call `storedKey.startsWith(...)` on the result without awaiting), so
-    // these return values directly. `await` on a plain value is still fine
-    // for the call sites that do await.
-    const key = (k: string) => `geode:secret:${k}`;
-    a.secretStorage = {
-      getSecret(k: string): string | null {
-        return window.localStorage.getItem(key(k));
-      },
-      setSecret(k: string, value: string): void {
-        window.localStorage.setItem(key(k), value);
-      },
-      deleteSecret(k: string): void {
-        window.localStorage.removeItem(key(k));
-      },
-      isEncryptionAvailable(): boolean {
-        return false;
-      },
-    };
-  }
+  // Obsidian's secretStorage.getSecret/setSecret are synchronous (plugins call
+  // `storedKey.startsWith(...)` on the result without awaiting), so the
+  // implementation mirrors the store in memory and persists behind the scenes.
+  a.secretStorage ??= createSecretStorage();
   if (!a.plugins) {
     // `pluginManager` isn't assigned yet at the point this runs (it's the
     // first statement of `App.start()`, before a vault is even open), so
