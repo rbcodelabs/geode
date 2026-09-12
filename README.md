@@ -5,10 +5,27 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.17.2). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.17.3). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.17.3: Canvas media cards render again
+
+**A Canvas card pointing at an image, audio or video file could come up blank
+and stay blank.** Every path that opens a Canvas renders the whole board
+*before* the view is attached to the document. A card's file read that happened
+to finish inside that window was discarded as belonging to a stale render — and
+because nothing re-rendered after the view was attached, the card never
+recovered. It was a race, so it struck under load and looked intermittent:
+reopening the same board could show the media or not.
+
+Liveness is now decided by whether the node still belongs to the view being
+rendered, rather than by whether it had already been inserted into the document,
+so a card rendered ahead of attachment is filled in correctly. The read-failure
+path is also no longer discarded alongside it: a file that genuinely cannot be
+read now always shows the visible "Could not load file" fallback instead of
+leaving an empty card and no explanation.
 
 ## New in v0.17.2: comment on headings, list items and table cells
 
