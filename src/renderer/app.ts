@@ -89,6 +89,12 @@ import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, typ
 import { stripCommentMetadata } from "./comments/model";
 import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
 
+/**
+ * How a clicked local-file link was resolved. "rejected" means nothing was
+ * opened, so a caller with its own fallback may still act on the path.
+ */
+export type LocalFileLinkOutcome = "vault" | "external-resource" | "external" | "rejected";
+
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface AppSettings {
   theme: "dark" | "light";
@@ -3130,19 +3136,32 @@ export class App {
     });
   }
 
-  private async openLocalFileLink(href: string): Promise<void> {
+  /**
+   * Route a clicked local-file link (`file://…` or an absolute path) the way
+   * the host classified it. Public because plugin-rendered UI that opens a
+   * file by absolute path — Agent Threads' edited-file chips, for one — must
+   * reach the same decision as an ordinary anchor click instead of shelling
+   * out to the OS and bypassing attached Project roots.
+   */
+  async openLocalFileLink(href: string): Promise<LocalFileLinkOutcome> {
     const result = await this.host.navigation.openLocalFile(href);
-    if (result.kind !== "vault") return;
+    if (result.kind === "external-resource") {
+      await this.openExternalResource(result.ref, result.rootLabel);
+      return "external-resource";
+    }
+    // "external" means the host already handed it to the OS default app.
+    if (result.kind !== "vault") return result.kind;
     const file = this.vault.getAbstractFileByPath(result.path);
-    if (!isTFile(file)) return;
+    if (!isTFile(file)) return "rejected";
     await this.openFile(file, false);
     if (file.extension === "md" && result.line !== undefined) {
       const view = this.getActiveMarkdownView();
-      if (!view?.editor) return;
+      if (!view?.editor) return "vault";
       const line = view.editor.state.doc.line(Math.min(result.line, view.editor.state.doc.lines));
       const columnOffset = Math.min((result.column ?? 1) - 1, line.length);
       view.scrollToOffset(line.from + columnOffset);
     }
+    return "vault";
   }
 
   /** Route an external link click through the Web Viewer or the OS browser, per the "open links in app" setting. */

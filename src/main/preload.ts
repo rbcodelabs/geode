@@ -8,6 +8,7 @@ import type { CrashDiagnostic } from "./crash-journal";
 import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
 import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
+import type { ResourceRef } from "../shared/root-registry";
 import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
@@ -156,6 +157,7 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   openLocalFile: (href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }
+    | { kind: "external-resource"; ref: ResourceRef; rootLabel: string }
     | { kind: "external" }
     | { kind: "rejected" }
   > => ipcRenderer.invoke("open-local-file", href),

@@ -123,3 +123,36 @@ it("clears inside-vault association when cwd changes", async () => {
   expect((await s.session.attach("p"))?.state).toBe("inside-vault");
   expect(await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }])).toEqual([{ projectId: "p", label: "Project", state: "unbound" }]);
 });
+
+it("resolves an absolute path only for roots contributed in this session", async () => {
+  const s = await setup();
+  await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }]);
+  const attached = await s.session.attach("p");
+  if (attached?.state !== "bound") throw new Error("Expected bound project");
+
+  expect(await s.session.resolveOpenableFile(path.join(s.repo, "a.txt")))
+    .toEqual({ ref: { rootId: attached.root.rootId, relativePath: "a.txt" }, label: "Project" });
+
+  // Same device-global grant, different vault session: must stay invisible.
+  const other = await s.service.createSession({
+    activeVaultPath: s.vault, isSessionCurrent: () => true, pickDirectory: async () => null,
+  });
+  expect(await other.resolveOpenableFile(path.join(s.repo, "a.txt"))).toBeNull();
+});
+
+it("does not resolve a path outside every contributed root", async () => {
+  const s = await setup();
+  await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }]);
+  if ((await s.session.attach("p"))?.state !== "bound") throw new Error("Expected bound project");
+  const outside = path.join(s.vault, "note.md");
+  await fs.writeFile(outside, "x");
+  expect(await s.session.resolveOpenableFile(outside)).toBeNull();
+});
+
+it("does not resolve once the vault session is stale", async () => {
+  const s = await setup();
+  await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }]);
+  if ((await s.session.attach("p"))?.state !== "bound") throw new Error("Expected bound project");
+  s.stale();
+  await expect(s.session.resolveOpenableFile(path.join(s.repo, "a.txt"))).rejects.toThrow();
+});

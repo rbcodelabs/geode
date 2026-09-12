@@ -924,6 +924,22 @@ function registerIpc() {
       }
     }
 
+    // Not in the vault, but it may still be inside a Project folder the user
+    // attached read-only. Those are openable in Geode's external read-only
+    // viewer (ADR-0015), so handing them to the OS would ignore a grant the
+    // user explicitly made. Resolution is on the realpath, so a symlink cannot
+    // widen the grant, and it is scoped to roots this window exposes.
+    const external = await externalRootSession(e.sender)
+      .then((roots) => roots.resolveOpenableFile(realTarget))
+      .catch(() => null);
+    if (external) {
+      return {
+        kind: "external-resource",
+        ref: external.ref,
+        rootLabel: external.label,
+      } as const;
+    }
+
     const error = await shell.openPath(realTarget);
     return error ? ({ kind: "rejected" } as const) : ({ kind: "external" } as const);
   });
