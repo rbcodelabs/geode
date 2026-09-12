@@ -636,7 +636,7 @@ export class CanvasView implements View {
     if (!resolved.file || resolved.kind !== "image") return;
     try {
       const url = await loadEmbedBlobUrl(this.app, resolved.file);
-      if (version !== this.renderVersion || !el.isConnected) {
+      if (!this.isLiveNodeRender(version, el)) {
         URL.revokeObjectURL(url);
         return;
       }
@@ -701,6 +701,27 @@ export class CanvasView implements View {
     el.appendChild(action);
   }
 
+  /**
+   * Whether an async node load started by render generation `version` may still
+   * write into `el`.
+   *
+   * Deliberately does *not* test `el.isConnected`. A Canvas renders inside
+   * `setFile`, and every open path — `App.mountDocumentInLeaf` and the
+   * workspace's `restoreLeafView` both do `await view.setFile(file)` and only
+   * then `await leaf.setView(view)` — attaches the view to the document
+   * afterwards. A load that resolves in that window belongs to the live render
+   * even though nothing is connected yet, and nothing re-renders once the view
+   * is finally attached, so dropping it left the card permanently blank.
+   *
+   * Containment in the live viewport is the accurate test instead: every
+   * render replaces the viewport's children wholesale, so an element still
+   * inside it belongs to the current generation whether or not the view has
+   * reached the document.
+   */
+  private isLiveNodeRender(version: number, el: Element): boolean {
+    return version === this.renderVersion && this.viewportEl.contains(el);
+  }
+
   private renderFileNode(el: HTMLElement, node: Extract<CanvasNode, { type: "file" }>, version: number): void {
     const target = node.file + (node.subpath ?? "");
     const resolved = resolveEmbed(target, this.file?.path ?? "", this.app);
@@ -718,13 +739,13 @@ export class CanvasView implements View {
       void this.app.markdownRenderer
         .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content)
         .then(() => {
-          if (version === this.renderVersion && content.isConnected) return;
+          if (this.isLiveNodeRender(version, content)) return;
           this.app.markdownRenderer.dispose(content);
           this.markdownContentEls.delete(content);
         })
         .catch(() => {
           this.app.markdownRenderer.dispose(content);
-          if (version === this.renderVersion && content.isConnected) this.renderFileFallback(el, target, "Could not load note");
+          if (this.isLiveNodeRender(version, content)) this.renderFileFallback(el, target, "Could not load note");
           this.markdownContentEls.delete(content);
         });
       return;
@@ -762,17 +783,26 @@ export class CanvasView implements View {
   }
 
   private async loadFileMedia(file: TFile, media: HTMLImageElement | HTMLAudioElement | HTMLVideoElement, version: number): Promise<void> {
+    let url: string;
     try {
-      const url = await loadEmbedBlobUrl(this.app, file);
-      if (version !== this.renderVersion || !media.isConnected) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      this.objectUrls.add(url);
-      media.src = url;
+      url = await loadEmbedBlobUrl(this.app, file);
     } catch {
-      if (version === this.renderVersion && media.isConnected) this.renderFileFallback(media.parentElement!, file.name, "Could not load file");
+      // A card of the live render never stays silently blank: an unreadable
+      // file always resolves to the visible fallback. `isLiveNodeRender`
+      // guarantees the media element is inside the viewport, so it has a
+      // parent to replace.
+      if (this.isLiveNodeRender(version, media)) this.renderFileFallback(media.parentElement!, file.name, "Could not load file");
+      return;
     }
+    if (!this.isLiveNodeRender(version, media)) {
+      // A superseded render's subtree was already discarded wholesale, so
+      // there is no card left to fill in or to fall back for — the only thing
+      // owed here is the object URL this load just created.
+      URL.revokeObjectURL(url);
+      return;
+    }
+    this.objectUrls.add(url);
+    media.src = url;
   }
 
   private revokeObjectUrls(): void {
