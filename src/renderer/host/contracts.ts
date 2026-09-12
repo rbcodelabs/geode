@@ -1,3 +1,5 @@
+import type { ResourceRef } from "../../shared/root-registry";
+
 export interface VaultFileEntry {
   path: string;
   isFolder: boolean;
@@ -108,6 +110,9 @@ export interface NavigationService {
   openExternal(url: string): Promise<void>;
   openLocalFile(href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }
+    /** Inside an attached read-only Project root: open in the external viewer. */
+    | { kind: "external-resource"; ref: ResourceRef; rootLabel: string }
+    /** Already handed to the OS default application by the host. */
     | { kind: "external" }
     | { kind: "rejected" }
   >;

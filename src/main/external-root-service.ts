@@ -219,6 +219,38 @@ export class ExternalRootServiceSession implements ExternalRootsHost {
     this.authorize(ref);
     return result;
   }
+
+  /**
+   * Classify a host-side absolute path against the roots this vault session
+   * actually exposes, so a local-file link can open in Geode's read-only
+   * viewer instead of the OS default application.
+   *
+   * Only roots bound to a Project contributed in *this* window are considered:
+   * a device-global grant made for another vault must not become reachable
+   * here just because the path exists on disk (ADR-0015). An unavailable root
+   * is skipped rather than failing the whole lookup.
+   */
+  async resolveOpenableFile(absolutePath: string): Promise<{ ref: ResourceRef; label: string } | null> {
+    this.assertCurrent();
+    if (typeof absolutePath !== "string" || !absolutePath) return null;
+    const seen = new Set<string>();
+    for (const project of [...this.projects.values()]) {
+      const binding = this.binding(project.projectId);
+      if (!binding || binding.sourceFingerprint !== fingerprint(project)) continue;
+      if (seen.has(binding.rootId)) continue;
+      seen.add(binding.rootId);
+      let ref: ResourceRef | null;
+      try {
+        ref = await this.boundary.resolveOpenableFile(binding.rootId, absolutePath);
+      } catch {
+        continue;
+      }
+      if (!ref) continue;
+      this.authorize(ref);
+      return { ref, label: project.label };
+    }
+    return null;
+  }
   async dispose(): Promise<void> { this.disposed = true; this.pendingDeletions.clear(); this.owner.removeSession(this); await this.boundary.dispose(); }
   private assertCurrent(): void {
     if (this.disposed || !this.options.isSessionCurrent?.()) throw new Error("External root vault session is stale");
