@@ -3881,12 +3881,24 @@ export class App {
   showDocumentMenu(e: MouseEvent, leaf: WorkspaceLeaf, options: { anchor?: HTMLElement } = {}): void {
     const file = leaf.view?.getFile?.() ?? null;
     if (!file) return;
-    this.showMenu(e, composeMenu(this.actions, {
+    const items = composeMenu(this.actions, {
       leaf,
       file,
       resource: file,
       view: leaf.view instanceof MarkdownView ? leaf.view : null,
-    }, DOCUMENT_MENU_SPEC), options);
+    }, DOCUMENT_MENU_SPEC);
+    // Same build-then-fire-then-show pattern as `file-explorer.ts`'s
+    // file/folder menus — see `buildMenu`'s doc comment. Source id mirrors
+    // Obsidian's view-header "more options" (⋮) button; `leaf` is passed as
+    // the optional 4th arg since (unlike the file explorer) one is available
+    // here.
+    const menu = this.buildMenu(items);
+    this.workspace.trigger("file-menu", menu, file, "more-options", leaf);
+    if (options.anchor) {
+      menu.showAtElement(options.anchor);
+    } else {
+      menu.showAtMouseEvent(e);
+    }
   }
 
   resourceMenuItems(resource: TFile | TFolder) {
@@ -3968,12 +3980,23 @@ export class App {
     e.preventDefault();
     e.stopPropagation();
     const file = leaf.view?.getFile?.() ?? null;
-    this.showMenu(e, composeMenu(this.actions, {
+    const items = composeMenu(this.actions, {
       leaf,
       file,
       resource: file,
       ...this.viewActionContext(leaf.view),
-    }, TAB_MENU_SPEC));
+    }, TAB_MENU_SPEC);
+    // Same build-then-fire-then-show pattern as `showDocumentMenu` and
+    // `file-explorer.ts`'s file/folder menus — see `buildMenu`'s doc comment.
+    // Source id mirrors Obsidian's tab-header context menu; `leaf` is passed
+    // as the optional 4th arg since one is available here (the file explorer
+    // has none). Unlike `showDocumentMenu`, this must still show the
+    // built-in tab menu for a file-less tab (e.g. a Web Viewer or Graph tab),
+    // so it does not early-return on a null file — it just skips firing the
+    // event, since Obsidian's `file-menu` always receives a real `TFile`.
+    const menu = this.buildMenu(items);
+    if (file) this.workspace.trigger("file-menu", menu, file, "tab-header", leaf);
+    menu.showAtMouseEvent(e);
   }
 
   private showCollectionPicker(leaf: WorkspaceLeaf): void {
