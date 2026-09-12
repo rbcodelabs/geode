@@ -5,10 +5,40 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.17.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.17.1). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.17.1: plugins can use `fetch()`, and links into Project folders open in-app
+
+**Plugins that call `fetch()` directly now work.** Geode's renderer runs under a
+deliberately strict `default-src 'self'` policy, and plugin code executes in that
+same renderer — so a plugin calling the ambient `fetch()` was blocked from
+reaching any remote origin. `requestUrl` already avoided this by doing the real
+request in the privileged main process, but plugins cannot always use it: its
+body type is `string | ArrayBuffer`, which cannot carry a `FormData` multipart
+upload. Anything uploading a file — audio to a transcription endpoint, an image
+to an API — had no working path at all, and failed with a bare network error.
+
+Plugin bundles now get their own privileged `fetch`, mirroring `requestUrl`'s
+transport: the body (including a `FormData` boundary) is serialized in the
+renderer, sent to the main process, and issued there, with a spec-compliant
+`Response` handed back. **The content security policy is unchanged and
+`window.fetch` is untouched** — the identifier is shadowed only inside a
+plugin's own compiled bundle, so nothing else in the app gains network reach.
+
+**Links into attached Project folders open in Geode, not the OS.** Clicking a
+file link pointing into an attached read-only Project folder opened it in the
+system default app, and attaching the folder appeared to change nothing — while
+the *same* file reached through the Projects tree opened correctly in the
+in-app viewer. `open-local-file` only tested containment against the vault root,
+so an explicit user grant had no effect on link handling. It now classifies the
+path against the roots the window exposes and routes to the read-only viewer.
+Containment is decided on **canonical real paths**, so a symlink cannot widen a
+grant, and only roots bound in the current vault session are eligible.
+
+See the [plugin API reference](docs/spec/03-plugin-api.md).
 
 ## New in v0.17.0: secrets in the OS keychain, and six plugin-API fixes
 
