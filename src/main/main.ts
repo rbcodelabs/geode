@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, session, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, session, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -51,13 +51,16 @@ import { listVaultFiles, type VaultFileEntry } from "./vault-files";
 import { startVaultWatcher, type VaultWatcherHandle, type VaultWatchEventName } from "./vault-watcher";
 import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
-import { DeepLinkDispatcher } from "./deep-link";
+import { DeepLinkDispatcher, shouldClaimObsidianProtocol } from "./deep-link";
 import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
 import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
 import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performRequestUrl } from "./request-url";
+import { SecretStore } from "./secret-store";
+import { resolveVaultPath as resolveInVault } from "./vault-path";
+import { removeVaultFolderAt, resolveVaultFolderPath } from "./vault-remove";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
 import {
   admitSupportedPluginInstall,
@@ -294,15 +297,28 @@ function loadManagedPolicy(): ManagedPolicy | null {
   return validatePolicy(raw);
 }
 
-/** Resolve a vault-relative path and refuse anything escaping the vault root. */
-function resolveVaultPath(win: BrowserWindow, rel: string): string {
+/**
+ * App-wide keychain-backed secret storage behind `app.secretStorage`. Built
+ * lazily because `app.getPath("userData")` is only meaningful once the app is
+ * ready, and shared across windows — secrets are per-installation, not
+ * per-vault.
+ */
+let secretStore: SecretStore | undefined;
+function getSecretStore(): SecretStore {
+  secretStore ??= new SecretStore(path.join(app.getPath("userData"), "secrets.json"), safeStorage);
+  return secretStore;
+}
+
+/** The open vault root for a window, or throw if there isn't one. */
+function requireVaultRoot(win: BrowserWindow): string {
   const session = sessions.get(win.id);
   if (!session) throw new Error("No vault open");
-  const abs = path.resolve(session.root, rel);
-  if (abs !== session.root && !abs.startsWith(session.root + path.sep)) {
-    throw new Error(`Path escapes vault: ${rel}`);
-  }
-  return abs;
+  return session.root;
+}
+
+/** Resolve a vault-relative path and refuse anything escaping the vault root. */
+function resolveVaultPath(win: BrowserWindow, rel: string): string {
+  return resolveInVault(requireVaultRoot(win), rel);
 }
 
 function toRel(root: string, abs: string): string {
@@ -633,6 +649,19 @@ function registerIpc() {
     });
   });
 
+  // Obsidian's `adapter.rmdir(normalizedPath, recursive)`. Deliberately a
+  // direct filesystem removal rather than a trip through the OS trash like
+  // `vault-delete` above — see `./vault-remove` for why. The vault watcher
+  // started in `startWatcher` is rooted at the vault, so the resulting
+  // `delete`/`delete-folder` events (and the metadata-cache invalidation they
+  // drive) arrive exactly as they do for any other removal; nothing extra to
+  // fire here.
+  ipcMain.handle("vault-rmdir", async (e, rel: string, recursive: boolean) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const abs = resolveVaultFolderPath(requireVaultRoot(win), rel);
+    return withPathLock([abs], () => removeVaultFolderAt(abs, recursive === true));
+  });
+
   ipcMain.handle("vault-rename", async (e, rel: string, newRel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const from = resolveVaultPath(win, rel);
@@ -769,6 +798,49 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     return sessions.get(win.id)?.root ?? null;
   });
+
+  // Secret storage (`app.secretStorage`). Obsidian's API is SYNCHRONOUS —
+  // `getSecret(id): string | null` — and hosted plugins use it that way:
+  // obsidian-claude-threads calls `.startsWith('sk-')` straight on the result
+  // and builds a subprocess env map out of several reads with no await
+  // anywhere. So the renderer keeps an in-memory mirror, hydrated once through
+  // this single blocking `sendSync`, and serves reads from it while writing
+  // back through the async handlers below. The hydrate payload also carries
+  // any plaintext entries the renderer is migrating out of the pre-keychain
+  // localStorage store; they are only dropped there once this reports
+  // `available`.
+  ipcMain.on("secrets-read-all", (e, legacy: unknown) => {
+    const migrating = legacy && typeof legacy === "object" ? (legacy as Record<string, string>) : {};
+    try {
+      e.returnValue = getSecretStore().hydrate(migrating);
+    } catch (error) {
+      console.error("Secret storage: failed to hydrate", error);
+      e.returnValue = { available: false, secrets: {} };
+    }
+  });
+
+  ipcMain.handle("secrets-get", (_e, id: unknown) =>
+    typeof id === "string" ? getSecretStore().get(id) : null);
+
+  ipcMain.handle("secrets-list", () => getSecretStore().list());
+
+  ipcMain.handle("secrets-set", async (_e, id: unknown, value: unknown) => {
+    if (typeof id !== "string" || typeof value !== "string") {
+      throw new Error("Secret storage: id and value must be strings");
+    }
+    const store = getSecretStore();
+    store.set(id, value);
+    await store.flush();
+  });
+
+  ipcMain.handle("secrets-delete", async (_e, id: unknown) => {
+    if (typeof id !== "string") return;
+    const store = getSecretStore();
+    store.delete(id);
+    await store.flush();
+  });
+
+  ipcMain.handle("secrets-encryption-available", () => getSecretStore().isEncryptionAvailable());
 
   // Plugin discovery: list subfolders of <vault>/.geode/plugins/ that look
   // like a plugin (contain a manifest.json). Reading/writing manifest.json,
@@ -1318,7 +1390,18 @@ function installApplicationMenu(): void {
 }
 
 app.whenReady().then(() => {
-  if (!isHeadless) app.setAsDefaultProtocolClient("geode");
+  if (!isHeadless) {
+    app.setAsDefaultProtocolClient("geode");
+    // Hosted Obsidian plugins hand the OS `obsidian://` links for their own
+    // `registerObsidianProtocolHandler` actions, so Geode has to be a
+    // registered handler for that scheme too or the link never reaches this
+    // process. Claiming it is gated (see `shouldClaimObsidianProtocol`) so a
+    // real Obsidian install on the same machine is never silently hijacked.
+    const claimObsidian = process.env.GEODE_CLAIM_OBSIDIAN_PROTOCOL === "1";
+    if (shouldClaimObsidianProtocol(app.getApplicationNameForProtocol("obsidian://"), claimObsidian)) {
+      app.setAsDefaultProtocolClient("obsidian");
+    }
+  }
   if (isHeadless && process.platform === "darwin") {
     // `dock.hide()` removes the Dock tile but leaves the app a "regular"
     // NSApplication — still in the menu bar, still able to become the active

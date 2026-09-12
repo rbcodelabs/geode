@@ -79,6 +79,13 @@ export interface VaultFilesService {
   ): Promise<{ mtime: number; ctime: number; size: number }>;
   mkdir(path: string, mutationId?: string): Promise<void>;
   trash(path: string, mutationId?: string): Promise<void>;
+  /**
+   * Obsidian's `adapter.rmdir`: remove a folder outright rather than trashing
+   * it. Optional because not every host can — the Capacitor bridge exposes no
+   * such native call — and `Vault.adapter.rmdir` reports that honestly instead
+   * of pretending the folder is gone.
+   */
+  rmdir?(path: string, recursive: boolean, mutationId?: string): Promise<void>;
   rename(path: string, newPath: string, mutationId?: string): Promise<void>;
   /** Resolves after every change event carrying this mutation id has been delivered. */
   settleMutation(mutationId: string): Promise<void>;

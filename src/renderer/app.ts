@@ -1,5 +1,5 @@
 import { Vault } from "./vault";
-import { MetadataCache } from "./metadata-cache";
+import { MetadataCache, parseMetadata } from "./metadata-cache";
 import {
   DEFAULT_METADATA_SCAN_CAP_BYTES,
   MAX_METADATA_SCAN_CAP_BYTES,
@@ -40,7 +40,7 @@ import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { renderExternalRootsTab } from "./settings/external-roots-tab";
-import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName } from "./types";
+import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName, type HeadingCache } from "./types";
 import { RenderContext } from "./api/bases-values";
 import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
 import {
@@ -3156,16 +3156,67 @@ export class App {
     }
   }
 
+  /**
+   * Resolve an Obsidian subpath — `#Heading` or `#^blockid`, leading `#`
+   * optional — to a character offset in `file`, or null when it does not
+   * resolve.
+   *
+   * The single place an anchor becomes a scroll target. `openLink` (ordinary
+   * in-app link clicks) and `WorkspaceLeaf.openFile`'s `eState.subpath` (the
+   * plugin API) both route through here, so they cannot drift apart.
+   */
+  async resolveSubpathOffset(file: TFile, subpath: string): Promise<number | null> {
+    const target = (subpath.startsWith("#") ? subpath.slice(1) : subpath).trim();
+    if (!target) return null;
+    if (target.startsWith("^")) {
+      const blockId = target.slice(1);
+      if (!blockId) return null;
+      // Block IDs are a trailing `^id` marker on the line they anchor, and
+      // are not in the metadata cache — scan for them the way `openBookmark`
+      // resolves a bookmarked block.
+      try {
+        const content = await this.vault.cachedRead(file);
+        let offset = 0;
+        for (const line of content.split("\n")) {
+          if (line.trimEnd().endsWith(`^${blockId}`)) return offset;
+          offset += line.length + 1;
+        }
+      } catch {
+        /* unreadable file: treat the anchor as unresolved */
+      }
+      return null;
+    }
+    const match = (headings: HeadingCache[]) =>
+      headings.find((h) => h.heading.toLowerCase() === target.toLowerCase());
+    const cached = match(this.metadataCache.getHeadings(file));
+    if (cached) return cached.position.start.offset;
+    // Cache miss. That is usually a genuinely absent heading, but it is also
+    // what a *cold* cache looks like: the vault index is built asynchronously
+    // during startup, so a plugin that opens `Note#Heading` early (restoring a
+    // context panel, handling a deep link) can get here before `file` has been
+    // indexed and would otherwise land silently at the top of the document —
+    // the exact bug this method exists to fix, just conditioned on timing.
+    // Re-derive from the file with the same parser the cache itself uses, so
+    // resolution never depends on index progress. The block branch above is
+    // already immune for the same reason: it reads the file directly.
+    if (this.metadataCache.getHeadings(file).length > 0) return null;
+    try {
+      const content = await this.vault.cachedRead(file);
+      const parsed = match(parseMetadata(content, this.settings.metadataScanCapBytes).headings);
+      return parsed ? parsed.position.start.offset : null;
+    } catch {
+      return null;
+    }
+  }
+
   async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {
     const dest = this.metadataCache.getFirstLinkpathDest(linktext, sourcePath);
     if (dest) {
       await this.openFile(dest, newTab);
-      const sub = linktext.includes("#") ? linktext.slice(linktext.indexOf("#") + 1) : null;
-      if (sub && !sub.startsWith("^")) {
-        const heading = this.metadataCache
-          .getHeadings(dest)
-          .find((h) => h.heading.toLowerCase() === sub.toLowerCase());
-        if (heading) this.revealOffsetInActiveMarkdownView(dest, heading.position.start.offset);
+      const hash = linktext.indexOf("#");
+      if (hash !== -1) {
+        const offset = await this.resolveSubpathOffset(dest, linktext.slice(hash));
+        if (offset !== null) this.revealOffsetInActiveMarkdownView(dest, offset);
       }
     } else {
       // Unresolved link: create the note (Obsidian behavior)

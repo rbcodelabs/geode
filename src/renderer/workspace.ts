@@ -42,6 +42,24 @@ export interface View {
   onReveal?(): void;
   /** Views showing a file implement this. */
   getFile?(): TFile | null;
+  /**
+   * Scroll to a character offset in the open document. Implemented by
+   * `MarkdownView`; how `#Heading` and `#^blockid` anchors are honoured.
+   */
+  scrollToOffset?(offset: number): void;
+}
+
+/**
+ * Obsidian's `OpenViewState`, as much of it as Geode acts on. Declared here
+ * rather than inlined so `WorkspaceLeaf.openFile`'s contract is greppable
+ * from the plugin-facing side.
+ */
+export interface OpenViewState {
+  /** `false` opens the file without letting the new view take focus. */
+  active?: boolean;
+  /** Ephemeral view state. Geode honours `subpath`. */
+  eState?: { subpath?: string; [key: string]: unknown };
+  [key: string]: unknown;
 }
 
 interface StatefulView extends View {
@@ -310,21 +328,38 @@ export class WorkspaceLeaf {
     return this.viewState.state;
   }
 
-  /** Open a vault file in *this* leaf (Obsidian `leaf.openFile`). */
   /**
-   * @param state Obsidian's `OpenViewState`. Only `active` is honoured:
-   * `{ active: false }` opens the file without letting the new view take
-   * keyboard focus, which is what "open in a background tab" means. Mounting a
-   * view never changes which tab is *visible* (`setView` does not activate the
+   * Open a vault file in *this* leaf (Obsidian `leaf.openFile`).
+   *
+   * @param state Obsidian's `OpenViewState`. Two fields are honoured:
+   *
+   * `active: false` opens the file without letting the new view take keyboard
+   * focus, which is what "open in a background tab" means. Mounting a view
+   * never changes which tab is *visible* (`setView` does not activate the
    * leaf), but `MarkdownView.onOpen()` focuses its editor — so without this the
    * caret would jump into a pane the user cannot see. Focus is only restored if
    * the newly mounted view actually took it, so an unrelated concurrent focus
    * change is left alone.
+   *
+   * `eState.subpath` scrolls the newly mounted view to a `#Heading` or
+   * `#^blockid` anchor, resolved by `App.resolveSubpathOffset` — the same
+   * resolution ordinary in-app link clicks use. This is what a plugin does
+   * after `parseLinktext` to make a `Note#Heading` link land on the heading
+   * instead of the top of the file. It runs before the focus restore above,
+   * so scrolling a background tab does not steal the caret (scrolling focuses
+   * the editor, and the restore then hands focus back).
+   *
+   * Any other `OpenViewState` field is still ignored.
    */
-  async openFile(file: TFile, state?: { active?: boolean }): Promise<void> {
+  async openFile(file: TFile, state?: OpenViewState): Promise<void> {
     const keepFocus = state?.active === false;
     const focusBefore = keepFocus ? (document.activeElement as HTMLElement | null) : null;
     await this.app.openFileInLeaf(this, file);
+    const subpath = state?.eState?.subpath;
+    if (typeof subpath === "string" && subpath) {
+      const offset = await this.app.resolveSubpathOffset(file, subpath);
+      if (offset !== null) this.view?.scrollToOffset?.(offset);
+    }
     if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) {
       focusBefore.focus({ preventScroll: true });
     }

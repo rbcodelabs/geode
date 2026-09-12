@@ -67,6 +67,13 @@
         "schemes": [
           "geode"
         ]
+      },
+      {
+        "name": "Obsidian plugin deep links",
+        "schemes": [
+          "obsidian"
+        ],
+        "role": "Viewer"
       }
     ],
     "directories": {
