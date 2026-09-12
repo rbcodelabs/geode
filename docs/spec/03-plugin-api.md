@@ -873,6 +873,24 @@ All events return `EventRef`; plugins wrap with `this.registerEvent(...)`.
 | Workspace | `quit` | `(tasks: Tasks)` | App closing |
 | WorkspaceLeaf | `pinned-change`, `group-change` | | |
 
+### 4.1 Geode-specific events (no Obsidian equivalent)
+
+These events have no counterpart in Obsidian and are specific to Geode's own host integrations. Core Geode stays decoupled from any specific plugin or connector web app — it only knows about the generic shapes below.
+
+| Emitter | Event | Callback | Notes |
+|---|---|---|---|
+| Workspace | `web-viewer:event` | `(event: NormalizedWebViewerEvent)` | Fired via `app.workspace.trigger`; subscribe with `app.workspace.on("web-viewer:event", cb)`. Carries an event a cooperating "connector" web app posted from inside a Web Viewer `<webview>` tab via `window.__geode.postEvent(type, payload)`, after Geode's main process has authoritatively checked the posting frame's origin against an allowlist of known connectors (`src/shared/web-viewer-connectors.ts`) and validated the event `type` and payload. Desktop-only (Web Viewer is a desktop host capability). |
+
+```ts
+interface NormalizedWebViewerEvent {
+  source: string;    // connector id, e.g. "compass"
+  type: string;       // one of that connector's allowed event types, e.g. "decision.approved"
+  payload: unknown;    // JSON-serializable, size-capped
+  url: string;        // the guest frame's URL the event was posted from
+  timestamp: number;   // Date.now() at normalization time, set by main
+}
+```
+
 ---
 
 ## 5. Editor Extensions (CodeMirror 6)

@@ -54,6 +54,14 @@ const builds = [
   },
   {
     ...common,
+    entryPoints: ["src/main/webviewer-bridge-preload.ts"],
+    outfile: "dist/webviewer-bridge-preload.js",
+    platform: "node",
+    format: "cjs",
+    external: ["electron"],
+  },
+  {
+    ...common,
     entryPoints: ["src/indexer/indexer-process.ts"],
     outfile: "dist/indexer-process.js",
     platform: "node",

@@ -9,7 +9,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "listPluginIds" | "listThemes" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
-  | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen"
+  | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onWebViewerBridgeEvent"
 > & Partial<Pick<GeodeApi, "externalRoots">>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
@@ -99,6 +99,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       publishHotkeys: (combos) => preload.publishHotkeys(combos),
       onGuestHotkey: (cb) => preload.onGuestHotkey(cb),
       onGuestWindowOpen: (cb) => preload.onGuestWindowOpen(cb),
+      onWebViewerBridgeEvent: (cb) => preload.onWebViewerBridgeEvent(cb),
       revealInFileManager: (path) => preload.reveal(path),
     },
   };
