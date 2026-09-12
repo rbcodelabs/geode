@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, session, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -59,10 +59,23 @@ import { listVaultFiles, type VaultFileEntry } from "./vault-files";
 import { startVaultWatcher, type VaultWatcherHandle, type VaultWatchEventName } from "./vault-watcher";
 import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
-import { DeepLinkDispatcher } from "./deep-link";
+import { DeepLinkDispatcher, shouldClaimObsidianProtocol } from "./deep-link";
 import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
+import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
+import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
+import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
+import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performRequestUrl } from "./request-url";
+import { SecretStore } from "./secret-store";
+import { resolveVaultPath as resolveInVault } from "./vault-path";
+import { registerVaultRemoveIpc } from "./vault-remove-ipc";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
+import {
+  admitSupportedPluginInstall,
+  SUPPORTED_PLUGIN_CATALOG_URL,
+  SupportedPluginCatalogService,
+} from "./supported-plugin-catalog";
+import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -97,6 +110,8 @@ app.on("second-instance", (_event, argv) => {
 });
 
 interface VaultSession {
+  externalRoots?: Promise<ExternalRootServiceSession>;
+  externalRootsInvalidated?: boolean;
   root: string;
   watcher: VaultWatcherHandle | null;
   indexer: MetadataIndexerHost | null;
@@ -112,6 +127,62 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
+const externalRootService = new ExternalRootService(() => RootRegistry.open({ store: new JsonRootRegistryStore(app.getPath("userData")) }));
+
+function externalRootSession(sender: Electron.WebContents): Promise<ExternalRootServiceSession> {
+  const win = BrowserWindow.fromWebContents(sender);
+  const session = win && sessions.get(win.id);
+  if (!win || win.webContents !== sender || !session || session.externalRootsInvalidated || process.platform !== "darwin") {
+    throw new Error("External roots unavailable for this vault session");
+  }
+  return session.externalRoots ??= externalRootService.createSession({
+    activeVaultPath: session.root,
+    isSessionCurrent: () => !win.isDestroyed() && win.webContents === sender && sessions.get(win.id) === session && !session.externalRootsInvalidated,
+    pickDirectory: async (purpose, details) => {
+      const result = await dialog.showOpenDialog(win, {
+        title: purpose === "attach" ? "Attach Project folder read-only" : "Reconnect Project folder",
+        properties: ["openDirectory"],
+        ...(details.suggestedPath ? { defaultPath: details.suggestedPath } : {}),
+      });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+    confirmDirectory: async ({ purpose, label, selectedPath }) => {
+      const result = await dialog.showMessageBox(win, {
+        type: "question", title: purpose === "attach" ? "Attach Project folder?" : "Replace Project folder?",
+        message: `${purpose === "attach" ? "Attach" : "Reconnect"} ${label}`,
+        detail: `${selectedPath}\n\nGeode may browse and open files read-only. Agent execution permission is separate. This does not change the Project working directory.${purpose === "reconnect" ? " This folder replaces the previous location for the existing root and its tabs." : ""}`,
+        buttons: ["Cancel", purpose === "attach" ? "Attach read-only" : "Reconnect read-only"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      return result.response === 1;
+    },
+    confirmDetach: async (label) => (await dialog.showMessageBox(win, {
+      type: "question", title: "Detach from Geode?", message: `Detach ${label}?`,
+      detail: "This removes only the local Project attachment. Files, the Threads Project, its working directory, and execution permission are unchanged.",
+      buttons: ["Cancel", "Detach"], defaultId: 0, cancelId: 0, noLink: true,
+    })).response === 1,
+    confirmManagement: async ({ kind, label, selectedPath }) => (await dialog.showMessageBox(win, {
+      type: "question", title: kind === "remove-root" ? "Remove folder grant?" : "Remove stale Project association?",
+      message: kind === "remove-root" ? "Remove this unassigned folder grant?" : `Remove association for ${label}?`,
+      detail: `${selectedPath}\n\nOnly Geode's local ${kind === "remove-root" ? "grant record" : "Project association"} will be removed. External files, Threads Projects, working directories, and execution permissions are unchanged.`,
+      buttons: ["Cancel", "Remove"], defaultId: 0, cancelId: 0, noLink: true,
+    })).response === 1,
+  });
+}
+
+function invalidateExternalRoots(session: VaultSession | undefined): void {
+  if (!session) return;
+  session.externalRootsInvalidated = true;
+  void session.externalRoots?.then(async (roots) => { await roots.dispose(); notifyExternalRoots(); }).catch(() => undefined);
+}
+
+function notifyExternalRoots(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    const session = sessions.get(win.id);
+    if (!win.isDestroyed() && !win.webContents.isDestroyed() && session && !session.externalRootsInvalidated) {
+      win.webContents.send("external-roots-changed");
+    }
+  }
+}
 /** Explicit vault requested for a window that has not completed open-vault yet. */
 const launchTargets = new Map<number, string>();
 /**
@@ -135,6 +206,16 @@ const powerSaveBlockerOwners = new Set<number>();
 const artifactRuntime = new ArtifactRuntime();
 let journal: CrashJournal | undefined;
 let diagnosticLog: DiagnosticLog | undefined;
+let supportedPluginCatalog: SupportedPluginCatalogService | undefined;
+
+function supportedPluginCatalogService(): SupportedPluginCatalogService {
+  const testUrl = isHeadless ? process.env.GEODE_TEST_SUPPORTED_PLUGIN_CATALOG_URL : undefined;
+  return (supportedPluginCatalog ??= new SupportedPluginCatalogService({
+    cachePath: path.join(app.getPath("userData"), "supported-plugins-v1-cache.json"),
+    fetch: (input, init) => net.fetch(input, init),
+    url: testUrl || SUPPORTED_PLUGIN_CATALOG_URL,
+  }));
+}
 
 function crashJournal(): CrashJournal {
   return (journal ??= new CrashJournal(path.join(app.getPath("userData"), "crash-journal.json")));
@@ -224,15 +305,28 @@ function loadManagedPolicy(): ManagedPolicy | null {
   return validatePolicy(raw);
 }
 
-/** Resolve a vault-relative path and refuse anything escaping the vault root. */
-function resolveVaultPath(win: BrowserWindow, rel: string): string {
+/**
+ * App-wide keychain-backed secret storage behind `app.secretStorage`. Built
+ * lazily because `app.getPath("userData")` is only meaningful once the app is
+ * ready, and shared across windows — secrets are per-installation, not
+ * per-vault.
+ */
+let secretStore: SecretStore | undefined;
+function getSecretStore(): SecretStore {
+  secretStore ??= new SecretStore(path.join(app.getPath("userData"), "secrets.json"), safeStorage);
+  return secretStore;
+}
+
+/** The open vault root for a window, or throw if there isn't one. */
+function requireVaultRoot(win: BrowserWindow): string {
   const session = sessions.get(win.id);
   if (!session) throw new Error("No vault open");
-  const abs = path.resolve(session.root, rel);
-  if (abs !== session.root && !abs.startsWith(session.root + path.sep)) {
-    throw new Error(`Path escapes vault: ${rel}`);
-  }
-  return abs;
+  return session.root;
+}
+
+/** Resolve a vault-relative path and refuse anything escaping the vault root. */
+function resolveVaultPath(win: BrowserWindow, rel: string): string {
+  return resolveInVault(requireVaultRoot(win), rel);
 }
 
 function toRel(root: string, abs: string): string {
@@ -280,6 +374,44 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 
 function registerIpc() {
   const secretCapabilities = new Map<string, { senderId: number; owner: string }>();
+  // Narrow internal desktop integration. No Vault/TFile or arbitrary-path API.
+  ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[], options?: ExternalProjectContributionOptions) => externalRootReply(async () => {
+    return submitExternalProjects(await externalRootSession(e.sender), projects, options, notifyExternalRoots);
+  }));
+  ipcMain.handle("external-roots-projects", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listProjects()));
+  ipcMain.handle("external-roots-grants", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listGrants()));
+  for (const [channel, action] of [["remove-association", "removeStaleAssociation"], ["remove-orphan", "removeOrphanGrant"]] as const) {
+    ipcMain.handle(`external-roots-${channel}`, (e, id: string) => externalRootReply(async () => {
+      const removed = await (await externalRootSession(e.sender))[action](id);
+      if (removed) notifyExternalRoots();
+      return removed;
+    }));
+  }
+  for (const action of ["attach", "reconnect", "detach"] as const) {
+    ipcMain.handle(`external-roots-${action}`, (e, projectId: string) => externalRootReply(async () => {
+      const result = await (await externalRootSession(e.sender))[action](projectId);
+      if (result) notifyExternalRoots();
+      return result;
+    }));
+  }
+  ipcMain.handle("external-roots-list", (e, ref: RootDirectoryRef, options?: { cursor?: string }) => externalRootReply(async () => (await externalRootSession(e.sender)).listDirectory(ref, options)));
+  ipcMain.handle("external-roots-read", (e, ref: ResourceRef) => externalRootReply(async () => (await externalRootSession(e.sender)).readText(ref)));
+  ipcMain.handle("supported-plugin-catalog", async () => ({
+    currentGeodeVersion: app.getVersion(),
+    ...await supportedPluginCatalogService().load(),
+  }));
+  ipcMain.handle("supported-plugin-install", async (e, pluginId: unknown, release: unknown) => {
+    if (typeof pluginId !== "string" || (release !== "tested" && release !== "latest")) {
+      throw new Error("Invalid supported-plugin install request");
+    }
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const state = await supportedPluginCatalogService().load();
+    if (state.status === "unavailable") throw new Error("Supported plugin catalog is unavailable");
+    const request = admitSupportedPluginInstall(state.catalog, pluginId, release, app.getVersion());
+    return installCommunity(session.root, request.repo, request.options);
+  });
   ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
     performRequestUrl(request, (input, init) => net.fetch(input, init)),
   );
@@ -324,6 +456,7 @@ function registerIpc() {
     const st = await fsp.stat(vaultPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(`Not a folder: ${vaultPath}`);
     const prev = sessions.get(win.id);
+    invalidateExternalRoots(prev);
     if (prev?.watcher) await prev.watcher.close();
     if (prev?.indexer) await prev.indexer.shutdown();
     prev?.metadataDb?.close();
@@ -664,6 +797,15 @@ function registerIpc() {
     });
   });
 
+  // Obsidian's `adapter.rmdir(normalizedPath, recursive)`. Deliberately a
+  // direct filesystem removal rather than a trip through the OS trash like
+  // `vault-delete` above — see `./vault-remove` for why. The vault watcher
+  // started in `startWatcher` is rooted at the vault, so the resulting
+  // `delete`/`delete-folder` events (and the metadata-cache invalidation they
+  // drive) arrive exactly as they do for any other removal; nothing extra to
+  // fire here.
+  registerVaultRemoveIpc(ipcMain, e => requireVaultRoot(BrowserWindow.fromWebContents(e.sender)!));
+
   ipcMain.handle("vault-rename", async (e, rel: string, newRel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id)!;
@@ -806,6 +948,49 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     return sessions.get(win.id)?.root ?? null;
   });
+
+  // Secret storage (`app.secretStorage`). Obsidian's API is SYNCHRONOUS —
+  // `getSecret(id): string | null` — and hosted plugins use it that way:
+  // obsidian-claude-threads calls `.startsWith('sk-')` straight on the result
+  // and builds a subprocess env map out of several reads with no await
+  // anywhere. So the renderer keeps an in-memory mirror, hydrated once through
+  // this single blocking `sendSync`, and serves reads from it while writing
+  // back through the async handlers below. The hydrate payload also carries
+  // any plaintext entries the renderer is migrating out of the pre-keychain
+  // localStorage store; they are only dropped there once this reports
+  // `available`.
+  ipcMain.on("secrets-read-all", (e, legacy: unknown) => {
+    const migrating = legacy && typeof legacy === "object" ? (legacy as Record<string, string>) : {};
+    try {
+      e.returnValue = getSecretStore().hydrate(migrating);
+    } catch (error) {
+      console.error("Secret storage: failed to hydrate", error);
+      e.returnValue = { available: false, secrets: {} };
+    }
+  });
+
+  ipcMain.handle("secrets-get", (_e, id: unknown) =>
+    typeof id === "string" ? getSecretStore().get(id) : null);
+
+  ipcMain.handle("secrets-list", () => getSecretStore().list());
+
+  ipcMain.handle("secrets-set", async (_e, id: unknown, value: unknown) => {
+    if (typeof id !== "string" || typeof value !== "string") {
+      throw new Error("Secret storage: id and value must be strings");
+    }
+    const store = getSecretStore();
+    store.set(id, value);
+    await store.flush();
+  });
+
+  ipcMain.handle("secrets-delete", async (_e, id: unknown) => {
+    if (typeof id !== "string") return;
+    const store = getSecretStore();
+    store.delete(id);
+    await store.flush();
+  });
+
+  ipcMain.handle("secrets-encryption-available", () => getSecretStore().isEncryptionAvailable());
 
   // Plugin discovery: list subfolders of <vault>/.geode/plugins/ that look
   // like a plugin (contain a manifest.json). Reading/writing manifest.json,
@@ -1043,6 +1228,49 @@ function bridgeGuestHotkeys(win: BrowserWindow, guest: Electron.WebContents): vo
 
 const EMPTY_HOTKEYS: ReadonlySet<string> = new Set();
 
+/**
+ * The Web Viewer's own `<webview>` partition (src/renderer/views/web-view.ts).
+ * Exclusively the real Web Viewer tab — canvas link-preview guests
+ * (src/renderer/views/canvas-view.ts) intentionally use a different
+ * partition so they never receive the bridge preload below. Kept as one
+ * constant so the `will-attach-webview` gate and the `did-attach-webview`
+ * guard in `trackWebViewerBridgeGuest` cannot drift apart.
+ */
+const WEBVIEWER_PARTITION = "persist:webviewer";
+
+/**
+ * Bridge `window.__geode.postEvent(type, payload)` calls made inside a Web
+ * Viewer `<webview>` guest (see webviewer-bridge-preload.ts) onto the host
+ * renderer, after authoritatively checking the sender frame's origin here in
+ * main.
+ *
+ * `guest.ipc` (a WebContents-scoped IpcMain) is used instead of a global
+ * `ipcMain.on` listener or the DOM `ipc-message`/`sendToHost` events:
+ * neither of those reliably exposes the per-message sender frame needed to
+ * check origin authoritatively — a compromised or navigated guest could
+ * otherwise spoof which page a message came from.
+ *
+ * `did-attach-webview` fires for every `<webview>` guest (artifact guests,
+ * canvas link-preview guests, real Web Viewer tabs) — `will-attach-webview`
+ * does not hand back a guest identifier to gate on ahead of time, since the
+ * guest doesn't exist yet at that point. Comparing `guest.session` identity
+ * against `session.fromPartition(WEBVIEWER_PARTITION)` is an exact
+ * equivalent: Electron returns the same `Session` instance for every guest
+ * sharing a persistent partition string, and that partition is exclusively
+ * the real Web Viewer (see WEBVIEWER_PARTITION above). Guests attached under
+ * any other partition are left alone entirely — no listener is registered.
+ */
+function trackWebViewerBridgeGuest(win: BrowserWindow, guest: Electron.WebContents): void {
+  if (guest.session !== session.fromPartition(WEBVIEWER_PARTITION)) return;
+  guest.ipc.on(WEBVIEWER_BRIDGE_CHANNEL, (event, message: WebViewerBridgeMessage) => {
+    const frameUrl = event.senderFrame?.url;
+    if (!frameUrl) return;
+    const normalized = normalizeWebViewerEvent(frameUrl, message);
+    if (!normalized) return;
+    if (!win.isDestroyed()) win.webContents.send("web-viewer-bridge-event", normalized);
+  });
+}
+
 function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
@@ -1110,12 +1338,28 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
         !artifactRuntime.secureWebviewAttachment(win.webContents, webPreferences, params)) {
       event.preventDefault();
     }
+    if (params.partition === WEBVIEWER_PARTITION) {
+      // Main decides, never trusts the guest — same posture as
+      // artifactRuntime.secureWebviewAttachment above. Set unconditionally,
+      // overwriting anything already present, so the webviewer-bridge-preload
+      // (which exposes window.__geode.postEvent) runs in an isolated,
+      // sandboxed guest rather than one that could reach Node or the host's
+      // unisolated context. This partition is exclusively the real Web
+      // Viewer tab (src/renderer/views/web-view.ts) — canvas link-preview
+      // guests use their own "persist:canvas-preview" partition precisely so
+      // they never get this bridge; see canvas-view.ts's renderWebNode.
+      webPreferences.nodeIntegration = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      webPreferences.preload = path.join(__dirname, "webviewer-bridge-preload.js");
+    }
   });
   win.webContents.on("did-attach-webview", (_event, guest) => {
     artifactRuntime.trackGuest(win.webContents, guest);
     // Every guest, not just artifact guests: the Web Viewer and canvas
     // web-preview cards are <webview>s too and have the same dead-hotkey bug.
     bridgeGuestHotkeys(win, guest);
+    trackWebViewerBridgeGuest(win, guest);
     guest.setWindowOpenHandler(({ url, disposition }) => {
       let protocol = "";
       try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }
@@ -1247,6 +1491,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     void artifactRuntime.unregisterOwner(ownerWebContentsId);
     const session = sessions.get(win.id);
     session?.watcher?.close();
+    invalidateExternalRoots(session);
     if (session?.indexer) void session.indexer.shutdown();
     session?.metadataDb?.close();
     sessions.delete(win.id);
@@ -1295,7 +1540,18 @@ function installApplicationMenu(): void {
 }
 
 app.whenReady().then(() => {
-  if (!isHeadless) app.setAsDefaultProtocolClient("geode");
+  if (!isHeadless) {
+    app.setAsDefaultProtocolClient("geode");
+    // Hosted Obsidian plugins hand the OS `obsidian://` links for their own
+    // `registerObsidianProtocolHandler` actions, so Geode has to be a
+    // registered handler for that scheme too or the link never reaches this
+    // process. Claiming it is gated (see `shouldClaimObsidianProtocol`) so a
+    // real Obsidian install on the same machine is never silently hijacked.
+    const claimObsidian = process.env.GEODE_CLAIM_OBSIDIAN_PROTOCOL === "1";
+    if (shouldClaimObsidianProtocol(app.getApplicationNameForProtocol("obsidian://"), claimObsidian)) {
+      app.setAsDefaultProtocolClient("obsidian");
+    }
+  }
   if (isHeadless && process.platform === "darwin") {
     // `dock.hide()` removes the Dock tile but leaves the app a "regular"
     // NSApplication — still in the menu bar, still able to become the active

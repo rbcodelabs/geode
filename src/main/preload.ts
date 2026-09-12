@@ -9,7 +9,17 @@ import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
 import type { HostHttpRequest, HostHttpResponse } from "../shared/network";
 import type { GuardedMutation, GuardedMutationResult } from "../shared/sync-safety";
+import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
 import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
+import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
+import type { SecretSnapshot } from "./secret-store";
+import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
+
+async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
+  if (reply.ok) return reply.value;
+  throw Object.assign(new Error(`External root: ${reply.error}`), { code: reply.error });
+}
 
 export interface VaultFileEntry {
   path: string;
@@ -46,6 +56,24 @@ export interface UpdaterCheckResult {
 }
 
 const api = {
+  externalRoots: (process.platform === "darwin" ? Object.freeze({
+    version: 1,
+    contribute: (projects, options) => invokeExternalRoot("external-roots-contribute", projects, options),
+    listProjects: () => invokeExternalRoot("external-roots-projects"),
+    attach: (projectId) => invokeExternalRoot("external-roots-attach", projectId),
+    reconnect: (projectId) => invokeExternalRoot("external-roots-reconnect", projectId),
+    detach: (projectId) => invokeExternalRoot("external-roots-detach", projectId),
+    listDirectory: (ref, options) => invokeExternalRoot("external-roots-list", ref, options),
+    readText: (ref) => invokeExternalRoot("external-roots-read", ref),
+    listGrants: () => invokeExternalRoot("external-roots-grants"),
+    removeStaleAssociation: (projectId) => invokeExternalRoot("external-roots-remove-association", projectId),
+    removeOrphanGrant: (rootId) => invokeExternalRoot("external-roots-remove-orphan", rootId),
+    onChange: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on("external-roots-changed", listener);
+      return () => ipcRenderer.removeListener("external-roots-changed", listener);
+    },
+  } satisfies ExternalRootsHost) : undefined),
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
   requestUrl: (request: PrivilegedRequestUrlParam): Promise<PrivilegedRequestUrlResponse> =>
     ipcRenderer.invoke("request-url", request),
@@ -103,6 +131,9 @@ const api = {
     ipcRenderer.invoke("vault-write", path, data, options),
   mkdir: (path: string): Promise<void> => ipcRenderer.invoke("vault-mkdir", path),
   trash: (path: string): Promise<void> => ipcRenderer.invoke("vault-delete", path),
+  /** Obsidian's `adapter.rmdir`: remove a vault folder outright, no trash. */
+  rmdir: (path: string, recursive: boolean): Promise<void> =>
+    ipcRenderer.invoke("vault-rmdir", path, recursive),
   rename: (path: string, newPath: string): Promise<void> =>
     ipcRenderer.invoke("vault-rename", path, newPath),
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),
@@ -128,6 +159,23 @@ const api = {
     ipcRenderer.on("metadata-indexer-message", listener);
     return () => { ipcRenderer.removeListener("metadata-indexer-message", listener); };
   },
+  /**
+   * Read the whole keychain-backed secret store in one blocking call, handing
+   * main any plaintext entries being migrated out of the renderer's old
+   * localStorage store. This is the only synchronous call on the bridge, and
+   * it exists because Obsidian's `app.secretStorage` API is itself synchronous
+   * — see the `secrets-read-all` handler in main.ts. It is made at most once
+   * per renderer, lazily, and only if something actually reads a secret.
+   */
+  readSecretsSync: (migrating: Record<string, string>): SecretSnapshot =>
+    ipcRenderer.sendSync("secrets-read-all", migrating),
+  getSecret: (id: string): Promise<string | null> => ipcRenderer.invoke("secrets-get", id),
+  listSecrets: (): Promise<string[]> => ipcRenderer.invoke("secrets-list"),
+  setSecret: (id: string, value: string): Promise<void> =>
+    ipcRenderer.invoke("secrets-set", id, value),
+  deleteSecret: (id: string): Promise<void> => ipcRenderer.invoke("secrets-delete", id),
+  isSecretEncryptionAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke("secrets-encryption-available"),
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),
@@ -146,6 +194,12 @@ const api = {
   > => ipcRenderer.invoke("open-local-file", href),
   listPluginIds: (): Promise<string[]> => ipcRenderer.invoke("plugins-list-ids"),
   listThemes: (): Promise<string[]> => ipcRenderer.invoke("themes-list"),
+  getSupportedPluginCatalog: (): Promise<SupportedPluginCatalogIpcState> =>
+    ipcRenderer.invoke("supported-plugin-catalog"),
+  installSupportedPlugin: (
+    pluginId: string,
+    release: "tested" | "latest",
+  ): Promise<InstalledResult> => ipcRenderer.invoke("supported-plugin-install", pluginId, release),
   resolveCommunity: (spec: string, opts?: ResolveOpts): Promise<CommunityPreview> =>
     ipcRenderer.invoke("community-resolve", spec, opts ?? {}),
   installCommunity: (spec: string, opts?: ResolveOpts): Promise<InstalledResult> =>
@@ -220,6 +274,16 @@ const api = {
     ipcRenderer.on("guest-window-open", listener);
     return () => { ipcRenderer.removeListener("guest-window-open", listener); };
   },
+  /**
+   * A normalized, origin-checked event posted from inside a Web Viewer guest
+   * via `window.__geode.postEvent` (see webviewer-bridge-preload.ts and
+   * main.ts's `trackWebViewerBridgeGuest`).
+   */
+  onWebViewerBridgeEvent: (cb: (ev: NormalizedWebViewerEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, ev: NormalizedWebViewerEvent) => cb(ev);
+    ipcRenderer.on("web-viewer-bridge-event", listener);
+    return () => { ipcRenderer.removeListener("web-viewer-bridge-event", listener); };
+  },
   checkForUpdates: (): Promise<UpdaterCheckResult> => ipcRenderer.invoke("updater-check"),
 };
 
@@ -246,12 +310,30 @@ type ElectronOnlyGeodeApi = typeof api;
  */
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
-  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "requestUrl"
+  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
+  "requestUrl" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
+  "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
+  "isSecretEncryptionAvailable"
 > & {
+  externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
   requestUrl?: ElectronOnlyGeodeApi["requestUrl"];
+  getSupportedPluginCatalog?: ElectronOnlyGeodeApi["getSupportedPluginCatalog"];
+  installSupportedPlugin?: ElectronOnlyGeodeApi["installSupportedPlugin"];
+  /**
+   * Secret storage is keychain-backed and Electron-only. Absent on the
+   * mobile/browser facade, where `createSecretStorage` falls back to
+   * localStorage and reports `isEncryptionAvailable() === false` rather than
+   * claiming a keychain it does not have.
+   */
+  readSecretsSync?: ElectronOnlyGeodeApi["readSecretsSync"];
+  getSecret?: ElectronOnlyGeodeApi["getSecret"];
+  listSecrets?: ElectronOnlyGeodeApi["listSecrets"];
+  setSecret?: ElectronOnlyGeodeApi["setSecret"];
+  deleteSecret?: ElectronOnlyGeodeApi["deleteSecret"];
+  isSecretEncryptionAvailable?: ElectronOnlyGeodeApi["isSecretEncryptionAvailable"];
 };
 
 // The renderer runs with contextIsolation disabled (see main.ts's

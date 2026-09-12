@@ -4,6 +4,7 @@ import { resolveMobilePluginModule } from "../../src/renderer/mobile-plugin-runt
 import type { App } from "../../src/renderer/app";
 import { GEODE_API_VERSION } from "../../src/renderer/plugin-manifest";
 import { clearMeasures, getRecentMeasures } from "../../src/renderer/perf-instrumentation";
+import { threadsProjectSource } from "../../src/renderer/integrations/threads-projects";
 
 /** Minimal manifest.json content, valid unless overridden. */
 function manifestJson(id: string, overrides: Record<string, unknown> = {}): string {
@@ -202,6 +203,66 @@ function mobileApp(overrides: Record<string, unknown> = {}): App {
 }
 
 describe("PluginManager", () => {
+  it("publishes mobile Threads metadata even when its desktop bundle is not admitted", async () => {
+    const fs = installFakeGeode(["claude-threads"]);
+    fs.files.set(".geode/plugins/claude-threads/manifest.json", manifestJson("claude-threads", { isDesktopOnly: true }));
+    fs.files.set(".geode/plugins/claude-threads/main.js", "throw new Error('must not execute');");
+    fs.files.set(".geode/plugins/claude-threads/data.json", JSON.stringify({ projects: [{ id: "p", name: "Portable", cwdOverride: "/private/path" }] }));
+    fs.config.set("plugins", ["claude-threads"]);
+    // The real mobile plugin-code reader intentionally excludes data.json.
+    Object.assign(window.geode, { readPluginFile: async (file: string, at: number) => ({
+      ok: !file.endsWith("data.json"), content: file.endsWith("data.json") ? undefined : fs.files.get(file),
+      errorCode: "INVALID_PLUGIN_PATH", mainReceivedAt: at, fsStartedAt: at, fsFinishedAt: at,
+    }) });
+    const vault = {};
+    const pm = new PluginManager(mobileApp({ vault }));
+    await pm.initialize();
+    expect(threadsProjectSource(vault).getProjects()).toEqual([{ projectId: "p", label: "Portable" }]);
+    expect(pm.isEnabled("claude-threads")).toBe(false);
+    await pm.disable("claude-threads");
+    expect(threadsProjectSource(vault).getProjects()).toEqual([]);
+    expect(fs.config.get("plugins")).toEqual([]);
+  });
+
+  it("does not connect a delayed Threads onload after that instance was disabled", async () => {
+    const fs = installFakeGeode(["claude-threads"]);
+    fs.files.set(".geode/plugins/claude-threads/manifest.json", manifestJson("claude-threads"));
+    fs.files.set(".geode/plugins/claude-threads/main.js", `const { Plugin } = require('geode'); module.exports = class extends Plugin {
+      async onload() { await new Promise(resolve => { globalThis.__finishThreads = resolve; });
+        this.manager = { getProjects: () => [{id:'p',name:'P'}], getProjectCwd: () => '/repo', subscribe: () => () => {} };
+      }
+    };`);
+    const contribute = vi.fn(async () => []);
+    const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify: vi.fn(), vault: {}, host: { runtime: { runtime: "electron" }, externalRoots: { contribute } } } as unknown as App;
+    const pm = new PluginManager(app, 1);
+    await pm.initialize();
+    await pm.enable("claude-threads");
+    await pm.disable("claude-threads");
+    (globalThis as unknown as { __finishThreads: () => void }).__finishThreads();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(contribute).not.toHaveBeenCalled();
+    delete (globalThis as unknown as { __finishThreads?: unknown }).__finishThreads;
+  });
+  it("preserves metadata-only Threads enablement while another mobile plugin is toggled", async () => {
+    const fs = installFakeGeode(["claude-threads", "other"]);
+    fs.files.set(".geode/plugins/claude-threads/manifest.json", manifestJson("claude-threads", { isDesktopOnly: true }));
+    fs.files.set(".geode/plugins/claude-threads/data.json", JSON.stringify({ projects: [{ id: "p", name: "Portable" }] }));
+    fs.files.set(".geode/plugins/other/manifest.json", manifestJson("other", { isDesktopOnly: false }));
+    fs.files.set(".geode/plugins/other/main.js", "const {Plugin}=require('geode'); module.exports=class extends Plugin {};");
+    fs.config.set("plugins", ["claude-threads"]);
+    const vault = {};
+    const pm = new PluginManager(mobileApp({ vault }));
+    await pm.initialize();
+    await pm.enable("other");
+    expect(fs.config.get("plugins")).toContain("claude-threads");
+    await pm.disable("other");
+    await pm.dispose();
+    const reloaded = new PluginManager(mobileApp({ vault }));
+    await reloaded.initialize();
+    expect(threadsProjectSource(vault).getProjects()).toEqual([{ projectId: "p", label: "Portable" }]);
+    await reloaded.disable("claude-threads");
+    expect(fs.config.get("plugins")).not.toContain("claude-threads");
+  });
   it("keeps the geode namespace identity stable across requires and plugin loaders", () => {
     const Probe = instantiatePluginClass(`
       module.exports = class {

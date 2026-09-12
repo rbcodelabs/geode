@@ -16,6 +16,9 @@ import { openSortGroupMenu, type SortGroupValue } from "./bases/sort-group-menu"
 import { BasesTableView, type RowHeight } from "./bases/table-view";
 import { BasesCardsView } from "./bases/cards-view";
 import { BasesToolbar, type ToolbarHandlers } from "./bases/toolbar";
+import { BasesPluginViewHost } from "./bases/plugin-view-host";
+import { parseExpression } from "../bases/parser";
+import type { Expr } from "../bases/ast";
 
 const DEFAULT_CARD_ASPECT_RATIO = 16 / 9;
 const DEFAULT_CARD_SIZE = 240;
@@ -33,6 +36,32 @@ const FILE_NAMESPACE_FIELDS = [
   "file.backlinks",
   "file.embeds",
 ];
+
+/**
+ * Whether a freshly-read `.base` text should be discarded rather than parsed.
+ *
+ * A zero-length read of a file we already hold a definition for is not an empty
+ * base — it is a read that observed a write in flight, because writing a file
+ * truncates it before it refills. The window is small but it is hit in normal
+ * use: a plugin-provided view persists its own settings into the `.base` (the
+ * Kanban board writes column and card order on every drag), each write raises a
+ * `modify` event, and the reload that event triggers can land inside it.
+ *
+ * Parsing `""` yields a definition with no views, which `applyText` would
+ * "repair" by synthesizing the default table view and switching to it — hiding
+ * a plugin's board behind a table. Worse, `this.def` is what the next persist
+ * writes back, so that synthesized default would overwrite the user's real view
+ * configuration, along with every passthrough key commit 2 exists to preserve.
+ * Data loss, from a read that happened to be early.
+ *
+ * A base with genuinely no views is only reachable on first load, before any
+ * definition exists — which is why the guard requires one. The trade is that
+ * emptying a `.base` externally (`> Board.base`) is ignored until it has
+ * content again; keeping the last good definition is the safer failure.
+ */
+export function shouldIgnoreBaseReload(text: string, currentViewCount: number): boolean {
+  return text.trim() === "" && currentViewCount > 0;
+}
 
 function defaultBaseYaml(): string {
   return stringifyBaseFile({
@@ -62,6 +91,7 @@ export class BaseView implements View {
   private toolbar: BasesToolbar;
   private tableView: BasesTableView;
   private cardsView: BasesCardsView;
+  private pluginViewHost: BasesPluginViewHost;
 
   private def: BaseDefinition | null = null;
   private currentViewName = "";
@@ -199,7 +229,16 @@ export class BaseView implements View {
     this.saveStatusEl.className = "bases-save-status";
     this.saveStatusEl.setAttribute("role", "status");
     this.saveStatusEl.setAttribute("aria-live", "polite");
-    this.bodyEl.append(this.toolbar.containerEl, this.saveStatusEl, this.errorEl, this.tableView.containerEl, this.cardsView.containerEl);
+    this.pluginViewHost = new BasesPluginViewHost(app, () => void this.persist());
+
+    this.bodyEl.append(
+      this.toolbar.containerEl,
+      this.saveStatusEl,
+      this.errorEl,
+      this.tableView.containerEl,
+      this.cardsView.containerEl,
+      this.pluginViewHost.containerEl
+    );
 
     this.containerEl.append(this.headerEl, this.bodyEl);
     if (document.body.classList.contains("is-mobile") && window.visualViewport) {
@@ -265,6 +304,7 @@ export class BaseView implements View {
     if (requireValid && "error" in parsed) throw new Error(`Couldn't parse base: ${parsed.error}`);
     this.tableView.resetForFile();
     this.cardsView.destroy();
+    this.pluginViewHost.destroy();
     this.sourceEdit = null;
     this.sourceWritePath = null;
     this.sourceConflictReadOnly = false;
@@ -329,6 +369,9 @@ export class BaseView implements View {
 
   /** Parse `text` (freshly read from disk) into `this.def` and re-render. Records `text` as the current known-good state (see `lastKnownText`). */
   private async applyText(text: string): Promise<void> {
+    // Leave `lastKnownText` alone too: this read told us nothing, so the next
+    // one must still count as a change.
+    if (shouldIgnoreBaseReload(text, this.def?.views.length ?? 0)) return;
     this.lastKnownText = text;
     const parsed = parseBaseFile(text);
     if ("error" in parsed) {
@@ -366,6 +409,7 @@ export class BaseView implements View {
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
     this.cardsView.destroy();
+    this.pluginViewHost.destroy();
     this.sourceEdit = null;
     for (const cleanup of this.mobileCleanups.splice(0)) cleanup();
   }
@@ -379,18 +423,23 @@ export class BaseView implements View {
     });
   }
 
+  /** Show `message` instead of any layout — including a plugin-rendered one, which would otherwise stay on screen under the error. */
   private showError(message: string): void {
     this.errorEl.textContent = message;
     this.errorEl.style.display = "";
     this.tableView.containerEl.style.display = "none";
     this.cardsView.containerEl.style.display = "none";
+    this.pluginViewHost.hide();
   }
 
+  /**
+   * Hide the error. Layout visibility is deliberately NOT set here — it is
+   * `renderActiveView`'s job, and it runs immediately after. Deciding it in
+   * both places meant this one showed the table for any non-cards type,
+   * including a plugin-rendered view that renderActiveView then had to undo.
+   */
   private clearError(): void {
     this.errorEl.style.display = "none";
-    const isCards = this.currentView()?.type === "cards";
-    this.tableView.containerEl.style.display = isCards ? "none" : "";
-    this.cardsView.containerEl.style.display = isCards ? "" : "none";
   }
 
   private currentView(): BaseViewDefinition | null {
@@ -400,6 +449,20 @@ export class BaseView implements View {
   private knownPropertyKeys(): string[] {
     const files = this.app.vault.getMarkdownFiles();
     return enumerateFrontmatterKeys(files, (f) => this.app.metadataCache.getFileCache(f)?.frontmatter ?? null);
+  }
+
+  /**
+   * Base-level formulas, parsed. A plugin view's entries evaluate lazily and
+   * may reference `formula.*`, so they need the same parsed formula map
+   * `runQuery` builds internally.
+   */
+  private parsedFormulas(): Record<string, Expr> {
+    const out: Record<string, Expr> = {};
+    for (const [name, text] of Object.entries(this.def?.formulas ?? {})) {
+      const parsed = parseExpression(text);
+      if ("expr" in parsed) out[name] = parsed.expr;
+    }
+    return out;
   }
 
   private allPropertyPaths(): string[] {
@@ -442,6 +505,7 @@ export class BaseView implements View {
       viewNames: this.def.views.map((v) => v.name),
       currentViewName: this.currentViewName,
       currentViewType: view.type === "cards" ? "cards" : "table",
+      currentViewIsBuiltin: !this.pluginViewHost.registrationFor(view.type),
       resultCount: result.rows.length,
       rowHeight: this.rowHeights.get(this.currentViewName) ?? "medium",
     });
@@ -449,9 +513,42 @@ export class BaseView implements View {
     this.renderActiveView(view, result, columns);
   }
 
-  /** Dispatch rendering to the Table or Cards view based on `view.type`, keeping only the active one visible. */
+  /**
+   * Dispatch rendering by `view.type`, keeping only the active layout visible.
+   *
+   * Plugin-registered layouts are looked up first, then the built-ins. This
+   * used to be a hardcoded `type === "cards" ? cards : table`, which — since
+   * `BaseViewDefinition.type` is an open `string` — meant an unrecognised type
+   * silently rendered as a table rather than reporting that nothing could
+   * render it.
+   */
   private renderActiveView(view: BaseViewDefinition, result: QueryResult, columns: string[]): void {
     if (!this.def) return;
+
+    const registration = this.pluginViewHost.registrationFor(view.type);
+    if (registration) {
+      this.tableView.containerEl.style.display = "none";
+      this.cardsView.containerEl.style.display = "none";
+      const rendered = this.pluginViewHost.render({
+        def: this.def,
+        view,
+        result,
+        columns,
+        allPropertyPaths: this.allPropertyPaths(),
+        formulas: this.parsedFormulas(),
+        thisFile: this.file,
+      });
+      if (rendered) return;
+      // The plugin owns this view type but its view failed to construct.
+      // Falling through to the table would silently show a plausible-looking
+      // wrong layout — the exact failure this dispatch replaced. Say so.
+      this.showError(
+        `The "${registration.name}" view could not be loaded. See the developer console for details.`
+      );
+      return;
+    }
+    this.pluginViewHost.hide();
+
     const isCards = view.type === "cards";
     this.tableView.containerEl.style.display = isCards ? "none" : "";
     this.cardsView.containerEl.style.display = isCards ? "" : "none";

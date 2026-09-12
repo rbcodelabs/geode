@@ -87,6 +87,13 @@ export interface VaultFilesService {
   ): Promise<{ mtime: number; ctime: number; size: number }>;
   mkdir(path: string, mutationId?: string): Promise<void>;
   trash(path: string, mutationId?: string): Promise<void>;
+  /**
+   * Obsidian's `adapter.rmdir`: remove a folder outright rather than trashing
+   * it. Optional because not every host can — the Capacitor bridge exposes no
+   * such native call — and `Vault.adapter.rmdir` reports that honestly instead
+   * of pretending the folder is gone.
+   */
+  rmdir?(path: string, recursive: boolean, mutationId?: string): Promise<void>;
   rename(path: string, newPath: string, mutationId?: string): Promise<void>;
   /** Resolves after every change event carrying this mutation id has been delivered. */
   settleMutation(mutationId: string): Promise<void>;
@@ -174,12 +181,15 @@ export interface DesktopHostService {
     guestId: number;
     disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
   }) => void): () => void;
+  onWebViewerBridgeEvent(cb: (ev: import("../../shared/web-viewer-connectors").NormalizedWebViewerEvent) => void): () => void;
   revealInFileManager(path: string): Promise<void>;
 }
 
 export interface HostServices {
   readonly syncSafety?: import("../../shared/sync-safety").SyncSafetyService;
   readonly network?: { request(input: import("../../shared/network").HostHttpRequest, signal?: AbortSignal): Promise<import("../../shared/network").HostHttpResponse>; };
+  /** Internal desktop-only Project integration; absent on mobile/browser. */
+  externalRoots?: import("../../shared/external-roots").ExternalRootsHost;
   readonly capabilities: Readonly<HostCapabilities>;
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;

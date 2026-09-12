@@ -3,17 +3,17 @@ import type { HostServices, VaultFileEntry } from "./contracts";
 
 export type ElectronPreloadApi = Pick<GeodeApi,
   | "chooseVault" | "openVault" | "getRecentVaults" | "getLaunchVault" | "openVaultWindow"
-  | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rename" | "exists" | "reveal" | "onVaultEvent"
+  | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rmdir" | "rename" | "exists" | "reveal" | "onVaultEvent"
   | "readConfig" | "writeConfig" | "readMetadataCache" | "writeMetadataCache"
   | "startMetadataIndexer" | "onMetadataIndexerMessage" | "openExternal" | "openLocalFile"
   | "listPluginIds" | "listThemes" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
-  | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen"
+  | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onWebViewerBridgeEvent"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
   "list" | "scanForSync" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
-  "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
+  "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
 >>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
@@ -36,6 +36,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
         finally { signal?.removeEventListener("abort", cancel); }
       },
     },
+    ...(preload.externalRoots ? { externalRoots: preload.externalRoots } : {}),
     capabilities: Object.freeze({
       multipleWindows: true,
       nodePlugins: true,
@@ -82,6 +83,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       write: (path, data, options) => preload.write(path, data, options),
       mkdir: (path) => preload.mkdir(path),
       trash: (path) => preload.trash(path),
+      rmdir: (path, recursive) => preload.rmdir(path, recursive),
       rename: (path, newPath) => preload.rename(path, newPath),
       // Electron IPC does not echo renderer-originated mutation IDs.
       settleMutation: async () => {},
@@ -139,6 +141,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       publishHotkeys: (combos) => preload.publishHotkeys(combos),
       onGuestHotkey: (cb) => preload.onGuestHotkey(cb),
       onGuestWindowOpen: (cb) => preload.onGuestWindowOpen(cb),
+      onWebViewerBridgeEvent: (cb) => preload.onWebViewerBridgeEvent(cb),
       revealInFileManager: (path) => preload.reveal(path),
     },
   };

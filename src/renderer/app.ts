@@ -1,5 +1,5 @@
 import { Vault } from "./vault";
-import { MetadataCache } from "./metadata-cache";
+import { MetadataCache, parseMetadata } from "./metadata-cache";
 import {
   DEFAULT_METADATA_SCAN_CAP_BYTES,
   MAX_METADATA_SCAN_CAP_BYTES,
@@ -14,6 +14,7 @@ import { ThemeManager } from "./theme-manager";
 import { CommunityManager } from "./community/community-manager";
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
+import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
 import { MarkdownRenderer } from "./markdown/render";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import {
@@ -24,8 +25,11 @@ import {
 import { hasExternalChange, MarkdownView } from "./views/markdown-view";
 import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { CanvasView } from "./views/canvas-view";
+import { ImageView } from "./views/image-view";
 import { serializeCanvas } from "./canvas/canvas-data";
 import { FileExplorerView } from "./views/file-explorer";
+import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
+import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
@@ -35,7 +39,10 @@ import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
-import { FileSystemAdapter, TFile, TFolder, isTFile, pathName } from "./types";
+import { renderExternalRootsTab } from "./settings/external-roots-tab";
+import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName, type HeadingCache } from "./types";
+import { RenderContext } from "./api/bases-values";
+import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
 import {
   addBookmark,
   createEmptyRoot,
@@ -148,6 +155,26 @@ class EmptyView implements View {
   onOpen(): void {}
   onClose(): void {}
 }
+
+/** Item spec accepted by `App.showMenu` / `App.buildMenu`. `ComposedMenuItem` (built-in menus) is a superset of this. */
+export type ContextMenuItemSpec = {
+  title: string | DocumentFragment;
+  action?: () => void;
+  submenu?: Array<{
+    title: string | DocumentFragment;
+    action: () => void;
+    icon?: string | null;
+    checked?: boolean;
+    disabled?: boolean;
+    section?: string;
+    warning?: boolean;
+  }>;
+  icon?: string | null;
+  checked?: boolean;
+  disabled?: boolean;
+  section?: string;
+  warning?: boolean;
+};
 
 export interface AppActionContext {
   file?: TFile | null;
@@ -372,8 +399,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "sync" | "advanced" | "performance";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "sync", "advanced", "performance"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "sync", "advanced", "performance", "project-folders"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -384,6 +411,7 @@ class SettingsModal extends Modal {
   private stopHotkeyRecorder: (() => void) | null = null;
   /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
   private stopPerformanceTab: (() => void) | null = null;
+  private stopExternalRootsTab: (() => void) | null = null;
 
   constructor(private geodeApp: App) {
     super(geodeApp);
@@ -449,6 +477,8 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab = null;
     }
     this.unsubscribeHotkeys?.();
+    this.stopExternalRootsTab?.();
+    this.stopExternalRootsTab = null;
     this.unsubscribeHotkeys = null;
     this.stopHotkeyRecorder?.();
     this.stopHotkeyRecorder = null;
@@ -471,6 +501,10 @@ class SettingsModal extends Modal {
       this.renderSyncTab(this.contentContainerEl);
     } else if (id === "advanced") {
       this.renderAdvancedTab(this.contentContainerEl);
+    } else if (id === "project-folders") {
+      const roots = this.geodeApp.host.externalRoots;
+      if (!roots?.listGrants || !roots.removeStaleAssociation || !roots.removeOrphanGrant) { this.activateTab("appearance"); return; }
+      this.stopExternalRootsTab = renderExternalRootsTab(this.contentContainerEl, roots);
     } else if (id === "performance") {
       if (!this.geodeApp.host.capabilities.processDiagnostics) {
         this.activateTab("appearance");
@@ -521,6 +555,7 @@ class SettingsModal extends Modal {
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
     addNavItem("sync", "Sync", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
+    if (this.geodeApp.host.externalRoots?.listGrants) addNavItem("project-folders", "Project folders", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
     }
@@ -833,6 +868,17 @@ class SettingsModal extends Modal {
         this.renderCommunityList(listEl)
       ).open();
     });
+
+    if (this.geodeApp.host.capabilities.nodePlugins) {
+      const catalogEl = document.createElement("section");
+      catalogEl.className = "supported-plugin-catalog";
+      container.appendChild(catalogEl);
+      void renderSupportedPluginCatalog(catalogEl, {
+        load: () => window.geode.getSupportedPluginCatalog!(),
+        install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
+        onInstalled: () => { void this.renderCommunityList(listEl); },
+      });
+    }
 
     // One-shot importer for users pointing Geode at a vault that already has an
     // Obsidian `.obsidian/` folder of community plugins/themes.
@@ -1315,6 +1361,8 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab = null;
     }
     this.unsubscribeSettingTabs?.();
+    this.stopExternalRootsTab?.();
+    this.stopExternalRootsTab = null;
     this.unsubscribeSettingTabs = null;
     this.unsubscribeHotkeys?.();
     this.unsubscribeHotkeys = null;
@@ -1393,6 +1441,22 @@ export class App {
    * dropping it. Nothing reads it to drive behavior yet.
    */
   editorSuggests = new Set<unknown>();
+  /**
+   * Shared context handed to `Value.renderTo` when a Bases view renders a
+   * cell (`app.renderContext` in the Obsidian API). Carries hover-preview
+   * state there; here it is inert for the same reason `hoverLinkSources` is
+   * store-only — Geode has no hover-preview infrastructure yet.
+   */
+  renderContext = new RenderContext();
+  /**
+   * Bases view layouts registered by plugins (`Plugin.registerBasesView`),
+   * keyed by view type — the `type:` of a view inside a `.base` file.
+   *
+   * Unlike `hoverLinkSources`/`editorSuggests` above, this one is *read*:
+   * `BaseView.renderActiveView` looks the current view's type up here and
+   * hands rendering to the registered layout.
+   */
+  basesViews = new Map<string, BasesViewRegistration>();
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;
@@ -1514,6 +1578,23 @@ export class App {
     const serialized = JSON.stringify(data);
     if (serialized === undefined) throw new TypeError("App local storage data must be JSON-serializable");
     localStorage.setItem(storageKey, serialized);
+  }
+
+  /**
+   * Register a Bases view layout. Mirrors `Workspace.registerViewFactory`,
+   * including its refusal to let a plugin claim a built-in type — a plugin
+   * that captured `"table"` would leave no way to get the table view back.
+   *
+   * @returns true if registered; false if the type was already taken.
+   * @throws if `viewType` is a built-in.
+   */
+  registerBasesView(viewType: string, registration: BasesViewRegistration): boolean {
+    return registerBasesViewIn(this.basesViews, viewType, registration);
+  }
+
+  /** Remove a Bases view layout, if `registration` is still the one registered. */
+  unregisterBasesView(viewType: string, registration: BasesViewRegistration): void {
+    unregisterBasesViewIn(this.basesViews, viewType, registration);
   }
 
   registerProtocolHandler(action: string, handler: (params: Record<string, string>) => unknown): void {
@@ -1957,6 +2038,9 @@ export class App {
     // obsidian_open_url) opens a tab here too. Must be registered before
     // restoreWorkspaceLayout() below, which resolves saved leaves by type.
     await this.applyWebViewerLifecycle();
+    // Register on all platforms: unavailable external identities restore honestly
+    // instead of being interpreted as vault file paths.
+    this.workspace.registerViewFactory("geode-external-source", (leaf) => new ExternalSourceView(this, leaf));
     if (this.host.capabilities.artifacts) {
       this.workspace.registerViewFactory("geode-artifact", (leaf) => new ArtifactView(this, leaf));
     }
@@ -2473,6 +2557,15 @@ export class App {
       });
     });
     if (stopGuestWindowOpen) this.hostDisposers.add(stopGuestWindowOpen);
+    // The only place `web-viewer:event` fires: the event path is
+    // leaf-independent (zero, one, or many Web Viewer leaves may be open at
+    // once), so it is handled once here at the App level rather than inside
+    // web-view.ts. Core Geode stays decoupled from any specific connector —
+    // this only ever sees the generic NormalizedWebViewerEvent shape.
+    const stopWebViewerBridge = this.host.desktop?.onWebViewerBridgeEvent((ev) => {
+      this.workspace.trigger("web-viewer:event", ev);
+    });
+    if (stopWebViewerBridge) this.hostDisposers.add(stopWebViewerBridge);
   }
 
   private async openGuestWindowInTab(request: {
@@ -2959,6 +3052,20 @@ export class App {
 
   // --- File opening -------------------------------------------------------
 
+  async openExternalResource(ref: ResourceRef, rootLabel: string, newTab = false): Promise<void> {
+    const state = validateExternalSourceViewState({ version: 1, ref, rootLabel });
+    if (!state) { this.notify("External source unavailable: invalid resource identity"); return; }
+    if (!newTab) {
+      const existing = this.workspace.getLeavesOfType("geode-external-source").find(leaf => {
+        const saved = validateExternalSourceViewState(leaf.view?.getState?.());
+        return saved?.ref.rootId === state.ref.rootId && saved.ref.relativePath === state.ref.relativePath;
+      });
+      if (existing) { this.workspace.revealLeaf(existing); return; }
+    }
+    const leaf = this.workspace.getLeaf(newTab);
+    await leaf.runDocumentNavigation(() => leaf.setViewState({ type: "geode-external-source", state, active: true }));
+  }
+
   async openFile(file: TFile, newTab: boolean): Promise<void> {
     if (file.extension === "canvas") {
       const existing = this.workspace.findLeafForFile(file.path);
@@ -2991,7 +3098,7 @@ export class App {
       });
       return;
     }
-    if (file.extension === "base" || file.extension === "md") {
+    if (file.extension === "base" || file.extension === "md" || IMAGE_EXTENSIONS.has(file.extension)) {
       const existing = this.workspace.findLeafForFile(file.path);
       if (existing && !newTab) {
         existing.group.setActiveLeaf(existing);
@@ -3004,7 +3111,7 @@ export class App {
     this.notify(`Cannot open .${file.extension} files yet`);
   }
 
-  /** Open a supported document in a specific leaf; every load is serialized by that leaf. */
+  /** Open a vault file in a specific leaf; every load is serialized by that leaf. */
   async openFileInLeaf(
     leaf: WorkspaceLeaf,
     file: TFile,
@@ -3048,8 +3155,28 @@ export class App {
         await view.setFile(file);
         await leaf.setView(view);
       }
+    } else if (IMAGE_EXTENSIONS.has(file.extension)) {
+      if (leaf.view instanceof ImageView) {
+        await leaf.view.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new ImageView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     } else {
-      throw new Error(`Unsupported document history file extension: .${file.extension}`);
+      // Preserve Obsidian's plugin-facing `leaf.openFile()` fallback for file
+      // types Geode does not have a dedicated built-in view for yet.
+      if (leaf.view instanceof MarkdownView) {
+        await leaf.view.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else {
+        const view = new MarkdownView(this);
+        await view.setFile(file);
+        await leaf.setView(view);
+      }
     }
     if (recordHistory) {
       if (previousPath) leaf.recordDocumentNavigation(previousPath);
@@ -3207,16 +3334,67 @@ export class App {
     }
   }
 
+  /**
+   * Resolve an Obsidian subpath — `#Heading` or `#^blockid`, leading `#`
+   * optional — to a character offset in `file`, or null when it does not
+   * resolve.
+   *
+   * The single place an anchor becomes a scroll target. `openLink` (ordinary
+   * in-app link clicks) and `WorkspaceLeaf.openFile`'s `eState.subpath` (the
+   * plugin API) both route through here, so they cannot drift apart.
+   */
+  async resolveSubpathOffset(file: TFile, subpath: string): Promise<number | null> {
+    const target = (subpath.startsWith("#") ? subpath.slice(1) : subpath).trim();
+    if (!target) return null;
+    if (target.startsWith("^")) {
+      const blockId = target.slice(1);
+      if (!blockId) return null;
+      // Block IDs are a trailing `^id` marker on the line they anchor, and
+      // are not in the metadata cache — scan for them the way `openBookmark`
+      // resolves a bookmarked block.
+      try {
+        const content = await this.vault.cachedRead(file);
+        let offset = 0;
+        for (const line of content.split("\n")) {
+          if (line.trimEnd().endsWith(`^${blockId}`)) return offset;
+          offset += line.length + 1;
+        }
+      } catch {
+        /* unreadable file: treat the anchor as unresolved */
+      }
+      return null;
+    }
+    const match = (headings: HeadingCache[]) =>
+      headings.find((h) => h.heading.toLowerCase() === target.toLowerCase());
+    const cached = match(this.metadataCache.getHeadings(file));
+    if (cached) return cached.position.start.offset;
+    // Cache miss. That is usually a genuinely absent heading, but it is also
+    // what a *cold* cache looks like: the vault index is built asynchronously
+    // during startup, so a plugin that opens `Note#Heading` early (restoring a
+    // context panel, handling a deep link) can get here before `file` has been
+    // indexed and would otherwise land silently at the top of the document —
+    // the exact bug this method exists to fix, just conditioned on timing.
+    // Re-derive from the file with the same parser the cache itself uses, so
+    // resolution never depends on index progress. The block branch above is
+    // already immune for the same reason: it reads the file directly.
+    if (this.metadataCache.getHeadings(file).length > 0) return null;
+    try {
+      const content = await this.vault.cachedRead(file);
+      const parsed = match(parseMetadata(content, this.settings.metadataScanCapBytes).headings);
+      return parsed ? parsed.position.start.offset : null;
+    } catch {
+      return null;
+    }
+  }
+
   async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {
     const dest = this.metadataCache.getFirstLinkpathDest(linktext, sourcePath);
     if (dest) {
       await this.openFile(dest, newTab);
-      const sub = linktext.includes("#") ? linktext.slice(linktext.indexOf("#") + 1) : null;
-      if (sub && !sub.startsWith("^")) {
-        const heading = this.metadataCache
-          .getHeadings(dest)
-          .find((h) => h.heading.toLowerCase() === sub.toLowerCase());
-        if (heading) this.revealOffsetInActiveMarkdownView(dest, heading.position.start.offset);
+      const hash = linktext.indexOf("#");
+      if (hash !== -1) {
+        const offset = await this.resolveSubpathOffset(dest, linktext.slice(hash));
+        if (offset !== null) this.revealOffsetInActiveMarkdownView(dest, offset);
       }
     } else {
       // Unresolved link: create the note (Obsidian behavior)
@@ -3668,6 +3846,11 @@ export class App {
     return new CanvasView(this);
   }
 
+  /** Construct a fresh file-backed image view (used during workspace restore). */
+  createImageView(): ImageView {
+    return new ImageView(this);
+  }
+
   /** Construct the "No file is open" placeholder view (used when restoring/cleaning up empty leaves). */
   createEmptyView(): View {
     return new EmptyView(this);
@@ -3881,33 +4064,24 @@ export class App {
     createDismissibleNotice(message, timeout);
   }
 
-  showMenu(
-    e: MouseEvent,
-    items: Array<{
-      title: string | DocumentFragment;
-      action?: () => void;
-      submenu?: Array<{
-        title: string | DocumentFragment;
-        action: () => void;
-        icon?: string | null;
-        checked?: boolean;
-        disabled?: boolean;
-        section?: string;
-        warning?: boolean;
-      }>;
-      icon?: string | null;
-      checked?: boolean;
-      disabled?: boolean;
-      section?: string;
-      warning?: boolean;
-    }>,
-    options: { anchor?: HTMLElement; horizontalAlign?: "start" | "end"; menuClass?: string } = {}
-  ): Menu {
+  /**
+   * Build (but do not show) a Menu populated with `items`. Factored out of
+   * `showMenu` so callers that need plugins to add items via a workspace
+   * event (`file-menu`, `editor-menu`) can populate the built-ins, fire the
+   * event synchronously so plugin `menu.addItem(...)` calls land in the same
+   * `entries` list, and only then show the merged menu. Menu items added
+   * without an explicit `.setSection(...)` (as plugins typically do) get no
+   * `data-section`, which differs from built-ins' `"default"` section — the
+   * Menu's group renderer already inserts a separator whenever the section
+   * changes between adjacent entries, so plugin items automatically land
+   * after a separator following the built-ins with no extra bookkeeping here.
+   */
+  buildMenu(items: ContextMenuItemSpec[], menuClass?: string): Menu {
     const menu = new Menu();
     // Keep the pre-v0.8 selectors during the core-menu migration. The shared
     // Obsidian-compatible DOM remains canonical (`.menu` / `.menu-item`).
     menu.dom.classList.add("context-menu");
-    if (options.menuClass) menu.dom.classList.add(options.menuClass);
+    if (menuClass) menu.dom.classList.add(menuClass);
     for (const item of items) {
       menu.addItem((menuItem) => {
         menuItem.dom.classList.add("context-menu-item");
@@ -3925,6 +4099,15 @@ export class App {
         menuItem.dom.classList.toggle("is-warning", item.warning ?? false);
       });
     }
+    return menu;
+  }
+
+  showMenu(
+    e: MouseEvent,
+    items: ContextMenuItemSpec[],
+    options: { anchor?: HTMLElement; horizontalAlign?: "start" | "end"; menuClass?: string } = {}
+  ): Menu {
+    const menu = this.buildMenu(items, options.menuClass);
     if (options.anchor) {
       menu.showAtElement(options.anchor, { horizontalAlign: options.horizontalAlign });
     } else {

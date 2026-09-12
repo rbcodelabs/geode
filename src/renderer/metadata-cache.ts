@@ -6,11 +6,13 @@ import { recordMeasure, withPerfMark } from "./perf-instrumentation";
 import { maskCommentMetadata } from "./comments/model";
 import {
   CachedMetadata,
+  FootnoteRefCache,
   HeadingCache,
   LinkCache,
   ListItemCache,
   Loc,
   Pos,
+  ReferenceLinkCache,
   SectionCache,
   TFile,
   TagCache,
@@ -28,6 +30,12 @@ import {
 } from "../indexer/metadata-indexer";
 
 const WIKILINK_RE = /(!)?\[\[([^\[\]\n]+)\]\]/g;
+// `[^id]` NOT followed by `:` — that would make it a footnote definition
+// rather than a reference to one.
+const FOOTNOTE_REF_RE = /\[\^([^\]\s]+)\](?!:)/g;
+// `[text][id]` (full) and `[text][]` (collapsed) markdown reference links.
+// The `!` lookbehind keeps image references out.
+const REFERENCE_LINK_RE = /(?<!!)\[([^\[\]\n]+)\]\[([^\[\]\n]*)\]/g;
 const TAG_RE = /(^|[\s(])#([\p{L}\p{N}_\/-]*[\p{L}_\/-][\p{L}\p{N}_\/-]*)/gu;
 const HEADING_RE = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?$/;
 // A list item: leading indent, a bullet (-,*,+) or ordered marker (1. / 1)),
@@ -667,6 +675,28 @@ export function parseMetadata(
     const start = bodyOffset + m.index! + m[1].length;
     meta.tags.push({ tag, position: offsetToLoc(lineStarts, start, start + tag.length + 1) });
   }
+
+  // Footnote *references* — `[^id]` used inline. The definition line
+  // (`[^id]: text`) is excluded by the negative lookahead, since a definition
+  // is not a reference to itself.
+  const footnoteRefs: FootnoteRefCache[] = [];
+  for (const m of masked.matchAll(FOOTNOTE_REF_RE)) {
+    const start = bodyOffset + m.index!;
+    footnoteRefs.push({ id: m[1], position: offsetToLoc(lineStarts, start, start + m[0].length) });
+  }
+  if (footnoteRefs.length) meta.footnoteRefs = footnoteRefs;
+
+  // Markdown reference links — `[text][id]` (full) and `[id][]` (collapsed),
+  // where an empty id means the link text doubles as the id.
+  const referenceLinks: ReferenceLinkCache[] = [];
+  for (const m of masked.matchAll(REFERENCE_LINK_RE)) {
+    if (m[1].startsWith("^")) continue; // a footnote ref, handled above
+    const id = m[2] || m[1];
+    if (!id) continue;
+    const start = bodyOffset + m.index!;
+    referenceLinks.push({ id, link: m[1], position: offsetToLoc(lineStarts, start, start + m[0].length) });
+  }
+  if (referenceLinks.length) meta.referenceLinks = referenceLinks;
 
   let offset = bodyOffset;
   let inFence = false;

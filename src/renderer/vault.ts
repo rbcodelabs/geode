@@ -444,6 +444,13 @@ export class Vault extends Events {
       const options = {
         getName: () => this.name,
         exists: (p: string) => this.host.vaultFiles.exists(p),
+        rmdir: async (p: string, recursive: boolean) => {
+          const files = this.host.vaultFiles;
+          if (!files.rmdir) {
+            throw new Error(`Vault.adapter.rmdir is not supported on this platform (cannot remove "${p}")`);
+          }
+          await files.rmdir(p, recursive);
+        },
       };
       this._adapter = this.host.capabilities.nodePlugins
         ? new FileSystemAdapter(this.root, options)
@@ -451,6 +458,38 @@ export class Vault extends Events {
       this._adapterRoot = this.root;
     }
     return this._adapter;
+  }
+
+  /**
+   * Obsidian's `vault.getResourcePath(file)`: a URL the browser engine can load
+   * a vault file from, for example as an `<img src>`.
+   *
+   * Distinct from the identically named `vault.adapter.getResourcePath(path)`,
+   * which takes a normalized path string. Plugins call this `TFile` overload —
+   * `kanban-bases-view` uses it for card cover images — and passing a `TFile` to
+   * the adapter form would have produced `file://<root>/[object Object]`.
+   *
+   * Geode's renderer document is itself served over `file://`, so its
+   * `img-src 'self'` CSP admits `file://` URLs (verified in
+   * `tests/e2e/bases-kanban-interaction.spec.ts`, which asserts a cover image
+   * reaches a non-zero `naturalWidth`). That is why this can hand back a direct
+   * `file://` URL instead of needing the custom `app://local/` scheme Obsidian
+   * registers.
+   *
+   * @throws when the platform has no filesystem adapter (mobile). There is no
+   * synchronous URL for vault bytes there — `loadEmbedBlobUrl()` is the async
+   * route Geode's own views use — and returning an unloadable URL would render
+   * as a permanently broken image with no error anywhere.
+   */
+  getResourcePath(file: TFile): string {
+    const adapter = this.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      throw new Error(
+        `Vault.getResourcePath is only available where the vault is backed by the filesystem; ` +
+          `cannot resolve "${file?.path}" on this platform.`
+      );
+    }
+    return adapter.getResourcePath(file.path);
   }
 
   getRoot(): TFolder {
@@ -575,6 +614,23 @@ export class Vault extends Events {
     this.acknowledgedPathsSinceManifest.add(file.path);
     this.contents.set(file.path, data);
     this.trigger("modify", file);
+  }
+
+  /**
+   * Copy a file to `newPath`, returning the new file.
+   *
+   * Files only. Copying a folder means recursively recreating its whole
+   * subtree, which this doesn't do — and it rejects rather than silently
+   * copying nothing, so a caller finds out immediately.
+   */
+  async copy<T extends TFile>(file: T, newPath: string): Promise<TFile> {
+    if ((file as TFile | TFolder).kind !== "file") {
+      throw new Error(`Vault.copy only supports files; "${file.path}" is a folder`);
+    }
+    if (this.files.has(newPath) || this.folders.has(newPath)) {
+      throw new Error(`File already exists: ${newPath}`);
+    }
+    return this.create(newPath, await this.read(file));
   }
 
   async trash(item: TFile | TFolder): Promise<void> {

@@ -273,6 +273,32 @@ export function createBrowserHost(
         for (const candidate of descendantFolders) emit({ event: "delete-folder", path: candidate, mutationId });
         emit({ event: "delete-folder", path: key, mutationId });
       },
+      // Obsidian's `adapter.rmdir`: remove a folder outright. Distinct from
+      // `trash` above in that it only ever accepts a folder, and refuses a
+      // non-empty one unless `recursive`.
+      rmdir: async (path, recursive, mutationId) => {
+        requireOpen();
+        const key = normalizeVaultPath(path);
+        const prefix = `${key}/`;
+        const files = [...activeState.files.keys()].filter((c) => c.startsWith(prefix)).sort().reverse();
+        const folders = [...activeState.folders.keys()].filter((c) => c.startsWith(prefix)).sort().reverse();
+        // A folder exists here either because it was explicitly created or
+        // because something lives under it — this host has no folder entries
+        // for the implied parents of a seeded file.
+        if (!activeState.folders.has(key) && !files.length && !folders.length) {
+          throw new Error(`Folder not found: ${path}`);
+        }
+        if (!recursive && (files.length || folders.length)) {
+          throw new Error(`Folder is not empty: ${path}`);
+        }
+        for (const candidate of files) activeState.files.delete(candidate);
+        for (const candidate of folders) activeState.folders.delete(candidate);
+        activeState.folders.delete(key);
+        activeState.persist();
+        for (const candidate of files) emit({ event: "delete", path: candidate, mutationId });
+        for (const candidate of folders) emit({ event: "delete-folder", path: candidate, mutationId });
+        emit({ event: "delete-folder", path: key, mutationId });
+      },
       rename: async (path, newPath, mutationId) => {
         requireOpen();
         const from = normalizeVaultPath(path);

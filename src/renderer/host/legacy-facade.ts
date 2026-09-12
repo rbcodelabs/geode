@@ -35,6 +35,8 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     write: (path, data, options) => host.vaultFiles.write(path, data, options),
     mkdir: (path) => host.vaultFiles.mkdir(path),
     trash: (path) => host.vaultFiles.trash(path),
+    rmdir: (path, recursive) =>
+      host.vaultFiles.rmdir?.(path, recursive) ?? unavailable("rmdir")(),
     rename: (path, newPath) => host.vaultFiles.rename(path, newPath),
     exists: (path) => host.vaultFiles.exists(path),
     reveal: host.desktop?.revealInFileManager ?? unavailable("desktop") as never,
@@ -80,5 +82,6 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     publishHotkeys: host.desktop?.publishHotkeys ?? (async () => {}),
     onGuestHotkey: (host.desktop?.onGuestHotkey ?? (() => () => {})) as never,
     onGuestWindowOpen: (host.desktop?.onGuestWindowOpen ?? (() => () => {})) as never,
+    onWebViewerBridgeEvent: (host.desktop?.onWebViewerBridgeEvent ?? (() => () => {})) as never,
   };
 }

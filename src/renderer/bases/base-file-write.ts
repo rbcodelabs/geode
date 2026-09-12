@@ -12,6 +12,9 @@ function omitUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
 
 function viewToRaw(view: BaseViewDefinition): Record<string, unknown> {
   return omitUndefined({
+    // Unknown keys first, so a typed field always wins over a same-named
+    // leftover in the passthrough bag. See `BaseViewDefinition.extra`.
+    ...view.extra,
     type: view.type,
     name: view.name,
     limit: view.limit,
@@ -41,7 +44,11 @@ function viewToRaw(view: BaseViewDefinition): Record<string, unknown> {
 export function stringifyBaseFile(def: BaseDefinition): string {
   const properties: Record<string, unknown> = {};
   for (const [key, cfg] of Object.entries(def.properties)) {
-    if (cfg.displayName) properties[key] = { displayName: cfg.displayName };
+    // A property entry is worth writing if it carries a displayName OR any
+    // config Geode doesn't model. Previously only the former counted, so a
+    // hand-authored `{color: blue}` entry was erased on the next save.
+    const raw = omitUndefined({ ...cfg.extra, displayName: cfg.displayName });
+    if (Object.keys(raw).length) properties[key] = raw;
   }
 
   const raw = omitUndefined({

@@ -3,6 +3,8 @@ import type { View } from "../workspace";
 import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
 import { VAULT_FILE_DRAG_MIME } from "../file-drag";
+import { ProjectsSection } from "./projects-section";
+import { threadsProjectSource } from "../integrations/threads-projects";
 
 export type SortOrder = "name-asc" | "name-desc";
 
@@ -26,6 +28,7 @@ export class FileExplorerView implements View {
   readonly viewType = "file-explorer";
   containerEl: HTMLElement;
   private treeEl: HTMLElement;
+  private vaultTreeEl: HTMLElement;
   private expanded = new Set<string>();
   private activePath: string | null = null;
   private sortOrder: SortOrder = "name-asc";
@@ -33,6 +36,7 @@ export class FileExplorerView implements View {
   private selected = new Set<string>();
   /** Anchor for Shift-range selection: the last row clicked without Shift. */
   private lastClicked: string | null = null;
+  private readonly projects: ProjectsSection;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -96,7 +100,24 @@ export class FileExplorerView implements View {
 
     this.treeEl = document.createElement("div");
     this.treeEl.className = "nav-files-container";
+    this.vaultTreeEl = document.createElement("div");
+    this.vaultTreeEl.className = "nav-files-tree";
+    this.treeEl.appendChild(this.vaultTreeEl);
     this.containerEl.appendChild(this.treeEl);
+    this.projects = new ProjectsSection({
+      host: app.host.externalRoots,
+      ...(app.host.runtime.runtime !== "electron" ? { mobileProjects: threadsProjectSource(app.vault) } : {}),
+      openResource: (ref, label, newTab) => app.openExternalResource(ref, label, newTab),
+      revealVaultFolder: (relativePath) => {
+        const parts = relativePath.split("/");
+        for (let length = 1; length <= parts.length; length++) this.expanded.add(parts.slice(0, length).join("/"));
+        this.render();
+        for (const row of this.treeEl.querySelectorAll<HTMLElement>(".nav-folder-title")) {
+          if (row.dataset.path === relativePath) { row.scrollIntoView({ block: "nearest" }); break; }
+        }
+      },
+    });
+    this.treeEl.appendChild(this.projects.containerEl);
 
     for (const ev of ["create", "delete", "rename"]) {
       app.vault.on(ev, () => this.render());
@@ -117,16 +138,17 @@ export class FileExplorerView implements View {
 
   onOpen(): void {
     this.render();
+    void this.projects.refresh();
   }
 
-  onClose(): void {}
+  onClose(): void { this.projects.dispose(); }
 
   private render() {
-    this.treeEl.innerHTML = "";
+    this.vaultTreeEl.innerHTML = "";
     const root = this.app.vault.getRoot();
     const children = sortChildren(root.children, this.sortOrder);
     for (const child of children) {
-      this.treeEl.appendChild(this.renderItem(child as TFile | TFolder));
+      this.vaultTreeEl.appendChild(this.renderItem(child as TFile | TFolder));
     }
     this.highlightActive();
   }
@@ -301,6 +323,9 @@ export class FileExplorerView implements View {
     return [path];
   }
 
+  /** Source id passed to the `file-menu` workspace event for both files and folders opened from this view. */
+  private static readonly MENU_SOURCE = "file-explorer-context-menu";
+
   private fileMenu(e: MouseEvent, file: TFile) {
     e.preventDefault();
     const targets = this.menuTargetPaths(file.path);
@@ -313,7 +338,13 @@ export class FileExplorerView implements View {
         action: () => void this.app.bookmarkPaths(targets),
       });
     }
-    this.app.showMenu(e, items);
+    // Build the menu with built-ins first, then let plugins add their own
+    // items via `workspace.on('file-menu', ...)` before it's shown, so both
+    // render in one list (plugin items land after a separator — see
+    // `App.buildMenu`'s doc comment for why no explicit separator is needed).
+    const menu = this.app.buildMenu(items);
+    this.app.workspace.trigger("file-menu", menu, file, FileExplorerView.MENU_SOURCE);
+    menu.showAtMouseEvent(e);
   }
 
   private folderMenu(e: MouseEvent, folder: TFolder) {
@@ -328,6 +359,12 @@ export class FileExplorerView implements View {
         action: () => void this.app.bookmarkPaths(targets),
       });
     }
-    this.app.showMenu(e, resourceItems);
+    // Obsidian fires the same `file-menu` event (not a separate `folder-menu`)
+    // for folders, passing a TFolder — mirrored here so a plugin that only
+    // checks `file instanceof TFile` (like most) safely no-ops on folders,
+    // while a folder-aware plugin can still act on the TFolder it receives.
+    const menu = this.app.buildMenu(resourceItems);
+    this.app.workspace.trigger("file-menu", menu, folder, FileExplorerView.MENU_SOURCE);
+    menu.showAtMouseEvent(e);
   }
 }

@@ -1931,6 +1931,31 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   min-height: 0;
 }
 
+.image-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--background-primary);
+}
+
+.image-view-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: var(--size-4-4);
+}
+
+.image-view-image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 /* ---- View header (breadcrumb/actions bar above each leaf's content) ----
    Real Obsidian DOM: .view-header > .view-header-left (nav buttons only) +
    .view-header-title-container + .view-actions. The title-container is a
@@ -2626,7 +2651,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 .markdown-rendered table {
   margin: 0 0 1em;
 }
-.markdown-rendered li { margin: 0.15em 0; }
+.markdown-rendered li { margin: 0.45em 0; }
 .markdown-rendered li > ul,
 .markdown-rendered li > ol { margin-bottom: 0; }
 
@@ -3103,6 +3128,51 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
 .community-item-controls button {
   font-size: var(--font-ui-small);
   padding: 3px 8px;
+}
+
+.supported-plugin-catalog {
+  margin: 18px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.supported-plugin-catalog h3 { margin: 0 0 4px; }
+.supported-plugin-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.supported-plugin-info { min-width: 0; }
+.supported-plugin-heading { display: flex; align-items: center; gap: 8px; }
+.supported-plugin-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 230px;
+}
+.supported-release-badge.is-unverified { color: var(--text-warning, #d99b3d); }
+.supported-latest-warning {
+  max-width: 280px;
+  color: var(--text-warning, #d99b3d);
+  font-size: var(--font-ui-smaller);
+}
+.supported-plugin-status {
+  min-height: 1.2em;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.supported-plugin-status.is-error { color: var(--text-error, #e06c75); }
+
+@media (max-width: 700px) {
+  .mod-settings .supported-plugin-item { flex-direction: column; }
+  .mod-settings .supported-plugin-controls {
+    min-width: 0;
+    width: 100%;
+    align-items: stretch;
+  }
+  .mod-settings .supported-latest-warning { max-width: none; }
 }
 
 /* Settings → Performance tab */
@@ -5246,6 +5316,63 @@ body.is-mobile .page-preview {
 .canvas-view.has-error .canvas-selection-controls {
   display: none;
 }
+
+/* External Projects share the file explorer's single scrolling tree while
+   remaining a distinct, read-only source. */
+.projects-section {
+  padding-top: 8px;
+  font-size: var(--font-ui-small);
+}
+.projects-section[hidden] { display: none; }
+.projects-section-header, .projects-root-alias, .projects-unbound {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.projects-section-header { justify-content: space-between; margin: 0 -4px 2px; padding: 6px 10px; }
+.projects-section button {
+  font-size: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  border: 0;
+  box-shadow: none;
+}
+.projects-root { margin-bottom: 6px; }
+.projects-root-alias, .projects-status { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 3px 8px 3px 26px; overflow-wrap: anywhere; }
+.projects-root-alias button, .projects-section-header button { font-size: var(--font-ui-smaller); }
+.projects-directory-toggle, .projects-file {
+  width: 100%;
+  background: transparent;
+}
+.projects-directory-children { margin-left: 12px; }
+.projects-directory-children[hidden] { display: none; }
+.projects-file:disabled { opacity: .6; cursor: not-allowed; }
+.projects-inline-action,
+.projects-root-alias button,
+.projects-unbound button {
+  background: transparent;
+  color: var(--text-accent);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.projects-inline-action:hover,
+.projects-root-alias button:hover,
+.projects-unbound button:hover { background: var(--background-modifier-hover); }
+.projects-directory-toggle:focus-visible,
+.projects-file:focus-visible,
+.projects-inline-action:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.external-source-view { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; }
+.external-source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--background-modifier-border); }
+.external-source-readonly { font-size: var(--font-ui-small); color: var(--text-muted); }
+.external-source-identity { padding: 8px 16px; font-size: var(--font-ui-small); overflow-wrap: anywhere; color: var(--text-muted); }
+.external-source-body { flex: 1; min-height: 0; overflow: auto; }
+.external-source-text { margin: 0; padding: 16px; min-height: 100%; white-space: pre; font-family: var(--font-monospace); user-select: text; }
+.external-source-text code { font-family: inherit; white-space: inherit; background: transparent; }
+.external-source-status { padding: 16px; color: var(--text-muted); }
+.external-source-status.is-error { color: var(--text-error); }
+
 /* Anchored Markdown comments */
 .markdown-source-view { position: relative; }
 .cm-comment-anchor {

@@ -7,6 +7,15 @@ export interface ToolbarState {
   viewNames: string[];
   currentViewName: string;
   currentViewType: BaseViewType;
+  /**
+   * False when the current view is rendered by a plugin-registered layout
+   * rather than by Table/Cards. The built-in-only affordances (the
+   * table/cards type toggle, the row-height select) are hidden in that case:
+   * `currentViewType` still has to be one of the two built-ins for the rest
+   * of the toolbar's typing, so on its own it would claim a Kanban view is a
+   * table and offer to "change type to Cards".
+   */
+  currentViewIsBuiltin: boolean;
   resultCount: number;
   rowHeight: RowHeight;
 }
@@ -122,11 +131,13 @@ export class BasesToolbar {
     }));
     items.push({ title: "+ New table view", action: () => this.handlers.onAddView("table") });
     items.push({ title: "+ New cards view", action: () => this.handlers.onAddView("cards") });
-    const otherType: BaseViewType = this.state.currentViewType === "cards" ? "table" : "cards";
-    items.push({
-      title: `Change type to ${otherType === "cards" ? "Cards" : "Table"}`,
-      action: () => this.handlers.onSetViewType(otherType),
-    });
+    if (this.state.currentViewIsBuiltin) {
+      const otherType: BaseViewType = this.state.currentViewType === "cards" ? "table" : "cards";
+      items.push({
+        title: `Change type to ${otherType === "cards" ? "Cards" : "Table"}`,
+        action: () => this.handlers.onSetViewType(otherType),
+      });
+    }
     items.push({ title: "Rename current view…", action: () => this.handlers.onRenameView(currentViewName) });
     const idx = viewNames.indexOf(currentViewName);
     if (idx > 0) items.push({ title: "Move view up", action: () => this.handlers.onMoveView(currentViewName, -1) });
@@ -148,14 +159,23 @@ export class BasesToolbar {
     ]);
   }
 
-  private state: ToolbarState = { viewNames: [], currentViewName: "", currentViewType: "table", resultCount: 0, rowHeight: "medium" };
+  private state: ToolbarState = {
+    viewNames: [],
+    currentViewName: "",
+    currentViewType: "table",
+    currentViewIsBuiltin: true,
+    resultCount: 0,
+    rowHeight: "medium",
+  };
 
   update(state: ToolbarState): void {
     this.state = state;
     this.viewBtn.textContent = `${state.currentViewName} ▾`;
     this.resultsEl.textContent = `${state.resultCount} result${state.resultCount === 1 ? "" : "s"}`;
     this.rowHeightSelect.value = state.rowHeight;
-    // Row height is a Table-view-only control; hide it on Cards views.
-    this.rowHeightSelect.style.display = state.currentViewType === "cards" ? "none" : "";
+    // Row height is a Table-view-only control: hidden on Cards, and on any
+    // plugin-rendered view (which owns its own layout entirely).
+    const showRowHeight = state.currentViewIsBuiltin && state.currentViewType !== "cards";
+    this.rowHeightSelect.style.display = showRowHeight ? "" : "none";
   }
 }

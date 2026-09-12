@@ -16,6 +16,7 @@
 
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { parseManifest } from "../renderer/plugin-manifest";
 import {
   DEFAULT_API_BASE,
@@ -23,6 +24,7 @@ import {
   parseRepoSpec,
   resolveItem,
   type CommunityPreview,
+  type CertifiedArtifactHashes,
   type HttpGet,
   type InstalledResult,
   type RepoSpec,
@@ -40,6 +42,22 @@ function bases(): { apiBase: string; rawBase: string } {
     apiBase: process.env.GEODE_GITHUB_API_BASE || DEFAULT_API_BASE,
     rawBase: process.env.GEODE_GITHUB_RAW_BASE || DEFAULT_RAW_BASE,
   };
+}
+
+/** Verify every installed plugin runtime file against the catalog certificate. */
+export function validateArtifactHashes(
+  expected: CertifiedArtifactHashes,
+  actual: Partial<Record<"manifest.json" | "main.js" | "styles.css", Buffer>>,
+): void {
+  for (const name of ["manifest.json", "main.js", "styles.css"] as const) {
+    const expectedHash = expected[name];
+    const bytes = actual[name];
+    if (expectedHash && !bytes) throw new Error(`Certified artifact ${name} is missing`);
+    if (!expectedHash && bytes) throw new Error(`Downloaded artifact ${name} is not certified`);
+    if (!expectedHash || !bytes) continue;
+    const actualHash = createHash("sha256").update(bytes).digest("hex");
+    if (actualHash !== expectedHash) throw new Error(`${name} failed catalog SHA-256 verification`);
+  }
 }
 
 /** Real HTTP client over Node's global fetch (follows redirects by default). */
@@ -161,6 +179,7 @@ export async function installCommunity(
   try {
     let wroteManifest = false;
     let wroteEntry = false;
+    const stagedPluginFiles: Partial<Record<"manifest.json" | "main.js" | "styles.css", Buffer>> = {};
     const entryFile = resolved.type === "plugin" ? "main.js" : "theme.css";
 
     for (const file of resolved.files) {
@@ -172,6 +191,9 @@ export async function installCommunity(
       }
       const buf = Buffer.from(await res.arrayBuffer());
       await fsp.writeFile(path.join(staging, file.name), buf);
+      if (resolved.type === "plugin" && (file.name === "manifest.json" || file.name === "main.js" || file.name === "styles.css")) {
+        stagedPluginFiles[file.name] = buf;
+      }
       if (file.name === "manifest.json") wroteManifest = true;
       if (file.name === entryFile) wroteEntry = true;
     }
@@ -182,6 +204,9 @@ export async function installCommunity(
     if (opts.expected) {
       const stagedManifest = await fsp.readFile(path.join(staging, "manifest.json"), "utf8");
       validateInstallCandidate(opts.expected, toPreview(spec, resolved), stagedManifest);
+      if (resolved.type === "plugin" && opts.expected.artifactHashes) {
+        validateArtifactHashes(opts.expected.artifactHashes, stagedPluginFiles);
+      }
     }
 
     await preserveItemState(destDir, staging);

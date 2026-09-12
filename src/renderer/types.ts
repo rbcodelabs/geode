@@ -111,6 +111,29 @@ export interface CachedMetadata {
    * existed). Present when the note has any block content.
    */
   sections?: SectionCache[];
+  /**
+   * Inline footnote references (`[^id]`). ABSENT when the note has none,
+   * following the same "present only when found" convention as `listItems`
+   * and `sections` above.
+   */
+  footnoteRefs?: FootnoteRefCache[];
+  /** Markdown reference links (`[text][id]`, `[text][]`). ABSENT when the note has none. */
+  referenceLinks?: ReferenceLinkCache[];
+}
+
+// NOTE: Geode's `Loc` is the {start, end} span (what Obsidian calls `Pos`),
+// and Geode's `Pos` is the {line, ch, offset} point. `position: Loc` here is
+// the span, consistent with every other cache type in this file.
+export interface FootnoteRefCache {
+  id: string;
+  position: Loc;
+}
+
+export interface ReferenceLinkCache {
+  id: string;
+  /** The link text, i.e. what is displayed. */
+  link: string;
+  position: Loc;
 }
 
 export const MARKDOWN_EXTENSIONS = new Set(["md"]);
@@ -173,16 +196,23 @@ export class TFolderClass {
  * module stays dependency-free; safe defaults keep any bare
  * `new FileSystemAdapter(basePath)` construction working.
  */
+export interface DataAdapterOptions {
+  getName?: () => string;
+  exists?: (normalizedPath: string) => Promise<boolean> | boolean;
+  rmdir?: (normalizedPath: string, recursive: boolean) => Promise<void>;
+}
+
 export class DataAdapter {
   private readonly nameProvider: () => string;
   private readonly existsProvider: (normalizedPath: string) => Promise<boolean> | boolean;
+  private readonly rmdirProvider: (normalizedPath: string, recursive: boolean) => Promise<void>;
 
-  constructor(opts?: {
-    getName?: () => string;
-    exists?: (normalizedPath: string) => Promise<boolean> | boolean;
-  }) {
+  constructor(opts?: DataAdapterOptions) {
     this.nameProvider = opts?.getName ?? (() => "");
     this.existsProvider = opts?.exists ?? (() => false);
+    this.rmdirProvider = opts?.rmdir ?? ((normalizedPath) => Promise.reject(
+      new Error(`Vault.adapter.rmdir is not supported on this platform (cannot remove "${normalizedPath}")`)
+    ));
   }
 
   getName(): string {
@@ -192,18 +222,27 @@ export class DataAdapter {
   exists(normalizedPath: string): Promise<boolean> | boolean {
     return this.existsProvider(normalizedPath);
   }
+
+  /**
+   * Obsidian's `adapter.rmdir(normalizedPath, recursive)`: remove a folder
+   * from the vault outright — no trip through the OS trash, unlike
+   * `Vault.trash`. Plugins call this to clean up folders they created
+   * themselves; obsidian-claude-threads removes a thread's attachment folder
+   * this way when the thread is hard-deleted, and without it the folder leaked
+   * on disk forever (the missing method threw, and the caller swallowed it).
+   *
+   * Rejects rather than resolving when the path escapes the vault, names the
+   * vault root, is not a folder, or — with `recursive` false — is not empty.
+   */
+  rmdir(normalizedPath: string, recursive = false): Promise<void> {
+    return this.rmdirProvider(normalizedPath, recursive);
+  }
 }
 
 export class FileSystemAdapter extends DataAdapter {
   /** Absolute vault path. Public because real Obsidian exposes it directly. */
   basePath: string;
-  constructor(
-    basePath: string,
-    opts?: {
-      getName?: () => string;
-      exists?: (normalizedPath: string) => Promise<boolean> | boolean;
-    }
-  ) {
+  constructor(basePath: string, opts?: DataAdapterOptions) {
     super(opts);
     this.basePath = basePath;
   }
@@ -213,9 +252,24 @@ export class FileSystemAdapter extends DataAdapter {
   }
 
   getResourcePath(normalizedPath: string): string {
-    return `file://${this.basePath}/${normalizedPath}`.replace(/ /g, "%20");
+    return `file://${encodeFileUrlPath(`${this.basePath}/${normalizedPath}`)}`;
   }
 
+}
+
+/**
+ * Percent-encode a filesystem path for use in a `file://` URL, one segment at a
+ * time so the separators survive.
+ *
+ * Escaping only spaces (the previous behaviour) is not enough: `#` starts a
+ * fragment, so `Board/photo#1.png` used to yield a URL truncated at `photo`,
+ * and `?` would open a query string. Both silently resolve to "file not found"
+ * — an `<img>` that never loads with nothing in the console explaining why.
+ * `encodeURIComponent` still renders a space as `%20`, so ordinary paths are
+ * byte-for-byte unchanged.
+ */
+export function encodeFileUrlPath(absolutePath: string): string {
+  return absolutePath.split("/").map(encodeURIComponent).join("/");
 }
 
 /**

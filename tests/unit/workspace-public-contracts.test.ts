@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { View } from "../../src/renderer/api/obsidian";
 import { TabGroup, Workspace, WorkspaceLeaf } from "../../src/renderer/workspace";
+import { DeferredView } from "../../src/renderer/views/deferred-view";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -120,6 +121,20 @@ describe("Workspace active leaf events", () => {
 });
 
 describe("WorkspaceLeaf public state contracts", () => {
+  function stateLeaf(currentView: unknown, factoryView: unknown) {
+    const factory = vi.fn(() => factoryView);
+    const setView = vi.fn(async (next: unknown) => void ((leaf as any).view = next));
+    const setActiveLeaf = vi.fn();
+    const leaf = Object.create(WorkspaceLeaf.prototype) as WorkspaceLeaf;
+    Object.assign(leaf, {
+      app: { workspace: { getViewFactory: () => factory } },
+      group: { setActiveLeaf },
+      view: currentView,
+      setView,
+    });
+    return { leaf, factory, setView, setActiveLeaf };
+  }
+
   it("applies falsey view state and reports the view's current serialized state", async () => {
     const setState = vi.fn(async () => {});
     const view = {
@@ -139,6 +154,72 @@ describe("WorkspaceLeaf public state contracts", () => {
     await leaf.setViewState({ type: "probe", state: false });
     expect(setState).toHaveBeenCalledWith(false, {});
     expect(leaf.getViewState()).toEqual({ type: "probe", state: { current: 2 } });
+  });
+
+  it("updates a live same-type stateful view in place", async () => {
+    const setState = vi.fn(async () => {});
+    const currentView = { viewType: "probe", setState };
+    const replacement = { viewType: "probe", setState: vi.fn() };
+    const { leaf, factory, setView, setActiveLeaf } = stateLeaf(currentView, replacement);
+
+    await leaf.setViewState({ type: "probe", active: true, state: { cursor: 7 } });
+
+    expect(setState).toHaveBeenCalledWith({ cursor: 7 }, {});
+    expect(factory).not.toHaveBeenCalled();
+    expect(setView).not.toHaveBeenCalled();
+    expect(leaf.view).toBe(currentView);
+    expect(setActiveLeaf).toHaveBeenCalledWith(leaf);
+  });
+
+  it("remounts a deferred same-type view even if it exposes setState", async () => {
+    vi.stubGlobal("document", {
+      createElement: () => ({
+        className: "",
+        textContent: "",
+        hidden: false,
+        append() {},
+      }),
+    });
+    const deferred = new DeferredView({ type: "probe", state: { cursor: 1 } });
+    const deferredSetState = vi.fn();
+    Object.assign(deferred, { setState: deferredSetState });
+    const replacementSetState = vi.fn();
+    const replacement = { viewType: "probe", setState: replacementSetState };
+    const { leaf, factory, setView } = stateLeaf(deferred, replacement);
+
+    await leaf.setViewState({ type: "probe", state: { cursor: 2 } });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(setView).toHaveBeenCalledWith(replacement);
+    expect(deferredSetState).not.toHaveBeenCalled();
+    expect(replacementSetState).toHaveBeenCalledWith({ cursor: 2 }, {});
+  });
+
+  it("remounts when the requested type differs from the live view", async () => {
+    const currentSetState = vi.fn();
+    const currentView = { viewType: "first", setState: currentSetState };
+    const replacementSetState = vi.fn();
+    const replacement = { viewType: "second", setState: replacementSetState };
+    const { leaf, factory, setView } = stateLeaf(currentView, replacement);
+
+    await leaf.setViewState({ type: "second", state: { cursor: 3 } });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(setView).toHaveBeenCalledWith(replacement);
+    expect(currentSetState).not.toHaveBeenCalled();
+    expect(replacementSetState).toHaveBeenCalledWith({ cursor: 3 }, {});
+  });
+
+  it("remounts a same-type view that cannot apply state in place", async () => {
+    const currentView = { viewType: "probe" };
+    const replacement = { viewType: "probe" };
+    const { leaf, factory, setView } = stateLeaf(currentView, replacement);
+
+    await leaf.setViewState({ type: "probe", state: { cursor: 4 } });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(setView).toHaveBeenCalledWith(replacement);
+    expect(leaf.view).toBe(replacement);
   });
 
   it("opens and returns an existing view and toggles pinned state", async () => {
@@ -179,6 +260,111 @@ describe("View state foundation", () => {
     view.setEphemeralState({ cursor: 3 });
     expect(view.getEphemeralState()).toEqual({ cursor: 3 });
     await expect(view.setState({ saved: true }, {})).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The pane-targeting surface `kanban-bases-view` opens notes through:
+ * `getMostRecentLeaf()` to remember the board's own leaf, `getLeaf('tab')` for
+ * the note, then `setActiveLeaf(previous, { focus: false })` to put the board
+ * back in front. Only `getLeaf(boolean)` existed before, and `'tab'` worked by
+ * truthiness alone.
+ */
+describe("Workspace pane targeting (getLeaf / getMostRecentLeaf / setActiveLeaf)", () => {
+  function paneWorkspace(active: WorkspaceLeaf | null) {
+    const created: WorkspaceLeaf[] = [];
+    const split = { leaf: {} as WorkspaceLeaf };
+    const workspace = Object.create(Workspace.prototype) as Workspace;
+    Object.assign(workspace, {
+      activeGroup: {
+        active,
+        leaves: active ? [active] : [],
+        createLeaf: () => {
+          const leaf = { id: `created-${created.length}` } as unknown as WorkspaceLeaf;
+          created.push(leaf);
+          return leaf;
+        },
+      },
+      groups: [{ active, leaves: active ? [active] : [] }],
+      splitActiveLeaf: vi.fn(() => split.leaf),
+    });
+    return { workspace, created, split };
+  }
+
+  it("treats the documented 'tab' PaneType as a new tab, not just as a truthy value", () => {
+    const active = { pinned: false } as WorkspaceLeaf;
+    const { workspace, created } = paneWorkspace(active);
+
+    expect(workspace.getLeaf("tab")).toBe(created[0]);
+    expect(workspace.getLeaf(true)).toBe(created[1]);
+  });
+
+  it("reuses the active leaf for false/omitted, unless it is pinned", () => {
+    const active = { pinned: false } as WorkspaceLeaf;
+    const { workspace, created } = paneWorkspace(active);
+
+    expect(workspace.getLeaf(false)).toBe(active);
+    expect(workspace.getLeaf()).toBe(active);
+    expect(created).toHaveLength(0);
+
+    const pinned = { pinned: true } as WorkspaceLeaf;
+    const pinnedWs = paneWorkspace(pinned);
+    expect(pinnedWs.workspace.getLeaf(false)).toBe(pinnedWs.created[0]);
+  });
+
+  it("routes 'split' to a new adjacent group instead of another tab", () => {
+    const active = { pinned: false } as WorkspaceLeaf;
+    const { workspace, created, split } = paneWorkspace(active);
+
+    expect(workspace.getLeaf("split", "vertical")).toBe(split.leaf);
+    expect(workspace.splitActiveLeaf).toHaveBeenCalledWith("vertical");
+    expect(created).toHaveLength(0);
+  });
+
+  it("throws on 'window' rather than silently substituting a tab", () => {
+    const { workspace, created } = paneWorkspace({ pinned: false } as WorkspaceLeaf);
+
+    expect(() => workspace.getLeaf("window")).toThrow(/has no pop-out windows/);
+    expect(created).toHaveLength(0);
+  });
+
+  it("getMostRecentLeaf() returns the active main-area leaf", () => {
+    const active = { pinned: false } as WorkspaceLeaf;
+    const { workspace } = paneWorkspace(active);
+
+    expect(workspace.getMostRecentLeaf()).toBe(active);
+  });
+
+  it("getMostRecentLeaf() falls back to another group, then to null", () => {
+    const other = { pinned: false } as WorkspaceLeaf;
+    const { workspace } = paneWorkspace(null);
+    (workspace as any).groups = [{ active: null, leaves: [] }, { active: other, leaves: [other] }];
+    expect(workspace.getMostRecentLeaf()).toBe(other);
+
+    const empty = paneWorkspace(null);
+    expect(empty.workspace.getMostRecentLeaf()).toBeNull();
+  });
+
+  it("getMostRecentLeaf(root) rejects anything that is not a Geode TabGroup", () => {
+    const { workspace } = paneWorkspace({ pinned: false } as WorkspaceLeaf);
+
+    expect(() => workspace.getMostRecentLeaf({ active: null } as unknown as TabGroup)).toThrow(
+      /only accepts a Geode TabGroup/
+    );
+  });
+
+  it("setActiveLeaf() activates through the leaf's container and defaults focus off", () => {
+    const { workspace } = paneWorkspace(null);
+    const setActive = vi.fn();
+    const leaf = { group: { setActiveLeaf: setActive } } as unknown as WorkspaceLeaf;
+
+    workspace.setActiveLeaf(leaf);
+    workspace.setActiveLeaf(leaf, { focus: false });
+    // Deprecated three-argument form: pushHistory is ignored, focus is last.
+    workspace.setActiveLeaf(leaf, true, false);
+
+    expect(setActive).toHaveBeenCalledTimes(3);
+    expect(setActive).toHaveBeenCalledWith(leaf);
   });
 });
 

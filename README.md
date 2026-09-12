@@ -5,12 +5,124 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.13.3). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.17.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Features (v0.13.3)
+## New in v0.17.0: secrets in the OS keychain, and six plugin-API fixes
+
+**Plugin secrets now live in the OS keychain.** `app.secretStorage` previously
+persisted secrets as plaintext in `localStorage` — so an API key a plugin stored
+sat in the clear on disk, even where the plugin's own UI told the user it was
+keychain-protected. Secrets are now encrypted through Electron's `safeStorage`
+and written as ciphertext, and `isEncryptionAvailable()` reports the real
+answer instead of a hardcoded `false`. **Existing `geode:secret:*` entries
+migrate automatically on first access and are removed from `localStorage`.**
+Where no keychain backend exists (some Linux setups), Geode falls back to the
+previous behaviour and says so honestly rather than pretending.
+
+**Five other divergences from Obsidian's API, all found by auditing a real
+plugin against the shim.** Each was the same failure mode: an API that returned
+successfully and quietly did the wrong thing, leaving the plugin no way to
+detect it and the user nothing to see.
+
+- `SecretComponent` now takes Obsidian's `(app, containerEl)` and renders a
+  picker **button**, not a password input — the previous signature threw inside
+  the caller's click handler, so the button did nothing at all.
+- `obsidian://` deep links now reach Geode, so a plugin's
+  `registerObsidianProtocolHandler` callbacks fire. Registration is deliberately
+  **non-hijacking**: Geode claims the scheme only when nothing else answers it,
+  advertises itself as a `Viewer` rather than an owner, and leaves an existing
+  Obsidian install untouched. `GEODE_CLAIM_OBSIDIAN_PROTOCOL=1` forces it.
+- `Vault.adapter.rmdir()` exists, so plugins can clean up their own
+  directories. It removes directly rather than trashing, and refuses anything
+  resolving outside the vault, the vault root itself, or a symlink pointing out
+  of the vault.
+- `sanitizeHTMLToDom` strips `on*` handlers, `javascript:`/`vbscript:` URLs and
+  `iframe`/`object`/`embed`/`link`/`meta`/`base`, not just `<script>`. Policy
+  tracks DOMPurify's stock configuration, so `<style>`, `<form>` and
+  `data:image/…` still render.
+- `WorkspaceLeaf.openFile` honours `eState.subpath`, so heading and block
+  anchors scroll to their target — including when a plugin opens one *before*
+  the metadata cache has finished indexing, which previously returned no match
+  and silently landed at the top of the file.
+
+See the [plugin API reference](docs/spec/03-plugin-api.md).
+
+## New in v0.16.0: a supported plugin catalog, and two new plugin events
+
+**Install certified plugins without hunting for a repository.** Settings →
+Community plugins & themes now lists a supported catalog. Installing a *tested*
+release verifies the manifest and the SHA-256 of every runtime artifact before
+replacing any file, then pins that version. Choosing *latest* instead requires
+an explicit unverified acknowledgement and leaves the install unpinned. The
+catalog is fetched with an 8-second timeout and a 256 KiB cap, and an atomic
+last-known-good cache keeps it usable when a refresh fails. The manual GitHub
+installer is still there.
+
+**Plugins can now populate Geode's context menus.** The `file-menu` and
+`editor-menu` workspace events fire, so a plugin can add its own items to a
+file's context menu in the explorer or to the editor's menu.
+
+**Plugins can react to a web app running in the Web Viewer.** A cooperating
+"connector" page can call `window.__geode.postEvent(type, payload)`, and Geode
+re-emits it on the workspace bus as `web-viewer:event`. Geode's main process
+checks the posting frame's origin against an allowlist and validates the event
+type, serializability and payload size before anything reaches a plugin — the
+guest is never trusted about which page it is. Canvas link previews run in
+their own session precisely so that merely *viewing* a canvas can never stand
+up such a bridge. See the [plugin API reference](docs/spec/03-plugin-api.md).
+
+## New in v0.15.2: a unified file explorer
+
+External Projects now share one scrolling panel with vault files. Matching
+headers, standard folder and file rows, and quieter refresh and detach actions
+keep the explorer consistent across narrow and wide sidebars and light/dark themes.
+
+## New in v0.15.1: preserved Web Viewer history
+
+Opening another URL in the same Web Viewer tab now keeps its live browser and
+Back/Forward history. Rapid navigation and redirects preserve the newest
+requested URL, and a later navigation can restore the viewer after its browser
+process exits.
+
+## New in v0.15.0: interactive Bases views for plugins
+
+A community plugin can now provide a Bases view that **writes to the vault**, not
+just renders one. `kanban-bases-view` runs unmodified in Geode: drag a card
+between columns and the note's frontmatter is rewritten on disk; the per-column
+**+** creates a note in the view's configured folder with that column's value
+already set; middle-click opens a card's note behind the board and a plain click
+opens it in place; card cover images resolve and load.
+
+The plugin API surface behind that grew accordingly —
+`BasesView.createFileForView`, `Vault.getResourcePath(file)`,
+`Workspace.getMostRecentLeaf()`, `Workspace.setActiveLeaf(leaf, { focus })` and
+`Workspace.getLeaf(PaneType | boolean)` — and `GEODE_API_VERSION` advertises
+**1.10.2** (from 1.8.0), so plugins gating on the host's API version see the
+Bases surface they require.
+
+Where Geode cannot honour a request exactly it refuses loudly rather than
+guessing: `createFileForView()` with no file name, a folder that does not exist,
+or a path escaping the vault all reject instead of writing a note somewhere the
+user did not configure; `getLeaf('window')` throws rather than substituting a
+tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
+
+## Features (v0.17.0)
+
+- **Keychain-backed plugin secrets** — `app.secretStorage` encrypts through the
+  OS keychain via Electron `safeStorage`, migrating any previously stored
+  plaintext entries and reporting honestly when no backend is available.
+
+- **Supported plugin catalog** — install certified plugins from Settings →
+  Community plugins & themes. Tested releases verify the manifest and the
+  SHA-256 of every runtime artifact before replacing files, then pin the
+  installed version; choosing latest requires an explicit acknowledgement.
+
+- **Image tabs** — open vault images from File Explorer, Markdown links, or
+  plugins in a read-only image view. Images fit within the pane, use normal tab
+  navigation, and restore when the workspace reopens.
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
@@ -59,6 +171,8 @@ cloud, no lock-in.
   pointer- and keyboard-resizable persisted proportions, pinned tabs, vertically
   stacked and independently resizable sidebar groups, recursive layout persistence,
   independent session-only back/forward document history in each tab,
+  [durable companion splits](docs/design/companion-panes.md) for plugins that
+  feature-detect Geode's workspace extension,
   a hideable left ribbon with persistent Settings and
   plugin-contributed actions, shared document actions (including reveal-in-Finder/
   system-file-manager) across tab, view, command, and File Explorer menus,
@@ -74,7 +188,9 @@ cloud, no lock-in.
   plugins can add their own tabs with `Plugin.addSettingTab`
 - **Community plugins & themes** — install from GitHub or safely import from
   an existing Obsidian vault without overwriting installed items or changing
-  their enabled state; enable/disable,
+  their enabled state; browse a fail-closed supported-plugin catalog whose
+  default installs are pinned to tested release bytes (with an explicit
+  unverified opt-in for the latest upstream release); enable/disable,
   auto-update; broad plugin-API compatibility (`EditorSuggest`, `Scope`,
   `BaseComponent`, `ValueComponent`, `AbstractTextComponent`, `SearchComponent`,
   metadata cache with list items/sections + frontmatter tag helpers) so real
@@ -97,7 +213,8 @@ cloud, no lock-in.
   fresh grace period on wake, preventing false recovery caused by suspension
 - **Web Viewer** — an enabled-by-default, per-vault core plugin for opening web
   pages and local `.html`/`.htm` vault files in an in-app tab (`webview`-backed,
-  its own session). Disabling it preserves open viewer tabs for later restore.
+  its own session). Updating the URL in the same viewer preserves its live
+  browser and Back/Forward history. Disabling it preserves open viewer tabs for later restore.
   Web links requesting a new window open as tabs in the source tab group;
   background openings preserve your current tab selection. Popup destinations
   must use HTTP or HTTPS.

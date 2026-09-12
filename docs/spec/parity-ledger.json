@@ -38,12 +38,12 @@
       "api-member": 1009
     },
     "byStatus": {
-      "verified": 211,
-      "partial": 52,
+      "verified": 291,
+      "partial": 64,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2589
+      "unknown": 2497
     }
   },
   "requirements": [
@@ -3997,8 +3997,12 @@
       "title": "BasesEntry",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesEntry.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesEntry.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntry wraps one query row with a lazily-evaluating, memoized getValue."
     },
     {
       "id": "DEV-eebaf6369e13",
@@ -4008,8 +4012,12 @@
       "title": "file",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesEntry/file.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesEntry/file.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntry.file is the TFile backing the row."
     },
     {
       "id": "DEV-050466f56ac7",
@@ -4019,8 +4027,12 @@
       "title": "getValue",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesEntry/getValue.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesEntry/getValue.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "getValue evaluates on demand and memoizes; unset properties yield NullValue."
     },
     {
       "id": "DEV-a1eefabcf4af",
@@ -4030,8 +4042,12 @@
       "title": "BasesEntryGroup",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesEntryGroup.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesEntryGroup.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntryGroup buckets entries by the groupBy value."
     },
     {
       "id": "DEV-a411db2f810a",
@@ -4041,8 +4057,12 @@
       "title": "entries",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesEntryGroup/entries.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesEntryGroup/entries.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntryGroup.entries holds the group's rows."
     },
     {
       "id": "DEV-98a4f0e78a86",
@@ -4052,8 +4072,11 @@
       "title": "hasKey",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesEntryGroup/hasKey.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesEntryGroup/hasKey.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "hasKey() is false both for an absent key and for an explicit NullValue key."
     },
     {
       "id": "DEV-91476df44a1a",
@@ -4063,8 +4086,12 @@
       "title": "key",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesEntryGroup/key.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesEntryGroup/key.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntryGroup.key is the groupBy value for the group."
     },
     {
       "id": "DEV-389eed5cdf0b",
@@ -4492,8 +4519,12 @@
       "title": "BasesQueryResult",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesQueryResult.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesQueryResult.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "data, groupedData and properties are implemented; getSummaryValue covers named summary formulas but not Obsidian's built-in aggregations."
     },
     {
       "id": "DEV-99a4079bcaf4",
@@ -4712,8 +4743,12 @@
       "title": "BasesView",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesView.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesView.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesView is a real subclassable abstract class extending Component, constructed from a QueryController by the registration factory."
     },
     {
       "id": "DEV-66e6a86bb17b",
@@ -4811,8 +4846,12 @@
       "title": "BasesViewConfig",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesViewConfig.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesViewConfig.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesViewConfig reads and writes through the `.base` per-view passthrough bag."
     },
     {
       "id": "DEV-dc9e3697ff21",
@@ -4910,8 +4949,12 @@
       "title": "BasesViewFactory",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesViewFactory.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesViewFactory.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesViewFactory is invoked with (controller, containerEl) by the host."
     },
     {
       "id": "DEV-bc952f5ec0d7",
@@ -4921,8 +4964,12 @@
       "title": "BasesViewRegistration",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/BasesViewRegistration.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/BasesViewRegistration.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "name, icon and factory are honoured; `options` descriptors are stored but no settings UI renders them yet."
     },
     {
       "id": "DEV-90c5681a96c8",
@@ -9246,8 +9293,11 @@
       "title": "Keymap",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Keymap.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Keymap.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "isModEvent and isModifier are implemented; pushScope/popScope are absent rather than stubbed."
     },
     {
       "id": "DEV-22bec1688869",
@@ -9257,8 +9307,11 @@
       "title": "isModEvent",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Keymap/isModEvent.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Keymap/isModEvent.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "isModEvent implements the documented tab/split/window/false mapping, including middle-click as 'tab'."
     },
     {
       "id": "DEV-3ac6580a333f",
@@ -11289,8 +11342,11 @@
       "title": "NotNullValue",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/NotNullValue.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/NotNullValue.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NotNullValue is the marker base for every non-null arm."
     },
     {
       "id": "DEV-0b28790097f4",
@@ -11300,8 +11356,12 @@
       "title": "NullValue",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/NullValue.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/NullValue.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NullValue is a singleton reachable as NullValue.value."
     },
     {
       "id": "DEV-23b94267f9eb",
@@ -11589,8 +11649,11 @@
       "title": "parsePropertyId",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/parsePropertyId.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/parsePropertyId.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "parsePropertyId splits a prefixed id into its source and name, first dot only."
     },
     {
       "id": "DEV-ea5325ca72bd",
@@ -11780,8 +11843,12 @@
       "title": "registerBasesView",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Plugin/registerBasesView.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Plugin/registerBasesView.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "registerBasesView is implemented and wired, not stored: the registry is read by BaseView.renderActiveView on every query run."
     },
     {
       "id": "DEV-f49e1839dafc",
@@ -14626,8 +14693,11 @@
       "title": "Value",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Value.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Value.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "Value is the abstract base class of the Bases value hierarchy."
     },
     {
       "id": "DEV-c1371875005f",
@@ -15918,8 +15988,11 @@
       "title": "on('editor-menu')",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Workspace/on('editor-menu').md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Workspace/on('editor-menu').md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/file-editor-menu-events.spec.ts"
+      ],
+      "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror’s EditorView standing in for Obsidian’s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
     },
     {
       "id": "DEV-a1d693878feb",
@@ -15940,8 +16013,11 @@
       "title": "on('file-menu')",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Workspace/on('file-menu').md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Workspace/on('file-menu').md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/file-editor-menu-events.spec.ts"
+      ],
+      "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. The optional fourth leaf argument is not passed, and the event is not yet fired from Obsidian’s other sources such as tab headers, pane-more-options, or link context menus."
     },
     {
       "id": "DEV-b57ac9ecc1b7",
@@ -17684,8 +17760,12 @@
       "title": "BasesEntry",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntry wraps one query row. getValue evaluates lazily rather than reading a precomputed map, which is required: the engine only materializes the paths named in view.order, and a view routinely asks for a property deliberately excluded from it."
     },
     {
       "id": "API-03dd5f56e027",
@@ -17695,8 +17775,12 @@
       "title": "BasesEntryGroup",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntryGroup buckets entries by the groupBy value; entry instances are shared with BasesQueryResult.data rather than duplicated."
     },
     {
       "id": "API-634af931b56a",
@@ -17827,8 +17911,12 @@
       "title": "BasesQueryResult",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "data, groupedData and properties are implemented. getSummaryValue supports named summary formulas from the base's summaries block but not Obsidian's built-in aggregations (Average/Sum/Median/...), which Geode's engine does not implement; those return NullValue rather than a guessed result, matching how runQuery already skips them."
     },
     {
       "id": "API-0615dfc1b2e6",
@@ -17882,8 +17970,12 @@
       "title": "BasesView",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesView is a real subclassable abstract class extending Component, constructed from a QueryController by the registration factory."
     },
     {
       "id": "API-d0cb55a7c379",
@@ -17893,8 +17985,12 @@
       "title": "BasesViewConfig",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesViewConfig reads and writes through the `.base` per-view passthrough bag, which is what lets a plugin-registered view type persist settings at all."
     },
     {
       "id": "API-6fb273fe23d7",
@@ -17904,8 +18000,12 @@
       "title": "BasesViewFactory",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesViewFactory is invoked with (controller, containerEl) and its returned view is loaded, rendered and unloaded by the host."
     },
     {
       "id": "API-dc2de8bbc493",
@@ -17915,8 +18015,12 @@
       "title": "BasesViewRegistration",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "name, icon and factory are honoured. `options` is accepted and stored but not rendered: Geode has no view-options UI for plugin views yet. That is inert data rather than a stubbed behaviour, because a view reads its settings through config.get, which works regardless of what wrote them."
     },
     {
       "id": "API-6218d6fdb05d",
@@ -17948,8 +18052,11 @@
       "title": "BooleanValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "BooleanValue wraps the engine's boolean arm."
     },
     {
       "id": "API-abd6aa8cd492",
@@ -18139,8 +18246,11 @@
       "title": "DateValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "DateValue wraps the engine's date arm (epoch milliseconds)."
     },
     {
       "id": "API-1d541fd0d76b",
@@ -18205,8 +18315,11 @@
       "title": "DurationValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "DurationValue wraps the engine's duration arm (amount plus canonical unit letter)."
     },
     {
       "id": "API-5ac607d9a388",
@@ -18500,8 +18613,11 @@
       "title": "FileValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "FileValue wraps the engine's file arm and renders as a link to the file itself."
     },
     {
       "id": "API-466ac7fbc743",
@@ -18845,8 +18961,11 @@
       "title": "HTMLValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "HTMLValue extends StringValue as documented and renders through the shared HTML sanitizer. Note the capitalisation: the class must be HTMLValue, not HtmlValue, or a view's `instanceof HTMLValue` check can never match."
     },
     {
       "id": "API-5aa5dcd33e48",
@@ -18878,8 +18997,11 @@
       "title": "ImageValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "ImageValue extends StringValue as documented and renders an <img>."
     },
     {
       "id": "API-2522eda18502",
@@ -18944,8 +19066,11 @@
       "title": "Keymap",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "The two documented static helpers (isModEvent, isModifier) are implemented. The instance scope-stack methods pushScope/popScope need scope infrastructure Geode does not have and are deliberately absent rather than stubbed, so calling them raises a TypeError instead of silently pretending to bind a keymap."
     },
     {
       "id": "API-e4f90bcb7908",
@@ -19010,8 +19135,12 @@
       "title": "LinkValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "LinkValue extends StringValue as documented, stringifies to its display text, and renders internal-link markup."
     },
     {
       "id": "API-8dd7aa9573b2",
@@ -19043,8 +19172,11 @@
       "title": "ListValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "ListValue wraps the engine's list arm, lifting items recursively, and renders each item through its own renderTo so a list of links stays clickable."
     },
     {
       "id": "API-a5a0fa4c2d06",
@@ -19403,8 +19535,11 @@
       "title": "NotNullValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NotNullValue is the marker base for every non-null arm; NullValue deliberately does not extend it."
     },
     {
       "id": "API-35f3098121a4",
@@ -19414,8 +19549,12 @@
       "title": "NullValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NullValue is a true singleton: NullValue.value is the only instance the adapters produce, so a view's `value instanceof NullValue` check and an identity check agree. A structurally-identical parallel type would silently never match."
     },
     {
       "id": "API-f2b4205fb907",
@@ -19425,8 +19564,11 @@
       "title": "NumberValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NumberValue wraps the engine's number arm."
     },
     {
       "id": "API-643d302169b4",
@@ -19436,8 +19578,11 @@
       "title": "ObjectValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "ObjectValue wraps the engine's object arm; get() returns NullValue for a missing key rather than undefined."
     },
     {
       "id": "API-656654cf442e",
@@ -19549,8 +19694,11 @@
       "title": "parsePropertyId",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "parsePropertyId splits on the first dot only (so a nested frontmatter path survives) and treats an unrecognised prefix or a bare id as frontmatter shorthand. This is load-bearing beyond typing: a view uses parsePropertyId(id).name to choose the frontmatter key it writes to."
     },
     {
       "id": "API-668a74f6064a",
@@ -19685,8 +19833,11 @@
       "title": "PrimitiveValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "PrimitiveValue<T> is the base for the single-JS-primitive arms and exposes the wrapped value."
     },
     {
       "id": "API-01e236a3e435",
@@ -19751,8 +19902,11 @@
       "title": "RegExpValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "RegExpValue wraps the engine's regexp arm. Capitalisation matters here for the same instanceof reason as HTMLValue."
     },
     {
       "id": "API-25597f8943b5",
@@ -20430,8 +20584,11 @@
       "title": "StringValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "StringValue wraps the engine's string arm."
     },
     {
       "id": "API-626650819a45",
@@ -20639,8 +20796,11 @@
       "title": "Value",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "Value is the abstract base of the boundary representation handed to views. Every wrapper defers toString/isTruthy to the expression engine's own coercion rules, so the API layer cannot disagree with the engine about what a value means."
     },
     {
       "id": "API-d37d7c9eee1d",
@@ -21421,8 +21581,12 @@
       "title": "BasesEntry.file",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntry.file is the TFile backing the row."
     },
     {
       "id": "API-MEMBER-312b7491458a",
@@ -21432,8 +21596,12 @@
       "title": "BasesEntry.getValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "getValue accepts prefixed or bare ids, evaluates on demand against a retained per-row EvalContext, memoizes, and returns NullValue for a property that is merely unset (null is reserved for an id that is not a parseable property expression). The e2e board groups by a property that is NOT in view.order, which is the case a precomputed map fails."
     },
     {
       "id": "API-MEMBER-a271396b6565",
@@ -21443,8 +21611,12 @@
       "title": "BasesEntryGroup.entries",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntryGroup.entries holds the group's rows."
     },
     {
       "id": "API-MEMBER-0c444efdb3a3",
@@ -21454,8 +21626,11 @@
       "title": "BasesEntryGroup.hasKey",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "hasKey() is false both for an absent key and for an explicit NullValue key."
     },
     {
       "id": "API-MEMBER-1d85c0e7e9cb",
@@ -21465,8 +21640,12 @@
       "title": "BasesEntryGroup.key",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesEntryGroup.key is the groupBy value, absent for the synthetic single group returned when no groupBy is configured."
     },
     {
       "id": "API-MEMBER-4bbd62cfceff",
@@ -21773,8 +21952,12 @@
       "title": "BasesQueryResult.data",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesQueryResult.data is the ungrouped, sorted, limited entry list."
     },
     {
       "id": "API-MEMBER-88f3ffc8b426",
@@ -21784,8 +21967,11 @@
       "title": "BasesQueryResult.getSummaryValue",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "Named summary formulas from the base's summaries block are evaluated. Obsidian's built-in aggregation names return NullValue rather than a guessed computation, because Geode's summary engine does not implement them."
     },
     {
       "id": "API-MEMBER-fc8d6a589857",
@@ -21795,8 +21981,12 @@
       "title": "BasesQueryResult.groupedData",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "groupedData returns a single keyless group when no groupBy is configured, per the documented contract, so a view can iterate it without branching."
     },
     {
       "id": "API-MEMBER-4973d692a4c6",
@@ -21806,8 +21996,12 @@
       "title": "BasesQueryResult.properties",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesQueryResult.properties lists visible properties in user-configured order as prefixed ids."
     },
     {
       "id": "API-MEMBER-ad30db43ae80",
@@ -21960,8 +22154,11 @@
       "title": "BasesView.(constructor)",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "The protected constructor takes a QueryController and reads app, config, data and allProperties out of the host wiring it carries. QueryController itself has no public members (its documented class body is empty), so Geode defines its internals."
     },
     {
       "id": "API-MEMBER-5c1265cc324a",
@@ -21971,8 +22168,12 @@
       "title": "BasesView.allProperties",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesView.allProperties lists every property available in the dataset, normalized to prefixed BasesPropertyId form."
     },
     {
       "id": "API-MEMBER-c4b02965441f",
@@ -21982,8 +22183,11 @@
       "title": "BasesView.app",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesView.app is the live App instance."
     },
     {
       "id": "API-MEMBER-3c1c42c4c2bd",
@@ -21993,8 +22197,12 @@
       "title": "BasesView.config",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesView.config is a BasesViewConfig, rebuilt on each render because reloadFromDisk replaces the parsed definition objects wholesale; a config captured at construction time would keep writing into an orphaned view object."
     },
     {
       "id": "API-MEMBER-64cb7342ae0e",
@@ -22004,8 +22212,13 @@
       "title": "BasesView.createFileForView",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-kanban-interaction.spec.ts",
+        "tests/unit/bases-create-file-for-view.test.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "Implemented, replacing the earlier deliberate rejection. The real kanban-bases-view plugin quick-adds a card in Electron and the note appears on disk in the view-configured folder, with the clicked column value already in its frontmatter. Composed as a single vault.create so a failed frontmatter step cannot leave a half-made note on the board. Requests Geode cannot honour exactly reject instead of falling back to the vault root: no file name (Obsidian would open its new-note menu, for which Geode has no surface), a folder that does not exist, or a path escaping the vault."
     },
     {
       "id": "API-MEMBER-7b1dca8c6e69",
@@ -22015,8 +22228,12 @@
       "title": "BasesView.data",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesView.data is a BasesQueryResult replaced wholesale on each update, matching the documented contract that views must not retain a reference to it."
     },
     {
       "id": "API-MEMBER-7d823d5567cc",
@@ -22026,8 +22243,12 @@
       "title": "BasesView.onDataUpdated",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "onDataUpdated is called after every query run; the view instance is reused across updates rather than rebuilt, which is what makes the hook meaningful."
     },
     {
       "id": "API-MEMBER-99233dced9b3",
@@ -22037,8 +22258,12 @@
       "title": "BasesView.type",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "The abstract `type` field is declared by the subclass and is the key the host registry dispatches on."
     },
     {
       "id": "API-MEMBER-640d26406b65",
@@ -22048,8 +22273,12 @@
       "title": "BasesViewConfig.get",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "get() reads unknown-to-Geode keys out of the view definition. Those keys survive a read/write round trip only because `.base` parsing and serialization now preserve unrecognised keys instead of dropping them."
     },
     {
       "id": "API-MEMBER-9afbafd9b6a0",
@@ -22059,8 +22288,12 @@
       "title": "BasesViewConfig.getAsPropertyId",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "getAsPropertyId normalizes a stored setting to prefixed BasesPropertyId form and returns null for an absent or unusable value, so a bad value reads as 'not configured' rather than as a broken id. The e2e board groups its columns by exactly this path."
     },
     {
       "id": "API-MEMBER-5b6b46f74357",
@@ -22070,8 +22303,12 @@
       "title": "BasesViewConfig.getDisplayName",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "getDisplayName prefers the user's properties[...].displayName override (matched under either the prefixed id or the bare name, since a hand-authored .base may key it either way) and otherwise returns the name with its source prefix removed."
     },
     {
       "id": "API-MEMBER-ed44da5b19c0",
@@ -22081,8 +22318,11 @@
       "title": "BasesViewConfig.getEvaluatedFormula",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "getEvaluatedFormula parses a stored setting as a Bases expression and evaluates it against the contextual file, degrading to NullValue for an absent key or a malformed formula rather than throwing."
     },
     {
       "id": "API-MEMBER-0c12cd241e4d",
@@ -22092,8 +22332,11 @@
       "title": "BasesViewConfig.getOrder",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "getOrder returns the resolved column paths as prefixed ids, going through the same resolveColumns fallback the built-in views use."
     },
     {
       "id": "API-MEMBER-02e90fc3ad78",
@@ -22103,8 +22346,11 @@
       "title": "BasesViewConfig.getSort",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "getSort normalizes property ids and drops invalid entries, per the documented contract."
     },
     {
       "id": "API-MEMBER-0343650c3642",
@@ -22114,8 +22360,11 @@
       "title": "BasesViewConfig.name",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "BasesViewConfig.name returns the view's user-facing name."
     },
     {
       "id": "API-MEMBER-e7ec0a778bdd",
@@ -22125,8 +22374,11 @@
       "title": "BasesViewConfig.set",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-data-adapters.test.ts"
+      ],
+      "notes": "set() writes into the passthrough bag and persists; set(key, null) deletes the key rather than writing a null into the user's YAML."
     },
     {
       "id": "API-MEMBER-80cde7d15d2e",
@@ -22136,8 +22388,12 @@
       "title": "BasesViewRegistration.factory",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesViewRegistration.factory is called to build the view instance."
     },
     {
       "id": "API-MEMBER-a898a403cdb7",
@@ -22147,8 +22403,11 @@
       "title": "BasesViewRegistration.icon",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesViewRegistration.icon is stored with the registration."
     },
     {
       "id": "API-MEMBER-0facedf2ed19",
@@ -22158,8 +22417,11 @@
       "title": "BasesViewRegistration.name",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "BasesViewRegistration.name is stored with the registration."
     },
     {
       "id": "API-MEMBER-3eb76b4692d8",
@@ -22169,8 +22431,11 @@
       "title": "BasesViewRegistration.options",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "The options callback is accepted and its BasesAllOptions descriptors stored, but Geode renders no view-options UI for plugin views, so nothing writes settings through it. Views still read their settings via config.get."
     },
     {
       "id": "API-MEMBER-d32b81d409df",
@@ -24820,8 +25085,12 @@
       "title": "FileSystemAdapter.getResourcePath",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-kanban-interaction.spec.ts",
+        "tests/unit/vault-adapter.test.ts"
+      ],
+      "notes": "Percent-encodes each path segment rather than escaping only spaces, so a name containing # or ? no longer yields a URL truncated at the fragment or query. Ordinary paths are byte-for-byte unchanged."
     },
     {
       "id": "API-MEMBER-092c2056d9ed",
@@ -25627,8 +25896,11 @@
       "title": "Keymap.isModEvent",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "isModEvent returns 'tab' for the platform Mod key or a middle-click, 'split' for Mod+Alt, 'window' for Mod+Alt+Shift, and false otherwise, per the documented rules. The Mod key is Cmd on macOS and Ctrl elsewhere, strictly one or the other, since Ctrl-click on macOS is the context-menu gesture."
     },
     {
       "id": "API-MEMBER-41402f88fd45",
@@ -25638,8 +25910,11 @@
       "title": "Keymap.isModifier",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "isModifier reads each named modifier off the event, resolving 'Mod' to the platform key."
     },
     {
       "id": "API-MEMBER-4eeedc27f571",
@@ -27191,8 +27466,11 @@
       "title": "NullValue.isTruthy",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NullValue.isTruthy() is false."
     },
     {
       "id": "API-MEMBER-01dc662d169a",
@@ -27202,8 +27480,11 @@
       "title": "NullValue.toString",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NullValue.toString() is the empty string."
     },
     {
       "id": "API-MEMBER-e30705ce9d48",
@@ -27213,8 +27494,11 @@
       "title": "NullValue.value",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "NullValue.value is the shared singleton instance."
     },
     {
       "id": "API-MEMBER-4c0e79600305",
@@ -27489,8 +27773,12 @@
       "title": "Plugin.registerBasesView",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "Plugin.registerBasesView registers a layout for a .base view type; BaseView looks the type up in app.basesViews and dispatches to it instead of the built-in Table/Cards renderers. Built-in types (table/cards) are refused, mirroring registerView's guard. The e2e spec loads the real third-party kanban-bases-view bundle and renders a board from a .base file."
     },
     {
       "id": "API-MEMBER-d4a7de0f3a9e",
@@ -30589,8 +30877,11 @@
       "title": "Value.equals",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "equals() is type-strict and null-safe in both its instance and static forms."
     },
     {
       "id": "API-MEMBER-8b0761571075",
@@ -30600,8 +30891,11 @@
       "title": "Value.isTruthy",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "isTruthy() delegates to the engine's isTruthy for every arm."
     },
     {
       "id": "API-MEMBER-6f15e5e4ecbc",
@@ -30611,8 +30905,11 @@
       "title": "Value.looseEquals",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "looseEquals() uses the engine's cross-type comparison rules, which relate a link to the file it resolves to."
     },
     {
       "id": "API-MEMBER-0508e7d1f7e0",
@@ -30622,8 +30919,12 @@
       "title": "Value.renderTo",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "renderTo() paints a value into an element: plain text by default, with richer overrides for lists, images, HTML and links. LinkValue emits <a class=\"internal-link\" data-href=\"...\">, which is load-bearing rather than cosmetic because views wire navigation with a delegated on('click', 'a.internal-link') handler that reads data-href. Observed in real Electron: the e2e board's card property values are painted through renderTo."
     },
     {
       "id": "API-MEMBER-974c62f635ff",
@@ -30633,8 +30934,11 @@
       "title": "Value.toString",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "toString() delegates to the engine's valueToDisplayString for every arm."
     },
     {
       "id": "API-MEMBER-905de1975fb1",
@@ -30644,8 +30948,11 @@
       "title": "Value.type",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases-values.test.ts"
+      ],
+      "notes": "Value.type is the static discriminator on each concrete subclass."
     },
     {
       "id": "API-MEMBER-c045058aba9a",
@@ -30920,8 +31227,12 @@
       "title": "Vault.getResourcePath",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-kanban-interaction.spec.ts",
+        "tests/unit/vault-adapter.test.ts"
+      ],
+      "notes": "The TFile overload plugins actually call, distinct from the adapter path-string form. A card cover image rendered by the real kanban-bases-view plugin is observed reaching a non-zero naturalWidth in Electron, so the URL is loadable rather than merely well-formed. Throws where no filesystem adapter exists (mobile) instead of returning a URL that would render as a permanently broken image."
     },
     {
       "id": "API-MEMBER-92ea17cba0a5",
@@ -31524,8 +31835,12 @@
       "title": "Workspace.getLeaf",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases-kanban-interaction.spec.ts",
+        "tests/unit/workspace-public-contracts.test.ts"
+      ],
+      "notes": "Accepts the documented PaneType | boolean rather than a bare boolean: getLeaf('tab') previously worked only because a non-empty string is truthy, and 'split' would have silently produced a tab. Partial, not verified: 'window' throws because Geode has no pop-out windows, and the 'split' overload ignores its SplitDirection because Geode's main area only produces side-by-side groups."
     },
     {
       "id": "API-MEMBER-6fe95813588a",
@@ -31571,8 +31886,12 @@
       "title": "Workspace.getMostRecentLeaf",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases-kanban-interaction.spec.ts",
+        "tests/unit/workspace-public-contracts.test.ts"
+      ],
+      "notes": "The no-argument form is exact: Geode's activeGroup is only ever a main-area TabGroup, so activeGroup.active is the most recently active root-split leaf. Observed in Electron via the real kanban-bases-view plugin, which uses it to keep the board in front while opening a note behind it. Partial because the optional root argument is typed WorkspaceParent in Obsidian, a WorkspaceItem tree Geode deliberately does not shim; anything other than a Geode TabGroup throws rather than silently searching a wider scope than the caller asked for."
     },
     {
       "id": "API-MEMBER-bbb027361f38",
@@ -31789,8 +32108,12 @@
       "title": "Workspace.setActiveLeaf",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/bases-kanban-interaction.spec.ts",
+        "tests/unit/workspace-public-contracts.test.ts"
+      ],
+      "notes": "Added at the Workspace level, where plugins call it: setActiveLeaf previously existed only on TabGroup and Sidebar, and took no options. Both documented forms are accepted, the options object and the deprecated (leaf, pushHistory, focus) triple. focus defaults to false and, when true, moves keyboard focus into the leaf content rather than being accepted and ignored. Observed in Electron restoring the kanban board in front of a note opened behind it."
     },
     {
       "id": "API-MEMBER-233c334f7880",

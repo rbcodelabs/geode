@@ -20,7 +20,9 @@ import type {
   MarkdownPostProcessorContext,
 } from "../markdown/processor-registry";
 import { Scope, EditorSuggest } from "./suggest";
+import type { BasesViewRegistration } from "./bases-view";
 import { createDismissibleNotice } from "../notice";
+import { createSecretStorage } from "../secret-storage";
 import moment from "moment";
 import { getHostServices } from "../host/registry";
 
@@ -79,6 +81,48 @@ export type {
   EditorSuggestTriggerInfo,
 } from "./suggest";
 
+// --- Bases API -------------------------------------------------------------
+// The `Value` hierarchy has to be exported as real classes, not types: views
+// branch on it with `value instanceof NullValue`, so a structurally-identical
+// parallel type would silently never match. See ./bases-values.
+export {
+  Value,
+  NotNullValue,
+  PrimitiveValue,
+  NullValue,
+  StringValue,
+  NumberValue,
+  BooleanValue,
+  DateValue,
+  DurationValue,
+  ListValue,
+  ObjectValue,
+  LinkValue,
+  FileValue,
+  ImageValue,
+  RegExpValue,
+  HTMLValue,
+  RenderContext,
+} from "./bases-values";
+export { Keymap } from "./keymap";
+export type { PaneType, UserEvent, Modifier } from "./keymap";
+export { parsePropertyId } from "./bases-property-id";
+export type { BasesProperty, BasesPropertyId, BasesPropertyType } from "./bases-property-id";
+export { BasesView, QueryController } from "./bases-view";
+export type {
+  BasesViewFactory,
+  BasesViewRegistration,
+  // `BasesAllOptions` is the real name for a view's option descriptors. There
+  // is no `ViewOption` in the Obsidian API despite plugins importing it; being
+  // type-only it erases at build time, so those plugins still load.
+  BasesAllOptions,
+  BasesOptions,
+  BasesOptionGroup,
+  IconName,
+} from "./bases-view";
+export { BasesEntry, BasesEntryGroup, BasesQueryResult, BasesViewConfig } from "./bases-data";
+export type { BasesSortConfig } from "./bases-data";
+
 // ---------------------------------------------------------------------------
 // Utility functions
 // ---------------------------------------------------------------------------
@@ -118,18 +162,34 @@ export { addIcon, setIcon };
  */
 export { loadMermaid } from "../internal-plugins/mermaid/load-mermaid";
 export { moment };
-export function setTooltip(el: HTMLElement, tooltip: string): void {
-  el.setAttribute("aria-label", tooltip);
+export type TooltipPlacement = "bottom" | "right" | "left" | "top";
+
+export interface TooltipOptions {
+  placement?: TooltipPlacement;
+  /** Extra classes applied to the tooltip element. */
+  classes?: string[];
+  /** Gap in px between the tooltip and its anchor. */
+  gap?: number;
+  /** Delay in ms before the tooltip appears. */
+  delay?: number;
 }
 
-/** Sanitize an HTML string into a DocumentFragment (Obsidian uses this for untrusted HTML). */
-export function sanitizeHTMLToDom(html: string): DocumentFragment {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  // Strip script elements defensively.
-  template.content.querySelectorAll("script").forEach((s) => s.remove());
-  return template.content;
+/**
+ * Geode renders tooltips through the native `aria-label` affordance rather
+ * than a custom popover, so the options are recorded as data attributes for a
+ * theme/stylesheet to act on rather than being interpreted here. That keeps
+ * `setTooltip(el, text, opts)` from silently discarding its third argument.
+ */
+export function setTooltip(el: HTMLElement, tooltip: string, options?: TooltipOptions): void {
+  el.setAttribute("aria-label", tooltip);
+  if (!options) return;
+  if (options.placement) el.setAttribute("data-tooltip-position", options.placement);
+  if (options.classes?.length) el.setAttribute("data-tooltip-classes", options.classes.join(" "));
+  if (options.gap !== undefined) el.setAttribute("data-tooltip-gap", String(options.gap));
+  if (options.delay !== undefined) el.setAttribute("data-tooltip-delay", String(options.delay));
 }
+
+export { sanitizeHTMLToDom } from "./obsidian-dom";
 
 export interface RequestUrlParam {
   /** Geode extension; cancelled calls reject late host responses. */
@@ -209,9 +269,19 @@ export class Notice {
   noticeEl: HTMLElement;
   private readonly notice: ReturnType<typeof createDismissibleNotice>;
 
+  /**
+   * `noticeEl` is deprecated upstream in favour of `messageEl`; both point at
+   * the same element here. `containerEl` is the notice stack this toast lives
+   * in — plugins position or restyle relative to it.
+   */
+  containerEl: HTMLElement;
+  messageEl: HTMLElement;
+
   constructor(message: string | DocumentFragment, duration = 4000) {
     this.notice = createDismissibleNotice(message, duration);
     this.noticeEl = this.notice.noticeEl;
+    this.messageEl = this.notice.noticeEl;
+    this.containerEl = this.notice.noticeEl.parentElement ?? this.notice.noticeEl;
   }
 
   setMessage(message: string | DocumentFragment): this {
@@ -264,6 +334,19 @@ export class Modal {
   close(): void {
     this.onClose();
     this.containerEl.remove();
+    this.closeCallback?.();
+  }
+
+  private closeCallback?: () => unknown;
+
+  /**
+   * Register a callback fired after the modal closes. Distinct from
+   * overriding `onClose()`: a caller that *opens* someone else's modal can
+   * observe its dismissal without subclassing it.
+   */
+  setCloseCallback(callback: () => unknown): this {
+    this.closeCallback = callback;
+    return this;
   }
 
   setTitle(title: string): this {
@@ -578,10 +661,113 @@ export class SliderComponent extends ValueComponent<number> {
   private updateDisplay(): void { this.displayEl.textContent = this.getValuePretty(); }
 }
 
-export class SecretComponent extends TextComponent {
-  constructor(container: HTMLElement) {
-    super(container);
-    this.inputEl.type = "password";
+const SECRET_COMPONENT_PLACEHOLDER = "Select secret…";
+
+/**
+ * Which overload of `new SecretComponent(...)` a caller used. Obsidian's
+ * signature is `(app, containerEl)`; Geode's first cut took only
+ * `(container)`, so both are accepted and told apart by which argument looks
+ * like a DOM node. `appendChild` rather than `instanceof HTMLElement` is the
+ * probe so unit tests can drive this with a fake element, the way
+ * `tests/unit/declarative-settings.test.ts` already drives `Setting`.
+ */
+function resolveSecretComponentArgs(
+  first: App | HTMLElement,
+  second?: HTMLElement,
+): { app: App | null; containerEl: HTMLElement } {
+  const isNode = (value: unknown): value is HTMLElement =>
+    !!value && typeof (value as { appendChild?: unknown }).appendChild === "function";
+  if (isNode(second)) return { app: first as App, containerEl: second };
+  if (isNode(first)) return { app: null, containerEl: first };
+  throw new TypeError("SecretComponent requires a container element");
+}
+
+/**
+ * Obsidian's `SecretComponent`: a button that opens a picker listing the
+ * secrets already in `app.secretStorage`, and reports the chosen secret's
+ * **id** — never its value — through `onChange`. Callers resolve the value
+ * themselves with `app.secretStorage.getSecret(id)`; obsidian-claude-threads'
+ * "Link existing" button next to the OpenAI key field does exactly that.
+ *
+ * Two things were wrong before. The constructor took a single `container`, so
+ * the real call `new SecretComponent(this.app, tmp)` bound the `App` to
+ * `container` and threw `container.appendChild is not a function` synchronously
+ * inside the caller's click handler — the button appeared to do nothing at all.
+ * And it rendered a bare password `<input>`, which the caller's
+ * `querySelector('button, input').click()` could focus but never open a picker
+ * from. Both arities are supported: `(app, containerEl)` is Obsidian's, and a
+ * bare `(containerEl)` keeps any caller written against the old Geode shape
+ * working (with no `app`, the picker simply has nothing to list).
+ */
+export class SecretComponent extends ValueComponent<string> {
+  /** The `App` whose `secretStorage` the picker lists; null for the legacy single-argument form. */
+  app: App | null;
+  buttonEl: HTMLButtonElement;
+  private value = "";
+
+  constructor(app: App | HTMLElement, containerEl?: HTMLElement) {
+    super();
+    const resolved = resolveSecretComponentArgs(app, containerEl);
+    this.app = resolved.app;
+    this.buttonEl = document.createElement("button");
+    this.buttonEl.type = "button";
+    this.buttonEl.className = "secret-component-select";
+    this.buttonEl.textContent = SECRET_COMPONENT_PLACEHOLDER;
+    resolved.containerEl.appendChild(this.buttonEl);
+    this.buttonEl.addEventListener("click", () => this.openPicker());
+  }
+
+  getValue(): string {
+    return this.value;
+  }
+
+  setValue(value: string): this {
+    this.value = value;
+    this.buttonEl.textContent = value || SECRET_COMPONENT_PLACEHOLDER;
+    return this;
+  }
+
+  override setDisabled(disabled: boolean): this {
+    super.setDisabled(disabled);
+    this.buttonEl.disabled = disabled;
+    return this;
+  }
+
+  /**
+   * Open the secret picker. Anchored to the button's own rect rather than the
+   * click's coordinates: the caller above dispatches a synthetic `.click()`
+   * (whose `clientX`/`clientY` are 0) on a button inside a hidden container,
+   * and `Menu.showAtPosition` clamps a zero rect into the viewport anyway.
+   */
+  private openPicker(): void {
+    if (this.disabled) return;
+    const menu = new Menu();
+    const ids = this.listSecretIds();
+    if (ids.length === 0) {
+      menu.addItem((item) => item.setTitle("No secrets stored").setDisabled(true));
+    } else {
+      for (const id of ids) {
+        menu.addItem((item) =>
+          item.setTitle(id).onClick(() => {
+            this.setValue(id);
+            this.changeCb?.(id);
+          }),
+        );
+      }
+    }
+    const rect = this.buttonEl.getBoundingClientRect?.();
+    menu.showAtPosition({ x: rect?.left ?? 0, y: rect?.bottom ?? 0 });
+  }
+
+  private listSecretIds(): string[] {
+    const storage = (this.app as { secretStorage?: { listSecrets?: () => string[] } } | null)
+      ?.secretStorage;
+    try {
+      return storage?.listSecrets?.() ?? [];
+    } catch (error) {
+      console.error("SecretComponent: failed to list secrets", error);
+      return [];
+    }
   }
 }
 
@@ -1237,34 +1423,17 @@ export { TFileClass as TFile, TFolderClass as TFolder } from "../types";
 
 /**
  * Add the app-level Obsidian APIs Geode's `App` doesn't natively have but
- * that hosted plugins expect on `this.app`: `secretStorage` (async secret
- * get/set, persisted in localStorage — a fuller keychain-backed store is a
- * follow-up), and the `plugins`/`internalPlugins` registries. Idempotent;
- * runs when the first Obsidian-compat plugin is constructed.
+ * that hosted plugins expect on `this.app`: `secretStorage` (keychain-backed
+ * secret get/set — see `../secret-storage`), and the
+ * `plugins`/`internalPlugins` registries. Idempotent; runs when the first
+ * Obsidian-compat plugin is constructed.
  */
 export function installObsidianAppCompat(app: App): void {
   const a = app as any;
-  if (!a.secretStorage) {
-    // Obsidian's secretStorage.getSecret/setSecret are synchronous (plugins
-    // call `storedKey.startsWith(...)` on the result without awaiting), so
-    // these return values directly. `await` on a plain value is still fine
-    // for the call sites that do await.
-    const key = (k: string) => `geode:secret:${k}`;
-    a.secretStorage = {
-      getSecret(k: string): string | null {
-        return window.localStorage.getItem(key(k));
-      },
-      setSecret(k: string, value: string): void {
-        window.localStorage.setItem(key(k), value);
-      },
-      deleteSecret(k: string): void {
-        window.localStorage.removeItem(key(k));
-      },
-      isEncryptionAvailable(): boolean {
-        return false;
-      },
-    };
-  }
+  // Obsidian's secretStorage.getSecret/setSecret are synchronous (plugins call
+  // `storedKey.startsWith(...)` on the result without awaiting), so the
+  // implementation mirrors the store in memory and persists behind the scenes.
+  a.secretStorage ??= createSecretStorage();
   if (!a.plugins) {
     // `pluginManager` isn't assigned yet at the point this runs (it's the
     // first statement of `App.start()`, before a vault is even open), so
@@ -1495,6 +1664,22 @@ export abstract class Plugin extends GeodePlugin {
   registerHoverLinkSource(id: string, info: unknown): void {
     (this.app as any).hoverLinkSources?.set(id, info);
     this.register(() => (this.app as any).hoverLinkSources?.delete(id));
+  }
+
+  /**
+   * Register a custom Bases view layout, rendered for any view in a `.base`
+   * file whose `type:` matches `viewId`. Auto-unregistered on `onunload()`.
+   *
+   * Unlike the store-only registrations above, this one is genuinely wired:
+   * `BaseView` looks the type up in `app.basesViews` and hands rendering over.
+   *
+   * @returns true if registered; false if another plugin already claimed the
+   * type. Throws for a built-in type, matching `registerView`'s guard.
+   */
+  registerBasesView(viewId: string, registration: BasesViewRegistration): boolean {
+    const registered = this.app.registerBasesView(viewId, registration);
+    if (registered) this.register(() => this.app.unregisterBasesView(viewId, registration));
+    return registered;
   }
 
   /**

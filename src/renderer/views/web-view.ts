@@ -16,6 +16,7 @@ export interface WebViewState {
 interface WebviewElement extends HTMLElement {
   src: string;
   loadURL(url: string): Promise<void>;
+  clearHistory(): void;
   getURL(): string;
   getTitle(): string;
   goBack(): void;
@@ -43,12 +44,40 @@ interface DidFailLoadEventLike {
   isMainFrame: boolean;
 }
 
+interface DidRedirectNavigationEventLike {
+  url: string;
+  isInPlace: boolean;
+  isMainFrame: boolean;
+}
+
+type DidStartNavigationEventLike = DidRedirectNavigationEventLike;
+
 /** net::ERR_ABORTED — emitted for cancelled/redirected navigations; not a real failure. */
 const ERR_ABORTED = -3;
 /** One automatic recovery attempt is scheduled this long after a hard crash. */
 const AUTO_RECOVER_DELAY_MS = 300;
 
 const DEFAULT_URL = "https://duckduckgo.com/";
+const BOOTSTRAP_URL = "about:blank";
+
+/**
+ * Electron reports committed navigation URLs in canonical browser form (for
+ * example, a bare HTTP origin gains a trailing slash). Use that same identity
+ * for scheduler bookkeeping without changing the URL assigned to the guest or
+ * the canonical URL later reported by Electron to the visible/persisted state.
+ */
+function navigationKey(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
+function sameNavigation(url: string | null, other: string | null): boolean {
+  if (url === null || other === null) return url === other;
+  return navigationKey(url) === navigationKey(other);
+}
 
 /**
  * Web Viewer view (Obsidian core plugin compat, shipped in Obsidian 1.8.3):
@@ -83,6 +112,17 @@ export class WebView implements View, ReloadableView {
   private failedUrl: string | null = null;
   private title = "";
   private cleanups: (() => void)[] = [];
+  /** The neutral guest exists synchronously; real navigation starts only once its guest API is ready. */
+  private guestAttached = false;
+  private guestCanLoadUrl = false;
+  /** A terminated guest must be respawned with `src`; it cannot accept `loadURL`. */
+  private guestDead = false;
+  private bootstrapHistoryPending = true;
+  private requestedUrl: string | null = null;
+  private dispatchedUrl: string | null = null;
+  private supersededUrls = new Set<string>();
+  private activeNavigationUrls = new Set<string>();
+  private activeNavigationStarted = false;
   /**
    * Per-URL single-shot guard: at most one automatic reload is attempted per
    * crash on a given page, so a genuinely broken/GPU-hostile page can't spin
@@ -149,13 +189,15 @@ export class WebView implements View, ReloadableView {
     this.webview.classList.add("web-view-frame");
     this.webview.setAttribute("partition", "persist:webviewer");
     this.webview.setAttribute("allowpopups", "");
-    body.appendChild(this.webview);
-
+    this.webview.src = BOOTSTRAP_URL;
     this.errorEl = this.buildErrorOverlay();
+
+    // `did-attach` can fire as the element is inserted. Install every guest
+    // listener first so the queued real navigation cannot be missed.
+    this.attachWebviewEvents();
+    body.appendChild(this.webview);
     body.appendChild(this.errorEl);
     this.containerEl.appendChild(body);
-
-    this.attachWebviewEvents();
   }
 
   /** Hidden-by-default error overlay shown on a guest crash or main-frame load failure. */
@@ -204,14 +246,28 @@ export class WebView implements View, ReloadableView {
   }
 
   private attachWebviewEvents(): void {
-    const onNavigate = (e: Event) => {
+    const onNavigate = (e: Event): boolean => {
       const url = (e as unknown as { url: string }).url;
+      if (this.isBootstrapEvent(url)) return false;
+      if (this.isSupersededUrl(url)) return false;
+      this.requestedUrl = url;
+      this.dispatchedUrl = url;
+      this.supersededUrls.clear();
+      this.activeNavigationUrls.clear();
+      this.activeNavigationStarted = false;
       this.currentUrl = url;
       this.addressInput.value = url;
+      if (this.bootstrapHistoryPending) {
+        this.webview.clearHistory();
+        this.bootstrapHistoryPending = false;
+      }
       this.updateNavButtons();
       this.persistState();
+      return true;
     };
     const onTitleUpdated = (e: Event) => {
+      const url = this.webview.getURL();
+      if (this.isBootstrapEvent(url) || this.isSupersededUrl(url)) return;
       this.title = (e as unknown as { title: string }).title;
       this.leaf.updateHeader();
       this.persistState();
@@ -223,10 +279,40 @@ export class WebView implements View, ReloadableView {
     // overlay is cleared here and deliberately NOT in dom-ready, which would
     // otherwise hide the error the instant it was shown.
     const onNavigateSuccess = (e: Event) => {
-      onNavigate(e);
-      this.clearError();
+      if (onNavigate(e)) this.clearError();
     };
-    const onDomReady = () => this.updateNavButtons();
+    const onAttach = () => {
+      this.guestAttached = true;
+    };
+    const onStartNavigation = (e: Event) => {
+      const { url, isInPlace, isMainFrame } = e as unknown as DidStartNavigationEventLike;
+      if (this.isBootstrapEvent(url)) return;
+      if (isMainFrame && !isInPlace && sameNavigation(url, this.dispatchedUrl)) {
+        this.activeNavigationStarted = true;
+        this.activeNavigationUrls = new Set([navigationKey(url)]);
+      }
+    };
+    const onRedirect = (e: Event) => {
+      const { url, isInPlace, isMainFrame } = e as unknown as DidRedirectNavigationEventLike;
+      if (this.isBootstrapEvent(url)) return;
+      if (isMainFrame && !isInPlace && this.activeNavigationStarted) {
+        this.activeNavigationUrls.add(navigationKey(url));
+      }
+    };
+    const onDomReady = () => {
+      // `did-attach` only means a guest exists. Electron's programmatic guest
+      // methods (including loadURL) are legal once that guest emits dom-ready.
+      // A crashed guest can recover on this same element without attaching
+      // again, so every dom-ready re-arms the API and releases a newer target.
+      this.guestAttached = true;
+      this.guestCanLoadUrl = true;
+      this.guestDead = false;
+      if (this.requestedUrl !== null
+        && !sameNavigation(this.dispatchedUrl, this.requestedUrl)) {
+        this.dispatchNavigation(this.requestedUrl);
+      }
+      this.updateNavButtons();
+    };
 
     // Guest renderer died (crash, OOM, kill). Electron 42 nests the payload
     // under `event.details`.
@@ -243,8 +329,14 @@ export class WebView implements View, ReloadableView {
         e as unknown as DidFailLoadEventLike;
       // Only surface real, top-level failures. Sub-frame errors and ERR_ABORTED
       // (normal for cancelled/redirected navigations) must not flash an overlay.
-      if (!isMainFrame || errorCode === ERR_ABORTED) return;
-      this.failedUrl = validatedURL || this.currentUrl;
+      if (!isMainFrame) return;
+      const failedUrl = validatedURL || this.webview.getURL();
+      if (this.isBootstrapEvent(failedUrl)) return;
+      if (this.isSupersededUrl(failedUrl)) return;
+      if (errorCode === ERR_ABORTED) return;
+      this.activeNavigationUrls.clear();
+      this.activeNavigationStarted = false;
+      this.failedUrl = failedUrl || this.currentUrl;
       this.showError(
         "This page failed to load",
         `${errorDescription || "Load failed"} (${this.failedUrl})`
@@ -254,6 +346,9 @@ export class WebView implements View, ReloadableView {
     const onUnresponsive = () => this.containerEl.classList.add("is-web-view-unresponsive");
     const onResponsive = () => this.containerEl.classList.remove("is-web-view-unresponsive");
 
+    this.webview.addEventListener("did-attach", onAttach);
+    this.webview.addEventListener("did-start-navigation", onStartNavigation);
+    this.webview.addEventListener("did-redirect-navigation", onRedirect);
     this.webview.addEventListener("did-navigate", onNavigateSuccess);
     this.webview.addEventListener("did-navigate-in-page", onNavigate);
     this.webview.addEventListener("page-title-updated", onTitleUpdated);
@@ -264,6 +359,9 @@ export class WebView implements View, ReloadableView {
     this.webview.addEventListener("unresponsive", onUnresponsive);
     this.webview.addEventListener("responsive", onResponsive);
     this.cleanups.push(
+      () => this.webview.removeEventListener("did-attach", onAttach),
+      () => this.webview.removeEventListener("did-start-navigation", onStartNavigation),
+      () => this.webview.removeEventListener("did-redirect-navigation", onRedirect),
       () => this.webview.removeEventListener("did-navigate", onNavigateSuccess),
       () => this.webview.removeEventListener("did-navigate-in-page", onNavigate),
       () => this.webview.removeEventListener("page-title-updated", onTitleUpdated),
@@ -285,6 +383,11 @@ export class WebView implements View, ReloadableView {
   private handleGuestCrash(reason: string, exitCode: number | undefined): void {
     if (this.crashHandled) return;
     this.crashHandled = true;
+    this.guestCanLoadUrl = false;
+    this.guestDead = true;
+    this.dispatchedUrl = null;
+    this.activeNavigationUrls.clear();
+    this.activeNavigationStarted = false;
 
     const exit = exitCode !== undefined ? ` (exit code ${exitCode})` : "";
     this.showError("This page crashed", `${reason}${exit} at ${this.currentUrl}`);
@@ -385,6 +488,12 @@ export class WebView implements View, ReloadableView {
     if (resetGuard) this.autoRecovered = false;
     this.crashHandled = false;
     this.errorEl.classList.add("is-hidden");
+    this.requestedUrl = url;
+    this.dispatchedUrl = url;
+    this.guestCanLoadUrl = false;
+    this.supersededUrls.clear();
+    this.activeNavigationUrls = new Set([navigationKey(url)]);
+    this.activeNavigationStarted = false;
     this.webview.src = url;
   }
 
@@ -409,8 +518,51 @@ export class WebView implements View, ReloadableView {
     this.loadUrl(url);
   }
 
+  private isSupersededUrl(url: string): boolean {
+    const key = navigationKey(url);
+    return !this.activeNavigationUrls.has(key)
+      && !sameNavigation(this.requestedUrl, url)
+      && this.supersededUrls.has(key);
+  }
+
+  private isBootstrapEvent(url: string): boolean {
+    return this.bootstrapHistoryPending
+      && sameNavigation(url, BOOTSTRAP_URL)
+      && !sameNavigation(this.requestedUrl, BOOTSTRAP_URL);
+  }
+
+  /** Replace an attached guest's navigation immediately; never await the page. */
+  private dispatchNavigation(url: string): void {
+    this.dispatchedUrl = url;
+    this.activeNavigationUrls = new Set([navigationKey(url)]);
+    this.activeNavigationStarted = false;
+    let navigation: Promise<void>;
+    try {
+      navigation = this.webview.loadURL(url);
+    } catch {
+      // A guest may disappear between a readiness event and this call. Leave
+      // the latest request queued for the recovered guest's next dom-ready.
+      this.guestCanLoadUrl = false;
+      this.dispatchedUrl = null;
+      this.activeNavigationUrls.clear();
+      return;
+    }
+    void navigation.catch(() => {
+      // Main-frame failures are rendered from did-fail-load. Cancellation of
+      // a superseded request also rejects this promise and is intentionally
+      // silent here.
+    });
+  }
+
   /** Load a URL, used both on initial open (setState) and address-bar navigation. */
   loadUrl(url: string): void {
+    if (this.requestedUrl !== null && !sameNavigation(this.requestedUrl, url)) {
+      this.supersededUrls.add(navigationKey(this.requestedUrl));
+      for (const activeUrl of this.activeNavigationUrls) {
+        this.supersededUrls.add(activeUrl);
+      }
+    }
+    this.requestedUrl = url;
     this.currentUrl = url;
     this.addressInput.value = url;
     // A fresh navigation gets a clean recovery budget and no stale overlay.
@@ -419,7 +571,14 @@ export class WebView implements View, ReloadableView {
     this.crashHandled = false;
     this.failedUrl = null;
     this.errorEl.classList.add("is-hidden");
-    this.webview.src = url;
+    if (this.guestDead) {
+      this.dispatchedUrl = url;
+      this.activeNavigationUrls = new Set([navigationKey(url)]);
+      this.activeNavigationStarted = false;
+      this.webview.src = url;
+    } else if (this.guestAttached && this.guestCanLoadUrl) {
+      this.dispatchNavigation(url);
+    }
     this.persistState();
   }
 
@@ -460,6 +619,14 @@ export class WebView implements View, ReloadableView {
 
   onClose(): void {
     this.clearRecoverTimer();
+    this.requestedUrl = null;
+    this.dispatchedUrl = null;
+    this.guestAttached = false;
+    this.guestCanLoadUrl = false;
+    this.guestDead = false;
+    this.supersededUrls.clear();
+    this.activeNavigationUrls.clear();
+    this.activeNavigationStarted = false;
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     this.webview.remove();
   }

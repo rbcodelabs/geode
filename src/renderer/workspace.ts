@@ -2,6 +2,7 @@ import { Events } from "./events";
 import type { App } from "./app";
 import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
+import type { PaneType } from "./api/keymap";
 import { markStart, markEnd } from "./perf-instrumentation";
 import { DeferredView, isDeferredView } from "./views/deferred-view";
 import {
@@ -41,6 +42,32 @@ export interface View {
   onReveal?(): void;
   /** Views showing a file implement this. */
   getFile?(): TFile | null;
+  /**
+   * Scroll to a character offset in the open document. Implemented by
+   * `MarkdownView`; how `#Heading` and `#^blockid` anchors are honoured.
+   */
+  scrollToOffset?(offset: number): void;
+}
+
+/**
+ * Obsidian's `OpenViewState`, as much of it as Geode acts on. Declared here
+ * rather than inlined so `WorkspaceLeaf.openFile`'s contract is greppable
+ * from the plugin-facing side.
+ */
+export interface OpenViewState {
+  /** `false` opens the file without letting the new view take focus. */
+  active?: boolean;
+  /** Ephemeral view state. Geode honours `subpath`. */
+  eState?: { subpath?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+interface StatefulView extends View {
+  setState(state: unknown, result: unknown): void | Promise<void>;
+}
+
+function isStatefulView(view: View | null): view is StatefulView {
+  return typeof (view as StatefulView | null)?.setState === "function";
 }
 
 /**
@@ -93,6 +120,45 @@ export interface LeafContainer {
 let leafIdCounter = 0;
 const DOCUMENT_NAVIGATION_HISTORY_LIMIT = 100;
 
+/**
+ * First natively focusable thing inside a view, in the order a user would
+ * expect focus to land: the editor surface, then a text input, then anything
+ * explicitly in the tab order.
+ */
+const LEAF_FOCUS_TARGET_SELECTOR = [
+  ".cm-content",
+  "[contenteditable='true']",
+  "input:not([type='hidden']):not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(", ");
+
+/**
+ * Move keyboard focus into a leaf's content, backing `Workspace.setActiveLeaf`'s
+ * `{ focus: true }`.
+ *
+ * Activating a leaf and focusing it are separate things in Obsidian, and they
+ * are separate here: `TabGroup.setActiveLeaf` only makes a tab visible. Views
+ * that want focus on first open take it themselves in `onOpen()` (e.g.
+ * `MarkdownView` focuses its editor), which does nothing on a *re*-activation —
+ * so `{ focus: true }` needs its own implementation rather than riding along.
+ *
+ * The container is made programmatically focusable (`tabindex="-1"`) only as a
+ * fallback, when the view holds nothing natively focusable. That keeps it out
+ * of the tab order while still giving the keypress target somewhere real to
+ * land, so `{ focus: true }` never silently does nothing.
+ */
+function focusLeafContent(leaf: WorkspaceLeaf): void {
+  const root = leaf.view?.containerEl ?? leaf.contentEl;
+  const target = root.querySelector<HTMLElement>(LEAF_FOCUS_TARGET_SELECTOR);
+  if (target) {
+    target.focus({ preventScroll: true });
+    return;
+  }
+  if (!root.hasAttribute("tabindex")) root.setAttribute("tabindex", "-1");
+  root.focus({ preventScroll: true });
+}
+
 /** The leaf currently being dragged, shared across containers during a drag-and-drop. */
 let draggingLeaf: WorkspaceLeaf | null = null;
 let draggingCollection: { group: TabGroup; id: string } | null = null;
@@ -106,6 +172,8 @@ export class WorkspaceLeaf {
   leafEl: HTMLElement;
   contentEl: HTMLElement;
   pinned = false;
+  /** Geode companion destination; independent of the mounted view. */
+  companionOwner?: string;
   /** Split-local Phase 1 collection membership. Never carried across containers. */
   collectionId?: string;
   private opened = false;
@@ -169,17 +237,24 @@ export class WorkspaceLeaf {
   /**
    * Obsidian-compatible view opener: resolve the registered factory for
    * `state.type` (from `Plugin.registerView`/`registerViewFactory`) and
-   * mount its view in this leaf. This is how Obsidian plugins open their
-   * own views (`leaf.setViewState({ type: MY_VIEW })`).
+   * mount its view in this leaf. A live same-type view that supports
+   * `setState` receives the new state in place, preserving view-owned
+   * resources such as a Web Viewer's guest navigation history. This is how
+   * Obsidian plugins open or update their own views
+   * (`leaf.setViewState({ type: MY_VIEW })`).
    */
   async setViewState(state: { type: string; active?: boolean; state?: unknown }): Promise<void> {
     this.viewState = { type: state.type, state: state.state };
     const factory = this.app.workspace.getViewFactory(state.type);
     if (!factory) throw new Error(`No view registered for type "${state.type}"`);
-    const view = factory(this);
-    await this.setView(view);
-    if ("state" in state && typeof (view as any).setState === "function") {
-      await (view as any).setState(state.state, {});
+    const currentView = this.view;
+    const canUpdateInPlace = currentView?.viewType === state.type
+      && !isDeferredView(currentView)
+      && isStatefulView(currentView);
+    const view = canUpdateInPlace ? currentView : factory(this);
+    if (!canUpdateInPlace) await this.setView(view);
+    if ("state" in state && isStatefulView(view)) {
+      await view.setState(state.state, {});
     }
     if (state.active) this.group.setActiveLeaf(this);
   }
@@ -253,16 +328,41 @@ export class WorkspaceLeaf {
     return this.viewState.state;
   }
 
-  /** Open a markdown file in *this* leaf (Obsidian `leaf.openFile`). */
-  async openFile(file: TFile): Promise<void> {
-    await this.runDocumentNavigation(async () => {
-      const previousPath = this.view?.getFile?.()?.path;
-      const view = this.app.createMarkdownView();
-      await view.setFile(file);
-      await this.setView(view);
-      if (previousPath) this.recordDocumentNavigation(previousPath);
-      this.recordDocumentNavigation(file.path);
-    });
+  /**
+   * Open a vault file in *this* leaf (Obsidian `leaf.openFile`).
+   *
+   * @param state Obsidian's `OpenViewState`. Two fields are honoured:
+   *
+   * `active: false` opens the file without letting the new view take keyboard
+   * focus, which is what "open in a background tab" means. Mounting a view
+   * never changes which tab is *visible* (`setView` does not activate the
+   * leaf), but `MarkdownView.onOpen()` focuses its editor — so without this the
+   * caret would jump into a pane the user cannot see. Focus is only restored if
+   * the newly mounted view actually took it, so an unrelated concurrent focus
+   * change is left alone.
+   *
+   * `eState.subpath` scrolls the newly mounted view to a `#Heading` or
+   * `#^blockid` anchor, resolved by `App.resolveSubpathOffset` — the same
+   * resolution ordinary in-app link clicks use. This is what a plugin does
+   * after `parseLinktext` to make a `Note#Heading` link land on the heading
+   * instead of the top of the file. It runs before the focus restore above,
+   * so scrolling a background tab does not steal the caret (scrolling focuses
+   * the editor, and the restore then hands focus back).
+   *
+   * Any other `OpenViewState` field is still ignored.
+   */
+  async openFile(file: TFile, state?: OpenViewState): Promise<void> {
+    const keepFocus = state?.active === false;
+    const focusBefore = keepFocus ? (document.activeElement as HTMLElement | null) : null;
+    await this.app.openFileInLeaf(this, file);
+    const subpath = state?.eState?.subpath;
+    if (typeof subpath === "string" && subpath) {
+      const offset = await this.app.resolveSubpathOffset(file, subpath);
+      if (offset !== null) this.view?.scrollToOffset?.(offset);
+    }
+    if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) {
+      focusBefore.focus({ preventScroll: true });
+    }
   }
 
   /** Record a normal file navigation in this leaf without persisting it. */
@@ -506,6 +606,8 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
 
 /** A group of tabs sharing one content area. */
 export class TabGroup implements LeafContainer {
+  /** Geode companion split ownership; survives loss of its destination tab. */
+  companionOwner?: string;
   readonly isSidebar: boolean;
   leaves: WorkspaceLeaf[] = [];
   active: WorkspaceLeaf | null = null;
@@ -729,10 +831,11 @@ export class TabGroup implements LeafContainer {
     return tabs.length;
   }
 
-  createLeaf(): WorkspaceLeaf {
+  createLeaf(companionOwner?: string): WorkspaceLeaf {
     markStart("leaf-create");
     try {
       const leaf = new WorkspaceLeaf(this, this.app);
+      leaf.companionOwner = companionOwner;
       this.leaves.push(leaf);
       this.setActiveLeaf(leaf);
       this.workspace.trigger("layout-change");
@@ -1725,8 +1828,9 @@ export class Sidebar implements LeafContainer {
 
 /** One serialized leaf in the persisted workspace layout. */
 export interface PersistedLeaf {
+  companionOwner?: string;
   type: string;
-  /** For markdown views: the file path. */
+  /** For built-in file-backed views: the file path. */
   file?: string;
   /** For plugin views: the view's serialized state (from `getViewState`). */
   state?: unknown;
@@ -1749,7 +1853,7 @@ export interface PersistedLeaf {
 
 /**
  * Types that must never be replaced by a deferred placeholder, regardless of
- * factory registration. `empty`/`markdown`/`canvas` have dedicated restore
+ * factory registration. `empty`/`markdown`/`canvas`/`image` have dedicated restore
  * branches; `graph`/`base` are core app views whose factories are registered
  * unconditionally at boot. Minting a placeholder for any of these would
  * create a ghost leaf that persists forever and breaks callers that cast
@@ -1759,6 +1863,7 @@ export const RESERVED_VIEW_TYPES: ReadonlySet<string> = new Set([
   "empty",
   "markdown",
   "canvas",
+  "image",
   "graph",
   "base",
 ]);
@@ -1834,6 +1939,7 @@ export interface PersistedWorkspaceV1 {
 }
 
 export interface PersistedTabNode {
+  companionOwner?: string;
   type: "tabs";
   leaves: PersistedLeaf[];
   active: number;
@@ -1903,7 +2009,7 @@ export type PersistedWorkspace = PersistedWorkspaceV1 | PersistedWorkspaceV2 | P
 
 /** Remove empty branches and redundant one-child splits after moves/closes. */
 export function normalizeWorkspaceNode(node: WorkspaceTreeNode, keepEmptyRoot = false): WorkspaceTreeNode | null {
-  if (node.type === "tabs") return node.leaves.length || keepEmptyRoot ? node : null;
+  if (node.type === "tabs") return node.leaves.length || node.companionOwner || keepEmptyRoot ? node : null;
   const children = node.children
     .map((child) => normalizeWorkspaceNode(child, false))
     .filter((child): child is WorkspaceTreeNode => child !== null);
@@ -1920,6 +2026,7 @@ export function normalizeWorkspaceNode(node: WorkspaceTreeNode, keepEmptyRoot = 
 
 /** Upgrade the old flat v1 layout without dropping any user-visible state. */
 export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWorkspaceV3 {
+  const companionOwners = new Set<string>();
   const normalizeNode = (node: WorkspaceTreeNode | null, center: boolean): WorkspaceTreeNode | null => {
     if (!node || (node as WorkspaceTreeNode).type !== "tabs" && (node as WorkspaceTreeNode).type !== "split") return null;
     if (node.type === "split") {
@@ -1928,10 +2035,23 @@ export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWork
         : [];
       return { ...node, children, sizes: Array.isArray(node.sizes) ? node.sizes : children.map(() => 1 / Math.max(1, children.length)) };
     }
-    const rawLeaves = Array.isArray(node.leaves) ? node.leaves : [];
+    const owner = center && typeof node.companionOwner === "string" && node.companionOwner.trim()
+      && !companionOwners.has(node.companionOwner) ? node.companionOwner : undefined;
+    if (owner) companionOwners.add(owner);
+    let designated = false;
+    const rawLeaves = (Array.isArray(node.leaves) ? node.leaves : []).map((leaf) => {
+      const { companionOwner, ...rest } = leaf;
+      if (owner && companionOwner === owner && !designated) {
+        designated = true;
+        return { ...rest, companionOwner: owner };
+      }
+      return rest;
+    });
+    const { companionOwner: _ignoredOwner, ...nodeWithoutOwner } = node;
+    const ownedNode = owner ? { ...nodeWithoutOwner, companionOwner: owner } : nodeWithoutOwner;
     if (!center) {
       return {
-        ...node,
+        ...ownedNode,
         leaves: rawLeaves.map(({ collectionId: _ignored, ...leaf }) => leaf),
         active: Number.isInteger(node.active) && node.active >= 0 && node.active < rawLeaves.length ? node.active : 0,
       };
@@ -1941,7 +2061,7 @@ export function migrateWorkspaceLayout(state: PersistedWorkspace): PersistedWork
     const normalized = normalizeTabCollections(tagged, Array.isArray(node.collections) ? node.collections : []);
     const leaves = normalized.leaves.map(({ id: _ignored, ...leaf }) => leaf);
     const active = activeLeaf ? normalized.leaves.findIndex((leaf) => rawLeaves[Number(leaf.id.slice(10))] === activeLeaf) : -1;
-    return { ...node, leaves, active: active >= 0 ? active : 0, collections: normalized.collections };
+    return { ...ownedNode, leaves, active: active >= 0 ? active : 0, collections: normalized.collections };
   };
 
   if (state.version === 2 || state.version === 3) {
@@ -2261,8 +2381,10 @@ export class Workspace extends Events {
     return this.rightSidebar;
   }
 
-  addGroup(after?: TabGroup, leadingRatio = 0.5): TabGroup {
+  addGroup(after?: TabGroup, leadingRatio = 0.5, companionOwner?: string): TabGroup {
     const group = new TabGroup(this, this.app);
+    // Publish ownership before layout/activation events can reenter the API.
+    group.companionOwner = companionOwner;
     const donorIndex = after ? this.groups.indexOf(after) : Math.max(0, this.groups.length - 1);
     this.centerGroupSizes = insertCenterGroupSize(this.centerGroupSizes, donorIndex, leadingRatio);
     if (after) {
@@ -2401,6 +2523,7 @@ export class Workspace extends Events {
   }
 
   groupEmptied(group: TabGroup) {
+    group.companionOwner = undefined;
     if (group.sidebar) {
       group.sidebar.removeSplitGroup(group);
       this.trigger("layout-change");
@@ -2451,11 +2574,102 @@ export class Workspace extends Events {
     return view instanceof type ? view : null;
   }
 
-  /** Get a leaf for opening a file: reuse active unless newTab/pinned. */
-  getLeaf(newTab: boolean): WorkspaceLeaf {
+  /**
+   * Obsidian's `workspace.getLeaf(newLeaf?, direction?)`.
+   *
+   * The documented argument is a `PaneType | boolean`, not a bare boolean, and
+   * plugins pass the string form — `getLeaf('tab')` is the idiomatic "open in a
+   * new tab". Accepting only a boolean happened to work for `'tab'` purely
+   * because a non-empty string is truthy; `'split'` would have silently
+   * produced a tab, which is the wrong pane in the wrong place.
+   *
+   * - `'tab'` / `true` — a new leaf in the active group. It becomes the group's
+   *   visible tab (via `createLeaf()`), matching Obsidian. Callers that want the
+   *   new tab to stay in the background restore the previous leaf afterwards
+   *   with `setActiveLeaf(previous, { focus: false })`.
+   * - `false` / omitted — reuse the active leaf unless it is pinned.
+   * - `'split'` — a new group beside the active one (`splitActiveLeaf`).
+   * - `'window'` — throws. Geode has no pop-out windows, and handing back an
+   *   ordinary tab would put the plugin's content somewhere the user did not
+   *   ask for while reporting success.
+   *
+   * `direction` is forwarded to `splitActiveLeaf()`, which currently only
+   * produces side-by-side (vertical) splits.
+   */
+  getLeaf(newLeaf?: PaneType | boolean, direction?: "vertical" | "horizontal"): WorkspaceLeaf {
+    if (newLeaf === "window") {
+      throw new Error(
+        "Workspace.getLeaf('window') is not supported: Geode has no pop-out windows. " +
+          "Use 'tab' or 'split' instead."
+      );
+    }
+    if (newLeaf === "split") return this.splitActiveLeaf(direction);
+    const newTab = newLeaf === true || newLeaf === "tab";
     const active = this.getActiveLeaf();
     if (!newTab && active && !active.pinned) return active;
     return this.activeGroup.createLeaf();
+  }
+
+  /**
+   * Obsidian's `workspace.getMostRecentLeaf(root?)`: the most recently active
+   * leaf in the main area, so a plugin can act on the document pane even while
+   * a sidebar pane holds focus.
+   *
+   * Geode can answer this exactly rather than approximate it: `activeGroup` is
+   * only ever a main-area `TabGroup` (`TabGroup.setActiveLeaf` calls
+   * `workspace.setActiveGroup(this)` only when `!this.sidebar`, and `Sidebar`
+   * never assigns it), so `activeGroup.active` *is* the most recently active
+   * root-split leaf. The scan over `groups` is the tie-breaker for the moment
+   * before any leaf in the active group has been selected.
+   *
+   * @param root Restrict the search to one tab group. Obsidian types this as a
+   * `WorkspaceParent`, a `WorkspaceItem` protocol Geode deliberately does not
+   * shim (see `leftSplit`/`rightSplit`), so anything other than a `TabGroup`
+   * throws instead of quietly searching the whole workspace and returning a
+   * leaf from somewhere the caller excluded.
+   */
+  getMostRecentLeaf(root?: TabGroup): WorkspaceLeaf | null {
+    if (root !== undefined) {
+      if (!(root instanceof TabGroup)) {
+        throw new Error(
+          "Workspace.getMostRecentLeaf(root) only accepts a Geode TabGroup: Geode does not model " +
+            "Obsidian's WorkspaceParent/WorkspaceItem tree."
+        );
+      }
+      return root.active ?? null;
+    }
+    const active = this.getActiveLeaf();
+    if (active) return active;
+    for (const group of this.groups) {
+      if (group.active) return group.active;
+    }
+    return null;
+  }
+
+  /**
+   * Obsidian's `workspace.setActiveLeaf(leaf, params?)` — the workspace-level
+   * entry point, distinct from the `LeafContainer.setActiveLeaf(leaf)` that
+   * `TabGroup`/`Sidebar` implement. Plugins call this one, with the options
+   * object: `setActiveLeaf(leaf, { focus: false })` activates a pane without
+   * pulling keyboard focus (and the scroll-into-view that comes with it).
+   *
+   * `focus` defaults to false, matching Obsidian. When true, keyboard focus is
+   * moved into the leaf's content — see `focusLeafContent`. The deprecated
+   * three-argument form is accepted because plugins built against older APIs
+   * still use it; `pushHistory` is ignored, as Geode records document history
+   * per leaf on navigation rather than on activation.
+   */
+  setActiveLeaf(leaf: WorkspaceLeaf, params?: { focus?: boolean }): void;
+  setActiveLeaf(leaf: WorkspaceLeaf, pushHistory: boolean, focus: boolean): void;
+  setActiveLeaf(
+    leaf: WorkspaceLeaf,
+    paramsOrPushHistory?: { focus?: boolean } | boolean,
+    legacyFocus?: boolean
+  ): void {
+    const focus =
+      typeof paramsOrPushHistory === "boolean" ? !!legacyFocus : !!paramsOrPushHistory?.focus;
+    leaf.group.setActiveLeaf(leaf);
+    if (focus) focusLeafContent(leaf);
   }
 
   /**
@@ -2483,6 +2697,31 @@ export class Workspace extends Events {
   splitActiveLeafWithRatio(_direction: "vertical" | "horizontal", leadingRatio: number): WorkspaceLeaf {
     const group = this.addGroup(this.activeGroup, leadingRatio);
     return group.createLeaf();
+  }
+
+  /**
+   * Geode extension (not Obsidian API): resolve a durable, workspace-wide
+   * companion split and destination. Call after onLayoutReady. Explicit
+   * targeting reuses a pinned destination just like WorkspaceLeaf.openFile.
+   */
+  getOrCreateCompanionLeaf(
+    ownerKey: string,
+    anchorLeaf: WorkspaceLeaf,
+    leadingRatio: number,
+  ): { leaf: WorkspaceLeaf; reused: boolean } {
+    if (!this.layoutReady || this.restoringLayout) throw new Error("Workspace layout is not ready");
+    if (typeof ownerKey !== "string" || !ownerKey.trim()) throw new Error("Companion owner must be a nonempty string");
+    const anchor = anchorLeaf?.group;
+    if (!(anchor instanceof TabGroup) || !this.groups.includes(anchor) || !anchor.leaves.includes(anchorLeaf)) {
+      throw new Error("Companion anchor must be an attached center leaf");
+    }
+    const group = this.groups.find((candidate) => candidate.companionOwner === ownerKey)
+      ?? this.addGroup(anchor, leadingRatio, ownerKey);
+    // addGroup may synchronously trigger another caller that already created
+    // the destination, so resolve the leaf only after the group is published.
+    const existing = group.leaves.find((leaf) => leaf.companionOwner === ownerKey);
+    if (existing) return { leaf: existing, reused: true };
+    return { leaf: group.createLeaf(ownerKey), reused: false };
   }
 
   /** Find an open leaf already displaying the given file. */
@@ -2730,6 +2969,7 @@ export class Workspace extends Events {
 
   private layoutReadyCbs: (() => void)[] = [];
   private layoutReady = false;
+  private restoringLayout = false;
 
   /**
    * Obsidian defers plugin work until the initial layout is ready — crucially,
@@ -2793,10 +3033,13 @@ export class Workspace extends Events {
       arr.splice(Math.max(0, Math.min(ins, arr.length)), 0, leaf);
       target.renderTabs();
     } else if (from !== target) {
+      leaf.companionOwner = undefined;
       from.extractLeaf(leaf);
       target.insertLeaf(leaf, index);
       target.setActiveLeaf(leaf);
-      if (from instanceof TabGroup && from.leaves.length === 0) this.groupEmptied(from);
+      // Moving a destination does not close its companion split. Retain the
+      // empty group so subsequent navigation creates its replacement there.
+      if (from instanceof TabGroup && from.leaves.length === 0 && !from.companionOwner) this.groupEmptied(from);
     }
     this.trigger("layout-change");
   }
@@ -2805,16 +3048,20 @@ export class Workspace extends Events {
 
   private serializeLeaf(leaf: WorkspaceLeaf): PersistedLeaf | null {
     const v = leaf.view;
-    if (!v) return null;
+    const companion = leaf.group instanceof TabGroup && !leaf.group.sidebar
+      && leaf.companionOwner === leaf.group.companionOwner && leaf.companionOwner
+      ? { companionOwner: leaf.companionOwner } : {};
+    if (!v || v.viewType === "empty") {
+      return companion.companionOwner ? { type: "empty", pinned: leaf.pinned, ...companion } : null;
+    }
     // Empty/placeholder tabs (and markdown tabs whose file vanished) aren't
     // worth persisting — and persisting them caused empties to accumulate
     // across launches (restore recreated them, then a fresh one was added).
-    if (v.viewType === "empty") return null;
-    if (v.viewType === "markdown" || v.viewType === "canvas") {
+    if (v.viewType === "markdown" || v.viewType === "canvas" || v.viewType === "image") {
       // No title/icon here: the file path is the source of truth for these,
       // and they always have a restore branch, so they're never deferred.
       const file = v.getFile?.()?.path;
-      return file ? { type: v.viewType, file, pinned: leaf.pinned } : null;
+      return file ? { type: v.viewType, file, pinned: leaf.pinned, ...companion } : null;
     }
     // A `DeferredView` needs no special case: it impersonates its persisted
     // type and returns its persisted state/title/icon, so a leaf that is still
@@ -2824,6 +3071,7 @@ export class Workspace extends Events {
       type: v.viewType,
       state: leaf.getViewState().state,
       pinned: leaf.pinned,
+      ...companion,
       ...describeViewForPlaceholder(v),
     };
   }
@@ -2851,6 +3099,7 @@ export class Workspace extends Events {
         : item.persisted);
       return {
         type: "tabs",
+        ...(container instanceof TabGroup && !container.sidebar && container.companionOwner ? { companionOwner: container.companionOwner } : {}),
         leaves: persistedLeaves,
         active,
         ...(container instanceof TabGroup && !container.sidebar ? { collections: subset.collections.map((collection) => ({ ...collection })) } : {}),
@@ -2892,6 +3141,15 @@ export class Workspace extends Events {
       const file = this.app.vault.getFileByPath(ls.file);
       if (file) {
         const view = this.app.createCanvasView();
+        await view.setFile(file);
+        await leaf.setView(view);
+      } else {
+        await leaf.setView(this.app.createEmptyView());
+      }
+    } else if (ls.type === "image" && ls.file) {
+      const file = this.app.vault.getFileByPath(ls.file);
+      if (file) {
+        const view = this.app.createImageView();
         await view.setFile(file);
         await leaf.setView(view);
       } else {
@@ -2968,6 +3226,15 @@ export class Workspace extends Events {
    * content, so the caller can fall back to opening an empty tab.
    */
   async deserialize(input: PersistedWorkspace): Promise<boolean> {
+    this.restoringLayout = true;
+    try {
+      return await this.restoreLayout(input);
+    } finally {
+      this.restoringLayout = false;
+    }
+  }
+
+  private async restoreLayout(input: PersistedWorkspace): Promise<boolean> {
     const state = migrateWorkspaceLayout(input);
     // Snapshot the leaves that exist *before* this pass. The `existingBuiltin`
     // lookups below match on `leaf.view.viewType`, and a `DeferredView` created
@@ -2979,7 +3246,7 @@ export class Workspace extends Events {
     this.iterateLeaves((leaf) => preExisting.add(leaf));
     const centerNodes = state.center.root?.type === "split" ? state.center.root.children : state.center.root ? [state.center.root] : [];
     const hasContent =
-      centerNodes.some((node) => node.type === "tabs" && node.leaves.length) ||
+      centerNodes.some((node) => node.type === "tabs" && (node.leaves.length || node.companionOwner)) ||
       !!state.left.root || !!state.right.root;
 
     // Restore sidebar chrome (width/collapsed/docked leaves) unconditionally,
@@ -3004,6 +3271,7 @@ export class Workspace extends Events {
     for (let gi = 0; gi < this.groups.length; gi++) {
       const group = this.groups[gi];
       const gs = centerNodes[gi];
+      group.companionOwner = gs?.type === "tabs" ? gs.companionOwner : undefined;
       if (gs?.type === "tabs") {
         // Do not install the registry until all leaves exist: createLeaf()
         // renders/normalizes after each addition, when no restored membership
@@ -3028,11 +3296,12 @@ export class Workspace extends Events {
               : undefined;
             if (existingBuiltin) {
               this.moveLeaf(existingBuiltin, group);
+              existingBuiltin.companionOwner = ls.companionOwner;
               if (ls.pinned) existingBuiltin.setPinned(true);
               existingBuiltin.collectionId = ls.collectionId;
               restored.push({ leaf: existingBuiltin, sourceIndex, collectionId: ls.collectionId });
             } else {
-              const leaf = group.createLeaf();
+              const leaf = group.createLeaf(ls.companionOwner);
               await this.restoreLeafView(leaf, ls);
               leaf.collectionId = ls.collectionId;
               restored.push({ leaf, sourceIndex, collectionId: ls.collectionId });
@@ -3058,7 +3327,7 @@ export class Workspace extends Events {
         }
       }
       if (group.leaves.length === 0) {
-        const leaf = group.createLeaf();
+        const leaf = group.createLeaf(group.companionOwner);
         await leaf.setView(this.app.createEmptyView());
       }
       const active = group.active || group.leaves[0];
