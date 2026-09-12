@@ -5,6 +5,7 @@ import { Events } from "./events";
 import { Vault } from "./vault";
 import { projectCanvasFileLinks } from "./canvas/canvas-data";
 import { recordMeasure, withPerfMark } from "./perf-instrumentation";
+import { stripCommentMarkerSyntax } from "./comments/model";
 import {
   CachedMetadata,
   HeadingCache,
