@@ -660,10 +660,113 @@ export class SliderComponent extends ValueComponent<number> {
   private updateDisplay(): void { this.displayEl.textContent = this.getValuePretty(); }
 }
 
-export class SecretComponent extends TextComponent {
-  constructor(container: HTMLElement) {
-    super(container);
-    this.inputEl.type = "password";
+const SECRET_COMPONENT_PLACEHOLDER = "Select secret…";
+
+/**
+ * Which overload of `new SecretComponent(...)` a caller used. Obsidian's
+ * signature is `(app, containerEl)`; Geode's first cut took only
+ * `(container)`, so both are accepted and told apart by which argument looks
+ * like a DOM node. `appendChild` rather than `instanceof HTMLElement` is the
+ * probe so unit tests can drive this with a fake element, the way
+ * `tests/unit/declarative-settings.test.ts` already drives `Setting`.
+ */
+function resolveSecretComponentArgs(
+  first: App | HTMLElement,
+  second?: HTMLElement,
+): { app: App | null; containerEl: HTMLElement } {
+  const isNode = (value: unknown): value is HTMLElement =>
+    !!value && typeof (value as { appendChild?: unknown }).appendChild === "function";
+  if (isNode(second)) return { app: first as App, containerEl: second };
+  if (isNode(first)) return { app: null, containerEl: first };
+  throw new TypeError("SecretComponent requires a container element");
+}
+
+/**
+ * Obsidian's `SecretComponent`: a button that opens a picker listing the
+ * secrets already in `app.secretStorage`, and reports the chosen secret's
+ * **id** — never its value — through `onChange`. Callers resolve the value
+ * themselves with `app.secretStorage.getSecret(id)`; obsidian-claude-threads'
+ * "Link existing" button next to the OpenAI key field does exactly that.
+ *
+ * Two things were wrong before. The constructor took a single `container`, so
+ * the real call `new SecretComponent(this.app, tmp)` bound the `App` to
+ * `container` and threw `container.appendChild is not a function` synchronously
+ * inside the caller's click handler — the button appeared to do nothing at all.
+ * And it rendered a bare password `<input>`, which the caller's
+ * `querySelector('button, input').click()` could focus but never open a picker
+ * from. Both arities are supported: `(app, containerEl)` is Obsidian's, and a
+ * bare `(containerEl)` keeps any caller written against the old Geode shape
+ * working (with no `app`, the picker simply has nothing to list).
+ */
+export class SecretComponent extends ValueComponent<string> {
+  /** The `App` whose `secretStorage` the picker lists; null for the legacy single-argument form. */
+  app: App | null;
+  buttonEl: HTMLButtonElement;
+  private value = "";
+
+  constructor(app: App | HTMLElement, containerEl?: HTMLElement) {
+    super();
+    const resolved = resolveSecretComponentArgs(app, containerEl);
+    this.app = resolved.app;
+    this.buttonEl = document.createElement("button");
+    this.buttonEl.type = "button";
+    this.buttonEl.className = "secret-component-select";
+    this.buttonEl.textContent = SECRET_COMPONENT_PLACEHOLDER;
+    resolved.containerEl.appendChild(this.buttonEl);
+    this.buttonEl.addEventListener("click", () => this.openPicker());
+  }
+
+  getValue(): string {
+    return this.value;
+  }
+
+  setValue(value: string): this {
+    this.value = value;
+    this.buttonEl.textContent = value || SECRET_COMPONENT_PLACEHOLDER;
+    return this;
+  }
+
+  override setDisabled(disabled: boolean): this {
+    super.setDisabled(disabled);
+    this.buttonEl.disabled = disabled;
+    return this;
+  }
+
+  /**
+   * Open the secret picker. Anchored to the button's own rect rather than the
+   * click's coordinates: the caller above dispatches a synthetic `.click()`
+   * (whose `clientX`/`clientY` are 0) on a button inside a hidden container,
+   * and `Menu.showAtPosition` clamps a zero rect into the viewport anyway.
+   */
+  private openPicker(): void {
+    if (this.disabled) return;
+    const menu = new Menu();
+    const ids = this.listSecretIds();
+    if (ids.length === 0) {
+      menu.addItem((item) => item.setTitle("No secrets stored").setDisabled(true));
+    } else {
+      for (const id of ids) {
+        menu.addItem((item) =>
+          item.setTitle(id).onClick(() => {
+            this.setValue(id);
+            this.changeCb?.(id);
+          }),
+        );
+      }
+    }
+    const rect = this.buttonEl.getBoundingClientRect?.();
+    menu.showAtPosition({ x: rect?.left ?? 0, y: rect?.bottom ?? 0 });
+  }
+
+  private listSecretIds(): string[] {
+    const storage = (this.app as { secretStorage?: { listSecrets?: () => string[] } } | null)
+      ?.secretStorage;
+    try {
+      return storage?.listSecrets?.() ?? [];
+    } catch (error) {
+      console.error("SecretComponent: failed to list secrets", error);
+      return [];
+    }
   }
 }
 
