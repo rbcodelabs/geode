@@ -17,6 +17,7 @@ import { getProcessMetricsSnapshot } from "./process-metrics";
 import { PowerSaveBlockerRegistry } from "./power-save-blocker";
 import { MetadataCacheReaders } from "./metadata-cache-reader";
 import {
+  bootstrapMetadataDb,
   openMetadataDb,
   pruneMetadataEntries,
   readAllMetadataEntries,
@@ -102,8 +103,8 @@ interface VaultSession {
   indexer: MetadataIndexerHost | null;
   indexerReady: Promise<unknown | null>;
   /**
-   * Lazily opened on first `metadata-cache-read`/`metadata-cache-write` IPC
-   * call — the renderer's warm-start read fires on every vault open, but a
+   * Bootstrapped before utility launch; lazy opening is only a fallback
+   * after startup failure. The renderer's warm-start read fires on every vault open, but a
    * WRITE from this connection only ever happens when the indexer utility
    * process is unavailable (WAL supports concurrent multi-process readers
    * safely; the two writers are kept mutually exclusive by construction).
@@ -409,6 +410,7 @@ function registerIpc() {
     if (prev?.watcher) await prev.watcher.close();
     if (prev?.indexer) await prev.indexer.shutdown();
     prev?.metadataDb?.close();
+    if (prev) prev.metadataDb = null;
     const root = path.resolve(vaultPath);
     // Seed a brand-new (never-before-opened) vault with whatever a deploying
     // organization has dropped into resources/ ahead of their build. No-op
@@ -418,24 +420,39 @@ function registerIpc() {
     const files = await listVaultFiles(root);
     let indexer: MetadataIndexerHost | null = null;
     let indexerReady: Promise<unknown | null> = Promise.resolve(null);
+    let metadataDb: DatabaseSync | null = null;
     try {
-      const indexerInspectPort = process.env.GEODE_INDEXER_INSPECT_PORT;
-      const child = utilityProcess.fork(path.join(__dirname, "indexer-process.js"), [], {
-        execArgv: indexerInspectPort ? [`--inspect=${indexerInspectPort}`] : [],
-      });
-      indexer = new MetadataIndexerHost(child, (message) => {
-        if (!win.isDestroyed()) win.webContents.send("metadata-indexer-message", message);
-      });
       const markdownFiles: MetadataFileStat[] = files
         .filter((file) => !file.isFolder && file.path.toLowerCase().endsWith(".md"))
         .map((file) => ({ path: file.path, mtimeMs: file.mtime, size: file.size }));
       const scanCapBytes = await readMetadataScanCapBytes(root);
-      indexerReady = indexer.initialize(root, markdownFiles, scanCapBytes);
+      if (win.isDestroyed()) return;
+      const prepared = bootstrapMetadataDb(root, () => {
+        const indexerInspectPort = process.env.GEODE_INDEXER_INSPECT_PORT;
+        const child = utilityProcess.fork(path.join(__dirname, "indexer-process.js"), [], {
+          execArgv: indexerInspectPort ? [`--inspect=${indexerInspectPort}`] : [],
+        });
+        try {
+          const host = new MetadataIndexerHost(child, (message) => {
+            if (!win.isDestroyed()) win.webContents.send("metadata-indexer-message", message);
+          });
+          return { host, ready: host.initialize(root, markdownFiles, scanCapBytes) };
+        } catch (error) { child.kill(); throw error; }
+      });
+      metadataDb = prepared.db;
+      indexer = prepared.value.host;
+      indexerReady = prepared.value.ready;
     } catch (error) {
       console.error("Metadata utility process unavailable; using renderer fallback", error);
     }
-    const watcher = startWatcher(win, root, files);
-    sessions.set(win.id, { root, watcher, indexer, indexerReady, metadataDb: null, generation: ++vaultGeneration });
+    let watcher: VaultWatcherHandle;
+    try { watcher = startWatcher(win, root, files); }
+    catch (error) {
+      try { metadataDb?.close(); }
+      finally { if (indexer) await indexer.shutdown(); }
+      throw error;
+    }
+    sessions.set(win.id, { root, watcher, indexer, indexerReady, metadataDb, generation: ++vaultGeneration });
     // The watcher backend and the descriptor count it costs are the first
     // things worth knowing when a sandboxed child process later fails to
     // spawn (see probeFdPressure).
