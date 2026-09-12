@@ -37,6 +37,10 @@ import { GraphView } from "./views/graph-view";
 import { WebView } from "./views/web-view";
 import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestModal } from "./modals/modals";
+import { ConflictCompareModal } from "./modals/conflict-compare-modal";
+import { SyncConflictBannerController } from "./sync/conflict-banner";
+import { SYNC_CONFLICT_COMPARE_LABEL, SYNC_CONFLICT_COMPARE_ROW_LIMIT, planConflictRow } from "./sync/conflict-presentation";
+import type { HistoryConflictComparison } from "./sync/history-controller";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { renderExternalRootsTab } from "./settings/external-roots-tab";
@@ -413,6 +417,8 @@ class SettingsModal extends Modal {
   private stopHotkeyRecorder: (() => void) | null = null;
   /** Cleanup for the Performance tab's live-metrics polling interval (set while that tab is active). */
   private stopPerformanceTab: (() => void) | null = null;
+  /** Bumped by every Sync tab render so stale async row upgrades stand down. */
+  private syncTabGeneration = 0;
   private stopExternalRootsTab: (() => void) | null = null;
 
   constructor(private geodeApp: App) {
@@ -1159,7 +1165,7 @@ class SettingsModal extends Modal {
     });
   }
 
-  private addRow(container: HTMLElement, label: string, description?: string): { control: HTMLElement } {
+  private addRow(container: HTMLElement, label: string, description?: string): { control: HTMLElement; info: HTMLElement; description: HTMLElement | null } {
     const row = document.createElement("div");
     row.className = "setting-item";
     const info = document.createElement("div");
@@ -1168,8 +1174,9 @@ class SettingsModal extends Modal {
     name.className = "setting-item-name";
     name.textContent = label;
     info.appendChild(name);
+    let desc: HTMLElement | null = null;
     if (description) {
-      const desc = document.createElement("div");
+      desc = document.createElement("div");
       desc.className = "setting-item-description";
       desc.textContent = description;
       info.appendChild(desc);
@@ -1179,7 +1186,7 @@ class SettingsModal extends Modal {
     row.appendChild(info);
     row.appendChild(control);
     container.appendChild(row);
-    return { control };
+    return { control, info, description: desc };
   }
 
   private addTextInput(container: HTMLElement, label: string, value: string, onChange: (v: string) => void): HTMLInputElement {
@@ -1254,6 +1261,7 @@ class SettingsModal extends Modal {
   }
 
   private renderSyncTab(container: HTMLElement, summary = ""): void {
+    const generation = ++this.syncTabGeneration;
     container.innerHTML = `<h2>Sync</h2>`;
     const providers = this.geodeApp.sync.listProviders();
     const active = this.geodeApp.sync.getActiveProvider();
@@ -1305,12 +1313,48 @@ class SettingsModal extends Modal {
         recovery.control.parentElement?.classList.add("sync-wrapped-setting");
         const stop = document.createElement("button"); stop.type = "button"; stop.textContent = "Stop pending retries & preview"; stop.addEventListener("click", () => perform(() => this.geodeApp.sync.abandonPending())); recovery.control.appendChild(stop);
       }
-      for (const conflict of details?.conflicts ?? []) {
-        const row = this.addRow(container, conflict.path, `${conflict.reason}. Choose the current local content or an explicit immutable version; unseen concurrent versions remain conflicts.`);
+      // Rows render with the original keep-local / accept-version workflow, then
+      // upgrade to a single Compare & resolve action once the (read-only)
+      // comparison reports the conflict comparable. Comparisons take the sync
+      // controller's single-owner slot, so they are described one at a time.
+      // Every conflict gets a row: a conflict is actionable, so omitting one
+      // would hide work the user must complete. Only the async comparison
+      // upgrade below is bounded, and rows past that bound say so rather than
+      // silently keeping the older workflow.
+      const appendOnlyConflicts = details?.conflicts ?? [];
+      const conflictRows = appendOnlyConflicts.map(conflict => {
+        const row = this.addRow(container, conflict.path, planConflictRow(conflict, null).description);
         row.control.parentElement?.classList.add("sync-wrapped-setting");
         const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep local"; keep.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "current" } }))); row.control.appendChild(keep);
         for (const recordId of conflict.heads) { const accept = document.createElement("button"); accept.type = "button"; accept.textContent = `Accept version ${recordId.slice(0, 8)}`; accept.title = recordId; accept.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "version", recordId } }))); row.control.appendChild(accept); }
-      }
+        return { conflict, row };
+      });
+      if (conflictRows.length) void (async () => {
+        const live = () => container.isConnected && generation === this.syncTabGeneration;
+        for (const { row } of conflictRows.slice(SYNC_CONFLICT_COMPARE_ROW_LIMIT)) {
+          if (row.info) {
+            const note = document.createElement("div"); note.className = "setting-item-description sync-conflict-fallback";
+            note.textContent = `Side-by-side comparison is not offered beyond the first ${SYNC_CONFLICT_COMPARE_ROW_LIMIT} conflicts. Resolve some of those first, or use the buttons here.`;
+            row.info.appendChild(note);
+          }
+        }
+        for (const { conflict, row } of conflictRows.slice(0, SYNC_CONFLICT_COMPARE_ROW_LIMIT)) {
+          if (!live()) return;
+          let comparison: HistoryConflictComparison | null = null;
+          try { comparison = await this.geodeApp.sync.describeHistoryConflict(conflict.entityId); }
+          catch { comparison = null; }
+          if (!live()) return;
+          const plan = planConflictRow(conflict, comparison);
+          if (row.description) row.description.textContent = plan.description;
+          if (plan.mode === "compare") {
+            const compare = document.createElement("button"); compare.type = "button"; compare.className = "mod-cta"; compare.textContent = SYNC_CONFLICT_COMPARE_LABEL;
+            compare.addEventListener("click", () => this.geodeApp.openConflictComparison({ entityId: conflict.entityId, path: conflict.path }, () => { if (container.isConnected) this.renderSyncTab(container); }));
+            row.control.replaceChildren(compare);
+          } else if (plan.fallback && row.info) {
+            const note = document.createElement("div"); note.className = "setting-item-description sync-conflict-fallback"; note.textContent = plan.fallback; row.info.appendChild(note);
+          }
+        }
+      })();
     }
     const conflictContainer = document.createElement("div"); container.appendChild(conflictContainer);
     void this.geodeApp.sync.listConflicts().then(conflicts => {
@@ -1503,6 +1547,8 @@ export class App {
   private externalModifyInFlight = new Map<string, Promise<void>>();
   private webViewerLifecycleEnabled = false;
   private commentsView?: CommentsView;
+  private syncConflictBanners: SyncConflictBannerController | null = null;
+  private openConflictModal: ConflictCompareModal | null = null;
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
@@ -2102,6 +2148,45 @@ export class App {
     this.workspace.on("active-leaf-change", scheduleSave);
     this.workspace.on("file-open", scheduleSave);
 
+    // Advisory sync-conflict banners are reconciled across every open pane from
+    // sync state, so a conflicted note is flagged in each pane showing it —
+    // including reading mode — and nowhere else.
+    const conflictBanners = new SyncConflictBannerController({
+      views: () => {
+        const views: MarkdownView[] = [];
+        this.workspace.iterateLeaves((leaf) => {
+          if (leaf.view instanceof MarkdownView) views.push(leaf.view);
+        });
+        return views;
+      },
+      conflicts: () => (this.sync.isAppendOnly() ? this.sync.getHistoryDetails()?.conflicts ?? [] : []),
+      compare: (info) => this.openConflictComparison(info),
+    });
+    this.syncConflictBanners = conflictBanners;
+    const refreshConflictBanners = () => {
+      conflictBanners.refresh();
+      // A comparison whose conflict has left sync state — resolved elsewhere,
+      // provider unloaded, sync disconnected — has nothing left to read, so it
+      // is dismissed rather than left showing a stale side-by-side.
+      const open = this.openConflictModal;
+      if (!open || open.isClosed) return;
+      const live = this.sync.isAppendOnly() ? this.sync.getHistoryDetails()?.conflicts ?? [] : [];
+      if (live.some((conflict) => conflict.entityId === open.entityId)) return;
+      open.cancel();
+      if (this.openConflictModal === open) this.openConflictModal = null;
+    };
+    this.workspace.on("layout-change", refreshConflictBanners);
+    this.workspace.on("file-open", refreshConflictBanners);
+    const stopSyncStatus = this.sync.on("status", refreshConflictBanners);
+    this.hostDisposers.add(() => {
+      stopSyncStatus();
+      this.openConflictModal?.cancel();
+      this.openConflictModal = null;
+      conflictBanners.dispose();
+      if (this.syncConflictBanners === conflictBanners) this.syncConflictBanners = null;
+    });
+    refreshConflictBanners();
+
     // Hydrate metadata from the persisted warm cache before layout-ready, but
     // never wait for the utility process's full vault reconciliation. On slow
     // or endpoint-protected filesystems that can take minutes. The utility's
@@ -2345,6 +2430,58 @@ export class App {
       return;
     }
     await this.preserveConflict(view, file, text, file.path);
+  }
+
+  /**
+   * Opens the read-only comparison for one sync conflict. Both entry points —
+   * the in-note banner and the Sync settings tab — go through here, so there is
+   * a single dialog instance and a single resolution path.
+   */
+  openConflictComparison(info: { entityId: string; path: string }, onResolved?: () => void): void {
+    this.openConflictModal?.cancel();
+    const modal = new ConflictCompareModal(this, {
+      entityId: info.entityId,
+      path: info.path,
+      sync: this.sync,
+      settleLocalEdits: (path) => this.settleSyncConflictEdits(path),
+      onResolved: () => {
+        this.syncConflictBanners?.refresh();
+        onResolved?.();
+      },
+    });
+    this.openConflictModal = modal;
+    modal.open();
+  }
+
+  /**
+   * Lets ordinary autosave settle for a conflicted path, and refuses when open
+   * panes still disagree. Resolution must never silently choose between dirty
+   * buffers, so two panes holding unsaved edits is reported rather than guessed.
+   */
+  private async settleSyncConflictEdits(path: string): Promise<string | null> {
+    const views: MarkdownView[] = [];
+    this.workspace?.iterateLeaves((leaf) => {
+      if (leaf.view instanceof MarkdownView && leaf.view.file?.path === path) views.push(leaf.view);
+    });
+    if (views.filter((view) => view.hasUnacknowledgedChanges()).length > 1) {
+      return "More than one open pane has unsaved edits for this note. Save or close all but one before resolving.";
+    }
+    // A pane held read-only by external-edit recovery must not be flushed:
+    // there `lastSavedText` is the provider text while the buffer holds the
+    // local edit, and flush() has no read-only guard of its own, so settling
+    // autosave here would write the local text over the provider file and
+    // silently defeat the recovery safeguard.
+    if (views.some((view) => view.isConflictReadOnly())) {
+      return "This note is in external-edit recovery in an open pane. Resolve that banner first, then compare sync versions.";
+    }
+    for (const view of views) {
+      await view.flush();
+      await view.waitForPendingSave();
+    }
+    if (views.some((view) => view.hasPendingSave() || view.hasUnacknowledgedChanges())) {
+      return "This note still has unsaved edits. Save or refresh it in every open pane before resolving.";
+    }
+    return null;
   }
 
   private async preserveConflict(

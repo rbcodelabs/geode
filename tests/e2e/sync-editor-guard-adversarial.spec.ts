@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { SYNC_CONFLICT_BANNER_MESSAGE, SYNC_CONFLICT_COMPARE_LABEL } from '../../src/renderer/sync/conflict-presentation';
 
 const repoRoot = path.resolve(__dirname, '../..');
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -76,6 +77,74 @@ async function gatePrepare(page: Page): Promise<void> {
     };
   });
 }
+
+/**
+ * The two banners are different surfaces with different powers: external-edit
+ * recovery owns read-only, the sync-conflict banner is purely advisory. They
+ * mount in different slots (above the header vs below it) and must be able to
+ * be visible at the same time without either disarming the other — in
+ * particular, the advisory one must never pause writes.
+ */
+test('the advisory sync-conflict banner coexists with external-edit recovery without taking the editor read-only', async () => {
+  await isolated(async ({ second, vault }) => {
+    await open(second);
+    await second.evaluate(() => {
+      (window as any).compared = 0;
+      (window as any).app.workspace.activeLeaf.view.presentSyncConflict(
+        { entityId: 'entity-1', path: 'Note.md', heads: ['head-1', 'head-2'], reason: 'concurrent-heads' },
+        () => { (window as any).compared++; },
+      );
+    });
+    const syncBanner = second.locator('.sync-conflict-banner');
+    await expect(syncBanner).toBeVisible();
+    await expect(syncBanner.locator('.sync-conflict-banner-message')).toHaveText(SYNC_CONFLICT_BANNER_MESSAGE);
+
+    // Advisory only: no read-only attributes, and autosave still writes.
+    const content = second.locator('.markdown-source-view .cm-content');
+    await expect(content).toHaveAttribute('contenteditable', 'true');
+    expect(await content.getAttribute('aria-readonly')).toBeNull();
+    await second.evaluate(() => {
+      const view = (window as any).app.workspace.activeLeaf.view;
+      view.editor.dispatch({ changes: { from: 0, to: view.editor.state.doc.length, insert: 'edited under the sync banner' } });
+    });
+    await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('edited under the sync banner');
+    await expect(syncBanner).toHaveCount(1);
+
+    await syncBanner.getByRole('button', { name: SYNC_CONFLICT_COMPARE_LABEL, exact: true }).click();
+    expect(await second.evaluate(() => (window as any).compared)).toBe(1);
+
+    // Now stack a genuine external-edit conflict on top of it.
+    await second.evaluate(() => {
+      const view = (window as any).app.workspace.activeLeaf.view;
+      view.editor.dispatch({ changes: { from: 0, to: view.editor.state.doc.length, insert: 'dirty local edit' } });
+    });
+    fs.writeFileSync(path.join(vault, 'Note.md'), 'external provider edit');
+    await second.evaluate(async () => {
+      const app = (window as any).app;
+      await app.handleExternalModify(app.vault.getFileByPath('Note.md'), 'external provider edit');
+    });
+
+    // Both visible; only the recovery banner took read-only.
+    await expect(second.locator('.editor-conflict-banner')).toBeVisible();
+    await expect(syncBanner).toHaveCount(1);
+    await expect(syncBanner).toBeVisible();
+    await expect(content).toHaveAttribute('aria-readonly', 'true');
+    // Distinct slots: recovery above the header, sync conflict below it.
+    expect(await second.evaluate(() => [...(window as any).app.workspace.activeLeaf.view.containerEl.children]
+      .map((el: Element) => el.className.split(' ')[0])
+      .filter((name: string) => ['editor-conflict-banner', 'view-header', 'sync-conflict-banner', 'markdown-view-body'].includes(name))))
+      .toEqual(['editor-conflict-banner', 'view-header', 'sync-conflict-banner', 'markdown-view-body']);
+
+    // Dismissing recovery leaves the advisory banner alone.
+    await second.locator('.editor-conflict-banner').getByRole('button', { name: 'Dismiss' }).click();
+    await expect(second.locator('.editor-conflict-banner')).toHaveCount(0);
+    await expect(syncBanner).toHaveCount(1);
+
+    // The pane showing a different note carries no conflict state over.
+    await open(second, 'Source.md');
+    await expect(syncBanner).toHaveCount(0);
+  });
+});
 
 test('dirty Canvas document blocks an incoming guarded write', async () => {
   await isolated(async ({ second, vault, apply }) => {

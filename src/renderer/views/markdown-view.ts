@@ -25,6 +25,7 @@ import { resolveBlockBoundary } from "../block-boundary";
 import { PagePreviewController } from "../page-preview";
 import { commentDecorations, commentInteractions } from "../comments/editor-extension";
 import { parseCommentThreads, validateCommentRange } from "../comments/model";
+import { SyncConflictBannerSlot, type SyncConflictBannerInfo } from "../sync/conflict-banner";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, class: "cm-header-1" },
@@ -83,6 +84,14 @@ export class MarkdownView implements View {
   private vaultSwitching = false;
   private conflictReadOnly = false;
   private conflictBanner: HTMLElement | null = null;
+  /**
+   * The sync conflict banner is a separate, advisory surface from the
+   * external-edit recovery banner above: it lives below the view header rather
+   * than above it, has its own element and field, and never makes the note
+   * read-only. Both can therefore be visible at once without either clobbering
+   * the other.
+   */
+  private syncConflictSlot: SyncConflictBannerSlot;
   private pagePreview: PagePreviewController;
   private commentButton: HTMLButtonElement;
 
@@ -161,6 +170,7 @@ export class MarkdownView implements View {
     this.bodyEl.appendChild(this.readingEl);
     this.containerEl.appendChild(this.headerEl);
     this.containerEl.appendChild(this.bodyEl);
+    this.syncConflictSlot = new SyncConflictBannerSlot(this.containerEl, this.bodyEl);
     this.pagePreview = new PagePreviewController(
       this.app,
       this.containerEl,
@@ -193,6 +203,9 @@ export class MarkdownView implements View {
       for (const el of buildBreadcrumbs(file.parent)) this.titleParentEl.appendChild(el);
     }
     this.clearConflictState();
+    // The pane now shows a different note; its conflict state is re-reconciled
+    // from sync state rather than inherited.
+    this.clearSyncConflict();
     this.lastSavedText = text;
     this.buildEditor(text);
     if (this.mode === "reading") await this.renderReading();
@@ -459,6 +472,19 @@ export class MarkdownView implements View {
     return this.pendingSaveText !== null || this.getText() !== this.lastSavedText;
   }
 
+  /**
+   * True while the external-edit recovery flow holds this view read-only.
+   *
+   * In that state `lastSavedText` is the *provider* text while the buffer still
+   * holds the local edit, so calling `flush()` would write the local text over
+   * the provider file — `flush()` itself has no read-only guard, unlike
+   * `scheduleSave()`. Callers that settle autosave on the user's behalf must
+   * check this and decline rather than flush.
+   */
+  isConflictReadOnly(): boolean {
+    return this.conflictReadOnly;
+  }
+
   acceptExternalText(text: string): void {
     this.pagePreview.hide();
     this.clearConflictState();
@@ -541,6 +567,19 @@ export class MarkdownView implements View {
     this.buildEditor(localText);
     this.presentConflict(externalText, null, true);
     this.applyMode();
+  }
+
+  /**
+   * Advisory sync-conflict banner, mounted below the view header. Deliberately
+   * does not touch read-only state: the note stays editable and the
+   * external-edit recovery path keeps sole ownership of `conflictReadOnly`.
+   */
+  presentSyncConflict(info: SyncConflictBannerInfo, onCompare: () => void): void {
+    this.syncConflictSlot.present(info, onCompare);
+  }
+
+  clearSyncConflict(): void {
+    this.syncConflictSlot.clear();
   }
 
   private clearConflictState(): void {
@@ -734,6 +773,7 @@ export class MarkdownView implements View {
 
   async onClose(): Promise<void> {
     this.pagePreview.destroy();
+    this.clearSyncConflict();
     await this.flush();
     this.vaultSwitching = true;
     this.editor?.destroy();

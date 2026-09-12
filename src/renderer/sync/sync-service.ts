@@ -3,7 +3,7 @@ import type { HostServices } from "../host/contracts";
 import { SyncCoordinator } from "./coordinator";
 import type { SyncApi, SyncConflict, SyncPreview, SyncProvider, SyncRunResult, SyncStatus } from "./types";
 import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySyncProvider, type AppendOnlySession, type VaultDescriptor } from "./history-types";
-import { HistoryController, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
+import { HistoryController, type HistoryComparisonChoice, type HistoryConflictComparison, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope } from "./scope";
 import { projectPortableConfig, serializePortableConfig } from "./portable-config";
 import { isPortableAssetPath } from "../../shared/portable-assets";
@@ -171,7 +171,8 @@ export class SyncService extends Events implements SyncApi {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", bytes)); digest[6] = (digest[6] & 15) | 80; digest[8] = (digest[8] & 63) | 128;
     const hex = [...digest.slice(0, 16)].map(value => value.toString(16).padStart(2, "0")).join(""); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
-  private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal) => Promise<T>): Promise<T> {
+  /** @param silent read-only work that must not publish its failure as global sync status. */
+  private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal) => Promise<T>, silent = false): Promise<T> {
     if (this.running || this.closing || this.cancellations) throw new Error("Sync already running or disconnecting");
     const provider = this.selected; if (!provider) throw new Error("Select a provider");
     const root = this.vaultId(); const generation = this.generation; const abort = new AbortController(); this.abort = abort;
@@ -255,7 +256,7 @@ export class SyncService extends Events implements SyncApi {
     this.running = work;
     let completed = false;
     try { const result = await work; completed = true; return result; }
-    catch (error) { if (!abort.signal.aborted && root === this.vaultId() && generation === this.generation && this.selected === provider && this.status.state !== "paused") this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); throw error; }
+    catch (error) { if (!silent && !abort.signal.aborted && root === this.vaultId() && generation === this.generation && this.selected === provider && this.status.state !== "paused") this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); throw error; }
     finally { try { await this.session?.close(); } finally { this.session = undefined; if (this.running === work) this.running = undefined; if (this.abort === abort) this.abort = undefined; } if (completed) assertContext(); }
   }
   private summarize(value: HistoryPreview): SyncPreview {
@@ -281,6 +282,37 @@ export class SyncService extends Events implements SyncApi {
     return (this.details?.conflicts ?? []).map(conflict => ({ id: JSON.stringify([conflict.entityId, conflict.heads]), path: conflict.path, conflictPath: "", remoteRevision: conflict.heads.join(",") }));
   }
   async resolveHistoryConflict(resolution: HistoryResolution) { return this.summarize(await this.withController((controller, signal) => controller.resolve(resolution, signal))); }
+  /**
+   * Read-only comparison shares withController's single-owner invariants:
+   * this.abort, this.session and this.lease are single-slot fields, so a second
+   * controller running concurrently would overwrite the in-flight sync's abort
+   * handle and close its session underneath it. Rather than weaken that, a
+   * comparison lets the current work settle once and then takes the ordinary
+   * guarded path (vaultId/generation/provider-identity checks, AbortError
+   * semantics, cancellation on unload/vault switch/cancel()). If something else
+   * claims the slot first, withController's existing "Sync already running or
+   * disconnecting" error surfaces unchanged.
+   */
+  private async settled() {
+    for (let attempt = 0; attempt < 4 && this.running; attempt++) {
+      const current = this.running;
+      await current.catch(() => {});
+      // withController clears this.running inside a finally that first awaits
+      // session close, so yield once before deciding the slot is still taken.
+      if (this.running === current) await new Promise(resolve => setTimeout(resolve, 0));
+      if (this.running === current) break;
+    }
+  }
+  async describeHistoryConflict(entityId: string): Promise<HistoryConflictComparison> {
+    if (!this.selected) throw new Error("Select an append-only provider");
+    await this.settled();
+    return this.withController((controller, signal) => controller.describeConflict(entityId, signal), true);
+  }
+  async readHistoryConflictText(entityId: string, choice: HistoryComparisonChoice): Promise<string> {
+    if (!this.selected) throw new Error("Select an append-only provider");
+    await this.settled();
+    return this.withController((controller, signal) => controller.readConflictText(entityId, choice, signal), true);
+  }
   async resolveConflict(id: string, resolution: "keep-local" | "accept-remote") {
     if (!this.selected) return this.withConditional(() => this.conditional.resolveConflict(id, resolution));
     if (resolution !== "keep-local") throw new Error("Choose an explicit immutable version to accept");

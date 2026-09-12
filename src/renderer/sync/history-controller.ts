@@ -1,4 +1,4 @@
-import { SYNC_MAX_FILE_BYTES, type AppendOnlySession, type HistoryRecord } from './history-types';
+import { SYNC_CONFLICT_COMPARE_MAX_BYTES, SYNC_MAX_FILE_BYTES, type AppendOnlySession, type HistoryRecord } from './history-types';
 import { mergeHistory, deriveHistory, type HistoryStore } from './history-reducer';
 import { validateSyncPath } from './scope';
 export type HistoryNamespace = HistoryRecord['namespace'];
@@ -121,6 +121,48 @@ export interface HistoryResolution {
         kind: 'version';
         recordId: string;
     };
+    /**
+     * Transient, in-memory only: the local content hash the user actually
+     * reviewed in a comparison. Never persisted in a record or on disk. When
+     * supplied, resolution refuses to publish if the local file has moved on.
+     */
+    reviewedLocalSha256?: string;
+}
+/** Which side of a comparison to load; mirrors HistoryResolution['choice']. */
+export type HistoryComparisonChoice = {
+    kind: 'current';
+} | {
+    kind: 'version';
+    recordId: string;
+};
+/** Machine-readable reason a conflict cannot be compared as same-path Markdown text. */
+export type HistoryComparisonBlocker = 'portable-config' | 'folder' | 'deleted-version' | 'rename-or-move' | 'non-markdown' | 'missing-content' | 'oversize';
+export interface HistoryComparisonVersion {
+    recordId: string;
+    deviceId: string;
+    kind: 'file' | 'folder';
+    deleted: boolean;
+    name: string;
+    parentId: string | null;
+    size?: number;
+    sha256?: string;
+}
+export interface HistoryComparisonLocal {
+    path: string;
+    present: boolean;
+    sha256?: string;
+    size?: number;
+}
+export interface HistoryConflictComparison {
+    entityId: string;
+    namespace: HistoryNamespace;
+    path: string;
+    /** The planner's conflict reason, carried through unchanged. */
+    reason: string;
+    heads: HistoryComparisonVersion[];
+    local: HistoryComparisonLocal;
+    comparable: boolean;
+    notComparable?: HistoryComparisonBlocker;
 }
 export interface HistoryControllerOptions {
     vaultId: string;
@@ -164,6 +206,12 @@ const sameHeads = (a: string[], b: string[]) => { const left = [...a].sort(), ri
 const fingerprint = (resource: HistoryLocalResource | undefined): string | null => resource ? (resource.kind === 'folder' ? 'folder' : resource.sha256 ?? null) : null;
 const matches = (resource: HistoryLocalResource | undefined, base: HistoryBaseline) => base.present
     ? Boolean(resource && resource.kind === base.kind && resource.path === base.path && (base.kind === 'folder' || resource.sha256 === base.sha256)) : !resource;
+const COMPARE_OVERSIZE = 'Conflict comparison is limited to 1 MiB of text';
+/** Strict decode: invalid UTF-8 surfaces an error rather than replacement garbage. */
+const decodeText = (bytes: ArrayBuffer): string => {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { throw new Error('Conflict content is not valid UTF-8 text'); }
+};
 const recordBaseline = (r: HistoryRecord, path: string): HistoryBaseline => ({ namespace: r.namespace, path, kind: r.kind, present: !r.deleted, heads: [r.recordId], ...(r.blob ? { sha256: r.blob.sha256 } : {}) });
 function folderSignatures(resources: HistoryLocalResource[]): Map<string, string> {
     const parts = new Map<string, string[]>();
@@ -663,6 +711,86 @@ export class HistoryController {
         if (operation.type === 'publish' && operation.id !== r.operationId)
             throw new Error('Invalid durable publication identity');
     }
+    /**
+     * Read-only comparison support. These two methods deliberately never touch
+     * plan(), which persists state on an incomplete scan, and never reach
+     * save/prepare/stage/saveOperation/perform/apply. They read the durable
+     * state written by the last preview or run, so the heads a user was shown
+     * stay exactly the heads they resolve against; nothing is collapsed,
+     * auto-selected, or repaired here.
+     */
+    private displayedConflict(state: HistoryControllerState, entityId: string): HistoryConflict {
+        const conflict = state.conflicts.find(item => item.entityId === entityId);
+        if (!conflict || !conflict.heads.length)
+            throw new Error('Conflict selection is stale');
+        return conflict;
+    }
+    async describeConflict(entityId: string, signal: AbortSignal): Promise<HistoryConflictComparison> {
+        return this.exclusive(signal, async () => {
+            const state = await this.load(signal);
+            const conflict = this.displayedConflict(state, entityId);
+            const records = conflict.heads.map(id => {
+                const found = state.history.records[id];
+                if (!found || found.entityId !== entityId)
+                    throw new Error('Invalid conflict heads');
+                return found;
+            });
+            const heads: HistoryComparisonVersion[] = records.map(r => ({ recordId: r.recordId, deviceId: r.deviceId, kind: r.kind, deleted: r.deleted, name: r.location.name, parentId: r.location.parentId, ...(r.blob ? { size: r.blob.size, sha256: r.blob.sha256 } : {}) }));
+            const name = nameOf(conflict.path);
+            let blocker: HistoryComparisonBlocker | undefined = conflict.namespace !== 'content' ? 'portable-config'
+                : records.some(r => r.kind !== 'file') ? 'folder'
+                    : records.some(r => r.deleted) ? 'deleted-version'
+                        : records.some(r => r.location.name !== name || r.location.parentId !== records[0].location.parentId) ? 'rename-or-move'
+                            : !/\.md$/i.test(conflict.path) ? 'non-markdown'
+                                : records.some(r => !r.blob) ? 'missing-content'
+                                    : records.some(r => r.blob!.size > SYNC_CONFLICT_COMPARE_MAX_BYTES) ? 'oversize'
+                                        : undefined;
+            const local: HistoryComparisonLocal = { path: conflict.path, present: false };
+            if (blocker !== 'portable-config' && blocker !== 'folder') {
+                this.assert(signal);
+                let bytes: ArrayBuffer | undefined;
+                // Absence is a legitimate comparison outcome, not a failure; a
+                // cancelled context is re-raised by the assertion that follows.
+                try { bytes = await this.ports.read({ namespace: conflict.namespace, path: conflict.path, kind: 'file' }); }
+                catch { bytes = undefined; }
+                this.assert(signal);
+                if (!bytes)
+                    blocker ??= 'missing-content';
+                else {
+                    local.present = true;
+                    local.size = bytes.byteLength;
+                    if (bytes.byteLength > SYNC_CONFLICT_COMPARE_MAX_BYTES)
+                        blocker ??= 'oversize';
+                    else
+                        local.sha256 = await this.hash(bytes, signal);
+                }
+            }
+            return { entityId, namespace: conflict.namespace, path: conflict.path, reason: conflict.reason, heads, local, comparable: !blocker, ...(blocker ? { notComparable: blocker } : {}) };
+        });
+    }
+    async readConflictText(entityId: string, choice: HistoryComparisonChoice, signal: AbortSignal): Promise<string> {
+        return this.exclusive(signal, async () => {
+            const state = await this.load(signal);
+            const conflict = this.displayedConflict(state, entityId);
+            if (choice.kind === 'current') {
+                const bytes = await this.checked(signal, () => this.ports.read({ namespace: conflict.namespace, path: conflict.path, kind: 'file' }));
+                if (bytes.byteLength > SYNC_CONFLICT_COMPARE_MAX_BYTES)
+                    throw new Error(COMPARE_OVERSIZE);
+                return decodeText(bytes);
+            }
+            const chosen = state.history.records[choice.recordId];
+            if (!chosen || chosen.entityId !== entityId || !conflict.heads.includes(choice.recordId))
+                throw new Error('Invalid selected conflict version');
+            if (chosen.deleted || chosen.kind !== 'file')
+                throw new Error('Selected version has no comparable text');
+            if (!chosen.blob)
+                throw new Error('Missing content reference');
+            if (chosen.blob.size > SYNC_CONFLICT_COMPARE_MAX_BYTES)
+                throw new Error(COMPARE_OVERSIZE);
+            const bytes = await this.verified(await this.checked(signal, () => this.options.session.readBlob(chosen.blob!, signal)), chosen.blob.sha256, chosen.blob.size, signal);
+            return decodeText(bytes);
+        });
+    }
     async resolve(resolution: HistoryResolution, signal: AbortSignal): Promise<HistoryPreview> {
         return this.exclusive(signal, async () => {
             const state = await this.load(signal);
@@ -704,6 +832,12 @@ export class HistoryController {
             const actualLocation = chosen?.location ?? plan.locations.get(resolution.entityId) ?? state.history.records[state.baseline[resolution.entityId]?.heads[0]]?.location;
             if (!actualLocation)
                 throw new Error('Current conflict location is unavailable');
+            // Last guard, after every pre-existing one and before any write: a
+            // caller that reviewed a specific local snapshot must not publish
+            // on behalf of bytes nobody looked at. Absent-vs-supplied (either
+            // direction) is stale. Omitting the field preserves prior behavior.
+            if (resolution.reviewedLocalSha256 !== undefined && (local?.kind === 'file' ? local.sha256 : undefined) !== resolution.reviewedLocalSha256)
+                throw new Error('This device\'s file changed since it was reviewed; compare again');
             const publish: PublishAction = { type: 'publish', entityId: resolution.entityId, namespace: displayed.namespace, path: selectedPath, kind: template.kind, parents: [...resolution.heads].sort(), location: actualLocation, deleted: !resource, resource };
             let operation: HistoryOperation;
             if (selectedData) {
