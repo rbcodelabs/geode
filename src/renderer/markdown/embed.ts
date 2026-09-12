@@ -1,4 +1,5 @@
 import type { App } from "../app";
+import { stripCommentMarkerSyntax } from "../comments/model";
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, TFile, VIDEO_EXTENSIONS } from "../types";
 
 /**
@@ -37,20 +38,43 @@ export function parseEmbedDims(param: string): { width?: string; height?: string
   return { width: m[1], height: m[2] };
 }
 
+const HEADING_LINE_RE = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?$/;
+
+/**
+ * Match one raw source line as an ATX heading, with any anchored-comment
+ * markers removed first so group 2 is the heading text an author would
+ * recognise — the same string the metadata cache records and that link
+ * subpaths (`[[Note#Heading]]`) are written against.
+ *
+ * Shared with `page-preview.ts`: transclusion and hover previews must agree on
+ * whether a heading exists, or `![[Note#Heading]]` silently embeds the whole
+ * note while its preview claims the heading is missing.
+ */
+export function headingLineMatch(line: string): RegExpMatchArray | null {
+  return stripCommentMarkerSyntax(line).match(HEADING_LINE_RE);
+}
+
 /** Reads a binary file from the vault and returns a blob: URL for it. */
 export async function loadEmbedBlobUrl(app: App, file: TFile): Promise<string> {
   const buf = await app.vault.readBinary(file);
   return URL.createObjectURL(new Blob([buf]));
 }
 
-/** Extract the section under a given heading (until the next heading of <= level). */
+/**
+ * Extract the section under a given heading (until the next heading of <= level).
+ *
+ * `heading` comes from the metadata cache, which reports the author's prose; the
+ * raw line it has to be matched against may carry anchored-comment markers. The
+ * lines are returned raw (markers included) — the caller renders them through
+ * the normal pipeline, which strips markers itself.
+ */
 export function extractSection(text: string, heading: string): string {
   const lines = text.split("\n");
   const target = heading.toLowerCase();
   let start = -1;
   let level = 0;
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?$/);
+    const m = headingLineMatch(lines[i]);
     if (m && m[2].trim().toLowerCase() === target) {
       start = i;
       level = m[1].length;

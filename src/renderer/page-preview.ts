@@ -1,5 +1,6 @@
 import type { App } from "./app";
-import { extractSection } from "./markdown/embed";
+import { stripCommentMarkerSyntax } from "./comments/model";
+import { extractSection, headingLineMatch } from "./markdown/embed";
 import { positionHoverElement } from "./tooltip";
 
 const SHOW_DELAY_MS = 300;
@@ -39,10 +40,7 @@ export function previewMarkdownExcerpt(text: string, subpath: string, maxChars: 
 export function hasMarkdownHeading(text: string, heading: string): boolean {
   const target = heading.trim().toLowerCase();
   if (!target) return false;
-  return text.split("\n").some((line) => {
-    const match = line.match(/^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?$/);
-    return match?.[2].trim().toLowerCase() === target;
-  });
+  return text.split("\n").some((line) => headingLineMatch(line)?.[2].trim().toLowerCase() === target);
 }
 
 /** Keep preview parsing inert while still presenting Obsidian inline syntax as readable content. */
@@ -53,6 +51,11 @@ export function safePreviewMarkdownSource(source: string): string {
     code.push(match);
     return `\u0000PREVIEW_CODE_${code.length - 1}\u0000`;
   });
+  // Anchored-comment markers are storage metadata. They must go before the
+  // HTML escaping below, or the preview renders their bytes as visible literal
+  // text. Stripping after code regions are parked keeps a marker an author
+  // typed inside a code span intact, as authored.
+  source = stripCommentMarkerSyntax(source);
   source = source.replace(/%%[\s\S]*?%%/g, "");
   source = source.replace(/!\[\[[^\[\]\n]+\]\]/g, "");
   source = source.replace(/!\[([^\]\n]*)\](?:\([^\n)]*\)|\[[^\]\n]*\])/g, "$1");
