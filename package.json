@@ -12,6 +12,8 @@
     "parity:generate": "node scripts/generate-parity-ledger.mts",
     "parity:check": "node scripts/generate-parity-ledger.mts --check",
     "benchmark:metadata": "node scripts/run-metadata-benchmark.mjs",
+    "generate:stress-vault": "node scripts/generate-synthetic-vault.mjs",
+    "benchmark:stress-vault": "node scripts/run-large-vault-benchmark.mjs",
     "benchmark:offset-to-loc": "node scripts/run-offset-to-loc-benchmark.mjs",
     "build": "node esbuild.config.mjs",
     "build:mobile": "node esbuild.config.mjs --mobile-only",
