@@ -907,6 +907,12 @@ test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript,
   const { app, window, userDataDir, consoleErrors } = await launch();
 
   try {
+    // `launch()` only waits for `.workspace`; the restored session paints its
+    // tab headers a frame or two later. A bare `.count()` here can therefore
+    // read 0 under load and make the "reuses the tab, adds no new one"
+    // assertion below compare against the wrong baseline — observed failing
+    // with `Expected: 0, Received: 1`. Wait for the strip to exist first.
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header")).not.toHaveCount(0);
     const initialTabCount = await window.locator(".workspace-split.mod-root .workspace-tab-header").count();
     await window.locator('.nav-file-title[data-path="Local page.html"]').click();
 
