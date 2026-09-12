@@ -15,6 +15,7 @@ import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { checkForUpdatesManually, initAutoUpdater } from "./auto-updater";
 import { getProcessMetricsSnapshot } from "./process-metrics";
 import { PowerSaveBlockerRegistry } from "./power-save-blocker";
+import { MetadataCacheReaders } from "./metadata-cache-reader";
 import {
   openMetadataDb,
   pruneMetadataEntries,
@@ -93,6 +94,7 @@ app.on("second-instance", (_event, argv) => {
 });
 
 interface VaultSession {
+  generation: number;
   externalRoots?: Promise<ExternalRootServiceSession>;
   externalRootsInvalidated?: boolean;
   root: string;
@@ -110,6 +112,8 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
+const metadataReaders = new MetadataCacheReaders();
+let vaultGeneration = 0;
 const externalRootService = new ExternalRootService(() => RootRegistry.open({ store: new JsonRootRegistryStore(app.getPath("userData")) }));
 
 function externalRootSession(sender: Electron.WebContents): Promise<ExternalRootServiceSession> {
@@ -399,6 +403,8 @@ function registerIpc() {
     const st = await fsp.stat(vaultPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(`Not a folder: ${vaultPath}`);
     const prev = sessions.get(win.id);
+    if (prev) prev.generation = -1;
+    metadataReaders.closeOwner(e.sender.id);
     invalidateExternalRoots(prev);
     if (prev?.watcher) await prev.watcher.close();
     if (prev?.indexer) await prev.indexer.shutdown();
@@ -429,7 +435,7 @@ function registerIpc() {
       console.error("Metadata utility process unavailable; using renderer fallback", error);
     }
     const watcher = startWatcher(win, root, files);
-    sessions.set(win.id, { root, watcher, indexer, indexerReady, metadataDb: null });
+    sessions.set(win.id, { root, watcher, indexer, indexerReady, metadataDb: null, generation: ++vaultGeneration });
     // The watcher backend and the descriptor count it costs are the first
     // things worth knowing when a sandboxed child process later fails to
     // spawn (see probeFdPressure).
@@ -629,6 +635,24 @@ function registerIpc() {
     shell.showItemInFolder(resolveVaultPath(win, rel));
   });
 
+  ipcMain.handle("metadata-cache-begin", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (!session || session.generation < 0) throw Error("No active metadata vault session");
+    session.metadataDb ??= openMetadataDb(session.root);
+    return metadataReaders.begin(e.sender.id, session.root, session.generation);
+  });
+  ipcMain.handle("metadata-cache-page", (e, token: string, sequence: number) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (!session || session.generation < 0) throw Error("No active metadata vault session");
+    return metadataReaders.page(e.sender.id, session.generation, token, sequence);
+  });
+  ipcMain.handle("metadata-cache-cancel", (e, token: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (session) metadataReaders.cancel(e.sender.id, session.generation, token);
+  });
   ipcMain.handle("metadata-cache-read", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
@@ -1173,7 +1197,12 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     return { action: "deny" };
   });
 
+  win.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+    if (mainFrame && !inPlace) metadataReaders.closeOwner(ownerWebContentsId);
+  });
+  win.webContents.once("destroyed", () => metadataReaders.closeOwner(ownerWebContentsId));
   win.on("closed", () => {
+    metadataReaders.closeOwner(ownerWebContentsId);
     clearInterval(watchdog);
     void artifactRuntime.unregisterOwner(ownerWebContentsId);
     const session = sessions.get(win.id);

@@ -614,6 +614,9 @@ export class MetadataCache extends Events {
   private unlinkedMentionsEpoch = 0;
   private activeUnlinkedMentionScans = new Set<AbortController>();
   private disposed = false;
+  /** Paths mutated during hydration, retained even after dirty queues flush. */
+  private hydrationMutations: Set<string> | null = null;
+  private cancelHydration: (() => Promise<void>) | null = null;
   /** Compact token/punctuation key -> Markdown source paths that contain it. */
   private mentionSourcesByKey = new Map<string, Set<string>>();
   /** Authoritative per-file keys, persisted and computed by the utility process. */
@@ -691,6 +694,37 @@ export class MetadataCache extends Events {
       return isPersistedMetadataIndexSnapshot(value) ? value : null;
     } catch {
       return null;
+    }
+  }
+
+  private async hydratePersistedPages(): Promise<void> {
+    const api = window.geode;
+    let token: string | undefined;
+    try {
+      if (!api.beginMetadataCacheRead || !api.readMetadataCachePage || !api.cancelMetadataCacheRead) throw Error("Incomplete cache paging capability");
+      const begin = await api.beginMetadataCacheRead();
+      token = begin.token;
+      this.cancelHydration = () => api.cancelMetadataCacheRead!(begin.token);
+      if (begin.schemaVersion !== METADATA_CACHE_SCHEMA_VERSION) throw Error("Unsupported cache schema");
+      for (let sequence = 0; !this.disposed; sequence++) {
+        const page = await api.readMetadataCachePage(token, sequence);
+        if (page.sequence !== sequence || typeof page.done !== "boolean" || !isPersistedMetadataIndexSnapshot(page)) throw Error("Invalid cache page");
+        if (this.disposed) return;
+        for (const [path, entry] of Object.entries(page.entries)) {
+          const file = this.vault.getFileByPath(path);
+          if (!file || file.extension !== "md" || this.hydrationMutations?.has(path) || entry.mtimeMs !== file.mtime || entry.size !== file.size) continue;
+          this.cache.set(path, entry.metadata);
+          if (entry.mentionKeys) this.setMentionSourceKeys(path, entry.mentionKeys);
+        }
+        if (page.done) break;
+        await yieldToEventLoop();
+      }
+    } catch (error) {
+      // A failed paged capability is a bounded cache miss, never bulk retry.
+      console.warn("Persisted metadata hydration incomplete", error);
+    } finally {
+      this.cancelHydration = null;
+      if (token) await api.cancelMetadataCacheRead?.(token).catch(() => {});
     }
   }
 
@@ -875,6 +909,7 @@ export class MetadataCache extends Events {
 
   dispose(): void {
     this.disposed = true;
+    void this.cancelHydration?.().catch(() => {});
     for (const controller of this.activeUnlinkedMentionScans) controller.abort();
     this.activeUnlinkedMentionScans.clear();
     this.stopIndexerMessages?.();
@@ -921,6 +956,7 @@ export class MetadataCache extends Events {
       return;
     }
     if (message?.type !== "delta") return;
+    this.hydrationMutations?.add(message.path);
     if (message.entry) {
       this.workerEntries.set(message.path, message.entry);
     }
@@ -936,6 +972,7 @@ export class MetadataCache extends Events {
     // descendant files fire their own file events (see Vault.rename), so
     // folder events are index no-ops.
     if (!f || f.kind !== "file") return;
+    this.hydrationMutations?.add(f.path);
     const cur = this.dirty.get(f.path);
     if (cur) cur.present = present;
     else this.dirty.set(f.path, { existedBefore, present });
@@ -952,6 +989,8 @@ export class MetadataCache extends Events {
   /** Record a rename as a delete of the old path + a create of the new path. */
   private enqueueRename(f: TFile, oldPath: string): void {
     if (!f || f.kind !== "file") return;
+    this.hydrationMutations?.add(oldPath);
+    this.hydrationMutations?.add(f.path);
     const old = this.dirty.get(oldPath);
     if (old) old.present = false;
     else this.dirty.set(oldPath, { existedBefore: true, present: false });
@@ -1124,6 +1163,7 @@ export class MetadataCache extends Events {
   async initialize(): Promise<void> {
     let attemptedBackground = false;
     let completePersistedMentionIndex = false;
+    let recoverPagedMisses: (() => Promise<void>) | undefined;
     await withPerfMark("metadata-initialize", async () => {
       const markdownFiles = this.vault.getMarkdownFiles();
       const canvasFiles = this.vault.getFiles().filter((file) => file.extension === "canvas");
@@ -1148,29 +1188,40 @@ export class MetadataCache extends Events {
           if (this.initialized) this.scheduleBackground(() => this.applyRendererFallback());
         });
       }
-      const persisted = await this.loadPersistedCache();
+      const paged = !!(api?.beginMetadataCacheRead || api?.readMetadataCachePage || api?.cancelMetadataCacheRead);
+      this.hydrationMutations = paged ? new Set() : null;
+      const persisted = paged ? null : await this.loadPersistedCache();
       await withPerfMark("metadata-renderer-apply", async () => {
         this.cache.clear();
         this.canvasLinkContexts.clear();
         this.mentionSourcesByKey.clear();
         this.mentionKeysBySource.clear();
         this.mentionIndexReady = false;
+        if (paged) await this.hydratePersistedPages();
         const toRead: TFile[] = [];
+        const deferredMisses: TFile[] = [];
         for (const file of markdownFiles) {
           const entry = persisted?.entries[file.path];
           if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
             this.cache.set(file.path, entry.metadata);
             if (entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
-          } else if (!attemptedBackground) {
-            toRead.push(file);
+          } else if ((!attemptedBackground || paged) && !this.cache.has(file.path)) {
+            (paged && attemptedBackground ? deferredMisses : toRead).push(file);
           }
         }
         // Canvas projection is renderer-only and intentionally never enters the
         // utility-process or persisted Markdown cache schema.
         toRead.push(...canvasFiles);
-        await processInBatches(toRead, INDEX_CONCURRENCY, async (f) => {
+        const readMissing = async (f: TFile) => {
           try {
+            const originalPath = f.path, mtime = f.mtime, size = f.size;
+            const stillCurrent = () => {
+              const current = this.vault.getFileByPath(originalPath);
+              return !!current && current.mtime === mtime && current.size === size && f.path === originalPath;
+            };
+            if (paged && (this.disposed || this.cache.has(originalPath) || this.hydrationMutations?.has(originalPath) || !stillCurrent())) return;
             const text = await this.vault.cachedRead(f);
+            if (paged && (this.disposed || this.cache.has(originalPath) || this.hydrationMutations?.has(originalPath) || !stillCurrent())) return;
             if (f.extension === "canvas") {
               const parsed = parseCanvasLinkMetadata(text);
               this.cache.set(f.path, parsed.metadata);
@@ -1182,8 +1233,24 @@ export class MetadataCache extends Events {
           } catch (err) {
             if (!isBenignEnoent(err)) console.error(`Failed to index ${f.path}`, err);
           }
-        });
+        };
+        await processInBatches(toRead, paged ? 1 : INDEX_CONCURRENCY, readMissing);
+        if (deferredMisses.length) recoverPagedMisses = async () => {
+          try {
+            await processInBatches(deferredMisses, 1, readMissing);
+            if (this.disposed) return;
+            this.rebuildNameIndex();
+            this.resolveAll();
+            await processInBatches(deferredMisses, 50, async (file) => {
+              const current = this.vault.getFileByPath(file.path);
+              if (!this.disposed && current && this.cache.has(current.path)) this.trigger("resolve", current);
+            });
+            await this.rebuildMentionIndex();
+            this.trigger("resolved");
+          } finally { this.hydrationMutations = null; }
+        };
       });
+      if (!recoverPagedMisses) this.hydrationMutations = null;
       completePersistedMentionIndex = this.mentionKeysBySource.size === markdownFiles.length;
       withPerfMark("metadata-renderer-resolve", () => {
         this.rebuildNameIndex();
@@ -1197,6 +1264,9 @@ export class MetadataCache extends Events {
     });
     this.initialized = true;
     this.trigger("resolved");
+    // Preserve cold layout responsiveness; persisted omissions are recovered
+    // independently of whether the utility ever sends those unchanged rows.
+    if (recoverPagedMisses) this.scheduleBackground(recoverPagedMisses);
     if (this.backgroundRefreshPending) this.scheduleBackground(() => this.applyBackgroundSnapshot());
     else if (this.backgroundUnavailable) this.scheduleBackground(() => this.applyRendererFallback());
     else if (attemptedBackground && completePersistedMentionIndex) {

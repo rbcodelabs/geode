@@ -24,7 +24,7 @@ function fixture(noteCount: number, pluginMain?: string) {
   return { userDataDir, vaultPath };
 }
 
-test("slow main/utility filesystem work does not starve renderer heartbeats", async () => {
+test("slow main/utility filesystem work does not starve renderer heartbeats", async ({}, testInfo) => {
   test.setTimeout(60_000);
   const ribbonPlugin = `
     const { Plugin } = require('geode');
@@ -45,6 +45,9 @@ test("slow main/utility filesystem work does not starve renderer heartbeats", as
       GEODE_TEST_WATCHDOG_INTERVAL_MS: "100",
     },
   });
+  const stderr: Buffer[] = [];
+  const captureStderr = (chunk: Buffer | string) => stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  app.process().stderr?.on("data", captureStderr);
   const window = await app.firstWindow();
   try {
     await window.evaluate(() => {
@@ -70,7 +73,17 @@ test("slow main/utility filesystem work does not starve renderer heartbeats", as
     const recovery = await window.evaluate(() => window.geode.getCrashRecoveryState());
     expect(recovery.suppressPlugins).toBe(false);
     expect(recovery.entries.filter((entry) => entry.type === "renderer-hang")).toEqual([]);
+  } catch (error) {
+    // Retain the original attempt's diagnostics before fixture cleanup and
+    // before Playwright starts a retry with a different user-data directory.
+    await testInfo.attach("electron-stderr", { body: Buffer.concat(stderr), contentType: "text/plain" });
+    for (const name of ["diagnostic.log", "crash-journal.json"]) {
+      const file = path.join(userDataDir, name);
+      if (fs.existsSync(file)) await testInfo.attach(name, { body: fs.readFileSync(file), contentType: name.endsWith(".json") ? "application/json" : "text/plain" });
+    }
+    throw error;
   } finally {
+    app.process().stderr?.off("data", captureStderr);
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
     fs.rmSync(vaultPath, { recursive: true, force: true });
