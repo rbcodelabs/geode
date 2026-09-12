@@ -5,10 +5,132 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.17.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.18.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.18.0: shared wiki foundations and bounded cache loading
+
+Desktop link navigation and the internal Node wiki snapshot now use the same
+candidate-selection machinery, with separate policies preserving desktop
+compatibility and strict ambiguity reporting. This is a
+[desktop link-resolution milestone](docs/design/shared-engine-desktop-resolution.md),
+**not a full desktop backend migration**. The
+[read-only Node API](docs/design/local-wiki-usage.md) supports folder snapshots,
+metadata, literal search, links and backlinks without Electron; it is internal
+tooling, not a published SDK, cloud service or replacement desktop application.
+The [headless extraction report](docs/design/headless-phase0.md) describes the
+portable foundation and its plain-Node proofs.
+
+Persisted desktop metadata now loads through session-bound snapshot pages of at
+most 50 examined rows and 256 KiB per response. Newer edits and deletions take
+precedence; omitted entries are recovered with yielded file reads. Startup
+database initialization is ordered before the utility indexer starts. These
+bounds reduce the size of individual cache transfers, not all indexing or
+rendering work. See [bounded cache hydration](docs/large-vault-benchmark.md#bounded-desktop-cache-hydration).
+
+New synthetic-vault tooling generates linked and dense workloads and compares
+baseline/candidate runs with same-revision controls. The
+[benchmark safeguards](docs/large-vault-benchmark.md#methodology-v2-safeguards)
+separate terminal indexing readiness from correctness validation, monitor owned
+process RSS independently, and retain failed samples. The default memory limit
+is half physical RAM; failures are not replaced with successful retries.
+
+**Large-vault limits remain.** In the three-pair synthetic comparison, 10,000-note
+warm startup was slower by paired medians of approximately 2.6 seconds for the
+linked profile and 11.9 seconds for the dense profile. At 50,000 notes, every
+linked-profile sample failed on both revisions. All three dense-profile
+candidate samples passed, while all three baseline samples failed. The failures
+involved renderer-watchdog recovery; bounded hydration does not eliminate every
+stall. These measurements are not a blanket speedup, a production guarantee, or
+a claim that 50,000-note vaults are now reliably supported. See the
+[benchmark methodology and limitations](docs/large-vault-benchmark.md).
+
+## New in v0.17.3: Canvas media cards render again
+
+**A Canvas card pointing at an image, audio or video file could come up blank
+and stay blank.** Every path that opens a Canvas renders the whole board
+*before* the view is attached to the document. A card's file read that happened
+to finish inside that window was discarded as belonging to a stale render — and
+because nothing re-rendered after the view was attached, the card never
+recovered. It was a race, so it struck under load and looked intermittent:
+reopening the same board could show the media or not.
+
+Liveness is now decided by whether the node still belongs to the view being
+rendered, rather than by whether it had already been inserted into the document,
+so a card rendered ahead of attachment is filled in correctly. The read-failure
+path is also no longer discarded alongside it: a file that genuinely cannot be
+read now always shows the visible "Could not load file" fallback instead of
+leaving an empty card and no explanation.
+
+## New in v0.17.2: comment on headings, list items and table cells
+
+**Comments are no longer limited to ordinary paragraphs.** You can now anchor a
+thread to prose inside a heading, a list item (bullet, ordered, task, nested) or
+a table cell. Previously any text that was not a plain paragraph was refused:
+the rule protected *every* node that was not a paragraph, so the words in a
+heading were treated as untouchable along with the `#` that made it one.
+
+Only the structural syntax itself is off-limits now — a heading's `#`, a list
+bullet or `[ ]` checkbox, a table's `|` separators and its delimiter row. Code,
+links, images, math, raw HTML, blockquotes and Obsidian comments are still
+protected in full. And a selection that merely *straddles* structural syntax —
+a triple-click that sweeps up a heading's `#`, or a drag starting on a bullet —
+is now trimmed automatically to the prose it covers rather than rejected
+outright. When a selection genuinely has nothing commentable left in it, the
+rejection names the specific reason instead of failing generically.
+
+Widening this surfaced two defects that had been latent all along:
+
+- **Live Preview decorations could silently disappear.** Comment markers begin
+  with `<!--`, which is CommonMark's HTML-block start condition, so a marker at
+  a line's first content position made the parser treat the whole line as an
+  HTML block — dropping that line's list and heading decorations. This already
+  affected plain paragraphs; it simply had never been hit, because nothing else
+  reads the unstripped document.
+- **A commented heading broke its own links.** Heading text is extracted from a
+  copy in which markers are masked to spaces to keep offsets stable — correct
+  for positions, wrong for text. A commented heading yielded heading text with
+  a run of spaces buried in it, which broke `[[Note#Heading]]` resolution,
+  heading bookmarks and transclusion.
+
+One known limit: a comment anchored inside a **table cell** shows no inline
+highlight in Live Preview, because tables are rendered there as a widget rather
+than as decorated source, leaving no source text to highlight — the same reason
+Reading view never highlights anchors. The thread itself is unaffected; it
+persists in the note, appears in the Comments pane, and replies and resolves
+normally.
+
+## New in v0.17.1: plugins can use `fetch()`, and links into Project folders open in-app
+
+**Plugins that call `fetch()` directly now work.** Geode's renderer runs under a
+deliberately strict `default-src 'self'` policy, and plugin code executes in that
+same renderer — so a plugin calling the ambient `fetch()` was blocked from
+reaching any remote origin. `requestUrl` already avoided this by doing the real
+request in the privileged main process, but plugins cannot always use it: its
+body type is `string | ArrayBuffer`, which cannot carry a `FormData` multipart
+upload. Anything uploading a file — audio to a transcription endpoint, an image
+to an API — had no working path at all, and failed with a bare network error.
+
+Plugin bundles now get their own privileged `fetch`, mirroring `requestUrl`'s
+transport: the body (including a `FormData` boundary) is serialized in the
+renderer, sent to the main process, and issued there, with a spec-compliant
+`Response` handed back. **The content security policy is unchanged and
+`window.fetch` is untouched** — the identifier is shadowed only inside a
+plugin's own compiled bundle, so nothing else in the app gains network reach.
+
+**Links into attached Project folders open in Geode, not the OS.** Clicking a
+file link pointing into an attached read-only Project folder opened it in the
+system default app, and attaching the folder appeared to change nothing — while
+the *same* file reached through the Projects tree opened correctly in the
+in-app viewer. `open-local-file` only tested containment against the vault root,
+so an explicit user grant had no effect on link handling. It now classifies the
+path against the roots the window exposes and routes to the read-only viewer.
+Containment is decided on **canonical real paths**, so a symlink cannot widen a
+grant, and only roots bound in the current vault session are eligible.
+
+See the [plugin API reference](docs/spec/03-plugin-api.md).
 
 ## New in v0.17.0: secrets in the OS keychain, and six plugin-API fixes
 
@@ -126,8 +248,10 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
-  recovery. Comments travel inside the note; Live Preview and Reading view hide
-  their markers, while Source mode exposes them.
+  recovery. Select text and press <kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> (or
+  run *Comments: Add comment to selection*); headings, list items and table cells
+  can be annotated as well as ordinary prose. Comments travel inside the note;
+  Live Preview and Reading view hide their markers, while Source mode exposes them.
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
@@ -297,6 +421,16 @@ node scripts/geode-update.mts --help       # full usage
    follow-up that needs a paid Apple Developer account.
 
 ## Develop
+
+The internal [read-only local wiki engine](docs/design/local-wiki-usage.md)
+opens a bounded folder snapshot in plain Node for metadata, literal search,
+strict link resolution and backlinks. Results disclose ambiguity and incomplete
+parsing. Run `npm run proof:local-wiki` for its fresh-Node acceptance demo.
+
+The [Geode Headless Phase 0 report](docs/design/headless-phase0.md) documents
+the portable parser/resolver extraction and disposable PostgreSQL transaction
+proof. Run `npm run proof:headless` for the Node-only proof; this is an engineering
+spike, not a released cloud service.
 
 ```bash
 npm install

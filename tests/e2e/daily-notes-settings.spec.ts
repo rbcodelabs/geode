@@ -199,6 +199,7 @@ test("Calendar sees a disabled Daily Notes lifecycle and shows its own warning",
   try {
     const window = await app.firstWindow();
     await window.waitForFunction(() => !!(window as any).app?.pluginManager?.getPlugin("calendar"));
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
     await window.evaluate(() => (window as any).app.setting.openTabById("calendar"));
     await expect(window.getByText("⚠️ Daily Notes plugin not enabled", { exact: true })).toBeVisible();
     expect(await window.evaluate(() => {

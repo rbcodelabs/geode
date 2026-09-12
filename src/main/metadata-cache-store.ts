@@ -42,8 +42,18 @@ export function openMetadataDb(root: string): DatabaseSync {
   const target = path.join(root, METADATA_DB_RELATIVE_PATH);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const db = new DatabaseSync(target);
-  initializeMetadataSchema(db);
-  return db;
+  try {
+    initializeMetadataSchema(db);
+    return db;
+  } catch (error) { db.close(); throw error; }
+}
+
+/** Prepare the main-owned WAL database before a utility can open it.
+ * The callback's readiness promise is returned, never awaited here. */
+export function bootstrapMetadataDb<T>(root: string, startUtility: () => T): { db: DatabaseSync; value: T } {
+  const db = openMetadataDb(root);
+  try { return { db, value: startUtility() }; }
+  catch (error) { db.close(); throw error; }
 }
 
 /** Small, content-less (path, mtimeMs, size) projection used for reconcile's reuse-detection — no metadata JSON parsing. */

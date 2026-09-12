@@ -69,11 +69,11 @@ function makeVault(): string {
   const boardDir = path.join(vaultDir, BOARD_FOLDER);
   fs.mkdirSync(boardDir, { recursive: true });
   fs.writeFileSync(path.join(boardDir, "cover.png"), COVER_PNG);
-  for (const { name, status, owner } of CARDS) {
+  for (const { name, owner } of CARDS) {
     fs.writeFileSync(
       path.join(boardDir, `${name}.md`),
       // `owner` is deliberately unrelated to the drag: it must survive untouched.
-      `---\nstatus: ${status}\nowner: ${owner}\ncover: "[[cover.png]]"\n---\n\n# ${name}\n\nBody text.\n`
+      `---\nstatus: Doing\nowner: ${owner}\ncover: "[[cover.png]]"\n---\n\n# ${name}\n\nBody text.\n`
     );
   }
   fs.writeFileSync(path.join(vaultDir, "Board.base"), BASE_YAML);
@@ -112,6 +112,20 @@ function readNote(vaultDir: string, name: string): string {
 async function dragCardToColumn(window: Page, cardPath: string, targetStatus: string): Promise<void> {
   const dragState = "__geodeKanbanDragTransfer";
 
+  // Incrementally created columns attach Sortable on their first pointerdown.
+  // Initialize both the source and receiver before a separate drag: the source
+  // needs a fresh pointerdown, and the receiver must have a dragover listener.
+  for (const target of [
+    window.locator(`.obk-column[data-column-value="${targetStatus}"] .obk-column-body`),
+    window.locator(`.obk-card[data-entry-path="${cardPath}"]`),
+  ]) {
+    await target.evaluate((element) => {
+      element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
+      element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
+      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    });
+  }
+
   // Phase 1 — grab the card and start the drag.
   await window.evaluate(
     ({ cardPath: from, dragState: key }) => {
@@ -119,20 +133,23 @@ async function dragCardToColumn(window: Page, cardPath: string, targetStatus: st
       if (!card) throw new Error(`No card at ${from}`);
       const dataTransfer = new DataTransfer();
       (window as unknown as Record<string, DataTransfer>)[key] = dataTransfer;
-      card.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+      card.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }));
       card.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
       card.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer }));
     },
     { cardPath, dragState }
   );
-  // Let Sortable's deferred `_dragStarted` run and publish `Sortable.active`.
-  await window.waitForTimeout(100);
+  // `_dragStarted` applies this class immediately before publishing active.
+  // A fixed delay can expire before that callback on a loaded hosted runner.
+  await expect(window.locator(`.obk-card[data-entry-path="${cardPath}"]`)).toHaveClass(/\bobk-card-ghost\b/);
 
   // Phase 2 — hover the destination. Sortable decides the insertion point from
   // the event target plus its coordinates, so aim at the bottom edge of the
-  // column's last card (or the empty body) to append.
-  await window.evaluate(
-    ({ targetStatus: status, dragState: key }) => {
+  // column's last card (or the empty body) to append. A browser sends repeated
+  // dragover events; keep doing that while Sortable's animation guards reject
+  // insertion, and do not drop until it reports the move through the DOM.
+  await expect.poll(() => window.evaluate(
+    ({ targetStatus: status, dragState: key, cardPath: from }) => {
       const body = document.querySelector<HTMLElement>(
         `.obk-column[data-column-value="${status}"] .obk-column-body`
       );
@@ -152,10 +169,10 @@ async function dragCardToColumn(window: Page, cardPath: string, targetStatus: st
         );
       fire("dragenter");
       fire("dragover");
+      return body.querySelector(`.obk-card[data-entry-path="${from}"]`) !== null;
     },
-    { targetStatus, dragState }
-  );
-  await window.waitForTimeout(100);
+    { targetStatus, dragState, cardPath }
+  ), { message: "Sortable never moved the dragged card into the destination" }).toBe(true);
 
   // Phase 3 — drop. `onEnd` is what calls back into the plugin's write path.
   await window.evaluate(
@@ -215,6 +232,16 @@ test("a plugin Bases view can write the vault: drag, quick-add, open and cover i
         message: "card cover image never decoded",
       })
       .toBeGreaterThan(0);
+
+    // Cold metadata can add both columns after the initial board render.
+    // Exercise that path deterministically: each new column installs Sortable
+    // lazily on its first pointerdown, including the drag receiver.
+    fs.writeFileSync(path.join(vaultDir, BOARD_FOLDER, "Draft the spec.md"),
+      readNote(vaultDir, "Draft the spec").replace("status: Doing", "status: To Do"));
+    fs.writeFileSync(path.join(vaultDir, BOARD_FOLDER, "Ship the passthrough.md"),
+      readNote(vaultDir, "Ship the passthrough").replace("status: Doing", "status: Done"));
+    await expect(window.locator('.obk-column[data-column-value="To Do"] .obk-card[data-entry-path="Board/Draft the spec.md"]')).toBeVisible();
+    await expect(window.locator('.obk-column[data-column-value="Done"] .obk-card[data-entry-path="Board/Ship the passthrough.md"]')).toBeVisible();
 
     // ---------------------------------------------------------------------
     // Drag "Draft the spec" from To Do to Done. The board updating is not the

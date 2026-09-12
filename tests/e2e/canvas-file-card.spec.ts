@@ -5,6 +5,57 @@ import { _electron as electron, expect, test, type Page } from "@playwright/test
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+test("retains Canvas media loaded before its restored view is attached", async ({}, testInfo) => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-detached-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-detached-user-"));
+  fs.writeFileSync(path.join(vaultDir, "Photo.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
+  fs.writeFileSync(path.join(vaultDir, "Files.canvas"), JSON.stringify({
+    nodes: [{ id: "photo", type: "file", x: 0, y: 0, width: 200, height: 200, file: "Photo.png" }], edges: [],
+  }));
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
+    const loaded = await window.evaluate(async () => {
+      const a = (window as any).app;
+      const view = a.createCanvasView();
+      // Restore loads the file before setView attaches the container. Hold
+      // that interval open until the actual media request has settled.
+      const originalLoad = view.loadFileMedia.bind(view);
+      let settle!: () => void;
+      const mediaLoaded = new Promise<void>((resolve) => { settle = resolve; });
+      view.loadFileMedia = async (...args: unknown[]) => {
+        try { await originalLoad(...args); } finally { settle(); }
+      };
+      await view.setFile(a.vault.getFileByPath("Files.canvas"));
+      await mediaLoaded;
+      const beforeAttach = view.containerEl.isConnected;
+      await a.workspace.getLeaf(true).setView(view);
+      return beforeAttach;
+    });
+    expect(loaded).toBe(false);
+    const image = window.locator('.canvas-node[data-node-id="photo"] img');
+    await expect(image).toHaveAttribute("src", /^blob:/);
+    await expect.poll(() => image.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+    await window.screenshot({ path: testInfo.outputPath("restored-canvas-media.png") });
+    const source = await image.getAttribute("src");
+    const revoked = await window.evaluate(async () => {
+      const urls: string[] = [];
+      const revoke = URL.revokeObjectURL.bind(URL);
+      URL.revokeObjectURL = (url: string) => { urls.push(url); revoke(url); };
+      try { await (window as any).app.workspace.getLeavesOfType("canvas")[0].detach(); }
+      finally { URL.revokeObjectURL = revoke; }
+      return urls;
+    });
+    expect(revoked).toContain(source);
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 async function chooseFile(window: Page, actionName: string, fileName: string): Promise<void> {
   await window.getByRole("button", { name: actionName }).click();
   const input = window.locator(".prompt-input");

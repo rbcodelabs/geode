@@ -10,7 +10,9 @@ import type { ArtifactRegistrationResult } from "./artifact-runtime";
 import type { HostHttpRequest, HostHttpResponse } from "../shared/network";
 import type { GuardedMutation, GuardedMutationResult } from "../shared/sync-safety";
 import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
+import type { ResourceRef } from "../shared/root-registry";
 import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
+import type { PrivilegedFetchRequest, PrivilegedFetchResponse } from "../shared/plugin-fetch";
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
 import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
@@ -77,6 +79,15 @@ const api = {
   host: Object.freeze({ name: "geode" as const, protocolScheme: "geode" as const }),
   requestUrl: (request: PrivilegedRequestUrlParam): Promise<PrivilegedRequestUrlResponse> =>
     ipcRenderer.invoke("request-url", request),
+  /**
+   * Privileged sibling of `requestUrl` for plugins' raw `fetch()` calls —
+   * see `pluginFetch` in `src/renderer/plugin-fetch.ts`, which is what
+   * actually calls this. Same CSP-bypass IPC pattern, but carries
+   * pre-serialized body bytes for any `fetch()` body shape (including
+   * `FormData`) rather than `requestUrl`'s `string | ArrayBuffer`.
+   */
+  pluginFetch: (request: PrivilegedFetchRequest): Promise<PrivilegedFetchResponse> =>
+    ipcRenderer.invoke("plugin-fetch", request),
   acquirePowerSaveBlocker: (): Promise<string> =>
     ipcRenderer.invoke("power-save-blocker-acquire"),
   releasePowerSaveBlocker: (token: string): Promise<boolean> =>
@@ -139,6 +150,9 @@ const api = {
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),
   reveal: (path: string): Promise<void> => ipcRenderer.invoke("vault-reveal", path),
   readMetadataCache: (): Promise<unknown | null> => ipcRenderer.invoke("metadata-cache-read"),
+  beginMetadataCacheRead: (): Promise<{ token: string; schemaVersion: number }> => ipcRenderer.invoke("metadata-cache-begin"),
+  readMetadataCachePage: (token: string, sequence: number): Promise<import("./metadata-cache-reader").MetadataCachePage> => ipcRenderer.invoke("metadata-cache-page", token, sequence),
+  cancelMetadataCacheRead: (token: string): Promise<void> => ipcRenderer.invoke("metadata-cache-cancel", token),
   writeMetadataCache: (data: unknown): Promise<void> => ipcRenderer.invoke("metadata-cache-write", data),
   /**
    * Upsert one bounded batch of entries (a partial snapshot, not the whole
@@ -189,6 +203,7 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   openLocalFile: (href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }
+    | { kind: "external-resource"; ref: ResourceRef; rootLabel: string }
     | { kind: "external" }
     | { kind: "rejected" }
   > => ipcRenderer.invoke("open-local-file", href),
@@ -311,15 +326,20 @@ type ElectronOnlyGeodeApi = typeof api;
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
   "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
-  "requestUrl" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
+  "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
-  "isSecretEncryptionAvailable"
+  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead"
 > & {
+  beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
+  readMetadataCachePage?: ElectronOnlyGeodeApi["readMetadataCachePage"];
+  cancelMetadataCacheRead?: ElectronOnlyGeodeApi["cancelMetadataCacheRead"];
   externalRoots?: ExternalRootsHost;
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
   requestUrl?: ElectronOnlyGeodeApi["requestUrl"];
+  /** Absent on the mobile/browser facade — see `pluginFetch` in `src/renderer/plugin-fetch.ts` for its native-`fetch` fallback when unset. */
+  pluginFetch?: ElectronOnlyGeodeApi["pluginFetch"];
   getSupportedPluginCatalog?: ElectronOnlyGeodeApi["getSupportedPluginCatalog"];
   installSupportedPlugin?: ElectronOnlyGeodeApi["installSupportedPlugin"];
   /**

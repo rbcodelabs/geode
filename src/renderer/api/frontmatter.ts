@@ -14,7 +14,7 @@
 // These are pure functions (no DOM, no app) — matching Geode's existing
 // `normalizePath`/`parseMetadata` helper exports and unit-testable directly.
 
-import type { CachedMetadata } from "../types";
+import type { CachedMetadata } from "../../wiki/types";
 
 export interface FrontMatterInfo {
   exists: boolean;

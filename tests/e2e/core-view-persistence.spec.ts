@@ -34,8 +34,16 @@ function makeVault(): { vaultDir: string; userDataDir: string } {
   return { vaultDir, userDataDir };
 }
 
-function launch(userDataDir: string): Promise<ElectronApplication> {
-  return electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+async function launch(userDataDir: string): Promise<ElectronApplication> {
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady === true);
+    return app;
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
 }
 
 // Regression: `graph` and `base` had no registered view factory, so
@@ -44,8 +52,9 @@ function launch(userDataDir: string): Promise<ElectronApplication> {
 // vanished on relaunch.
 test("restores open Graph, Bases, and Image tabs across a relaunch", async () => {
   const { vaultDir, userDataDir } = makeVault();
+  let app: ElectronApplication | undefined;
   try {
-    let app = await launch(userDataDir);
+    app = await launch(userDataDir);
     let win = await app.firstWindow();
     await expect(win.locator('.nav-file-title[data-path="Alpha.md"]')).toBeVisible();
 
@@ -77,6 +86,7 @@ test("restores open Graph, Bases, and Image tabs across a relaunch", async () =>
       )
       .toEqual(expect.arrayContaining(['"type":"graph"', '"type":"base"', '"type":"image"']));
     await app.close();
+    app = undefined;
 
     app = await launch(userDataDir);
     win = await app.firstWindow();
@@ -101,8 +111,8 @@ test("restores open Graph, Bases, and Image tabs across a relaunch", async () =>
     expect(restored.baseFile).toBe("Everything.base");
     expect(restored.imageFile).toBe("Preview.png");
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
-    await app.close();
   } finally {
+    await app?.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }

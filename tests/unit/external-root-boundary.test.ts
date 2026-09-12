@@ -599,3 +599,65 @@ describe("ExternalRootDesktopBoundary text reads", () => {
       .toMatchObject<Partial<ExternalRootAccessError>>({ code: "unavailable" });
   });
 });
+
+describe("ExternalRootDesktopBoundary absolute-path resolution", () => {
+  it("maps a path inside the granted root to a resource identity", async () => {
+    const { repo, boundary } = await fixture();
+    await fs.writeFile(path.join(repo, "src", "nested", "note.md"), "# hi");
+    const attached = await attachRepo(boundary);
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, path.join(repo, "src/nested/note.md")))
+      .resolves.toEqual({ rootId: attached.root.rootId, relativePath: "src/nested/note.md" });
+  });
+
+  it("returns null for a path outside the granted root", async () => {
+    const { base, repo, boundary } = await fixture();
+    await fs.writeFile(path.join(repo, "inside.md"), "in");
+    const outside = path.join(base, "outside.md");
+    await fs.writeFile(outside, "out");
+    const attached = await attachRepo(boundary);
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, outside)).resolves.toBeNull();
+  });
+
+  it("refuses a symlink whose target escapes the root, so a grant cannot widen", async () => {
+    const { base, repo, boundary } = await fixture();
+    const secret = path.join(base, "secret.md");
+    await fs.writeFile(secret, "secret");
+    await fs.symlink(secret, path.join(repo, "escape.md"));
+    const attached = await attachRepo(boundary);
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, path.join(repo, "escape.md")))
+      .resolves.toBeNull();
+  });
+
+  it("resolves a symlink that stays inside the root to its canonical identity", async () => {
+    const { repo, boundary } = await fixture();
+    await fs.writeFile(path.join(repo, "src", "real.md"), "real");
+    await fs.symlink(path.join(repo, "src", "real.md"), path.join(repo, "alias.md"));
+    const attached = await attachRepo(boundary);
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, path.join(repo, "alias.md")))
+      .resolves.toEqual({ rootId: attached.root.rootId, relativePath: "src/real.md" });
+  });
+
+  it("returns null for directories, missing files, and the root itself", async () => {
+    const { repo, boundary } = await fixture();
+    const attached = await attachRepo(boundary);
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, path.join(repo, "src"))).resolves.toBeNull();
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, path.join(repo, "gone.md"))).resolves.toBeNull();
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, repo)).resolves.toBeNull();
+  });
+
+  it("rejects relative input and NUL injection without touching the filesystem", async () => {
+    const { boundary } = await fixture();
+    const attached = await attachRepo(boundary);
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, "relative/note.md")).resolves.toBeNull();
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, "/tmp/a\0b")).resolves.toBeNull();
+  });
+
+  it("fails closed once the root is no longer connected", async () => {
+    const { base, repo, boundary } = await fixture();
+    await fs.writeFile(path.join(repo, "note.md"), "hi");
+    const attached = await attachRepo(boundary);
+    await fs.rename(repo, path.join(base, "moved"));
+    await expect(boundary.resolveOpenableFile(attached.root.rootId, path.join(repo, "note.md")))
+      .rejects.toMatchObject({ code: "root-missing" });
+  });
+});

@@ -1,4 +1,4 @@
-import type { CachedMetadata } from "../renderer/types";
+import type { CachedMetadata } from "../wiki/types";
 
 export const METADATA_INDEX_SCHEMA_VERSION = 1;
 

@@ -258,6 +258,41 @@ export class ExternalRootDesktopBoundary {
     return this.registry.removeBinding(binding, () => this.assertCurrentSession(isCurrent));
   }
 
+  /**
+   * Map a host-side absolute path to a root-relative resource identity, or null
+   * when it is not an openable file inside this root.
+   *
+   * Containment is decided on canonical real paths, so a symbolic link may be
+   * opened only when its final target stays inside the same registered root
+   * (ADR-0015). This is a read-only classification: it grants no access on its
+   * own, and callers still go through `readText` to load content.
+   */
+  async resolveOpenableFile(rootId: string, absolutePath: string): Promise<ResourceRef | null> {
+    if (!path.isAbsolute(absolutePath) || absolutePath.includes("\0")) return null;
+    const root = await this.getUsableRoot(rootId);
+    if (!root.capabilities.has("open")) return null;
+    let realTarget: string;
+    try {
+      realTarget = await fs.realpath(absolutePath);
+      const stat = await fs.stat(realTarget);
+      if (!stat.isFile()) return null;
+    } catch {
+      return null;
+    }
+    if (!isWithinOrEqual(root.locator.canonicalPath, realTarget)) return null;
+    let relativePath: string;
+    try {
+      relativePath = normalizeResourceRelativePath(
+        path.relative(root.locator.canonicalPath, realTarget).split(path.sep).join("/")
+      );
+    } catch {
+      // The root itself, or a spelling that cannot be a resource identity.
+      return null;
+    }
+    await this.proveCurrentRoot(root);
+    return { rootId: root.rootId, relativePath };
+  }
+
   async listDirectory(
     ref: RootDirectoryRef,
     options: { cursor?: string } = {}

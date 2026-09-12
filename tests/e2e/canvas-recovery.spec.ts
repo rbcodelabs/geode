@@ -31,6 +31,7 @@ test("recovers malformed Canvas files without exposing stale-document mutation p
     const errors: string[] = [];
     window.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     window.on("pageerror", (error) => errors.push(String(error)));
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady === true);
     await window.locator('.nav-file-title[data-path="Recovery.canvas"]').click();
     let view = window.locator(".canvas-view");
     await expect(view.locator('.canvas-node[data-node-id="stale"]')).toBeVisible();
@@ -99,7 +100,14 @@ test("recovers malformed Canvas files without exposing stale-document mutation p
       edges: [{ id: "edge-keep", fromNode: "left", toNode: "right", fromSide: "right", toSide: "left", vendorEdge: "keep" }],
     };
     const recoveredText = JSON.stringify(recovered, null, 2) + "\n";
-    fs.writeFileSync(canvasPath, recoveredText);
+    // Publish the repaired bytes during the real click's capture phase, before
+    // Retry reads them. Writing beforehand lets the watcher recover the view
+    // and remove the button before Playwright can exercise manual recovery.
+    await view.getByRole("button", { name: "Retry", exact: true }).evaluate((button, { file, text }) => {
+      button.addEventListener("click", () => {
+        require("node:fs").writeFileSync(file, text);
+      }, { capture: true, once: true });
+    }, { file: canvasPath, text: recoveredText });
     await view.getByRole("button", { name: "Retry", exact: true }).click();
     await expect(view.locator('.canvas-node[data-node-id="left"]')).toBeVisible();
     await expect(view.locator('.canvas-node[data-node-id="right"]')).toBeVisible();
@@ -135,6 +143,7 @@ test("recovers malformed Canvas files without exposing stale-document mutation p
     expect(await camera(view)).toEqual(cameraBefore);
 
     await window.reload();
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady === true);
     await window.locator('.nav-file-title[data-path="Recovery.canvas"]').click();
     view = window.locator(".canvas-view");
     await expect(view.locator('.canvas-node[data-node-id="automatic"]')).toBeVisible();

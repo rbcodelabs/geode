@@ -24,7 +24,9 @@ import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { checkForUpdatesManually, initAutoUpdater } from "./auto-updater";
 import { getProcessMetricsSnapshot } from "./process-metrics";
 import { PowerSaveBlockerRegistry } from "./power-save-blocker";
+import { MetadataCacheReaders } from "./metadata-cache-reader";
 import {
+  bootstrapMetadataDb,
   openMetadataDb,
   pruneMetadataEntries,
   readAllMetadataEntries,
@@ -65,11 +67,12 @@ import { ExternalRootService, externalRootReply, submitExternalProjects, type Ex
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
 import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
-import { performRequestUrl } from "./request-url";
+import { performPluginFetch, performRequestUrl } from "./request-url";
 import { SecretStore } from "./secret-store";
 import { resolveVaultPath as resolveInVault } from "./vault-path";
 import { registerVaultRemoveIpc } from "./vault-remove-ipc";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
+import type { PrivilegedFetchRequest } from "../shared/plugin-fetch";
 import {
   admitSupportedPluginInstall,
   SUPPORTED_PLUGIN_CATALOG_URL,
@@ -110,6 +113,7 @@ app.on("second-instance", (_event, argv) => {
 });
 
 interface VaultSession {
+  generation: number;
   externalRoots?: Promise<ExternalRootServiceSession>;
   externalRootsInvalidated?: boolean;
   root: string;
@@ -117,8 +121,8 @@ interface VaultSession {
   indexer: MetadataIndexerHost | null;
   indexerReady: Promise<unknown | null>;
   /**
-   * Lazily opened on first `metadata-cache-read`/`metadata-cache-write` IPC
-   * call — the renderer's warm-start read fires on every vault open, but a
+   * Bootstrapped before utility launch; lazy opening is only a fallback
+   * after startup failure. The renderer's warm-start read fires on every vault open, but a
    * WRITE from this connection only ever happens when the indexer utility
    * process is unavailable (WAL supports concurrent multi-process readers
    * safely; the two writers are kept mutually exclusive by construction).
@@ -127,6 +131,8 @@ interface VaultSession {
 }
 
 const sessions = new Map<number, VaultSession>();
+const metadataReaders = new MetadataCacheReaders();
+let vaultGeneration = 0;
 const externalRootService = new ExternalRootService(() => RootRegistry.open({ store: new JsonRootRegistryStore(app.getPath("userData")) }));
 
 function externalRootSession(sender: Electron.WebContents): Promise<ExternalRootServiceSession> {
@@ -415,6 +421,9 @@ function registerIpc() {
   ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
     performRequestUrl(request, (input, init) => net.fetch(input, init)),
   );
+  ipcMain.handle("plugin-fetch", (_e, request: PrivilegedFetchRequest) =>
+    performPluginFetch(request, (input, init) => net.fetch(input, init)),
+  );
   ipcMain.handle("window-chrome-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false };
@@ -456,10 +465,13 @@ function registerIpc() {
     const st = await fsp.stat(vaultPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(`Not a folder: ${vaultPath}`);
     const prev = sessions.get(win.id);
+    if (prev) prev.generation = -1;
+    metadataReaders.closeOwner(e.sender.id);
     invalidateExternalRoots(prev);
     if (prev?.watcher) await prev.watcher.close();
     if (prev?.indexer) await prev.indexer.shutdown();
     prev?.metadataDb?.close();
+    if (prev) prev.metadataDb = null;
     const root = path.resolve(vaultPath);
     // Seed a brand-new (never-before-opened) vault with whatever a deploying
     // organization has dropped into resources/ ahead of their build. No-op
@@ -469,24 +481,39 @@ function registerIpc() {
     const files = await listVaultFiles(root);
     let indexer: MetadataIndexerHost | null = null;
     let indexerReady: Promise<unknown | null> = Promise.resolve(null);
+    let metadataDb: DatabaseSync | null = null;
     try {
-      const indexerInspectPort = process.env.GEODE_INDEXER_INSPECT_PORT;
-      const child = utilityProcess.fork(path.join(__dirname, "indexer-process.js"), [], {
-        execArgv: indexerInspectPort ? [`--inspect=${indexerInspectPort}`] : [],
-      });
-      indexer = new MetadataIndexerHost(child, (message) => {
-        if (!win.isDestroyed()) win.webContents.send("metadata-indexer-message", message);
-      });
       const markdownFiles: MetadataFileStat[] = files
         .filter((file) => !file.isFolder && file.path.toLowerCase().endsWith(".md"))
         .map((file) => ({ path: file.path, mtimeMs: file.mtime, size: file.size }));
       const scanCapBytes = await readMetadataScanCapBytes(root);
-      indexerReady = indexer.initialize(root, markdownFiles, scanCapBytes);
+      if (win.isDestroyed()) return;
+      const prepared = bootstrapMetadataDb(root, () => {
+        const indexerInspectPort = process.env.GEODE_INDEXER_INSPECT_PORT;
+        const child = utilityProcess.fork(path.join(__dirname, "indexer-process.js"), [], {
+          execArgv: indexerInspectPort ? [`--inspect=${indexerInspectPort}`] : [],
+        });
+        try {
+          const host = new MetadataIndexerHost(child, (message) => {
+            if (!win.isDestroyed()) win.webContents.send("metadata-indexer-message", message);
+          });
+          return { host, ready: host.initialize(root, markdownFiles, scanCapBytes) };
+        } catch (error) { child.kill(); throw error; }
+      });
+      metadataDb = prepared.db;
+      indexer = prepared.value.host;
+      indexerReady = prepared.value.ready;
     } catch (error) {
       console.error("Metadata utility process unavailable; using renderer fallback", error);
     }
-    const watcher = startWatcher(win, root, files);
-    sessions.set(win.id, { root, watcher, indexer, indexerReady, metadataDb: null });
+    let watcher: VaultWatcherHandle;
+    try { watcher = startWatcher(win, root, files); }
+    catch (error) {
+      try { metadataDb?.close(); }
+      finally { if (indexer) await indexer.shutdown(); }
+      throw error;
+    }
+    sessions.set(win.id, { root, watcher, indexer, indexerReady, metadataDb, generation: ++vaultGeneration });
     // The watcher backend and the descriptor count it costs are the first
     // things worth knowing when a sandboxed child process later fails to
     // spawn (see probeFdPressure).
@@ -838,6 +865,24 @@ function registerIpc() {
     shell.showItemInFolder(resolveVaultPath(win, rel));
   });
 
+  ipcMain.handle("metadata-cache-begin", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (!session || session.generation < 0) throw Error("No active metadata vault session");
+    session.metadataDb ??= openMetadataDb(session.root);
+    return metadataReaders.begin(e.sender.id, session.root, session.generation);
+  });
+  ipcMain.handle("metadata-cache-page", (e, token: string, sequence: number) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (!session || session.generation < 0) throw Error("No active metadata vault session");
+    return metadataReaders.page(e.sender.id, session.generation, token, sequence);
+  });
+  ipcMain.handle("metadata-cache-cancel", (e, token: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (session) metadataReaders.cancel(e.sender.id, session.generation, token);
+  });
   ipcMain.handle("metadata-cache-read", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
@@ -1072,6 +1117,22 @@ function registerIpc() {
       if (!rel.startsWith("../") && rel !== "..") {
         return { kind: "vault", path: rel, line: target.line, column: target.column } as const;
       }
+    }
+
+    // Not in the vault, but it may still be inside a Project folder the user
+    // attached read-only. Those are openable in Geode's external read-only
+    // viewer (ADR-0015), so handing them to the OS would ignore a grant the
+    // user explicitly made. Resolution is on the realpath, so a symlink cannot
+    // widen the grant, and it is scoped to roots this window exposes.
+    const external = await externalRootSession(e.sender)
+      .then((roots) => roots.resolveOpenableFile(realTarget))
+      .catch(() => null);
+    if (external) {
+      return {
+        kind: "external-resource",
+        ref: external.ref,
+        rootLabel: external.label,
+      } as const;
     }
 
     const error = await shell.openPath(realTarget);
@@ -1486,7 +1547,12 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     return { action: "deny" };
   });
 
+  win.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+    if (mainFrame && !inPlace) metadataReaders.closeOwner(ownerWebContentsId);
+  });
+  win.webContents.once("destroyed", () => metadataReaders.closeOwner(ownerWebContentsId));
   win.on("closed", () => {
+    metadataReaders.closeOwner(ownerWebContentsId);
     clearInterval(watchdog);
     void artifactRuntime.unregisterOwner(ownerWebContentsId);
     const session = sessions.get(win.id);

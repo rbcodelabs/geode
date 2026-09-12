@@ -52,8 +52,16 @@ function makeVault(options: { withPlugin?: boolean } = {}): {
   return { vaultDir, userDataDir };
 }
 
-function launch(userDataDir: string): Promise<ElectronApplication> {
-  return electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+async function launch(userDataDir: string): Promise<ElectronApplication> {
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady === true);
+    return app;
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
 }
 
 test("keeps the same leaf when a plugin is disabled and re-enabled in a live session", async () => {

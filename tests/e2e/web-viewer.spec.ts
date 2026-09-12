@@ -22,6 +22,7 @@ async function launch(vaultPath = testVaultPath) {
   });
   window.on("pageerror", (err) => consoleErrors.push(String(err)));
   await expect(window.locator(".workspace")).toBeVisible();
+  await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
   return { app, window, userDataDir, consoleErrors };
 }
 
@@ -926,12 +927,20 @@ test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript,
     await expect
       .poll(() =>
         frame.evaluate((guest) =>
-          (guest as unknown as { executeJavaScript(script: string): Promise<unknown> }).executeJavaScript(`({
-            title: document.title,
-            scriptRan: document.body.dataset.scriptRan,
-            color: getComputedStyle(document.querySelector('h1')).color,
-            imageLoaded: document.querySelector('img').complete && document.querySelector('img').naturalWidth > 0
-          })`)
+          (guest as unknown as { executeJavaScript(script: string): Promise<unknown> }).executeJavaScript(`(() => {
+            // The address bar updates before the guest finishes navigating.
+            // Poll incomplete documents without throwing on missing elements.
+            const heading = document.querySelector('h1');
+            const image = document.querySelector('img');
+            if (location.protocol !== 'file:' || !location.pathname.endsWith('/Local%20page.html') ||
+                !document.body || !heading || !image) return null;
+            return {
+              title: document.title,
+              scriptRan: document.body.dataset.scriptRan,
+              color: getComputedStyle(heading).color,
+              imageLoaded: image.complete && image.naturalWidth > 0
+            };
+          })()`)
         )
       )
       .toEqual({
