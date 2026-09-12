@@ -3147,16 +3147,50 @@ export class App {
     }
   }
 
+  /**
+   * Resolve an Obsidian subpath — `#Heading` or `#^blockid`, leading `#`
+   * optional — to a character offset in `file`, or null when it does not
+   * resolve.
+   *
+   * The single place an anchor becomes a scroll target. `openLink` (ordinary
+   * in-app link clicks) and `WorkspaceLeaf.openFile`'s `eState.subpath` (the
+   * plugin API) both route through here, so they cannot drift apart.
+   */
+  async resolveSubpathOffset(file: TFile, subpath: string): Promise<number | null> {
+    const target = (subpath.startsWith("#") ? subpath.slice(1) : subpath).trim();
+    if (!target) return null;
+    if (target.startsWith("^")) {
+      const blockId = target.slice(1);
+      if (!blockId) return null;
+      // Block IDs are a trailing `^id` marker on the line they anchor, and
+      // are not in the metadata cache — scan for them the way `openBookmark`
+      // resolves a bookmarked block.
+      try {
+        const content = await this.vault.cachedRead(file);
+        let offset = 0;
+        for (const line of content.split("\n")) {
+          if (line.trimEnd().endsWith(`^${blockId}`)) return offset;
+          offset += line.length + 1;
+        }
+      } catch {
+        /* unreadable file: treat the anchor as unresolved */
+      }
+      return null;
+    }
+    const heading = this.metadataCache
+      .getHeadings(file)
+      .find((h) => h.heading.toLowerCase() === target.toLowerCase());
+    return heading ? heading.position.start.offset : null;
+  }
+
   async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {
     const dest = this.metadataCache.getFirstLinkpathDest(linktext, sourcePath);
     if (dest) {
       await this.openFile(dest, newTab);
-      const sub = linktext.includes("#") ? linktext.slice(linktext.indexOf("#") + 1) : null;
-      if (sub && !sub.startsWith("^")) {
-        const heading = this.metadataCache
-          .getHeadings(dest)
-          .find((h) => h.heading.toLowerCase() === sub.toLowerCase());
-        if (heading) this.revealOffsetInActiveMarkdownView(dest, heading.position.start.offset);
+      const hash = linktext.indexOf("#");
+      if (hash !== -1) {
+        const offset = await this.resolveSubpathOffset(dest, linktext.slice(hash));
+        if (offset !== null) this.revealOffsetInActiveMarkdownView(dest, offset);
       }
     } else {
       // Unresolved link: create the note (Obsidian behavior)
