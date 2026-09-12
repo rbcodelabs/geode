@@ -241,14 +241,20 @@ test("Live Preview requires Cmd/Ctrl, cancels stale work, and tears down with it
     await window.keyboard.press("Escape");
     await window.keyboard.up(platformModifier);
 
-    // Make the first read slower than the second; generation cancellation must win.
+    // Hold each slow read until the competing action has happened. Timer speed
+    // must not decide whether this actually exercises generation cancellation.
     await window.evaluate(() => {
       const geodeApp = (window as any).app;
       const original = geodeApp.vault.read.bind(geodeApp.vault);
+      (window as any).slowPreviewReadsStarted = 0;
+      (window as any).slowPreviewReadsCompleted = 0;
       geodeApp.vault.read = async (file: { path: string }) => {
         if (file.path === "Slow.md") {
-          (window as any).slowPreviewReadStarted = true;
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          (window as any).slowPreviewReadsStarted += 1;
+          await new Promise<void>((resolve) => { (window as any).releaseSlowPreviewRead = resolve; });
+          const text = await original(file);
+          (window as any).slowPreviewReadsCompleted += 1;
+          return text;
         }
         return original(file);
       };
@@ -257,11 +263,13 @@ test("Live Preview requires Cmd/Ctrl, cancels stale work, and tears down with it
     const fast = window.locator('.cm-live-wikilink[data-href="Fast"]');
     await window.keyboard.down(platformModifier);
     await slow.hover();
-    await window.waitForTimeout(325);
-    expect(await window.evaluate(() => (window as any).slowPreviewReadStarted)).toBe(true);
+    await expect.poll(() => window.evaluate(() => (window as any).slowPreviewReadsStarted)).toBe(1);
     await fast.hover();
     await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
-    await window.waitForTimeout(550);
+    await window.evaluate(() => (window as any).releaseSlowPreviewRead());
+    await expect.poll(() => window.evaluate(() => (window as any).slowPreviewReadsCompleted)).toBe(1);
+    // Observe after the read consumer's promise continuation has run.
+    await window.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
     await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
     await expect(preview).not.toContainText("Stale slow content");
 
@@ -277,10 +285,12 @@ test("Live Preview requires Cmd/Ctrl, cancels stale work, and tears down with it
     await window.locator('.nav-file-title[data-path="Folder/Source.md"]').click();
     await window.keyboard.down(platformModifier);
     await window.locator('.cm-live-wikilink[data-href="Slow"]').hover();
-    await window.waitForTimeout(325);
+    await expect.poll(() => window.evaluate(() => (window as any).slowPreviewReadsStarted)).toBe(2);
     await window.locator('.nav-file-title[data-path="Other.md"]').click();
     await window.keyboard.up(platformModifier);
-    await window.waitForTimeout(550);
+    await window.evaluate(() => (window as any).releaseSlowPreviewRead());
+    await expect.poll(() => window.evaluate(() => (window as any).slowPreviewReadsCompleted)).toBe(2);
+    await window.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
     await expect(preview).toHaveCount(0);
 
     // Source revealed on the active line has no preview trigger.
