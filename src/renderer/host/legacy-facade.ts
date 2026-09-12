@@ -65,5 +65,6 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     publishHotkeys: host.desktop?.publishHotkeys ?? (async () => {}),
     onGuestHotkey: (host.desktop?.onGuestHotkey ?? (() => () => {})) as never,
     onGuestWindowOpen: (host.desktop?.onGuestWindowOpen ?? (() => () => {})) as never,
+    onWebViewerBridgeEvent: (host.desktop?.onWebViewerBridgeEvent ?? (() => () => {})) as never,
   };
 }

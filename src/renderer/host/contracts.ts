@@ -156,6 +156,7 @@ export interface DesktopHostService {
     guestId: number;
     disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
   }) => void): () => void;
+  onWebViewerBridgeEvent(cb: (ev: import("../../shared/web-viewer-connectors").NormalizedWebViewerEvent) => void): () => void;
   revealInFileManager(path: string): Promise<void>;
 }
 

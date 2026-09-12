@@ -1,4 +1,4 @@
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, session, shell, utilityProcess } from "electron";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -67,6 +67,7 @@ import {
   SUPPORTED_PLUGIN_CATALOG_URL,
   SupportedPluginCatalogService,
 } from "./supported-plugin-catalog";
+import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -1077,6 +1078,49 @@ function bridgeGuestHotkeys(win: BrowserWindow, guest: Electron.WebContents): vo
 
 const EMPTY_HOTKEYS: ReadonlySet<string> = new Set();
 
+/**
+ * The Web Viewer's own `<webview>` partition (src/renderer/views/web-view.ts).
+ * Exclusively the real Web Viewer tab — canvas link-preview guests
+ * (src/renderer/views/canvas-view.ts) intentionally use a different
+ * partition so they never receive the bridge preload below. Kept as one
+ * constant so the `will-attach-webview` gate and the `did-attach-webview`
+ * guard in `trackWebViewerBridgeGuest` cannot drift apart.
+ */
+const WEBVIEWER_PARTITION = "persist:webviewer";
+
+/**
+ * Bridge `window.__geode.postEvent(type, payload)` calls made inside a Web
+ * Viewer `<webview>` guest (see webviewer-bridge-preload.ts) onto the host
+ * renderer, after authoritatively checking the sender frame's origin here in
+ * main.
+ *
+ * `guest.ipc` (a WebContents-scoped IpcMain) is used instead of a global
+ * `ipcMain.on` listener or the DOM `ipc-message`/`sendToHost` events:
+ * neither of those reliably exposes the per-message sender frame needed to
+ * check origin authoritatively — a compromised or navigated guest could
+ * otherwise spoof which page a message came from.
+ *
+ * `did-attach-webview` fires for every `<webview>` guest (artifact guests,
+ * canvas link-preview guests, real Web Viewer tabs) — `will-attach-webview`
+ * does not hand back a guest identifier to gate on ahead of time, since the
+ * guest doesn't exist yet at that point. Comparing `guest.session` identity
+ * against `session.fromPartition(WEBVIEWER_PARTITION)` is an exact
+ * equivalent: Electron returns the same `Session` instance for every guest
+ * sharing a persistent partition string, and that partition is exclusively
+ * the real Web Viewer (see WEBVIEWER_PARTITION above). Guests attached under
+ * any other partition are left alone entirely — no listener is registered.
+ */
+function trackWebViewerBridgeGuest(win: BrowserWindow, guest: Electron.WebContents): void {
+  if (guest.session !== session.fromPartition(WEBVIEWER_PARTITION)) return;
+  guest.ipc.on(WEBVIEWER_BRIDGE_CHANNEL, (event, message: WebViewerBridgeMessage) => {
+    const frameUrl = event.senderFrame?.url;
+    if (!frameUrl) return;
+    const normalized = normalizeWebViewerEvent(frameUrl, message);
+    if (!normalized) return;
+    if (!win.isDestroyed()) win.webContents.send("web-viewer-bridge-event", normalized);
+  });
+}
+
 function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
@@ -1144,12 +1188,28 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
         !artifactRuntime.secureWebviewAttachment(win.webContents, webPreferences, params)) {
       event.preventDefault();
     }
+    if (params.partition === WEBVIEWER_PARTITION) {
+      // Main decides, never trusts the guest — same posture as
+      // artifactRuntime.secureWebviewAttachment above. Set unconditionally,
+      // overwriting anything already present, so the webviewer-bridge-preload
+      // (which exposes window.__geode.postEvent) runs in an isolated,
+      // sandboxed guest rather than one that could reach Node or the host's
+      // unisolated context. This partition is exclusively the real Web
+      // Viewer tab (src/renderer/views/web-view.ts) — canvas link-preview
+      // guests use their own "persist:canvas-preview" partition precisely so
+      // they never get this bridge; see canvas-view.ts's renderWebNode.
+      webPreferences.nodeIntegration = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      webPreferences.preload = path.join(__dirname, "webviewer-bridge-preload.js");
+    }
   });
   win.webContents.on("did-attach-webview", (_event, guest) => {
     artifactRuntime.trackGuest(win.webContents, guest);
     // Every guest, not just artifact guests: the Web Viewer and canvas
     // web-preview cards are <webview>s too and have the same dead-hotkey bug.
     bridgeGuestHotkeys(win, guest);
+    trackWebViewerBridgeGuest(win, guest);
     guest.setWindowOpenHandler(({ url, disposition }) => {
       let protocol = "";
       try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }

@@ -669,7 +669,15 @@ export class CanvasView implements View {
       const parsed = new URL(canonical);
       const preview = document.createElement("webview") as HTMLElement & { src: string };
       preview.className = "canvas-node-web-preview";
-      preview.setAttribute("partition", "persist:webviewer");
+      // Distinct from the real Web Viewer's "persist:webviewer" partition:
+      // this guest auto-loads and executes the target page's JS the instant
+      // a canvas containing this link node is viewed, with no explicit "open
+      // in Web Viewer" gesture. Sharing "persist:webviewer" would let a
+      // canvas link node pointing at a trusted connector hostname (e.g.
+      // compass.rbcodelabs.com) silently stand up a live event bridge just
+      // by being viewed. See src/main/main.ts's `will-attach-webview`, which
+      // only wires the bridge preload for "persist:webviewer" guests.
+      preview.setAttribute("partition", "persist:canvas-preview");
       preview.setAttribute("title", `Live preview of ${parsed.hostname}`);
       preview.src = canonical;
       host.textContent = parsed.hostname;

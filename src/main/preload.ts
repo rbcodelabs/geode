@@ -11,6 +11,7 @@ import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-ro
 import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
+import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
   const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
@@ -239,6 +240,16 @@ const api = {
     const listener = (_e: Electron.IpcRendererEvent, request: GuestWindowOpenRequest) => cb(request);
     ipcRenderer.on("guest-window-open", listener);
     return () => { ipcRenderer.removeListener("guest-window-open", listener); };
+  },
+  /**
+   * A normalized, origin-checked event posted from inside a Web Viewer guest
+   * via `window.__geode.postEvent` (see webviewer-bridge-preload.ts and
+   * main.ts's `trackWebViewerBridgeGuest`).
+   */
+  onWebViewerBridgeEvent: (cb: (ev: NormalizedWebViewerEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, ev: NormalizedWebViewerEvent) => cb(ev);
+    ipcRenderer.on("web-viewer-bridge-event", listener);
+    return () => { ipcRenderer.removeListener("web-viewer-bridge-event", listener); };
   },
   checkForUpdates: (): Promise<UpdaterCheckResult> => ipcRenderer.invoke("updater-check"),
 };

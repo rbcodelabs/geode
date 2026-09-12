@@ -5,10 +5,34 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.15.4). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.16.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.16.0: a supported plugin catalog, and two new plugin events
+
+**Install certified plugins without hunting for a repository.** Settings →
+Community plugins & themes now lists a supported catalog. Installing a *tested*
+release verifies the manifest and the SHA-256 of every runtime artifact before
+replacing any file, then pins that version. Choosing *latest* instead requires
+an explicit unverified acknowledgement and leaves the install unpinned. The
+catalog is fetched with an 8-second timeout and a 256 KiB cap, and an atomic
+last-known-good cache keeps it usable when a refresh fails. The manual GitHub
+installer is still there.
+
+**Plugins can now populate Geode's context menus.** The `file-menu` and
+`editor-menu` workspace events fire, so a plugin can add its own items to a
+file's context menu in the explorer or to the editor's menu.
+
+**Plugins can react to a web app running in the Web Viewer.** A cooperating
+"connector" page can call `window.__geode.postEvent(type, payload)`, and Geode
+re-emits it on the workspace bus as `web-viewer:event`. Geode's main process
+checks the posting frame's origin against an allowlist and validates the event
+type, serializability and payload size before anything reaches a plugin — the
+guest is never trusted about which page it is. Canvas link previews run in
+their own session precisely so that merely *viewing* a canvas can never stand
+up such a bridge. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
 ## New in v0.15.2: a unified file explorer
 
@@ -45,7 +69,12 @@ or a path escaping the vault all reject instead of writing a note somewhere the
 user did not configure; `getLeaf('window')` throws rather than substituting a
 tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
-## Features (v0.15.4)
+## Features (v0.16.0)
+
+- **Supported plugin catalog** — install certified plugins from Settings →
+  Community plugins & themes. Tested releases verify the manifest and the
+  SHA-256 of every runtime artifact before replacing files, then pin the
+  installed version; choosing latest requires an explicit acknowledgement.
 
 - **Image tabs** — open vault images from File Explorer, Markdown links, or
   plugins in a read-only image view. Images fit within the pane, use normal tab

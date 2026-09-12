@@ -2380,6 +2380,15 @@ export class App {
       });
     });
     if (stopGuestWindowOpen) this.hostDisposers.add(stopGuestWindowOpen);
+    // The only place `web-viewer:event` fires: the event path is
+    // leaf-independent (zero, one, or many Web Viewer leaves may be open at
+    // once), so it is handled once here at the App level rather than inside
+    // web-view.ts. Core Geode stays decoupled from any specific connector —
+    // this only ever sees the generic NormalizedWebViewerEvent shape.
+    const stopWebViewerBridge = this.host.desktop?.onWebViewerBridgeEvent((ev) => {
+      this.workspace.trigger("web-viewer:event", ev);
+    });
+    if (stopWebViewerBridge) this.hostDisposers.add(stopWebViewerBridge);
   }
 
   private async openGuestWindowInTab(request: {
