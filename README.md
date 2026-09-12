@@ -5,10 +5,47 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.17.3). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.18.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.18.0: shared wiki foundations and bounded cache loading
+
+Desktop link navigation and the internal Node wiki snapshot now use the same
+candidate-selection machinery, with separate policies preserving desktop
+compatibility and strict ambiguity reporting. This is a
+[desktop link-resolution milestone](docs/design/shared-engine-desktop-resolution.md),
+**not a full desktop backend migration**. The
+[read-only Node API](docs/design/local-wiki-usage.md) supports folder snapshots,
+metadata, literal search, links and backlinks without Electron; it is internal
+tooling, not a published SDK, cloud service or replacement desktop application.
+The [headless extraction report](docs/design/headless-phase0.md) describes the
+portable foundation and its plain-Node proofs.
+
+Persisted desktop metadata now loads through session-bound snapshot pages of at
+most 50 examined rows and 256 KiB per response. Newer edits and deletions take
+precedence; omitted entries are recovered with yielded file reads. Startup
+database initialization is ordered before the utility indexer starts. These
+bounds reduce the size of individual cache transfers, not all indexing or
+rendering work. See [bounded cache hydration](docs/large-vault-benchmark.md#bounded-desktop-cache-hydration).
+
+New synthetic-vault tooling generates linked and dense workloads and compares
+baseline/candidate runs with same-revision controls. The
+[benchmark safeguards](docs/large-vault-benchmark.md#methodology-v2-safeguards)
+separate terminal indexing readiness from correctness validation, monitor owned
+process RSS independently, and retain failed samples. The default memory limit
+is half physical RAM; failures are not replaced with successful retries.
+
+**Large-vault limits remain.** In the three-pair synthetic comparison, 10,000-note
+warm startup was slower by paired medians of approximately 2.6 seconds for the
+linked profile and 11.9 seconds for the dense profile. At 50,000 notes, every
+linked-profile sample failed on both revisions. All three dense-profile
+candidate samples passed, while all three baseline samples failed. The failures
+involved renderer-watchdog recovery; bounded hydration does not eliminate every
+stall. These measurements are not a blanket speedup, a production guarantee, or
+a claim that 50,000-note vaults are now reliably supported. See the
+[benchmark methodology and limitations](docs/large-vault-benchmark.md).
 
 ## New in v0.17.3: Canvas media cards render again
 
