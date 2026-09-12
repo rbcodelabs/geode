@@ -257,6 +257,22 @@ test('Compare & resolve shows every head read-only, and cancelling publishes not
     };
     await shoot('conflict-banner');
 
+    /*
+     * Quiesce every client before snapshotting. All three are live and
+     * auto-syncing, so without this the scheduler can publish between the two
+     * snapshots and the diff gets blamed on the dialog — which is exactly how
+     * this failed on CI (slower machine, wider window for a background run to
+     * land in) while passing locally.
+     *
+     * Then prove the system is actually still: take the snapshot twice and
+     * require it unchanged. That makes the later assertion mean "the dialog
+     * wrote nothing" rather than "nothing happened to change in this interval",
+     * which is a stronger claim than the original.
+     */
+    for (const client of clients) await client.page!.evaluate(() => (window as any).app.sync.cancel());
+    const quiesced = await observable();
+    await expect.poll(async () => JSON.stringify(await observable()), { timeout: 15000 }).toBe(JSON.stringify(quiesced));
+
     const before = await observable();
     await opener.click();
 
