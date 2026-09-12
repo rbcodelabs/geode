@@ -57,11 +57,12 @@ import { ExternalRootService, externalRootReply, submitExternalProjects, type Ex
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
 import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
-import { performRequestUrl } from "./request-url";
+import { performPluginFetch, performRequestUrl } from "./request-url";
 import { SecretStore } from "./secret-store";
 import { resolveVaultPath as resolveInVault } from "./vault-path";
 import { removeVaultFolderAt, resolveVaultFolderPath } from "./vault-remove";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
+import type { PrivilegedFetchRequest } from "../shared/plugin-fetch";
 import {
   admitSupportedPluginInstall,
   SUPPORTED_PLUGIN_CATALOG_URL,
@@ -405,6 +406,9 @@ function registerIpc() {
   });
   ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
     performRequestUrl(request, (input, init) => net.fetch(input, init)),
+  );
+  ipcMain.handle("plugin-fetch", (_e, request: PrivilegedFetchRequest) =>
+    performPluginFetch(request, (input, init) => net.fetch(input, init)),
   );
   ipcMain.handle("window-chrome-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);

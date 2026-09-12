@@ -5,11 +5,34 @@ module.exports.default = class RequestUrlProbe extends Plugin {
     window.__requestUrlProbe = {
       run: async (baseUrl) => {
         const result = {};
+        // A bare fetch() call is proxied through the main process exactly
+        // like requestUrl — see src/renderer/plugin-fetch.ts. It should
+        // reach the real server, not be blocked by the renderer CSP.
         try {
-          await fetch(`${baseUrl}/raw-fetch`);
-          result.rawFetch = "unexpected-success";
+          const rawFetchRes = await fetch(`${baseUrl}/raw-fetch`, {
+            headers: { "X-Custom": "raw-fetch" },
+          });
+          result.rawFetch = {
+            status: rawFetchRes.status,
+            header: rawFetchRes.headers.get("x-probe"),
+            json: await rawFetchRes.json(),
+          };
         } catch (error) {
           result.rawFetch = String(error);
+        }
+
+        // The FormData case is the whole reason a raw fetch() proxy exists
+        // alongside requestUrl: requestUrl's body is only string|ArrayBuffer,
+        // so a plugin doing a multipart upload (e.g. Whisper transcription)
+        // has no choice but to call fetch() directly.
+        try {
+          const form = new FormData();
+          form.append("field", "value");
+          form.append("file", new Blob(["file-bytes"], { type: "text/plain" }), "test.txt");
+          const multipartRes = await fetch(`${baseUrl}/echo-multipart`, { method: "POST", body: form });
+          result.rawFetchMultipart = await multipartRes.json();
+        } catch (error) {
+          result.rawFetchMultipart = String(error);
         }
 
         const shorthand = await requestUrl(`${baseUrl}/json`);

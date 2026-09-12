@@ -1000,6 +1000,8 @@ interface RequestUrlResponse {
 
 Key property: bypasses CORS entirely (routed through the privileged process on desktop / native layer on mobile). This is the sanctioned way for plugins to call arbitrary HTTP APIs; a clone needs an equivalent privileged proxy.
 
+Plugins also commonly call the ambient `fetch()` directly — most often for a `FormData`/multipart body, which `RequestUrlParam.body` (`string | ArrayBuffer` only) cannot carry. A clone with a locked-down renderer CSP (no `connect-src` override) must give plugin code its own privileged `fetch()` too, or such plugins break with a CSP-blocked network error even though the equivalent `requestUrl` call would have worked. Geode does this by shadowing the `fetch` identifier inside each plugin's compiled bundle with a proxy that mirrors `requestUrl`'s desktop transport (`src/renderer/plugin-fetch.ts` / `src/main/request-url.ts`'s `performPluginFetch`) — `window.fetch` and the CSP itself are left untouched everywhere else.
+
 ---
 
 ## 9. obsidian:// URI Protocol
