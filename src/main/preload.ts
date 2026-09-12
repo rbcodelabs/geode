@@ -104,6 +104,9 @@ const api = {
     ipcRenderer.invoke("vault-write", path, data, options),
   mkdir: (path: string): Promise<void> => ipcRenderer.invoke("vault-mkdir", path),
   trash: (path: string): Promise<void> => ipcRenderer.invoke("vault-delete", path),
+  /** Obsidian's `adapter.rmdir`: remove a vault folder outright, no trash. */
+  rmdir: (path: string, recursive: boolean): Promise<void> =>
+    ipcRenderer.invoke("vault-rmdir", path, recursive),
   rename: (path: string, newPath: string): Promise<void> =>
     ipcRenderer.invoke("vault-rename", path, newPath),
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),

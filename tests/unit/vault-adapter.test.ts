@@ -34,6 +34,7 @@ function installFakeGeode(initialEntries: VaultFileEntry[] = []) {
     write: vi.fn(async () => ({ mtime: Date.now(), size: 0 })),
     mkdir: vi.fn(async () => {}),
     trash: vi.fn(async () => {}),
+    rmdir: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     exists: vi.fn(async (path: string) => files.has(path)),
     onVaultEvent: vi.fn(() => {}),
@@ -152,5 +153,72 @@ describe("FileSystemAdapter (class directly)", () => {
     expect(adapter.getName()).toBe("");
     expect(adapter.exists("anything")).toBe(false);
     expect(adapter.getResourcePath("a b.md")).toBe("file:///root/a%20b.md");
+  });
+
+  it("rejects rather than throwing when no rmdir is injected", async () => {
+    const adapter = new FileSystemAdapter("/root");
+    await expect(adapter.rmdir("Attachments", true)).rejects.toThrow(/not supported on this platform/);
+  });
+});
+
+/**
+ * `adapter.rmdir` did not exist anywhere on Geode's adapter surface, so
+ * `app.vault.adapter.rmdir(dir, true)` — what obsidian-claude-threads calls to
+ * clean up a thread's attachment folder on hard delete — threw, was swallowed
+ * by the plugin, and left the folder on disk forever.
+ */
+describe("Vault.adapter.rmdir", () => {
+  afterEach(() => {
+    delete (globalThis as any).window;
+  });
+
+  it("delegates to the host with the recursive flag intact", async () => {
+    const { vault, geode } = await openTestVault();
+
+    await vault.adapter.rmdir("Attachments/thread-1", true);
+
+    expect(geode.rmdir).toHaveBeenCalledWith("Attachments/thread-1", true);
+  });
+
+  it("defaults to a non-recursive removal when the flag is omitted", async () => {
+    const { vault, geode } = await openTestVault();
+
+    await vault.adapter.rmdir("Attachments");
+
+    expect(geode.rmdir).toHaveBeenCalledWith("Attachments", false);
+  });
+
+  it("removes a folder and its contents on a host that implements it", async () => {
+    const host = createBrowserHost(createBrowserHostState({
+      files: { "Attachments/thread-1/a.png": "bytes", "Keep.md": "keep" },
+    }));
+    const vault = new Vault(host);
+    await vault.open("managed://default");
+
+    await vault.adapter.rmdir("Attachments", true);
+
+    await expect(vault.adapter.exists("Attachments/thread-1/a.png")).resolves.toBe(false);
+    await expect(vault.adapter.exists("Keep.md")).resolves.toBe(true);
+  });
+
+  it("refuses to empty a folder that was not asked to be emptied", async () => {
+    const host = createBrowserHost(createBrowserHostState({
+      files: { "Attachments/a.png": "bytes" },
+    }));
+    const vault = new Vault(host);
+    await vault.open("managed://default");
+
+    await expect(vault.adapter.rmdir("Attachments", false)).rejects.toThrow(/not empty/);
+    await expect(vault.adapter.exists("Attachments/a.png")).resolves.toBe(true);
+  });
+
+  it("rejects with a clear message on a host that cannot remove folders", async () => {
+    const host = createBrowserHost(createBrowserHostState({ files: { "Note.md": "x" } }));
+    const vault = new Vault({ ...host, vaultFiles: { ...host.vaultFiles, rmdir: undefined } });
+    await vault.open("managed://default");
+
+    await expect(vault.adapter.rmdir("Anything", true)).rejects.toThrow(
+      /not supported on this platform/,
+    );
   });
 });

@@ -81,9 +81,15 @@ const MAIN_JS = `
 test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + ItemView + DOM helpers", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-compat-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-compat-ud-"));
+  // A folder deliberately outside the vault, to prove adapter.rmdir cannot
+  // reach it with a `..` path.
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-compat-outside-"));
+  fs.writeFileSync(path.join(outsideDir, "precious.md"), "do not delete");
   const screenshotDir = process.env.GEODE_QA_SCREENSHOT_DIR;
   if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true });
   fs.writeFileSync(path.join(vaultDir, "Note.md"), "# Hello\n");
+  fs.mkdirSync(path.join(vaultDir, "Attachments", "thread-1"), { recursive: true });
+  fs.writeFileSync(path.join(vaultDir, "Attachments", "thread-1", "a.png"), "bytes");
   const pluginDir = path.join(vaultDir, ".geode", "plugins", "obsidian-compat-probe");
   fs.mkdirSync(pluginDir, { recursive: true });
   fs.writeFileSync(path.join(pluginDir, "manifest.json"), JSON.stringify(MANIFEST));
@@ -215,6 +221,25 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
     // os.hostname() returned a non-empty string via the real Node require.
     await expect(window.locator(".probe-host")).not.toHaveText("host:0");
 
+    // adapter.rmdir removes a real vault folder through the main process —
+    // obsidian-claude-threads cleans up a thread's attachment folder with it —
+    // and the vault root boundary holds against a plugin-supplied `..` path.
+    const rmdirErrors = await window.evaluate(async (escape: string) => {
+      const adapter = (window as any).app.vault.adapter;
+      const errors: string[] = [];
+      try {
+        await adapter.rmdir(escape, true);
+      } catch (error) {
+        errors.push(String(error));
+      }
+      await adapter.rmdir("Attachments", true);
+      return errors;
+    }, path.relative(vaultDir, outsideDir));
+    expect(rmdirErrors[0]).toMatch(/Path escapes vault/);
+    expect(fs.existsSync(path.join(outsideDir, "precious.md"))).toBe(true);
+    expect(fs.existsSync(path.join(vaultDir, "Attachments"))).toBe(false);
+    expect(fs.existsSync(path.join(vaultDir, "Note.md"))).toBe(true);
+
     // getLeavesOfType() sees the docked sidebar leaf (so plugins don't
     // reopen a pane they've already docked).
     const leafCount = await window.evaluate(
@@ -252,6 +277,7 @@ test("hosts a real-shaped Obsidian plugin: require('obsidian') + Node builtin + 
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
   }
 });
 

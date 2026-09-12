@@ -59,6 +59,8 @@ import type { ExternalProjectContribution, ExternalProjectContributionOptions } 
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performRequestUrl } from "./request-url";
 import { SecretStore } from "./secret-store";
+import { resolveVaultPath as resolveInVault } from "./vault-path";
+import { removeVaultFolderAt, resolveVaultFolderPath } from "./vault-remove";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
 import {
   admitSupportedPluginInstall,
@@ -306,15 +308,16 @@ function getSecretStore(): SecretStore {
   return secretStore;
 }
 
-/** Resolve a vault-relative path and refuse anything escaping the vault root. */
-function resolveVaultPath(win: BrowserWindow, rel: string): string {
+/** The open vault root for a window, or throw if there isn't one. */
+function requireVaultRoot(win: BrowserWindow): string {
   const session = sessions.get(win.id);
   if (!session) throw new Error("No vault open");
-  const abs = path.resolve(session.root, rel);
-  if (abs !== session.root && !abs.startsWith(session.root + path.sep)) {
-    throw new Error(`Path escapes vault: ${rel}`);
-  }
-  return abs;
+  return session.root;
+}
+
+/** Resolve a vault-relative path and refuse anything escaping the vault root. */
+function resolveVaultPath(win: BrowserWindow, rel: string): string {
+  return resolveInVault(requireVaultRoot(win), rel);
 }
 
 function toRel(root: string, abs: string): string {
@@ -643,6 +646,19 @@ function registerIpc() {
       // Move to OS trash rather than permanent deletion (Obsidian's default).
       await shell.trashItem(abs);
     });
+  });
+
+  // Obsidian's `adapter.rmdir(normalizedPath, recursive)`. Deliberately a
+  // direct filesystem removal rather than a trip through the OS trash like
+  // `vault-delete` above — see `./vault-remove` for why. The vault watcher
+  // started in `startWatcher` is rooted at the vault, so the resulting
+  // `delete`/`delete-folder` events (and the metadata-cache invalidation they
+  // drive) arrive exactly as they do for any other removal; nothing extra to
+  // fire here.
+  ipcMain.handle("vault-rmdir", async (e, rel: string, recursive: boolean) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const abs = resolveVaultFolderPath(requireVaultRoot(win), rel);
+    return withPathLock([abs], () => removeVaultFolderAt(abs, recursive === true));
   });
 
   ipcMain.handle("vault-rename", async (e, rel: string, newRel: string) => {

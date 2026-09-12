@@ -441,6 +441,13 @@ export class Vault extends Events {
       const options = {
         getName: () => this.name,
         exists: (p: string) => this.host.vaultFiles.exists(p),
+        rmdir: async (p: string, recursive: boolean) => {
+          const files = this.host.vaultFiles;
+          if (!files.rmdir) {
+            throw new Error(`Vault.adapter.rmdir is not supported on this platform (cannot remove "${p}")`);
+          }
+          await files.rmdir(p, recursive);
+        },
       };
       this._adapter = this.host.capabilities.nodePlugins
         ? new FileSystemAdapter(this.root, options)

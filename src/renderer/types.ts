@@ -196,16 +196,23 @@ export class TFolderClass {
  * module stays dependency-free; safe defaults keep any bare
  * `new FileSystemAdapter(basePath)` construction working.
  */
+export interface DataAdapterOptions {
+  getName?: () => string;
+  exists?: (normalizedPath: string) => Promise<boolean> | boolean;
+  rmdir?: (normalizedPath: string, recursive: boolean) => Promise<void>;
+}
+
 export class DataAdapter {
   private readonly nameProvider: () => string;
   private readonly existsProvider: (normalizedPath: string) => Promise<boolean> | boolean;
+  private readonly rmdirProvider: (normalizedPath: string, recursive: boolean) => Promise<void>;
 
-  constructor(opts?: {
-    getName?: () => string;
-    exists?: (normalizedPath: string) => Promise<boolean> | boolean;
-  }) {
+  constructor(opts?: DataAdapterOptions) {
     this.nameProvider = opts?.getName ?? (() => "");
     this.existsProvider = opts?.exists ?? (() => false);
+    this.rmdirProvider = opts?.rmdir ?? ((normalizedPath) => Promise.reject(
+      new Error(`Vault.adapter.rmdir is not supported on this platform (cannot remove "${normalizedPath}")`)
+    ));
   }
 
   getName(): string {
@@ -215,18 +222,27 @@ export class DataAdapter {
   exists(normalizedPath: string): Promise<boolean> | boolean {
     return this.existsProvider(normalizedPath);
   }
+
+  /**
+   * Obsidian's `adapter.rmdir(normalizedPath, recursive)`: remove a folder
+   * from the vault outright — no trip through the OS trash, unlike
+   * `Vault.trash`. Plugins call this to clean up folders they created
+   * themselves; obsidian-claude-threads removes a thread's attachment folder
+   * this way when the thread is hard-deleted, and without it the folder leaked
+   * on disk forever (the missing method threw, and the caller swallowed it).
+   *
+   * Rejects rather than resolving when the path escapes the vault, names the
+   * vault root, is not a folder, or — with `recursive` false — is not empty.
+   */
+  rmdir(normalizedPath: string, recursive = false): Promise<void> {
+    return this.rmdirProvider(normalizedPath, recursive);
+  }
 }
 
 export class FileSystemAdapter extends DataAdapter {
   /** Absolute vault path. Public because real Obsidian exposes it directly. */
   basePath: string;
-  constructor(
-    basePath: string,
-    opts?: {
-      getName?: () => string;
-      exists?: (normalizedPath: string) => Promise<boolean> | boolean;
-    }
-  ) {
+  constructor(basePath: string, opts?: DataAdapterOptions) {
     super(opts);
     this.basePath = basePath;
   }
