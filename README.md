@@ -482,6 +482,11 @@ guarded local application. Test only with disposable vault copies. The Google
 Drive provider remains disabled in distributed beta builds until authenticated
 multi-client and durability gates pass; this is not a production sync service.
 
+Sync previews show pending changes. After an immutable-history sync, the summary
+shows remaining work—not completed transfer totals—and reports “Up to date” only
+when the controller confirms it. First-sync approval instructions appear only
+while approval is still required.
+
 The full reverse-engineered specification of the target feature set lives in
 [`docs/spec/`](docs/spec/00-overview.md) — core app behavior, all 30 core
 plugins, the plugin API surface, and on-disk file formats. It doubles as the

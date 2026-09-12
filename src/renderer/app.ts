@@ -87,6 +87,8 @@ import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
+import { formatSyncFeedback, renderSyncFeedback } from "./sync/feedback";
+import type { SyncPreview } from "./sync/types";
 import { stripCommentMetadata } from "./comments/model";
 import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
 
@@ -1264,20 +1266,20 @@ class SettingsModal extends Modal {
     select.addEventListener("change", () => { void (select.value ? this.geodeApp.sync.activate(select.value) : this.geodeApp.sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
     control.appendChild(select);
     this.addRow(container, "Status", status.message ?? status.state).control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
-    if (summary) { const result = document.createElement("p"); result.setAttribute("role", "status"); result.textContent = summary; container.appendChild(result); }
+    if (summary) renderSyncFeedback(container, summary);
     const actions = document.createElement("div"); actions.className = "setting-item-control";
-    const perform = (action: () => Promise<unknown>) => {
+    const perform = (action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => {
       container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button,input,select").forEach(control => { control.disabled = true; });
       void action().then(result => {
         if (result && typeof result === "object" && "uploads" in result && "downloads" in result && "deletes" in result && "conflicts" in result && "skipped" in result) {
-          summary = `${result.uploads} upload, ${result.downloads} download, ${result.deletes} deletions, ${result.conflicts} conflict, ${result.skipped} skipped. Review before approving the first sync.`;
+          summary = formatSyncFeedback(kind, result as SyncPreview, this.geodeApp.sync.isAppendOnly(), this.geodeApp.sync.getHistoryDetails());
         } else summary = "Sync settings updated.";
       }).catch(error => { summary = error instanceof Error ? error.message : String(error); this.geodeApp.notify(summary); })
         .finally(() => { if (container.isConnected) this.renderSyncTab(container, summary); });
     };
-    const addAction = (label: string, action: () => Promise<unknown>) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action)); actions.appendChild(button); };
+    const addAction = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); };
     addAction("Preview", () => this.geodeApp.sync.preview());
-    addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }));
+    addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
     addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
     container.appendChild(actions);
     if (this.geodeApp.sync.isAppendOnly()) {
