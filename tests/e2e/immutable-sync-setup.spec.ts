@@ -36,7 +36,27 @@ test("immutable setup requires explicit create and preview through real settings
     expect(fs.readFileSync(path.join(vault, "Note.md"), "utf8")).toBe("local");
     await page.setViewportSize({ width: 800, height: 800 });
     const setup = modal.locator('.setting-item').filter({ has: page.getByText('Shared vault setup', { exact: true }) });
-    expect((await setup.locator('.setting-item-info').boundingBox())!.width).toBeGreaterThanOrEqual(240);
+    /*
+     * Poll, so the locator is re-resolved on every attempt.
+     *
+     * The Sync tab re-renders asynchronously after Preview, detaching its rows.
+     * A handle resolved before that re-render reports width 0 from
+     * getBoundingClientRect() — and null from boundingBox(), which is why this
+     * failed on CI as "Cannot read properties of null" while passing locally:
+     * it is a race, not a layout bug. Measured live, the row is 360px wide at
+     * this viewport. Re-resolving each attempt measures the attached row rather
+     * than a stale snapshot, leaving the 240px assertion itself untouched.
+     */
+    await expect
+      .poll(
+        async () =>
+          setup
+            .locator('.setting-item-info')
+            .evaluate(element => element.getBoundingClientRect().width)
+            .catch(() => 0),
+        { timeout: 15000 },
+      )
+      .toBeGreaterThanOrEqual(240);
     expect(await modal.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     await expect(setup.getByRole('button', { name: 'Create shared vault', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath("immutable-setup-small.png") });
