@@ -159,6 +159,35 @@ export function stripCommentMetadata(source: string): string {
   return result;
 }
 
+/**
+ * Every syntactically well-formed marker token, matched independently of its
+ * partner. Both alternatives forbid newlines inside the quoted fields so a
+ * crafted `data="..."` can never span lines — `stripCommentMarkerSyntax`'s
+ * line-count guarantee depends on that.
+ */
+const MARKER_TOKEN_RE =
+  /<!-- geode-comment:v1 id="[^"\r\n]+" data="[^"\r\n]*" -->|<!-- geode-comment-end:[^\s<>]+ -->/g;
+
+/**
+ * Remove marker tokens from `text` without requiring them to pair up.
+ *
+ * The document-level helpers (`stripCommentMetadata`, `maskCommentMetadata`,
+ * `commentMarkerRanges`) all refuse to touch a source whose markers do not
+ * parse, so an author can see and repair the damage. That contract is wrong for
+ * the consumers that match or display a *single line* — a line holding one half
+ * of a valid pair is not a broken document, it is just a slice of one — and it
+ * is wrong for read-only presentation, where showing raw marker bytes helps
+ * nobody. Those callers use this instead.
+ *
+ * Markers never contain a line break, so line numbers and line count survive;
+ * only offsets within a line shift. Callers that need offsets preserved want
+ * `maskCommentMetadata`, and callers that need to map back to raw offsets want
+ * `stripCommentMetadataWithMap`.
+ */
+export function stripCommentMarkerSyntax(text: string): string {
+  return text.replace(MARKER_TOKEN_RE, "");
+}
+
 export interface StrippedCommentMetadata {
   text: string;
   /** Map an offset in marker-stripped text back to the original Markdown. */
@@ -368,7 +397,7 @@ function maskNonPlainDelimiterContexts(source: string, delimiter: "$$" | "%%"): 
   if (frontmatter.exists) mask(0, frontmatter.contentStart);
   commentMarkdownParser.parse(source).iterate({
     enter(node) {
-      if (node.name === "Document" || node.name === "Paragraph" || delimiterNodes.has(node.name)) return;
+      if (TRANSPARENT_NODES.has(node.name) || delimiterNodes.has(node.name)) return;
       mask(node.from, node.to);
     },
   });
@@ -397,6 +426,61 @@ function delimitedSyntaxRanges(
   return ranges;
 }
 
+/**
+ * Container nodes that carry no syntax of their own. `protectedRanges` recurses
+ * through these and protects only their structural children, so ordinary prose
+ * inside a heading, list item, or table cell stays commentable.
+ *
+ * Everything not listed here is opaque and protects its whole span — the safe
+ * default. The structural children (`HeaderMark`, `ListMark`, `TaskMarker`,
+ * `TableDelimiter`, `QuoteMark`) are deliberately absent so they stay protected;
+ * a marker spliced into one of those would change how the block parses.
+ *
+ * `Task` wraps a task list item's `[x]` plus its text, and `TableDelimiter`
+ * covers both the `|` separators and the whole `| --- | :-: |` row — both
+ * verified against the real GFM tree rather than assumed.
+ */
+const TRANSPARENT_NODES = new Set([
+  "Document",
+  "Paragraph",
+  "ATXHeading1", "ATXHeading2", "ATXHeading3", "ATXHeading4", "ATXHeading5", "ATXHeading6",
+  "SetextHeading1", "SetextHeading2",
+  "BulletList", "OrderedList", "ListItem", "Task",
+  "Table", "TableHeader", "TableRow", "TableCell",
+]);
+
+/** Human-readable names for the rejection message; falls back to the node name. */
+const PROTECTED_KIND_LABELS: Record<string, string> = {
+  HeaderMark: "the heading marker",
+  ListMark: "the list marker",
+  TaskMarker: "the task checkbox",
+  TableDelimiter: "table syntax",
+  QuoteMark: "the blockquote marker",
+  Blockquote: "a blockquote",
+  FencedCode: "fenced code",
+  CodeBlock: "indented code",
+  InlineCode: "inline code",
+  CodeMark: "inline code",
+  Link: "a link",
+  LinkMark: "a link",
+  URL: "a link",
+  Image: "an image",
+  HTMLTag: "raw HTML",
+  HTMLBlock: "raw HTML",
+  Comment: "an HTML comment",
+  CommentBlock: "an HTML comment",
+  Emphasis: "emphasis syntax",
+  StrongEmphasis: "emphasis syntax",
+  EmphasisMark: "emphasis syntax",
+  Strikethrough: "strikethrough syntax",
+  HorizontalRule: "a horizontal rule",
+  BlockID: "a block reference",
+};
+
+function protectedKind(nodeName: string): string {
+  return PROTECTED_KIND_LABELS[nodeName] ?? nodeName;
+}
+
 function protectedRanges(source: string): Array<{ from: number; to: number; kind: string }> {
   const ranges: Array<{ from: number; to: number; kind: string }> = [];
   const frontmatter = getFrontMatterInfo(source);
@@ -411,19 +495,15 @@ function protectedRanges(source: string): Array<{ from: number; to: number; kind
   ranges.push(...delimitedSyntaxRanges(maskNonPlainDelimiterContexts(source, "%%"), "%%", "Obsidian comment"));
   commentMarkdownParser.parse(source).iterate({
     enter(node) {
-      if (node.name === "Document" || node.name === "Paragraph") return;
-      ranges.push({ from: node.from, to: node.to, kind: node.name });
+      if (TRANSPARENT_NODES.has(node.name)) return;
+      ranges.push({ from: node.from, to: node.to, kind: protectedKind(node.name) });
       // Inline HTML's tags are sibling nodes around their content. Treat the
       // containing paragraph conservatively, since text between paired tags
       // is still part of the raw HTML construct.
-      if (node.name === "HTMLTag" || node.name === "TablePipe") {
+      if (node.name === "HTMLTag") {
         let parent = node.node.parent;
         while (parent && parent.name !== "Paragraph") parent = parent.parent;
-        if (parent) ranges.push({
-          from: parent.from,
-          to: parent.to,
-          kind: node.name === "HTMLTag" ? "raw HTML" : "table syntax",
-        });
+        if (parent) ranges.push({ from: parent.from, to: parent.to, kind: "raw HTML" });
       }
     },
   });
@@ -451,8 +531,66 @@ export function validateCommentRange(source: string, range: { from: number; to: 
   if (source.slice(from, to).includes("<!-- geode-comment")) throw new CommentFormatError("Selections cannot contain comment markers");
   const selected = source.slice(from, to);
   if (/\r?\n[ \t]*\r?\n/.test(selected)) throw new CommentFormatError("Comments must stay within one text block");
-  if (/(?:\*\*|__|~~|`|\[|\]|!\[)|(?:^|\n)#{1,6}[ \t]|(?:^|\n)[ \t]*(?:>|[-+*][ \t]|\d+[.)][ \t])/.test(selected)) {
+  // Block-level syntax (headings, list marks, table pipes) is the node walk's
+  // job — it protects the exact marker spans instead of the whole construct, so
+  // prose inside those blocks stays commentable. This regex only guards inline
+  // delimiters, which the walk reports as spans but which can also be typed
+  // unbalanced inside otherwise-plain text.
+  if (/(?:\*\*|__|~~|`|\[|\]|!\[)/.test(selected)) {
     throw new CommentFormatError("Selections cannot contain structural Markdown syntax");
   }
   return { from, to };
+}
+
+/**
+ * Best commentable sub-range of `range`, or `null` when nothing survives.
+ *
+ * A selection dragged across a heading's `#`, a list item's bullet, or a table
+ * pipe is trimmed to the prose it overlaps instead of being rejected outright.
+ * `validateCommentRange` stays the single authority on what is legal — every
+ * candidate produced here is confirmed by it — so the two can never disagree.
+ */
+export function narrowCommentRange(
+  source: string,
+  range: { from: number; to: number },
+): { from: number; to: number } | null {
+  const from = Math.max(0, Math.min(source.length, Math.trunc(range.from)));
+  const to = Math.max(0, Math.min(source.length, Math.trunc(range.to)));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return null;
+
+  // The whole selection is usually already legal; skip the subtraction work.
+  try { return validateCommentRange(source, { from, to }); } catch { /* fall through */ }
+
+  const parsed = parseCommentThreads(source);
+  if (parsed.errors.length) return null;
+  const blocked = [
+    ...parsed.threads.map((thread) => ({ from: thread.markerFrom, to: thread.markerTo })),
+    ...protectedRanges(maskCommentSyntax(source)),
+  ]
+    .filter((blockedRange) => blockedRange.from < to && blockedRange.to > from)
+    .sort((a, b) => a.from - b.from);
+
+  // Walk the gaps between blocked spans inside the selection.
+  const candidates: Array<{ from: number; to: number }> = [];
+  let cursor = from;
+  for (const span of blocked) {
+    if (span.from > cursor) candidates.push({ from: cursor, to: Math.min(span.from, to) });
+    cursor = Math.max(cursor, span.to);
+    if (cursor >= to) break;
+  }
+  if (cursor < to) candidates.push({ from: cursor, to });
+
+  let best: { from: number; to: number } | null = null;
+  for (const candidate of candidates) {
+    // Trim whitespace the subtraction left behind (e.g. the space after `# `).
+    let start = candidate.from;
+    let end = Math.min(candidate.to, to);
+    while (start < end && /\s/.test(source[start])) start += 1;
+    while (end > start && /\s/.test(source[end - 1])) end -= 1;
+    if (start >= end) continue;
+    let confirmed: { from: number; to: number };
+    try { confirmed = validateCommentRange(source, { from: start, to: end }); } catch { continue; }
+    if (!best || confirmed.to - confirmed.from > best.to - best.from) best = confirmed;
+  }
+  return best;
 }

@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { Marked } from "marked";
+import { GFM, parser } from "@lezer/markdown";
 import {
   CommentFormatError,
   createCommentMarkers,
+  narrowCommentRange,
   parseCommentThreads,
   stripCommentMetadata,
   maskCommentMetadata,
   validateCommentRange,
 } from "../../src/renderer/comments/model";
+import { geodeCommentMarkerSyntax } from "../../src/renderer/comments/marker-syntax";
 import { MarkdownRenderer } from "../../src/renderer/markdown/render";
 import type { App } from "../../src/renderer/app";
 
@@ -128,7 +131,10 @@ describe("comment range validation", () => {
     ["tilde fence", "~~~js\ncode\n~~~", 6, 10],
     ["indented code", "    code", 4, 8],
     ["multi-backtick", "Use ``code``", 6, 10],
-    ["table delimiter", "| a | b |", 2, 3],
+    ["table pipe", "| a | b |", 0, 1],
+    ["range spanning a table pipe", "| a | b |", 2, 7],
+    ["table delimiter row", "| a | b |\n| --- | --- |\n| c | d |", 12, 15],
+    ["range spanning a real table pipe", "| a | b |\n| --- | --- |\n| c | d |", 26, 31],
     ["wikilink text", "[[Target]]", 2, 8],
     ["tag text", "A #topic here", 3, 8],
     ["URL text", "See https://example.com now", 12, 19],
@@ -236,5 +242,169 @@ describe("comment range validation", () => {
 
     expect(await renderDocument(forced)).toBe(await renderDocument(source));
     expect(() => validateCommentRange(source, { from, to: from + selected.length })).toThrow(CommentFormatError);
+  });
+});
+
+/**
+ * Prose inside a heading, list item, or table cell is commentable: only the
+ * structural marker itself (`#`, the bullet, the `|`) is off-limits. Each case
+ * anchors a word and checks the three things that must hold — the range is
+ * accepted, Geode renders the commented document identically, and the thread
+ * round-trips back to the exact anchor text.
+ */
+describe("comments in structural blocks", () => {
+  const CONTEXTS: Array<[string, string, string]> = [
+    ["h1 first word", "# Alpha beta gamma", "Alpha"],
+    ["h1 middle word", "# Alpha beta gamma", "beta"],
+    ["h1 last word", "# Alpha beta gamma", "gamma"],
+    ["h1 whole text", "# Alpha beta gamma", "Alpha beta gamma"],
+    ["h3", "### Alpha beta gamma", "beta"],
+    ["h6", "###### Alpha beta gamma", "beta"],
+    ["setext heading", "Alpha beta gamma\n================", "beta"],
+    ["setext heading first word", "Alpha beta gamma\n================", "Alpha"],
+    ["bullet first word", "- alpha beta gamma", "alpha"],
+    ["bullet middle word", "- alpha beta gamma", "beta"],
+    ["star bullet", "* alpha beta gamma", "beta"],
+    ["ordered list", "1. alpha beta gamma", "alpha"],
+    ["ordered paren list", "1) alpha beta gamma", "beta"],
+    ["task list", "- [ ] alpha beta gamma", "alpha"],
+    ["checked task list", "- [x] alpha beta gamma", "beta"],
+    ["second list item", "- first item\n- second item\n- third item", "second"],
+    ["nested list item", "- outer item\n  - inner alpha beta", "inner"],
+    ["nested ordered item", "1. outer item\n   1. inner alpha beta", "alpha"],
+    ["table header cell", "| head a | head b |\n| --- | --- |\n| alpha | beta |", "head b"],
+    ["table body cell", "| head a | head b |\n| --- | --- |\n| alpha | beta |", "alpha"],
+    ["table body cell word", "| head a | head b |\n| --- | --- |\n| one two | beta |", "two"],
+  ];
+
+  it.each(CONTEXTS)("accepts and round-trips a comment on %s", async (_label, source, word) => {
+    const from = source.indexOf(word);
+    const to = from + word.length;
+    const markers = createCommentMarkers("structural", { messages: [] });
+    const commented = source.slice(0, from) + markers.open + source.slice(from, to) + markers.close + source.slice(to);
+
+    expect(validateCommentRange(source, { from, to })).toEqual({ from, to });
+    expect(await renderDocument(commented)).toBe(await renderDocument(source));
+    expect(stripCommentMetadata(commented)).toBe(source);
+    const parsed = parseCommentThreads(commented);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.threads).toHaveLength(1);
+    expect(parsed.threads[0].anchorText).toBe(word);
+  });
+
+  it.each([
+    ["heading marker", "# Alpha beta", 0, 1],
+    ["list bullet", "- alpha beta", 0, 1],
+    ["ordered list marker", "1. alpha beta", 0, 2],
+    ["task checkbox", "- [ ] alpha beta", 2, 5],
+    ["setext underline", "Alpha beta\n==========", 11, 21],
+    ["range spanning the heading marker", "# Alpha beta", 0, 7],
+  ])("still rejects %s", (_label, source, from, to) => {
+    expect(() => validateCommentRange(source, { from, to })).toThrow(CommentFormatError);
+  });
+});
+
+describe("narrowCommentRange", () => {
+  it.each([
+    ["a heading line selected whole", "# Alpha beta", "Alpha beta"],
+    ["a bullet line selected whole", "- alpha beta", "alpha beta"],
+    ["an ordered item selected whole", "1. alpha beta", "alpha beta"],
+    ["a task item selected whole", "- [ ] alpha beta", "alpha beta"],
+    ["a table row selected whole", "| a | b |\n| --- | --- |\n| alpha | beta |", "alpha"],
+  ])("trims %s to its prose", (_label, source, expected) => {
+    const lineFrom = source.lastIndexOf("\n") + 1;
+    const narrowed = narrowCommentRange(source, { from: lineFrom, to: source.length });
+    expect(narrowed).not.toBeNull();
+    expect(source.slice(narrowed!.from, narrowed!.to)).toBe(expected);
+    // Whatever it returns must itself be a legal range.
+    expect(validateCommentRange(source, narrowed!)).toEqual(narrowed);
+  });
+
+  it("returns an already-legal range unchanged", () => {
+    const source = "# Alpha beta";
+    const from = source.indexOf("beta");
+    expect(narrowCommentRange(source, { from, to: from + 4 })).toEqual({ from, to: from + 4 });
+  });
+
+  it("prefers the longest commentable run when a selection straddles protected syntax", () => {
+    const source = "one `code` three four";
+    const narrowed = narrowCommentRange(source, { from: 0, to: source.length });
+    expect(narrowed).not.toBeNull();
+    expect(source.slice(narrowed!.from, narrowed!.to)).toBe("three four");
+  });
+
+  it.each([
+    ["a fenced code block", "```ts\nconst x = 1\n```", 6, 16],
+    ["an empty selection", "# Alpha beta", 4, 4],
+    ["a selection of only the heading marker", "# Alpha beta", 0, 2],
+  ])("returns null for %s", (_label, source, from, to) => {
+    expect(narrowCommentRange(source, { from, to })).toBeNull();
+  });
+
+  it("anchors to a single item when a selection spans two list items", () => {
+    // Deliberate: an anchor cannot straddle a list mark, so a multi-item drag
+    // resolves to the longest single item rather than being refused. Earlier
+    // candidates win ties, so the choice is stable rather than arbitrary.
+    const source = "- first item\n- second item";
+    const narrowed = narrowCommentRange(source, { from: 0, to: source.length });
+    expect(narrowed).not.toBeNull();
+    expect(source.slice(narrowed!.from, narrowed!.to)).toBe("second item");
+  });
+
+  it("returns null rather than throwing when the document has malformed markers", () => {
+    const source = 'A <!-- geode-comment:v1 id="x" data="not-json" -->B';
+    expect(narrowCommentRange(source, { from: 0, to: 1 })).toBeNull();
+  });
+});
+
+/**
+ * A marker's bytes begin with `<!--`, which is CommonMark's HTML-block start
+ * condition. Sitting on a line's first content position that would swallow the
+ * whole line — silently breaking Live Preview's list and heading decorations,
+ * which read the raw editor document rather than the stripped one.
+ * `geodeCommentMarkerSyntax` is what prevents it, so these assert block shape is
+ * identical with and without the marker.
+ */
+describe("editor syntax tree with markers at a line's first content position", () => {
+  const treeParser = parser.configure([GFM, geodeCommentMarkerSyntax]);
+
+  // Nodes lying entirely inside a marker's own bytes are the marker's business
+  // and are dropped. A marker that corrupted the line would produce a node
+  // spanning *beyond* its span (e.g. a CommentBlock swallowing the whole list
+  // item), which survives this filter and fails the comparison.
+  const blockShape = (source: string): string[] => {
+    const markerSpans = parseCommentThreads(source).threads.flatMap((thread) => [
+      { from: thread.openFrom, to: thread.openTo },
+      { from: thread.closeFrom, to: thread.closeTo },
+    ]);
+    const inMarker = (from: number, to: number) =>
+      markerSpans.some((span) => from >= span.from && to <= span.to);
+    const shape: string[] = [];
+    treeParser.parse(source).iterate({
+      enter(node) {
+        if (node.name === "GeodeCommentMarker" || inMarker(node.from, node.to)) return;
+        shape.push(node.name);
+      },
+    });
+    return shape;
+  };
+
+  it.each([
+    ["paragraph", "Alpha beta gamma", "Alpha"],
+    ["bullet item", "- alpha beta gamma", "alpha"],
+    ["ordered item", "1. alpha beta gamma", "alpha"],
+    ["task item", "- [ ] alpha beta gamma", "alpha"],
+    ["nested item", "- outer item\n  - inner alpha", "inner"],
+    ["second list item", "- first item\n- second item", "second"],
+    ["setext heading", "Alpha beta gamma\n================", "Alpha"],
+    ["atx heading", "# Alpha beta gamma", "Alpha"],
+    ["table cell", "| a | b |\n| --- | --- |\n| alpha | beta |", "alpha"],
+  ])("leaves %s block structure unchanged", (_label, source, word) => {
+    const from = source.indexOf(word);
+    const to = from + word.length;
+    const markers = createCommentMarkers("first-offset", { messages: [] });
+    const commented = source.slice(0, from) + markers.open + source.slice(from, to) + markers.close + source.slice(to);
+
+    expect(blockShape(commented)).toEqual(blockShape(source));
   });
 });

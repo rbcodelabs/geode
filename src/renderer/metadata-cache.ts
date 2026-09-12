@@ -3,7 +3,7 @@ import { Events } from "./events";
 import { Vault } from "./vault";
 import { projectCanvasFileLinks } from "./canvas/canvas-data";
 import { recordMeasure, withPerfMark } from "./perf-instrumentation";
-import { maskCommentMetadata } from "./comments/model";
+import { maskCommentMetadata, stripCommentMarkerSyntax } from "./comments/model";
 import {
   CachedMetadata,
   FootnoteRefCache,
@@ -469,6 +469,15 @@ async function findUnlinkedMentionsCooperatively(
   options: Required<Pick<UnlinkedMentionScanOptions, "chunkSize" | "yieldToEventLoop">>,
   assertCurrent: () => void
 ): Promise<UnlinkedMention[]> {
+  // Mirror `findUnlinkedMentions`: strip markers so one cannot split a note
+  // name or leak into a snippet. Every offset below is derived from the
+  // stripped text, so `bodyStart` — which arrives as a raw-source offset — is
+  // re-measured against the stripped prefix rather than assumed unchanged.
+  const stripped = stripCommentMarkerSyntax(text);
+  if (stripped !== text) {
+    bodyStart = stripCommentMarkerSyntax(text.slice(0, bodyStart)).length;
+    text = stripped;
+  }
   const lineStarts = [0];
   const countByLine = new Map<number, number>();
   const maskRanges = await buildMentionMaskRanges(
@@ -555,6 +564,12 @@ export function findUnlinkedMentions(text: string, names: string[]): UnlinkedMen
     .map(escapeRegExp)
     .join("|");
   const re = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${pattern})(?![\\p{L}\\p{N}_])`, "giu");
+  // A comment marker spliced into the middle of a note's name would break the
+  // word-boundary match and would show up verbatim in the snippet. Removing
+  // markers outright (rather than masking them to spaces, which would still
+  // split the name) is safe here because results are addressed by line, and
+  // markers never contain a line break.
+  text = stripCommentMarkerSyntax(text);
   // Both masking passes preserve string length/newlines, so line N of the
   // masked text lines up exactly with line N of the original.
   const maskedLines = maskWikilinks(maskCode(text)).split("\n");
@@ -583,6 +598,15 @@ export function parseMetadata(
   text: string,
   maxBodyBytesForScan: number = DEFAULT_METADATA_SCAN_CAP_BYTES
 ): CachedMetadata {
+  // Masking keeps every offset (and therefore every `position`) addressed to
+  // the raw Markdown, at the cost of leaving a space-run where each marker was.
+  // That is invisible in the position-only caches but not in the one field that
+  // carries extracted *text*: a heading's `heading`. The raw source is kept so
+  // the heading text can be re-derived from it — see the heading branch below.
+  // Nothing else here extracts text from a commentable region: link targets and
+  // display text, tags, and frontmatter aliases all come out of syntax that
+  // `validateCommentRange` protects, so no marker can land inside them.
+  const rawText = text;
   text = maskCommentMetadata(text);
   const meta: CachedMetadata = {
     // Left undefined (key absent) unless real frontmatter is parsed below —
@@ -755,8 +779,15 @@ export function parseMetadata(
       if (type === "heading") {
         flush();
         stack.length = 0;
+        // `h[2]` came off the masked line, so an anchored comment inside the
+        // heading text shows up as a run of spaces. Re-match the raw line with
+        // the markers removed to recover the prose the author typed. Detection
+        // and `level` stay on the masked match: a heading whose entire text is
+        // a detached comment still masks to a non-empty run, and must keep
+        // being recorded as the heading it is.
+        const cleanHeading = stripCommentMarkerSyntax(rawText.slice(lineStart, lineEnd)).match(HEADING_RE);
         meta.headings.push({
-          heading: h![2].trim(),
+          heading: (cleanHeading?.[2] ?? h![2]).trim(),
           level: h![1].length,
           position: offsetToLoc(lineStarts, lineStart, lineEnd),
         });

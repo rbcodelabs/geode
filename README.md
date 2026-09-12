@@ -5,10 +5,48 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.17.1). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.17.2). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.17.2: comment on headings, list items and table cells
+
+**Comments are no longer limited to ordinary paragraphs.** You can now anchor a
+thread to prose inside a heading, a list item (bullet, ordered, task, nested) or
+a table cell. Previously any text that was not a plain paragraph was refused:
+the rule protected *every* node that was not a paragraph, so the words in a
+heading were treated as untouchable along with the `#` that made it one.
+
+Only the structural syntax itself is off-limits now — a heading's `#`, a list
+bullet or `[ ]` checkbox, a table's `|` separators and its delimiter row. Code,
+links, images, math, raw HTML, blockquotes and Obsidian comments are still
+protected in full. And a selection that merely *straddles* structural syntax —
+a triple-click that sweeps up a heading's `#`, or a drag starting on a bullet —
+is now trimmed automatically to the prose it covers rather than rejected
+outright. When a selection genuinely has nothing commentable left in it, the
+rejection names the specific reason instead of failing generically.
+
+Widening this surfaced two defects that had been latent all along:
+
+- **Live Preview decorations could silently disappear.** Comment markers begin
+  with `<!--`, which is CommonMark's HTML-block start condition, so a marker at
+  a line's first content position made the parser treat the whole line as an
+  HTML block — dropping that line's list and heading decorations. This already
+  affected plain paragraphs; it simply had never been hit, because nothing else
+  reads the unstripped document.
+- **A commented heading broke its own links.** Heading text is extracted from a
+  copy in which markers are masked to spaces to keep offsets stable — correct
+  for positions, wrong for text. A commented heading yielded heading text with
+  a run of spaces buried in it, which broke `[[Note#Heading]]` resolution,
+  heading bookmarks and transclusion.
+
+One known limit: a comment anchored inside a **table cell** shows no inline
+highlight in Live Preview, because tables are rendered there as a widget rather
+than as decorated source, leaving no source text to highlight — the same reason
+Reading view never highlights anchors. The thread itself is unaffected; it
+persists in the note, appears in the Comments pane, and replies and resolves
+normally.
 
 ## New in v0.17.1: plugins can use `fetch()`, and links into Project folders open in-app
 
@@ -156,8 +194,10 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
-  recovery. Comments travel inside the note; Live Preview and Reading view hide
-  their markers, while Source mode exposes them.
+  recovery. Select text and press <kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> (or
+  run *Comments: Add comment to selection*); headings, list items and table cells
+  can be annotated as well as ordinary prose. Comments travel inside the note;
+  Live Preview and Reading view hide their markers, while Source mode exposes them.
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows

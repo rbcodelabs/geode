@@ -3705,7 +3705,13 @@ export class App {
   promptCommentForSelection(view: MarkdownView): void {
     const file = view.file;
     const range = view.getSelectedRange();
-    if (!file || !range) { this.notify("Select plain Markdown text to add a comment"); return; }
+    if (!file || !range) {
+      // Report why, not just that it failed. A selection that overlaps a
+      // heading marker or bullet is auto-narrowed, so anything still rejected
+      // here has a specific cause worth naming.
+      this.notify(view.describeCommentRangeRejection() ?? "Select text in a note to add a comment");
+      return;
+    }
     new PromptModal(this, {
       placeholder: "Add a comment…",
       onSubmit: (body) => void this.comments.create(file, range, body, { type: "user", name: "You" })

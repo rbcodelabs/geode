@@ -111,6 +111,100 @@ test("comments persist on disk, decorate Live Preview, hide in Reading view, and
   }
 });
 
+test("comments anchor inside headings, list items and table cells without disturbing them", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-comments-struct-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-comments-struct-ud-"));
+  const notePath = path.join(vaultDir, "Review.md");
+  fs.writeFileSync(
+    notePath,
+    [
+      "# Release checklist",
+      "",
+      "- [ ] tagged the build",
+      "- shipped the notes",
+      "",
+      "| stage | owner |",
+      "| --- | --- |",
+      "| canary | Rick |",
+      "",
+    ].join("\n"),
+  );
+  // A link to the heading proves the metadata cache still reports clean heading
+  // text once a marker sits inside it.
+  fs.writeFileSync(path.join(vaultDir, "Index.md"), "See [[Review#Release checklist]].\n");
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.locator('.nav-file-title[data-path="Review.md"]').click();
+
+    // Anchor the *first* word of a task item — the position that used to turn
+    // the whole line into an HTML block — plus a heading word and a table cell.
+    const anchors = await window.evaluate(async () => {
+      const app = (window as any).app;
+      const view = app.getActiveMarkdownView();
+      const ids: Record<string, string> = {};
+      for (const [key, word] of [["heading", "checklist"], ["task", "tagged"], ["bullet", "shipped"], ["cell", "canary"]]) {
+        const source = view.getText();
+        const from = source.indexOf(word);
+        const thread = await app.comments.create(
+          view.file,
+          { from, to: from + word.length },
+          `note on ${key}`,
+          { type: "user", name: "Rick" },
+        );
+        ids[key] = thread.id;
+      }
+      return ids;
+    });
+
+    for (const [key, word] of [["heading", "checklist"], ["task", "tagged"], ["bullet", "shipped"]]) {
+      await expect(window.locator(`.cm-comment-anchor[data-comment-id="${anchors[key]}"]`)).toHaveText(word);
+    }
+
+    // A table is replaced wholesale by a widget in Live Preview, so cell text is
+    // rendered HTML rather than decorated source and carries no anchor highlight
+    // — the same as Reading view, which strips markers outright. The thread is
+    // still real: it persists, lists, and resolves. What must not happen is
+    // marker bytes leaking into the rendered cell.
+    const cellRow = window.locator(".cm-editor table td", { hasText: "canary" });
+    await expect(cellRow).toBeVisible();
+    expect(await cellRow.innerText()).not.toContain("geode-comment");
+    expect(await window.evaluate(() => {
+      const app = (window as any).app;
+      const view = app.getActiveMarkdownView();
+      return app.comments.list(view.file, { includeResolved: true }).map((t: { anchorText: string }) => t.anchorText);
+    })).toEqual(expect.arrayContaining(["canary"]));
+
+    // The task checkbox only renders when TaskMarker survives the parse, so its
+    // presence is the regression guard for a marker at first content position.
+    await expect(window.locator(".cm-task-checkbox")).toHaveCount(1);
+    expect(await window.locator(".cm-editor").innerText()).not.toContain("geode-comment");
+
+    // Heading text in the metadata cache must be free of marker bytes and of the
+    // space-run that masking would otherwise leave behind.
+    expect(await window.evaluate(() => {
+      const app = (window as any).app;
+      const file = app.vault.getFileByPath("Review.md");
+      return app.metadataCache.getFileCache(file)?.headings?.map((h: { heading: string }) => h.heading) ?? [];
+    })).toEqual(["Release checklist"]);
+
+    await window.getByRole("button", { name: "Toggle reading view (Cmd/Ctrl+E)" }).click();
+    const reading = window.locator(".markdown-reading-view");
+    await expect(reading.locator("h1")).toHaveText("Release checklist");
+    await expect(reading.locator("li")).toHaveCount(2);
+    await expect(reading.locator("td", { hasText: "canary" })).toBeVisible();
+    expect(await reading.innerText()).not.toContain("geode-comment");
+
+    await expect.poll(() => fs.readFileSync(notePath, "utf8")).toContain("<!-- geode-comment:v1");
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("plain Enter edits prose inside an existing comment anchor", async () => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-comments-enter-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-comments-enter-ud-"));
