@@ -18,6 +18,7 @@ import {
 } from "./mobile-plugin-runtime";
 import type { PluginFileSet } from "./host/contracts";
 import { ThreadsProjectsAdapter, threadsProjectSource, portableThreadsProjects, observeThreadsData } from "./integrations/threads-projects";
+import { pluginFetch } from "./plugin-fetch";
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => Plugin;
 
@@ -71,6 +72,21 @@ const nodeRequire: ((id: string) => unknown) | undefined = (
  * The plugin body runs in the renderer's own JS realm via `Function(...)`
  * (the CSP allows this — see index.html). This is a deliberate trust
  * decision consistent with Obsidian: locally-installed plugins are trusted.
+ *
+ * `fetch` is passed in as an explicit fourth parameter (`pluginFetch`, from
+ * `./plugin-fetch`) for the same reason `require` is: `new Function(...)`
+ * does NOT close over this module's lexical scope, so the only way to give
+ * the plugin body a non-default binding for an identifier is to name it as
+ * a parameter — it then shadows the ambient global of the same name for
+ * every top-level statement and nested function/class in the plugin's
+ * compiled bundle, exactly like `require` does today. A bare `fetch(...)`
+ * call inside a plugin would otherwise resolve to `window.fetch`, which the
+ * renderer's CSP blocks for any remote origin (no `connect-src` override —
+ * see `tests/unit/renderer-csp.test.ts`). This does NOT touch `window.fetch`
+ * itself or the CSP; it only rebinds the `fetch` identifier inside this one
+ * `Function` body. Do not "fix" a fetch problem here by overriding
+ * `window.fetch` globally — that would silently defeat the CSP for
+ * everything else in the app (first-party chrome, embedded content, …).
  */
 export function instantiatePluginClass(code: string, pluginId: string): PluginConstructor {
   const moduleObj: { exports: any } = { exports: {} };
@@ -92,8 +108,8 @@ export function instantiatePluginClass(code: string, pluginId: string): PluginCo
     );
   };
   // eslint-disable-next-line no-new-func -- deliberate CJS-style plugin loader, see doc comment above
-  const run = new Function("module", "exports", "require", code);
-  run(moduleObj, moduleObj.exports, requireShim);
+  const run = new Function("module", "exports", "require", "fetch", code);
+  run(moduleObj, moduleObj.exports, requireShim, pluginFetch);
   const exported = moduleObj.exports?.default ?? moduleObj.exports;
   if (typeof exported !== "function") {
     throw new Error(

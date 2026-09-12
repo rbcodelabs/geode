@@ -1,5 +1,6 @@
 import * as ObsidianAPI from "./api/obsidian";
 import * as GeodeAPI from "./api/geode";
+import { pluginFetch } from "./plugin-fetch";
 import * as CodeMirrorState from "@codemirror/state";
 import * as CodeMirrorView from "@codemirror/view";
 import * as CodeMirrorCommands from "@codemirror/commands";
@@ -148,10 +149,17 @@ export async function compileMobilePluginModule(code: string, pluginId: string):
   const moduleObj: { exports: unknown } = { exports: {} };
   const requireShim = (specifier: string) => resolveMobilePluginModule(pluginId, specifier);
   // Plugin bundles are installed code, evaluated only after mobile admission.
+  // `fetch` is shadowed the same way `instantiatePluginClass` (the desktop
+  // loader) shadows it — see its doc comment for why `new Function(...)`
+  // needs an explicit parameter rather than a global override. Today this
+  // Capacitor shell has no privileged bridge for `pluginFetch` to delegate
+  // to (no `window.geode.pluginFetch`), so it falls back to native `fetch`
+  // — unchanged behavior — but plugin bundles are wired for parity so a
+  // future native bridge only needs to fill in that one function.
   // eslint-disable-next-line no-new-func
-  const run = new Function("module", "exports", "require", `"use strict";\n${code}`);
+  const run = new Function("module", "exports", "require", "fetch", `"use strict";\n${code}`);
   return () => {
-    run(moduleObj, moduleObj.exports, requireShim);
+    run(moduleObj, moduleObj.exports, requireShim, pluginFetch);
     const candidate = (moduleObj.exports as { default?: unknown })?.default ?? moduleObj.exports;
     if (typeof candidate !== "function") {
       throw new Error(`Mobile plugin "${pluginId}" main module must export a Plugin class.`);
