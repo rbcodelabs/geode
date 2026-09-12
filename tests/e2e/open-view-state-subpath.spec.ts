@@ -41,6 +41,11 @@ const MAIN_JS = `
           path: leaf.view.getFile ? leaf.view.getFile().path : null,
           scrollTop: scroller ? Math.round(scroller.scrollTop) : -1,
           cursor: leaf.view.editor ? leaf.view.editor.state.selection.main.head : -1,
+          // Reported so a failure says why: the heading branch of
+          // resolveSubpathOffset reads the metadata cache, which startup
+          // populates asynchronously. (No backticks here - this whole
+          // plugin body is a template literal.)
+          headings: this.app.metadataCache.getHeadings(file).length,
         };
       };
       window.__subpathProbeReady = true;
@@ -80,16 +85,36 @@ test.describe("OpenViewState.eState.subpath", () => {
       expect(plain.path).toBe("Long.md");
       expect(plain.scrollTop, "no subpath must not scroll").toBe(0);
 
+      /**
+       * Poll rather than assert a single shot. Landing on the anchor depends
+       * on a chain that startup completes asynchronously — the plugin loading,
+       * the metadata cache indexing `Long.md` (the heading branch reads it),
+       * the view mounting, and CodeMirror measuring the scroll. A one-shot
+       * `evaluate` plus a fixed two-frame wait assumes every link is ready and
+       * fails spuriously under load when one is not. Polling still fails for
+       * real if the scroll never happens, so this hardens the timing without
+       * weakening the assertion. `headings` is reported to make a genuine
+       * failure self-diagnosing.
+       */
+      const openAt = async (subpath: string, expectedCursor: number) =>
+        await expect
+          .poll(
+            async () => {
+              const r = await window.evaluate(
+                (s) => (window as any).__openWithSubpath(s),
+                subpath
+              );
+              return { path: r.path, cursor: r.cursor, scrolled: r.scrollTop > 0 };
+            },
+            { timeout: 20_000 }
+          )
+          .toEqual({ path: "Long.md", cursor: expectedCursor, scrolled: true });
+
       // Heading anchor.
-      const heading = await window.evaluate(() => (window as any).__openWithSubpath("#Target Heading"));
-      expect(heading.path).toBe("Long.md");
-      expect(heading.cursor, "cursor lands on the heading").toBe(headingOffset);
-      expect(heading.scrollTop, "view actually scrolled").toBeGreaterThan(0);
+      await openAt("#Target Heading", headingOffset);
 
       // Block anchor.
-      const block = await window.evaluate(() => (window as any).__openWithSubpath("#^block-1"));
-      expect(block.cursor, "cursor lands on the anchored block").toBe(blockOffset);
-      expect(block.scrollTop, "view actually scrolled").toBeGreaterThan(0);
+      await openAt("#^block-1", blockOffset);
 
       // An anchor that does not resolve leaves the view alone rather than erroring.
       const missing = await window.evaluate(() => (window as any).__openWithSubpath("#No Such Heading"));

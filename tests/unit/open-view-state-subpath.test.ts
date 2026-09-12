@@ -22,12 +22,13 @@ function heading(text: string, level: number, offset: number): HeadingCache {
   } as HeadingCache;
 }
 
-/** An `App` with only the two collaborators `resolveSubpathOffset` touches. */
+/** An `App` with only the collaborators `resolveSubpathOffset` touches. */
 function stubApp(headings: HeadingCache[], content: string): App {
   const app = Object.create(App.prototype) as App;
   Object.assign(app, {
     metadataCache: { getHeadings: () => headings },
     vault: { cachedRead: async () => content },
+    settings: { metadataScanCapBytes: 1_000_000 },
   });
   return app;
 }
@@ -61,6 +62,40 @@ describe("App.resolveSubpathOffset", () => {
     expect(await app.resolveSubpathOffset(FILE, "#")).toBeNull();
     expect(await app.resolveSubpathOffset(FILE, "")).toBeNull();
     expect(await app.resolveSubpathOffset(FILE, "#^")).toBeNull();
+  });
+
+  /**
+   * The vault index is built asynchronously during startup, so a plugin that
+   * opens `Note#Heading` early — restoring a context panel, handling a deep
+   * link — can reach the resolver before the file is indexed. Observed in the
+   * Electron harness: with a cold cache the heading resolved to null and the
+   * view stayed at offset 0, which is the very bug this resolver exists to
+   * fix. Falling back to the cache's own parser makes resolution independent
+   * of index progress.
+   */
+  it("falls back to parsing the file when the metadata cache is still cold", async () => {
+    const app = stubApp([], CONTENT);
+    expect(await app.resolveSubpathOffset(FILE, "#Beta Section")).toBe(CONTENT.indexOf("## Beta Section"));
+    expect(await app.resolveSubpathOffset(FILE, "#Alpha")).toBe(0);
+  });
+
+  it("still returns null for a missing heading when the cache is cold", async () => {
+    const app = stubApp([], CONTENT);
+    expect(await app.resolveSubpathOffset(FILE, "#Nonexistent")).toBeNull();
+  });
+
+  it("does not re-read the file when the cache already has headings", async () => {
+    let reads = 0;
+    const app = Object.create(App.prototype) as App;
+    Object.assign(app, {
+      metadataCache: { getHeadings: () => HEADINGS },
+      vault: { cachedRead: async () => { reads += 1; return CONTENT; } },
+      settings: { metadataScanCapBytes: 1_000_000 },
+    });
+    expect(await app.resolveSubpathOffset(FILE, "#Beta Section")).toBe(120);
+    // A heading miss in a populated cache is a genuine miss, not a cold cache.
+    expect(await app.resolveSubpathOffset(FILE, "#Nonexistent")).toBeNull();
+    expect(reads, "heading lookups must not read the file when indexed").toBe(0);
   });
 
   it("treats an unreadable file as unresolved rather than throwing", async () => {
