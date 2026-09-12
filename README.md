@@ -156,8 +156,10 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
 - **[Markdown comments](docs/design/markdown-comments-v1.md)** — passage-anchored
   threads with replies, resolve/reopen, human/agent attribution, and detached-anchor
-  recovery. Comments travel inside the note; Live Preview and Reading view hide
-  their markers, while Source mode exposes them.
+  recovery. Select text and press <kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> (or
+  run *Comments: Add comment to selection*); headings, list items and table cells
+  can be annotated as well as ordinary prose. Comments travel inside the note;
+  Live Preview and Reading view hide their markers, while Source mode exposes them.
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows

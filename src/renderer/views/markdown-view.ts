@@ -24,7 +24,8 @@ import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
 import { resolveBlockBoundary } from "../block-boundary";
 import { PagePreviewController } from "../page-preview";
 import { commentDecorations, commentInteractions } from "../comments/editor-extension";
-import { parseCommentThreads, validateCommentRange } from "../comments/model";
+import { CommentFormatError, narrowCommentRange, parseCommentThreads, validateCommentRange } from "../comments/model";
+import { geodeCommentMarkerSyntax } from "../comments/marker-syntax";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, class: "cm-header-1" },
@@ -244,7 +245,10 @@ export class MarkdownView implements View {
         history(),
         drawSelection(),
         highlightSelectionMatches(),
-        markdown({ base: markdownLanguage }),
+        // `geodeCommentMarkerSyntax` keeps a marker sitting on a line's first
+        // content position from starting a CommonMark HTML block and swallowing
+        // the rest of the line — see the note in `comments/marker-syntax.ts`.
+        markdown({ base: markdownLanguage, extensions: [geodeCommentMarkerSyntax] }),
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
@@ -337,7 +341,9 @@ export class MarkdownView implements View {
     if (!this.editor || this.mode !== "live") { this.commentButton.hidden = true; return; }
     const selection = this.editor.state.selection.main;
     try {
-      validateCommentRange(this.editor.state.doc.toString(), selection);
+      // Narrowed rather than validated: a selection dragged across a heading's
+      // `#` or a list bullet still offers the button, anchored to the prose.
+      if (!narrowCommentRange(this.editor.state.doc.toString(), selection)) throw new Error("No commentable range");
       const coords = this.editor.coordsAtPos(selection.to);
       if (!coords) throw new Error("Selection is not visible");
       const host = this.editorHostEl.getBoundingClientRect();
@@ -359,8 +365,23 @@ export class MarkdownView implements View {
   getSelectedRange(): { from: number; to: number } | null {
     if (!this.editor || this.mode === "reading") return null;
     const { from, to } = this.editor.state.selection.main;
-    try { return validateCommentRange(this.editor.state.doc.toString(), { from, to }); }
-    catch { return null; }
+    return narrowCommentRange(this.editor.state.doc.toString(), { from, to });
+  }
+
+  /**
+   * Why the current selection cannot be commented, for the command's toast.
+   * `narrowCommentRange` deliberately reports only success or failure, so the
+   * precise reason is recovered by re-running the validator that produced it.
+   */
+  describeCommentRangeRejection(): string | null {
+    if (!this.editor || this.mode === "reading") return "Open a note in edit mode to add a comment";
+    const { from, to } = this.editor.state.selection.main;
+    try {
+      validateCommentRange(this.editor.state.doc.toString(), { from, to });
+      return null;
+    } catch (error) {
+      return error instanceof CommentFormatError ? error.message : null;
+    }
   }
 
   revealComment(threadId: string): void {
