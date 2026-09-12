@@ -6,8 +6,8 @@ import { dirname, join, resolve } from "node:path";
 import { arch, cpus, freemem, platform, release, totalmem } from "node:os";
 import { createRequire } from "node:module";
 import { freshDirectory, generateSyntheticVault, verifySyntheticVault } from "./synthetic-vault.mts";
-import { distribution } from "./large-vault-sample.mjs";
-import { pairedSummary, runChild, stageDependencies } from "./large-vault-runner-lib.mjs";
+import { distribution } from "./large-vault-metrics.mjs";
+import { pairedSummary, runChild, stageDependencies, preflightRssMonitoring } from "./large-vault-runner-lib.mjs";
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
 const repository = resolve(scriptRoot, "..");
 const values = {};
@@ -33,12 +33,15 @@ for (const size of [...sizes, controlNotes])
 if (profiles.some(p => !["linked", "dense"].includes(p)))
     throw Error("profiles must be linked,dense");
 const reusedManifest = values.fixture ? await verifySyntheticVault(values.fixture) : null;
+await preflightRssMonitoring();
 const git = (args, root = repository) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const revisions = { baseline: git(["rev-parse", "--verify", `${values.baseline ?? "c45ebee9c172b4020620c5d63e53acbddff5d46b"}^{commit}`]), candidate: git(["rev-parse", "--verify", `${values.candidate ?? "68d7b5353bdd5b960629d422e96c2a4223761085"}^{commit}`]) };
 const output = await freshDirectory(values.output);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const report = { schemaVersion: 1, startedAt: new Date().toISOString(), status: "running", revisions, configuration: { sizes, profiles, pairs, timeoutMs, controlNotes, controlPairs, maxWorkingSetMiB }, environment: { node: process.version, nodeExecArgv: process.execArgv, platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cpuCount: cpus().length, totalMemory: totalmem(), freeMemory: freemem() }, samples: [] };
 const save = async () => { await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2) + "\n"); await writeFile(join(output, "report.md"), markdown(report)); };
+report.methodologyVersion = 2;
+report.configuration.parentRssLimitMiB = maxWorkingSetMiB;
 function markdown(report) {
     const lines = ["# Synthetic vault measurements", "", `Status: ${report.status}. No performance threshold.`, "", `Baseline: ${report.revisions.baseline}; candidate: ${report.revisions.candidate}.`, "", "Cold means application cache, not OS cache. Memory is summed process working set, not unique physical memory. Source fixture generation/build/copy excluded. Failed samples are retained, never retried or substituted.", "", "| Workload | Label | Pair | Status | Cold ms | Warm ms | Click median/p95 ms |", "|---|---|---:|---|---:|---:|---|"];
     for (const s of report.samples) {
@@ -46,6 +49,7 @@ function markdown(report) {
         const nav = p.navigation?.clickThroughRenderedDestinationMs;
         lines.push(`| ${s.workload} | ${s.label} | ${s.pair} | ${s.result?.status ?? s.status} | ${p.cold?.launchThroughReadyMs?.toFixed(1) ?? "—"} | ${p.warm?.launchThroughReadyMs?.toFixed(1) ?? "—"} | ${nav ? `${nav.median.toFixed(1)} / ${nav.p95.toFixed(1)}` : "—"} |`);
     }
+    lines.push('', 'Methodology v2: startup latency includes terminal utility completion and queued renderer background application; initial readiness and oracle validation are reported separately. Do not pair with v1 readiness timings. Parent guard samples OS summed RSS for owned sample-Node/Electron groups; Electron working-set measurements remain separate. Guard and completed partial-click evidence is retained in per-sample .guard.json and .events.jsonl files.');
     lines.push("", "## Paired changes", "", "Positive values mean candidate is higher. Valid phases from partial samples remain included; missing/failed phases are never zero. Control labels are the SAME candidate revision: their spread exposes machine/OS/order noise, not code regression. The first cold sample is retained. No regression acceptance threshold.", "", "| Workload | Metric | Valid pairs | Absolute delta median [min,max] | Relative delta median [min,max] |", "|---|---|---:|---|---|");
     for (const workload of new Set(report.samples.map(s => s.workload))) {
         for (const { name, absolute, relative } of pairedSummary(report.samples, workload)) {
@@ -59,7 +63,7 @@ function markdown(report) {
 async function child(config, id) {
     const configFile = join(output, `${id}.config.json`), resultFile = join(output, `${id}.json`);
     await writeFile(configFile, JSON.stringify({ ...config, resultFile }));
-    return runChild({ script: join(output, "harness", "large-vault-sample.mjs"), args: ["--config", configFile], cwd: repository, resultFile, logFile: join(output, `${id}.log`), timeoutMs });
+    return runChild({ script: join(output, "harness", "large-vault-sample.mjs"), args: ["--config", configFile], cwd: repository, resultFile, logFile: join(output, `${id}.log`), timeoutMs, maxRssMiB: maxWorkingSetMiB });
 }
 try {
     report.environment.lockSha256 = hash(await readFile(join(repository, "package-lock.json")));
@@ -70,7 +74,7 @@ try {
     const { build } = createRequire(join(output, "runner.cjs"))("esbuild");
     await mkdir(join(output, "harness"));
     report.environment.harness = {};
-    for (const file of ["large-vault-sample.mjs", "synthetic-vault.mts"]) {
+    for (const file of ["large-vault-sample.mjs", "large-vault-metrics.mjs", "synthetic-vault.mts"]) {
         const bytes = await readFile(join(scriptRoot, file));
         report.environment.harness[file] = hash(bytes);
         await writeFile(join(output, "harness", file), bytes);
@@ -110,7 +114,7 @@ try {
                 await verifySyntheticVault(sourceVault);
                 sample.sourceDigestUnchanged = true;
                 await save();
-                if (sample.cancelled || sample.result?.status === "resource-limit")
+                if (sample.cancelled || ["resource-limit", "monitoring-unavailable"].includes(sample.result?.status))
                     throw Error("Sample cancelled/resource-limited; remaining matrix stopped");
                 // Keep every sample copy (especially failed ones). The user owns this
                 // explicit output tree; the tool never recursively deletes it.

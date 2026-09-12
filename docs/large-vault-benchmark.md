@@ -145,3 +145,10 @@ sample copies. After archiving evidence, explicitly remove those exact detached
 worktrees with `git worktree remove <recorded-path>` and remove only the chosen
 benchmark output directory. Never run recursive cleanup against an unresolved
 variable, a vault, home, or a repository root.
+# Methodology v2 safeguards
+
+Startup now records initial layout/cache-count readiness, terminal utility completion plus queued renderer background application, and exhaustive graph validation separately. The primary startup timer ends at terminal readiness, before the oracle. An unavailable utility is an explicit failed sample, never a normal performance result. These timings must not be compared directly with methodology v1.
+
+An independent parent samples OS RSS every 500 ms with a two-second query deadline. The default limit remains half physical RAM (8192 MiB on a 16 GiB host); `--max-working-set-mib` also sets this parent limit. RSS includes the owned sample Node process and ancestry/identity-verified Electron groups, including detached descendants. It is distinct from the existing Electron working-set measurement and is not unique physical memory. Three consecutive collection errors fail closed; unsupported platforms fail preflight. Resource-limit or monitoring-unavailable stops the remaining matrix.
+
+Each sample retains `.guard.json` (membership, RSS, errors and termination evidence), `.events.jsonl` (stderr/lifecycle and completed partial navigation clicks), and the original last checkpoint when interrupted. Only freshly identity-verified owned process groups may be terminated. If OS identity collection fails during cleanup, only the owned Node handle is signalled and unresolved detached cleanup is reported; unrelated processes are never guessed or killed. No watchdog settings or app code change.

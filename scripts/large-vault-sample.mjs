@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
-import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
+import { readFile, writeFile, mkdir, unlink, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { _electron as electron } from "@playwright/test";
 import { graphFor, referencesFor, notePath, attachmentPath, incrementalDeletionIndex, incrementalGraphFor } from "./synthetic-vault.mts";
-export const distribution = values => {
-    const sorted = [...values].sort((a, b) => a - b);
-    return { samples: values, median: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null, p95: sorted.length ? sorted[Math.ceil(sorted.length * .95) - 1] : null };
-};
+import { distribution } from './large-vault-metrics.mjs';
+export { distribution } from './large-vault-metrics.mjs';
 export async function deadline(run, milliseconds, label) {
     let timer;
     try {
@@ -18,9 +16,32 @@ export async function deadline(run, milliseconds, label) {
         clearTimeout(timer);
     }
 }
+export async function awaitTerminalReadiness(adapters) {
+    const { startMetadataIndexer, waitForBackgroundIdle } = adapters ?? {
+        startMetadataIndexer: () => window.geode.startMetadataIndexer(),
+        waitForBackgroundIdle: async () => {
+            // The existing host forwards completion before resolving its cached
+            // readiness promise. Require renderer receipt as well, including
+            // completion delivered before our benchmark listener was installed.
+            const cache = window.app.metadataCache;
+            while (!cache.backgroundSnapshot || cache.snapshotReceiving) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+            await cache.waitForBackgroundIdle();
+        },
+    };
+    if (await startMetadataIndexer() !== true) throw Error("Metadata indexer unavailable: no terminal readiness measurement");
+    await waitForBackgroundIdle();
+}
 export async function runSample(config) {
     const { revisionRoot, vault, userData, manifest, timeoutMs, resultFile, snapshotBundle } = config;
-    const report = { config, status: "running", phases: {}, memorySamples: [], errors: [] };
+    const report = { methodologyVersion: 2, config, status: "running", phases: {}, memorySamples: [], errors: [] };
+    let eventWrites = Promise.resolve();
+    let eventWriteError;
+    const event = (type, data = {}) => {
+        const line = JSON.stringify({ at: Date.now(), phase: report.activePhase, type, ...data }) + '\n';
+        eventWrites = eventWrites.then(() => appendFile(resultFile + '.events.jsonl', line)).catch(error => { eventWriteError = String(error); });
+    };
     const save = () => writeFile(resultFile, JSON.stringify(report, null, 2) + "\n");
     let app;
     let timer;
@@ -82,7 +103,8 @@ export async function runSample(config) {
             const a = window.app;
             return a?.workspace?.layoutReady && a.metadataCache.initialized && a.vault.getMarkdownFiles().length === count && Object.keys(a.metadataCache.resolvedLinks).length === count;
         }, { count: manifest.options.notes }, { timeout: timeoutMs });
-        await page.evaluate(() => window.app.metadataCache.waitForBackgroundIdle());
+        const initialReadyAt = performance.now();
+        await page.evaluate(awaitTerminalReadiness);
         const readyAt = performance.now();
         // Validate every graph row, not only the number of known files: the utility
         // stream may finish after initialize() and waitForBackgroundIdle() return.
@@ -101,14 +123,20 @@ export async function runSample(config) {
                 const c = window.app.metadataCache;
                 return !c.resolvedLinks[deleted] && c.resolvedLinks["Incremental-added.md"]?.[window.__stressFirstNote] === 1;
             }, deletionPath, { timeout: timeoutMs });
-        return { readyAt, graphValidationMs: performance.now() - started, validatedRows: manifest.options.notes };
+        return { readyAt, initialReadyAt, terminalWaitMs: readyAt - initialReadyAt, graphValidationMs: performance.now() - started, validatedRows: manifest.options.notes };
     }
     async function launch() {
         const started = performance.now();
         app = await electron.launch({ args: [revisionRoot, `--user-data-dir=${userData}`], cwd: revisionRoot,
             env: { ...process.env, GEODE_HEADLESS: "1" }, timeout: timeoutMs });
+        if (process.send) process.send({ type: 'electron-process', pid: app.process().pid }, error => { if (error) report.errors.push(`parent registration: ${String(error)}`); });
+        const launchPhase = report.activePhase;
+        app.process().stderr?.on('data', bytes => event('stderr', { phase: launchPhase, text: String(bytes) }));
+        app.process().on('exit', (code, signal) => event('process-exit', { phase: launchPhase, code, signal }));
         timer = setInterval(() => { void sampleMemory(); }, 250);
         const page = await app.firstWindow();
+        page.on('close', () => event('page-close'));
+        page.on('crash', () => event('page-crash'));
         report.runtime = await app.evaluate(() => ({ electron: process.versions.electron, node: process.versions.node, chrome: process.versions.chrome }));
         page.on("pageerror", e => report.errors.push(`pageerror: ${String(e)}`));
         await page.evaluate(() => {
@@ -120,8 +148,8 @@ export async function runSample(config) {
         });
         const validation = await ready(page);
         await sampleMemory();
-        const { readyAt, ...verification } = validation;
-        return { page, result: { launchThroughReadyMs: readyAt - started, ...verification } };
+        const { readyAt, initialReadyAt, ...verification } = validation;
+        return { page, result: { launchThroughReadyMs: readyAt - started, launchThroughInitialReadyMs: initialReadyAt - started, ...verification } };
     }
     async function close() { clearInterval(timer); if (app) {
         await app.close();
@@ -153,6 +181,10 @@ export async function runSample(config) {
                 await page.waitForFunction(target => window.app.workspace.getActiveFile()?.path === target, nav.target, { timeout: timeoutMs });
                 await page.getByRole("heading", { name: nav.marker, exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
                 times.push(performance.now() - started);
+                // Small append-only progress survives renderer recovery without
+                // rewriting the full memory/manifest checkpoint on every click.
+                event('navigation-completed', { index: times.length - 1, source: nav.source, target: nav.target, elapsedMs: times.at(-1) });
+                await eventWrites;
             }
             return { clickThroughRenderedDestinationMs: distribution(times) };
         });
@@ -260,6 +292,11 @@ export async function runSample(config) {
         catch (error) {
             report.errors.push(`close: ${String(error)}`);
             report.status = "failed";
+        }
+        await eventWrites;
+        if (eventWriteError) {
+            report.status = 'failed';
+            report.errors.push(`event evidence write: ${eventWriteError}`);
         }
         if (resourceError) {
             report.status = "resource-limit";
