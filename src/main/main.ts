@@ -51,7 +51,7 @@ import { listVaultFiles, type VaultFileEntry } from "./vault-files";
 import { startVaultWatcher, type VaultWatcherHandle, type VaultWatchEventName } from "./vault-watcher";
 import { ArtifactRuntime, serializeArtifactRegistrationError } from "./artifact-runtime";
 import { ARTIFACT_SCHEME } from "../artifacts/security-policy";
-import { DeepLinkDispatcher } from "./deep-link";
+import { DeepLinkDispatcher, shouldClaimObsidianProtocol } from "./deep-link";
 import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
 import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
@@ -1330,7 +1330,18 @@ function installApplicationMenu(): void {
 }
 
 app.whenReady().then(() => {
-  if (!isHeadless) app.setAsDefaultProtocolClient("geode");
+  if (!isHeadless) {
+    app.setAsDefaultProtocolClient("geode");
+    // Hosted Obsidian plugins hand the OS `obsidian://` links for their own
+    // `registerObsidianProtocolHandler` actions, so Geode has to be a
+    // registered handler for that scheme too or the link never reaches this
+    // process. Claiming it is gated (see `shouldClaimObsidianProtocol`) so a
+    // real Obsidian install on the same machine is never silently hijacked.
+    const claimObsidian = process.env.GEODE_CLAIM_OBSIDIAN_PROTOCOL === "1";
+    if (shouldClaimObsidianProtocol(app.getApplicationNameForProtocol("obsidian://"), claimObsidian)) {
+      app.setAsDefaultProtocolClient("obsidian");
+    }
+  }
   if (isHeadless && process.platform === "darwin") {
     // `dock.hide()` removes the Dock tile but leaves the app a "regular"
     // NSApplication — still in the menu bar, still able to become the active
