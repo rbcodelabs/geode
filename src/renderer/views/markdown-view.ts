@@ -16,7 +16,7 @@ import {
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
-import type { App } from "../app";
+import type { App, ContextMenuItemSpec } from "../app";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
 import { setIcon } from "../api/icons";
 import type { HeadingCache, TFile } from "../types";
@@ -287,28 +287,41 @@ export class MarkdownView implements View {
           contextmenu(e, v) {
             const file = view.file;
             if (!file) return false;
+            const items: ContextMenuItemSpec[] = [];
             const selection = v.state.selection.main;
+            let hasComment = false;
             if (selection.from !== selection.to) {
               try {
                 validateCommentRange(v.state.doc.toString(), selection);
-                e.preventDefault();
-                app.showMenu(e, [{ title: "Add comment", icon: "message-square", action: () => app.promptCommentForSelection(view) }]);
-                return true;
+                items.push({ title: "Add comment", icon: "message-square", action: () => app.promptCommentForSelection(view) });
+                hasComment = true;
               } catch { /* fall through to heading actions */ }
             }
-            const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
-            if (pos == null) return false;
-            const line = v.state.doc.lineAt(pos).number - 1; // 0-based
-            const heading = view.headingAtLine(line);
-            if (!heading) return false;
+            if (!hasComment) {
+              const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+              if (pos != null) {
+                const line = v.state.doc.lineAt(pos).number - 1; // 0-based
+                const heading = view.headingAtLine(line);
+                if (heading) {
+                  items.push({
+                    title: "Bookmark this heading",
+                    icon: "bookmark",
+                    action: () => void app.addHeadingBookmark(file, heading),
+                  });
+                }
+              }
+            }
+            // Always fire `editor-menu` so plugins can contribute even when
+            // neither built-in above applies — matches Obsidian firing it on
+            // every editor right-click, not just Geode's special-cased ones.
+            // `v` (CodeMirror's EditorView) stands in for Obsidian's richer
+            // `Editor` wrapper, which Geode doesn't implement yet; plugins
+            // that only read `info.file` (the common case) are unaffected.
+            const menu = app.buildMenu(items);
+            app.workspace.trigger("editor-menu", menu, v, view);
+            if (menu.items.length === 0) return false;
             e.preventDefault();
-            app.showMenu(e, [
-              {
-                title: "Bookmark this heading",
-                icon: "bookmark",
-                action: () => void app.addHeadingBookmark(file, heading),
-              },
-            ]);
+            menu.showAtMouseEvent(e);
             return true;
           },
         }),

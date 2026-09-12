@@ -323,6 +323,9 @@ export class FileExplorerView implements View {
     return [path];
   }
 
+  /** Source id passed to the `file-menu` workspace event for both files and folders opened from this view. */
+  private static readonly MENU_SOURCE = "file-explorer-context-menu";
+
   private fileMenu(e: MouseEvent, file: TFile) {
     e.preventDefault();
     const targets = this.menuTargetPaths(file.path);
@@ -335,7 +338,13 @@ export class FileExplorerView implements View {
         action: () => void this.app.bookmarkPaths(targets),
       });
     }
-    this.app.showMenu(e, items);
+    // Build the menu with built-ins first, then let plugins add their own
+    // items via `workspace.on('file-menu', ...)` before it's shown, so both
+    // render in one list (plugin items land after a separator — see
+    // `App.buildMenu`'s doc comment for why no explicit separator is needed).
+    const menu = this.app.buildMenu(items);
+    this.app.workspace.trigger("file-menu", menu, file, FileExplorerView.MENU_SOURCE);
+    menu.showAtMouseEvent(e);
   }
 
   private folderMenu(e: MouseEvent, folder: TFolder) {
@@ -350,6 +359,12 @@ export class FileExplorerView implements View {
         action: () => void this.app.bookmarkPaths(targets),
       });
     }
-    this.app.showMenu(e, resourceItems);
+    // Obsidian fires the same `file-menu` event (not a separate `folder-menu`)
+    // for folders, passing a TFolder — mirrored here so a plugin that only
+    // checks `file instanceof TFile` (like most) safely no-ops on folders,
+    // while a folder-aware plugin can still act on the TFolder it receives.
+    const menu = this.app.buildMenu(resourceItems);
+    this.app.workspace.trigger("file-menu", menu, folder, FileExplorerView.MENU_SOURCE);
+    menu.showAtMouseEvent(e);
   }
 }

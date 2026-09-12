@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 291,
-      "partial": 62,
+      "partial": 64,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2499
+      "unknown": 2497
     }
   },
   "requirements": [
@@ -15988,8 +15988,11 @@
       "title": "on('editor-menu')",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Workspace/on('editor-menu').md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Workspace/on('editor-menu').md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/file-editor-menu-events.spec.ts"
+      ],
+      "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror’s EditorView standing in for Obsidian’s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
     },
     {
       "id": "DEV-a1d693878feb",
@@ -16010,8 +16013,11 @@
       "title": "on('file-menu')",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Workspace/on('file-menu').md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Workspace/on('file-menu').md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/file-editor-menu-events.spec.ts"
+      ],
+      "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. The optional fourth leaf argument is not passed, and the event is not yet fired from Obsidian’s other sources such as tab headers, pane-more-options, or link context menus."
     },
     {
       "id": "DEV-b57ac9ecc1b7",

@@ -1,0 +1,8 @@
+{
+  "id": "menu-probe",
+  "name": "Context Menu Probe",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.4",
+  "description": "Manual test plugin for verifying the workspace 'file-menu' and 'editor-menu' events let a plugin add context-menu items. Disabled by default. The Community plugins settings pane only lists tracked installs, so enable this the way the e2e suite does: add \"menu-probe\" to test-vault/.geode/plugins.json and reload.",
+  "author": "geode"
+}

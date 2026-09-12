@@ -2634,5 +2634,19 @@
       "tests/unit/workspace-public-contracts.test.ts"
     ],
     "notes": "Added at the Workspace level, where plugins call it: setActiveLeaf previously existed only on TabGroup and Sidebar, and took no options. Both documented forms are accepted, the options object and the deprecated (leaf, pushHistory, focus) triple. focus defaults to false and, when true, moves keyboard focus into the leaf content rather than being accepted and ignored. Observed in Electron restoring the kanban board in front of a note opened behind it."
+  },
+  "DEV-3f18652e7e3e": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/file-editor-menu-events.spec.ts"
+    ],
+    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. The optional fourth leaf argument is not passed, and the event is not yet fired from Obsidian’s other sources such as tab headers, pane-more-options, or link context menus."
+  },
+  "DEV-407dfa8627cb": {
+    "status": "partial",
+    "evidence": [
+      "tests/e2e/file-editor-menu-events.spec.ts"
+    ],
+    "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror’s EditorView standing in for Obsidian’s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
   }
 }
