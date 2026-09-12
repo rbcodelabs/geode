@@ -23,6 +23,9 @@ test("plugin requestUrl bypasses renderer CSP through the privileged HTTP transp
       if (request.url === "/json") {
         response.writeHead(200, { "Content-Type": "application/json", "X-Probe": "yes" });
         response.end('{"ok":true}');
+      } else if (request.url === "/raw-fetch") {
+        response.writeHead(200, { "Content-Type": "application/json", "X-Probe": "raw" });
+        response.end('{"raw":true}');
       } else if (request.url === "/echo") {
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({
@@ -30,6 +33,12 @@ test("plugin requestUrl bypasses renderer CSP through the privileged HTTP transp
           custom: request.headers["x-custom"],
           contentType: request.headers["content-type"],
           body: Array.from(body),
+        }));
+      } else if (request.url === "/echo-multipart") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({
+          contentType: request.headers["content-type"] ?? null,
+          bodyLength: body.length,
         }));
       } else if (request.url === "/plain") {
         response.writeHead(200, { "Content-Type": "text/plain" });
@@ -68,7 +77,12 @@ test("plugin requestUrl bypasses renderer CSP through the privileged HTTP transp
       baseUrl,
     );
 
-    expect(result.rawFetch).toMatch(/fetch|failed/i);
+    // A plugin's raw fetch() reaches the real server via the same
+    // privileged-IPC bypass as requestUrl — see plugin-fetch.ts. Before that
+    // proxy existed, this call was blocked by the renderer CSP.
+    expect(result.rawFetch).toEqual({ status: 200, header: "raw", json: { raw: true } });
+    expect(result.rawFetchMultipart.contentType).toMatch(/^multipart\/form-data; boundary=.+/);
+    expect(result.rawFetchMultipart.bodyLength).toBeGreaterThan(0);
     expect(result.shorthand).toEqual({
       status: 200,
       header: "yes",
@@ -94,9 +108,10 @@ test("plugin requestUrl bypasses renderer CSP through the privileged HTTP transp
     expect(result.invalidErrors).toHaveLength(3);
     for (const error of result.invalidErrors) expect(error).toMatch(/http|url/i);
 
-    expect(requests.some((request) => request.url === "/raw-fetch")).toBe(false);
+    expect(requests.some((request) => request.url === "/raw-fetch")).toBe(true);
+    expect(requests.some((request) => request.url === "/echo-multipart")).toBe(true);
     expect(requests.filter((request) => request.url === "/echo")).toHaveLength(2);
-    expect(requests).toHaveLength(6);
+    expect(requests).toHaveLength(8);
   } finally {
     await app.close();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
