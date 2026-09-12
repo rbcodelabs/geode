@@ -1,5 +1,5 @@
 import { Vault } from "./vault";
-import { MetadataCache } from "./metadata-cache";
+import { MetadataCache, parseMetadata } from "./metadata-cache";
 import {
   DEFAULT_METADATA_SCAN_CAP_BYTES,
   MAX_METADATA_SCAN_CAP_BYTES,
@@ -40,7 +40,7 @@ import { Modal, PromptModal, SuggestModal } from "./modals/modals";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { renderExternalRootsTab } from "./settings/external-roots-tab";
-import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName } from "./types";
+import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName, type HeadingCache } from "./types";
 import { RenderContext } from "./api/bases-values";
 import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
 import {
@@ -3177,10 +3177,27 @@ export class App {
       }
       return null;
     }
-    const heading = this.metadataCache
-      .getHeadings(file)
-      .find((h) => h.heading.toLowerCase() === target.toLowerCase());
-    return heading ? heading.position.start.offset : null;
+    const match = (headings: HeadingCache[]) =>
+      headings.find((h) => h.heading.toLowerCase() === target.toLowerCase());
+    const cached = match(this.metadataCache.getHeadings(file));
+    if (cached) return cached.position.start.offset;
+    // Cache miss. That is usually a genuinely absent heading, but it is also
+    // what a *cold* cache looks like: the vault index is built asynchronously
+    // during startup, so a plugin that opens `Note#Heading` early (restoring a
+    // context panel, handling a deep link) can get here before `file` has been
+    // indexed and would otherwise land silently at the top of the document —
+    // the exact bug this method exists to fix, just conditioned on timing.
+    // Re-derive from the file with the same parser the cache itself uses, so
+    // resolution never depends on index progress. The block branch above is
+    // already immune for the same reason: it reads the file directly.
+    if (this.metadataCache.getHeadings(file).length > 0) return null;
+    try {
+      const content = await this.vault.cachedRead(file);
+      const parsed = match(parseMetadata(content, this.settings.metadataScanCapBytes).headings);
+      return parsed ? parsed.position.start.offset : null;
+    } catch {
+      return null;
+    }
   }
 
   async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {
