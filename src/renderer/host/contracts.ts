@@ -9,6 +9,8 @@ export interface VaultFileEntry {
 }
 
 export interface VaultEvent {
+  /** Trusted completed host rename; native watcher guesses must not set this. */
+  renamedFrom?: string;
   event: "create" | "modify" | "delete" | "create-folder" | "delete-folder";
   path: string;
   /** Correlates the immediate echo of an app-originated mutation. */
@@ -73,6 +75,12 @@ export interface VaultFilesService {
   list(): Promise<VaultFileEntry[]>;
   read(path: string): Promise<string>;
   readBinary(path: string): Promise<ArrayBuffer>;
+  writeBinary(
+    path: string,
+    data: ArrayBuffer,
+    options?: { mtime?: number; ctime?: number },
+    mutationId?: string,
+  ): Promise<{ mtime: number; ctime: number; size: number }>;
   write(
     path: string,
     data: string,
@@ -99,6 +107,23 @@ export interface VaultFilesService {
     entries: VaultFileEntry[];
     errorCode?: string;
   }>;
+}
+
+/** Device-local structured state. Implementations must keep this outside the active vault. */
+export interface DeviceStateService {
+  read<T>(key: string): Promise<T | null>;
+  write(key: string, value: unknown): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+/** Host-backed secret storage. `available=false` means callers must disable credentialed features. */
+export interface SecureSecretService {
+  readonly available: boolean;
+  fromCapability(capability: string): {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+    remove(key: string): Promise<void>;
+  };
 }
 
 export interface ConfigService {
@@ -166,12 +191,16 @@ export interface DesktopHostService {
 }
 
 export interface HostServices {
+  readonly syncSafety?: import("../../shared/sync-safety").SyncSafetyService;
+  readonly network?: { request(input: import("../../shared/network").HostHttpRequest, signal?: AbortSignal): Promise<import("../../shared/network").HostHttpResponse>; };
   /** Internal desktop-only Project integration; absent on mobile/browser. */
   externalRoots?: import("../../shared/external-roots").ExternalRootsHost;
   readonly capabilities: Readonly<HostCapabilities>;
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;
   readonly vaultFiles: VaultFilesService;
+  readonly deviceState: DeviceStateService;
+  readonly secrets: SecureSecretService;
   readonly config: ConfigService;
   readonly metadataIndex: MetadataIndexService;
   readonly navigation: NavigationService;

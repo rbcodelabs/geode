@@ -24,6 +24,7 @@ import type { BasesViewRegistration } from "./bases-view";
 import { createDismissibleNotice } from "../notice";
 import { createSecretStorage } from "../secret-storage";
 import moment from "moment";
+import { getHostServices } from "../host/registry";
 
 // Ensure the DOM helpers exist the moment the compat module is first
 // evaluated (i.e. when a plugin requires 'obsidian'), even if the host
@@ -191,6 +192,8 @@ export function setTooltip(el: HTMLElement, tooltip: string, options?: TooltipOp
 export { sanitizeHTMLToDom } from "./obsidian-dom";
 
 export interface RequestUrlParam {
+  /** Geode extension; cancelled calls reject late host responses. */
+  signal?: AbortSignal;
   url: string;
   method?: string;
   headers?: Record<string, string>;
@@ -205,39 +208,36 @@ export interface RequestUrlResponse {
   json: any;
   text: string;
 }
-/** HTTP client matching Obsidian's requestUrl. Electron delegates across IPC to bypass renderer CSP/CORS. */
+/** Desktop requests execute through the host, outside renderer CSP. */
 export async function requestUrl(param: RequestUrlParam | string): Promise<RequestUrlResponse> {
   const p: RequestUrlParam = typeof param === "string" ? { url: param } : param;
-  const privilegedRequest = window.geode?.requestUrl;
-  const res = privilegedRequest
-    ? await privilegedRequest({
-        url: p.url,
-        method: p.method,
-        headers: p.headers,
-        body: p.body,
-        contentType: p.contentType,
-      })
-    : await fetch(p.url, {
-        method: p.method ?? "GET",
-        headers: p.contentType ? { ...(p.headers ?? {}), "Content-Type": p.contentType } : p.headers,
-        body: p.body,
-      }).then(async (response) => {
-        const headers: Record<string, string> = {};
-        response.headers.forEach((value, name) => { headers[name] = value; });
-        return { status: response.status, headers, arrayBuffer: await response.arrayBuffer() };
-      });
-  const buf = res.arrayBuffer;
-  const text = new TextDecoder().decode(buf);
+  const headers = { ...(p.headers ?? {}) };
+  if (p.contentType) headers["Content-Type"] = p.contentType;
+  const network = getHostServices().network;
+  const result = network ? await network.request({ url: p.url, method: p.method, headers, body: p.body }, p.signal) : undefined;
+  const res = result ? undefined : await fetch(p.url, { method: p.method ?? "GET", headers, body: p.body, signal: p.signal });
+  const buf = result?.body ?? await res!.arrayBuffer();
+  let text: string | undefined;
+  const readText = () => text ??= new TextDecoder().decode(buf);
+  const respHeaders: Record<string, string> = {};
+  if (result) Object.assign(respHeaders, result.headers); else res!.headers.forEach((v, k) => (respHeaders[k] = v));
+  const status = result?.status ?? res!.status;
   let json: any = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    /* not json */
+  let parsed = false;
+  if (p.throw !== false && status >= 400) {
+    throw new Error(`requestUrl failed: ${status}`);
   }
-  if (p.throw !== false && res.status >= 400) {
-    throw new Error(`requestUrl ${p.url} failed: ${res.status}`);
-  }
-  return { status: res.status, headers: res.headers, arrayBuffer: buf, json, text };
+  return {
+    status, headers: respHeaders, arrayBuffer: buf,
+    get text() { return readText(); },
+    get json() {
+      if (!parsed) {
+        parsed = true;
+        try { json = JSON.parse(readText()); } catch { /* not json */ }
+      }
+      return json;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1574,7 +1574,6 @@ export function installObsidianAppCompat(app: App): void {
 // runs `Plugin`'s constructor below, so it only sees a populated
 // `app.plugins` if `installObsidianAppCompat` ran earlier, at `App.start()`.
 export { GeodePlugin };
-
 export abstract class Plugin extends GeodePlugin {
   constructor(app: App, manifest: import("../plugin-manifest").PluginManifest) {
     super(app, manifest);

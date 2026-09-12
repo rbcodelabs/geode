@@ -542,6 +542,152 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   min-height: 44px;
 }
 
+/* Sync conflict advisory banner — mounted below the view header, above the
+   body, so it can coexist with the external-edit recovery banner that is
+   prepended above the header. Advisory only: the note stays editable. */
+.sync-conflict-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--color-orange) 14%, var(--background-primary));
+  border-bottom: 1px solid color-mix(in srgb, var(--color-orange) 35%, var(--background-modifier-border));
+  font-size: var(--font-ui-small);
+}
+
+.sync-conflict-banner-message {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sync-conflict-banner-action {
+  flex: 0 0 auto;
+  min-height: 32px;
+}
+
+/* Compare & resolve dialog */
+.modal.sync-conflict-modal {
+  width: min(1040px, 92vw);
+  max-width: 92vw;
+}
+
+.sync-conflict-modal .sync-conflict-title {
+  margin: 0 0 4px;
+  font-size: var(--font-ui-large);
+}
+
+.sync-conflict-modal .sync-conflict-subtitle {
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.sync-conflict-message {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--color-orange) 14%, var(--background-primary));
+  border: 1px solid color-mix(in srgb, var(--color-orange) 35%, var(--background-modifier-border));
+  font-size: var(--font-ui-small);
+}
+
+.sync-conflict-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.sync-conflict-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 6px;
+}
+
+.sync-conflict-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.sync-conflict-panel-title {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-ui-small);
+}
+
+/* Device ids are a secondary, opaque detail — never the headline. */
+.sync-conflict-version-select {
+  max-width: 55%;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.sync-conflict-panel-text {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 10px 12px;
+  min-height: 220px;
+  max-height: 48vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+}
+
+.sync-conflict-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.sync-conflict-actions button {
+  min-height: 36px;
+}
+
+/* Secondary keeps the default button chrome; ghost recedes further so the two
+   destructive-ish choices read as the weighted pair. */
+.sync-conflict-actions button.mod-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+
+.sync-conflict-actions button.mod-ghost:hover {
+  background: var(--background-modifier-hover);
+  border-color: transparent;
+  color: var(--text-normal);
+}
+
+@media (max-width: 700px) {
+  .sync-conflict-compare {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-conflict-panel-text {
+    min-height: 140px;
+    max-height: 30vh;
+  }
+
+  .sync-conflict-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}
+
 .workspace {
   display: flex;
   flex: 1;
@@ -3281,6 +3427,21 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
+}
+.setting-item.sync-wrapped-setting {
+  flex-wrap: wrap;
+}
+.sync-wrapped-setting > .setting-item-info {
+  flex: 1 1 260px;
+  min-width: min(260px, 100%);
+}
+.sync-wrapped-setting > .setting-item-control {
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.sync-wrapped-setting > .setting-item-control > * {
+  max-width: 100%;
 }
 .setting-item-group {
   margin: var(--size-4-4) 0;
