@@ -5,10 +5,50 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.16.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.17.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New in v0.17.0: secrets in the OS keychain, and six plugin-API fixes
+
+**Plugin secrets now live in the OS keychain.** `app.secretStorage` previously
+persisted secrets as plaintext in `localStorage` — so an API key a plugin stored
+sat in the clear on disk, even where the plugin's own UI told the user it was
+keychain-protected. Secrets are now encrypted through Electron's `safeStorage`
+and written as ciphertext, and `isEncryptionAvailable()` reports the real
+answer instead of a hardcoded `false`. **Existing `geode:secret:*` entries
+migrate automatically on first access and are removed from `localStorage`.**
+Where no keychain backend exists (some Linux setups), Geode falls back to the
+previous behaviour and says so honestly rather than pretending.
+
+**Five other divergences from Obsidian's API, all found by auditing a real
+plugin against the shim.** Each was the same failure mode: an API that returned
+successfully and quietly did the wrong thing, leaving the plugin no way to
+detect it and the user nothing to see.
+
+- `SecretComponent` now takes Obsidian's `(app, containerEl)` and renders a
+  picker **button**, not a password input — the previous signature threw inside
+  the caller's click handler, so the button did nothing at all.
+- `obsidian://` deep links now reach Geode, so a plugin's
+  `registerObsidianProtocolHandler` callbacks fire. Registration is deliberately
+  **non-hijacking**: Geode claims the scheme only when nothing else answers it,
+  advertises itself as a `Viewer` rather than an owner, and leaves an existing
+  Obsidian install untouched. `GEODE_CLAIM_OBSIDIAN_PROTOCOL=1` forces it.
+- `Vault.adapter.rmdir()` exists, so plugins can clean up their own
+  directories. It removes directly rather than trashing, and refuses anything
+  resolving outside the vault, the vault root itself, or a symlink pointing out
+  of the vault.
+- `sanitizeHTMLToDom` strips `on*` handlers, `javascript:`/`vbscript:` URLs and
+  `iframe`/`object`/`embed`/`link`/`meta`/`base`, not just `<script>`. Policy
+  tracks DOMPurify's stock configuration, so `<style>`, `<form>` and
+  `data:image/…` still render.
+- `WorkspaceLeaf.openFile` honours `eState.subpath`, so heading and block
+  anchors scroll to their target — including when a plugin opens one *before*
+  the metadata cache has finished indexing, which previously returned no match
+  and silently landed at the top of the file.
+
+See the [plugin API reference](docs/spec/03-plugin-api.md).
 
 ## New in v0.16.0: a supported plugin catalog, and two new plugin events
 
@@ -69,7 +109,11 @@ or a path escaping the vault all reject instead of writing a note somewhere the
 user did not configure; `getLeaf('window')` throws rather than substituting a
 tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
-## Features (v0.16.0)
+## Features (v0.17.0)
+
+- **Keychain-backed plugin secrets** — `app.secretStorage` encrypts through the
+  OS keychain via Electron `safeStorage`, migrating any previously stored
+  plaintext entries and reporting honestly when no backend is available.
 
 - **Supported plugin catalog** — install certified plugins from Settings →
   Community plugins & themes. Tested releases verify the manifest and the
