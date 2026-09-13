@@ -20,6 +20,7 @@ function pluginFixture(): ManagedVaultPlugin {
     list: vi.fn(async () => ({ entries: [{ path: "Welcome.md", isFolder: false, mtime: 2, ctime: 1, size: 7 }] })),
     read: vi.fn(async () => ({ data: "welcome" })),
     readBinary: vi.fn(async () => ({ base64: "AAEC/w==" })),
+    writeBinary: vi.fn(async ({ base64 }) => ({ mtime: 3, ctime: 1, size: atob(base64).length })),
     write: vi.fn(async () => ({ mtime: 3, ctime: 1, size: 6 })),
     mkdir: vi.fn(async () => ({})),
     trash: vi.fn(async () => ({})),
@@ -138,6 +139,7 @@ describe("CapacitorHostServices", () => {
 
     await expect(host.vaultFiles.read("Welcome.md")).resolves.toBe("welcome");
     expect([...new Uint8Array(await host.vaultFiles.readBinary("asset.bin"))]).toEqual([0, 1, 2, 255]);
+    await host.vaultFiles.writeBinary("asset.bin", new Uint8Array([0, 1, 2, 255]).buffer, undefined, "mutation-binary");
     await host.vaultFiles.write("Welcome.md", "edited", undefined, "mutation-1");
     await host.vaultFiles.mkdir("Folder", "mutation-2");
     await host.vaultFiles.rename("Folder", "Archive", "mutation-3");
@@ -145,6 +147,7 @@ describe("CapacitorHostServices", () => {
     await host.vaultFiles.settleMutation("mutation-4");
 
     expect(plugin.write).toHaveBeenCalledWith({ path: "Welcome.md", data: "edited", mutationId: "mutation-1" });
+    expect(plugin.writeBinary).toHaveBeenCalledWith({ path: "asset.bin", base64: "AAEC/w==", mutationId: "mutation-binary" });
     expect(plugin.mkdir).toHaveBeenCalledWith({ path: "Folder", mutationId: "mutation-2" });
     expect(plugin.rename).toHaveBeenCalledWith({ path: "Folder", newPath: "Archive", mutationId: "mutation-3" });
     expect(plugin.trash).toHaveBeenCalledWith({ path: "Archive", mutationId: "mutation-4" });

@@ -4,6 +4,17 @@ import * as crypto from "node:crypto";
 
 interface AtomicOps { rename(from: string, to: string): Promise<void> }
 
+export async function writeBufferAtomic(target: string, data: Uint8Array, ops: AtomicOps = fsp): Promise<void> {
+  const temp = path.join(path.dirname(target), `.${path.basename(target)}.tmp-${process.pid}-${crypto.randomUUID()}`);
+  try {
+    await fsp.writeFile(temp, data, { mode: 0o600, flag: "wx" });
+    await ops.rename(temp, target);
+  } catch (error) {
+    await fsp.rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 /** Same-directory write + rename prevents interrupted config writes from truncating the last good file. */
 export async function writeJsonAtomic(target: string, data: unknown, ops: AtomicOps = fsp): Promise<void> {
   const temp = path.join(path.dirname(target), `.${path.basename(target)}.tmp-${process.pid}-${crypto.randomUUID()}`);

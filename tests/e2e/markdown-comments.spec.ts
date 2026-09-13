@@ -61,6 +61,7 @@ test("comments persist on disk, decorate Live Preview, hide in Reading view, and
     await expect(pane.locator(`.comment-thread[data-comment-id="${created}"]`)).toBeFocused();
 
     // Create and manage a second thread through the actual selection/prompt/sidebar UI.
+    await expect(window.getByRole("status", { name: "External edit conflict" })).toHaveCount(0);
     await window.evaluate(() => {
       const view = (window as any).app.getActiveMarkdownView();
       const source = view.getText();

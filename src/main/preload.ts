@@ -7,6 +7,8 @@ import type { ProcessMetric } from "./process-metrics";
 import type { CrashDiagnostic } from "./crash-journal";
 import type { FdPressureSnapshot } from "./crash-diagnostics";
 import type { ArtifactRegistrationResult } from "./artifact-runtime";
+import type { HostHttpRequest, HostHttpResponse } from "../shared/network";
+import type { GuardedMutation, GuardedMutationResult } from "../shared/sync-safety";
 import type { ExternalRootsHost, ExternalRootReply } from "../shared/external-roots";
 import type { ResourceRef } from "../shared/root-registry";
 import type { PrivilegedRequestUrlParam, PrivilegedRequestUrlResponse } from "../shared/request-url";
@@ -41,6 +43,7 @@ export interface TimedPluginReadResult {
   mainReceivedAt: number;
   fsStartedAt: number;
   fsFinishedAt: number;
+  secretCapability?: string;
 }
 export interface PluginFileSet { manifest: string; main: string; styles: string | null }
 
@@ -101,6 +104,27 @@ const api = {
   getPluginPolicy: (): Promise<ManagedPolicy | null> => ipcRenderer.invoke("get-plugin-policy"),
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
+  scanForSync: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-sync-scan"),
+  httpRequest: (id: string, request: HostHttpRequest): Promise<HostHttpResponse> => ipcRenderer.invoke("host-http-request", id, request),
+  cancelHttpRequest: (id: string): void => ipcRenderer.send("host-http-cancel", id),
+  claimSyncOwner: (): Promise<string | null> => ipcRenderer.invoke("sync-owner-claim"),
+  privateSyncStorage: (token: string, binding: string, request: import("../shared/sync-safety").SyncStorageRequest): Promise<unknown> => ipcRenderer.invoke("sync-private-storage", token, binding, request),
+  releaseSyncOwner: (token: string): Promise<void> => ipcRenderer.invoke("sync-owner-release", token),
+  applySyncMutation: (token: string, input: GuardedMutation): Promise<GuardedMutationResult> => ipcRenderer.invoke("sync-local-apply", token, input),
+  onSyncPrepare: (handler: (token: string, path: string) => Promise<string | null>): (() => void) => {
+    const listener = async (_event: Electron.IpcRendererEvent, token: string, path: string) => {
+      let reason: string | null = null; try { reason = await handler(token, path); } catch { reason = "Editor preparation failed"; }
+      ipcRenderer.send("sync-editor-result", token, "prepare", reason);
+    };
+    ipcRenderer.on("sync-editor-prepare", listener); return () => ipcRenderer.removeListener("sync-editor-prepare", listener);
+  },
+  onSyncRelease: (handler: (token: string) => Promise<void>): (() => void) => {
+    const listener = async (_event: Electron.IpcRendererEvent, token: string) => {
+      let reason: string | null = null; try { await handler(token); } catch { reason = "Editor refresh failed"; }
+      ipcRenderer.send("sync-editor-result", token, "release", reason);
+    };
+    ipcRenderer.on("sync-editor-release", listener); return () => ipcRenderer.removeListener("sync-editor-release", listener);
+  },
   read: (path: string): Promise<string> => ipcRenderer.invoke("vault-read", path),
   readPluginFile: (path: string, rendererSentAt: number): Promise<TimedPluginReadResult> =>
     ipcRenderer.invoke("plugin-file-read", path, rendererSentAt),
@@ -108,6 +132,8 @@ const api = {
     ipcRenderer.invoke("plugin-files-replace", id, expectedManifest, replacement),
   readBinary: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("vault-read-binary", path),
+  writeBinary: (path: string, data: ArrayBuffer, options?: { mtime?: number; ctime?: number }): Promise<{ mtime: number; ctime: number; size: number }> =>
+    ipcRenderer.invoke("vault-write-binary", path, data, options),
   write: (
     path: string,
     data: string,
@@ -167,6 +193,13 @@ const api = {
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),
+  readDeviceState: <T>(key: string): Promise<T | null> => ipcRenderer.invoke("device-state-read", key),
+  writeDeviceState: (key: string, data: unknown): Promise<void> => ipcRenderer.invoke("device-state-write", key, data),
+  removeDeviceState: (key: string): Promise<void> => ipcRenderer.invoke("device-state-remove", key),
+  isSecretStorageAvailable: (): boolean => process.platform !== "linux" || Boolean(process.env.DBUS_SESSION_BUS_ADDRESS),
+  readSecret: (capability: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", capability, key),
+  writeSecret: (capability: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", capability, key, value),
+  removeSecret: (capability: string, key: string): Promise<void> => ipcRenderer.invoke("secret-remove", capability, key),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   openLocalFile: (href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }

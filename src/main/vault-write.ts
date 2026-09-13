@@ -18,6 +18,13 @@ export interface VaultWriteDeps {
   stat: (path: string) => Promise<Stats>;
 }
 
+export interface VaultBinaryWriteDeps {
+  mkdir: (path: string, options: { recursive: true }) => Promise<string | undefined>;
+  writeFile: (path: string, data: Uint8Array) => Promise<void>;
+  utimes: (path: string, atime: number, mtime: number) => Promise<void>;
+  stat: (path: string) => Promise<Stats>;
+}
+
 /**
  * Validate a caller-supplied `DataWriteOptions.mtime` and convert it to the
  * seconds-since-epoch unit `fs.utimes` expects. Returns `undefined` when no
@@ -57,6 +64,15 @@ export async function writeVaultFile(
   if (mtimeSeconds !== undefined) {
     await deps.utimes(abs, mtimeSeconds, mtimeSeconds);
   }
+  const st = await deps.stat(abs);
+  return { mtime: st.mtimeMs, ctime: birthtimeOf(st), size: st.size };
+}
+
+export async function writeVaultBinary(abs: string, data: ArrayBuffer, options?: DataWriteOptions, deps: VaultBinaryWriteDeps = fsp): Promise<VaultWriteResult> {
+  const mtimeSeconds = validateMtime(options?.mtime);
+  await deps.mkdir(path.dirname(abs), { recursive: true });
+  await deps.writeFile(abs, new Uint8Array(data));
+  if (mtimeSeconds !== undefined) await deps.utimes(abs, mtimeSeconds, mtimeSeconds);
   const st = await deps.stat(abs);
   return { mtime: st.mtimeMs, ctime: birthtimeOf(st), size: st.size };
 }

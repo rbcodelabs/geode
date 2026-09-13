@@ -2313,6 +2313,26 @@ export class Workspace extends Events {
     this.iterateLeaves((leaf) => leaf.view?.cancelVaultSwitch?.());
   }
 
+  private autosaveHolds?: Set<string>;
+
+  async holdAutosave(token: string): Promise<boolean> {
+    (this.autosaveHolds ??= new Set()).add(token);
+    const views: View[] = [];
+    this.iterateLeaves(leaf => { if (leaf.view) views.push(leaf.view); });
+    for (const view of views) {
+      if (!this.autosaveHolds.has(token)) return false;
+      await view.pauseAutosave?.();
+      // A timeout may release the hold while an in-flight save is finishing.
+      if (!this.autosaveHolds.has(token)) { this.resumeAutosave(); return false; }
+    }
+    return true;
+  }
+
+  releaseAutosaveHold(token: string): void {
+    this.autosaveHolds?.delete(token);
+    this.resumeAutosave();
+  }
+
   async pauseAutosave(): Promise<void> {
     const views: View[] = [];
     this.iterateLeaves((leaf) => { if (leaf.view) views.push(leaf.view); });
@@ -2323,12 +2343,13 @@ export class Workspace extends Events {
         await view.pauseAutosave?.();
       }
     } catch (error) {
-      for (const view of paused.reverse()) view.resumeAutosave?.();
+      if (!this.autosaveHolds?.size) for (const view of paused.reverse()) view.resumeAutosave?.();
       throw error;
     }
   }
 
   resumeAutosave(): void {
+    if (this.autosaveHolds?.size) return;
     this.iterateLeaves((leaf) => leaf.view?.resumeAutosave?.());
   }
 

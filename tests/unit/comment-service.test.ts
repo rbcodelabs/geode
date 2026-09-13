@@ -58,6 +58,27 @@ describe("CommentService", () => {
     expect(h.service.list(file)[0].messages.map((message) => message.body)).toEqual(["one", "two", "three"]);
   });
 
+  it("drains admitted writes and rejects new comments until every sync hold releases", async () => {
+    const h = harness();
+    let finish!: () => void;
+    h.vault.modify.mockImplementationOnce(async () => { await new Promise<void>(resolve => { finish = resolve; }); });
+    const write = h.service.create(file, { from: 0, to: 5 }, "first", { type: "agent", name: "Test" }).catch(() => undefined);
+    await vi.waitFor(() => expect(h.vault.modify).toHaveBeenCalledOnce());
+    let drained = false;
+    const hold = h.service.holdMutations("first").then(() => { drained = true; });
+    const second = h.service.holdMutations("second");
+    await expect(h.service.create(file, { from: 0, to: 5 }, "blocked", { type: "agent", name: "Test" })).rejects.toThrow("paused");
+    expect(drained).toBe(false);
+    finish();
+    await Promise.all([write, hold, second]);
+    expect(drained).toBe(true);
+    h.service.releaseMutationHold("first");
+    await expect(h.service.create(file, { from: 0, to: 5 }, "still blocked", { type: "agent", name: "Test" })).rejects.toThrow("paused");
+    h.service.releaseMutationHold("second");
+    await h.service.create(file, { from: 0, to: 5 }, "allowed", { type: "agent", name: "Test" });
+    expect(h.vault.modify).toHaveBeenCalledTimes(2);
+  });
+
   it("routes through an open editor when available", async () => {
     let editorText = "Hello world";
     const apply = vi.fn(async (mutator: (source: string) => string) => { editorText = mutator(editorText); });

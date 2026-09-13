@@ -6,7 +6,10 @@
  * Independent of the renderer-side `Vault.rename()` identity fix — this is
  * main-process hardening against overlapping fs operations on one path.
  */
+import * as fs from "node:fs/promises";
 const pathLocks = new Map<string, Promise<unknown>>();
+
+export async function withVaultMutation<T>(root: string, paths: string[], fn: () => Promise<T>): Promise<T> { return withPathLock([await fs.realpath(root), ...paths], fn); }
 
 export function withPathLock<T>(paths: string[], fn: () => Promise<T>): Promise<T> {
   const keys = [...new Set(paths)].sort();

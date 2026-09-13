@@ -47,6 +47,11 @@ export type { PluginManifest } from "../plugin-manifest";
 export type { PluginCommand } from "../plugin";
 export type { CommentAuthor, CommentMessage, CommentThread, OpenCommentEditor } from "../comments/service";
 export type {
+  SyncApi, SyncProvider, SyncProviderCapabilities, SyncRemoteEntry, SyncScanResult,
+  SyncSession, SyncStatus, SyncPreview, SyncRunResult, SyncWriteInput, SyncConflict,
+} from "../sync/types";
+export { SyncPreconditionError } from "../sync/types";
+export type {
   TAbstractFile,
   TFile,
   TFolder,

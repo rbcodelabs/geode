@@ -16,6 +16,7 @@ export interface ManagedVaultPlugin extends Plugin {
   list(): Promise<{ entries: VaultFileEntry[] }>;
   read(options: { path: string }): Promise<{ data: string }>;
   readBinary(options: { path: string }): Promise<{ base64: string }>;
+  writeBinary?(options: { path: string; base64: string; mutationId?: string }): Promise<{ mtime: number; ctime: number; size: number }>;
   write(options: { path: string; data: string; mutationId?: string }): Promise<{ mtime: number; ctime: number; size: number }>;
   mkdir(options: { path: string; mutationId?: string }): Promise<EmptyResult>;
   trash(options: { path: string; mutationId?: string }): Promise<EmptyResult>;
@@ -125,6 +126,13 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       readBinary: async (path) => {
         requireOpen();
         return decodeBase64((await plugin.readBinary({ path: managedVaultPath(path) })).base64);
+      },
+      writeBinary: async (path, data, _writeOptions, mutationId) => {
+        requireOpen();
+        if (!plugin.writeBinary) throw new Error("Binary writes are unavailable in this iOS host version");
+        const bytes = new Uint8Array(data); let binary = "";
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        return plugin.writeBinary({ path: managedVaultPath(path), base64: btoa(binary), mutationId });
       },
       // The native plugin does not yet accept mtime/ctime overrides; writeOptions
       // is accepted for interface compatibility with the other hosts but not

@@ -9,8 +9,17 @@ import { importFromObsidianVault } from "./obsidian-import";
 import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
 import type { DataWriteOptions } from "../renderer/vault";
-import { withPathLock } from "./path-lock";
-import { writeVaultFile } from "./vault-write";
+import { withPathLock, withVaultMutation } from "./path-lock";
+import { SenderRequests } from "./network";
+import { applyGuardedMutation } from "./sync-apply";
+import { SyncPrivateStorage } from "./sync-private-storage";
+import { PrivateKeyStore } from "./private-key-store";
+import { applyPortableMutation } from "./sync-config-apply";
+import { isPortableAssetPath } from "../shared/portable-assets";
+import type { GuardedMutation } from "../shared/sync-safety";
+import { createHash, randomUUID } from "node:crypto";
+import type { HostHttpRequest } from "../shared/network";
+import { writeVaultFile, writeVaultBinary } from "./vault-write";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
 import { checkForUpdatesManually, initAutoUpdater } from "./auto-updater";
 import { getProcessMetricsSnapshot } from "./process-metrics";
@@ -43,7 +52,6 @@ import {
   type DiagnosticEntry,
   type FdPressureSnapshot,
 } from "./crash-diagnostics";
-import { randomUUID } from "node:crypto";
 import { buildApplicationMenuTemplate } from "./application-menu";
 import { nodeHotkeyPlatform, resolveGuestHotkey } from "../shared/hotkey";
 import { writeJsonAtomic } from "./config-file";
@@ -62,7 +70,7 @@ import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performPluginFetch, performRequestUrl } from "./request-url";
 import { SecretStore } from "./secret-store";
 import { resolveVaultPath as resolveInVault } from "./vault-path";
-import { removeVaultFolderAt, resolveVaultFolderPath } from "./vault-remove";
+import { registerVaultRemoveIpc } from "./vault-remove-ipc";
 import type { PrivilegedRequestUrlParam } from "../shared/request-url";
 import type { PrivilegedFetchRequest } from "../shared/plugin-fetch";
 import {
@@ -371,6 +379,7 @@ function startWatcher(win: BrowserWindow, root: string, seed: VaultFileEntry[]):
 }
 
 function registerIpc() {
+  const secretCapabilities = new Map<string, { senderId: number; owner: string }>();
   // Narrow internal desktop integration. No Vault/TFile or arbitrary-path API.
   ipcMain.handle("external-roots-contribute", (e, projects: ExternalProjectContribution[], options?: ExternalProjectContributionOptions) => externalRootReply(async () => {
     return submitExternalProjects(await externalRootSession(e.sender), projects, options, notifyExternalRoots);
@@ -577,6 +586,105 @@ function registerIpc() {
   // already-running process picks up a just-changed policy immediately.
   ipcMain.handle("get-plugin-policy", () => loadManagedPolicy());
 
+  const httpRequests = new SenderRequests();
+  const httpOwners = new Set<number>();
+  ipcMain.handle("host-http-request", async (e, id: string, request: HostHttpRequest) => {
+    if (!httpOwners.has(e.sender.id)) {
+      httpOwners.add(e.sender.id);
+      e.sender.once("destroyed", () => { httpRequests.cancelOwner(e.sender.id); httpOwners.delete(e.sender.id); });
+    }
+    return httpRequests.run(e.sender.id, id, request);
+  });
+  ipcMain.on("host-http-cancel", (e, id: string) => { httpRequests.cancel(e.sender.id, id); });
+
+  const syncOwners = new Map<string, { senderId: number; token: string }>();
+  const syncEditorWaiters = new Map<string, (reason: string | null) => void>();
+  const requestEditor = (win: BrowserWindow, token: string, phase: "prepare" | "release", relative = ""): Promise<string | null> => new Promise(resolve => {
+    if (win.isDestroyed()) { resolve("Vault window closed during sync"); return; }
+    const key = `${win.webContents.id}:${token}:${phase}`;
+    const timeout = setTimeout(() => { syncEditorWaiters.delete(key); resolve("Editor guard timed out"); }, 5000);
+    syncEditorWaiters.set(key, reason => { clearTimeout(timeout); syncEditorWaiters.delete(key); resolve(reason); });
+    win.webContents.send(`sync-editor-${phase}`, token, relative);
+  });
+  ipcMain.on("sync-editor-result", (e, token: string, phase: string, reason: unknown) => {
+    syncEditorWaiters.get(`${e.sender.id}:${token}:${phase}`)?.(reason === null ? null : typeof reason === "string" ? reason : "Invalid editor guard response");
+  });
+  ipcMain.handle("sync-owner-claim", async e => {
+    const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const root = await fsp.realpath(session.root);
+    if (sessions.get(win.id) !== session) throw new Error("Vault changed");
+    const existing = syncOwners.get(root);
+    if (existing) return existing.senderId === e.sender.id ? existing.token : null;
+    const senderId = e.sender.id; const token = randomUUID(); syncOwners.set(root, { senderId, token });
+    e.sender.once("destroyed", () => { if (syncOwners.get(root)?.token === token) syncOwners.delete(root); });
+    return token;
+  });
+  ipcMain.handle("sync-owner-release", (e, token: string) => { for (const [root, owner] of syncOwners) if (owner.senderId === e.sender.id && owner.token === token) syncOwners.delete(root); });
+  ipcMain.handle("sync-private-storage", async (e, token: string, binding: string, request: import("../shared/sync-safety").SyncStorageRequest) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
+    if (!session || typeof binding !== "string" || !/^[a-f0-9]{64}$/.test(binding)) throw new Error("Invalid sync storage binding");
+    const root = await fsp.realpath(session.root); const owner = syncOwners.get(root);
+    if (sessions.get(win.id) !== session || owner?.senderId !== e.sender.id || owner.token !== token) throw new Error("Sync ownership changed");
+    const storage = new SyncPrivateStorage(path.join(app.getPath("userData"), "sync-private", createHash("sha256").update(root).digest("hex"), binding));
+    let result: unknown;
+    switch (request.action) {
+      case "stage": result = await storage.stage(request.key, request.data); break;
+      case "read-stage": result = await storage.readStage(request.key); break;
+      case "save-operation": result = await storage.saveOperation(request.key, request.value); break;
+      case "load-operations": result = await storage.loadOperations(); break;
+      default: throw new Error("Invalid sync storage request");
+    }
+    if (sessions.get(win.id) !== session || syncOwners.get(root) !== owner) throw new Error("Sync ownership changed");
+    return result;
+  });
+  ipcMain.handle("sync-local-apply", async (e, ownerToken: string, input: GuardedMutation) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const root = await fsp.realpath(session.root);
+    let preparedSessions: Map<number, typeof session> | undefined;
+    let preparedWindows: number[] | undefined;
+    const assertContext = () => {
+      const owner = syncOwners.get(root);
+      if (!owner || owner.senderId !== e.sender.id || owner.token !== ownerToken || sessions.get(win.id) !== session) throw new Error("Sync owner or vault changed");
+      if (preparedSessions && (sessions.size !== preparedSessions.size || [...preparedSessions].some(([id, current]) => sessions.get(id) !== current))) throw new Error("Vault window changed during sync");
+      if (preparedWindows && JSON.stringify(BrowserWindow.getAllWindows().map(peer => peer.id).sort()) !== JSON.stringify(preparedWindows)) throw new Error("Vault window opened or closed during sync");
+    };
+    return withPathLock([`sync-editor-guard:${root}`], async () => {
+      assertContext(); const participants: BrowserWindow[] = [];
+      // Conservatively restart even for an unrelated window change. No writer may
+      // join a vault after the prepared participant set was frozen.
+      preparedSessions = new Map(sessions);
+      preparedWindows = BrowserWindow.getAllWindows().map(peer => peer.id).sort();
+      for (const [id, candidate] of sessions) {
+        if (await fsp.realpath(candidate.root) === root) { const peer = BrowserWindow.fromId(id); if (peer) participants.push(peer); }
+      }
+      const token = randomUUID(); let result; let failure: unknown;
+      try {
+        const reasons = await Promise.all(participants.map(peer => requestEditor(peer, token, "prepare", input.path)));
+        const blocked = reasons.find(reason => reason !== null); if (blocked) throw new Error(blocked);
+        assertContext();
+        const apply = input.namespace === "portable-config" && !isPortableAssetPath(input.path) ? applyPortableMutation : applyGuardedMutation;
+        result = await apply(root, path.join(app.getPath("userData"), "sync-recovery", createHash("sha256").update(root).digest("hex")), input, { trash: target => shell.trashItem(target), assertContext });
+        if (input.namespace !== "portable-config") for (const peer of participants) if (!peer.isDestroyed()) peer.webContents.send("vault-event", { event: input.kind === "trash" ? "delete" : input.kind === "mkdir" ? "create-folder" : input.expectedHash === null ? "create" : "modify", path: input.path, mutationId: input.operationId });
+      } catch (error) { failure = error; }
+      finally {
+        const releases = await Promise.all(participants.map(peer => requestEditor(peer, token, "release")));
+        if (!failure && releases.some(reason => reason !== null)) failure = new Error("Editor refresh incomplete; sync can retry safely");
+      }
+      if (failure) throw failure; return result;
+    });
+  });
+
+  ipcMain.handle("vault-sync-scan", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const entries = await listVaultFiles(session.root, { strictSync: true });
+    if (sessions.get(win.id) !== session) throw new Error("Vault changed during sync scan");
+    return entries;
+  });
+
   ipcMain.handle("vault-list", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
@@ -597,7 +705,10 @@ function registerIpc() {
       const injectedDelayMs = Number(process.env.GEODE_TEST_PLUGIN_IO_DELAY_MS ?? 0);
       if (injectedDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, injectedDelayMs));
       const content = await fsp.readFile(resolveVaultPath(win, rel), "utf8");
-      return { ok: true, content, mainReceivedAt, fsStartedAt, fsFinishedAt: Date.now() };
+      const match = /^\.geode\/plugins\/([a-z0-9][a-z0-9-]*)\/main\.js$/.exec(rel.replace(/\\/g, "/"));
+      let secretCapability: string | undefined;
+      if (match) { secretCapability = randomUUID(); secretCapabilities.set(secretCapability, { senderId: e.sender.id, owner: match[1] }); }
+      return { ok: true, content, secretCapability, mainReceivedAt, fsStartedAt, fsFinishedAt: Date.now() };
     } catch (error) {
       return {
         ok: false,
@@ -619,7 +730,7 @@ function registerIpc() {
       if (error.code === "ENOENT") return null;
       throw error;
     });
-    await withPathLock([pluginRoot], async () => {
+    await withVaultMutation(session.root, [pluginRoot], async () => {
       const manifest = await readOptional("manifest.json");
       if (manifest !== expectedManifest) {
         throw new Error("PLUGIN_FILES_CHANGED");
@@ -659,18 +770,55 @@ function registerIpc() {
   ipcMain.handle("vault-write", async (e, rel: string, data: string, options?: DataWriteOptions) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    return withPathLock([abs], () => writeVaultFile(abs, data, options));
+    return withVaultMutation(sessions.get(win.id)!.root, [abs], () => writeVaultFile(abs, data, options));
   });
+
+  ipcMain.handle("vault-write-binary", async (e, rel: string, data: ArrayBuffer, options?: DataWriteOptions) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const abs = resolveVaultPath(win, rel);
+    return withVaultMutation(sessions.get(win.id)!.root, [abs], () => writeVaultBinary(abs, data, options));
+  });
+
+  const deviceStore = new PrivateKeyStore(path.join(app.getPath("userData"), "device-state"), "json");
+  const secretStore = new PrivateKeyStore(path.join(app.getPath("userData"), "secrets"), "bin");
+  const stateKey = (key: string) => {
+    if (!key || key.includes("\0")) throw new Error("Invalid device-state key");
+    return key;
+  };
+  const secretKey = (namespace: string, key: string) => {
+    if (!namespace || !key || namespace.includes("\0") || key.includes("\0")) throw new Error("Invalid secret key");
+    return `${namespace}\0${key}`;
+  };
+  const secretOwner = (senderId: number, capability: string) => {
+    const claimed = secretCapabilities.get(capability);
+    if (!claimed || claimed.senderId !== senderId) throw new Error("Invalid secret capability");
+    return claimed.owner;
+  };
+  ipcMain.handle("device-state-read", async (_e, key: string) => JSON.parse((await deviceStore.read(stateKey(key)))?.toString("utf8") ?? "null"));
+  ipcMain.handle("device-state-write", async (_e, key: string, value: unknown) => deviceStore.write(stateKey(key), Buffer.from(JSON.stringify(value))));
+  ipcMain.handle("device-state-remove", async (_e, key: string) => deviceStore.remove(stateKey(key)));
+  ipcMain.handle("secret-read", async (e, capability: string, key: string) => {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const namespace = secretOwner(e.sender.id, capability);
+    const encrypted = await secretStore.read(secretKey(namespace, key));
+    return encrypted ? safeStorage.decryptString(encrypted) : null;
+  });
+  ipcMain.handle("secret-write", async (e, capability: string, key: string, value: string) => {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure secret storage is unavailable");
+    const namespace = secretOwner(e.sender.id, capability);
+    await secretStore.write(secretKey(namespace, key), safeStorage.encryptString(value));
+  });
+  ipcMain.handle("secret-remove", async (e, capability: string, key: string) => secretStore.remove(secretKey(secretOwner(e.sender.id, capability), key)));
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
-    await fsp.mkdir(resolveVaultPath(win, rel), { recursive: true });
+    const target = resolveVaultPath(win, rel); await withVaultMutation(sessions.get(win.id)!.root, [target], () => fsp.mkdir(target, { recursive: true }));
   });
 
   ipcMain.handle("vault-delete", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    return withPathLock([abs], async () => {
+    return withVaultMutation(sessions.get(win.id)!.root, [abs], async () => {
       // Move to OS trash rather than permanent deletion (Obsidian's default).
       await shell.trashItem(abs);
     });
@@ -683,19 +831,19 @@ function registerIpc() {
   // `delete`/`delete-folder` events (and the metadata-cache invalidation they
   // drive) arrive exactly as they do for any other removal; nothing extra to
   // fire here.
-  ipcMain.handle("vault-rmdir", async (e, rel: string, recursive: boolean) => {
-    const win = BrowserWindow.fromWebContents(e.sender)!;
-    const abs = resolveVaultFolderPath(requireVaultRoot(win), rel);
-    return withPathLock([abs], () => removeVaultFolderAt(abs, recursive === true));
-  });
+  registerVaultRemoveIpc(ipcMain, e => requireVaultRoot(BrowserWindow.fromWebContents(e.sender)!));
 
   ipcMain.handle("vault-rename", async (e, rel: string, newRel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id)!;
     const from = resolveVaultPath(win, rel);
     const to = resolveVaultPath(win, newRel);
-    return withPathLock([from, to], async () => {
+    return withVaultMutation(session.root, [from, to], async () => {
+      if (sessions.get(win.id) !== session) throw new Error("Vault changed before rename");
+      const folder = (await fsp.stat(from)).isDirectory();
       await fsp.mkdir(path.dirname(to), { recursive: true });
       await fsp.rename(from, to);
+      for (const [id, candidate] of sessions) if (candidate.root === session.root) BrowserWindow.fromId(id)?.webContents.send("vault-event", { event: folder ? "create-folder" : "create", path: newRel, renamedFrom: rel });
     });
   });
 
@@ -835,8 +983,10 @@ function registerIpc() {
     const session = sessions.get(win.id);
     if (!session) return;
     const dir = path.join(session.root, ".geode");
-    await fsp.mkdir(dir, { recursive: true });
-    await writeJsonAtomic(path.join(dir, `${name}.json`), data);
+    await withVaultMutation(session.root, [dir], async () => {
+      await fsp.mkdir(dir, { recursive: true });
+      await writeJsonAtomic(path.join(dir, `${name}.json`), data);
+    });
   });
 
   ipcMain.handle("get-vault-root", (e) => {

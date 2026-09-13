@@ -1,4 +1,5 @@
 import { Events } from "./events";
+import { isIgnoredVaultPath } from "../shared/vault-ignore";
 import {
   TFile,
   TFolder,
@@ -238,7 +239,9 @@ export class Vault extends Events {
     if (scan.status !== "complete") {
       return { status: scan.status, changes: [], errorCode: scan.errorCode };
     }
-    const manifest = buildVaultManifest(this.root, scan.entries);
+    // The sync scanner includes configuration; ordinary vault refresh must keep
+    // the same hidden-path policy as initial loading and watcher events.
+    const manifest = buildVaultManifest(this.root, scan.entries.filter(entry => !isIgnoredVaultPath(entry.path)));
     const result = { status: "complete" as const, changes: diffVaultManifests(previous, manifest), manifest };
     const changes = result.changes.filter((change) => {
       if (!this.acknowledgedPathsSinceManifest.has(change.path)) return true;
