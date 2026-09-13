@@ -20,11 +20,24 @@ const A_MD = [
   "",
 ].join("\n");
 
+// A 1x1 transparent PNG. `App.openFile` only special-cases canvas/base/md/
+// image extensions (see `app.ts`'s `openFile`) — arbitrary extensions like
+// `.json` or `.txt` can't be opened into a tab at all yet ("Cannot open .json
+// files yet"), so a tab-header/more-options non-markdown regression check
+// needs an *image* file to get a real tab to right-click. The file-explorer
+// row's own context menu (tested above) has no such constraint since it
+// never has to open the file.
+const PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64"
+);
+
 function makeVault() {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-menu-events-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-menu-events-ud-"));
   fs.writeFileSync(path.join(vaultDir, "A.md"), A_MD);
   fs.writeFileSync(path.join(vaultDir, "sample-data.json"), "{}");
+  fs.writeFileSync(path.join(vaultDir, "pixel.png"), PIXEL_PNG);
   fs.mkdirSync(path.join(vaultDir, "Sub"));
   fs.writeFileSync(path.join(vaultDir, "Sub", "B.md"), "# B\n");
   fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
@@ -133,6 +146,120 @@ test.describe("file-menu", () => {
       await expect(win.locator(".menu-item-title", { hasText: "Should not appear for json" })).toHaveCount(0);
       const seen = await win.evaluate(() => (window as any).__jsonSeen);
       expect(seen).toEqual({ path: "sample-data.json", extension: "json" });
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// The two surfaces below were missed by the original file-menu/editor-menu
+// PR (#197): it wired the file explorer and the editor, but not the
+// tab-header right-click menu or the view-header "more options" (⋮) button.
+// Regression coverage for both, mirroring the file-explorer describe block
+// above so every file-bearing menu surface is asserted the same way.
+test.describe("file-menu (tab-header right-click)", () => {
+  test("fires with source 'tab-header' and the leaf as the 4th arg, appending after the built-ins", async () => {
+    const { win, cleanup } = await launch({ openEditor: true });
+    try {
+      await win.evaluate(() => {
+        const app = (window as any).app;
+        (window as any).__tabMenuArgs = [];
+        app.workspace.on("file-menu", (menu: any, file: any, source: string, leaf: any) => {
+          (window as any).__tabMenuArgs.push({
+            path: file?.path,
+            source,
+            hasLeaf: !!leaf,
+            leafMatchesActive: leaf === app.workspace.activeLeaf,
+          });
+          menu.addItem((item: any) => item.setTitle("Plugin Tab Item"));
+        });
+      });
+
+      await win.locator('.workspace-tab-header[aria-label="A"]').click({ button: "right" });
+      const titles = await win.locator(".menu .menu-item-title").allTextContents();
+      expect(titles.length).toBeGreaterThan(1); // built-ins + plugin item
+      expect(titles[titles.length - 1]).toBe("Plugin Tab Item");
+
+      const args = await win.evaluate(() => (window as any).__tabMenuArgs);
+      expect(args).toEqual([{ path: "A.md", source: "tab-header", hasLeaf: true, leafMatchesActive: true }]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("does not offer the item on a non-markdown file's tab, but the plugin still sees the real TFile", async () => {
+    const { win, cleanup } = await launch();
+    try {
+      await win.evaluate(() => {
+        const app = (window as any).app;
+        (window as any).__imageTabSeen = null;
+        app.workspace.on("file-menu", (menu: any, file: any) => {
+          (window as any).__imageTabSeen = { path: file.path, extension: file.extension };
+          if (file.extension !== "md") return; // mirrors a real plugin gating on markdown
+          menu.addItem((item: any) => item.setTitle("Should not appear for an image"));
+        });
+      });
+
+      await win.locator('.nav-file-title[data-path="pixel.png"]').click();
+      await win.locator('.workspace-tab-header[aria-label="pixel"]').click({ button: "right" });
+      await expect(win.locator(".menu")).toBeVisible();
+      await expect(win.locator(".menu-item-title", { hasText: "Should not appear for an image" })).toHaveCount(0);
+      const seen = await win.evaluate(() => (window as any).__imageTabSeen);
+      expect(seen).toEqual({ path: "pixel.png", extension: "png" });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("does not fire for a file-less tab, but the built-in tab menu (pin/close/etc.) still shows", async () => {
+    const { win, cleanup } = await launch();
+    try {
+      const isMac = process.platform === "darwin";
+      await win.keyboard.press(isMac ? "Meta+P" : "Control+P");
+      await win.locator(".prompt-input").fill("Graph view");
+      await win.getByText("Graph view: Open graph view").click();
+      await expect(win.locator(".graph-view")).toBeVisible();
+
+      await win.evaluate(() => {
+        const app = (window as any).app;
+        (window as any).__graphTabMenuFired = false;
+        app.workspace.on("file-menu", () => { (window as any).__graphTabMenuFired = true; });
+      });
+
+      await win.locator('.workspace-tab-header[data-type="graph"]').click({ button: "right" });
+      // TAB_MENU_SPEC's "tab" section (pin/close/close-others/close-right)
+      // uses `includeUnavailable: true`, so the built-in menu still renders
+      // even though this tab has no file — only the `file-menu` trigger is
+      // skipped.
+      await expect(win.locator(".menu-item-title", { hasText: "Close" }).first()).toBeVisible();
+      const fired = await win.evaluate(() => (window as any).__graphTabMenuFired);
+      expect(fired).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+test.describe("file-menu (view-header more-options ⋮ button)", () => {
+  test("fires with source 'more-options' and the leaf as the 4th arg, appending after the built-ins", async () => {
+    const { win, cleanup } = await launch({ openEditor: true });
+    try {
+      await win.evaluate(() => {
+        const app = (window as any).app;
+        (window as any).__moreOptionsArgs = [];
+        app.workspace.on("file-menu", (menu: any, file: any, source: string, leaf: any) => {
+          (window as any).__moreOptionsArgs.push({ path: file?.path, source, hasLeaf: !!leaf });
+          menu.addItem((item: any) => item.setTitle("Plugin More-Options Item"));
+        });
+      });
+
+      await win.locator(".view-more-options").click();
+      const titles = await win.locator(".menu .menu-item-title").allTextContents();
+      expect(titles.length).toBeGreaterThan(1); // built-ins + plugin item
+      expect(titles[titles.length - 1]).toBe("Plugin More-Options Item");
+
+      const args = await win.evaluate(() => (window as any).__moreOptionsArgs);
+      expect(args).toEqual([{ path: "A.md", source: "more-options", hasLeaf: true }]);
     } finally {
       await cleanup();
     }
