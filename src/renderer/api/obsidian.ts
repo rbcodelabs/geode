@@ -57,7 +57,7 @@ export { isTFile, isTFolder, normalizePath } from "../types";
 // often inside cache-building loops — obsidian-tasks calls
 // `parseFrontMatterTags` per file while building its task cache, so an
 // undefined export throws mid-scan. See ./frontmatter.
-export { getAllTags, getFrontMatterInfo, parseFrontMatterTags } from "./frontmatter";
+export { getAllTags, getFrontMatterInfo, parseFrontMatterTags, parseYaml, stringifyYaml } from "./frontmatter";
 export type { FrontMatterInfo } from "./frontmatter";
 export { App } from "../app";
 export type { TAbstractFile, CachedMetadata } from "../types";
