@@ -74,4 +74,20 @@ describe("icon resolution (Lucide)", () => {
     addIcon("lucide-my-custom", "<svg data-custom-2>y</svg>");
     expect(getIconSvg("my-custom")).toBeNull();
   });
+
+  it("resolves legacy Obsidian icon-font glyph names via their Lucide alias", () => {
+    // Regression test: the bundled Calendar plugin fixture's getIcon()
+    // returns "calendar-with-checkmark" — a pre-Lucide Obsidian icon-font
+    // name with no direct Lucide export (lucide-static has Calendar,
+    // CalendarCheck, CalendarCheck2, CalendarDays, ... but no
+    // CalendarWithCheckmark). Before the alias map, this silently rendered
+    // blank instead of falling back to a visible icon.
+    const svg = getIconSvg("calendar-with-checkmark");
+    expect(svg).toBeTypeOf("string");
+    expect(svg!.includes("<svg")).toBe(true);
+    expect(svg!.includes("lucide-calendar-check")).toBe(true);
+    expect(hasIcon("calendar-with-checkmark")).toBe(true);
+    // Aliasing composes with the existing lucide- prefix handling.
+    expect(getIconSvg("calendar-with-checkmark")).toBe(getIconSvg("calendar-check"));
+  });
 });

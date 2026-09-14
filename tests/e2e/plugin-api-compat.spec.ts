@@ -73,6 +73,10 @@ const PROBE_MAIN_JS = `
       };
       mkRibbon('ribbon-custom', 'probe-glyph', 'Custom glyph');
       mkRibbon('ribbon-lucide-prefixed', 'lucide-search', 'Lucide prefixed');
+      // Legacy Obsidian icon-font glyph name (pre-Lucide) with no direct
+      // Lucide export — e.g. the bundled Calendar plugin fixture's
+      // getIcon(). Must resolve via the alias map, not render blank.
+      mkRibbon('ribbon-legacy-alias', 'calendar-with-checkmark', 'Legacy alias icon');
       mkRibbon('ribbon-unknown', 'totally-unknown-icon-xyz', 'Unknown icon');
       mkRibbon('ribbon-emoji', '\u{1F600}', 'Emoji icon');
 
@@ -188,6 +192,18 @@ test.describe("plugin API host-contract compat", () => {
       await expect(lucideBtn.locator("svg")).toHaveCount(1);
       const lucideSvgHtml = await lucideBtn.locator("svg").innerHTML();
       expect(lucideSvgHtml.length).toBeGreaterThan(0);
+
+      // --- 3b. Legacy Obsidian icon-font name resolves via alias -----------
+      // Regression test for the bug where "calendar-with-checkmark" (the
+      // bundled Calendar plugin fixture's getIcon()) silently rendered
+      // blank: lucide-static has no CalendarWithCheckmark export, so direct
+      // PascalCase lookup failed with no error and no fallback glyph.
+      const legacyAliasBtn = window.locator("#ribbon-legacy-alias");
+      const legacyAliasSvg = legacyAliasBtn.locator("svg");
+      await expect(legacyAliasSvg).toHaveCount(1);
+      const legacyBox = await legacyAliasSvg.boundingBox();
+      expect(legacyBox && legacyBox.width > 0 && legacyBox.height > 0, "legacy alias svg has non-zero box").toBeTruthy();
+      await expect(legacyAliasSvg).toHaveClass(/lucide-calendar-check\b/);
 
       // --- 4. Unknown id -> empty text; emoji still falls back to text ----
       const unknownBtn = window.locator("#ribbon-unknown");
