@@ -333,3 +333,58 @@ test('a rejected Canvas refresh cannot acknowledge sync or clear stale-writer pr
     expect(await second.evaluate(() => (window as any).app.workspace.activeLeaf.view.containerEl.inert)).toBe(false);
   });
 });
+
+/**
+ * The external-edit recovery banner tells the user, in as many words, that the
+ * provider note is read-only. That promise has to survive the user navigating
+ * away or closing the tab.
+ *
+ * In recovery, `lastSavedText` holds the PROVIDER text while the buffer still
+ * holds the local edit, so any write persists the local text over the provider
+ * file. `scheduleSave()` refuses to run in that state, but `flush()` had no
+ * such guard and `setFile()` / `onClose()` / `prepareVaultSwitch()` /
+ * `renderReading()` all call it directly — so simply switching notes or closing
+ * the tab silently performed the write the banner promised would not happen.
+ */
+test('leaving or closing a note in external-edit recovery cannot write the local buffer over it', async () => {
+  await isolated(async ({ second, vault }) => {
+    await open(second);
+
+    const enterRecovery = () => second.evaluate(() => {
+      const app = (window as any).app;
+      const view = app.workspace.getLeavesOfType('markdown').find((leaf: any) => leaf.view?.file?.path === 'Note.md')!.view;
+      // Exactly the recovery state app.ts installs: provider text becomes the
+      // last-known-saved text, the local edit stays in the buffer, read-only.
+      view.presentConflict('provider wins', null, true);
+      view.editor.dispatch({ changes: { from: 0, to: view.editor.state.doc.length, insert: 'local edit that must not be published' } });
+      return { readOnly: view.isConflictReadOnly(), buffer: view.getText() };
+    });
+
+    // 1. Navigating to another note must not flush the recovery buffer.
+    const state = await enterRecovery();
+    expect(state.readOnly).toBe(true);
+    expect(state.buffer).toBe('local edit that must not be published');
+    await open(second, 'Source.md');
+    await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8'), { timeout: 4000 }).toBe('old');
+
+    // 2. Nor may closing the tab.
+    await open(second);
+    await enterRecovery();
+    await second.evaluate(async () => {
+      const app = (window as any).app;
+      const leaf = app.workspace.getLeavesOfType('markdown').find((item: any) => item.view?.file?.path === 'Note.md')!;
+      await leaf.detach?.() ?? app.workspace.detachLeaf?.(leaf);
+    });
+    await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8'), { timeout: 4000 }).toBe('old');
+
+    // 3. Nor may toggling reading mode, which also flushes.
+    await open(second);
+    await enterRecovery();
+    await second.evaluate(async () => {
+      const app = (window as any).app;
+      const view = app.workspace.getLeavesOfType('markdown').find((leaf: any) => leaf.view?.file?.path === 'Note.md')!.view;
+      await view.toggleMode();
+    });
+    await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8'), { timeout: 4000 }).toBe('old');
+  });
+});

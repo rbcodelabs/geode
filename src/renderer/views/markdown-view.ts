@@ -448,6 +448,22 @@ export class MarkdownView implements View {
       this.saveTimer = null;
     }
     if (this.flushInFlight) await this.flushInFlight;
+    // External-edit recovery tells the user the provider note is read-only, and
+    // that promise has to hold however they leave the note. In that state
+    // `lastSavedText` is the PROVIDER text while the buffer still holds the
+    // local edit, so any write here persists the local text over the provider
+    // file — the exact outcome the banner says will not happen.
+    //
+    // `scheduleSave()` already refuses, so autosave was never the risk. The
+    // risk is the direct callers: setFile(), onClose(), prepareVaultSwitch()
+    // and renderReading() all flush unconditionally, so merely switching notes,
+    // closing the tab or toggling reading view performed that write silently.
+    // Guarding here rather than at each call site closes the ones that exist
+    // and the ones added later.
+    //
+    // Any write already in flight is still awaited above, so callers can
+    // continue to rely on flush() leaving the view quiescent.
+    if (this.conflictReadOnly) return;
     if (!this.file || !this.editor) return;
     const text = this.editor.state.doc.toString();
     if (text === this.lastSavedText) return;
