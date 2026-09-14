@@ -22,16 +22,19 @@ abstract class SidebarView implements View {
     this.containerEl.appendChild(this.bodyEl);
 
     // file-open is a single discrete user action — render immediately.
-    app.workspace.on("file-open", (file: TFile | null) => {
-      this.file = file;
-      this.onFileChanged();
-      // Inactive fixed sidebar views are detached from the sidebar content
-      // host. Keep their file state current, but defer potentially expensive
-      // rendering (notably Backlinks' vault-wide unlinked-mention scan) until
-      // Sidebar.show() calls onOpen() for the view again.
-      if (this.containerEl.isConnected) this.render();
+    app.workspace.on("file-open", () => this.syncActiveFile());
+    // file-open is emitted only when the newly active leaf's view answers
+    // getFile(), so activating a fileless view (a web view, say) emits nothing
+    // and would leave the previous note's content on screen forever.
+    // active-leaf-change is the unconditional signal.
+    app.workspace.on("active-leaf-change", () => this.syncActiveFile());
+    app.workspace.on("layout-change", () => {
+      this.onVisibilityChanged(this.containerEl.isConnected);
+      // Swapping a leaf's view in place (opening an HTML file over the active
+      // markdown tab) goes through WorkspaceLeaf.setView, which emits neither
+      // active-leaf-change nor file-open — layout-change is its only signal.
+      this.syncActiveFile();
     });
-    app.workspace.on("layout-change", () => this.onVisibilityChanged(this.containerEl.isConnected));
     // A metadata burst fires N synchronous `changed` events in one microtask;
     // coalesce them into a single re-render on the next microtask, mirroring
     // base-view.ts's `scheduleRerender` pattern. Nothing about WHAT renders
@@ -43,6 +46,28 @@ abstract class SidebarView implements View {
   abstract getDisplayText(): string;
   abstract getIcon(): string;
   abstract render(): void | Promise<void>;
+
+  /**
+   * Recompute the subject from the live active leaf rather than from an event
+   * payload — the same way StatusBar does it. Two properties follow from
+   * Workspace.getActiveFile() reading `activeGroup.active`:
+   *
+   * - a fileless view (web viewer) yields null, so the panel blanks;
+   * - focusing a sidebar leaf leaves `activeGroup` on the centre split
+   *   (TabGroup.setActiveLeaf calls setActiveGroup only when `!this.sidebar`),
+   *   so clicking into this very panel reports the same file and is a no-op.
+   */
+  private syncActiveFile(): void {
+    const next = this.app.workspace.getActiveFile();
+    if ((next?.path ?? null) === (this.file?.path ?? null)) return;
+    this.file = next;
+    this.onFileChanged();
+    // Inactive fixed sidebar views are detached from the sidebar content
+    // host. Keep their file state current, but defer potentially expensive
+    // rendering (notably Backlinks' vault-wide unlinked-mention scan) until
+    // Sidebar.show() calls onOpen() for the view again.
+    if (this.containerEl.isConnected) this.render();
+  }
 
   private scheduleRender(): void {
     if (this.renderScheduled) return;
