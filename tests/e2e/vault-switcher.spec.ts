@@ -89,3 +89,62 @@ test("Manage vaults opens and focuses isolated vault windows", async () => {
     }
   }
 });
+
+test("a long vault list stays reachable inside the capped modal", async () => {
+  // `.modal` caps at 65vh and clips with `overflow: hidden`. Without a scroll
+  // container on `.modal-content`, enough recent vaults pushes the tail of the
+  // list — and the "Open folder as vault" button under it — outside the clipped
+  // box, where no amount of scrolling reaches them.
+  const vaults = Array.from({ length: 12 }, (_, index) => {
+    const vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), `geode-many-${index}-`));
+    fs.writeFileSync(path.join(vaultPath, "Note.md"), `# Vault ${index}\n`);
+    return vaultPath;
+  });
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-many-ud-"));
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({
+    recentVaults: vaults,
+    lastVault: vaults[0],
+  }));
+
+  const app = await electron.launch({
+    args: [repoRoot, `--user-data-dir=${userDataDir}`],
+    cwd: repoRoot,
+  });
+
+  try {
+    const window = await app.firstWindow();
+    await expect(window.locator('.nav-file-title[data-path="Note.md"]')).toBeVisible();
+    await window.setViewportSize({ width: 1100, height: 700 });
+    await window.getByRole("button", { name: "Manage vaults" }).click();
+
+    const modal = window.locator(".modal.mod-manage-vaults");
+    await expect(modal.getByRole("heading", { name: "Manage vaults" })).toBeVisible();
+
+    // The content column must actually be scrollable, not merely overflowing.
+    const scroll = await modal.locator(".modal-content").evaluate((el) => {
+      const before = el.scrollTop;
+      el.scrollTop = el.scrollHeight;
+      return { overflowY: getComputedStyle(el).overflowY, before, after: el.scrollTop };
+    });
+    expect(scroll.overflowY).toBe("auto");
+    expect(scroll.after).toBeGreaterThan(scroll.before);
+
+    // Having scrolled, the last vault and the action button are inside the modal.
+    const withinModal = await modal.evaluate((modalEl) => {
+      const rows = [...modalEl.querySelectorAll(".vault-switcher-row")];
+      const openFolder = modalEl.querySelector(".vault-switcher-open-folder")!;
+      const bounds = modalEl.getBoundingClientRect();
+      const contains = (el: Element) => {
+        const rect = el.getBoundingClientRect();
+        return rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1;
+      };
+      return { lastRow: contains(rows[rows.length - 1]), openFolder: contains(openFolder) };
+    });
+    expect(withinModal).toEqual({ lastRow: true, openFolder: true });
+  } finally {
+    await app.close();
+    for (const scratchPath of [...vaults, userDataDir]) {
+      fs.rmSync(scratchPath, { recursive: true, force: true });
+    }
+  }
+});

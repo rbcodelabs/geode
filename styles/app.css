@@ -3050,10 +3050,17 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   overflow: hidden;
 }
 
+/* `.modal` caps height at 65vh and clips with `overflow: hidden`, so the
+   content column has to be the scroll container — `min-height: 0` alone only
+   lets it shrink, it does not let the user reach what got shrunk. Without
+   `overflow-y`, any modal taller than the cap silently renders its tail
+   (including its action buttons) outside the clipped box, unreachable. The
+   settings modal opts out below because its two panes scroll individually. */
 .modal-content {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
   padding: 0;
 }
 
