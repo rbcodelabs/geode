@@ -80,6 +80,39 @@ describe("Obsidian wikilink utility contracts", () => {
   });
 });
 
+describe("Obsidian prepareFuzzySearch contract", () => {
+  it("exports prepareFuzzySearch, used by FuzzySuggestModal's built-in matcher", () => {
+    expect(ObsidianApi.prepareFuzzySearch).toBeTypeOf("function");
+  });
+
+  it("returns null for a query whose characters aren't all present in order", () => {
+    const search = ObsidianApi.prepareFuzzySearch("xyz");
+    expect(search("obsidian-terminal")).toBeNull();
+  });
+
+  it("matches a subsequence and scores contiguous/word-start runs higher", () => {
+    const search = ObsidianApi.prepareFuzzySearch("term");
+    const exact = search("terminal");
+    const scattered = search("the extra rare mess"); // t-e-r-m as scattered letters
+    expect(exact).not.toBeNull();
+    expect(scattered).not.toBeNull();
+    expect(exact!.score).toBeGreaterThan(scattered!.score);
+  });
+
+  it("reports contiguous match ranges usable for highlighting", () => {
+    const search = ObsidianApi.prepareFuzzySearch("term");
+    const result = search("open-terminal.integrated.root");
+    expect(result).not.toBeNull();
+    const [start, end] = result!.matches[0];
+    expect("open-terminal.integrated.root".slice(start, end)).toBe("term");
+  });
+
+  it("matches an empty query against anything with a zero score and no ranges", () => {
+    const search = ObsidianApi.prepareFuzzySearch("");
+    expect(search("anything")).toEqual({ score: 0, matches: [] });
+  });
+});
+
 describe("plugin CommonJS compatibility module", () => {
   it("makes all six utilities available through require('obsidian')", () => {
     expect(PluginManagerModule.instantiatePluginClass).toBeTypeOf("function");

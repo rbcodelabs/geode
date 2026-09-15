@@ -366,6 +366,230 @@ export class Modal {
 }
 
 // ---------------------------------------------------------------------------
+// SuggestModal / FuzzySuggestModal
+// ---------------------------------------------------------------------------
+
+export interface Instruction {
+  command: string;
+  purpose: string;
+}
+
+export type SearchMatches = [number, number][];
+
+export interface SearchResult {
+  score: number;
+  matches: SearchMatches;
+}
+
+/** Simple subsequence fuzzy scorer with contiguous-run + word-start bonuses. */
+function fuzzySearch(query: string, text: string): SearchResult | null {
+  if (!query) return { score: 0, matches: [] };
+  const lower = text.toLowerCase();
+  let qi = 0;
+  let score = 0;
+  let lastMatch = -2;
+  const matches: SearchMatches = [];
+  let rangeStart = -1;
+  for (let ti = 0; ti < lower.length && qi < query.length; ti++) {
+    if (lower[ti] === query[qi]) {
+      const contiguous = ti === lastMatch + 1;
+      score += contiguous ? 8 : 1;
+      if (ti === 0 || /[\s/\-_.]/.test(lower[ti - 1])) score += 6;
+      if (rangeStart === -1) rangeStart = ti;
+      else if (!contiguous) {
+        matches.push([rangeStart, lastMatch + 1]);
+        rangeStart = ti;
+      }
+      lastMatch = ti;
+      qi++;
+    }
+  }
+  if (qi !== query.length) return null;
+  if (rangeStart !== -1) matches.push([rangeStart, lastMatch + 1]);
+  return { score: score - text.length * 0.05, matches };
+}
+
+/** Returns a matcher bound to `query`, mirroring Obsidian's `prepareFuzzySearch`. */
+export function prepareFuzzySearch(query: string): (text: string) => SearchResult | null {
+  const q = query.toLowerCase();
+  return (text: string) => fuzzySearch(q, text);
+}
+
+/** Wraps matched ranges from a `SearchResult` in `<span class="suggestion-highlight">`. */
+export function renderMatches(el: HTMLElement, text: string, matches: SearchMatches | null): void {
+  el.empty();
+  if (!matches || !matches.length) {
+    el.appendText(text);
+    return;
+  }
+  let cursor = 0;
+  for (const [start, end] of matches) {
+    if (start > cursor) el.appendText(text.slice(cursor, start));
+    const mark = el.createSpan({ cls: "suggestion-highlight" });
+    mark.textContent = text.slice(start, end);
+    cursor = end;
+  }
+  if (cursor < text.length) el.appendText(text.slice(cursor));
+}
+
+/**
+ * A modal with a text input plus a live-filtered result list. Concrete
+ * subclasses provide `getSuggestions`/`renderSuggestion`/`onChooseSuggestion`;
+ * `FuzzySuggestModal` below is the common `getItems`/`getItemText` shortcut
+ * plugins actually extend most of the time.
+ */
+export abstract class SuggestModal<T> extends Modal {
+  limit = 100;
+  emptyStateText = "No match found";
+  inputEl: HTMLInputElement;
+  resultContainerEl: HTMLElement;
+  private suggestions: T[] = [];
+  private selectedIndex = 0;
+  private instructionsEl?: HTMLElement;
+
+  constructor(app: App) {
+    super(app);
+    this.modalEl.classList.add("prompt");
+    const inputContainer = document.createElement("div");
+    inputContainer.className = "prompt-input-container";
+    this.inputEl = document.createElement("input");
+    this.inputEl.type = "text";
+    this.inputEl.className = "prompt-input";
+    inputContainer.appendChild(this.inputEl);
+    this.resultContainerEl = document.createElement("div");
+    this.resultContainerEl.className = "suggestion-container";
+    this.contentEl.append(inputContainer, this.resultContainerEl);
+    this.inputEl.addEventListener("input", () => void this.refreshSuggestions());
+    this.inputEl.addEventListener("keydown", (e) => this.handleKeydown(e));
+  }
+
+  abstract getSuggestions(query: string): T[] | Promise<T[]>;
+  abstract renderSuggestion(value: T, el: HTMLElement): void;
+  abstract onChooseSuggestion(item: T, evt: MouseEvent | KeyboardEvent): void;
+
+  /** Called when Enter is pressed with no suggestion selected. */
+  onNoSuggestion(): void {}
+
+  setPlaceholder(placeholder: string): void {
+    this.inputEl.placeholder = placeholder;
+  }
+
+  setInstructions(instructions: Instruction[]): void {
+    this.instructionsEl?.remove();
+    const el = document.createElement("div");
+    el.className = "prompt-instructions";
+    for (const instruction of instructions) {
+      const row = document.createElement("div");
+      row.className = "prompt-instruction";
+      const command = document.createElement("span");
+      command.className = "prompt-instruction-command";
+      command.textContent = instruction.command;
+      const purpose = document.createElement("span");
+      purpose.textContent = instruction.purpose;
+      row.append(command, purpose);
+      el.appendChild(row);
+    }
+    this.instructionsEl = el;
+    this.modalEl.appendChild(el);
+  }
+
+  selectSuggestion(value: T, evt: MouseEvent | KeyboardEvent): void {
+    this.close();
+    this.onChooseSuggestion(value, evt);
+  }
+
+  onOpen(): void {
+    this.inputEl.focus();
+    void this.refreshSuggestions();
+  }
+
+  private async refreshSuggestions(): Promise<void> {
+    const query = this.inputEl.value;
+    const results = await this.getSuggestions(query);
+    this.suggestions = results.slice(0, this.limit);
+    this.selectedIndex = 0;
+    this.renderResults();
+  }
+
+  private renderResults(): void {
+    this.resultContainerEl.empty();
+    if (!this.suggestions.length) {
+      const empty = document.createElement("div");
+      empty.className = "suggestion-empty";
+      empty.textContent = this.emptyStateText;
+      this.resultContainerEl.appendChild(empty);
+      return;
+    }
+    this.suggestions.forEach((item, i) => {
+      const el = document.createElement("div");
+      el.className = "suggestion-item" + (i === this.selectedIndex ? " is-selected" : "");
+      this.renderSuggestion(item, el);
+      el.addEventListener("mousemove", () => {
+        if (this.selectedIndex !== i) {
+          this.selectedIndex = i;
+          this.renderResults();
+        }
+      });
+      el.addEventListener("click", (e) => this.selectSuggestion(item, e));
+      this.resultContainerEl.appendChild(el);
+      if (i === this.selectedIndex) el.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  private handleKeydown(e: KeyboardEvent): void {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      this.moveSelection(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      this.moveSelection(-1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const item = this.suggestions[this.selectedIndex];
+      if (item !== undefined) this.selectSuggestion(item, e);
+      else this.onNoSuggestion();
+    }
+  }
+
+  private moveSelection(delta: number): void {
+    if (!this.suggestions.length) return;
+    this.selectedIndex = (this.selectedIndex + delta + this.suggestions.length) % this.suggestions.length;
+    this.renderResults();
+  }
+}
+
+export interface FuzzyMatch<T> {
+  item: T;
+  match: SearchResult;
+}
+
+/** The common case: fuzzy-filter a fixed item list by a single text projection. */
+export abstract class FuzzySuggestModal<T> extends SuggestModal<FuzzyMatch<T>> {
+  abstract getItems(): T[];
+  abstract getItemText(item: T): string;
+  abstract onChooseItem(item: T, evt: MouseEvent | KeyboardEvent): void;
+
+  getSuggestions(query: string): FuzzyMatch<T>[] {
+    const search = prepareFuzzySearch(query);
+    const results: FuzzyMatch<T>[] = [];
+    for (const item of this.getItems()) {
+      const match = search(this.getItemText(item));
+      if (match) results.push({ item, match });
+    }
+    results.sort((a, b) => b.match.score - a.match.score);
+    return results;
+  }
+
+  renderSuggestion(fuzzyMatch: FuzzyMatch<T>, el: HTMLElement): void {
+    renderMatches(el, this.getItemText(fuzzyMatch.item), fuzzyMatch.match.matches);
+  }
+
+  onChooseSuggestion(fuzzyMatch: FuzzyMatch<T>, evt: MouseEvent | KeyboardEvent): void {
+    this.onChooseItem(fuzzyMatch.item, evt);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Setting / SettingComponents
 // ---------------------------------------------------------------------------
 
@@ -815,6 +1039,10 @@ export class Setting {
   }
   setDisabled(disabled: boolean): this {
     this.settingEl.classList.toggle("is-disabled", disabled);
+    return this;
+  }
+  setTooltip(tooltip: string, options?: TooltipOptions): this {
+    setTooltip(this.settingEl, tooltip, options);
     return this;
   }
   addButton(cb: (c: ButtonComponent) => any): this {
