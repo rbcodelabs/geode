@@ -25,7 +25,16 @@ export class CommentsView implements View {
     header.append(title, toggle);
     this.bodyEl.className = "sidebar-view-body";
     this.containerEl.append(header, this.bodyEl);
-    app.workspace.on("file-open", (file: TFile | null) => { this.file = file; this.render(); });
+    app.workspace.on("file-open", () => this.syncActiveFile());
+    // file-open is emitted only when the newly active leaf's view answers
+    // getFile(), so switching to a fileless view (a web view, say) emits
+    // nothing and would strand the previous note's comments on screen.
+    // active-leaf-change is the unconditional signal.
+    app.workspace.on("active-leaf-change", () => this.syncActiveFile());
+    // Swapping a leaf's view in place (opening an HTML file over the active
+    // markdown tab) goes through WorkspaceLeaf.setView, which emits neither
+    // active-leaf-change nor file-open — layout-change is its only signal.
+    app.workspace.on("layout-change", () => this.syncActiveFile());
     app.comments.on("changed", (file) => { if (file.path === this.file?.path) this.render(); });
   }
 
@@ -33,6 +42,20 @@ export class CommentsView implements View {
   getIcon(): string { return "message-square"; }
   onOpen(): void { this.file = this.app.workspace.getActiveFile(); this.render(); }
   onClose(): void {}
+
+  /**
+   * Recompute the subject from the live active leaf rather than from an event
+   * payload. Workspace.getActiveFile() reads `activeGroup.active`, which is
+   * null-yielding for a fileless view but unchanged while a sidebar leaf holds
+   * focus (TabGroup.setActiveLeaf calls setActiveGroup only when
+   * `!this.sidebar`) — so clicking into this panel never blanks it.
+   */
+  private syncActiveFile(): void {
+    const next = this.app.workspace.getActiveFile();
+    if ((next?.path ?? null) === (this.file?.path ?? null)) return;
+    this.file = next;
+    this.render();
+  }
 
   render(): void {
     this.bodyEl.replaceChildren();
