@@ -1442,6 +1442,10 @@ class StatusBar {
     parentEl.appendChild(this.containerEl);
     app.workspace.on("file-open", () => this.update());
     app.workspace.on("active-leaf-change", () => this.update());
+    // Swapping a leaf's view in place (opening an HTML file over the active
+    // markdown tab) goes through WorkspaceLeaf.setView, which emits neither
+    // active-leaf-change nor file-open — layout-change is its only signal.
+    app.workspace.on("layout-change", () => this.update());
     app.metadataCache.on("resolved", () => this.update());
   }
 
