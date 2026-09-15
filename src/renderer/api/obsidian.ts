@@ -304,34 +304,50 @@ export class Modal {
   modalEl: HTMLElement;
   titleEl: HTMLElement;
   contentEl: HTMLElement;
-  private scopeEl: HTMLElement;
+  /** The scrim behind the modal. Also the click-outside target. */
+  bgEl: HTMLElement;
+  /** The `×` affordance in the corner. Exposed so subclasses can hide it. */
+  closeEl: HTMLElement;
+  private keyHandler: (e: KeyboardEvent) => void;
 
   constructor(app: App) {
     this.app = app;
     this.containerEl = document.createElement("div");
     this.containerEl.className = "modal-container mod-dim";
-    this.scopeEl = document.createElement("div");
-    this.scopeEl.className = "modal-bg";
+    this.bgEl = document.createElement("div");
+    this.bgEl.className = "modal-bg";
     this.modalEl = document.createElement("div");
     this.modalEl.className = "modal";
-    const closeEl = document.createElement("div");
-    closeEl.className = "modal-close-button";
-    closeEl.addEventListener("click", () => this.close());
+    this.closeEl = document.createElement("div");
+    this.closeEl.className = "modal-close-button";
+    this.closeEl.setAttribute("aria-label", "Close");
+    this.closeEl.addEventListener("click", () => this.close());
     this.titleEl = document.createElement("div");
     this.titleEl.className = "modal-title";
     this.contentEl = document.createElement("div");
     this.contentEl.className = "modal-content";
-    this.modalEl.append(closeEl, this.titleEl, this.contentEl);
-    this.containerEl.append(this.scopeEl, this.modalEl);
-    this.scopeEl.addEventListener("click", () => this.close());
+    this.modalEl.append(this.closeEl, this.titleEl, this.contentEl);
+    this.containerEl.append(this.bgEl, this.modalEl);
+    this.bgEl.addEventListener("click", () => this.close());
+    // Obsidian dismisses modals on Escape. This class previously did not,
+    // so a plugin modal could only be closed by clicking — the in-app Modal
+    // in `modals/modals.ts` has always had this.
+    this.keyHandler = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        this.close();
+      }
+    };
   }
 
   open(): void {
     document.body.appendChild(this.containerEl);
+    document.addEventListener("keydown", this.keyHandler, true);
     this.onOpen();
   }
 
   close(): void {
+    document.removeEventListener("keydown", this.keyHandler, true);
     this.onClose();
     this.containerEl.remove();
     this.closeCallback?.();
