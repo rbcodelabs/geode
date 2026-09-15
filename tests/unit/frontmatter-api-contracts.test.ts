@@ -71,6 +71,29 @@ describe("getAllTags public contract", () => {
   });
 });
 
+describe("parseYaml / stringifyYaml", () => {
+  it("exports both documented functions from the Obsidian compatibility module", () => {
+    expect(ObsidianApi.parseYaml).toBeTypeOf("function");
+    expect(ObsidianApi.stringifyYaml).toBeTypeOf("function");
+  });
+
+  it("parses a simple YAML string into an object", () => {
+    expect(ObsidianApi.parseYaml("name: test\ndescription: a skill\n")).toEqual({
+      name: "test",
+      description: "a skill",
+    });
+  });
+
+  it("throws on genuinely malformed YAML", () => {
+    expect(() => ObsidianApi.parseYaml("name: [unclosed\n")).toThrow();
+  });
+
+  it("round-trips an object through stringifyYaml then parseYaml", () => {
+    const obj = { name: "test", description: "a skill" };
+    expect(ObsidianApi.parseYaml(ObsidianApi.stringifyYaml(obj))).toEqual(obj);
+  });
+});
+
 describe("frontmatter helpers through plugin require('obsidian')", () => {
   it("makes getFrontMatterInfo and getAllTags available to CommonJS plugins", () => {
     const PluginClass = instantiatePluginClass(
@@ -105,5 +128,44 @@ describe("frontmatter helpers through plugin require('obsidian')", () => {
       contentStart: 21,
     });
     expect(PluginClass.results.tags).toEqual(["#frontmatter", "#inline"]);
+  });
+
+  it("reproduces the Claude Threads validateManifest path: regex-extract then parseYaml no longer throws", () => {
+    // Mirrors the plugin bundle's validateManifest(content, skillId):
+    //   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+    //   if (!match) throw new Error("SKILL.md requires YAML frontmatter");
+    //   try { parsed = obsidian.parseYaml(match[1]); }
+    //   catch { throw new Error("Invalid SKILL.md YAML frontmatter"); }
+    // Before this fix, obsidian.parseYaml was undefined, so the call threw
+    // TypeError: parseYaml is not a function, which the catch swallowed and
+    // rethrew as the misleading "Invalid SKILL.md YAML frontmatter" — for a
+    // perfectly valid SKILL.md. This test proves that exact path now works.
+    const PluginClass = instantiatePluginClass(
+      `
+        const obsidian = require("obsidian");
+        function validateManifest(content) {
+          const match = /^---\\r?\\n([\\s\\S]*?)\\r?\\n---(?:\\r?\\n|$)/.exec(content);
+          if (!match) throw new Error("SKILL.md requires YAML frontmatter");
+          let parsed;
+          try {
+            parsed = obsidian.parseYaml(match[1]);
+          } catch {
+            throw new Error("Invalid SKILL.md YAML frontmatter");
+          }
+          return parsed;
+        }
+        module.exports = class ValidateManifestProbe extends obsidian.Plugin {
+          static result = validateManifest(
+            "---\\nname: test-skill\\ndescription: a minimal test skill\\n---\\n"
+          );
+        };
+      `,
+      "validate-manifest-probe",
+    ) as unknown as { result: unknown };
+
+    expect(PluginClass.result).toEqual({
+      name: "test-skill",
+      description: "a minimal test skill",
+    });
   });
 });

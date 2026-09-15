@@ -14,6 +14,7 @@
 // These are pure functions (no DOM, no app) — matching Geode's existing
 // `normalizePath`/`parseMetadata` helper exports and unit-testable directly.
 
+import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import type { CachedMetadata } from "../../wiki/types";
 
 export interface FrontMatterInfo {
@@ -124,4 +125,28 @@ export function getAllTags(cache: CachedMetadata | null | undefined): string[] |
     }
   }
   return out.length ? out : null;
+}
+
+/**
+ * Parse a raw YAML string, e.g. the contents of a frontmatter block.
+ *
+ * Real Obsidian exports this as a module-level utility (paired with
+ * `stringifyYaml`) — plugins call it directly on extracted frontmatter text
+ * rather than re-implementing YAML parsing themselves. The Claude Threads
+ * plugin's SKILL.md manifest validator is one such caller: without this
+ * export, `require("obsidian").parseYaml` was `undefined`, so the call threw
+ * `TypeError: parseYaml is not a function` for every manifest, valid or not,
+ * and the plugin's bare `catch` swallowed and rethrew that as a misleading
+ * "Invalid SKILL.md YAML frontmatter".
+ */
+export function parseYaml(yaml: string): any {
+  return yamlParse(yaml);
+}
+
+/**
+ * Serialize a value to a YAML string. Paired with `parseYaml` above to match
+ * Obsidian's documented module exports.
+ */
+export function stringifyYaml(obj: any): string {
+  return yamlStringify(obj);
 }
