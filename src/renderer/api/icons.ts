@@ -10,6 +10,27 @@ import * as lucide from "lucide-static";
 /** Custom SVGs registered by plugins via `addIcon(id, svg)`. */
 const customIcons = new Map<string, string>();
 
+/**
+ * Legacy Obsidian icon-font glyph names → their closest Lucide equivalent.
+ *
+ * Obsidian's old icon font (pre-Lucide) shipped compound-word glyph names
+ * that don't exist as Lucide exports (Lucide has no `CalendarWithCheckmark`,
+ * for instance) and never will, since Lucide's calendar family is
+ * `Calendar`, `CalendarCheck`, `CalendarCheck2`, `CalendarDays`, etc. A
+ * plugin (or Geode's own bundled-plugin fixtures) built against the old font
+ * still ships the old name, which fails direct Lucide lookup — but that's a
+ * genuinely known/supported id in Obsidian, not a bogus one, so unlike a
+ * truly-unknown id it deserves to resolve rather than render blank.
+ *
+ * Keys are kebab-case, matching the `iconId` shape everywhere else in this
+ * module. Only add an entry here when it's a confirmed legacy icon-font name
+ * with no direct Lucide match — don't guess at aliases that aren't backed by
+ * an actual observed name.
+ */
+const LEGACY_ICON_ALIASES: Record<string, string> = {
+  "calendar-with-checkmark": "calendar-check",
+};
+
 /** True if `content` is already a complete `<svg ...>...</svg>` element (vs. a bare fragment like a lone `<path>`). */
 function isCompleteSvg(content: string): boolean {
   return /^\s*<svg[\s>]/i.test(content);
@@ -56,6 +77,11 @@ export function getIconSvg(iconId: string): string | null {
   // ("lucide-search") for the same icon; retry with the prefix stripped
   // rather than rendering the literal id text.
   if (iconId.startsWith("lucide-")) return lookupLucide(iconId.slice("lucide-".length));
+  // Legacy Obsidian icon-font glyph name (e.g. `calendar-with-checkmark`,
+  // predates Obsidian's Lucide migration) — resolve via its Lucide alias
+  // rather than failing lookup outright.
+  const alias = LEGACY_ICON_ALIASES[iconId];
+  if (alias) return lookupLucide(alias);
   return null;
 }
 
