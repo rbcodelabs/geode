@@ -12,6 +12,12 @@
  *     explorer click on an HTML file does) emits only `layout-change`;
  *   - activating a separate web-view tab (TabGroup.setActiveLeaf) emits
  *     `active-leaf-change` and no `file-open`.
+ *
+ * The status bar is the same bug class and is covered here too: it already
+ * recomputed its subject live, but subscribed only to `file-open` and
+ * `active-leaf-change`, so the in-place path left a stale word/backlink count
+ * on screen. The separate web-view tab path already cleared it correctly, so
+ * only the in-place path is asserted.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -85,6 +91,30 @@ test("every file-backed panel blanks when the active pane swaps to a web view in
       await openInExplorer(window, "Note.md");
       await expect(panelBody(window), `${type} must restore when a note becomes active again`).toContainText(populated);
     }
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the status bar blanks when the active pane swaps to a web view in place, and restores on return", async () => {
+  const { window, cleanup } = await launch();
+  try {
+    const statusBar = window.locator(".status-bar");
+    await openInExplorer(window, "Note.md");
+    // Linker.md links to Note.md, so both status-bar items are populated.
+    await expect(statusBar).toContainText("words");
+    await expect(statusBar).toContainText("backlink");
+
+    // Same in-place WorkspaceLeaf.setView path the panels are checked against
+    // above: the markdown view is replaced by a fileless web view without
+    // changing tabs, which emits only layout-change.
+    await openInExplorer(window, "Page.html");
+    await expect(window.locator(".web-view")).toBeVisible();
+    await expect(statusBar, "status bar must blank for a fileless web view").toHaveText("");
+
+    await openInExplorer(window, "Note.md");
+    await expect(statusBar, "status bar must restore when a note becomes active again").toContainText("words");
+    await expect(statusBar).toContainText("backlink");
   } finally {
     await cleanup();
   }
