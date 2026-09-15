@@ -172,28 +172,61 @@ validation work in `LATER` but must not infer permission to add work to `NEXT` o
 
 ```yaml
 build_authorization_policy:
-  enabled: false
+  enabled: true
   version: build-authorization-v1
-  project_id: unresolved
-  workspace_id: unresolved
-  repository: unresolved
-  activated_at: unresolved
-  activation_authority: unresolved # exact human instruction/decision reference
-  receipt_store: unresolved # durable automation-runtime store, separate from decisions
-  serialized_executor: unresolved # verified single executor or conditional lease
+  project_id: c57cbe59-7ec5-405e-befd-adf1c3a14596      # Geode Project "Geode"
+  workspace_id: 2014ad67-8d4f-4db9-8eb5-5f3958c3ebbb    # Compass workspace rbcodelabs/geode
+  repository: github.com/rbcodelabs/geode
+  default_branch: main
+  activated_at: 2026-09-15T12:15:06Z
+  activation_authority:
+    type: synchronous_user_instruction
+    date: 2026-09-15
+    thread_id: 99596049-28f5-4f96-bea6-c98e36f43861
+    instruction: "lets enable build_authorization_policy"
+    context: >
+      The first scheduled Geode Product Operations run reported Authorized delivery as
+      BLOCKED, with the named blocker "no build-authorization runtime set up". Rick
+      reviewed that checklist and explicitly instructed enabling the policy. He then
+      stated the priority it is being enabled to serve: "headless is a key priority, we
+      need this done, because i want this headless wiki with sync working and powering
+      Compass's document store". That priority statement is direction, not a build
+      package, and does not itself approve any scope.
+  receipt_store: Products/Geode/Operations/build-receipts/   # vault-relative; Geode automation runtime
+  serialized_executor: "geode-cron:f1c20f33-0caf-4ee1-85f4-30491bbfee16"  # "Geode Product Operations", daily 14:20
 ```
 
-**Blocker:** no build-authorization runtime (receipt store, serialized executor) has been
-set up for geode yet, and no human activation instruction has been recorded. Leave
-disabled -- current build execution follows the existing separate legacy gate (isolated
-worktree, delegated engineering, verified tests, human PR review) described in this
-repo's `CLAUDE.md`, not standing build authorization.
+One human build decision covers investment, approach, capacity commitment, and execution
+through a tested PR, for the exact approved package only. It grants **no** merge, no
+production deployment, no production data change, and no external message. Existing
+decisions, Solution Plan approvals, and roadmap position are **not** grandfathered into
+this policy and never satisfy it on their own.
 
-Enable only under explicit human authorization after installed workflow, provider and
-runtime checks in `build-authorization`. Missing fields block execution. This standing
-policy permits a current approved build package through a tested PR, including its exact
-roadmap admission. It grants no merge or production authority. Existing decisions are
-not grandfathered. Package-specific limits and scope stay in the decision provider.
+**Specifically not grandfathered:** decision `c2344f49-24dd-49b5-8a35-8404121d57a0`
+(Geode Headless, APPROVE 2026-09-11) predates activation, and its approved scope was a
+bounded Phase 0 feasibility spike with "no paid infrastructure provisioning". Phase 0 has
+since been delivered (PRs #190/#195/#196, released in v0.18.0). Continuing past Phase 0 --
+in particular synchronization and the Compass document-store integration, both of which
+were explicitly *deferred* in the approved proposal -- requires a **new** build package
+and a new decision. Do not read the September 11 approval as covering it.
+
+**Executor and serialization.** Delivery is dispatched only from the single scheduled
+`Geode Product Operations` run (the `serialized_executor` above) via its authorized
+delivery checklist row, which invokes `compass-resolver`. Do not create a separate
+resolver or decision-router cron for this workspace -- a second dispatcher applying the
+same package is exactly what the contract forbids. Geode run history is run-state context,
+not an atomic lock; single execution rests on that one scheduled dispatcher plus the
+`workerId` / `leaseExpiresAt` lease fields carried in each receipt and enforced by the
+`build-authorization` evaluator.
+
+**Relationship to the legacy gate.** The repo's `CLAUDE.md` workflow (isolated worktree,
+delegated engineering, verified tests, human PR review) still governs *how* work is done.
+This policy governs *whether* an unattended scheduled run may start it. Neither widens the
+other, and a failed package validation must never fall back to approval inference.
+
+Missing or `unresolved` fields block execution. Package-specific limits and scope stay in
+the decision provider (`compass_decisions`), which remains tracking-only: a decision
+records human judgment and never itself dispatches work.
 
 ## Delivery Completion Policy
 
