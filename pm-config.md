@@ -117,38 +117,22 @@ only human admins decide, and no outcome automatically applies another action.
 - **Product analytics:** manual_input -- no automated analytics provider is connected;
   metrics are recorded manually when needed. No credential required.
 
-## Active Context
+<!-- NO "Active Context" SECTION -- this is deliberate, do not re-add one.
 
-> **Pointers only.** This block records WHICH Compass records are in focus, never their
-> values, progress, status or composition. Resolve current state with `get_okr_cycle` /
-> `get_opportunity` at read time. Titles are included only as human labels for the IDs --
-> the ID is the contract. Never record a KR's current/target here: a number in this file
-> that disagrees with Compass is worse than no number, because it reads as authoritative.
->
-> Update this block when FOCUS changes (a new cycle activates, a different KR becomes the
-> one being worked), not when a value moves.
+Geode's product state is provider-backed (Compass). Which cycle, objective and KR are
+active is resolved at read time and is authoritative there:
+  - active cycle       -> get_workspace_summary (returns activeOkrCycle)
+  - all cycles/status  -> list_okr_cycles
+  - objectives and KRs -> get_okr_cycle
+  - opportunities      -> list_opportunities (status ACTIVE) / roadmap NOW horizon
 
-- **OKR cycle:** `ce9cd60f-ae04-4eb8-927b-76f1fd0872fa` -- "Q3 close-out -- parity blockers"
-- **Active objective:** `c2e32aaa-e96a-4b6d-8b32-852df6248715` -- "A daily Obsidian user
-  can switch to Geode without hitting a wall"
-- **Active KRs:**
-  - `d827f54c-7038-4b74-aeea-8957ae536ad9` -- day-one blocking gaps (image paste, math,
-    footnotes)
-  - `721651b6-4977-4cff-a861-9591f767a4d5` -- Obsidian help-page parity requirements
-    assessed in the ledger
-  - `70e1ef16-97e4-420d-a614-b19dded285f8` -- community plugins with committed E2E
-    certification
-- **Desired outcome:** Ship a functional, MIT-licensed Obsidian alternative with a plugin
-  API layer sufficient for the Claude Threads plugin to run on it independent of
-  Obsidian's proprietary plugin ecosystem.
-- **Focus opportunity:** `7aa10909-1eb6-49b8-9471-e6f2759beeb1` -- "Core Obsidian features
-  a daily user reaches for are missing, so Geode can't replace Obsidian for real work"
-- **Strategic thesis (not the current focus):** `eaf7efe5-519f-4136-9454-b4f5368e905a` --
-  "Claude Threads needs an OSS-host independent of Obsidian's proprietary plugin
-  ecosystem". Sequenced behind parity, because parity gates it rather than competing
-  with it.
-- **Focus solution:** "Geode -- clean-room Obsidian clone (Electron + CM6) with an open
-  plugin API layer" (ID `2cd646b1-dede-4cfb-bf8e-22a932d88170`)
+A copy here would be read by nothing -- no skill reads this section -- and would go stale.
+It already did: this section previously claimed "OKR cycle: None yet" while three cycles
+existed, one ACTIVE. See integration-routing/assets/pm-config-template.md for the rule.
+
+Known gap: Compass has no first-class "focus" flag, so which single KR or opportunity is
+being worked right now is not expressible in the provider. That is tracked as feedback
+against Compass, not worked around with a cache here. -->
 
 ## Portfolio Policy
 
