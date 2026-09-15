@@ -38,12 +38,12 @@
       "api-member": 1009
     },
     "byStatus": {
-      "verified": 291,
-      "partial": 64,
+      "verified": 292,
+      "partial": 65,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2497
+      "unknown": 2495
     }
   },
   "requirements": [
@@ -2657,8 +2657,12 @@
       "title": "Dialog",
       "sourcePath": "obsidian-developer-docs/en/Reference/CSS variables/Components/Dialog.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/CSS%20variables/Components/Dialog.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "styles/app.css",
+        "tests/e2e/modal-parity.spec.ts"
+      ],
+      "notes": "All three documented --dialog-* variables are defined and drive .modal's computed box: modal-parity.spec.ts asserts --dialog-width is 560px and is the rendered width, and that max-width/max-height compute to 80vw/85vh of the viewport."
     },
     {
       "id": "DEV-8153de05a0e6",
@@ -2701,8 +2705,12 @@
       "title": "Modal",
       "sourcePath": "obsidian-developer-docs/en/Reference/CSS variables/Components/Modal.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/CSS%20variables/Components/Modal.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "styles/app.css",
+        "tests/e2e/modal-parity.spec.ts"
+      ],
+      "notes": "All ten documented --modal-* variables are defined and resolve (asserted in modal-parity.spec.ts). --modal-background, --modal-border-width, --modal-border-color and --modal-radius are consumed directly by .modal. The sizing set (--modal-width/-height/-max-width/-max-height/-max-width-narrow) is consumed only by the .mod-sidebar-layout and .mod-narrow opt-outs, which no Geode modal adopts yet; Settings uses its own 80vw/80vh sizing. --modal-community-sidebar-width has no consumer because Geode has no community browser sidebar. Partial rather than verified for that reason."
     },
     {
       "id": "DEV-af26765f073d",

@@ -1,0 +1,8 @@
+{
+  "id": "modal-parity-probe",
+  "name": "Modal Parity Probe",
+  "version": "1.0.0",
+  "minAppVersion": "0.1.0",
+  "description": "Opens a plugin-API Modal exercising title, close button and button container.",
+  "author": "geode"
+}
