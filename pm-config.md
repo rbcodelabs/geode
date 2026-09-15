@@ -119,14 +119,49 @@ only human admins decide, and no outcome automatically applies another action.
 
 ## Active Context
 
-- **OKR cycle:** None yet -- no OKR cycle created in Compass for this workspace.
-- **Active objective:** None yet.
-- **Active KR:** None yet.
+> Verified against Compass on 2026-09-13. The previous contents of this section claimed
+> "None yet" for cycle, objective and KR; three OKR cycles in fact existed, one of them
+> ACTIVE. Re-verify with `list_okr_cycles` / `get_okr_cycle` rather than trusting this
+> block if it looks stale -- Compass is authoritative, this is a pointer.
+
+- **OKR cycle:** "Q3 close-out -- parity blockers" (ID `ce9cd60f-ae04-4eb8-927b-76f1fd0872fa`),
+  ACTIVE, 2026-09-12 -> 2026-09-30.
+- **Active objective:** "A daily Obsidian user can switch to Geode without hitting a wall"
+  (ID `c2e32aaa-e96a-4b6d-8b32-852df6248715`), owner Rick Bowman.
+- **Active KRs:**
+  - `d827f54c-7038-4b74-aeea-8957ae536ad9` -- Day-one blocking gaps closed (image
+    paste/drag-drop, math rendering, footnote rendering): 0 of 3. Re-verified against
+    HEAD 5c79c09 (v0.19.0) on 2026-09-13 -- all three still absent.
+  - `721651b6-4977-4cff-a861-9591f767a4d5` -- Obsidian help-page parity requirements
+    assessed in the ledger: 2 of 176. Ledger regenerated 2026-09-13 (`114f9de`); count
+    did not move.
+  - `70e1ef16-97e4-420d-a614-b19dded285f8` -- Real unmodified third-party community
+    plugins vendored in-repo with committed E2E certification: 3 of 5.
+    **Reframed 2026-09-14.** As originally written ("Community plugins from Rick's real
+    Obsidian vault that work fully in Geode, baseline 3 of 16") this KR had no measurable
+    population: no list of those 16 plugins exists in the repo, and the remote catalog at
+    `https://geode.rbcodelabs.com/supported-plugins/v1.json` returns 404 (filed as
+    Compass bug `c2874d7c-5d9a-46aa-9ca2-44d78183066b`). It now measures the population
+    the repo can prove -- obsidian-calendar-plugin 1.5.10, Minimal Theme Settings 9.0.0,
+    kanban-bases-view 0.10.4. Not verified: that those three E2E specs currently pass;
+    only their existence against real unmodified bundles was confirmed.
+- **Other cycles:** "Q4 2026 -- Agentic harness foundation" (`f266f4e2-acfc-41ef-b5a4-d71a1760c2a6`,
+  DRAFT, 10/1--12/31) -- **3 objectives / 9 KRs as of 2026-09-14**, within the quality
+  gate. The shared-vault objective was removed to get there; the bet survives as OST
+  opportunity `7ced059d`. "Q3 2026 -- First-run activation"
+  (`dbb1926d-ee1d-4fcb-bd49-b3a0702b6f9b`, DRAFT, 7/1--9/30) -- never activated, 0%,
+  root cause of 3 experiments stalled 23 days; **must be archived by hand in the Compass
+  UI** (no `update_okr_cycle` or `archive_okr_cycle` tool exists on the MCP surface).
 - **Desired outcome:** Ship a functional, MIT-licensed Obsidian alternative with a plugin
   API layer sufficient for the Claude Threads plugin to run on it independent of
   Obsidian's proprietary plugin ecosystem.
-- **Focus opportunity:** "Claude Threads needs an OSS-host independent of Obsidian's
-  proprietary plugin ecosystem" (ID `eaf7efe5-519f-4136-9454-b4f5368e905a`)
+- **Focus opportunity:** "Core Obsidian features a daily user reaches for are missing, so
+  Geode can't replace Obsidian for real work" (ID `7aa10909-1eb6-49b8-9471-e6f2759beeb1`) --
+  this is the opportunity linked to the active cycle's lead KR. The previously listed
+  focus, "Claude Threads needs an OSS-host independent of Obsidian's proprietary plugin
+  ecosystem" (`eaf7efe5-519f-4136-9454-b4f5368e905a`), remains the strategic thesis but
+  is sequenced behind parity: the 2026-09-12 audit found no Editor API shim exists, so
+  parity gates the harness rather than competing with it.
 - **Focus solution:** "Geode -- clean-room Obsidian clone (Electron + CM6) with an open
   plugin API layer" (ID `2cd646b1-dede-4cfb-bf8e-22a932d88170`)
 
