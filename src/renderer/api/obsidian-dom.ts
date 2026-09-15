@@ -27,6 +27,14 @@ declare global {
     instanceOf<T>(type: { new (...args: any[]): T }): this is T;
     /** The document this node belongs to, or the global document. */
     readonly doc: Document;
+    /**
+     * Registers a callback fired when this node is moved into a different OS
+     * window (popout panes). Returns an unsubscribe function, per Obsidian's
+     * documented `Node` augmentation. Geode has no popout-window support, so
+     * a node's owning window never actually changes — the callback is
+     * registered but never invoked, and unsubscribing is a no-op.
+     */
+    onWindowMigrated(callback: (win: Window) => any): () => void;
   }
   interface Event {
     /**
@@ -621,6 +629,9 @@ export function installObsidianDomExtensions(): void {
     // `Document.ownerDocument` is null by spec, so a Document is its own doc.
     return this.ownerDocument ?? (this as unknown as Document);
   });
+  define(nodeProto, "onWindowMigrated", function (this: Node, _callback: (win: Window) => any) {
+    return () => {};
+  });
   if (typeof Event !== "undefined") {
     define(Event.prototype as any, "instanceOf", function (this: Event, type: { new (...args: any[]): unknown }) {
       return crossRealmInstanceOf(this, type);
@@ -631,8 +642,19 @@ export function installObsidianDomExtensions(): void {
   installDelegatedEvents(htmlProto);
   installDelegatedEvents(docProto);
 
-  // --- globals: createEl / createDiv / createSpan / createFragment ----------
+  // --- globals: activeWindow / activeDocument -------------------------------
+  // Obsidian aliases the popout-aware "current" window/document as these two
+  // globals so plugins don't hardcode the bare `window`/`document` (which
+  // would target the wrong OS window once a pane is popped out). Geode has no
+  // popout-window support yet, so both simply alias the single app window —
+  // still required because plugins call `activeWindow.setTimeout(...)` etc.
+  // directly (e.g. obsidian-terminal's `self.activeWindow.setTimeout`), and a
+  // missing global throws `Cannot read properties of undefined` at call time.
   const g = globalThis as any;
+  if (typeof g.activeWindow === "undefined") g.activeWindow = window;
+  if (typeof g.activeDocument === "undefined") g.activeDocument = document;
+
+  // --- globals: createEl / createDiv / createSpan / createFragment ----------
   if (typeof g.createDiv !== "function")
     g.createDiv = (o?: ElInfoOrTag, cb?: any) => createElOn(document.body, "div", o, cb);
   if (typeof g.createSpan !== "function")
