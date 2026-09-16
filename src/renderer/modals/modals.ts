@@ -2,21 +2,36 @@ import type { App } from "../app";
 
 export class Modal {
   containerEl: HTMLElement;
+  /** The scrim behind the modal. Also the click-outside target. */
+  bgEl: HTMLElement;
   modalEl: HTMLElement;
+  /**
+   * Obsidian's modal title slot. Left empty by subclasses that render their
+   * own heading inside `contentEl`; `.modal-title:empty` hides it so an unused
+   * slot costs no vertical space.
+   */
+  titleEl: HTMLElement;
   contentEl: HTMLElement;
   private keyHandler: (e: KeyboardEvent) => void;
 
   constructor(protected app: App) {
     this.containerEl = document.createElement("div");
-    this.containerEl.className = "modal-container";
+    this.containerEl.className = "modal-container mod-dim";
+    this.bgEl = document.createElement("div");
+    this.bgEl.className = "modal-bg";
     this.modalEl = document.createElement("div");
     this.modalEl.className = "modal";
+    this.titleEl = document.createElement("div");
+    this.titleEl.className = "modal-title";
     this.contentEl = document.createElement("div");
     this.contentEl.className = "modal-content";
-    this.modalEl.appendChild(this.contentEl);
-    this.containerEl.appendChild(this.modalEl);
+    this.modalEl.append(this.titleEl, this.contentEl);
+    this.containerEl.append(this.bgEl, this.modalEl);
+    // The scrim now covers the container, so a click on empty space lands on
+    // `.modal-bg` rather than on the container itself. Both are accepted so
+    // click-outside-to-close keeps working either way.
     this.containerEl.addEventListener("mousedown", (e) => {
-      if (e.target === this.containerEl) this.close();
+      if (e.target === this.containerEl || e.target === this.bgEl) this.close();
     });
     this.keyHandler = (e) => {
       if (e.key === "Escape") {
