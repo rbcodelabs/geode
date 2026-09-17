@@ -13,6 +13,16 @@ export interface TAbstractFile {
   name: string;
 }
 
+/**
+ * Obsidian's `FileStats` — the `{ ctime, mtime, size }` bag hanging off
+ * `TFile.stat` (ms epoch, bytes). See `docs/spec/03-plugin-api.md` § 2.7.
+ */
+export interface FileStats {
+  ctime: number;
+  mtime: number;
+  size: number;
+}
+
 export interface TFile extends TAbstractFile {
   kind: "file";
   basename: string;
@@ -21,6 +31,12 @@ export interface TFile extends TAbstractFile {
   ctime: number;
   size: number;
   parent: string; // folder path, "" for root
+  /**
+   * Obsidian-compat view over the flat fields above, which stay the canonical
+   * storage for all core code. Read-only and non-enumerable — see
+   * `attachFileStats`. `TFolder` has no counterpart, matching Obsidian.
+   */
+  readonly stat: FileStats;
 }
 
 export interface TFolder extends TAbstractFile {
@@ -48,6 +64,50 @@ export function isTFile(item: TAbstractFile | null | undefined): item is TFile {
 
 export function isTFolder(item: TAbstractFile | null | undefined): item is TFolder {
   return !!item && (item as TFolder).kind === "folder";
+}
+
+/**
+ * Give a freshly built file object its Obsidian-compat `stat`. Called from the
+ * single place `TFile`s are constructed (`Vault.indexEntry`); rename reindexes
+ * the same object in place, so the property outlives a move.
+ *
+ * Two deliberate choices here:
+ *
+ * 1. **Live, not a snapshot.** `mtime`/`ctime`/`size` are assigned directly on
+ *    the indexed object by the watcher, `modify` and `rename`. A plain
+ *    `stat: { ...entry }` captured at construction would keep serving the
+ *    numbers the file had when it was first indexed — plugins would silently
+ *    read stale timestamps, which is worse than the `undefined` throw this
+ *    replaces. The fields are therefore getters onto the owning file. The
+ *    `stat` object itself is stable (`file.stat === file.stat`), as in Obsidian.
+ *
+ * 2. **Non-enumerable**, so this stays a zero-diff addition to every existing
+ *    serialization. One core path does `JSON.stringify` a real `TFile` today:
+ *    `bases/query-engine.ts` builds a group bucket id from a `BaseValue`, whose
+ *    union includes `{ type: "file"; value: TFile }`. An enumerable `stat`
+ *    would add a `"stat":{...}` segment to those ids. Nothing *persists* a
+ *    `TFile` — workspace layout stores `PersistedLeaf.file` as a path string,
+ *    the metadata cache stores `PersistedMetadataEntry`, the vault manifest
+ *    stores `VaultFileEntry`, and `src/renderer/sync/` never references `TFile`
+ *    at all — but `Plugin.saveData` and `App.saveLocalStorage` will persist
+ *    whatever a plugin hands them.
+ *
+ *    The sharper reason is (1): enumeration is what copies. `{...file}` and
+ *    `structuredClone` evaluate the getters once and freeze the result, so an
+ *    enumerable `stat` would quietly reintroduce the stale snapshot this design
+ *    exists to avoid. Property reads, `file.stat.mtime` and
+ *    `Object.getOwnPropertyDescriptor` all work regardless — only enumeration
+ *    skips it — and `stat` still serializes on its own
+ *    (`JSON.stringify(file.stat)`) for plugins that actually want it.
+ */
+export function attachFileStats(file: Omit<TFile, "stat">): TFile {
+  const stat: FileStats = {
+    get ctime() { return file.ctime; },
+    get mtime() { return file.mtime; },
+    get size() { return file.size; },
+  };
+  Object.defineProperty(file, "stat", { value: stat, enumerable: false, configurable: true });
+  return file as TFile;
 }
 
 /**

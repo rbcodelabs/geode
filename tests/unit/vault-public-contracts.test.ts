@@ -237,7 +237,143 @@ describe("Vault mutation and event contracts", () => {
   });
 });
 
+describe("TFile.stat Obsidian-compat view", () => {
+  it("mirrors the flat ctime/mtime/size fields", async () => {
+    const { vault } = await openVault();
+    const file = vault.getFileByPath("Docs/Note.md")!;
+
+    expect(file.stat).toEqual({ ctime: 1, mtime: 2, size: 5 });
+    expect(file.stat.ctime).toBe(file.ctime);
+    expect(file.stat.mtime).toBe(file.mtime);
+    expect(file.stat.size).toBe(file.size);
+  });
+
+  it("reads through to the live fields the watcher mutates in place", async () => {
+    const { vault } = await openVault();
+    const file = vault.getFileByPath("Docs/Note.md")!;
+    const stat = file.stat;
+
+    // The watcher/rename paths assign these directly on the indexed object
+    // (vault.ts `f.mtime = Date.now()` and friends). A snapshot taken at
+    // construction would silently keep serving the old numbers.
+    file.mtime = 999;
+    file.ctime = 111;
+    file.size = 42;
+
+    expect(file.stat.mtime).toBe(999);
+    expect(file.stat.ctime).toBe(111);
+    expect(file.stat.size).toBe(42);
+    // The stat object itself is identity-stable, as it is in Obsidian.
+    expect(file.stat).toBe(stat);
+    expect(stat.mtime).toBe(999);
+  });
+
+  it("tracks a real modify() through the vault", async () => {
+    const { vault } = await openVault();
+    const file = vault.getFileByPath("Docs/Note.md")!;
+
+    await vault.modify(file, "updated", { mtime: 4242 });
+
+    expect(file.stat.mtime).toBe(4242);
+    expect(file.stat.size).toBe(file.size);
+  });
+
+  it("survives a rename, which reindexes the same object in place", async () => {
+    const { vault } = await openVault();
+    const file = vault.getFileByPath("Docs/Note.md")!;
+
+    await vault.rename(file, "Docs/Renamed.md");
+
+    const renamed = vault.getFileByPath("Docs/Renamed.md")!;
+    expect(renamed).toBe(file);
+    expect(renamed.stat.mtime).toBe(renamed.mtime);
+  });
+
+  it("does not give folders a stat — Obsidian's TFolder has none", async () => {
+    const { vault } = await openVault();
+    const folder = vault.getFolderByPath("Docs")!;
+
+    expect("stat" in folder).toBe(false);
+    expect(Object.getOwnPropertyDescriptor(folder, "stat")).toBeUndefined();
+  });
+
+  it("is non-enumerable, so serialization and spread stay byte-identical", async () => {
+    const { vault } = await openVault();
+    const file = vault.getFileByPath("Docs/Note.md")!;
+
+    // Pins the persisted/IPC shape: `stat` must never leak into JSON or a
+    // spread copy, where it would freeze into a stale snapshot.
+    expect(JSON.parse(JSON.stringify(file))).toEqual({
+      kind: "file",
+      path: "Docs/Note.md",
+      name: "Note.md",
+      basename: "Note",
+      extension: "md",
+      mtime: 2,
+      ctime: 1,
+      size: 5,
+      parent: "Docs",
+    });
+    expect(Object.keys(file)).not.toContain("stat");
+    expect(Object.keys({ ...file })).not.toContain("stat");
+    expect(JSON.stringify(file)).not.toContain("stat");
+  });
+
+  it("leaves the Bases group-key encoding of a file value untouched", async () => {
+    const { vault } = await openVault();
+    const file = vault.getFileByPath("Docs/Note.md")!;
+
+    // `bases/query-engine.ts` derives a group bucket id via
+    // `JSON.stringify(key)`, and a `BaseValue` may be `{type:"file", value:
+    // TFile}` — the one core path that really does serialize a TFile. Adding
+    // `stat` must not widen that id.
+    expect(JSON.stringify({ type: "file", value: file })).toBe(
+      '{"type":"file","value":' +
+        '{"kind":"file","path":"Docs/Note.md","name":"Note.md","basename":"Note",' +
+        '"extension":"md","mtime":2,"ctime":1,"size":5,"parent":"Docs"}}',
+    );
+  });
+
+  it("serializes on its own when a plugin reaches for it directly", async () => {
+    const { vault } = await openVault();
+    const file = vault.getFileByPath("Docs/Note.md")!;
+
+    expect(JSON.parse(JSON.stringify(file.stat))).toEqual({
+      ctime: 1,
+      mtime: 2,
+      size: 5,
+    });
+  });
+});
+
 describe("Vault through plugin require('obsidian')", () => {
+  it("lets a plugin read file.stat.mtime without throwing", async () => {
+    installFakeGeode(
+      [{ path: "Note.md", isFolder: false, mtime: 7, ctime: 3, size: 4 }],
+      { "Note.md": "body" },
+    );
+    // Regression: the installed claude-threads build reads `abstract.stat.mtime`
+    // on every vault event. Without `stat` that threw
+    // "Cannot read properties of undefined (reading 'mtime')" ~1/sec.
+    const PluginClass = instantiatePluginClass(
+      `
+        const { Vault } = require("obsidian");
+        module.exports = class StatProbe {
+          static results = (async () => {
+            const vault = new Vault();
+            await vault.open("/fake/vault");
+            const file = vault.getFileByPath("Note.md");
+            return [file.stat.mtime, file.stat.ctime, file.stat.size];
+          })();
+        };
+      `,
+      "stat-probe",
+    ) as unknown as { results: Promise<unknown[]> };
+
+    await expect(PluginClass.results).resolves.toEqual([7, 3, 4]);
+  });
+
+
   it("exposes the selected query/read foundation to CommonJS plugins", async () => {
     installFakeGeode(
       [{ path: "Note.md", isFolder: false, mtime: 1, ctime: 1, size: 4 }],
