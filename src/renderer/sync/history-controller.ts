@@ -207,6 +207,34 @@ const fingerprint = (resource: HistoryLocalResource | undefined): string | null 
 const matches = (resource: HistoryLocalResource | undefined, base: HistoryBaseline) => base.present
     ? Boolean(resource && resource.kind === base.kind && resource.path === base.path && (base.kind === 'folder' || resource.sha256 === base.sha256)) : !resource;
 const COMPARE_OVERSIZE = 'Conflict comparison is limited to 1 MiB of text';
+const INTEGRITY_MISMATCH = 'Sync content integrity mismatch';
+const OWNERSHIP_CHANGED = 'Resource ownership changed; preview sync again';
+/**
+ * Labels a failed local content read for the `blocked` list. Control flow never
+ * depends on this: every branch demotes the same single resource, so the only
+ * cost of a miss is a vaguer row in the Settings sync tab.
+ *
+ * `INTEGRITY_MISMATCH` is our own literal, so that arm is exact. ENOENT is not:
+ * it crosses Electron IPC and arrives stringified, e.g. "Error invoking remote
+ * method 'vault-read-binary': Error: ENOENT: no such file or directory, open
+ * '<vault>/Claude/2026-09-17-....md'". No error code or class survives that
+ * boundary, so substring matching is the only signal available. Keeping it in
+ * one place means the fragile part is auditable rather than scattered.
+ */
+const localReadReason = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes(INTEGRITY_MISMATCH))
+        return 'local-content-changed-during-sync';
+    if (message.includes('ENOENT'))
+        return 'local-file-vanished-during-sync';
+    return 'local-read-failed';
+};
+/**
+ * prepare() either produces a durable intent or demotes exactly one resource.
+ * `cause` is retained so callers that must not skip work (resolve()) can rethrow
+ * the original error unchanged instead of inventing a new one.
+ */
+type PrepareOutcome = { ok: true; operation: HistoryOperation } | { ok: false; issue: HistoryPathIssue; cause: unknown };
 /** Strict decode: invalid UTF-8 surfaces an error rather than replacement garbage. */
 const decodeText = (bytes: ArrayBuffer): string => {
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
@@ -276,8 +304,19 @@ export class HistoryController {
                 throw new Error('Preview this exact sync before approving it');
             state.approved = true;
             delete state.previewSignature;
-            await this.execute(state, plan, signal);
+            const demoted = await this.execute(state, plan, signal);
             const after = await this.plan(state, signal);
+            // Demotions describe what this run skipped, and the re-plan cannot
+            // rediscover them: a vanished file is simply absent from the new
+            // snapshot. Merge them into the returned preview (and the state the
+            // Settings tab reads) so the skipped work is visible instead of
+            // silently missing. They are not fed back into plan(), so the next
+            // preview recomputes from live evidence rather than inheriting these.
+            if (demoted.length) {
+                after.preview.blocked = [...after.preview.blocked, ...demoted];
+                after.preview.upToDate = false;
+                state.blocked = after.preview.blocked;
+            }
             await this.save(state, signal);
             return after.preview;
         });
@@ -579,15 +618,33 @@ export class HistoryController {
         return { actions, adoptions, preview, snapshot, resources: byEntity, locations };
     }
     private async verified(bytes: ArrayBuffer, sha256: string, size: number, signal: AbortSignal): Promise<ArrayBuffer> { if (bytes.byteLength !== size || size > SYNC_MAX_FILE_BYTES || await this.hash(bytes, signal) !== sha256)
-        throw new Error('Sync content integrity mismatch'); return bytes; }
-    private async prepare(action: Action, signal: AbortSignal): Promise<HistoryOperation> {
+        throw new Error(INTEGRITY_MISMATCH); return bytes; }
+    private async prepare(action: Action, signal: AbortSignal): Promise<PrepareOutcome> {
         const id = this.ports.newId();
         let record: HistoryRecord;
         let data: ArrayBuffer | undefined;
         if (action.type === 'publish') {
             record = { schema: 1, vaultId: this.options.vaultId, deviceId: this.options.deviceId, operationId: id, recordId: this.ports.newId(), entityId: action.entityId, namespace: action.namespace, parents: action.parents, kind: action.kind, deleted: action.deleted, location: action.location };
-            if (action.resource?.kind === 'file')
-                data = await this.verified(await this.checked(signal, () => this.ports.read(action.resource!)), action.resource.sha256!, action.resource.size!, signal);
+            if (action.resource?.kind === 'file') {
+                // Deliberately the narrowest possible catch: reading and verifying one
+                // local file. A live vault mutates under a long batch -- the file can be
+                // deleted (ENOENT) or rewritten (hash/size no longer match the snapshot)
+                // between snapshot() and here. Both are facts about this one resource, so
+                // they demote it and the batch continues. Everything after this point
+                // (stage, saveOperation, mergeHistory validation) is left uncaught on
+                // purpose: an ENOSPC or a broken operation journal is systemic, and
+                // demoting it would silently drop an unbounded amount of real work.
+                try {
+                    data = await this.verified(await this.checked(signal, () => this.ports.read(action.resource!)), action.resource.sha256!, action.resource.size!, signal);
+                }
+                catch (error) {
+                    // Cancellation and lost vault context are re-raised structurally
+                    // rather than pattern-matched: assert() is a pure re-read of current
+                    // state, so if that is why the read failed it throws again here.
+                    this.assert(signal);
+                    return { ok: false, issue: { namespace: action.namespace, path: action.path, reason: localReadReason(error) }, cause: error };
+                }
+            }
         }
         else {
             record = action.record;
@@ -604,20 +661,41 @@ export class HistoryController {
         if (this.ports.exclude && data) {
             const resource: HistoryLocalResource = { namespace: record.namespace, path: action.path, kind: record.kind, sha256: payload!.sha256, size: payload!.size };
             const reason = await this.checked(signal, () => this.ports.exclude!(resource, data));
+            // Also resource-local: the host reclassified this one path mid-batch. The
+            // exclude() call itself is still uncaught -- a broken port is systemic.
             if (reason)
-                throw new Error('Resource ownership changed; preview sync again');
+                return { ok: false, issue: { namespace: record.namespace, path: action.path, reason: 'resource-ownership-changed' }, cause: new Error(OWNERSHIP_CHANGED) };
         }
         const operation: HistoryOperation = { id, type: action.type, phase: 'prepared', record, entityId: record.entityId, path: action.path, ...(payload ? { payload } : {}),
             ...(action.type === 'publish' ? { baseline: { namespace: record.namespace, path: action.path, kind: record.kind, present: !record.deleted, heads: [record.recordId], ...(payload ? { sha256: payload.sha256 } : {}) } } : { ...(action.baseline ? { baseline: action.baseline } : {}), apply: { operationId: id, namespace: record.namespace, path: action.path, kind: record.kind, deleted: action.deleted, expectedHash: action.expected } }) };
         await this.checked(signal, () => this.ports.saveOperation(operation));
-        return operation;
+        return { ok: true, operation };
     }
-    private async execute(state: HistoryControllerState, plan: Plan, signal: AbortSignal): Promise<void> {
+    /**
+     * For callers acting on one explicitly chosen resource (conflict resolution),
+     * where skipping is not a meaningful outcome: the user asked for this exact
+     * publication, so a demotion is rethrown as the original failure.
+     */
+    private async prepareRequired(action: Action, signal: AbortSignal): Promise<HistoryOperation> {
+        const outcome = await this.prepare(action, signal);
+        if (!outcome.ok)
+            throw outcome.cause;
+        return outcome.operation;
+    }
+    private async execute(state: HistoryControllerState, plan: Plan, signal: AbortSignal): Promise<HistoryPathIssue[]> {
         const operations: HistoryOperation[] = [];
+        const demoted: HistoryPathIssue[] = [];
         // No mutation before the whole ordered batch is durably ready; this is what
         // makes destination-write/child-move/empty-folder-cleanup recovery safe.
-        for (const action of plan.actions)
-            operations.push(await this.prepare(action, signal));
+        // Demotion is safe here for the same reason: nothing has been written yet,
+        // so dropping an action only shrinks the batch that is about to run.
+        for (const action of plan.actions) {
+            const outcome = await this.prepare(action, signal);
+            if (outcome.ok)
+                operations.push(outcome.operation);
+            else
+                demoted.push(outcome.issue);
+        }
         state.pendingBatch = operations.map(op => op.id);
         await this.save(state, signal);
         for (const operation of operations)
@@ -625,6 +703,7 @@ export class HistoryController {
         this.finish(state, operations);
         Object.assign(state.baseline, plan.adoptions);
         await this.save(state, signal);
+        return demoted;
     }
     private async perform(operation: HistoryOperation, snapshot: HistoryLocalSnapshot, signal: AbortSignal): Promise<void> {
         this.validateOperation(operation);
@@ -859,10 +938,10 @@ export class HistoryController {
                 await this.checked(signal, () => this.ports.saveOperation(operation));
             }
             else
-                operation = await this.prepare(publish, signal);
+                operation = await this.prepareRequired(publish, signal);
             const operations = [operation];
             if (chosen) {
-                operations.push(await this.prepare({ type: 'apply', record: chosen, path: selectedPath, expected: fingerprint(destination), deleted: chosen.deleted }, signal));
+                operations.push(await this.prepareRequired({ type: 'apply', record: chosen, path: selectedPath, expected: fingerprint(destination), deleted: chosen.deleted }, signal));
                 const cleanup: ApplyAction[] = [];
                 if (local && local.path !== selectedPath) {
                     if (local.kind === 'folder') {
@@ -880,7 +959,7 @@ export class HistoryController {
                 }
                 cleanup.sort((a, b) => b.path.split('/').length - a.path.split('/').length);
                 for (const action of cleanup)
-                    operations.push(await this.prepare(action, signal));
+                    operations.push(await this.prepareRequired(action, signal));
             }
             state.pendingBatch = operations.map(op => op.id);
             await this.save(state, signal);

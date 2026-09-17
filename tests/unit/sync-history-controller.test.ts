@@ -224,6 +224,62 @@ describe('append-only history controller', () => {
         expect([...r.records.values()].some(x => x.location.name === 'good.md')).toBe(true);
         expect([...r.records.values()].some(x => x.location.name === 'Note.sync-conflict-20240722-095505-ABC.md')).toBe(false);
     });
+    it('demotes a file that vanishes between snapshot and read while the rest of the batch publishes', async () => {
+        // Production failure this reproduces: a Claude Threads note was renamed (its
+        // slug comes from the thread title) between snapshot() and prepare(), so the
+        // IPC read came back ENOENT and aborted a ~17,000-file batch.
+        const r = remote(), a = client(r, { 'gone.md': 'one', 'kept.md': 'two' });
+        const read = a.ports.read;
+        a.ports.read = async (resource) => {
+            if (resource.path === 'gone.md')
+                throw new Error("Error invoking remote method 'vault-read-binary': Error: ENOENT: no such file or directory, open '/vault/gone.md'");
+            return read(resource);
+        };
+        const result = await start(a);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'gone.md', reason: 'local-file-vanished-during-sync' });
+        expect(result.upToDate).toBe(false);
+        expect([...r.records.values()].some(x => x.location.name === 'kept.md')).toBe(true);
+        expect([...r.records.values()].some(x => x.location.name === 'gone.md')).toBe(false);
+        // The demotion describes this run only; once the path really is gone the
+        // next preview recomputes from live evidence and stops reporting it.
+        a.files.delete('gone.md');
+        a.ports.read = read;
+        expect((await a.controller.preview(signal())).blocked).toEqual([]);
+    });
+    it('demotes a file whose bytes change mid-sync and publishes it on the following run', async () => {
+        const r = remote(), a = client(r, { 'churn.md': 'one', 'kept.md': 'two' });
+        const read = a.ports.read;
+        a.ports.read = async (resource) => resource.path === 'churn.md' ? encode('rewritten after the snapshot') : read(resource);
+        const result = await start(a);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'churn.md', reason: 'local-content-changed-during-sync' });
+        expect([...r.records.values()].some(x => x.location.name === 'kept.md')).toBe(true);
+        expect([...r.records.values()].some(x => x.location.name === 'churn.md')).toBe(false);
+        a.ports.read = read;
+        const next = await a.controller.run({}, signal());
+        expect(next.blocked).toEqual([]);
+        expect([...r.records.values()].some(x => x.location.name === 'churn.md')).toBe(true);
+        const b = client(r); await start(b);
+        expect(b.text('churn.md')).toBe('one');
+    });
+    it('aborts the whole batch when the operation journal fails rather than demoting the resource', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one', 'b.md': 'two' });
+        await a.controller.preview(signal());
+        const saveOperation = a.ports.saveOperation;
+        let calls = 0;
+        a.ports.saveOperation = async (op) => { if (++calls === 2)
+            throw new Error('journal unavailable'); return saveOperation(op); };
+        await expect(a.controller.run({ approvePreview: true }, signal())).rejects.toThrow('journal unavailable');
+        expect(r.records.size).toBe(0);
+    });
+    it('honors cancellation raised during a local read instead of demoting the resource', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one', 'b.md': 'two' });
+        await a.controller.preview(signal());
+        const abort = new AbortController(), read = a.ports.read;
+        a.ports.read = async (resource) => { abort.abort(); return read(resource); };
+        await expect(a.controller.run({ approvePreview: true }, abort.signal)).rejects.toThrow();
+        expect(r.records.size).toBe(0);
+        expect(a.state()!.blocked.some(x => x.reason.startsWith('local-'))).toBe(false);
+    });
     it('still throws from the deep prepare()/mergeHistory guard if an invalid name is somehow forced past the planning-time gate', async () => {
         // Regression guard: the planning-stage `invalid-resource-name` check in snapshot()
         // is the primary fix, but prepare()'s own mergeHistory-based validation must remain
