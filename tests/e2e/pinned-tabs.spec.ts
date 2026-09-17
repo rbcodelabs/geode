@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _electron as electron, expect, test, type ElectronApplication } from "@playwright/test";
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
@@ -46,6 +46,28 @@ function launch(userDataDir: string): Promise<ElectronApplication> {
   return electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
 }
 
+/**
+ * Block until plugin view types exist.
+ *
+ * A rendered file explorer does NOT mean plugins have loaded:
+ * `App.openVaultMeasured` adds `FileExplorerView` and only then does a long
+ * stretch of async startup (dynamic `bookmarks-view` import, web-viewer
+ * lifecycle, built-in view factories) before `pluginManager.initialize()`
+ * awaits each enabled plugin's `onload()` — which is where this spec's
+ * fixture plugin calls `registerView("pinned-probe", ...)`. Gating on the nav
+ * item alone therefore races plugin registration, and `setViewState()` throws
+ * `No view registered for type "pinned-probe"` whenever the host is slow
+ * enough to lose it (reliably on CI's macos-latest runner, never on a fast
+ * dev machine).
+ *
+ * `workspace.layoutReady` is flipped by `flushLayoutReady()` strictly after
+ * plugin init and layout restore, so it is the correct gate — and the one the
+ * rest of the e2e suite already uses.
+ */
+function waitForLayoutReady(win: Page): Promise<unknown> {
+  return win.waitForFunction(() => (window as any).app?.workspace?.layoutReady === true);
+}
+
 test("pins a hosted plugin tab from its context menu, protects navigation, and restores it", async () => {
   const { vaultDir, userDataDir } = makeVault();
   const screenshotDir = process.env.GEODE_QA_SCREENSHOT_DIR;
@@ -54,6 +76,7 @@ test("pins a hosted plugin tab from its context menu, protects navigation, and r
   try {
     let win = await app.firstWindow();
     await expect(win.locator('.nav-file-title[data-path="Destination.md"]')).toBeVisible();
+    await waitForLayoutReady(win);
 
     await win.evaluate(async () => {
       const workspace = (window as any).app.workspace;
@@ -105,6 +128,12 @@ test("pins a hosted plugin tab from its context menu, protects navigation, and r
 
     app = await launch(userDataDir);
     win = await app.firstWindow();
+    // Same race on the restore path: until plugin init runs, the saved
+    // "pinned-probe" leaf resolves to a DeferredView placeholder rather than
+    // the real view, so its tab header has no "Pinned Probe" text to match.
+    // layoutReady also covers hydrateDeferredLeaves(), which is what swaps the
+    // placeholder for the plugin's view.
+    await waitForLayoutReady(win);
     const restoredPluginTab = win.locator(".workspace-split.mod-root .workspace-tab-header", { hasText: "Pinned Probe" });
     await expect(restoredPluginTab).toHaveClass(/mod-pinned/);
     await restoredPluginTab.click({ button: "right" });
