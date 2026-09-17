@@ -3,116 +3,17 @@ import { projectCanvasForSearch } from "../canvas/canvas-data";
 import type { View } from "../workspace";
 import { TFile, TagCache } from "../types";
 import { setIcon } from "../api/icons";
-import { stripCommentMetadataWithMap } from "../comments/model";
-
-export interface SearchTerm {
-  op: "text" | "file" | "path" | "tag" | "content" | "line";
-  value: string;
-  negated: boolean;
-  regex: RegExp | null;
-}
-
-export interface SearchMatch {
-  file: TFile;
-  snippets: { text: string; offset: number }[];
-}
-
-/** Parse a query into terms. Supports operators, "phrases", -negation, /regex/. */
-export function parseQuery(query: string): SearchTerm[] {
-  const terms: SearchTerm[] = [];
-  const re = /(-)?(?:(file|path|tag|content|line):)?(?:"([^"]*)"|\/((?:[^\/\\]|\\.)+)\/|(\S+))/g;
-  for (const m of query.matchAll(re)) {
-    const negated = !!m[1];
-    const op = (m[2] as SearchTerm["op"]) || "text";
-    let value = m[3] ?? m[5] ?? "";
-    let regex: RegExp | null = null;
-    if (m[4] !== undefined) {
-      try {
-        regex = new RegExp(m[4], "gi");
-      } catch {
-        value = m[4];
-      }
-    }
-    if (!value && !regex) continue;
-    terms.push({ op, value: value.toLowerCase(), negated, regex });
-  }
-  return terms;
-}
-
-function snippetAt(content: string, index: number, len: number): { text: string; offset: number } {
-  const lineStart = content.lastIndexOf("\n", index) + 1;
-  let lineEnd = content.indexOf("\n", index + len);
-  if (lineEnd === -1) lineEnd = content.length;
-  return { text: content.slice(lineStart, lineEnd).slice(0, 250), offset: index };
-}
+import { parseQuery, matchFileAgainstTerms, type SearchMatch as PortableSearchMatch, type SearchTerm } from "../../wiki/search";
 
 /**
- * Evaluate a parsed query's terms against a single file. Pure aside from the
- * injected `getTags` lookup (tag matching needs the metadata cache, which is
- * not available outside the app). All other operators only need `file` and
- * `content`, so this can run without any DOM/Electron dependency.
+ * The query primitives moved to the portable engine (`src/wiki/search.ts`):
+ * they never needed the DOM, and the local wiki provider needs them too.
+ * Re-exported here, with the file type bound back to `TFile`, so every desktop
+ * call site and test keeps working against one implementation.
  */
-export function matchFileAgainstTerms(
-  file: TFile,
-  content: string | null,
-  terms: SearchTerm[],
-  getTags: (file: TFile) => TagCache[]
-): SearchMatch | null {
-  const snippets: { text: string; offset: number }[] = [];
-  const searchable = content === null ? null : stripCommentMetadataWithMap(content);
-  if (searchable) content = searchable.text;
-  const rawContent = content;
-  const lower = content?.toLowerCase() ?? "";
-  const addSnippet = (index: number, len: number) => {
-    const raw = rawContent ?? "";
-    const lineStart = raw.lastIndexOf("\n", index) + 1;
-    let lineEnd = raw.indexOf("\n", index + len);
-    if (lineEnd < 0) lineEnd = raw.length;
-    snippets.push({ offset: searchable?.toSourceOffset(index) ?? index, text: raw.slice(lineStart, lineEnd).trim().slice(0, 250) });
-  };
-  for (const term of terms) {
-    let hit = false;
-    switch (term.op) {
-      case "file":
-        hit = file.name.toLowerCase().includes(term.value);
-        break;
-      case "path":
-        hit = file.path.toLowerCase().includes(term.value);
-        break;
-      case "tag": {
-        const tags = getTags(file);
-        const want = term.value.replace(/^#/, "");
-        hit = tags.some((t) => {
-          const tl = t.tag.toLowerCase();
-          return tl === want || tl.startsWith(want + "/");
-        });
-        break;
-      }
-      case "text":
-      case "content":
-      case "line": {
-        if (content == null) break;
-        if (term.regex) {
-          term.regex.lastIndex = 0;
-          const m = term.regex.exec(content);
-          if (m) {
-            hit = true;
-            if (!term.negated) addSnippet(m.index, m[0].length);
-          }
-        } else {
-          const idx = lower.indexOf(term.value);
-          if (idx !== -1) {
-            hit = true;
-            if (!term.negated) addSnippet(idx, term.value.length);
-          }
-        }
-        break;
-      }
-    }
-    if (term.negated ? hit : !hit) return null;
-  }
-  return { file, snippets };
-}
+export { parseQuery, matchFileAgainstTerms } from "../../wiki/search";
+export type { SearchTerm } from "../../wiki/search";
+export type SearchMatch = PortableSearchMatch<TFile>;
 
 export class SearchView implements View {
   readonly viewType = "search";

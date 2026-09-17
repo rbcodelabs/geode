@@ -1,5 +1,5 @@
 import { parseDocument } from "yaml";
-import { DEFAULT_METADATA_SCAN_CAP_BYTES } from "../indexer/metadata-indexer";
+import { DEFAULT_METADATA_SCAN_CAP_BYTES, FRONTMATTER_BLOCK_RE, FRONTMATTER_OPEN_RE } from "./constants";
 import { parseMetadata } from "./metadata";
 import { normalizeWikiPath, selectLinkCandidates } from "./link-candidates";
 export { normalizeWikiPath } from "./link-candidates";
@@ -115,8 +115,8 @@ function characterize(path: string, text: string): CapturedNote {
     coverage.headingsCertain = false; coverage.blocksCertain = false;
   }
   if (/(?:\[[^\]\n]*\]\([^\n]*|\[[^\]\n]*\]\[[^\]\n]*\]|^\s*\[[^\]\n]+\]:)/m.test(text)) add("markdown-links-unsupported");
-  if (/^---\r?\n/.test(text) && !metadata?.frontmatter) {
-    const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (FRONTMATTER_OPEN_RE.test(text) && !metadata?.frontmatter) {
+    const match = text.match(FRONTMATTER_BLOCK_RE);
     if (!match) add("frontmatter-unterminated");
     else {
       try { add(parseDocument(match[1]).errors.length ? "frontmatter-malformed" : "frontmatter-nonmapping"); }

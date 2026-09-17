@@ -19,8 +19,9 @@ import { loadEmbedBlobUrl, parseEmbedDims, resolveEmbed } from "./embed";
 import { isMermaidInfoString, parseFencedBlock } from "../internal-plugins/mermaid/fence";
 import { onThemeChange, renderMermaid } from "../internal-plugins/mermaid/render-mermaid";
 import { parseTable, serializeTable, type Align, type ParsedTable } from "./table";
+import { FRONTMATTER_BLOCK_RE } from "../../wiki/constants";
 
-const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
+const FM_RE = FRONTMATTER_BLOCK_RE;
 
 /** Length of doc prefix scanned for frontmatter. */
 const FM_SCAN = 8192;

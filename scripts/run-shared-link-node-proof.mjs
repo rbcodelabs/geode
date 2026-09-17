@@ -9,7 +9,10 @@ try {
   const outfile = join(directory, "proof.cjs");
   const result = await build({ entryPoints: [resolve("scripts/shared-link-node-proof.mts")], outfile, bundle: true, platform: "node", format: "cjs", target: "node22", metafile: true });
   const sources = Object.keys(result.metafile.inputs).filter(path => path.startsWith("src/"));
-  const allowed = new Set(["src/wiki/link-candidates.ts", "src/wiki/link-resolution.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts", "src/indexer/metadata-indexer.ts", "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts"]);
+  // `src/indexer/metadata-indexer.ts` is deliberately absent: the scan-cap
+  // constant moved to `src/wiki/constants.ts`, so the portable graph no longer
+  // reaches into the desktop indexer at all.
+  const allowed = new Set(["src/wiki/link-candidates.ts", "src/wiki/link-resolution.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts", "src/wiki/constants.ts", "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts"]);
   for (const source of sources) assert.ok(allowed.has(source), `Unexpected runtime dependency: ${source}`);
   process.stdout.write(execFileSync(process.execPath, [outfile], { encoding: "utf8" }));
 } finally { await rm(directory, { recursive: true, force: true }); }

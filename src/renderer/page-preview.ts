@@ -2,6 +2,7 @@ import type { App } from "./app";
 import { stripCommentMarkerSyntax } from "./comments/model";
 import { extractSection, headingLineMatch } from "./markdown/embed";
 import { positionHoverElement } from "./tooltip";
+import { commentSpanPattern, FRONTMATTER_BLOCK_RE } from "../wiki/constants";
 
 const SHOW_DELAY_MS = 300;
 const HIDE_GRACE_MS = 140;
@@ -45,7 +46,7 @@ export function hasMarkdownHeading(text: string, heading: string): boolean {
 
 /** Keep preview parsing inert while still presenting Obsidian inline syntax as readable content. */
 export function safePreviewMarkdownSource(source: string): string {
-  source = source.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
+  source = source.replace(FRONTMATTER_BLOCK_RE, "");
   const code: string[] = [];
   source = source.replace(/```[\s\S]*?(```|$)|`[^`\n]*`/g, (match) => {
     code.push(match);
@@ -56,7 +57,7 @@ export function safePreviewMarkdownSource(source: string): string {
   // text. Stripping after code regions are parked keeps a marker an author
   // typed inside a code span intact, as authored.
   source = stripCommentMarkerSyntax(source);
-  source = source.replace(/%%[\s\S]*?%%/g, "");
+  source = source.replace(commentSpanPattern(), "");
   source = source.replace(/!\[\[[^\[\]\n]+\]\]/g, "");
   source = source.replace(/!\[([^\]\n]*)\](?:\([^\n)]*\)|\[[^\]\n]*\])/g, "$1");
   source = source.replace(

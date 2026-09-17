@@ -1,5 +1,6 @@
 import { GFM, parser, type BlockParser, type MarkdownConfig } from "@lezer/markdown";
 import { getFrontMatterInfo } from "../api/frontmatter";
+import { COMMENT_DELIMITER, MATH_BLOCK_DELIMITER, type MaskedDelimiter } from "../../wiki/constants";
 
 export interface CommentAuthor {
   type: "user" | "agent";
@@ -309,8 +310,8 @@ const geodeMarkdownSyntax: MarkdownConfig = {
     { name: "ObsidianCommentBlock", block: true },
   ],
   parseBlock: [
-    delimitedBlockParser("MathBlock", "MathBlock", "$$"),
-    delimitedBlockParser("ObsidianCommentBlock", "ObsidianCommentBlock", "%%"),
+    delimitedBlockParser("MathBlock", "MathBlock", MATH_BLOCK_DELIMITER),
+    delimitedBlockParser("ObsidianCommentBlock", "ObsidianCommentBlock", COMMENT_DELIMITER),
   ],
   parseInline: [
     {
@@ -373,7 +374,7 @@ const geodeMarkdownSyntax: MarkdownConfig = {
       name: "ObsidianComment",
       parse(cx, next, pos) {
         if (next !== 37 || cx.char(pos + 1) !== 37) return -1;
-        const close = cx.slice(pos + 2, cx.end).indexOf("%%");
+        const close = cx.slice(pos + 2, cx.end).indexOf(COMMENT_DELIMITER);
         if (close < 0) return -1;
         return cx.addElement(cx.elt("ObsidianComment", pos, pos + close + 4));
       },
@@ -383,9 +384,9 @@ const geodeMarkdownSyntax: MarkdownConfig = {
 
 const commentMarkdownParser = parser.configure([GFM, geodeMarkdownSyntax]);
 
-function maskNonPlainDelimiterContexts(source: string, delimiter: "$$" | "%%"): string {
+function maskNonPlainDelimiterContexts(source: string, delimiter: MaskedDelimiter): string {
   const masked = source.split("");
-  const delimiterNodes = delimiter === "$$"
+  const delimiterNodes = delimiter === MATH_BLOCK_DELIMITER
     ? new Set(["InlineMath", "MathBlock"])
     : new Set(["ObsidianComment", "ObsidianCommentBlock"]);
   const mask = (from: number, to: number): void => {
@@ -406,7 +407,7 @@ function maskNonPlainDelimiterContexts(source: string, delimiter: "$$" | "%%"): 
 
 function delimitedSyntaxRanges(
   source: string,
-  delimiter: "$$" | "%%",
+  delimiter: MaskedDelimiter,
   kind: "display math" | "Obsidian comment",
 ): Array<{ from: number; to: number; kind: string }> {
   const ranges: Array<{ from: number; to: number; kind: string }> = [];
@@ -491,8 +492,8 @@ function protectedRanges(source: string): Array<{ from: number; to: number; kind
   // Mask other parsed Markdown and Geode syntax separately for each delimiter
   // so literal delimiters cannot become false openers while keeping every
   // source offset unchanged.
-  ranges.push(...delimitedSyntaxRanges(maskNonPlainDelimiterContexts(source, "$$"), "$$", "display math"));
-  ranges.push(...delimitedSyntaxRanges(maskNonPlainDelimiterContexts(source, "%%"), "%%", "Obsidian comment"));
+  ranges.push(...delimitedSyntaxRanges(maskNonPlainDelimiterContexts(source, MATH_BLOCK_DELIMITER), MATH_BLOCK_DELIMITER, "display math"));
+  ranges.push(...delimitedSyntaxRanges(maskNonPlainDelimiterContexts(source, COMMENT_DELIMITER), COMMENT_DELIMITER, "Obsidian comment"));
   commentMarkdownParser.parse(source).iterate({
     enter(node) {
       if (TRANSPARENT_NODES.has(node.name)) return;
