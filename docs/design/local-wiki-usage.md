@@ -126,3 +126,57 @@ The snapshot still uses `agent-strict`; desktop navigation uses
 `desktop-compatibility`. Sharing machinery does not make ambiguous agent results
 choose a desktop winner, or make desktop links adopt strict traversal/subpath
 validation. This milestone does not route desktop storage through snapshots.
+
+## Writing: `openLocalWikiProvider`
+
+`openLocalWikiSnapshot` is read-only by design. When a caller needs to change
+notes, use `openLocalWikiProvider` from `src/wiki/folder-provider.ts`. See
+[ADR 0020](../adr/0020-write-capable-local-wiki-provider.md) for the decision
+and its boundaries.
+
+```ts
+import { openLocalWikiProvider } from "../src/wiki/folder-provider";
+
+const opened = await openLocalWikiProvider("/path/to/vault", {
+  // Both sinks are optional and deliberately tiny — see src/wiki/contracts.ts.
+  index: { upsert: (path, note) => cache.set(path, note), remove: (path) => cache.delete(path) },
+  events: { emit: (event) => console.log(event.type, event.path) },
+});
+if (opened.status !== "ok") throw new Error(opened.error.code);
+const provider = opened.provider;
+
+await provider.create("notes/New.md", "# New\n\nLinks to [[Target]].\n");
+await provider.update("notes/New.md", "# New\n\nLinks to [[Other]].\n");
+await provider.delete("notes/New.md");
+
+// The view is a fresh frozen snapshot after every applied write.
+provider.snapshot().backlinks("Other.md");
+provider.snapshot().search("something");
+
+// Re-read the folder when something outside this process changed it.
+await provider.refresh();
+```
+
+Every operation returns a `WriteResult` whose `status` is `ok` or one of the
+named refusals — `invalid-path`, `not-a-note`, `already-exists`, `absent`,
+`portability-collision`, `path-changed`, `note-byte-limit`, `write-failed`.
+Refusals are values, not exceptions: check the status rather than wrapping calls
+in `try`.
+
+Writes are notes (`.md`) only. Paths must already be normalized, vault-relative
+and non-escaping — the same `normalizeWikiPath` rules the resolver uses, so a
+path the engine will not resolve is also a path it will not write.
+
+To run the write proof and its tests:
+
+```sh
+npm run proof:local-wiki-write
+npm run test:unit -- tests/unit/local-wiki-provider.test.ts tests/unit/local-wiki-write-node.test.ts
+```
+
+The provider validates paths, refuses to follow symlinks, and re-verifies
+containment immediately before each write. That defends a trusted folder against
+malformed input, planted symlinks, swapped ancestors and ordinary races — all
+covered by tests. It is **not** an OS sandbox against a hostile process racing
+the filesystem with equal privilege, and nothing here adds synchronization,
+remote storage or any external document-store integration.

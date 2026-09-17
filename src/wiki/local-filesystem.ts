@@ -1,7 +1,7 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createWikiSnapshot, DEFAULT_SNAPSHOT_LIMITS, normalizeWikiPath, type CapturedFile, type Diagnostic, type SnapshotLimits, type WikiSnapshot } from "./snapshot";
+import { createWikiSnapshot, DEFAULT_SNAPSHOT_LIMITS, normalizeWikiPath, type CaptureInfo, type CapturedFile, type Diagnostic, type SnapshotLimits, type WikiSnapshot } from "./snapshot";
 
 export interface WikiReadHandle {
   stat(): Promise<Stats>;
@@ -26,9 +26,18 @@ export const nodeWikiFileSystem: WikiFileSystem = {
   open: path => open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)),
 };
 export interface OpenSnapshotOptions { limits?: Partial<SnapshotLimits>; filesystem?: WikiFileSystem }
+export type CaptureError = { code: "invalid-limits" | "root-unavailable" | "root-not-directory" };
 export type OpenSnapshotResult = { status: "ok"; snapshot: WikiSnapshot } | {
-  status: "error"; error: { code: "invalid-limits" | "root-unavailable" | "root-not-directory" };
+  status: "error"; error: CaptureError;
 };
+/**
+ * A completed capture, before it becomes a snapshot. `root` is the resolved,
+ * canonical root the walk actually used — a caller that goes on to write must
+ * anchor to that, not to the path it originally asked for.
+ */
+export type CaptureResult =
+  | { status: "ok"; root: string; captured: CapturedFile[]; info: CaptureInfo; limits: SnapshotLimits }
+  | { status: "error"; error: CaptureError };
 class CaptureFailure extends Error {
   constructor(readonly code: string) { super(code); }
 }
@@ -41,6 +50,17 @@ function contained(root: string, path: string): boolean {
 
 /** Read a trusted, user-selected local folder into memory; this is not a hostile-tree OS sandbox. */
 export async function openLocalWikiSnapshot(rootPath: string, options: OpenSnapshotOptions = {}): Promise<OpenSnapshotResult> {
+  const capture = await captureLocalWikiFolder(rootPath, options);
+  if (capture.status === "error") return capture;
+  return { status: "ok", snapshot: createWikiSnapshot(capture.captured, capture.info) };
+}
+
+/**
+ * The capture half of `openLocalWikiSnapshot`, exposed so a write-capable
+ * provider can rebuild its view without reimplementing — or weakening — the
+ * containment, symlink and TOCTOU discipline below.
+ */
+export async function captureLocalWikiFolder(rootPath: string, options: OpenSnapshotOptions = {}): Promise<CaptureResult> {
   const limits = { ...DEFAULT_SNAPSHOT_LIMITS, ...options.limits };
   if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value <= 0)) return { status: "error", error: { code: "invalid-limits" } };
   const fs = options.filesystem ?? nodeWikiFileSystem;
@@ -150,7 +170,7 @@ export async function openLocalWikiSnapshot(rootPath: string, options: OpenSnaps
   }
   try { await walk("", 0); }
   catch { return { status: "error", error: { code: "root-unavailable" } }; }
-  return { status: "ok", snapshot: createWikiSnapshot(captured, {
+  return { status: "ok", root, captured, limits, info: {
     discoveryComplete, diagnostics, limits, scanStartedAt, scanEndedAt: new Date().toISOString(),
-  }) };
+  } };
 }
