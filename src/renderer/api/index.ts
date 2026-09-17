@@ -55,6 +55,7 @@ export type {
   TAbstractFile,
   TFile,
   TFolder,
+  FileStats,
   CachedMetadata,
   LinkCache,
   TagCache,

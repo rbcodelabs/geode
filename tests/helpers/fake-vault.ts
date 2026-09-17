@@ -1,5 +1,5 @@
 import { Events } from "../../src/renderer/events";
-import { pathParent, pathName, splitExt, TFile } from "../../src/renderer/types";
+import { pathParent, pathName, splitExt, attachFileStats, TFile } from "../../src/renderer/types";
 import type { Vault } from "../../src/renderer/vault";
 
 /**
@@ -40,7 +40,7 @@ export class FakeVault extends Events {
     const entry = this.files.get(path)!;
     const name = pathName(path);
     const { basename, extension } = splitExt(name);
-    return {
+    return attachFileStats({
       kind: "file",
       path,
       name,
@@ -50,7 +50,7 @@ export class FakeVault extends Events {
       ctime: entry.ctime,
       size: entry.size,
       parent: pathParent(path),
-    };
+    });
   }
 
   getFileByPath(path: string): TFile | null {

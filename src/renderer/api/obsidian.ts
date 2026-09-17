@@ -60,7 +60,7 @@ export { isTFile, isTFolder, normalizePath } from "../types";
 export { getAllTags, getFrontMatterInfo, parseFrontMatterTags, parseYaml, stringifyYaml } from "./frontmatter";
 export type { FrontMatterInfo } from "./frontmatter";
 export { App } from "../app";
-export type { TAbstractFile, CachedMetadata } from "../types";
+export type { TAbstractFile, CachedMetadata, FileStats } from "../types";
 // Keymap + in-editor suggest primitives. `EditorSuggest` must be a real,
 // subclassable export (plugins do `class X extends EditorSuggest` at
 // module-eval time) and `Scope` backs `app.scope` (installed below). See
