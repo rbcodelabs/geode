@@ -1,7 +1,7 @@
 {
   "name": "geode",
-  "version": "0.20.0",
-  "description": "Geode \u2014 an open-source knowledge base that works on local Markdown files",
+  "version": "0.21.0",
+  "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
   "scripts": {
     "test": "vitest run && npm run build && playwright test",
