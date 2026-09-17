@@ -18,10 +18,15 @@ const MOD = isMac ? "Meta" : "Control";
  * webview-hotkeys.spec.ts, so absolute tab/file counts don't depend on state
  * left behind by another spec.
  */
-async function launch() {
+async function launch(extraFiles: string[] = []) {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-new-tab-picker-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-new-tab-picker-ud-"));
   fs.writeFileSync(path.join(vaultDir, "Daily Plan.md"), "# Daily Plan\n\nBody text.\n");
+  // Seeded before launch so they are present in the initial vault scan —
+  // files written after the window opens depend on watcher latency.
+  for (const name of extraFiles) {
+    fs.writeFileSync(path.join(vaultDir, name), `# ${name.replace(/\.md$/, "")}\n`);
+  }
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
     JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }),
@@ -168,6 +173,52 @@ test("Search the web opens a Web Viewer tab at the resolved search-engine URL", 
       `https://duckduckgo.com/?q=${encodeURIComponent("release notes")}`,
     );
     await expect(rootTabs(window)).toHaveCount(tabsBefore + 1);
+  } finally {
+    await app.close();
+    cleanup();
+  }
+});
+
+/**
+ * Visual capture of the picker's four distinct states, for QA review of the
+ * New Tab redesign. Opt-in via GEODE_QA_SCREENSHOT_DIR (same convention as
+ * pinned-tabs.spec.ts) so a normal `npm test` run neither writes files nor
+ * pays the capture cost. The suite runs with GEODE_HEADLESS=1 (windows are
+ * created with `show: false`), but CDP's captureScreenshot still renders the
+ * offscreen window, so these come out as real pixels rather than blanks.
+ */
+test("QA capture: the picker's four states", async () => {
+  const screenshotDir = process.env.GEODE_QA_SCREENSHOT_DIR;
+  test.skip(!screenshotDir, "set GEODE_QA_SCREENSHOT_DIR to capture");
+  // A single-file vault makes the file-match state look degenerate, so give
+  // the fuzzy matcher something to actually rank.
+  const { app, window, cleanup } = await launch(["Daily Standup.md", "Daily Retro.md", "Project Notes.md"]);
+  try {
+    fs.mkdirSync(screenshotDir!, { recursive: true });
+
+    const input = await openNewTab(window);
+    const shot = (name: string) => window.screenshot({ path: path.join(screenshotDir!, `${name}.png`) });
+
+    // 1. Empty query: every file matches, no fixed items yet.
+    await expect(pickerResults(window).first()).toBeVisible();
+    await shot("01-empty-input");
+
+    // 2. File matches, ranked by fuzzyMatch. Assert on the file rows
+    //    specifically — the "New note"/"Search the web" rows also contain the
+    //    query text, so a bare hasText count would pass with zero files.
+    await input.fill("Daily");
+    await expect(pickerResults(window).locator(".new-tab-picker-result-title")).toHaveCount(3);
+    await shot("02-file-matches");
+
+    // 3. URL-shaped query: pinned "Open <url>" first.
+    await input.fill("example.com");
+    await expect(pickerResults(window).first()).toHaveText("Open https://example.com");
+    await shot("03-url-shaped-pinned-open");
+
+    // 4. Plain text: New note + Search the web, no file matches.
+    await input.fill("Totally New Idea");
+    await expect(pickerResults(window)).toHaveCount(2);
+    await shot("04-new-note-and-search-web");
   } finally {
     await app.close();
     cleanup();
