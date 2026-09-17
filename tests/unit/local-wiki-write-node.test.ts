@@ -5,15 +5,22 @@ it("creates, updates and deletes real notes in a fresh Node process with an audi
   const output = execFileSync(process.execPath, ["scripts/run-local-wiki-write-proof.mjs"], { encoding: "utf8" });
   const [proof, dependencies] = output.trim().split("\n").map((line) => JSON.parse(line));
 
+  // Each field is a sequence the proof measured as it went, so a provider that
+  // stopped applying writes would change these rather than still printing the
+  // same constants.
   expect(proof).toEqual({
     nodeOnly: true,
-    created: 1,
-    updated: 1,
-    deleted: 1,
+    // Target.md's backlinks: none, then one once the referrer is created, then
+    // none again once the update retargets it at Other.md.
+    backlinkCounts: [0, 1, 0],
+    // "plesiosaur" matches once after create and not after the update replaced
+    // it; "ichthyosaur" no longer matches after the delete.
+    searchCounts: [1, 0, 0],
+    // 1 seeded note, 2 after the create, still 2 after the delete because the
+    // mid-run refresh picked up Other.md.
+    fileCounts: [1, 2, 2],
+    eventTypes: ["created", "updated", "deleted"],
     refusals: 8,
-    events: 3,
-    backlinksObserved: true,
-    searchObserved: true,
   });
 
   expect(dependencies.runtimeSources).toContain("src/wiki/folder-provider.ts");

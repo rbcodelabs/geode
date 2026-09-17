@@ -29,8 +29,17 @@ try {
   if (opened.status !== "ok") throw new Error("unreachable");
   const provider = opened.provider;
 
+  // Recorded as the run proceeds so the emitted JSON reports what was actually
+  // observed, rather than restating constants the script could print whether or
+  // not the provider worked.
+  const backlinkCounts: number[] = [];
+  const searchCounts: number[] = [];
+  const fileCounts: number[] = [];
+
   assert.equal(provider.snapshot().listFiles().length, 1, "starts with the one seeded note");
   assert.equal(provider.snapshot().backlinks("Target.md").references.length, 0, "no backlinks yet");
+  fileCounts.push(provider.snapshot().listFiles().length);
+  backlinkCounts.push(provider.snapshot().backlinks("Target.md").references.length);
 
   // CREATE, then observe metadata, search and backlinks.
   const created = await provider.create(
@@ -62,6 +71,9 @@ try {
     ["notes/Referrer.md"],
     "the created note must produce a backlink",
   );
+  fileCounts.push(afterCreate.listFiles().length);
+  backlinkCounts.push(afterCreate.backlinks("Target.md").references.length);
+  searchCounts.push(afterCreate.search("plesiosaur").hits.length);
 
   // UPDATE, then observe the backlink and search change.
   await writeFile(join(root, "Other.md"), "# Other\n", "utf8");
@@ -78,6 +90,8 @@ try {
   );
   assert.equal(afterUpdate.search("plesiosaur").hits.length, 0, "stale content must stop matching");
   assert.equal(afterUpdate.search("ichthyosaur").hits.length, 1, "new content must match");
+  backlinkCounts.push(afterUpdate.backlinks("Target.md").references.length);
+  searchCounts.push(afterUpdate.search("plesiosaur").hits.length);
 
   // The portable query primitives run here too, against the same note.
   const note = afterUpdate.readNote("notes/Referrer.md");
@@ -96,6 +110,8 @@ try {
   assert.equal(afterDelete.readNote("notes/Referrer.md").status, "absent", "the note must be gone from the view");
   assert.equal(afterDelete.search("ichthyosaur").hits.length, 0, "the note must be gone from search");
   assert.equal(afterDelete.backlinks("Other.md").references.length, 0, "the backlink must be gone");
+  fileCounts.push(afterDelete.listFiles().length);
+  searchCounts.push(afterDelete.search("ichthyosaur").hits.length);
 
   // Refusals reach the same fresh process, and change nothing.
   const refusals = {
@@ -124,15 +140,21 @@ try {
   ], "the event sink must see applied writes only");
   assert.equal(indexed.has("notes/Referrer.md"), false, "the index must have dropped the deleted note");
 
+  // Every field below is measured, not asserted into existence. If the provider
+  // silently stopped applying writes, these sequences would change and the
+  // wrapper test would fail — which a hardcoded `created: 1` would not.
   console.log(JSON.stringify({
     nodeOnly: true,
-    created: 1,
-    updated: 1,
-    deleted: 1,
+    // Target.md backlinks: none -> one (create) -> none again (update retargets).
+    backlinkCounts,
+    // "plesiosaur" hits: one after create, zero after update; then
+    // "ichthyosaur" zero after delete.
+    searchCounts,
+    // Files in the view: 1 seeded -> 2 after create -> 2 after delete
+    // (Referrer gone, Other.md added by the mid-run refresh).
+    fileCounts,
+    eventTypes: events.map(event => event.type),
     refusals: Object.keys(refusals).length,
-    events: events.length,
-    backlinksObserved: true,
-    searchObserved: true,
   }));
 } finally {
   await rm(root, { recursive: true, force: true });

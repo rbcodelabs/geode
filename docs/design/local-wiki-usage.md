@@ -159,13 +159,27 @@ await provider.refresh();
 
 Every operation returns a `WriteResult` whose `status` is `ok` or one of the
 named refusals — `invalid-path`, `not-a-note`, `already-exists`, `absent`,
-`portability-collision`, `path-changed`, `note-byte-limit`, `write-failed`.
-Refusals are values, not exceptions: check the status rather than wrapping calls
-in `try`.
+`portability-collision`, `path-changed`, `note-byte-limit`, `entry-limit`,
+`capture-incomplete`, `write-failed`. Refusals are values, not exceptions: check
+the status rather than wrapping calls in `try`.
 
 Writes are notes (`.md`) only. Paths must already be normalized, vault-relative
-and non-escaping — the same `normalizeWikiPath` rules the resolver uses, so a
-path the engine will not resolve is also a path it will not write.
+and non-escaping — the same `normalizeWikiPath` rules the resolver uses — and
+must also survive the capture walk's exclusions, so dot-prefixed segments and
+`node_modules` are refused. That combination is what makes "a path the engine
+will not resolve is also a path it will not write" actually true.
+
+`refresh()` returns `root-changed` if the root now resolves to a different
+directory than the one the provider was opened against; writes stay anchored to
+the original root, so adopting a new one silently would read one vault and write
+to another.
+
+Two things this deliberately does not do. It does not pin a note's content
+identity across capture: a note edited outside the process between capture and
+`update` is overwritten, last-writer-wins, so call `refresh()` first if that
+matters. And it does not reject Windows-reserved names (`CON.md`, trailing dot
+or space, `<>:"|?*`) — `portability-collision` covers only NFC-lowercase
+identity collisions.
 
 To run the write proof and its tests:
 

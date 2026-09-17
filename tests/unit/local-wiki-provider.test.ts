@@ -382,6 +382,146 @@ describe("local wiki provider: concurrent mutation", () => {
   });
 });
 
+describe("local wiki provider: regressions found in review", () => {
+  it("refuses to refresh onto a different root rather than reading one vault and writing to another", async () => {
+    // A symlinked root that gets retargeted. Before the fix, refresh() adopted
+    // the new capture but kept writing to the root captured at open, so an
+    // update reported ok, changed vault A, and left the viewed vault B alone.
+    const vaultA = await fixture({ "Note.md": "A content\n" });
+    const vaultB = await fixture({ "Note.md": "B content\n" });
+    const parent = await mkdtemp(join(tmpdir(), "geode-rootswap-"));
+    roots.push(parent);
+    const link = join(parent, "current");
+    await symlink(vaultA, link);
+
+    const opened = await openLocalWikiProvider(link);
+    expect(opened.status).toBe("ok");
+    if (opened.status !== "ok") return;
+
+    await rm(link, { force: true });
+    await symlink(vaultB, link);
+
+    expect(await opened.provider.refresh()).toEqual({ status: "error", error: { code: "root-changed" } });
+
+    // The view is still the vault it was opened against, and so is any write.
+    const stale = opened.provider.snapshot().readNote("Note.md");
+    expect(stale.status === "ok" && stale.note.text).toBe("A content\n");
+    expect(await opened.provider.update("Note.md", "written\n")).toEqual({ status: "ok", path: "Note.md" });
+    expect(await readFile(join(vaultA, "Note.md"), "utf8")).toBe("written\n");
+    expect(await readFile(join(vaultB, "Note.md"), "utf8")).toBe("B content\n");
+  });
+
+  it("refuses to write when the root is replaced by a different directory at the same path", async () => {
+    // Name equality is not identity: before the fix, deleting and recreating
+    // the root defeated every containment check.
+    const root = await fixture({ "Note.md": "original\n" });
+    const opened = await openLocalWikiProvider(root);
+    expect(opened.status).toBe("ok");
+    if (opened.status !== "ok") return;
+
+    await rm(root, { recursive: true, force: true });
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "Note.md"), "a stranger's note\n", "utf8");
+
+    expect(await opened.provider.update("Note.md", "clobbered\n")).toEqual({ status: "path-changed", path: "Note.md" });
+    expect(await readFile(join(root, "Note.md"), "utf8")).toBe("a stranger's note\n");
+  });
+
+  it("refuses to update through a symlink planted where a note used to be", async () => {
+    const root = await fixture({ "Note.md": "original\n" });
+    const outside = await mkdtemp(join(tmpdir(), "geode-outside-"));
+    roots.push(outside);
+    const victim = join(outside, "victim.md");
+    await writeFile(victim, "untouched\n", "utf8");
+
+    const opened = await openLocalWikiProvider(root);
+    expect(opened.status).toBe("ok");
+    if (opened.status !== "ok") return;
+
+    await rm(join(root, "Note.md"), { force: true });
+    await symlink(victim, join(root, "Note.md"));
+
+    expect(await opened.provider.update("Note.md", "payload\n")).toEqual({ status: "path-changed", path: "Note.md" });
+    expect(await readFile(victim, "utf8")).toBe("untouched\n");
+  });
+
+  it.each([
+    [".hidden.md", "dot-prefixed note"],
+    [".secret/Note.md", "dot-prefixed folder"],
+    ["node_modules/Note.md", "node_modules"],
+    ["a/.git/Note.md", "dot-prefixed interior segment"],
+  ])("refuses to create %s (%s), which the capture walk would never read back", async (path) => {
+    // Writing these succeeded before the fix, so they appeared in the view
+    // until the next refresh and then became permanently unreachable — delete
+    // said absent, create said already-exists, and the bytes sat in the vault.
+    const { root, provider: p } = await provider();
+
+    expect(await p.create(path, "payload")).toEqual({ status: "invalid-path" });
+    expect(p.snapshot().listFiles()).toEqual([]);
+    await expect(readFile(join(root, path), "utf8")).rejects.toThrow();
+  });
+
+  it("agrees with the snapshot's own exclusion policy about what is writable", async () => {
+    const { provider: p } = await provider({ "Note.md": "a\n" });
+    const policy = p.snapshot().info.exclusionPolicy;
+    // Guard against the policy being renamed or dropped without this being noticed.
+    expect(policy).toBeDefined();
+    for (const excluded of [".hidden.md", "node_modules/Note.md"]) {
+      expect((await p.create(excluded, "x")).status).toBe("invalid-path");
+    }
+  });
+
+  it("leaves the note intact and the view honest when a replace fails partway", async () => {
+    // O_TRUNC-then-write would have emptied the note before failing, leaving
+    // the view asserting content no longer on disk. The temp-file + rename
+    // implementation means a failed write cannot publish a partial note.
+    const root = await fixture({ "Note.md": "original content\n" });
+
+    const failing: WikiWriteFileSystem = {
+      ...nodeWikiWriteFileSystem,
+      async replaceFile() { throw Object.assign(new Error("disk full"), { code: "ENOSPC" }); },
+    };
+
+    const opened = await openLocalWikiProvider(root, { filesystem: failing });
+    expect(opened.status).toBe("ok");
+    if (opened.status !== "ok") return;
+
+    expect(await opened.provider.update("Note.md", "new content\n")).toEqual({ status: "write-failed", path: "Note.md" });
+    expect(await readFile(join(root, "Note.md"), "utf8")).toBe("original content\n");
+    const view = opened.provider.snapshot().readNote("Note.md");
+    expect(view.status === "ok" && view.note.text).toBe("original content\n");
+  });
+
+  it("reports entry exhaustion as entry-limit, not as a byte limit", async () => {
+    // A 2-byte note being refused with "note-byte-limit" told the caller to
+    // shrink something that was never too big.
+    const { provider: p } = await provider({ "One.md": "a\n" }, { limits: { maxEntries: 1 } });
+    expect(await p.create("Two.md", "b\n")).toEqual({ status: "entry-limit", path: "Two.md" });
+  });
+
+  it("refuses every write when discovery was incomplete rather than answering from a partial view", async () => {
+    // With a visited-entry cap the walk stops early, so "absent" would be a
+    // guess: the note may exist and simply never have been seen.
+    const { provider: p } = await provider(
+      { "One.md": "a\n", "Two.md": "b\n", "Three.md": "c\n" },
+      { limits: { maxVisitedEntries: 1 } },
+    );
+    expect(p.snapshot().info.discoveryComplete).toBe(false);
+
+    expect((await p.create("New.md", "x")).status).toBe("capture-incomplete");
+    expect((await p.update("One.md", "x")).status).toBe("capture-incomplete");
+    expect((await p.delete("One.md")).status).toBe("capture-incomplete");
+  });
+
+  it("leaves no temp file behind after a successful replace", async () => {
+    const { root, provider: p } = await provider({ "Note.md": "a\n" });
+    await p.update("Note.md", "b\n");
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(root)).filter((name) => name.includes(".tmp"))).toEqual([]);
+    expect(await readFile(join(root, "Note.md"), "utf8")).toBe("b\n");
+  });
+});
+
 describe("local wiki provider: injected index and event contracts", () => {
   it("reports each applied write to the index and the event sink, in order", async () => {
     const { index, eventSink, events, indexed, removed } = sinks();

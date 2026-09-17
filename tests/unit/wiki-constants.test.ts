@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   COMMENT_DELIMITER,
@@ -114,15 +114,12 @@ describe("portable ownership boundary", () => {
     // Match import/export *statements* only. Matching the bare path would also
     // fire on prose in a doc comment explaining why the dependency was removed.
     const importsIndexer = /(?:^|\n)\s*(?:import|export)[^;]*?from\s+["'][^"']*indexer\/metadata-indexer["']/;
-    for (const path of [
-      "src/wiki/metadata.ts",
-      "src/wiki/snapshot.ts",
-      "src/wiki/constants.ts",
-      "src/wiki/link-candidates.ts",
-      "src/wiki/link-resolution.ts",
-      "src/wiki/types.ts",
-    ]) {
-      expect(source(path)).not.toMatch(importsIndexer);
+    // Enumerated from disk, not hardcoded: a hardcoded list silently stops
+    // covering every module added to src/wiki after it was written.
+    const modules = readdirSync(new URL("../../src/wiki", import.meta.url)).filter((name) => name.endsWith(".ts"));
+    expect(modules.length).toBeGreaterThanOrEqual(8);
+    for (const name of modules) {
+      expect(source(`src/wiki/${name}`), `src/wiki/${name} must not import the desktop indexer`).not.toMatch(importsIndexer);
     }
   });
 
@@ -133,8 +130,21 @@ describe("portable ownership boundary", () => {
 
   it("routes the comment and math delimiters through the portable constants", () => {
     const model = source("src/renderer/comments/model.ts");
-    expect(model).toContain("wiki/constants");
-    expect(model).toContain("COMMENT_DELIMITER");
-    expect(model).toContain("MATH_BLOCK_DELIMITER");
+    expect(model).toContain('from "../../wiki/constants"');
+
+    // Asserting the identifiers merely appear would pass even if the old
+    // literals survived alongside an unused import. Assert the literals are
+    // gone — that is what the move was for.
+    const body = model.slice(model.indexOf("\n", model.lastIndexOf("import ")));
+    expect(body).not.toMatch(/["']%%["']/);
+    expect(body).toContain("COMMENT_DELIMITER");
+    expect(body).toContain("MATH_BLOCK_DELIMITER");
+
+    // One `"$$"` literal legitimately remains: inline-math parsing picks
+    // between `$$` and `$`, which is a different concern from the block
+    // delimiter, and constant-ising half of that pair would read worse.
+    // Pinned at exactly one so a new literal cannot creep back in unnoticed.
+    expect(body.match(/["']\$\$["']/g)).toHaveLength(1);
+    expect(body).toMatch(/cx\.char\(pos \+ 1\) === 36 \? "\$\$" : "\$"/);
   });
 });

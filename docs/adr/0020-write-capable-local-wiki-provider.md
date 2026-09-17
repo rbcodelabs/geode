@@ -61,13 +61,23 @@ refusal has its own status rather than a generic failure:
 | `already-exists` | `create` found an entry at that path |
 | `absent` | `update`/`delete` found no note at that path |
 | `portability-collision` | A different path folds onto the same NFC-lowercased identity |
-| `path-changed` | Containment, symlink or identity re-verification failed at write time |
-| `note-byte-limit` | Would exceed the configured note, entry or total byte limits |
+| `path-changed` | Root identity, containment or symlink re-verification failed at write time |
+| `note-byte-limit` | Would exceed the configured per-note or total byte limits |
+| `entry-limit` | The folder already holds the configured maximum number of entries |
+| `capture-incomplete` | Discovery was cut short by a limit, so absence cannot be distinguished from "never seen" |
 | `write-failed` | The filesystem refused the operation |
 
 Path rules reuse `normalizeWikiPath` rather than introducing a second
-normalizer, so a path the engine will not resolve is also a path it will not
-write.
+normalizer, **and additionally apply the capture walk's own exclusions** —
+dot-prefixed segments and `node_modules`. Without that second half the claim
+"a path the engine will not resolve is also a path it will not write" is false:
+a write to `.secret/Note.md` would succeed, appear in the view until the next
+refresh, and then be permanently unreachable because the walk never picks it up.
+
+When discovery was incomplete (entry, depth or visited-entry limits), every
+write is refused with `capture-incomplete` rather than answered from a view
+known to be partial — otherwise `update` and `delete` report `absent` for notes
+that demonstrably exist.
 
 `portability-collision` refuses a write that would produce two notes a
 case-insensitive or normalization-insensitive filesystem treats as one. This
@@ -76,13 +86,30 @@ keeps a vault that was authored on Linux openable on macOS and Windows.
 ### Containment and race discipline
 
 - Parent components are re-verified immediately before each write: the root is
-  still the same directory, no component is a symlink, and the parent's
-  canonical path still equals the path walked to.
+  still the same directory **by device and inode** (name equality is not
+  identity — a root removed and recreated at the same path would otherwise pass
+  every check), no component is a symlink, and the parent's canonical path
+  still equals the path walked to.
+- For `update` and `delete` the final component is checked too: a symlink or a
+  directory planted where a note used to be is refused with `path-changed`. A
+  target that is simply *gone* is not a containment failure — it is an ordinary
+  race, reported as `absent`, and the view converges on it.
+- `refresh()` refuses with `root-changed` when the root now canonicalises
+  somewhere else. Adopting the new folder silently would leave the provider
+  reading one vault and writing to another, because writes stay anchored to the
+  root captured at open.
 - `create` uses `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW`, making "does this
   already exist?" one atomic question and refusing to write through a symlink
   planted at the target.
-- `update` uses `O_WRONLY | O_TRUNC | O_NOFOLLOW` with **no** `O_CREAT`, so an
-  update cannot resurrect a note deleted from under it — it reports `absent`.
+- `update` writes a sibling temp file, `fsync`s it, then `rename`s it over the
+  target. Truncating in place is the obvious implementation and it loses data:
+  `O_TRUNC` empties the note *before* the write, so a failure partway through
+  (ENOSPC, EIO) leaves a truncated note on disk while the caller still holds a
+  view asserting the old content. `rename` within a directory is atomic, so a
+  reader sees either the old note or the new one, never a partial one. Because
+  `rename` would happily create the target, the target is checked first and must
+  still be a regular, non-symlink file — which preserves the property that an
+  update cannot resurrect a note deleted from under it (it reports `absent`).
 - `delete` unlinks the entry without following it, and converges the in-memory
   view when the note is already gone rather than insisting it is still there.
 - Events are emitted only after the write is applied and the view rebuilt, so a
@@ -105,6 +132,19 @@ deterministically through the injected filesystem seam.
 What it does not defend: an adversary with equal privilege racing the
 filesystem in a genuinely concurrent process. The tests are single-threaded by
 construction. A hostile-tree sandbox was explicitly excluded from this scope.
+
+**Per-note content identity is deliberately not pinned across capture.** A note
+edited outside this process between capture and `update` is overwritten —
+last-writer-wins. Callers that must observe such an edit have to `refresh()`
+first. Doing better means threading per-file `Stats` through the capture API and
+comparing them at write time; that is a design change rather than a hardening,
+so it is recorded here as follow-up rather than half-implemented. The
+`path-changed` status therefore covers *route* verification (root identity,
+containment, symlinks), not note-content identity.
+
+**Windows-reserved names are not rejected.** `portability-collision` covers
+NFC-lowercase identity collisions only. Names like `CON.md`, a trailing dot or
+space, or `<>:"|?*` are accepted here and would still be unusable on Windows.
 
 ## Consequences
 
