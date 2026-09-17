@@ -192,9 +192,20 @@ build_authorization_policy:
       need this done, because i want this headless wiki with sync working and powering
       Compass's document store". That priority statement is direction, not a build
       package, and does not itself approve any scope.
-  receipt_store: Products/Geode/Operations/build-receipts/   # vault-relative; Geode automation runtime
   serialized_executor: "geode-cron:f1c20f33-0caf-4ee1-85f4-30491bbfee16"  # "Geode Product Operations", daily 14:20
 ```
+
+**Contract note (2026-09-17): the `receipt_store` key was removed, not lost.** The
+`build-authorization` contract this policy implements was simplified upstream
+(`agent-pm-playbook` PR #26, merged 2026-09-17): the SHA-256 package digest, the durable
+execution-receipt store, and the `workerId` / `leaseExpiresAt` lease fields no longer
+exist in either the skill or its evaluator. `receipt_store` therefore points at nothing
+the contract reads, and keeping it would misdescribe how execution is actually gated. The
+store's contents are **retained as a historical record** of the one execution performed
+under the previous contract, at the vault path
+`Products/Geode/Operations/build-receipts/` (alongside the package it executed, in
+`Products/Geode/Operations/build-packages/`). Nothing there is authoritative for any
+future build; see that folder's README for what it is and is not.
 
 One human build decision covers investment, approach, capacity commitment, and execution
 through a tested PR, for the exact approved package only. It grants **no** merge, no
@@ -210,14 +221,43 @@ in particular synchronization and the Compass document-store integration, both o
 were explicitly *deferred* in the approved proposal -- requires a **new** build package
 and a new decision. Do not read the September 11 approval as covering it.
 
+**What binds a package to its approved scope.** The plan is written as a versioned Compass
+doc, and the package records its `planDocId` plus the exact `planDocVersionId` that was
+approved. Because a doc version is immutable once created, drift is detected by re-reading
+the doc and comparing version IDs -- there is no package hash, canonicalization step or
+digest field. Editing the plan after approval creates a new version ID, which the
+evaluator treats as a changed package requiring a revised package and a new decision.
+Never edit an approved plan version in place.
+
+`roadmapItemId` is a **required** package field, so the roadmap item must already exist
+when the package is prepared. Preparation therefore includes creating (or identifying) the
+roadmap item up front; it is no longer created at execution time. The roadmap item itself
+is the durable record of admission.
+
 **Executor and serialization.** Delivery is dispatched only from the single scheduled
 `Geode Product Operations` run (the `serialized_executor` above) via its authorized
 delivery checklist row, which invokes `compass-resolver`. Do not create a separate
 resolver or decision-router cron for this workspace -- a second dispatcher applying the
-same package is exactly what the contract forbids. Geode run history is run-state context,
-not an atomic lock; single execution rests on that one scheduled dispatcher plus the
-`workerId` / `leaseExpiresAt` lease fields carried in each receipt and enforced by the
-`build-authorization` evaluator.
+same package is exactly what the contract forbids; the contract still states this rule
+explicitly. Geode run history is run-state context, not an atomic lock.
+
+The evaluator has **no** opinion on whether work is already claimed or mid-flight -- it
+answers only whether a current, verified human approval covers this exact scope and
+whether a delivery slot exists. Not-running-twice rests on that one scheduled dispatcher
+plus `compass-resolver`'s ordinary claim step, which opted-in packages share with every
+other delivery item and which gets no separate lease, worker ID or receipt object: first
+cross-check GitHub for an existing PR referencing the roadmap item's short UUID (this is
+what catches a prior run's in-flight or completed work), then mark the roadmap item as
+claimed and, if linked, set the Opportunity `ACTIVE`. Both must succeed before any code is
+written.
+
+> **Open question -- claim marker form (unresolved, do not assume either answer).** The
+> upstream contract's claim step prescribes renaming the roadmap item with a `🤖` title
+> prefix. The `Geode Product Operations` schedule carries a standing instruction that
+> roadmap titles describe work and must never be renamed to encode execution state. The
+> `🤖` prefix is nonetheless already an established convention in this workspace. This
+> tension is for Rick to settle; this file deliberately does **not** encode a claim-marker
+> instruction either way, and no agent should infer one from this paragraph.
 
 **Relationship to the legacy gate.** The repo's `CLAUDE.md` workflow (isolated worktree,
 delegated engineering, verified tests, human PR review) still governs *how* work is done.
