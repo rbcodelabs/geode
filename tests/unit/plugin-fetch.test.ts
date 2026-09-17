@@ -67,6 +67,24 @@ describe("pluginFetch", () => {
     expect(decoded).toContain("audio-bytes");
   });
 
+  it("forwards a non-standard init.timeout, which a constructed Request would drop", async () => {
+    const proxy = vi.fn(async () => jsonResponse({ ok: true }));
+    (globalThis as any).window = { geode: { pluginFetch: proxy } };
+
+    await pluginFetch("https://example.test/slow", { method: "POST", body: "x", timeout: 900_000 } as RequestInit);
+
+    expect(proxy.mock.calls[0][0].timeout).toBe(900_000);
+  });
+
+  it("omits the timeout when the caller does not ask for one, leaving main's default in force", async () => {
+    const proxy = vi.fn(async () => jsonResponse({ ok: true }));
+    (globalThis as any).window = { geode: { pluginFetch: proxy } };
+
+    await pluginFetch("https://example.test/plain");
+
+    expect(proxy.mock.calls[0][0].timeout).toBeUndefined();
+  });
+
   it("reconstructs a spec-compliant Response from the proxy's result", async () => {
     const proxy = vi.fn(async () => jsonResponse(
       { detail: "nope" },
