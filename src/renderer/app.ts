@@ -34,9 +34,9 @@ import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
 import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
-import { WebView } from "./views/web-view";
+import { WebView, isUrlShaped, resolveWebInput } from "./views/web-view";
 import { ArtifactView } from "./views/artifact-view";
-import { Modal, PromptModal, SuggestModal } from "./modals/modals";
+import { Modal, PromptModal, SuggestList, SuggestModal, fuzzyMatch, type FuzzyMatch } from "./modals/modals";
 import { ConflictCompareModal } from "./modals/conflict-compare-modal";
 import { SyncConflictBannerController } from "./sync/conflict-banner";
 import { SYNC_CONFLICT_COMPARE_LABEL, SYNC_CONFLICT_COMPARE_ROW_LIMIT, planConflictRow } from "./sync/conflict-presentation";
@@ -125,6 +125,133 @@ interface AppSettings {
   metadataScanCapBytes: number;
 }
 
+/** One row of the New Tab universal picker: a vault file, a pinned "open this URL", or one of the two always-available fallbacks. */
+export type PickerItem =
+  | { kind: "file"; file: TFile }
+  | { kind: "open-url"; url: string }
+  | { kind: "new-note"; title: string }
+  | { kind: "search-web"; query: string };
+
+/**
+ * Builds the New Tab picker's result list for one query: vault files ranked
+ * by `fuzzyMatch` (the same scorer the Quick Switcher uses), with a pinned
+ * "Open `<url>`" item first when `query` is URL/domain-shaped
+ * (`isUrlShaped`), and — whenever `query` is non-empty — "New note" and
+ * "Search the web" always appended last, regardless of whether files also
+ * matched. This never silently guesses one fallback action; both are always
+ * offered, selectable like any other result.
+ *
+ * File matches are capped below `SuggestList`'s own 80-item cap by however
+ * many fixed items (0-3) are present, so a very large match count can never
+ * push "New note" / "Search the web" out of the rendered list.
+ */
+export function buildPickerItems(query: string, files: TFile[], searchEngine: string): PickerItem[] {
+  const items: PickerItem[] = [];
+  const urlShaped = isUrlShaped(query);
+  const nonEmpty = query.length > 0;
+  if (urlShaped) items.push({ kind: "open-url", url: resolveWebInput(query, searchEngine) });
+
+  const reserved = (urlShaped ? 1 : 0) + (nonEmpty ? 2 : 0);
+  const scored: FuzzyMatch<TFile>[] = [];
+  for (const file of files) {
+    const score = fuzzyMatch(query, file.path);
+    if (score !== null) scored.push({ item: file, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  for (const { item } of scored.slice(0, Math.max(0, 80 - reserved))) {
+    items.push({ kind: "file", file: item });
+  }
+
+  if (nonEmpty) {
+    items.push({ kind: "new-note", title: query });
+    items.push({ kind: "search-web", query });
+  }
+  return items;
+}
+
+/**
+ * Mounted inline at the top of the New Tab screen (`EmptyView`), not in a
+ * floating dialog — hence `SuggestList` (no `Modal` chrome) rather than
+ * `SuggestModal`.
+ *
+ * `getItemText` deliberately ignores `item` and always returns the raw
+ * query. `buildPickerItems` already does its own filtering/ordering (pinned
+ * "Open <url>" first, ranked file matches, "New note"/"Search the web"
+ * always last), but `SuggestList.updateResults` re-applies
+ * `fuzzyMatch(query, getItemText(item))` over whatever `getItems()` returns
+ * and re-sorts by score. Making every item self-match the query with an
+ * identical score turns that re-sort into a no-op (JS array sort is stable),
+ * so `buildPickerItems`' order survives untouched without changing
+ * `SuggestList`'s scoring logic at all.
+ *
+ * Unlike the three `SuggestModal` subclasses, this list is mounted directly
+ * in the New Tab tab's own DOM, not inside a floating dialog — so, unlike
+ * theirs, its markup is on the page (and, since a blank query trivially
+ * matches every file, already populated) any time a New Tab is open, which
+ * is the common idle state. Unmodified `SuggestModal` dialogs' tests rely on
+ * bare `.prompt-input` / `.prompt-result` / `.prompt-empty` selectors to mean
+ * "whichever modal is currently open", so this class gives every one of its
+ * own rendered elements a distinct `new-tab-picker-*` class instead of
+ * reusing those bare names, to avoid a silent multi-match once both are on
+ * screen together.
+ */
+class NewTabPickerList extends SuggestList<PickerItem> {
+  constructor(private geodeApp: App) {
+    super();
+    this.inputEl.className = "new-tab-picker-input";
+    this.resultsEl.className = "new-tab-picker-results";
+    this.resultClassName = "new-tab-picker-result";
+    this.emptyClassName = "new-tab-picker-empty";
+    this.inputEl.placeholder = "Find a note, or type a URL or search…";
+  }
+
+  getItems(): PickerItem[] {
+    return buildPickerItems(
+      this.inputEl.value,
+      this.geodeApp.vault.getMarkdownFiles(),
+      this.geodeApp.settings.webViewer.searchEngine,
+    );
+  }
+
+  getItemText(): string {
+    return this.inputEl.value;
+  }
+
+  renderItem(item: PickerItem, el: HTMLElement): void {
+    switch (item.kind) {
+      case "file":
+        el.innerHTML = `<div class="new-tab-picker-result-title">${item.file.basename}</div><div class="new-tab-picker-result-path">${item.file.parent || ""}</div>`;
+        break;
+      case "open-url":
+        el.textContent = `Open ${item.url}`;
+        break;
+      case "new-note":
+        el.textContent = `New note "${item.title}"`;
+        break;
+      case "search-web":
+        el.textContent = `Search the web for "${item.query}"`;
+        break;
+    }
+  }
+
+  onChooseItem(item: PickerItem, evt: KeyboardEvent | MouseEvent): void {
+    switch (item.kind) {
+      case "file":
+        this.geodeApp.openFile(item.file, evt.metaKey || evt.ctrlKey);
+        break;
+      case "open-url":
+        this.geodeApp.openWebViewer(item.url);
+        break;
+      case "new-note":
+        this.geodeApp.createNewNote(undefined, item.title);
+        break;
+      case "search-web":
+        this.geodeApp.openWebViewer(resolveWebInput(item.query, this.geodeApp.settings.webViewer.searchEngine));
+        break;
+    }
+  }
+}
+
 class EmptyView implements View {
   readonly viewType = "empty";
   containerEl: HTMLElement;
@@ -139,6 +266,12 @@ class EmptyView implements View {
 
   private render(app: App): void {
     this.containerEl.innerHTML = `<div class="empty-state-title">No file is open</div>`;
+
+    const picker = new NewTabPickerList(app);
+    picker.containerEl.className = "new-tab-picker";
+    this.containerEl.appendChild(picker.containerEl);
+    picker.focus();
+
     const actions = [
       { label: "Create new note (Cmd/Ctrl+N)", fn: () => app.createNewNote() },
       { label: "Open quick switcher (Cmd/Ctrl+O)", fn: () => app.openQuickSwitcher() },

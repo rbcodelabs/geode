@@ -114,23 +114,41 @@ export class PromptModal extends Modal {
   }
 }
 
-export abstract class SuggestModal<T> extends Modal {
+/**
+ * Input + debounced fuzzy filtering + arrow/mouse keyboard nav + Enter-to-choose
+ * + rendering — the whole suggest-list contract, with no `Modal` chrome (no
+ * dim overlay, no Escape-to-close, no floating positioning). Mount `inputEl`/
+ * `resultsEl` (or subscribe to `containerEl`, which wraps both) anywhere a
+ * fuzzy picker is needed, not just inside a floating dialog.
+ */
+export abstract class SuggestList<T> {
+  containerEl: HTMLElement;
   inputEl: HTMLInputElement;
   resultsEl: HTMLElement;
   private items: T[] = [];
   private selected = 0;
   emptyStateText = "No results found.";
+  /**
+   * Class name applied to each rendered result row (plus `is-selected` for
+   * the active one). A subclass mounted inline alongside a floating
+   * `SuggestModal` (e.g. a permanently-visible New Tab picker) must override
+   * this — and `emptyClassName` below — to something other than the default
+   * `.prompt-result`/`.prompt-empty`, since those bare classes are relied on
+   * elsewhere (tests included) to uniquely identify whichever modal dialog
+   * is currently open.
+   */
+  protected resultClassName = "prompt-result";
+  /** Class name applied to the "no results" placeholder row. See `resultClassName`. */
+  protected emptyClassName = "prompt-empty";
 
-  constructor(app: App) {
-    super(app);
-    this.modalEl.classList.add("prompt");
-    this.inputEl = document.createElement("input");
+  constructor() {
+    this.containerEl = document.createElement("div");
+    this.inputEl = document.createElement("input") as HTMLInputElement;
     this.inputEl.className = "prompt-input";
     this.inputEl.type = "text";
     this.resultsEl = document.createElement("div");
     this.resultsEl.className = "prompt-results";
-    this.contentEl.appendChild(this.inputEl);
-    this.contentEl.appendChild(this.resultsEl);
+    this.containerEl.append(this.inputEl, this.resultsEl);
     this.inputEl.addEventListener("input", () => this.updateResults());
     this.inputEl.addEventListener("keydown", (e) => {
       if (e.key === "ArrowDown") {
@@ -143,7 +161,6 @@ export abstract class SuggestModal<T> extends Modal {
         e.preventDefault();
         const item = this.items[this.selected];
         if (item !== undefined) {
-          this.close();
           this.onChooseItem(item, e);
         } else {
           this.onNoMatch(this.inputEl.value, e);
@@ -161,7 +178,8 @@ export abstract class SuggestModal<T> extends Modal {
     el.textContent = this.getItemText(item);
   }
 
-  onOpen(): void {
+  /** Focus the input and (re)compute results — call when the list becomes visible. */
+  focus(): void {
     this.inputEl.focus();
     this.updateResults();
   }
@@ -189,14 +207,14 @@ export abstract class SuggestModal<T> extends Modal {
     this.resultsEl.innerHTML = "";
     if (!this.items.length) {
       const empty = document.createElement("div");
-      empty.className = "prompt-empty";
+      empty.className = this.emptyClassName;
       empty.textContent = this.emptyStateText;
       this.resultsEl.appendChild(empty);
       return;
     }
     this.items.forEach((item, i) => {
       const el = document.createElement("div");
-      el.className = "prompt-result" + (i === this.selected ? " is-selected" : "");
+      el.className = this.resultClassName + (i === this.selected ? " is-selected" : "");
       this.renderItem(item, el);
       el.addEventListener("mousemove", () => {
         if (this.selected !== i) {
@@ -205,11 +223,62 @@ export abstract class SuggestModal<T> extends Modal {
         }
       });
       el.addEventListener("click", (e) => {
-        this.close();
         this.onChooseItem(item, e);
       });
       this.resultsEl.appendChild(el);
       if (i === this.selected) el.scrollIntoView({ block: "nearest" });
     });
+  }
+}
+
+/**
+ * Thin `Modal` wrapper around `SuggestList<T>`: same public surface as before
+ * the extraction (`inputEl`, `resultsEl`, `emptyStateText`, and the
+ * `getItems`/`getItemText`/`onChooseItem`/`renderItem`/`onNoMatch` contract),
+ * so existing subclasses (QuickSwitcherModal, CommandPaletteModal,
+ * CanvasFileSuggestModal) need no changes. It composes a `SuggestList` whose
+ * abstract methods forward to this modal's own overrides, closing the dialog
+ * before `onChooseItem` fires (matching the pre-extraction behavior) but
+ * leaving `onNoMatch` to close (or not) itself, exactly as before.
+ */
+export abstract class SuggestModal<T> extends Modal {
+  inputEl: HTMLInputElement;
+  resultsEl: HTMLElement;
+  private list: SuggestList<T>;
+
+  constructor(app: App) {
+    super(app);
+    this.modalEl.classList.add("prompt");
+    const outer = this;
+    this.list = new (class extends SuggestList<T> {
+      getItems(): T[] { return outer.getItems(); }
+      getItemText(item: T): string { return outer.getItemText(item); }
+      onChooseItem(item: T, evt: KeyboardEvent | MouseEvent): void {
+        outer.close();
+        outer.onChooseItem(item, evt);
+      }
+      onNoMatch(query: string, evt: KeyboardEvent): void { outer.onNoMatch(query, evt); }
+      renderItem(item: T, el: HTMLElement): void { outer.renderItem(item, el); }
+    })();
+    this.inputEl = this.list.inputEl;
+    this.resultsEl = this.list.resultsEl;
+    this.contentEl.appendChild(this.inputEl);
+    this.contentEl.appendChild(this.resultsEl);
+  }
+
+  abstract getItems(): T[];
+  abstract getItemText(item: T): string;
+  abstract onChooseItem(item: T, evt: KeyboardEvent | MouseEvent): void;
+  /** Called on Enter with no matching item (e.g. create new note). */
+  onNoMatch(_query: string, _evt: KeyboardEvent): void {}
+  renderItem(item: T, el: HTMLElement): void {
+    el.textContent = this.getItemText(item);
+  }
+
+  get emptyStateText(): string { return this.list.emptyStateText; }
+  set emptyStateText(value: string) { this.list.emptyStateText = value; }
+
+  onOpen(): void {
+    this.list.focus();
   }
 }

@@ -8,6 +8,25 @@ export interface WebViewState {
   url: string;
 }
 
+/** True when `input` already looks like a URL or a bare/pathed domain — the two branches `resolveWebInput` resolves without going through the search engine. */
+export function isUrlShaped(input: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(input) || /^[^\s/]+\.[^\s/]+/.test(input);
+}
+
+/**
+ * The single heuristic for "is this text a URL, a bare domain, or a search
+ * query" — used by the Web Viewer's address bar (`WebView.navigate`) and the
+ * New Tab universal picker. Keep the regexes here as the one source of truth;
+ * do not duplicate them elsewhere.
+ */
+export function resolveWebInput(input: string, searchEngine: string): string {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(input)
+    ? input
+    : /^[^\s/]+\.[^\s/]+/.test(input)
+      ? `https://${input}`
+      : `${searchEngine}${encodeURIComponent(input)}`;
+}
+
 /**
  * The subset of the `<webview>` tag's API this view uses. Declared locally
  * (rather than pulling in the full `Electron.WebviewTag` ambient type)
@@ -510,12 +529,7 @@ export class WebView implements View, ReloadableView {
 
   private navigate(input: string): void {
     if (!input) return;
-    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(input)
-      ? input
-      : /^[^\s/]+\.[^\s/]+/.test(input)
-        ? `https://${input}`
-        : `${this.app.settings.webViewer.searchEngine}${encodeURIComponent(input)}`;
-    this.loadUrl(url);
+    this.loadUrl(resolveWebInput(input, this.app.settings.webViewer.searchEngine));
   }
 
   private isSupersededUrl(url: string): boolean {
