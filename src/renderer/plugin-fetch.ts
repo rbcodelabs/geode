@@ -65,11 +65,18 @@ async function proxyFetch(
   const request = new Request(input, init);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const bodyBuffer = hasBody ? await request.arrayBuffer() : undefined;
+  // Read off `init` rather than the Request: `timeout` is not a standard
+  // RequestInit member, so constructing a Request drops it. Main enforces the
+  // deadline (an AbortSignal cannot cross IPC) and falls back to its own
+  // default for anything missing or invalid, so this passes the value through
+  // without validating it here.
+  const timeout = (init as { timeout?: number } | undefined)?.timeout;
   const result = await proxy({
     url: request.url,
     method: request.method,
     headers: Object.fromEntries(request.headers),
     bodyBuffer: bodyBuffer && bodyBuffer.byteLength > 0 ? bodyBuffer : undefined,
+    timeout,
   });
   return new Response(result.arrayBuffer, {
     status: result.status,
