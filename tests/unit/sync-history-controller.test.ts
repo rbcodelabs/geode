@@ -195,4 +195,43 @@ describe('append-only history controller', () => {
     it('bounds metadata persistence for ten thousand files in structural folders and reconstructs them', async () => { const r = remote(), initial = Object.fromEntries(Array.from({ length: 10000 }, (_, i) => [`Folder-${Math.floor(i / 100)}/${i}.md`, `value-${i}`])); const a = client(r, initial); await start(a); expect(r.records.size).toBe(10100); expect(a.metrics().metadataBytes).toBeLessThan(85000000); const b = client(r); await start(b); expect(b.files.size).toBe(10000); expect(b.folders.size).toBe(100); expect(b.metrics().metadataBytes).toBeLessThan(70000000); }, 30000);
     it('does not publish a kind replacement when remote file history is already concurrent', async () => { const r = remote(), a = client(r, { 'a.md': 'one' }); await start(a); const b = client(r); await start(b); a.setFile('a.md', 'A'); b.setFile('a.md', 'B'); await a.controller.run({}, signal()); await b.controller.run({}, signal()); b.files.delete('a.md'); b.folders.add('a.md'); const count = r.records.size; await b.controller.run({}, signal()); expect(r.records.size).toBe(count); });
     it('makes unidentifiable quarantined history visible as a blocker', async () => { const r = remote(), a = client(r); r.session.scan = async () => ({ status: 'complete', records: [{ schema: 9, unexpected: true }] }); const out = await a.controller.preview(signal()); expect(out.blocked.length + out.conflicts.length).toBeGreaterThan(0); expect(out.upToDate).toBe(false); });
+    it('blocks a file with a forbidden name character during preview and still syncs the rest of the batch on run', async () => {
+        const r = remote(), a = client(r, { 'Bad?.md': 'one', 'good.md': 'two' });
+        const preview = await a.controller.preview(signal());
+        expect(preview.blocked).toContainEqual({ namespace: 'content', path: 'Bad?.md', reason: 'invalid-resource-name' });
+        const result = await a.controller.run({ approvePreview: true }, signal());
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'Bad?.md', reason: 'invalid-resource-name' });
+        expect([...r.records.values()].some(x => x.location.name === 'good.md')).toBe(true);
+        expect([...r.records.values()].some(x => x.location.name === 'Bad?.md')).toBe(false);
+        expect(a.files.has('Bad?.md')).toBe(true);
+    });
+    it('blocks a folder with a trailing space in its name during preview and still syncs the rest of the batch on run', async () => {
+        const r = remote(), a = client(r, { 'good.md': 'one' });
+        a.folders.add('Trailing space ');
+        const preview = await a.controller.preview(signal());
+        expect(preview.blocked).toContainEqual({ namespace: 'content', path: 'Trailing space ', reason: 'invalid-resource-name' });
+        const result = await a.controller.run({ approvePreview: true }, signal());
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'Trailing space ', reason: 'invalid-resource-name' });
+        expect([...r.records.values()].some(x => x.location.name === 'good.md')).toBe(true);
+        expect(a.folders.has('Trailing space ')).toBe(true);
+    });
+    it('blocks a legacy .sync-conflict- file during preview and still syncs the rest of the batch on run', async () => {
+        const r = remote(), a = client(r, { 'Note.sync-conflict-20240722-095505-ABC.md': 'dup', 'good.md': 'keep' });
+        const preview = await a.controller.preview(signal());
+        expect(preview.blocked).toContainEqual({ namespace: 'content', path: 'Note.sync-conflict-20240722-095505-ABC.md', reason: 'invalid-resource-name' });
+        const result = await a.controller.run({ approvePreview: true }, signal());
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'Note.sync-conflict-20240722-095505-ABC.md', reason: 'invalid-resource-name' });
+        expect([...r.records.values()].some(x => x.location.name === 'good.md')).toBe(true);
+        expect([...r.records.values()].some(x => x.location.name === 'Note.sync-conflict-20240722-095505-ABC.md')).toBe(false);
+    });
+    it('still throws from the deep prepare()/mergeHistory guard if an invalid name is somehow forced past the planning-time gate', async () => {
+        // Regression guard: the planning-stage `invalid-resource-name` check in snapshot()
+        // is the primary fix, but prepare()'s own mergeHistory-based validation must remain
+        // as defense-in-depth. Call the private method directly with a hand-built action to
+        // simulate a bad name that slipped past the earlier gate through some other path.
+        const r = remote(), a = client(r, { 'a.md': 'one' });
+        const prepare = (a.controller as unknown as { prepare: (action: unknown, signal: AbortSignal) => Promise<unknown> }).prepare.bind(a.controller);
+        const action = { type: 'publish' as const, entityId: randomUUID(), namespace: 'content' as const, path: 'forced-bad?.md', kind: 'file' as const, parents: [], location: { parentId: null, name: 'forced-bad?.md' }, deleted: false };
+        await expect(prepare(action, signal())).rejects.toThrow('Invalid local history record');
+    });
 });

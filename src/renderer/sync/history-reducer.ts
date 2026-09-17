@@ -8,7 +8,7 @@ const object = (value: unknown): value is Record<string, unknown> => typeof valu
 const dictionary = <T>(): Record<string, T> => Object.create(null) as Record<string, T>;
 const onlyKeys = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).every(key => keys.includes(key));
 
-function validName(value: unknown): value is string {
+export function validName(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 255 && new TextEncoder().encode(value).byteLength <= 255 && value === value.normalize('NFC')
     && !/[\x00-\x1f\x7f/\\:*?"<>|]/.test(value) && !/[. ]$/.test(value)
     && !/^(\.|\.\.|\.geode|\.geode-trash|\.obsidian|\.git|\.trash)$/i.test(value)
