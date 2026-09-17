@@ -7,4 +7,8 @@ it("uses real parser and injected resolver in a fresh Node process with a bounde
   expect(proof).toEqual({ nodeOnly: true, notes: 2, resolvedReferences: 3, missingTarget: null });
   expect(dependencies.runtimeSources).toContain("src/wiki/metadata.ts");
   expect(dependencies.runtimeSources).toContain("src/wiki/link-resolution.ts");
+  // The parser's constants are portable now, so they appear in the graph...
+  expect(dependencies.runtimeSources).toContain("src/wiki/constants.ts");
+  // ...and the desktop indexer they used to come from does not.
+  expect(dependencies.runtimeSources).not.toContain("src/indexer/metadata-indexer.ts");
 });

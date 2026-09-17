@@ -25,21 +25,23 @@ fixture are independent; a complete parse/upload/catalog commit is not proven.
 | `src/wiki/types.ts` | Plain metadata interfaces | Moved from renderer; original import paths re-export the same types |
 | `src/renderer/comments/model.ts` | `@lezer/markdown` plus pure frontmatter helpers | Remains a portable implementation under the renderer directory; packaging can move it later |
 | `src/renderer/api/frontmatter.ts` | Type-only dependency on wiki types | No runtime host/DOM dependency; retained as parser dependency |
-| `src/indexer/metadata-indexer.ts` | Portable types, Node `Buffer` in snapshot chunking, injected reconcile store | Parser imports only scan-cap constant; split constants/index contracts before publishing a package |
+| `src/indexer/metadata-indexer.ts` | Portable types, Node `Buffer` in snapshot chunking, injected reconcile store | **Done (increment 1):** scan-cap constants moved to `src/wiki/constants.ts` and re-exported here. The portable graph no longer imports this module at all |
 | `src/renderer/metadata-cache.ts` | `Vault`, events, canvas projection, performance hooks, optional `window.geode` indexer integration | Still desktop lifecycle/cache; calls extracted parser and resolver |
-| `src/renderer/vault.ts` | Default `getHostServices()`, broad host services, manifest reconciliation | Not instantiated or mocked in Node proof; a general folder provider is subsequent work |
-| `src/renderer/host/contracts.ts` | Storage vocabulary mixed with windows, plugins and runtime capabilities | Narrow engine contracts must not inherit the whole host interface |
+| `src/renderer/vault.ts` | Default `getHostServices()`, broad host services, manifest reconciliation | Not instantiated or mocked in Node proof. **Increment 2** added an independent write-capable folder provider (`src/wiki/folder-provider.ts`) rather than porting this one |
+| `src/renderer/host/contracts.ts` | Storage vocabulary mixed with windows, plugins and runtime capabilities | Narrow engine contracts must not inherit the whole host interface. **Done (increment 2):** `src/wiki/contracts.ts` defines `WikiIndexSink` and `WikiEventSink`, neither extending a host type |
 | `src/indexer/indexer-process.ts` | `process.parentPort`, filesystem, SQLite store | Electron utility-process orchestration stays outside engine |
 | `src/main/metadata-cache-store.ts` | `node:sqlite`, filesystem, desktop `.geode` index path | Rebuildable local index precedent; not a cloud catalog |
-| `src/renderer/views/search-view.ts` | Pure term matching alongside view/icon imports | Extract query primitives when local engine adds search |
+| `src/renderer/views/search-view.ts` | Pure term matching alongside view/icon imports | **Done (increment 2):** `parseQuery`/`matchFileAgainstTerms` moved to `src/wiki/search.ts`, file type genericized; the view re-exports them bound to `TFile` |
 | `src/renderer/rename.ts` | Pure textual rewrite plus basename validation | Useful regression fixtures; not identity-aware cloud rename planning |
 
 The executable proof audits esbuild's complete input graph against an explicit
 source allowlist, in addition to checking absent `window`, `document`, and
-`process.versions.electron` at runtime. The graph contains the five runtime
-modules above (`wiki/metadata`, `wiki/link-resolution`, comment model,
-frontmatter helpers, metadata-indexer) plus package dependencies. Unexpected
-source dependencies fail even if a bundler could tree-shake them away.
+`process.versions.electron` at runtime. As of increment 1 the graph contains
+`wiki/metadata`, `wiki/link-resolution`, `wiki/link-candidates`,
+`wiki/constants`, the comment model and the frontmatter helpers, plus package
+dependencies — `metadata-indexer` is no longer in it, having been replaced by
+`wiki/constants` as the owner of the scan-cap constant. Unexpected source
+dependencies fail even if a bundler could tree-shake them away.
 `tsconfig.headless.json` independently compiles with ES2022 and Node types,
 without the DOM library. A YAML CommonJS-to-ESM bundling interop shim supplies
 Node's `createRequire`; it is not a browser or Electron stub.
@@ -58,6 +60,13 @@ This fixture provider intentionally accepts only fixed known paths. It does not
 claim traversal protection, arbitrary symlink handling, path normalization,
 collision detection, storage mutations, revision pinning, or index persistence.
 Those belong in the real provider contract and its tests.
+
+> **Superseded as a model, 2026-09-16.** The real provider now exists and must
+> not be judged against the fixture above. `openLocalWikiSnapshot` (ADR 0019)
+> covers traversal, symlinks, normalization and collisions on the read path;
+> `openLocalWikiProvider` ([ADR 0020](../adr/0020-write-capable-local-wiki-provider.md))
+> covers the same families on the write path, plus concurrent mutation. Revision
+> pinning and index persistence remain unbuilt, as does anything cloud-side.
 
 ## Characterized semantics and gaps
 
@@ -167,6 +176,20 @@ cleanup of that run's schema. Tests use synthetic note content only.
 
 This evidence supports proceeding with the approved approach, but does not
 authorize or implement the subsequent phases. Suggested reviewable increments:
+
+> **Status, 2026-09-16.** Increments 1 and 2 are now implemented, under build
+> package `bap-geode-headless-core-provider-20260915`. Increment 1: format
+> constants moved to `src/wiki/constants.ts`, removing `src/indexer/metadata-
+> indexer.ts` from the portable input graph entirely, plus side-by-side
+> coverage of both resolution policies. Increment 2: `src/wiki/folder-
+> provider.ts` adds validated local CRUD behind the narrow contracts in
+> `src/wiki/contracts.ts`, query primitives moved to `src/wiki/search.ts`, and
+> `scripts/local-wiki-write-proof.mts` proves the loop in fresh Node. See
+> [ADR 0020](../adr/0020-write-capable-local-wiki-provider.md).
+>
+> Increments 3–5 remain unimplemented and unauthorized. Synchronization and any
+> external document-store integration are **not** part of increments 1–2 and
+> still require their own package and decision.
 
 1. **Core boundary and semantics:** finish moving pure comment/frontmatter/index constants to portable ownership; define paths, ambiguity, subpath diagnostics and coverage. Tests must distinguish desktop compatibility from agent strict mode.
 2. **Folder provider and local wiki:** implement validated storage operations with injected index/event contracts, extract search, and prove local CRUD/search/backlinks in fresh Node processes. Preserve desktop wrapper tests.
