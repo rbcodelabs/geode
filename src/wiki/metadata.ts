@@ -1,6 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { maskCommentMetadata, stripCommentMarkerSyntax } from "../renderer/comments/model";
-import { DEFAULT_METADATA_SCAN_CAP_BYTES } from "../indexer/metadata-indexer";
+import { DEFAULT_METADATA_SCAN_CAP_BYTES, FRONTMATTER_BLOCK_RE } from "./constants";
 import type { CachedMetadata, FootnoteRefCache, LinkCache, ListItemCache, Loc, Pos, ReferenceLinkCache, SectionCache } from "./types";
 
 const WIKILINK_RE = /(!)?\[\[([^\[\]\n]+)\]\]/g;
@@ -110,7 +110,7 @@ export function parseMetadata(
 
   let body = text;
   let bodyOffset = 0;
-  const fmMatch = text.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
+  const fmMatch = text.match(FRONTMATTER_BLOCK_RE);
   if (fmMatch) {
     try {
       const fm = parseYaml(fmMatch[1]);

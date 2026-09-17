@@ -20,10 +20,13 @@ try {
     banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   });
   const sources = Object.keys(result.metafile.inputs).filter((path) => path.startsWith("src/"));
+  // `src/indexer/metadata-indexer.ts` is deliberately absent: the parser's
+  // scan-cap constant moved to `src/wiki/constants.ts`, so the portable graph
+  // no longer reaches into the desktop indexer at all.
   const permitted = new Set([
     "src/wiki/metadata.ts", "src/wiki/link-resolution.ts", "src/wiki/link-candidates.ts",
+    "src/wiki/constants.ts",
     "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts",
-    "src/indexer/metadata-indexer.ts",
   ]);
   for (const path of sources) assert.ok(permitted.has(path), `Unexpected runtime dependency: ${path}`);
   process.stdout.write(execFileSync(process.execPath, [outfile], { encoding: "utf8" }));

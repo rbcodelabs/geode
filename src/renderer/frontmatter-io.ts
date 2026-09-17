@@ -1,9 +1,14 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { FRONTMATTER_BLOCK_OPTIONAL_BODY_RE } from "../wiki/constants";
 import type { TFile } from "./types";
 import type { DataWriteOptions } from "./vault";
 
-/** Same frontmatter delimiter pattern as `markdown/live-preview.ts`'s `FM_RE`. */
-const FM_RE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---(\r?\n|$)/;
+/**
+ * The rewrite-side frontmatter pattern, owned by the portable engine. Unlike
+ * the read-side pattern it also matches an empty block, so rewriting replaces
+ * it instead of prepending a second one.
+ */
+const FM_RE = FRONTMATTER_BLOCK_OPTIONAL_BODY_RE;
 
 /**
  * Narrow slice of `Vault` (see `src/renderer/vault.ts`) — just enough to
