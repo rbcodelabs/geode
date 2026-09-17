@@ -15,7 +15,12 @@ export interface WebViewerConnector {
 }
 
 export const WEB_VIEWER_CONNECTORS: readonly WebViewerConnector[] = [
-  { id: "compass", hostname: "compass.rbcodelabs.com", allowedEventTypes: ["decision.approved"] },
+  // `agent.handoff` carries Compass's "Send to Agent → Geode" context (entity
+  // ref + the prefilled agent instruction) for the Agent Threads plugin to
+  // seed a local thread from. Because its payload becomes agent prompt text,
+  // it is deliberately scoped to this one connector — see the scheme-matching
+  // caveat on resolveWebViewerConnector below.
+  { id: "compass", hostname: "compass.rbcodelabs.com", allowedEventTypes: ["decision.approved", "agent.handoff"] },
 ];
 
 /**
