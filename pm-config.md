@@ -252,9 +252,11 @@ Opportunity `ACTIVE`. Both must succeed before any code is written.
 
 **Claim markers: never encode claim or execution state in a roadmap item's title.**
 Settled by Rick on 2026-09-18, resolving the open question this file previously carried.
-Roadmap titles describe the work and nothing else. The upstream contract's claim step
-prescribes an emoji title prefix; for this workspace that step is satisfied *without* the
-rename, and the prefix must not be applied or reintroduced.
+Roadmap titles describe the work and nothing else: no claim, execution or blocked state is
+ever encoded in a title, and an emoji claim prefix must not be applied or reintroduced. The
+shared playbook contract is being brought into line by `agent-pm-playbook` PR #27, which
+removes the prescribed prefix from `compass-resolver` and `build-authorization`; this rule
+holds for this workspace regardless of that PR's status.
 
 Claiming therefore rests on three things that already exist and carry no title mutation:
 
@@ -266,9 +268,14 @@ Claiming therefore rests on three things that already exist and carry no title m
 
 A matching PR plus those links is what establishes ownership here. Lifecycle states
 (Opportunity `ACTIVE`, Solution `IN_DELIVERY`) communicate product status and never by
-themselves prove ownership. Pre-existing emoji prefixes on historical items are residue
-from the retired convention, carry no current meaning, and are being removed; do not read
-one as an active claim.
+themselves prove ownership.
+
+Geode's roadmap was audited on 2026-09-18 and contains **no** emoji-prefixed titles: the
+two historical items carrying residue (`32a66d8e`, `87c6f0de`, both `SHIPPED`) were
+renamed, and all 34 items were confirmed clean. If one ever reappears, treat it the way the
+shared contract does -- as deprecated residue that may still be *honored* as a skip signal
+so no genuinely in-flight work is re-picked, never as positive proof of an active claim,
+and never as something to newly write.
 
 **Relationship to the legacy gate.** The repo's `CLAUDE.md` workflow (isolated worktree,
 delegated engineering, verified tests, human PR review) still governs *how* work is done.
