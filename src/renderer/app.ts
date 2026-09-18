@@ -340,7 +340,10 @@ class QuickSwitcherModal extends SuggestModal<TFile> {
   }
 
   getItems(): TFile[] {
-    return this.geodeApp.vault.getMarkdownFiles();
+    // Not getMarkdownFiles(): the quick switcher should match any existing
+    // vault file (.base, .canvas, images, ...), not just Markdown notes.
+    // onNoMatch() still only offers to create a new Markdown note.
+    return this.geodeApp.vault.getFiles();
   }
 
   getItemText(file: TFile): string {
