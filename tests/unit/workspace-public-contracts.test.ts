@@ -48,6 +48,23 @@ describe("Workspace public query contracts", () => {
   });
 });
 
+/** Just enough of an element to be appended to, iterated, and classed. */
+function fakeLeafEl(): { parentElement: unknown; classList: { toggle(): void; remove(): void } } {
+  return { parentElement: null, classList: { toggle() {}, remove() {} } };
+}
+
+/** The tab group's content host: mounted leaves accumulate in `children`. */
+function fakeContentHost(): { children: unknown[]; appendChild(child: { parentElement: unknown }): void } {
+  const host = {
+    children: [] as unknown[],
+    appendChild(child: { parentElement: unknown }) {
+      child.parentElement = host;
+      host.children.push(child);
+    },
+  };
+  return host;
+}
+
 describe("Workspace active leaf events", () => {
   function eventWorkspace(firstGroup: object, groups: object[]): Workspace {
     const workspace = Object.create(Workspace.prototype) as Workspace;
@@ -67,10 +84,13 @@ describe("Workspace active leaf events", () => {
       active,
       leaves,
       sidebar: null,
-      contentHostEl: { innerHTML: "", appendChild: vi.fn() },
+      contentHostEl: fakeContentHost(),
       renderTabs: vi.fn(),
     });
-    for (const leaf of leaves) Object.assign(leaf, { group, leafEl: {}, ensureOpen: vi.fn() });
+    // `setActiveLeaf` keeps every revealed leaf mounted and toggles `mod-active`
+    // rather than wiping the host, so a leaf element needs enough of the DOM
+    // surface for that bookkeeping to run.
+    for (const leaf of leaves) Object.assign(leaf, { group, leafEl: fakeLeafEl(), ensureOpen: vi.fn() });
     return group;
   }
 

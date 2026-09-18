@@ -26,8 +26,11 @@ test("defers Backlinks work while hidden and refreshes it when revealed", async 
 
     // Backlinks is the right sidebar's initial view. Switch to Outline so
     // subsequent file activations must not run Backlinks' vault-wide scan.
+    // A dock keeps every pane it has shown mounted and hides it, so every
+    // assertion below scopes to `.sidebar-view.mod-active` — the pane on
+    // screen — rather than to whatever happens to be in the document.
     await window.locator('.workspace-sidebar.mod-right [data-type="outline"]').click();
-    await expect(window.locator(".workspace-sidebar.mod-right .sidebar-view-title")).toHaveText("Outline");
+    await expect(window.locator(".workspace-sidebar.mod-right .sidebar-view.mod-active .sidebar-view-title")).toHaveText("Outline");
 
     await window.evaluate(() => {
       const geode = (window as any).app;
@@ -66,13 +69,13 @@ test("defers Backlinks work while hidden and refreshes it when revealed", async 
 
     // Revealing Backlinks computes the deferred state for the active file.
     await window.locator('.workspace-sidebar.mod-right [data-type="backlinks"]').click();
-    await expect(window.locator(".workspace-sidebar.mod-right .sidebar-view-title")).toHaveText("Backlinks");
+    await expect(window.locator(".workspace-sidebar.mod-right .sidebar-view.mod-active .sidebar-view-title")).toHaveText("Backlinks");
     await expect(
-      window.locator(".workspace-sidebar.mod-right .pane-section-header", { hasText: "Unlinked mentions (1)" })
+      window.locator(".workspace-sidebar.mod-right .sidebar-view.mod-active .pane-section-header", { hasText: "Unlinked mentions (1)" })
     ).toBeVisible();
-    await expect(window.locator(".workspace-sidebar.mod-right .pane-result", { hasText: "A" })).toBeVisible();
+    await expect(window.locator(".workspace-sidebar.mod-right .sidebar-view.mod-active .pane-result", { hasText: "A" })).toBeVisible();
     await expect(
-      window.locator(".workspace-sidebar.mod-right .pane-result-context", { hasText: "Plain mention of B for context." })
+      window.locator(".workspace-sidebar.mod-right .sidebar-view.mod-active .pane-result-context", { hasText: "Plain mention of B for context." })
     ).toBeVisible();
     expect(await window.evaluate(() => (window as any).__unlinkedMentionCalls)).toEqual(["B.md"]);
 
@@ -82,7 +85,7 @@ test("defers Backlinks work while hidden and refreshes it when revealed", async 
       return geode.openFile(geode.vault.getFileByPath("A.md"), false);
     });
     await expect(
-      window.locator(".workspace-sidebar.mod-right .pane-section-header", { hasText: "Unlinked mentions (0)" })
+      window.locator(".workspace-sidebar.mod-right .sidebar-view.mod-active .pane-section-header", { hasText: "Unlinked mentions (0)" })
     ).toBeVisible();
     expect(await window.evaluate(() => (window as any).__unlinkedMentionCalls)).toEqual(["B.md", "A.md"]);
   } finally {

@@ -130,6 +130,17 @@ export class GraphView implements View {
     this.rebuild();
   }
 
+  /**
+   * A hidden tab measures 0x0, so the backing store was resized down to the 1x1
+   * floor `resizeCanvas()` clamps to. The `ResizeObserver` above does fire again
+   * on the way back, but only on a later frame; resizing here as well means the
+   * first paint after a tab switch is already at the right resolution rather
+   * than a stretched single pixel.
+   */
+  onReveal(): void {
+    this.resizeCanvas();
+  }
+
   onClose(): void {
     this.closed = true;
     this.app.metadataCache.off("changed", this.onDataChanged);

@@ -16,6 +16,8 @@ class FakeElement {
     if (!value) this.children = [];
   }
   get innerHTML(): string { return this.html; }
+  /** `SidebarView.isShowing` asks whether a hidden host is above it; this fake is never inside one. */
+  closest(): FakeElement | null { return null; }
   appendChild(child: FakeElement): FakeElement { this.children.push(child); return child; }
   append(...children: FakeElement[]): void { this.children.push(...children); }
   addEventListener(): void {}

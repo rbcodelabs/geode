@@ -808,6 +808,18 @@ export class MarkdownView implements View {
     if (this.mode !== "reading" && !document.body.classList.contains("is-mobile")) this.editor?.focus();
   }
 
+  /**
+   * A background tab stays mounted but hidden (see `TabGroup.revealActiveLeaf`),
+   * which lays its editor out at zero height. CodeMirror caches the viewport
+   * and line geometry it measured there, so on the way back it would paint an
+   * empty or one-line document until something else forced a remeasure.
+   * `requestMeasure()` schedules that remeasure for the frame after the tab
+   * becomes visible, which is the earliest point real geometry exists.
+   */
+  onReveal(): void {
+    this.editor?.requestMeasure();
+  }
+
   async onClose(): Promise<void> {
     this.pagePreview.destroy();
     this.clearSyncConflict();

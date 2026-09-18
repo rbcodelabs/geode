@@ -108,7 +108,13 @@ test("pins a hosted plugin tab from its context menu, protects navigation, and r
       const a = (window as any).app;
       await a.workspace.openLinkText("Destination", "", false);
     });
-    await expect(win.locator(".workspace-tab-container .pinned-probe-body")).toHaveCount(0);
+    // Pin protection sent the link to a different tab, so the plugin view must
+    // no longer be the one on screen. It is still *mounted* — a background tab
+    // now stays in the document and is hidden rather than detached, which is
+    // what stops a tab switch from tearing its view down — so the assertion is
+    // "not the visible leaf", not "not in the DOM".
+    await expect(win.locator(".workspace-split.mod-root .workspace-leaf.mod-active .pinned-probe-body")).toHaveCount(0);
+    await expect(win.locator(".workspace-tab-container .pinned-probe-body")).toBeHidden();
     await expect(pluginTab).toHaveClass(/mod-pinned/);
     await expect(win.locator(".workspace-split.mod-root .workspace-tab-header", { hasText: "Destination" })).toBeVisible();
     expect(await win.evaluate(() => (window as any).app.workspace.getLeavesOfType("pinned-probe").length)).toBe(1);

@@ -9,7 +9,10 @@ function setup() {
   const workspace = Object.create(Workspace.prototype) as Workspace;
   function group() {
     const result = Object.create(TabGroup.prototype) as TabGroup;
+    // `endBatch()` reveals the group's active leaf, which reads the content
+    // host: revealed leaves now stay mounted there instead of being wiped.
     Object.assign(result, { workspace, app: {}, leaves: [], collections: [], isSidebar: false, renderTabs: vi.fn(),
+      contentHostEl: { children: [], appendChild() {} },
       setActiveLeaf(leaf: WorkspaceLeaf) { result.active = leaf; workspace.trigger("active-leaf-change", leaf); } });
     return result;
   }
