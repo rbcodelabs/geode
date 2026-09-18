@@ -97,6 +97,7 @@ export const TAB_MENU_SPEC: MenuSection[] = [
 /** Page-scoped actions for the Web Viewer toolbar's "More options" button. */
 export const WEB_TAB_MENU_SPEC: MenuSection[] = [
   { section: "page", actions: ["web.reload", "web.bookmark-page"] },
+  { section: "auth", actions: ["web.continue-signin"] },
 ];
 
 export const FOLDER_MENU_SPEC: MenuSection[] = [

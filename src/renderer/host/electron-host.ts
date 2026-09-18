@@ -10,6 +10,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onWebViewerBridgeEvent"
+  | "onWebAuthnEscalationNeeded" | "webauthnOpenEscalationWindow"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
   "list" | "scanForSync" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
@@ -142,6 +143,8 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       onGuestHotkey: (cb) => preload.onGuestHotkey(cb),
       onGuestWindowOpen: (cb) => preload.onGuestWindowOpen(cb),
       onWebViewerBridgeEvent: (cb) => preload.onWebViewerBridgeEvent(cb),
+      onWebAuthnEscalationNeeded: (cb) => preload.onWebAuthnEscalationNeeded(cb),
+      openWebAuthnEscalationWindow: (url) => preload.webauthnOpenEscalationWindow(url),
       revealInFileManager: (path) => preload.reveal(path),
     },
   };

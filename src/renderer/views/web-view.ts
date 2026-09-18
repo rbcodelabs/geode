@@ -2,6 +2,7 @@ import type { App } from "../app";
 import type { ReloadableView, View, WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import { describeGuestCrashCause } from "./web-view-crash-message";
+import type { NormalizedWebAuthnEscalationSignal } from "../../shared/webauthn-escalation";
 
 /** State shape matches Obsidian's Web Viewer exactly, so `leaf.setViewState({ type: "webviewer", state: { url } })` from any hosted plugin (e.g. Threads' `obsidian_open_url`) works unmodified. */
 export interface WebViewState {
@@ -120,6 +121,11 @@ export class WebView implements View, ReloadableView {
   // Assigned in buildErrorOverlay(), invoked from the constructor.
   private errorTitleEl!: HTMLElement;
   private errorDetailEl!: HTMLElement;
+  private escalationBannerEl: HTMLElement;
+  // Assigned in buildEscalationBanner(), invoked from the constructor.
+  private escalationTextEl!: HTMLElement;
+  /** True while an escalation window is open, so a second rejection signal or menu click can't open a second one. */
+  private escalating = false;
   private currentUrl: string;
   /**
    * The URL of the most recent failed main-frame load, or null while the
@@ -210,12 +216,14 @@ export class WebView implements View, ReloadableView {
     this.webview.setAttribute("allowpopups", "");
     this.webview.src = BOOTSTRAP_URL;
     this.errorEl = this.buildErrorOverlay();
+    this.escalationBannerEl = this.buildEscalationBanner();
 
     // `did-attach` can fire as the element is inserted. Install every guest
     // listener first so the queued real navigation cannot be missed.
     this.attachWebviewEvents();
     body.appendChild(this.webview);
     body.appendChild(this.errorEl);
+    this.containerEl.appendChild(this.escalationBannerEl);
     this.containerEl.appendChild(body);
   }
 
@@ -248,6 +256,79 @@ export class WebView implements View, ReloadableView {
     overlay.appendChild(this.errorDetailEl);
     overlay.appendChild(reloadButton);
     return overlay;
+  }
+
+  /**
+   * Hidden-by-default banner shown when a guest reports that this page
+   * rejected a WebAuthn ceremony (see webviewer-bridge-preload.ts's injected
+   * wrapper and app.ts's `onWebAuthnEscalationNeeded` routing). Distinct from
+   * the crash/load-failure overlay: the page itself is fine, only the
+   * ceremony failed, so the guest stays fully visible and interactive.
+   */
+  private buildEscalationBanner(): HTMLElement {
+    const banner = document.createElement("div");
+    banner.className = "web-view-escalation-banner is-hidden";
+
+    this.escalationTextEl = document.createElement("span");
+    banner.appendChild(this.escalationTextEl);
+
+    const continueButton = document.createElement("button");
+    continueButton.className = "web-view-escalation-continue";
+    continueButton.textContent = "Continue in a separate window";
+    continueButton.addEventListener("click", () => void this.escalateAuth());
+    banner.appendChild(continueButton);
+
+    const dismissButton = this.makeButton("x", "Dismiss", () => this.hideEscalationBanner());
+    dismissButton.classList.add("web-view-escalation-dismiss");
+    banner.appendChild(dismissButton);
+
+    return banner;
+  }
+
+  private hideEscalationBanner(): void {
+    this.escalationBannerEl.classList.add("is-hidden");
+  }
+
+  /**
+   * Called by app.ts when this tab's guest reports a rejected WebAuthn
+   * ceremony. Purely advisory UI — the user decides whether to escalate;
+   * nothing happens automatically.
+   */
+  showWebAuthnEscalationPrompt(signal: NormalizedWebAuthnEscalationSignal): void {
+    let host = "this site";
+    try {
+      host = new URL(signal.url).hostname;
+    } catch {
+      // Keep the generic fallback text.
+    }
+    this.escalationTextEl.textContent =
+      `Sign-in with ${host} didn't complete here (${signal.errorName}).`;
+    this.escalationBannerEl.classList.remove("is-hidden");
+  }
+
+  /**
+   * Open a real top-level window (webauthn-escalation-window.ts, shared
+   * "persist:webviewer" session partition) scoped to this tab's current URL,
+   * wait for the user to finish there and close it, then reload this guest
+   * so it picks up whatever cookies/storage the escalation window set — see
+   * webauthn-escalation-window.ts's doc comment for why no explicit cookie
+   * copy step is needed.
+   */
+  async escalateAuth(): Promise<void> {
+    if (this.escalating) return;
+    const open = this.app.host.desktop?.openWebAuthnEscalationWindow;
+    if (!open) return;
+    this.escalating = true;
+    this.hideEscalationBanner();
+    try {
+      await open(this.currentUrl);
+    } finally {
+      this.escalating = false;
+    }
+    // Route through the class's own reload() rather than webview.reload()
+    // directly: it already handles a dead/crashed guest by respawning
+    // (reload()'s doc comment), which this call site cannot rule out.
+    this.reload();
   }
 
   /** Route a UI affordance through the action rather than calling reload() directly. */
@@ -585,6 +666,7 @@ export class WebView implements View, ReloadableView {
     this.crashHandled = false;
     this.failedUrl = null;
     this.errorEl.classList.add("is-hidden");
+    this.hideEscalationBanner();
     if (this.guestDead) {
       this.dispatchedUrl = url;
       this.activeNavigationUrls = new Set([navigationKey(url)]);

@@ -370,8 +370,14 @@ test("web tab menus lead with Reload and share one Bookmark implementation", asy
 
     // "More options" is composed from WEB_TAB_MENU_SPEC, so the toolbar menu
     // and the tab menu can no longer disagree about what a page action is.
+    // "Continue sign-in in a separate window" is the manual half of the
+    // WebAuthn escalation path (src/renderer/views/web-view.ts's
+    // `escalateAuth`), for a relying party that fails a passkey ceremony
+    // without throwing a detectable error the automatic banner could catch.
     await window.locator('.web-view-toolbar button[title="More options"]').click();
-    await expect(window.locator(".menu-item")).toHaveText(["Reload page", "Bookmark this page"]);
+    await expect(window.locator(".menu-item")).toHaveText([
+      "Reload page", "Bookmark this page", "Continue sign-in in a separate window",
+    ]);
     await window.keyboard.press("Escape");
     await expect(window.locator(".menu-item")).toHaveCount(0);
 

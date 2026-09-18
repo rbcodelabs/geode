@@ -79,6 +79,8 @@ import {
   SupportedPluginCatalogService,
 } from "./supported-plugin-catalog";
 import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
+import { normalizeWebAuthnEscalationSignal, WEBAUTHN_ESCALATION_CHANNEL } from "../shared/webauthn-escalation";
+import { openEscalationWindow } from "./webauthn-escalation-window";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -1172,6 +1174,18 @@ function registerIpc() {
   ipcMain.handle("chrome-list-profiles", () => listChromeProfiles());
   ipcMain.handle("chrome-import-cookies", (_e, profileDir: string) => importChromeCookies(profileDir));
 
+  // WebAuthn top-level-window escalation (src/main/webauthn-escalation-window.ts,
+  // src/renderer/views/web-view.ts's "Continue in a separate window" page
+  // action). `url` is caller-supplied and untrusted, but `openEscalationWindow`
+  // only ever navigates a freshly created window to it and shares Geode's own
+  // `persist:webviewer` partition — no elevated capability is granted beyond
+  // what any Web Viewer tab already has.
+  ipcMain.handle("webauthn-open-escalation-window", (e, url: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) throw new Error("No owning window for WebAuthn escalation request");
+    return openEscalationWindow(win, url, isHeadless);
+  });
+
   // Per-process CPU/memory telemetry for the Settings -> Performance tab
   // (src/renderer/settings/performance-tab.ts). Polled from the renderer on
   // a timer, so no caching here -- always return a fresh snapshot.
@@ -1332,6 +1346,27 @@ function trackWebViewerBridgeGuest(win: BrowserWindow, guest: Electron.WebConten
   });
 }
 
+/**
+ * Guest-to-host signal that a WebAuthn ceremony was rejected inside this
+ * `<webview>` (webviewer-bridge-preload.ts's injected wrapper). Unlike
+ * `trackWebViewerBridgeGuest` above, this is NOT origin-restricted — see
+ * src/shared/webauthn-escalation.ts's doc comment for why. `guest.id` is
+ * included so web-view.ts can match the signal to the specific tab whose
+ * guest reported it (a window can host many Web Viewer tabs at once).
+ */
+function trackWebAuthnEscalationGuest(win: BrowserWindow, guest: Electron.WebContents): void {
+  if (guest.session !== session.fromPartition(WEBVIEWER_PARTITION)) return;
+  guest.ipc.on(WEBAUTHN_ESCALATION_CHANNEL, (event, message: unknown) => {
+    const frameUrl = event.senderFrame?.url;
+    if (!frameUrl) return;
+    const normalized = normalizeWebAuthnEscalationSignal(frameUrl, message);
+    if (!normalized) return;
+    if (!win.isDestroyed()) {
+      win.webContents.send("webauthn-escalation-needed", { guestId: guest.id, ...normalized });
+    }
+  });
+}
+
 function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
@@ -1421,6 +1456,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     // web-preview cards are <webview>s too and have the same dead-hotkey bug.
     bridgeGuestHotkeys(win, guest);
     trackWebViewerBridgeGuest(win, guest);
+    trackWebAuthnEscalationGuest(win, guest);
     guest.setWindowOpenHandler(({ url, disposition }) => {
       let protocol = "";
       try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }

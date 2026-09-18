@@ -4706,6 +4706,48 @@ body.is-mobile .page-preview {
   opacity: 0.6;
 }
 
+/* WebAuthn escalation banner: the guest reported a rejected passkey
+   ceremony. Non-blocking — the frame stays fully visible below it. */
+.web-view-escalation-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.web-view-escalation-banner.is-hidden {
+  display: none;
+}
+
+.web-view-escalation-banner > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.web-view-escalation-continue {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border: none;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.web-view-escalation-continue:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.web-view-escalation-dismiss {
+  flex: 0 0 auto;
+}
+
 /* ---- Bases (Phase B: toolbar + Table view) ---- */
 
 .base-view {

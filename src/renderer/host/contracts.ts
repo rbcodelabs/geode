@@ -187,6 +187,12 @@ export interface DesktopHostService {
     disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
   }) => void): () => void;
   onWebViewerBridgeEvent(cb: (ev: import("../../shared/web-viewer-connectors").NormalizedWebViewerEvent) => void): () => void;
+  /** A guest `<webview>` reported a rejected WebAuthn ceremony — see web-view.ts's escalation banner. */
+  onWebAuthnEscalationNeeded(cb: (ev: {
+    guestId: number;
+  } & import("../../shared/webauthn-escalation").NormalizedWebAuthnEscalationSignal) => void): () => void;
+  /** Open a real top-level window on the Web Viewer's shared session partition for one WebAuthn ceremony. */
+  openWebAuthnEscalationWindow(url: string): Promise<{ closed: true; cookieObserved: boolean }>;
   revealInFileManager(path: string): Promise<void>;
 }
 
