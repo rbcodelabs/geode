@@ -1,19 +1,38 @@
 import type { App } from "../../app";
 import type { RowHeight } from "./table-view";
 
-export type BaseViewType = "table" | "cards";
+/**
+ * A Bases view type id.
+ *
+ * Deliberately open rather than a `"table" | "cards"` union: `BasesView.type`
+ * is an open string, and a plugin registers whatever id it likes through
+ * `app.registerBasesView` (`kanban-bases-view` registers `kanban-view`). The
+ * union used to be what made the view menu structurally unable to offer a
+ * plugin type at all.
+ */
+export type BaseViewType = string;
+
+/** A view type the menu can create or switch to, with the name to show for it. */
+export interface BaseViewTypeOption {
+  type: BaseViewType;
+  name: string;
+}
 
 export interface ToolbarState {
   viewNames: string[];
   currentViewName: string;
   currentViewType: BaseViewType;
   /**
+   * Every view type that can be created or switched to: the built-ins plus
+   * whatever plugins have registered, in menu order. Supplied per update
+   * rather than read from the registry here, because a plugin can register or
+   * unregister a view type at any point in its lifetime.
+   */
+  viewTypes: BaseViewTypeOption[];
+  /**
    * False when the current view is rendered by a plugin-registered layout
-   * rather than by Table/Cards. The built-in-only affordances (the
-   * table/cards type toggle, the row-height select) are hidden in that case:
-   * `currentViewType` still has to be one of the two built-ins for the rest
-   * of the toolbar's typing, so on its own it would claim a Kanban view is a
-   * table and offer to "change type to Cards".
+   * rather than by Table/Cards. Gates the row-height select, which is a
+   * Table-view control — a plugin view owns its own layout entirely.
    */
   currentViewIsBuiltin: boolean;
   resultCount: number;
@@ -42,10 +61,10 @@ export interface ToolbarHandlers {
 const ROW_HEIGHTS: RowHeight[] = ["short", "medium", "tall", "extra tall"];
 
 /**
- * The Bases toolbar: View menu (switch/add views, change view type between
- * Table and Cards), results count, Sort, Filter, Properties, Search, New —
- * per the spec's "Toolbar UI" section. Copy-to-clipboard and Export CSV
- * attach to the Results element in a later phase.
+ * The Bases toolbar: View menu (switch/add views, change the current view's
+ * type), results count, Sort, Filter, Properties, Search, New — per the
+ * spec's "Toolbar UI" section. Copy-to-clipboard and Export CSV attach to the
+ * Results element in a later phase.
  */
 export class BasesToolbar {
   containerEl: HTMLElement;
@@ -129,14 +148,12 @@ export class BasesToolbar {
       title: name === currentViewName ? `● ${name}` : name,
       action: () => this.handlers.onSwitchView(name),
     }));
-    items.push({ title: "+ New table view", action: () => this.handlers.onAddView("table") });
-    items.push({ title: "+ New cards view", action: () => this.handlers.onAddView("cards") });
-    if (this.state.currentViewIsBuiltin) {
-      const otherType: BaseViewType = this.state.currentViewType === "cards" ? "table" : "cards";
-      items.push({
-        title: `Change type to ${otherType === "cards" ? "Cards" : "Table"}`,
-        action: () => this.handlers.onSetViewType(otherType),
-      });
+    for (const { type, name } of this.state.viewTypes) {
+      items.push({ title: `+ New ${name} view`, action: () => this.handlers.onAddView(type) });
+    }
+    for (const { type, name } of this.state.viewTypes) {
+      if (type === this.state.currentViewType) continue;
+      items.push({ title: `Change type to ${name}`, action: () => this.handlers.onSetViewType(type) });
     }
     items.push({ title: "Rename current view…", action: () => this.handlers.onRenameView(currentViewName) });
     const idx = viewNames.indexOf(currentViewName);
@@ -163,6 +180,7 @@ export class BasesToolbar {
     viewNames: [],
     currentViewName: "",
     currentViewType: "table",
+    viewTypes: [],
     currentViewIsBuiltin: true,
     resultCount: 0,
     rowHeight: "medium",

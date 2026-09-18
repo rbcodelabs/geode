@@ -148,12 +148,23 @@ export interface BasesViewRegistration {
 }
 
 /**
+ * View types the app itself renders, mapped to the display name the view menu
+ * shows for them — the built-in counterpart to a registration's `name`, so the
+ * menu can list built-ins and plugin types from one uniform shape. Insertion
+ * order is menu order.
+ */
+export const BUILTIN_BASES_VIEW_NAMES: ReadonlyMap<string, string> = new Map([
+  ["table", "Table"],
+  ["cards", "Cards"],
+]);
+
+/**
  * View types the app itself renders. A plugin may not claim one, mirroring
  * `Plugin.registerView`'s guard against hijacking built-in workspace view
  * types — without it, a plugin could take over the table view and there would
  * be no way to get it back.
  */
-export const BUILTIN_BASES_VIEW_TYPES: ReadonlySet<string> = new Set(["table", "cards"]);
+export const BUILTIN_BASES_VIEW_TYPES: ReadonlySet<string> = new Set(BUILTIN_BASES_VIEW_NAMES.keys());
 
 /**
  * Registry mutations, as free functions over the map — the same shape as
