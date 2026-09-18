@@ -247,17 +247,28 @@ whether a delivery slot exists. Not-running-twice rests on that one scheduled di
 plus `compass-resolver`'s ordinary claim step, which opted-in packages share with every
 other delivery item and which gets no separate lease, worker ID or receipt object: first
 cross-check GitHub for an existing PR referencing the roadmap item's short UUID (this is
-what catches a prior run's in-flight or completed work), then mark the roadmap item as
-claimed and, if linked, set the Opportunity `ACTIVE`. Both must succeed before any code is
-written.
+what catches a prior run's in-flight or completed work), then, if linked, set the
+Opportunity `ACTIVE`. Both must succeed before any code is written.
 
-> **Open question -- claim marker form (unresolved, do not assume either answer).** The
-> upstream contract's claim step prescribes renaming the roadmap item with a `🤖` title
-> prefix. The `Geode Product Operations` schedule carries a standing instruction that
-> roadmap titles describe work and must never be renamed to encode execution state. The
-> `🤖` prefix is nonetheless already an established convention in this workspace. This
-> tension is for Rick to settle; this file deliberately does **not** encode a claim-marker
-> instruction either way, and no agent should infer one from this paragraph.
+**Claim markers: never encode claim or execution state in a roadmap item's title.**
+Settled by Rick on 2026-09-18, resolving the open question this file previously carried.
+Roadmap titles describe the work and nothing else. The upstream contract's claim step
+prescribes an emoji title prefix; for this workspace that step is satisfied *without* the
+rename, and the prefix must not be applied or reintroduced.
+
+Claiming therefore rests on three things that already exist and carry no title mutation:
+
+1. The GitHub PR cross-check above, which is the mechanism that actually detects a prior
+   run's in-flight or completed work.
+2. The linked Opportunity moving to `ACTIVE`.
+3. Reciprocal linking of package, decision, branch, commit and PR in the Compass Task and
+   PR body, so a later run recognizes this exact execution.
+
+A matching PR plus those links is what establishes ownership here. Lifecycle states
+(Opportunity `ACTIVE`, Solution `IN_DELIVERY`) communicate product status and never by
+themselves prove ownership. Pre-existing emoji prefixes on historical items are residue
+from the retired convention, carry no current meaning, and are being removed; do not read
+one as an active claim.
 
 **Relationship to the legacy gate.** The repo's `CLAUDE.md` workflow (isolated worktree,
 delegated engineering, verified tests, human PR review) still governs *how* work is done.
