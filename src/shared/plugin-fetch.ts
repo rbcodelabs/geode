@@ -14,6 +14,13 @@ export interface PrivilegedFetchRequest {
   method: string;
   headers: Record<string, string>;
   bodyBuffer?: ArrayBuffer;
+  /**
+   * Whole-request deadline in milliseconds — see the same field on
+   * `PrivilegedRequestUrlParam`. Plugins raise it by passing a non-standard
+   * numeric `timeout` in their `fetch()` init; see `pluginFetch` in
+   * `src/renderer/plugin-fetch.ts`.
+   */
+  timeout?: number;
 }
 
 export interface PrivilegedFetchResponse {
