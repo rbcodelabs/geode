@@ -1,7 +1,8 @@
 import { Events } from "../events";
 import type { HostServices } from "../host/contracts";
 import { SyncCoordinator } from "./coordinator";
-import type { SyncApi, SyncConflict, SyncPreview, SyncProvider, SyncRunResult, SyncStatus } from "./types";
+import type { SyncApi, SyncConflict, SyncPreview, SyncProgress, SyncProgressPhase, SyncProvider, SyncRunResult, SyncStatus } from "./types";
+import { SYNC_PROGRESS_THROTTLE_MS } from "./progress";
 import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySyncProvider, type AppendOnlySession, type VaultDescriptor } from "./history-types";
 import { HistoryController, type HistoryComparisonChoice, type HistoryConflictComparison, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope } from "./scope";
@@ -71,7 +72,54 @@ export class SyncService extends Events implements SyncApi {
   getStatus() { return this.selected || this.status.state === "error" && this.status.providerId && !this.conditional.getActiveProvider() ? { ...this.status } : this.conditional.getStatus(); }
   getHistoryDetails() { return this.details; }
   isAppendOnly() { return Boolean(this.selected); }
-  private setStatus(status: SyncStatus) { this.status = status; this.trigger("status", status); }
+  /**
+   * Any state change ends the run being reported, so progress is dropped here
+   * rather than at each call site. A stale "47%" surviving a failure is its own
+   * bug, and there are eleven setStatus() callers to forget.
+   */
+  private setStatus(status: SyncStatus) { this.cancelProgress(); this.status = status; this.trigger("status", status); }
+  private progressStartedAt = 0;
+  private progressEmittedAt = 0;
+  private progressPhase?: SyncProgressPhase;
+  private progressPending?: SyncProgress;
+  private progressTimer?: ReturnType<typeof setTimeout>;
+  /** Drops any in-flight throttle without emitting, so a deferred tick cannot land after a run ends. */
+  private cancelProgress() {
+    if (this.progressTimer) clearTimeout(this.progressTimer);
+    this.progressTimer = undefined; this.progressPending = undefined; this.progressPhase = undefined; this.progressStartedAt = 0; this.progressEmittedAt = 0;
+  }
+  /** Ends a run's progress display, telling subscribers once so nothing is left painted on screen. */
+  private endProgress() {
+    const had = Boolean(this.status.progress);
+    this.cancelProgress();
+    if (!had) return;
+    this.status = { ...this.status, progress: undefined };
+    this.trigger("status", this.status);
+  }
+  /**
+   * Rate-limits the controller's ticks onto the status bus. A phase change is
+   * always emitted immediately — it is the cheapest possible signal that the run
+   * moved on — and anything held back is emitted by a trailing timer, so the
+   * last tick of a batch is never the one that gets swallowed.
+   */
+  private publishProgress(progress: SyncProgress) {
+    const now = Date.now();
+    if (!this.progressPhase) this.progressStartedAt = now;
+    const elapsed = now - this.progressEmittedAt;
+    this.progressPending = progress;
+    if (progress.phase !== this.progressPhase || elapsed >= SYNC_PROGRESS_THROTTLE_MS) { this.progressPhase = progress.phase; this.flushProgress(now); return; }
+    this.progressPhase = progress.phase;
+    this.progressTimer ??= setTimeout(() => { this.progressTimer = undefined; this.flushProgress(Date.now()); }, Math.max(0, SYNC_PROGRESS_THROTTLE_MS - elapsed));
+  }
+  private flushProgress(now: number) {
+    const pending = this.progressPending;
+    if (!pending) return;
+    this.progressPending = undefined;
+    if (this.progressTimer) { clearTimeout(this.progressTimer); this.progressTimer = undefined; }
+    this.progressEmittedAt = now;
+    this.status = { ...this.status, progress: { ...pending, startedAt: this.progressStartedAt, lastProgressAt: now } };
+    this.trigger("status", this.status);
+  }
   private key(root = this.vaultId()) { return `sync-history-binding/${root}`; }
   private async load(): Promise<BindingState> {
     const root = this.vaultId(); const value = await this.host.deviceState.read<BindingState>(this.key(root));
@@ -250,14 +298,21 @@ export class SyncService extends Events implements SyncApi {
         exclude: async (resource, data) => { const reason = resource.namespace === "content" ? await provider.excludePath?.(resource.path, data) : null; assertContext(); return reason ?? null; },
         apply: async input => { assertContext(); await this.host.syncSafety!.apply(lease, { namespace: input.namespace, operationId: input.operationId, path: input.path, expectedHash: input.expectedHash, kind: input.deleted ? "trash" : input.kind === "folder" ? "mkdir" : "write", data: input.data }); assertContext(); if (input.namespace === "portable-config") await this.portableChanged(); assertContext(); },
         assertContext, newId: () => crypto.randomUUID(),
-      } });
+      },
+      // Progress from a run whose vault, provider or generation has moved on is
+      // dropped silently rather than asserted: this is the one callback that must
+      // never throw into the sync, and a late tick is simply not news any more.
+      progress: value => { if (!abort.signal.aborted && this.vaultId() === root && this.generation === generation && this.selected === provider) this.publishProgress(value); } });
       return operation(controller, abort.signal);
     })();
     this.running = work;
     let completed = false;
     try { const result = await work; completed = true; return result; }
     catch (error) { if (!silent && !abort.signal.aborted && root === this.vaultId() && generation === this.generation && this.selected === provider && this.status.state !== "paused") this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); throw error; }
-    finally { try { await this.session?.close(); } finally { this.session = undefined; if (this.running === work) this.running = undefined; if (this.abort === abort) this.abort = undefined; } if (completed) assertContext(); }
+    // Cancellation reaches neither summarize() nor the error branch above — an
+    // aborted run deliberately sets no status — so progress is retired here, on
+    // the one path every completion, failure and cancellation passes through.
+    finally { this.endProgress(); try { await this.session?.close(); } finally { this.session = undefined; if (this.running === work) this.running = undefined; if (this.abort === abort) this.abort = undefined; } if (completed) assertContext(); }
   }
   private summarize(value: HistoryPreview): SyncPreview {
     this.details = value;

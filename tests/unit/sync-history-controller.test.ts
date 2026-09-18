@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
 import { HistoryController, type HistoryControllerState, type HistoryControllerPorts, type HistoryOperation, type HistoryLocalSnapshot, type HistoryLocalResource, type HistoryApply } from '../../src/renderer/sync/history-controller';
 import { type AppendOnlySession, type HistoryRecord, type BlobRef } from '../../src/renderer/sync/history-types';
+import { type SyncProgress } from '../../src/renderer/sync/types';
 const vault = randomUUID();
 const signal = () => new AbortController().signal;
 const encode = (value: string) => new TextEncoder().encode(value).buffer;
@@ -25,7 +26,7 @@ function remote() {
     };
     return { session, records, blobs, failPut: () => { putFailure = true; }, corrupt: () => { badRead = true; }, reset: () => { reset = true; } };
 }
-function client(r: ReturnType<typeof remote>, initial: Record<string, string> = {}) {
+function client(r: ReturnType<typeof remote>, initial: Record<string, string> = {}, progress?: (progress: SyncProgress) => void) {
     const files = new Map<string, ArrayBuffer>(Object.entries(initial).map(([path, text]) => [path, encode(text)]));
     const folders = new Set<string>();
     for (const path of files.keys()) {
@@ -74,7 +75,7 @@ function client(r: ReturnType<typeof remote>, initial: Record<string, string> = 
             applied.add(input.operationId);
         }, isIncluded: (_ns, path) => !excluded.some(p => path === p || path.startsWith(`${p}/`)), assertContext: () => { }, newId: () => randomUUID(),
     };
-    const make = () => new HistoryController({ vaultId: vault, deviceId, bindingKey: `${deviceId}:${vault}`, session: r.session, ports });
+    const make = () => new HistoryController({ vaultId: vault, deviceId, bindingKey: `${deviceId}:${vault}`, session: r.session, ports, ...(progress ? { progress } : {}) });
     let controller = make();
     return { files, folders, ports, operations, staged, get controller() { return controller; }, restart: () => { controller = make(); }, setFile: (path: string, text: string) => files.set(path, encode(text)), text: (path: string) => files.has(path) ? new TextDecoder().decode(files.get(path)) : undefined,
         exclude: (paths: string[]) => { excluded = paths; scopeKey = JSON.stringify(paths); }, block: (paths: string[]) => { blocked = paths; }, authority: (value: boolean) => { authority = value; }, failGuard: (value: boolean) => { guardFailure = value; }, state: () => state, metrics: () => ({ metadataBytes, savedStates, reads }) };
@@ -289,5 +290,71 @@ describe('append-only history controller', () => {
         const prepare = (a.controller as unknown as { prepare: (action: unknown, signal: AbortSignal) => Promise<unknown> }).prepare.bind(a.controller);
         const action = { type: 'publish' as const, entityId: randomUUID(), namespace: 'content' as const, path: 'forced-bad?.md', kind: 'file' as const, parents: [], location: { parentId: null, name: 'forced-bad?.md' }, deleted: false };
         await expect(prepare(action, signal())).rejects.toThrow('Invalid local history record');
+    });
+    it('reports staging and transferring progress with monotonic counts and the resource being worked on', async () => {
+        const ticks: SyncProgress[] = [];
+        const r = remote(), a = client(r, { 'notes/a.md': 'one', 'notes/b.md': 'two', 'c.md': 'three' }, p => ticks.push({ ...p }));
+        await start(a);
+        expect(ticks[0].phase).toBe('scanning');
+        expect(ticks.some(t => t.phase === 'planning')).toBe(true);
+        // Every tick must describe a real position in a real batch. A completed
+        // count that outran its total would be a progress bar inventing work.
+        for (const tick of ticks) {
+            expect(tick.completed).toBeGreaterThanOrEqual(0);
+            expect(tick.completed).toBeLessThanOrEqual(Math.max(tick.total, 0));
+        }
+        for (const phase of ['staging', 'transferring'] as const) {
+            const counts = ticks.filter(t => t.phase === phase).map(t => t.completed);
+            expect(counts.length).toBeGreaterThan(0);
+            expect([...counts].sort((x, y) => x - y)).toEqual(counts);
+        }
+        // 3 files + 1 folder ('notes'), so the batch is 4 operations and the
+        // named paths must be exactly the resources actually being published.
+        const staging = ticks.filter(t => t.phase === 'staging');
+        expect(staging.every(t => t.total === 4)).toBe(true);
+        expect(new Set(staging.map(t => t.currentPath).filter(Boolean))).toEqual(new Set(['notes', 'notes/a.md', 'notes/b.md', 'c.md']));
+        expect(staging.at(-1)).toMatchObject({ completed: 4, total: 4 });
+        const transferring = ticks.filter(t => t.phase === 'transferring');
+        expect(new Set(transferring.map(t => t.currentPath))).toEqual(new Set(['notes', 'notes/a.md', 'notes/b.md', 'c.md']));
+        // The terminal count for the batch: the update whose absence would leave a panel at 96%.
+        expect(ticks.some(t => t.phase === 'finalizing' && t.completed === 4 && t.total === 4)).toBe(true);
+    });
+    it('reports progress when a pending batch is recovered after a restart', async () => {
+        const ticks: SyncProgress[] = [];
+        let collect = false;
+        const r = remote(), a = client(r, { 'a.md': 'one' }, p => { if (collect) ticks.push({ ...p }); });
+        await start(a);
+        // Wedge the batch mid-perform so a pendingBatch survives, then resume it
+        // on a fresh controller over the same durable state — the path a user hits
+        // when they reopen the app on a sync that already looked dead once.
+        a.setFile('b.md', 'two');
+        r.failPut();
+        await expect(a.controller.run({}, signal())).rejects.toThrow('lost upload response');
+        expect(a.state()!.pendingBatch?.length).toBeGreaterThan(0);
+        a.restart();
+        collect = true;
+        await a.controller.run({}, signal());
+        expect(ticks.some(t => t.phase === 'transferring' && t.currentPath === 'b.md')).toBe(true);
+        expect(ticks.some(t => t.phase === 'finalizing')).toBe(true);
+        expect(a.state()!.pendingBatch).toBeUndefined();
+    });
+    it('completes the sync and leaves state intact when the progress callback throws on every tick', async () => {
+        let calls = 0;
+        const r = remote(), a = client(r, { 'a.md': 'one', 'b.md': 'two' }, () => { calls++; throw new Error('listener exploded'); });
+        // A progress listener is an observer. If it can abort a run or strand a
+        // pendingBatch, the instrumentation is more dangerous than the blindness.
+        await expect(start(a)).resolves.toBeDefined();
+        expect(calls).toBeGreaterThan(0);
+        expect(a.state()!.pendingBatch).toBeUndefined();
+        const verify = client(r);
+        await start(verify);
+        expect(verify.text('a.md')).toBe('one');
+        expect(verify.text('b.md')).toBe('two');
+    });
+    it('is unaffected by a progress callback that returns a rejected promise', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one' }, () => Promise.reject(new Error('async listener exploded')) as unknown as void);
+        await expect(start(a)).resolves.toBeDefined();
+        expect(a.state()!.pendingBatch).toBeUndefined();
+        expect([...r.records.values()].some(record => record.location.name === 'a.md')).toBe(true);
     });
 });
