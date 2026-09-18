@@ -3723,6 +3723,93 @@ body:not(.is-mobile) .modal-button-container .mod-secondary {
 .sync-wrapped-setting > .setting-item-control > * {
   max-width: 100%;
 }
+.sync-progress {
+  display: grid;
+  gap: var(--size-4-1);
+  margin: var(--size-4-3) 0;
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+.sync-progress[hidden] {
+  display: none;
+}
+/* Exposed to assistive technology only; the visual rows below are aria-hidden. */
+.sync-progress-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.sync-progress-visual {
+  display: grid;
+  gap: var(--size-4-1);
+}
+.sync-progress-phase {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+.sync-progress-counts,
+.sync-progress-elapsed {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  /* Tabular figures keep a counter changing 4x/sec from jittering sideways. */
+  font-variant-numeric: tabular-nums;
+}
+.sync-progress-bar {
+  width: 100%;
+  height: 6px;
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+.sync-progress-bar::-webkit-progress-bar {
+  background: var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+.sync-progress-bar::-webkit-progress-value {
+  background: var(--interactive-accent);
+  border-radius: var(--radius-s);
+}
+.sync-progress-path {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.sync-progress-path[hidden] {
+  display: none;
+}
+/*
+ * --text-error and --background-modifier-error are theme-provided, so they carry
+ * literal fallbacks like the rest of this file. Without one the warning inherits
+ * ordinary body colour and stops reading as a warning at all.
+ */
+.sync-progress-stall {
+  padding: var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-error, rgba(224, 108, 117, 0.15));
+  color: var(--text-error, #e06c75);
+  font-weight: var(--font-semibold);
+  overflow-wrap: anywhere;
+}
+.sync-progress-stall[hidden] {
+  display: none;
+}
+.sync-progress.is-stalled {
+  border-color: var(--text-error, #e06c75);
+}
+.sync-progress.is-stalled .sync-progress-bar::-webkit-progress-value {
+  background: var(--text-error, #e06c75);
+}
 .setting-item-group {
   margin: var(--size-4-4) 0;
 }

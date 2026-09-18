@@ -61,7 +61,21 @@ export interface SyncProvider {
 }
 
 export type SyncStatusState = "disconnected" | "idle" | "preview" | "pending" | "syncing" | "paused" | "conflict" | "error";
-export interface SyncStatus { state: SyncStatusState; providerId?: string; message?: string; conflicts: number; }
+/**
+ * Ordered coarsely by when it happens in a run, so a reader can tell "still
+ * reading the remote" from "already moving bytes" without knowing the internals.
+ */
+export type SyncProgressPhase = "scanning" | "planning" | "staging" | "transferring" | "finalizing";
+/** What the sync engine knows while it works. `total` of 0 means "not countable yet". */
+export interface SyncProgress { phase: SyncProgressPhase; completed: number; total: number; currentPath?: string; }
+/**
+ * Progress as published on status, with the two timestamps a reader needs to
+ * derive elapsed time and staleness itself. `lastProgressAt` is the whole basis
+ * of stall detection: a wedged sync stops updating it while wall-clock time
+ * keeps moving, which is exactly the condition the UI must be able to show.
+ */
+export interface SyncStatusProgress extends SyncProgress { startedAt: number; lastProgressAt: number; }
+export interface SyncStatus { state: SyncStatusState; providerId?: string; message?: string; conflicts: number; progress?: SyncStatusProgress; }
 export interface SyncPreview { uploads: number; downloads: number; deletes: number; conflicts: number; skipped: number; requiresApproval: boolean; }
 export interface SyncRunResult extends Omit<SyncPreview, "requiresApproval"> { cursor?: string; }
 export interface SyncConflict { id: string; path: string; conflictPath: string; remoteRevision: string; }
