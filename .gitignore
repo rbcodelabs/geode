@@ -13,6 +13,12 @@ test-vault/.geode/plugins/*
 # bundle is checked in so the test exercises the actual published artifact
 # rather than a hand-written stand-in. Disabled by default, like status-probe.
 !test-vault/.geode/plugins/kanban-bases-view/
+# The Ivory theme ships with the demo vault so it's installed and selectable
+# out of the box in Settings -> Appearance -> Themes. Other themes dropped
+# into test-vault/.geode/themes/ locally stay ignored.
+!test-vault/.geode/themes/
+test-vault/.geode/themes/*
+!test-vault/.geode/themes/Ivory/
 test-results/
 playwright-report/
 .benchmark-vault/
