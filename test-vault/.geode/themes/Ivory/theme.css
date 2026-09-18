@@ -1,0 +1,149 @@
+/* Ivory — Geode community theme.
+   Ports the ivory-and-green identity from geode-site
+   (geode-site/src/styles/global.css, commit e5fcf4a) into the app's
+   CSS custom-property theme API (see styles/app.css for the base contract).
+   Structure mirrors app.css's .theme-light / .theme-dark blocks exactly —
+   only the color values differ; :root accent-h/s/l is the HSL of the
+   site's primary green #294835. */
+
+:root {
+  --accent-h: 143;
+  --accent-s: 27%;
+  --accent-l: 22%;
+}
+
+.theme-light {
+  /* Neutral base ramp — site's ivory/green palette (00 = brightest bg → 100
+     = darkest text), same direction as app.css's ramp. */
+  --color-base-00: #ffffff;
+  --color-base-05: #fbfbf7;
+  --color-base-10: #f7f7f2;
+  --color-base-20: #edf0e7;
+  --color-base-25: #e4e9db;
+  --color-base-30: #d6dece;
+  --color-base-35: #c8d2bd;
+  --color-base-40: #b7c3a8;
+  --color-base-50: #93a184;
+  --color-base-60: #748267;
+  --color-base-70: #677360;
+  --color-base-100: #232921;
+
+  --background-primary: var(--color-base-00);
+  --background-primary-alt: var(--color-base-10);
+  --background-secondary: var(--color-base-10);
+  --background-secondary-alt: var(--color-base-20);
+  --background-modifier-border: rgba(0, 0, 0, 0.1);
+  --background-modifier-border-hover: rgba(0, 0, 0, 0.18);
+  --background-modifier-border-focus: rgba(0, 0, 0, 0.25);
+  --background-modifier-hover: rgba(0, 0, 0, 0.045);
+  --background-modifier-active: rgba(0, 0, 0, 0.09);
+  --background-modifier-cover: rgba(10, 10, 10, 0.4);
+  --text-normal: var(--color-base-100);
+  --text-muted: var(--color-base-60);
+  --text-faint: var(--color-base-50);
+  /* Site's exact link color / hover (docs content), not the generic hsl()
+     accent derivation. */
+  --text-accent: #365a3f;
+  --text-accent-hover: #1f382a;
+  --link-color: var(--text-accent);
+  --link-color-hover: var(--text-accent-hover);
+  --link-external-color: var(--text-accent);
+  --link-external-color-hover: var(--text-accent-hover);
+  --text-on-accent: #ffffff;
+  /* Soft primary-green selection tint. */
+  --text-selection: rgba(41, 72, 53, 0.18);
+  /* Site's exact btn-primary color / hover. */
+  --interactive-accent: #294835;
+  --interactive-accent-hover: #1f382a;
+  --code-background: rgba(0, 0, 0, 0.045);
+
+  --modal-background: var(--background-primary);
+  --modal-border-color: var(--color-base-40, var(--background-modifier-border-focus));
+  --prompt-background: var(--background-primary);
+  --prompt-border-color: var(--color-base-40, var(--background-modifier-border-focus));
+
+  --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow: rgba(0, 0, 0, 0.15);
+
+  --color-red: #e05252;
+  --color-orange: #e9973f;
+  --color-yellow: #e0c24f;
+  /* Site's secondary green for the on-brand semantic green swatch. */
+  --color-green: #637a50;
+  --color-blue: #4080ff;
+  --color-purple: #9b6acb;
+
+  --tab-background-active: var(--background-primary);
+  --tab-container-background: var(--background-secondary);
+  --tab-outline-color: var(--background-modifier-border);
+  --tab-divider-color: var(--background-modifier-border);
+  --tab-text-color: var(--text-faint);
+  --tab-text-color-active: var(--text-normal);
+}
+
+.theme-dark {
+  /* Complementary dark companion — same hue family as the site's green,
+     inverted lightness (the site has no dark variant to port). */
+  --color-base-00: #10140d;
+  --color-base-05: #141a10;
+  --color-base-10: #191f14;
+  --color-base-20: #21281a;
+  --color-base-25: #29331f;
+  --color-base-30: #323f28;
+  --color-base-35: #3d4c30;
+  --color-base-40: #4b5c3a;
+  --color-base-50: #64794c;
+  --color-base-60: #839a66;
+  --color-base-70: #a8bd91;
+  --color-base-100: #e8ecdb;
+
+  --background-primary: var(--color-base-05);
+  --background-primary-alt: var(--color-base-10);
+  --background-secondary: var(--color-base-00);
+  --background-secondary-alt: var(--color-base-10);
+  --background-modifier-border: rgba(255, 255, 255, 0.09);
+  --background-modifier-border-hover: rgba(255, 255, 255, 0.16);
+  --background-modifier-border-focus: rgba(255, 255, 255, 0.25);
+  --background-modifier-hover: rgba(255, 255, 255, 0.055);
+  --background-modifier-active: rgba(255, 255, 255, 0.11);
+  --background-modifier-cover: rgba(10, 10, 10, 0.4);
+  --text-normal: var(--color-base-100);
+  --text-muted: var(--color-base-70);
+  --text-faint: var(--color-base-50);
+  /* Lighter green, readable on the dark background. */
+  --text-accent: #a8d99a;
+  --text-accent-hover: #c2e8b5;
+  --link-color: var(--text-accent);
+  --link-color-hover: var(--text-accent-hover);
+  --link-external-color: var(--text-accent);
+  --link-external-color-hover: var(--text-accent-hover);
+  --text-on-accent: #ffffff;
+  --text-selection: hsla(143, 27%, 45%, 0.35);
+  --interactive-accent: hsl(143, 28%, 38%);
+  --interactive-accent-hover: hsl(143, 28%, 44%);
+  --code-background: rgba(255, 255, 255, 0.06);
+
+  --modal-background: var(--background-primary);
+  --modal-border-color: var(--color-base-40, var(--background-modifier-border-focus));
+  --prompt-background: var(--background-primary);
+  --prompt-border-color: var(--color-base-40, var(--background-modifier-border-focus));
+
+  --shadow-s: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-l: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow: rgba(0, 0, 0, 0.5);
+
+  --color-red: #ff4444;
+  --color-orange: #ff8c42;
+  --color-yellow: #ffd900;
+  --color-green: #839a66;
+  --color-blue: #448aff;
+  --color-purple: #7c4dff;
+
+  --tab-background-active: var(--background-primary);
+  --tab-container-background: var(--background-secondary);
+  --tab-outline-color: var(--background-modifier-border);
+  --tab-divider-color: var(--background-modifier-border);
+  --tab-text-color: var(--text-faint);
+  --tab-text-color-active: var(--text-normal);
+}
