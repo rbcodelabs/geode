@@ -1,6 +1,7 @@
 import { SYNC_CONFLICT_COMPARE_MAX_BYTES, SYNC_MAX_FILE_BYTES, type AppendOnlySession, type HistoryRecord } from './history-types';
 import { mergeHistory, deriveHistory, validName, type HistoryStore } from './history-reducer';
 import { validateSyncPath } from './scope';
+import type { SyncProgress, SyncProgressPhase } from './types';
 export type HistoryNamespace = HistoryRecord['namespace'];
 export interface HistoryLocalResource {
     namespace: HistoryNamespace;
@@ -170,6 +171,15 @@ export interface HistoryControllerOptions {
     bindingKey: string;
     session: AppendOnlySession;
     ports: HistoryControllerPorts;
+    /**
+     * Observational only, and deliberately not a port. Every member of `ports`
+     * is a capability the controller awaits and whose failure is systemic — a
+     * broken one must stop the run. Progress is the opposite: it is fire and
+     * forget, it is synchronous so it can add no await point to the ordered
+     * batch, and a listener that throws is swallowed. Keeping it out of `ports`
+     * keeps that distinction impossible to misread.
+     */
+    progress?: (progress: SyncProgress) => void;
 }
 interface PublishAction {
     type: 'publish';
@@ -255,6 +265,24 @@ export class HistoryController {
     private active = false;
     constructor(private readonly options: HistoryControllerOptions) { }
     private get ports() { return this.options.ports; }
+    /**
+     * Publishes one progress tick. Synchronous by construction: it introduces no
+     * await point, so it cannot reorder the batch or open a window between
+     * "durably prepared" and "performed". A listener that throws — or hands back
+     * a rejecting promise — is swallowed, because a sync that aborts because a
+     * progress bar failed would be strictly worse than no progress bar at all.
+     */
+    private report(phase: SyncProgressPhase, completed: number, total: number, currentPath?: string): void {
+        const listener = this.options.progress;
+        if (!listener)
+            return;
+        try {
+            const result = listener({ phase, completed, total, ...(currentPath === undefined ? {} : { currentPath }) }) as unknown;
+            if (result && typeof (result as PromiseLike<unknown>).then === 'function')
+                void Promise.resolve(result).catch(() => { });
+        }
+        catch { /* observational only; never allowed to affect the run */ }
+    }
     private assert(signal: AbortSignal) { signal.throwIfAborted(); this.ports.assertContext(); }
     private async checked<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> { this.assert(signal); const result = await operation(); this.assert(signal); return result; }
     private async exclusive<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> { if (this.active)
@@ -305,7 +333,7 @@ export class HistoryController {
             state.approved = true;
             delete state.previewSignature;
             const demoted = await this.execute(state, plan, signal);
-            const after = await this.plan(state, signal);
+            const after = await this.plan(state, signal, 'finalizing');
             // Demotions describe what this run skipped, and the re-plan cannot
             // rediscover them: a vanished file is simply absent from the new
             // snapshot. Merge them into the returned preview (and the state the
@@ -357,7 +385,20 @@ export class HistoryController {
         }
         return { ...snapshot, entries, blocked, excluded };
     }
-    private async plan(state: HistoryControllerState, signal: AbortSignal): Promise<Plan> {
+    /**
+     * @param as overrides the reported phase. The re-plan that follows a completed
+     * batch is still that run finishing, not a new scan, so it reports `finalizing`
+     * rather than bouncing the panel back to "Scanning". It keeps reporting at all
+     * — instead of leaving the last transfer tick frozen on screen — because that
+     * rescan is itself unbounded work, and a frozen 100% during it would be the
+     * same lie this feature exists to remove.
+     */
+    private async plan(state: HistoryControllerState, signal: AbortSignal, as?: SyncProgressPhase): Promise<Plan> {
+        // Neither of these is countable in advance — the remote scan is one call
+        // and the local snapshot walks the vault — so they report phase entry with
+        // a total of 0. That is still the difference between "planning" on screen
+        // and a blank panel for the ten minutes this takes on a large vault.
+        this.report(as ?? 'scanning', 0, 0);
         const scan = await this.checked(signal, () => this.options.session.scan(state.cursor, signal));
         const availability: Record<string, 'pending' | 'corrupt'> = Object.assign(Object.create(null), state.blobAvailability ?? {});
         if (scan.blobAvailability !== undefined && !Array.isArray(scan.blobAvailability)) throw new Error('Invalid blob availability evidence');
@@ -375,6 +416,7 @@ export class HistoryController {
             throw new Error('Complete remote history scan unavailable');
         }
         state.cursor = scan.cursor;
+        this.report(as ?? 'planning', 0, 0);
         const snapshot = await this.snapshot(signal);
         if (state.scopeKey !== snapshot.scopeKey) {
             state.approved = false;
@@ -689,23 +731,46 @@ export class HistoryController {
         // makes destination-write/child-move/empty-folder-cleanup recovery safe.
         // Demotion is safe here for the same reason: nothing has been written yet,
         // so dropping an action only shrinks the batch that is about to run.
-        for (const action of plan.actions) {
+        // Reporting is interleaved with, never in place of, the existing control
+        // flow: each report() is synchronous and returns nothing, so the loop below
+        // prepares exactly the same actions in exactly the same order as before.
+        const planned = plan.actions.length;
+        for (const [index, action] of plan.actions.entries()) {
+            this.report('staging', index, planned, action.path);
             const outcome = await this.prepare(action, signal);
             if (outcome.ok)
                 operations.push(outcome.operation);
             else
                 demoted.push(outcome.issue);
         }
+        this.report('staging', planned, planned);
         state.pendingBatch = operations.map(op => op.id);
         await this.save(state, signal);
-        for (const operation of operations)
-            await this.perform(operation, plan.snapshot, signal);
+        await this.performAll(operations, plan.snapshot, signal);
         this.finish(state, operations);
         Object.assign(state.baseline, plan.adoptions);
         await this.save(state, signal);
         return demoted;
     }
-    private async perform(operation: HistoryOperation, snapshot: HistoryLocalSnapshot, signal: AbortSignal): Promise<void> {
+    /**
+     * The one place a batch is actually performed, shared by a fresh run and by
+     * recovery of a pending batch after a restart, so both report identically.
+     * `completed` counts operations finished, so it only advances once an
+     * operation has committed — it can never claim work that did not happen.
+     */
+    private async performAll(operations: HistoryOperation[], snapshot: HistoryLocalSnapshot, signal: AbortSignal): Promise<void> {
+        const total = operations.length;
+        for (const [index, operation] of operations.entries()) {
+            // Re-reported per network leg inside perform() as well. A single file
+            // at the 100 MiB cap is otherwise one silent tick, and silence is
+            // indistinguishable from a wedge.
+            const tick = () => this.report('transferring', index, total, operation.path);
+            tick();
+            await this.perform(operation, snapshot, signal, tick);
+        }
+        this.report('finalizing', total, total);
+    }
+    private async perform(operation: HistoryOperation, snapshot: HistoryLocalSnapshot, signal: AbortSignal, tick: () => void = () => { }): Promise<void> {
         this.validateOperation(operation);
         if (operation.phase !== 'prepared')
             return;
@@ -714,19 +779,23 @@ export class HistoryController {
         const data = operation.payload ? await this.verified(await this.checked(signal, () => this.ports.readStage(operation.payload!.key)), operation.payload.sha256, operation.payload.size, signal) : undefined;
         if (operation.type === 'publish') {
             if (data && !operation.record.blob) {
+                tick();
                 const ref = await this.checked(signal, () => this.options.session.putBlob({ operationId: operation.id, sha256: operation.payload!.sha256, size: operation.payload!.size, data }, signal));
                 if (ref.sha256 !== operation.payload!.sha256 || ref.size !== operation.payload!.size)
                     throw new Error('Invalid upload receipt');
+                tick();
                 await this.verified(await this.checked(signal, () => this.options.session.readBlob(ref, signal)), ref.sha256, ref.size, signal);
                 operation.record = { ...operation.record, blob: ref };
                 await this.checked(signal, () => this.ports.saveOperation(operation));
             }
+            tick();
             await this.checked(signal, () => this.options.session.appendRecord(operation.record, signal));
         }
         else {
             const apply = operation.apply;
             if (!apply)
                 throw new Error('Missing guarded operation');
+            tick();
             await this.checked(signal, () => this.ports.apply({ ...apply, ...(data ? { data } : {}) }));
         }
         operation.phase = 'committed';
@@ -748,9 +817,12 @@ export class HistoryController {
         const all = new Map((await this.checked(signal, () => this.ports.loadOperations())).map(o => [o.id, o]));
         const operations = state.pendingBatch!.map(id => { const op = all.get(id); if (!op)
             throw new Error('Missing durable sync intent'); return op; });
+        // Recovery is the path that runs after a restart, i.e. the one a user hits
+        // when they reopen the app on a sync that already looked dead once. It
+        // reports through exactly the same performAll() as a fresh run.
+        this.report('planning', 0, 0);
         const snapshot = await this.snapshot(signal);
-        for (const operation of operations)
-            await this.perform(operation, snapshot, signal);
+        await this.performAll(operations, snapshot, signal);
         this.finish(state, operations);
         await this.save(state, signal);
     }
@@ -963,10 +1035,9 @@ export class HistoryController {
             }
             state.pendingBatch = operations.map(op => op.id);
             await this.save(state, signal);
-            for (const op of operations)
-                await this.perform(op, plan.snapshot, signal);
+            await this.performAll(operations, plan.snapshot, signal);
             this.finish(state, operations);
-            const after = await this.plan(state, signal);
+            const after = await this.plan(state, signal, 'finalizing');
             await this.save(state, signal);
             return after.preview;
         });

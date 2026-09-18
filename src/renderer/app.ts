@@ -99,7 +99,8 @@ import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
 import { formatSyncFeedback, renderSyncFeedback } from "./sync/feedback";
-import type { SyncPreview } from "./sync/types";
+import { describeSyncProgress } from "./sync/progress";
+import type { SyncPreview, SyncStatusProgress } from "./sync/types";
 import { stripCommentMetadata } from "./comments/model";
 import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
 
@@ -568,6 +569,13 @@ class SettingsModal extends Modal {
   private stopPerformanceTab: (() => void) | null = null;
   /** Bumped by every Sync tab render so stale async row upgrades stand down. */
   private syncTabGeneration = 0;
+  /**
+   * Cleanup for the Sync tab's live progress subscription and its stall ticker.
+   * Held on the modal rather than in the render closure because a re-render and
+   * a modal close are both ways out, and a status subscription that outlives its
+   * detached container would repaint elements nobody can see.
+   */
+  private stopSyncProgress: (() => void) | null = null;
   private stopExternalRootsTab: (() => void) | null = null;
 
   constructor(private geodeApp: App) {
@@ -633,6 +641,12 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab();
       this.stopPerformanceTab = null;
     }
+    // Same reason as Performance above, and it cannot be left to the render
+    // guard: this empties contentContainerEl but the container itself stays
+    // connected, so a Sync-tab subscription would survive the switch and keep
+    // painting detached nodes on a 1s ticker for the life of the modal.
+    this.stopSyncProgress?.();
+    this.stopSyncProgress = null;
     this.unsubscribeHotkeys?.();
     this.stopExternalRootsTab?.();
     this.stopExternalRootsTab = null;
@@ -1460,8 +1474,103 @@ class SettingsModal extends Modal {
     );
   }
 
+  /**
+   * The Sync tab's live activity surface. Builds its elements once and mutates
+   * them in place on every tick: re-rendering the tab at 4 updates/sec would
+   * throw away scroll position, button focus and any half-finished interaction,
+   * and at 17,251 operations it would be unusable.
+   */
+  private renderSyncProgress(container: HTMLElement, generation: number): { begin: () => void } {
+    const activity = document.createElement("div");
+    activity.className = "sync-progress";
+    activity.setAttribute("role", "status");
+    activity.hidden = true;
+    // The only part of this subtree exposed to assistive technology. Everything
+    // below is aria-hidden, so a screen reader hears a coarse phase/decile line
+    // when it changes rather than four counter updates a second.
+    const announce = document.createElement("div");
+    announce.className = "sync-progress-announcement";
+    const visual = document.createElement("div");
+    visual.className = "sync-progress-visual";
+    visual.setAttribute("aria-hidden", "true");
+    const phase = document.createElement("div"); phase.className = "sync-progress-phase";
+    const counts = document.createElement("div"); counts.className = "sync-progress-counts";
+    const bar = document.createElement("progress"); bar.className = "sync-progress-bar"; bar.max = 100;
+    const path = document.createElement("div"); path.className = "sync-progress-path";
+    const elapsed = document.createElement("div"); elapsed.className = "sync-progress-elapsed";
+    const stall = document.createElement("div"); stall.className = "sync-progress-stall"; stall.hidden = true;
+    visual.append(phase, counts, bar, path, elapsed, stall);
+    activity.append(announce, visual);
+    container.appendChild(activity);
+
+    let ticker: number | undefined;
+    let announced = "";
+    let stop: (() => void) | null = null;
+    const stopTicker = () => { if (ticker !== undefined) window.clearInterval(ticker); ticker = undefined; };
+    const teardown = () => { stop?.(); stop = null; stopTicker(); };
+    const live = () => generation === this.syncTabGeneration && container.isConnected;
+
+    const paint = (progress: SyncStatusProgress | undefined) => {
+      if (!progress) {
+        activity.hidden = true; stall.hidden = true; activity.classList.remove("is-stalled");
+        announced = ""; announce.textContent = ""; container.removeAttribute("aria-busy");
+        stopTicker();
+        return;
+      }
+      const view = describeSyncProgress(progress, Date.now());
+      activity.hidden = false;
+      container.setAttribute("aria-busy", "true");
+      activity.classList.toggle("is-stalled", view.stalled);
+      phase.textContent = view.phaseLabel;
+      counts.textContent = view.counts;
+      // No percentage yet means an indeterminate bar, not a misleading 0%.
+      if (view.percent === null) bar.removeAttribute("value"); else bar.value = view.percent;
+      path.textContent = view.path;
+      path.hidden = !view.path;
+      elapsed.textContent = `Elapsed ${view.elapsed}`;
+      stall.textContent = view.stallMessage;
+      stall.hidden = !view.stalled;
+      if (view.announcement !== announced) { announced = view.announcement; announce.textContent = view.announcement; }
+      // A stalled sync emits no events at all, so the duration on screen has to
+      // advance on our own clock or it would freeze at the moment work stopped —
+      // the exact illusion this feature exists to break.
+      if (ticker === undefined) ticker = window.setInterval(() => {
+        if (!live()) { teardown(); return; }
+        paint(this.geodeApp.sync.getStatus().progress);
+      }, 1000);
+    };
+
+    stop = this.geodeApp.sync.on("status", status => {
+      if (!live()) { teardown(); return; }
+      paint(status.progress);
+    });
+    this.stopSyncProgress = teardown;
+    paint(this.geodeApp.sync.getStatus().progress);
+    return {
+      begin: () => {
+        if (this.geodeApp.sync.getStatus().progress) return;
+        activity.hidden = false;
+        container.setAttribute("aria-busy", "true");
+        activity.classList.remove("is-stalled");
+        phase.textContent = "Starting…";
+        counts.textContent = "";
+        bar.removeAttribute("value");
+        path.hidden = true;
+        elapsed.textContent = "";
+        stall.hidden = true;
+        announced = "Sync started.";
+        announce.textContent = announced;
+      },
+    };
+  }
+
   private renderSyncTab(container: HTMLElement, summary = ""): void {
     const generation = ++this.syncTabGeneration;
+    // innerHTML detaches the previous render's nodes but leaves `container`
+    // connected, so isConnected cannot detect a re-render. The previous
+    // subscription is retired explicitly here instead.
+    this.stopSyncProgress?.();
+    this.stopSyncProgress = null;
     container.innerHTML = `<h2>Sync</h2>`;
     const providers = this.geodeApp.sync.listProviders();
     const active = this.geodeApp.sync.getActiveProvider();
@@ -1475,9 +1584,14 @@ class SettingsModal extends Modal {
     control.appendChild(select);
     this.addRow(container, "Status", status.message ?? status.state).control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
     if (summary) renderSyncFeedback(container, summary);
+    const showProgress = this.renderSyncProgress(container, generation);
     const actions = document.createElement("div"); actions.className = "setting-item-control";
     const perform = (action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => {
       container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button,input,select").forEach(control => { control.disabled = true; });
+      // Disabled buttons alone say nothing about whether work is happening. Paint
+      // the activity surface on click, before the first tick can possibly arrive,
+      // so the panel is never blank while an action is in flight.
+      showProgress.begin();
       void action().then(result => {
         if (result && typeof result === "object" && "uploads" in result && "downloads" in result && "deletes" in result && "conflicts" in result && "skipped" in result) {
           summary = formatSyncFeedback(kind, result as SyncPreview, this.geodeApp.sync.isAppendOnly(), this.geodeApp.sync.getHistoryDetails());
@@ -1606,6 +1720,11 @@ class SettingsModal extends Modal {
       this.stopPerformanceTab();
       this.stopPerformanceTab = null;
     }
+    // The Sync tab can be the active tab when the modal closes, and its status
+    // subscription plus 1 s stall ticker would otherwise keep running against a
+    // container nobody can see.
+    this.stopSyncProgress?.();
+    this.stopSyncProgress = null;
     this.unsubscribeSettingTabs?.();
     this.stopExternalRootsTab?.();
     this.stopExternalRootsTab = null;
