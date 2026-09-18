@@ -55,7 +55,10 @@ async function startFakeGithub(): Promise<{ url: string; close: () => Promise<vo
   };
 }
 
-async function launchApp(githubUrl: string): Promise<{
+async function launchApp(
+  githubUrl: string,
+  seedVault?: (vaultPath: string) => void,
+): Promise<{
   app: ElectronApplication;
   window: Page;
   userDataDir: string;
@@ -64,6 +67,8 @@ async function launchApp(githubUrl: string): Promise<{
 }> {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-e2e-"));
   const vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), "geode-vault-"));
+  // Seed before launch so the plugin is on disk for the initial discovery pass.
+  seedVault?.(vaultPath);
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
     JSON.stringify({ recentVaults: [vaultPath], lastVault: vaultPath })
@@ -81,6 +86,137 @@ async function launchApp(githubUrl: string): Promise<{
   window.on("pageerror", (err) => consoleErrors.push(String(err)));
   return { app, window, userDataDir, vaultPath, consoleErrors };
 }
+
+/** Open Settings and click into the community vertical-tab, the way a user does. */
+async function openCommunitySettings(window: Page): Promise<void> {
+  await window.evaluate(() => (window as unknown as { app: any }).app.commands.execute("open-settings"));
+  await window
+    .locator(".vertical-tab-nav-item", { hasText: "Community plugins & themes" })
+    .click();
+}
+
+function isEnabled(window: Page, id: string): Promise<boolean> {
+  return window.evaluate(
+    (pluginId) => (window as unknown as { app: any }).app.pluginManager.isEnabled(pluginId),
+    id,
+  );
+}
+
+/** Contents of `.geode/plugins.json` — the persisted enabled set. */
+function enabledIdsOnDisk(vaultPath: string): string[] {
+  const file = path.join(vaultPath, ".geode", "plugins.json");
+  if (!fs.existsSync(file)) return [];
+  return JSON.parse(fs.readFileSync(file, "utf8")) as string[];
+}
+
+test("enables and disables an already-installed plugin from the installed list", async () => {
+  const github = await startFakeGithub();
+  const { app, window, userDataDir, vaultPath, consoleErrors } = await launchApp(github.url);
+  const pluginDir = path.join(vaultPath, ".geode", "plugins", "e2e-managed");
+
+  try {
+    await expect(window.locator(".workspace")).toBeVisible();
+    await window.waitForFunction(
+      () => Boolean((window as unknown as { app?: { commands?: unknown } }).app?.commands)
+    );
+
+    // Install WITHOUT ticking "enable after installing" — this is the state the
+    // defect stranded users in: files on disk, id absent from plugins.json.
+    await window.evaluate(() => (window as unknown as { app: any }).app.commands.execute("community-add"));
+    const modal = window.locator(".mod-community-install");
+    await expect(modal).toBeVisible();
+    await modal.locator(".community-repo-input").fill("geode-tests/managed");
+    await expect(modal.locator(".community-enable-checkbox")).not.toBeChecked();
+    await modal.locator(".community-install-btn").click();
+    await expect(modal).toBeHidden();
+    await expect.poll(() => fs.existsSync(pluginDir), { timeout: 5000 }).toBe(true);
+    expect(await isEnabled(window, "e2e-managed")).toBe(false);
+
+    await openCommunitySettings(window);
+    const rowLoc = window.locator('.community-item[data-repo="geode-tests/managed"]');
+    await expect(rowLoc).toBeVisible();
+
+    // The control that did not exist before: enable from the installed list.
+    const toggle = rowLoc.locator(".community-item-enable");
+    await expect(toggle).toHaveText("Enable");
+    await toggle.click();
+
+    await expect.poll(() => isEnabled(window, "e2e-managed"), { timeout: 5000 }).toBe(true);
+    await expect
+      .poll(() => enabledIdsOnDisk(vaultPath), { timeout: 5000 })
+      .toContain("e2e-managed");
+    // The row re-rendered into the disabled-able state.
+    await expect(rowLoc.locator(".community-item-enable")).toHaveText("Disable");
+
+    // …and back off again, persisted.
+    await rowLoc.locator(".community-item-enable").click();
+    await expect.poll(() => isEnabled(window, "e2e-managed"), { timeout: 5000 }).toBe(false);
+    await expect
+      .poll(() => enabledIdsOnDisk(vaultPath), { timeout: 5000 })
+      .not.toContain("e2e-managed");
+    await expect(rowLoc.locator(".community-item-enable")).toHaveText("Enable");
+
+    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    await github.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  }
+});
+
+test("lists and enables an installed plugin that community.json never recorded", async () => {
+  const github = await startFakeGithub();
+  // Stand in for "Import from Obsidian" / default-vault bootstrap: files land in
+  // .geode/plugins/ with no community.json provenance at all.
+  const { app, window, userDataDir, vaultPath, consoleErrors } = await launchApp(
+    github.url,
+    (vault) => {
+      const dir = path.join(vault, ".geode", "plugins", "e2e-untracked");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "manifest.json"),
+        JSON.stringify({ ...MANIFEST, id: "e2e-untracked", name: "E2E Untracked Plugin" })
+      );
+      fs.writeFileSync(path.join(dir, "main.js"), MAIN_JS);
+    },
+  );
+
+  try {
+    await expect(window.locator(".workspace")).toBeVisible();
+    await window.waitForFunction(
+      () => Boolean((window as unknown as { app?: { commands?: unknown } }).app?.commands)
+    );
+    expect(fs.existsSync(path.join(vaultPath, ".geode", "community.json"))).toBe(false);
+    expect(await isEnabled(window, "e2e-untracked")).toBe(false);
+
+    await openCommunitySettings(window);
+
+    // Before the fix this row did not exist: the list was built from
+    // community.json alone, so the plugin was unreachable from the UI.
+    const rowLoc = window.locator('.installed-plugin-item[data-plugin-id="e2e-untracked"]');
+    await expect(rowLoc).toBeVisible();
+    await expect(rowLoc).toContainText("E2E Untracked Plugin");
+    await expect(rowLoc).toContainText("not tracked for updates");
+
+    await rowLoc.locator(".community-item-enable").click();
+    await expect.poll(() => isEnabled(window, "e2e-untracked"), { timeout: 5000 }).toBe(true);
+    await expect
+      .poll(() => enabledIdsOnDisk(vaultPath), { timeout: 5000 })
+      .toContain("e2e-untracked");
+
+    await expect(rowLoc.locator(".community-item-enable")).toHaveText("Disable");
+    await rowLoc.locator(".community-item-enable").click();
+    await expect.poll(() => isEnabled(window, "e2e-untracked"), { timeout: 5000 }).toBe(false);
+
+    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    await github.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  }
+});
 
 test("manages a tracked plugin from Settings: toggle auto-update, then uninstall", async () => {
   const github = await startFakeGithub();

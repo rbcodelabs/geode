@@ -1,3 +1,12 @@
+/**
+ * "Supported plugins" catalog list. Each row installs a main-process-admitted
+ * catalog entry. Installing writes files; it never runs them. Enabling an
+ * installed plugin (which executes its code) is a separate opt-in checkbox,
+ * off by default — the same trust posture as the "Install from GitHub" modal
+ * (see install-modal.ts). Being listed in the supported catalog is not by
+ * itself consent to run the plugin.
+ */
+
 import type {
   SupportedPlugin,
   SupportedPluginCatalogIpcState,
@@ -8,6 +17,19 @@ import { isMinimumGeodeVersionMet } from "../../shared/semver";
 export interface SupportedCatalogViewDeps {
   load(): Promise<SupportedPluginCatalogIpcState>;
   install(plugin: SupportedPlugin, release: "tested" | "latest"): Promise<InstalledResult>;
+  /**
+   * Enable an installed plugin — i.e. execute its code. Only ever called when
+   * the user has ticked the opt-in checkbox for this row; installing alone
+   * never enables (see the module header).
+   */
+  enable(pluginId: string): Promise<void>;
+  /**
+   * Soft failure from the last enable attempt, if any. `enable()` resolves even
+   * when the plugin's `onload()` hasn't settled within the timeout, so this is
+   * what distinguishes "enabled and running" from "enabled but still churning"
+   * — same distinction install-modal.ts draws.
+   */
+  getLoadError(pluginId: string): string | undefined;
   onInstalled(): void;
 }
 
@@ -72,6 +94,20 @@ function renderPluginRow(
   confirm.className = "supported-latest-confirm";
   warning.append(confirm, document.createTextNode(" I understand the latest release is not verified by Geode."));
 
+  // Opt-in, off by default: installing writes files, enabling runs them.
+  const enableRow = document.createElement("label");
+  enableRow.className = "community-enable-row supported-plugin-enable-row";
+  const enableAfterInstall = document.createElement("input");
+  enableAfterInstall.type = "checkbox";
+  enableAfterInstall.className = "community-enable-checkbox supported-plugin-enable-checkbox";
+  enableAfterInstall.disabled = !compatible;
+  enableRow.append(
+    enableAfterInstall,
+    document.createTextNode(
+      " Enable after installing — plugins run with full access to your files and system.",
+    ),
+  );
+
   const install = document.createElement("button");
   install.className = "supported-plugin-install mod-cta";
   install.textContent = "Install";
@@ -96,19 +132,42 @@ function renderPluginRow(
     release.disabled = true;
     status.textContent = "Installing…";
     status.classList.remove("is-error");
+    const unverified = choice === "latest" ? " (unverified)" : "";
     try {
-      const installed = await deps.install(plugin, choice);
-      status.textContent = `Installed ${installed.name} ${installed.version}${choice === "latest" ? " (unverified)" : ""}`;
+      let installed;
+      try {
+        installed = await deps.install(plugin, choice);
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : String(error);
+        status.classList.add("is-error");
+        return;
+      }
+      status.textContent = `Installed ${installed.name} ${installed.version}${unverified}`;
+      // The install succeeded and is recorded. A failure past this point is an
+      // enable failure and must not read as "install failed" — the files are
+      // on disk either way, and the installed list needs to reflect that.
+      if (enableAfterInstall.checked) {
+        try {
+          await deps.enable(installed.id);
+          const loadError = deps.getLoadError(installed.id);
+          status.textContent = loadError
+            ? `Installed and enabled ${installed.name} ${installed.version}${unverified}, ` +
+              `but it hasn't finished starting up: ${loadError}`
+            : `Enabled ${installed.name} ${installed.version}${unverified}`;
+        } catch (error) {
+          status.textContent =
+            `Installed ${installed.name} ${installed.version}${unverified}, but enabling failed: ` +
+            (error instanceof Error ? error.message : String(error));
+          status.classList.add("is-error");
+        }
+      }
       deps.onInstalled();
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : String(error);
-      status.classList.add("is-error");
     } finally {
       release.disabled = false;
       updateChoice();
     }
   });
-  controls.append(release, warning, install, status);
+  controls.append(release, warning, enableRow, install, status);
   row.append(info, controls);
   return row;
 }
