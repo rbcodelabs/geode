@@ -1,5 +1,5 @@
 import { SYNC_CONFLICT_COMPARE_MAX_BYTES, SYNC_MAX_FILE_BYTES, type AppendOnlySession, type HistoryRecord } from './history-types';
-import { mergeHistory, deriveHistory, type HistoryStore } from './history-reducer';
+import { mergeHistory, deriveHistory, validName, type HistoryStore } from './history-reducer';
 import { validateSyncPath } from './scope';
 export type HistoryNamespace = HistoryRecord['namespace'];
 export interface HistoryLocalResource {
@@ -294,6 +294,17 @@ export class HistoryController {
         for (const resource of snapshot.entries) {
             if (!this.included(snapshot, resource.namespace, resource.path))
                 continue;
+            // A resource whose leaf name would fail history-record validation (forbidden
+            // characters, trailing dot/space, reserved device names, `.sync-conflict-`
+            // remnants from another sync tool, non-NFC text, etc.) must never reach
+            // prepare()/mergeHistory mid-batch: that throw aborts the whole sync. Catching
+            // it here at planning time routes just this resource to `blocked` — matching
+            // the existing `invalid-or-oversized-resource` pattern — and `included()`'s
+            // path-prefix check keeps any descendants out of `entries` too.
+            if (!validName(nameOf(resource.path))) {
+                blocked.push({ namespace: resource.namespace, path: resource.path, reason: 'invalid-resource-name' });
+                continue;
+            }
             if (resource.kind === 'file' && (!Number.isSafeInteger(resource.size) || resource.size! < 0 || resource.size! > SYNC_MAX_FILE_BYTES || !/^[a-f0-9]{64}$/.test(resource.sha256 ?? ''))) {
                 blocked.push({ namespace: resource.namespace, path: resource.path, reason: 'invalid-or-oversized-resource' });
                 continue;
