@@ -9,6 +9,7 @@ import {
   pathParent,
   pathName,
   splitExt,
+  attachFileStats,
   MARKDOWN_EXTENSIONS,
   isTFolder,
 } from "./types";
@@ -351,7 +352,7 @@ export class Vault extends Events {
     } else {
       const name = pathName(entry.path);
       const { basename, extension } = splitExt(name);
-      this.files.set(entry.path, {
+      this.files.set(entry.path, attachFileStats({
         kind: "file",
         path: entry.path,
         name,
@@ -361,7 +362,7 @@ export class Vault extends Events {
         ctime: entry.ctime,
         size: entry.size,
         parent: pathParent(entry.path),
-      });
+      }));
     }
   }
 
