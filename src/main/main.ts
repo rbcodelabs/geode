@@ -18,6 +18,19 @@ import { applyPortableMutation } from "./sync-config-apply";
 import { isPortableAssetPath } from "../shared/portable-assets";
 import type { GuardedMutation } from "../shared/sync-safety";
 import { createHash, randomUUID } from "node:crypto";
+import {
+  originOf,
+  shouldDeliverPostMessage,
+  WebViewerPopupRegistry,
+  POPUP_CLAIM_HANDLE_CHANNEL,
+  POPUP_CLAIM_OPENER_CHANNEL,
+  POPUP_CONTROL_CHANNEL,
+  POPUP_POST_TO_OPENER_CHANNEL,
+  POPUP_POST_TO_POPUP_CHANNEL,
+  POPUP_RELAY_CHANNEL,
+  type PopupControlRequest,
+  type PopupRelayMessage,
+} from "./webviewer-popups";
 import type { HostHttpRequest } from "../shared/network";
 import { writeVaultFile, writeVaultBinary } from "./vault-write";
 import { listChromeProfiles, importChromeCookies } from "./chrome-cookies";
@@ -1300,6 +1313,178 @@ const EMPTY_HOTKEYS: ReadonlySet<string> = new Set();
 const WEBVIEWER_PARTITION = "persist:webviewer";
 
 /**
+ * Exact-instance session check, not a string compare on a partition the guest
+ * could influence: Electron hands back the same `Session` object for every
+ * guest sharing a persistent partition, and that partition is exclusively the
+ * real Web Viewer tab (see WEBVIEWER_PARTITION). Artifact guests and canvas
+ * link-preview guests fail this and are left entirely alone.
+ */
+function isWebViewerGuest(guest: Electron.WebContents): boolean {
+  return guest.session === session.fromPartition(WEBVIEWER_PARTITION);
+}
+
+/**
+ * Every live Web Viewer guest, by WebContents id. The popup relay resolves its
+ * delivery target through this map rather than `webContents.fromId`, so a
+ * handle id that somehow named a WebContents outside the Web Viewer — an
+ * artifact guest, a canvas preview, the host window itself — could not be
+ * reached from inside a page even if the ownership check above it were wrong.
+ */
+const webViewerGuests = new Map<number, Electron.WebContents>();
+
+/**
+ * Pairing state for the popup/opener shim. One registry for the whole app:
+ * WebContents ids are process-global, and the registry scopes pairing to a
+ * single BrowserWindow itself rather than relying on per-window instances.
+ */
+const webViewerPopups = new WebViewerPopupRegistry({ newHandleId: randomUUID });
+
+/**
+ * Relay a popup/opener `postMessage` after checking it authoritatively here.
+ *
+ * Neither origin comes from the sender: the sender's is read off
+ * `event.senderFrame`, and the receiver's off the receiving guest's current
+ * main frame — so a page cannot lie about who it is, and cannot learn where
+ * the other side has navigated by probing targetOrigin (a mismatch is dropped
+ * silently, exactly as a browser drops it).
+ */
+function deliverPopupMessage(input: {
+  senderFrameUrl: string | undefined;
+  receiverGuestId: number;
+  handleId: string;
+  from: "opener" | "popup";
+  message: unknown;
+  targetOrigin: unknown;
+}): void {
+  if (typeof input.targetOrigin !== "string") return;
+  const receiver = webViewerGuests.get(input.receiverGuestId);
+  if (!receiver || receiver.isDestroyed()) return;
+  const senderOrigin = originOf(input.senderFrameUrl ?? "");
+  const receiverOrigin = originOf(receiver.mainFrame?.url ?? "");
+  if (!senderOrigin || !receiverOrigin) return;
+  if (!shouldDeliverPostMessage(input.targetOrigin, senderOrigin, receiverOrigin)) return;
+  receiver.send(POPUP_RELAY_CHANNEL, {
+    kind: "message",
+    from: input.from,
+    handleId: input.handleId,
+    data: input.message,
+    origin: senderOrigin,
+  } satisfies PopupRelayMessage);
+}
+
+function notifyPopupGuest(guestId: number, message: PopupRelayMessage): void {
+  const target = webViewerGuests.get(guestId);
+  if (!target || target.isDestroyed()) return;
+  target.send(POPUP_RELAY_CHANNEL, message);
+}
+
+/**
+ * Wire one Web Viewer guest into the popup/opener shim (see
+ * src/main/webviewer-popups.ts for why the shim exists and what it does not
+ * try to be).
+ *
+ * As with `trackWebViewerBridgeGuest` below, every handler is registered on
+ * `guest.ipc` rather than globally, because only the WebContents-scoped
+ * IpcMain reliably exposes the per-message sender frame. Two of the channels
+ * are deliberately synchronous: `window.open()` must return a handle on the
+ * same turn it is called, and `window.opener` must exist before the page's
+ * first inline script runs. Both of those depend on the opening guest staying
+ * alive while the popup's tab is created — which is only true because
+ * `TabGroup.revealActiveLeaf` keeps background tabs mounted.
+ */
+function trackWebViewerPopupGuest(win: BrowserWindow, guest: Electron.WebContents): void {
+  if (!isWebViewerGuest(guest)) return;
+  const guestId = guest.id;
+  webViewerGuests.set(guestId, guest);
+  webViewerPopups.noteGuestAttached(guestId);
+
+  guest.ipc.on(POPUP_CLAIM_HANDLE_CHANNEL, (event) => {
+    event.returnValue = webViewerPopups.claimHandle(event.sender.id);
+  });
+  // Pairing is decided here, not when the page asks for it. A popup's first
+  // navigation starts at the URL that was *requested*; by the time a document
+  // commits, a 302 may have moved it somewhere the opener never named — which
+  // is exactly what `window.open('/auth/start')` does when `/auth/start`
+  // redirects to an identity provider. Listening for the navigation start
+  // catches the requested URL before any redirect can rewrite it.
+  //
+  // Registered from `did-attach-webview`, which runs while the guest is still
+  // on its `about:blank` bootstrap, so the real navigation cannot be missed.
+  guest.on("did-start-navigation", (details) => {
+    // Subframes get no preload and so no shim; a same-document navigation is
+    // not a load at all and must not spend the guest's one pairing chance.
+    if (!details.isMainFrame || details.isSameDocument) return;
+    webViewerPopups.noteGuestNavigationStart(guestId, win.id, details.url);
+  });
+  guest.ipc.on(POPUP_CLAIM_OPENER_CHANNEL, (event) => {
+    // No arguments, by design, and now not even a URL lookup: the page asks
+    // only "am I paired?", and the answer is keyed by the guest id main read
+    // off `event.sender`.
+    event.returnValue = webViewerPopups.claimOpener(event.sender.id);
+  });
+  guest.ipc.on(POPUP_POST_TO_OPENER_CHANNEL, (event, payload: { message?: unknown; targetOrigin?: unknown }) => {
+    const pair = webViewerPopups.pairForPopup(event.sender.id);
+    if (!pair) return;
+    deliverPopupMessage({
+      senderFrameUrl: event.senderFrame?.url,
+      receiverGuestId: pair.openerGuestId,
+      handleId: pair.handleId,
+      from: "popup",
+      message: payload?.message,
+      targetOrigin: payload?.targetOrigin,
+    });
+  });
+  guest.ipc.on(POPUP_POST_TO_POPUP_CHANNEL, (event, payload: { handleId?: unknown; message?: unknown; targetOrigin?: unknown }) => {
+    // The handle id travels through the page, so ownership is re-checked
+    // against the sending guest before it can address anything.
+    const pair = webViewerPopups.pairForOpenerHandle(event.sender.id, payload?.handleId);
+    if (!pair) return;
+    deliverPopupMessage({
+      senderFrameUrl: event.senderFrame?.url,
+      receiverGuestId: pair.popupGuestId,
+      handleId: pair.handleId,
+      from: "opener",
+      message: payload?.message,
+      targetOrigin: payload?.targetOrigin,
+    });
+  });
+  guest.ipc.on(POPUP_CONTROL_CHANNEL, (event, request: PopupControlRequest) => {
+    const action = request?.action;
+    if (action !== "close" && action !== "focus") return;
+    // Pairing never crosses BrowserWindows, so the target guest is always in
+    // `win` and this window's renderer is always the one that owns its tab.
+    const send = (channel: "guest-window-close" | "guest-window-focus", targetGuestId: number) => {
+      if (!win.isDestroyed()) win.webContents.send(channel, targetGuestId);
+    };
+    if (request.target === "popup") {
+      const pair = webViewerPopups.pairForOpenerHandle(event.sender.id, request.handleId);
+      if (!pair) return;
+      send(action === "close" ? "guest-window-close" : "guest-window-focus", pair.popupGuestId);
+      return;
+    }
+    if (request.target === "opener") {
+      const pair = webViewerPopups.pairForPopup(event.sender.id);
+      // A popup may raise its opener but never close it — Chromium refuses
+      // close() on a window the script did not open, and the opener tab was
+      // opened by the user. The shim already declines to send this, so
+      // reaching it means the page called the internal bridge directly.
+      if (!pair || action !== "focus") return;
+      send("guest-window-focus", pair.openerGuestId);
+    }
+  });
+  guest.once("destroyed", () => {
+    webViewerGuests.delete(guestId);
+    const outcome = webViewerPopups.noteGuestDestroyed(guestId);
+    for (const target of outcome.popupClosed) {
+      notifyPopupGuest(target.guestId, { kind: "popup-closed", handleId: target.handleId });
+    }
+    for (const target of outcome.openerGone) {
+      notifyPopupGuest(target.guestId, { kind: "opener-gone", handleId: target.handleId });
+    }
+  });
+}
+
+/**
  * Bridge `window.__geode.postEvent(type, payload)` calls made inside a Web
  * Viewer `<webview>` guest (see webviewer-bridge-preload.ts) onto the host
  * renderer, after authoritatively checking the sender frame's origin here in
@@ -1322,7 +1507,7 @@ const WEBVIEWER_PARTITION = "persist:webviewer";
  * any other partition are left alone entirely — no listener is registered.
  */
 function trackWebViewerBridgeGuest(win: BrowserWindow, guest: Electron.WebContents): void {
-  if (guest.session !== session.fromPartition(WEBVIEWER_PARTITION)) return;
+  if (!isWebViewerGuest(guest)) return;
   guest.ipc.on(WEBVIEWER_BRIDGE_CHANNEL, (event, message: WebViewerBridgeMessage) => {
     const frameUrl = event.senderFrame?.url;
     if (!frameUrl) return;
@@ -1421,10 +1606,20 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     // web-preview cards are <webview>s too and have the same dead-hotkey bug.
     bridgeGuestHotkeys(win, guest);
     trackWebViewerBridgeGuest(win, guest);
+    trackWebViewerPopupGuest(win, guest);
     guest.setWindowOpenHandler(({ url, disposition }) => {
       let protocol = "";
       try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }
       if ((protocol === "http:" || protocol === "https:") && !win.isDestroyed()) {
+        // Recorded before the renderer is told to open a tab, and before this
+        // handler returns: Chromium's CreateNewWindow is a synchronous call
+        // into the browser process, so the guest's shimmed `window.open` runs
+        // its claim on the same turn its native call returns and must find
+        // this entry already queued. Only Web Viewer guests take part — an
+        // artifact or canvas-preview guest keeps plain deny-and-reparent.
+        if (isWebViewerGuest(guest)) {
+          webViewerPopups.requestPopup({ openerGuestId: guest.id, windowId: win.id, url });
+        }
         const request: GuestWindowOpenRequest = { url, guestId: guest.id, disposition };
         win.webContents.send("guest-window-open", request);
       }

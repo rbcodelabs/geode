@@ -3019,6 +3019,21 @@ export class App {
       });
     });
     if (stopGuestWindowOpen) this.hostDisposers.add(stopGuestWindowOpen);
+    // `handle.close()` and `handle.focus()` on the popup/opener shim (see
+    // src/main/webviewer-popups.ts). Main has already proved the calling guest
+    // owns the pairing it is acting on, so the only work left here is finding
+    // the tab that hosts the named guest. `leafOwningGuest` resolves through
+    // the DOM, which reaches background tabs too now that they stay mounted.
+    const stopGuestWindowClose = this.host.desktop?.onGuestWindowClose((guestId) => {
+      const leaf = this.leafOwningGuest(guestId);
+      if (leaf) void leaf.detach().catch(() => { /* already detached */ });
+    });
+    if (stopGuestWindowClose) this.hostDisposers.add(stopGuestWindowClose);
+    const stopGuestWindowFocus = this.host.desktop?.onGuestWindowFocus((guestId) => {
+      const leaf = this.leafOwningGuest(guestId);
+      if (leaf) this.workspace.revealLeaf(leaf);
+    });
+    if (stopGuestWindowFocus) this.hostDisposers.add(stopGuestWindowFocus);
     // The only place `web-viewer:event` fires: the event path is
     // leaf-independent (zero, one, or many Web Viewer leaves may be open at
     // once), so it is handled once here at the App level rather than inside

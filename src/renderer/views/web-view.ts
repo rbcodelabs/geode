@@ -362,6 +362,24 @@ export class WebView implements View, ReloadableView {
       );
     };
 
+    // The guest called `window.close()`. Chromium destroys a real popup window
+    // at this point; a `<webview>` guest instead just emits this and keeps
+    // rendering, so without handling it a page that closes itself — an OAuth
+    // popup finishing its handshake, a "print then close" flow — leaves a
+    // dead-looking tab behind. Detaching the leaf is the tab-hosting
+    // equivalent of closing the window.
+    //
+    // Deliberately unconditional, and knowingly more permissive than a browser:
+    // Chromium ignores `window.close()` on a window script did not open, but
+    // Geode denies real popups and reparents them into ordinary tabs (see
+    // main.ts's window-open handler), so there is no surviving record of which
+    // tabs were script-opened to gate on. Honoring every `window.close()` keeps
+    // self-closing pages working; the cost is that a page can close its own
+    // tab even when the user opened it, which is visible and recoverable.
+    const onGuestClose = () => {
+      void this.leaf.detach().catch(() => { /* leaf already gone */ });
+    };
+
     const onUnresponsive = () => this.containerEl.classList.add("is-web-view-unresponsive");
     const onResponsive = () => this.containerEl.classList.remove("is-web-view-unresponsive");
 
@@ -375,6 +393,7 @@ export class WebView implements View, ReloadableView {
     this.webview.addEventListener("render-process-gone", onRenderProcessGone);
     this.webview.addEventListener("crashed", onCrashed);
     this.webview.addEventListener("did-fail-load", onFailLoad);
+    this.webview.addEventListener("close", onGuestClose);
     this.webview.addEventListener("unresponsive", onUnresponsive);
     this.webview.addEventListener("responsive", onResponsive);
     this.cleanups.push(
@@ -388,6 +407,7 @@ export class WebView implements View, ReloadableView {
       () => this.webview.removeEventListener("render-process-gone", onRenderProcessGone),
       () => this.webview.removeEventListener("crashed", onCrashed),
       () => this.webview.removeEventListener("did-fail-load", onFailLoad),
+      () => this.webview.removeEventListener("close", onGuestClose),
       () => this.webview.removeEventListener("unresponsive", onUnresponsive),
       () => this.webview.removeEventListener("responsive", onResponsive)
     );
