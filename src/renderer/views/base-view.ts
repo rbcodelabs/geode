@@ -15,8 +15,9 @@ import { openPropertiesMenu } from "./bases/properties-menu";
 import { openSortGroupMenu, type SortGroupValue } from "./bases/sort-group-menu";
 import { BasesTableView, type RowHeight } from "./bases/table-view";
 import { BasesCardsView } from "./bases/cards-view";
-import { BasesToolbar, type ToolbarHandlers } from "./bases/toolbar";
+import { BasesToolbar, type BaseViewTypeOption, type ToolbarHandlers } from "./bases/toolbar";
 import { BasesPluginViewHost } from "./bases/plugin-view-host";
+import { BUILTIN_BASES_VIEW_NAMES, BUILTIN_BASES_VIEW_TYPES } from "../api/bases-view";
 import { parseExpression } from "../bases/parser";
 import type { Expr } from "../bases/ast";
 
@@ -504,7 +505,8 @@ export class BaseView implements View {
     this.toolbar.update({
       viewNames: this.def.views.map((v) => v.name),
       currentViewName: this.currentViewName,
-      currentViewType: view.type === "cards" ? "cards" : "table",
+      currentViewType: view.type,
+      viewTypes: this.creatableViewTypes(),
       currentViewIsBuiltin: !this.pluginViewHost.registrationFor(view.type),
       resultCount: result.rows.length,
       rowHeight: this.rowHeights.get(this.currentViewName) ?? "medium",
@@ -644,7 +646,27 @@ export class BaseView implements View {
     this.runAndRender();
   }
 
-  addView(type: "table" | "cards" = "table"): void {
+  /**
+   * Every view type the toolbar may offer: the built-ins, then whatever
+   * plugins have registered, each with the display name to show for it.
+   *
+   * Recomputed per render rather than cached, because a plugin can register or
+   * unregister a Bases view at any point in its lifetime — a list captured at
+   * construction would miss a plugin that loads after the `.base` file opens.
+   */
+  private creatableViewTypes(): BaseViewTypeOption[] {
+    const types: BaseViewTypeOption[] = [...BUILTIN_BASES_VIEW_NAMES].map(([type, name]) => ({ type, name }));
+    for (const [type, registration] of this.app.basesViews) {
+      // `registerBasesViewIn` already rejects a built-in type, so this can only
+      // fire if that guard is ever relaxed — but a duplicated menu entry is a
+      // worse failure than a skipped one.
+      if (BUILTIN_BASES_VIEW_TYPES.has(type)) continue;
+      types.push({ type, name: registration.name });
+    }
+    return types;
+  }
+
+  addView(type: string = "table"): void {
     new PromptModal(this.app, {
       placeholder: "View name",
       onSubmit: (name) => {
@@ -656,8 +678,12 @@ export class BaseView implements View {
     }).open();
   }
 
-  /** Change the current view's type (e.g. Table ↔ Cards), preserving its other settings. */
-  private setViewType(type: "table" | "cards"): void {
+  /**
+   * Change the current view's type (Table, Cards, or any registered plugin
+   * layout), preserving its other settings — including the passthrough keys a
+   * plugin view stores, so switching away and back does not lose them.
+   */
+  private setViewType(type: string): void {
     const view = this.currentView();
     if (!view || view.type === type) return;
     view.type = type;

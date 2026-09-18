@@ -8,10 +8,12 @@ test-vault/.geode/*
 test-vault/.geode/plugins/*
 !test-vault/.geode/plugins/status-probe/
 !test-vault/.geode/plugins/menu-probe/
-# Third-party Bases plugin (MIT) used by tests/e2e/bases-plugin-view.spec.ts as
-# the real-world check that a Bases view registers and renders. Its shipped
-# bundle is checked in so the test exercises the actual published artifact
-# rather than a hand-written stand-in. Disabled by default, like status-probe.
+# Third-party Bases plugin (MIT) used by tests/e2e/bases-plugin-view.spec.ts
+# and tests/e2e/bases-kanban-interaction.spec.ts as the real-world check that a
+# Bases view registers, renders and writes. Its published *release assets* are
+# checked in (digests pinned in the directory's README-geode.md) so the tests
+# exercise the artifact users actually install rather than a local build or a
+# hand-written stand-in. Disabled by default, like status-probe.
 !test-vault/.geode/plugins/kanban-bases-view/
 # The Ivory theme ships with the demo vault so it's installed and selectable
 # out of the box in Settings -> Appearance -> Themes. Other themes dropped

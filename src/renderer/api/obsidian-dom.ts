@@ -175,17 +175,44 @@ function applyInfo(el: HTMLElement, info: DomElementInfo): void {
   if (info.href !== undefined) el.setAttribute("href", info.href);
 }
 
-function createElOn<K extends keyof HTMLElementTagNameMap>(
+/** `Node.DOCUMENT_NODE`, spelled numerically so this module stays importable
+ * where there is no DOM (the unit suite runs vitest's `node` environment). */
+const DOCUMENT_NODE = 9;
+
+/**
+ * Backs `createEl`/`createDiv`/`createSpan` on all three parent prototypes.
+ *
+ * The parent kind decides whether the new element is attached:
+ *
+ * - `HTMLElement` and `DocumentFragment` append (or prepend). A fragment holds
+ *   any number of children, so this is the ordinary case.
+ * - a `Document` does **not**. A document may contain exactly one element
+ *   child, so appending is not merely wrong, it throws
+ *   `HierarchyRequestError: Only one element on document allowed` — and
+ *   Obsidian's `Document.createEl` hands back a *detached* element for
+ *   precisely that reason. Plugins rely on it: `kanban-bases-view` builds
+ *   every column, card and swatch with `ctx.doc.createDiv()`, so appending
+ *   here threw on the first column and left the board blank.
+ *
+ * The element is also created from the parent's own document rather than the
+ * global one, so `popoutWindow.document.createDiv()` yields a node that
+ * belongs to the window it was asked for.
+ */
+export function createElOn<K extends keyof HTMLElementTagNameMap>(
   parent: Node,
   tag: K,
   o?: ElInfoOrTag,
   callback?: (el: HTMLElementTagNameMap[K]) => void
 ): HTMLElementTagNameMap[K] {
   const info = normalizeInfo(o);
-  const el = document.createElement(tag);
+  const isDocument = parent.nodeType === DOCUMENT_NODE;
+  const ownerDoc = isDocument ? (parent as Document) : parent.ownerDocument ?? document;
+  const el = ownerDoc.createElement(tag);
   applyInfo(el, info);
-  if (info.prepend && parent.firstChild) parent.insertBefore(el, parent.firstChild);
-  else parent.appendChild(el);
+  if (!isDocument) {
+    if (info.prepend && parent.firstChild) parent.insertBefore(el, parent.firstChild);
+    else parent.appendChild(el);
+  }
   callback?.(el);
   return el;
 }

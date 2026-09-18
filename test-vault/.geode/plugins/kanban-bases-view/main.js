@@ -188,7 +188,7 @@ function renderCardCover(coverEl, entry, filePath, ctx) {
   return true;
 }
 function createCard(entry, ctx, cb) {
-  const cardEl = ctx.doc.createElement("div");
+  const cardEl = ctx.doc.createDiv();
   cardEl.className = CSS_CLASSES.CARD;
   const filePath = entry.file.path;
   cardEl.setAttribute(DATA_ATTRIBUTES.ENTRY_PATH, filePath);
@@ -234,15 +234,7 @@ function createCard(entry, ctx, cb) {
       cb.onOpenInBackgroundTab(entry.file);
       return;
     }
-    if (ctx.openInSidebar) {
-      if (import_obsidian.Keymap.isModEvent(e)) {
-        void ctx.app.workspace.openLinkText(filePath, "", true);
-        return;
-      }
-      cb.onOpenCardDetail(entry.file);
-    } else {
-      void ctx.app.workspace.openLinkText(filePath, "", import_obsidian.Keymap.isModEvent(e));
-    }
+    void ctx.app.workspace.openLinkText(filePath, "", import_obsidian.Keymap.isModEvent(e));
   };
   cardEl.addEventListener("click", clickHandler);
   cardEl.addEventListener("auxclick", clickHandler);
@@ -316,6 +308,8 @@ var QuickAddModal = class extends import_obsidian2.Modal {
 };
 
 // src/components/quickAdd.ts
+var CREATED_CARD_TIMEOUT_MS = 2e3;
+var CREATED_CARD_SETTLE_MS = 50;
 function sanitizeBaseFileName(title) {
   return title.trim().replace(/\.md$/i, "").replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").replace(/[.\s]+$/g, "").trim();
 }
@@ -324,6 +318,73 @@ function getWritableFrontmatterPropertyName(propertyId) {
   const parsed = (0, import_obsidian3.parsePropertyId)(propertyId);
   if (parsed.type !== "note") return null;
   return parsed.name || null;
+}
+function getCreatedMarkdownFile(app, previousPaths, baseFileName) {
+  const createdFiles = app.vault.getMarkdownFiles().filter((file) => !previousPaths.has(file.path));
+  if (createdFiles.length === 0) return null;
+  const preferredBasename = baseFileName.split("/").pop() ?? baseFileName;
+  return createdFiles.find((file) => file.basename === preferredBasename) ?? createdFiles[0] ?? null;
+}
+function getParentPath(path) {
+  const normalizedPath = (0, import_obsidian3.normalizePath)(path);
+  const separatorIndex = normalizedPath.lastIndexOf("/");
+  return separatorIndex === -1 ? "" : normalizedPath.slice(0, separatorIndex);
+}
+function isFileInFolder(file, folder) {
+  return getParentPath(file.path) === (0, import_obsidian3.normalizePath)(folder);
+}
+function waitForCreatedMarkdownFile(app, previousPaths, baseFileName) {
+  if (typeof app.vault.on !== "function" || typeof app.vault.offref !== "function") {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    let eventRef = null;
+    let timeoutId = null;
+    let settled = false;
+    const cleanup = () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (eventRef) app.vault.offref(eventRef);
+    };
+    const finish = (file) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(file);
+    };
+    const finishIfCreated = () => {
+      const createdFile = getCreatedMarkdownFile(app, previousPaths, baseFileName);
+      if (createdFile) finish(createdFile);
+    };
+    eventRef = app.vault.on("create", () => {
+      finishIfCreated();
+      window.setTimeout(finishIfCreated, CREATED_CARD_SETTLE_MS);
+    });
+    timeoutId = window.setTimeout(() => {
+      finish(getCreatedMarkdownFile(app, previousPaths, baseFileName));
+    }, CREATED_CARD_TIMEOUT_MS);
+  });
+}
+function getAvailablePath(app, folder, fileName) {
+  const extension = fileName.toLowerCase().endsWith(".md") ? ".md" : "";
+  const basename = extension ? fileName.slice(0, -extension.length) : fileName;
+  let candidate = (0, import_obsidian3.normalizePath)(`${folder}/${extension ? fileName : `${fileName}.md`}`);
+  let counter = 1;
+  while (app.vault.getAbstractFileByPath(candidate)) {
+    candidate = (0, import_obsidian3.normalizePath)(`${folder}/${basename} ${counter}.md`);
+    counter++;
+  }
+  return candidate;
+}
+async function ensureCreatedCardInFolder(app, previousPaths, createdFilePromise, baseFileName, folder) {
+  const createdFile = getCreatedMarkdownFile(app, previousPaths, baseFileName) ?? await createdFilePromise;
+  if (!createdFile) {
+    new import_obsidian3.Notice(`Created card, but could not move it to ${folder}.`);
+    return;
+  }
+  if (isFileInFolder(createdFile, folder)) return;
+  const targetPath = getAvailablePath(app, folder, baseFileName);
+  if (targetPath === createdFile.path) return;
+  await app.fileManager.renameFile(createdFile, targetPath);
 }
 function closeNativeNewItemPopover(doc) {
   const closePopovers = () => {
@@ -367,6 +428,8 @@ async function createQuickAddCard(title, columnValue, swimlaneValue, ctx, cb) {
     return;
   }
   const fileNameToCreate = (0, import_obsidian3.normalizePath)(`${targetFolder}/${baseFileName}`);
+  const createdFilePaths = new Set(ctx.app.vault.getMarkdownFiles().map((file) => file.path));
+  const createdFilePromise = waitForCreatedMarkdownFile(ctx.app, createdFilePaths, fileNameToCreate);
   const setFrontmatter = (frontmatter) => {
     if (columnValue === UNCATEGORIZED_LABEL) {
       delete frontmatter[columnPropertyName];
@@ -383,13 +446,14 @@ async function createQuickAddCard(title, columnValue, swimlaneValue, ctx, cb) {
   try {
     await cb.createFileForView(fileNameToCreate, setFrontmatter);
     closeNativeNewItemPopover(ctx.doc);
+    await ensureCreatedCardInFolder(ctx.app, createdFilePaths, createdFilePromise, baseFileName, targetFolder);
   } catch (error) {
     console.error("Error creating kanban card:", error);
     new import_obsidian3.Notice("Could not create card.");
   }
 }
 function createAddButton(columnValue, swimlaneValue, ctx, cb) {
-  const btn = ctx.doc.createElement("div");
+  const btn = ctx.doc.createDiv();
   btn.className = CSS_CLASSES.COLUMN_ADD_BTN;
   btn.setAttribute(
     "aria-label",
@@ -436,7 +500,7 @@ function applyColumnColor(columnEl, colorName) {
   columnEl.setAttribute(DATA_ATTRIBUTES.COLUMN_COLOR, colorName);
 }
 function createRemoveButton(doc, value, onRemove) {
-  const btn = doc.createElement("div");
+  const btn = doc.createDiv();
   btn.className = CSS_CLASSES.COLUMN_REMOVE_BTN;
   btn.setAttribute("aria-label", `Remove column: ${value}`);
   btn.setAttribute("role", "button");
@@ -448,7 +512,7 @@ function createRemoveButton(doc, value, onRemove) {
   return btn;
 }
 function createColumn(value, entries, options, ctx, cb) {
-  const columnEl = ctx.doc.createElement("div");
+  const columnEl = ctx.doc.createDiv();
   columnEl.className = CSS_CLASSES.COLUMN;
   columnEl.setAttribute(DATA_ATTRIBUTES.COLUMN_VALUE, value);
   const colorName = ctx.prefs.columnColors[value] ?? null;
@@ -468,7 +532,7 @@ function createColumn(value, entries, options, ctx, cb) {
   if (cb.getQuickAddFolder()) {
     headerEl.appendChild(cb.createAddButton(value, options.swimlaneValue ?? null));
   }
-  if (entries.length === 0 && options.showRemoveButton !== false) {
+  if (ctx.globallyEmptyColumns.has(value)) {
     headerEl.appendChild(createRemoveButton(ctx.doc, value, () => cb.onRemoveColumn(value, columnEl)));
   }
   const bodyEl = columnEl.createDiv({ cls: CSS_CLASSES.COLUMN_BODY });
@@ -486,10 +550,10 @@ function patchColumnCards(columnEl, newEntries, ctx, cb) {
   const headerEl = columnEl.querySelector(`.${CSS_CLASSES.COLUMN_HEADER}`);
   const columnValue = columnEl.getAttribute(DATA_ATTRIBUTES.COLUMN_VALUE);
   const existingRemoveBtn = headerEl?.querySelector(`.${CSS_CLASSES.COLUMN_REMOVE_BTN}`) ?? null;
-  const isInSwimlane = !!columnEl.closest(`.${CSS_CLASSES.SWIMLANE}`);
-  if (headerEl && newEntries.length === 0 && !existingRemoveBtn && columnValue && !isInSwimlane) {
+  const showRemoveButton = !!columnValue && ctx.globallyEmptyColumns.has(columnValue);
+  if (headerEl && showRemoveButton && !existingRemoveBtn && columnValue) {
     headerEl.appendChild(createRemoveButton(ctx.doc, columnValue, () => cb.onRemoveColumn(columnValue, columnEl)));
-  } else if (newEntries.length > 0 && existingRemoveBtn) {
+  } else if (!showRemoveButton && existingRemoveBtn) {
     existingRemoveBtn.remove();
   }
   const existingAddBtn = headerEl?.querySelector(`.${CSS_CLASSES.COLUMN_ADD_BTN}`) ?? null;
@@ -566,7 +630,7 @@ function getOrderedSwimlaneValues(liveValues, swimlaneOrder) {
   return [...ordered, ...newOnes];
 }
 function buildSwimlaneElement(laneValue, laneEntries, orderedColumnValues, ctx, cb) {
-  const laneEl = ctx.doc.createElement("div");
+  const laneEl = ctx.doc.createDiv();
   laneEl.className = CSS_CLASSES.SWIMLANE;
   laneEl.setAttribute(DATA_ATTRIBUTES.SWIMLANE_VALUE, laneValue);
   const isCollapsed = ctx.collapsedLanes.has(laneValue);
@@ -597,7 +661,6 @@ function buildSwimlaneElement(laneValue, laneEntries, orderedColumnValues, ctx, 
       columnValue,
       laneEntries.get(columnValue) ?? [],
       {
-        showRemoveButton: false,
         swimlaneValue: laneValue
       },
       ctx,
@@ -2904,7 +2967,6 @@ var KanbanView = class extends import_obsidian5.BasesView {
     this.swimlaneSortable = null;
     this.swimlaneColumnSortables = /* @__PURE__ */ new Map();
     this.activeColorPicker = null;
-    this._detailLeaf = null;
     /**
      * In-memory display preferences — the single source of truth during a session.
      *
@@ -2918,7 +2980,6 @@ var KanbanView = class extends import_obsidian5.BasesView {
      */
     this._lastOrderKey = "";
     this._lastWrapValue = null;
-    this._lastOpenInSidebar = null;
     this._lastCardTitlePropertyId = void 0;
     this._lastImagePropertyId = void 0;
     this._lastImageFit = void 0;
@@ -2926,6 +2987,10 @@ var KanbanView = class extends import_obsidian5.BasesView {
     this._lastSwimlanePropertyId = void 0;
     this._lastQuickAddFolder = void 0;
     this._cardFingerprints = /* @__PURE__ */ new Map();
+    // Column values empty across the whole board (every swimlane). Recomputed each
+    // render() and read via _buildColumnCtx so components can show a remove button
+    // without the board-wide map being threaded through every render function.
+    this._globallyEmptyColumns = /* @__PURE__ */ new Set();
     this._deferredSortableListeners = /* @__PURE__ */ new Map();
     this._prefs = {
       columnOrder: [],
@@ -3062,13 +3127,21 @@ var KanbanView = class extends import_obsidian5.BasesView {
    *
    * Change guards skip config.set() when the value hasn't changed, preventing
    * spurious onDataUpdated() triggers.
+   *
+   * The stored value must be a snapshot, never the live _prefs object. Handing
+   * _prefs straight to set() aliases it into the config: later mutations of
+   * _prefs then also mutate the config value in place, so the guard below ends up
+   * comparing an object with itself, always finds them equal, and never calls
+   * set() again. Obsidian is never told the Base changed, so nothing is written
+   * until the view closes and the config is serialised wholesale — which looks
+   * exactly like "card order only saves on close".
    */
   _persistConfigKey(key, guard, newValue, storageKey = this._prefsPropertyId) {
     if (!storageKey) return;
     const raw = this.config?.get(key);
     const all = guard(raw) ? raw : {};
     if (JSON.stringify(all[storageKey]) !== JSON.stringify(newValue)) {
-      this.config?.set(key, { ...all, [storageKey]: newValue });
+      this.config?.set(key, { ...all, [storageKey]: structuredClone(newValue) });
     }
   }
   _persistPrefs() {
@@ -3126,6 +3199,9 @@ var KanbanView = class extends import_obsidian5.BasesView {
       const groupedByLane = swimlanePropertyId ? this.groupEntriesBySwimlaneAndColumn(entries, swimlanePropertyId, this.groupByPropertyId) : null;
       const groupedEntries = groupedByLane ? this.flattenLanes(groupedByLane) : this.groupEntriesByProperty(entries, this.groupByPropertyId);
       const sortActive = this.hasActiveSort();
+      if (!sortActive && !this._dragging && this._pruneCardOrders(this.buildLivePathToKey(groupedByLane, groupedEntries))) {
+        this._persistPrefs();
+      }
       if (!sortActive && groupedByLane) {
         groupedByLane.forEach((columns, laneValue) => {
           columns.forEach((cellEntries, columnValue) => {
@@ -3166,9 +3242,6 @@ var KanbanView = class extends import_obsidian5.BasesView {
       const currentWrapValue = this.config?.get("wrapPropertyValues") === true;
       const wrapChanged = currentWrapValue !== this._lastWrapValue;
       this._lastWrapValue = currentWrapValue;
-      const currentOpenInSidebar = this.config?.get("openInSidebar") === true;
-      const openInSidebarChanged = currentOpenInSidebar !== this._lastOpenInSidebar;
-      this._lastOpenInSidebar = currentOpenInSidebar;
       const currentCardTitlePropertyId = this.cardTitlePropertyId;
       const cardTitleChanged = currentCardTitlePropertyId !== this._lastCardTitlePropertyId;
       this._lastCardTitlePropertyId = currentCardTitlePropertyId;
@@ -3189,7 +3262,7 @@ var KanbanView = class extends import_obsidian5.BasesView {
       const quickAddFolderChanged = currentQuickAddFolder !== this._lastQuickAddFolder;
       this._lastQuickAddFolder = currentQuickAddFolder;
       const existingBoard = this.containerEl.querySelector(`.${CSS_CLASSES.BOARD}`);
-      const optionsChanged = orderChanged || wrapChanged || openInSidebarChanged || cardTitleChanged || imagePropertyChanged || imageFitChanged || imageAspectRatioChanged || swimlanePropertyChanged || quickAddFolderChanged;
+      const optionsChanged = orderChanged || wrapChanged || cardTitleChanged || imagePropertyChanged || imageFitChanged || imageAspectRatioChanged || swimlanePropertyChanged || quickAddFolderChanged;
       const lanes = /* @__PURE__ */ new Map();
       if (groupedByLane) {
         groupedByLane.forEach((v, k) => lanes.set(k, v));
@@ -3199,6 +3272,9 @@ var KanbanView = class extends import_obsidian5.BasesView {
       const hasSwimlanes = groupedByLane !== null;
       const existingIsSwimlane = existingBoard?.classList.contains(CSS_CLASSES.BOARD_WITH_SWIMLANES) ?? false;
       const modeChanged = hasSwimlanes !== existingIsSwimlane;
+      this._globallyEmptyColumns = new Set(
+        orderedValues.filter((value) => (groupedEntries.get(value)?.length ?? 0) === 0)
+      );
       if (!existingBoard || modeChanged || groupChanged || optionsChanged) {
         this.fullRebuild(orderedValues, lanes, hasSwimlanes);
       } else {
@@ -3467,6 +3543,11 @@ var KanbanView = class extends import_obsidian5.BasesView {
           s.destroy();
           this._columnSortables.delete(key);
         }
+        const deferred = this._deferredSortableListeners.get(key);
+        if (deferred) {
+          deferred.el.removeEventListener("pointerdown", deferred.handler);
+          this._deferredSortableListeners.delete(key);
+        }
         colEl.remove();
         existingColumns.delete(colValue);
       }
@@ -3474,8 +3555,7 @@ var KanbanView = class extends import_obsidian5.BasesView {
     orderedColumnValues.forEach((colValue) => {
       const entries = groupedEntries.get(colValue) ?? [];
       if (!existingColumns.has(colValue)) {
-        const options = laneValue !== null ? { showRemoveButton: false, swimlaneValue: laneValue } : {};
-        const colEl = this.createColumn(colValue, entries, options);
+        const colEl = this.createColumn(colValue, entries, { swimlaneValue: laneValue });
         containerEl.appendChild(colEl);
         existingColumns.set(colValue, colEl);
         const cardBody = colEl.querySelector(
@@ -3596,7 +3676,8 @@ var KanbanView = class extends import_obsidian5.BasesView {
       cardCb: this._buildCardCallbacks(),
       prefs: { columnColors: this._prefs.columnColors },
       dragging: this._dragging,
-      cardFingerprints: this._cardFingerprints
+      cardFingerprints: this._cardFingerprints,
+      globallyEmptyColumns: this._globallyEmptyColumns
     };
   }
   _buildColumnCallbacks() {
@@ -3621,7 +3702,6 @@ var KanbanView = class extends import_obsidian5.BasesView {
       imageFit: this._lastImageFit ?? "cover",
       imageAspectRatio: this._lastImageAspectRatio ?? 0.5,
       wrapValues: this._lastWrapValue ?? false,
-      openInSidebar: this._lastOpenInSidebar ?? false,
       order: this.config?.getOrder() ?? [],
       getDisplayName: (id) => this.config?.getDisplayName(id) ?? id
     };
@@ -3630,8 +3710,7 @@ var KanbanView = class extends import_obsidian5.BasesView {
     return {
       onHoverPreview: (lt, sp, e, el) => this.triggerHoverPreview(lt, sp, e, el),
       onSetActiveCard: (path) => this.setActiveCard(path),
-      onOpenInBackgroundTab: (file) => this.openInBackgroundTab(file),
-      onOpenCardDetail: (file) => void this.openCardDetail(file)
+      onOpenInBackgroundTab: (file) => this.openInBackgroundTab(file)
     };
   }
   createCard(entry) {
@@ -3643,10 +3722,10 @@ var KanbanView = class extends import_obsidian5.BasesView {
   openColorPicker(anchorEl, columnEl, columnValue) {
     this.activeColorPicker?.remove();
     this.activeColorPicker = null;
-    const popover = anchorEl.doc.createElement("div");
+    const popover = anchorEl.doc.createDiv();
     popover.className = CSS_CLASSES.COLUMN_COLOR_POPOVER;
     const currentColor = columnEl.getAttribute(DATA_ATTRIBUTES.COLUMN_COLOR);
-    const noneSwatch = anchorEl.doc.createElement("div");
+    const noneSwatch = anchorEl.doc.createDiv();
     noneSwatch.className = `${CSS_CLASSES.COLUMN_COLOR_SWATCH} ${CSS_CLASSES.COLUMN_COLOR_NONE}`;
     if (!currentColor) noneSwatch.classList.add(CSS_CLASSES.COLUMN_COLOR_SWATCH_ACTIVE);
     noneSwatch.title = "No color";
@@ -3659,7 +3738,7 @@ var KanbanView = class extends import_obsidian5.BasesView {
     });
     popover.appendChild(noneSwatch);
     for (const color of COLOR_PALETTE) {
-      const swatch = anchorEl.doc.createElement("div");
+      const swatch = anchorEl.doc.createDiv();
       swatch.className = CSS_CLASSES.COLUMN_COLOR_SWATCH;
       swatch.style.background = color.cssVar;
       swatch.title = color.name;
@@ -3724,12 +3803,30 @@ var KanbanView = class extends import_obsidian5.BasesView {
     closeNativeNewItemPopover(this.containerEl.doc);
   }
   detachColumn(value, colEl) {
-    const sortable = this._columnSortables.get(value);
-    if (sortable) {
-      sortable.destroy();
-      this._columnSortables.delete(value);
+    const boardEl = this.containerEl.querySelector(`.${CSS_CLASSES.BOARD}`);
+    const columnEls = [];
+    if (boardEl) {
+      boardEl.querySelectorAll(`.${CSS_CLASSES.COLUMN}`).forEach((el) => {
+        if (el.getAttribute(DATA_ATTRIBUTES.COLUMN_VALUE) === value) columnEls.push(el);
+      });
     }
-    colEl.remove();
+    const suffix = `${SWIMLANE_KEY_SEPARATOR}${value}`;
+    const matchesColumn = (key) => key === value || key.endsWith(suffix);
+    for (const key of [...this._columnSortables.keys()]) {
+      if (matchesColumn(key)) {
+        this._columnSortables.get(key)?.destroy();
+        this._columnSortables.delete(key);
+      }
+    }
+    for (const key of [...this._deferredSortableListeners.keys()]) {
+      if (matchesColumn(key)) {
+        const deferred = this._deferredSortableListeners.get(key);
+        deferred?.el.removeEventListener("pointerdown", deferred.handler);
+        this._deferredSortableListeners.delete(key);
+      }
+    }
+    if (columnEls.length > 0) columnEls.forEach((el) => el.remove());
+    else colEl.remove();
   }
   removeColumn(value, columnEl) {
     if (!this._prefsPropertyId) return;
@@ -3938,28 +4035,71 @@ var KanbanView = class extends import_obsidian5.BasesView {
     const newValues = liveValues.filter((v) => !this._prefs.columnOrder.includes(v));
     return [...this._prefs.columnOrder, ...newValues];
   }
+  /**
+   * Map every entry in the current dataset to the cardOrders key of the cell it
+   * actually occupies right now.
+   */
+  buildLivePathToKey(groupedByLane, groupedEntries) {
+    const livePathToKey = /* @__PURE__ */ new Map();
+    if (groupedByLane) {
+      groupedByLane.forEach((columns, laneValue) => {
+        columns.forEach((cellEntries, columnValue) => {
+          const key = this.cardOrderKey(laneValue, columnValue);
+          cellEntries.forEach((entry) => livePathToKey.set(entry.file.path, key));
+        });
+      });
+    } else {
+      groupedEntries.forEach((columnEntries, columnValue) => {
+        const key = this.cardOrderKey(null, columnValue);
+        columnEntries.forEach((entry) => livePathToKey.set(entry.file.path, key));
+      });
+    }
+    return livePathToKey;
+  }
+  /**
+   * Remove card order entries that no longer describe where a card lives.
+   *
+   * A card's cell is derived from its group-by property, which can change
+   * without any drag: a script rewrites the frontmatter, another device syncs,
+   * or the user edits the note directly. handleCardDrop only rewrites the two
+   * cells it sees, so those paths linger in their old cell's list indefinitely
+   * and every later drag rewrites the accumulated cruft back into the Base.
+   *
+   * Pruning is deliberately conservative — a path is only dropped when the live
+   * data positively places it somewhere else. A path that is merely absent from
+   * the dataset is kept, because absence is ambiguous: the card may be hidden by
+   * the Base's own filters, or the query may not have caught up yet, and its
+   * manual order has to survive both. Entries for deleted files therefore linger,
+   * which is harmless — applyCardOrder skips paths it cannot resolve — and is a
+   * far better failure mode than silently dropping a live card's slot.
+   *
+   * @returns true if anything changed and prefs need persisting.
+   */
+  _pruneCardOrders(livePathToKey) {
+    let changed = false;
+    for (const [key, paths] of Object.entries(this._prefs.cardOrders)) {
+      const kept = paths.filter((path) => {
+        const liveKey = livePathToKey.get(path);
+        return liveKey === void 0 || liveKey === key;
+      });
+      if (kept.length !== paths.length) {
+        this._prefs.cardOrders[key] = kept;
+        changed = true;
+      }
+    }
+    return changed;
+  }
   applyCardOrder(entries, savedOrder) {
     const entryMap = new Map(entries.map((e) => [e.file.path, e]));
     const ordered = savedOrder.map((p) => entryMap.get(p)).filter((e) => e !== void 0);
     const unsaved = entries.filter((e) => !savedOrder.includes(e.file.path));
     return [...ordered, ...unsaved];
   }
-  async openCardDetail(file) {
-    if (!this.app?.workspace) return;
-    const { workspace } = this.app;
-    if (!this._detailLeaf?.parent) {
-      this._detailLeaf = workspace.getRightLeaf(false);
-    }
-    if (!this._detailLeaf) return;
-    await this._detailLeaf.openFile(file);
-    await workspace.revealLeaf(this._detailLeaf);
-  }
   onClose() {
     this._debouncedRender.cancel();
     this.destroySortables();
     this.activeColorPicker?.remove();
     this.activeColorPicker = null;
-    this._detailLeaf = null;
   }
   /**
    * Column state (order and colors) is persisted using BasesViewConfig.set/get
@@ -4037,11 +4177,6 @@ var KanbanView = class extends import_obsidian5.BasesView {
         displayName: "Wrap property values",
         type: "toggle",
         key: "wrapPropertyValues"
-      },
-      {
-        displayName: "Open cards in right sidebar",
-        type: "toggle",
-        key: "openInSidebar"
       }
     ];
   }
