@@ -15,6 +15,13 @@ import { CommunityManager } from "./community/community-manager";
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
+import {
+  appendLoadErrorDiagnostic,
+  createTrackedItemEnableControl,
+  renderInstalledPluginRow,
+  selectUntrackedManifests,
+  type CommunityListViewDeps,
+} from "./community/community-list-view";
 import { MarkdownRenderer } from "./markdown/render";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import {
@@ -1026,6 +1033,8 @@ class SettingsModal extends Modal {
       void renderSupportedPluginCatalog(catalogEl, {
         load: () => window.geode.getSupportedPluginCatalog!(),
         install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
+        enable: (pluginId) => this.geodeApp.pluginManager.enable(pluginId),
+        getLoadError: (pluginId) => this.geodeApp.pluginManager.getLoadError(pluginId),
         onInstalled: () => { void this.renderCommunityList(listEl); },
       });
     }
@@ -1100,7 +1109,23 @@ class SettingsModal extends Modal {
         listEl.appendChild(this.renderMobilePluginRow(manifest, listEl));
       }
     }
-    if (!cfg.items.length && !Object.keys(quarantined).length) {
+    // community.json records *provenance*, not inventory. Plugins that reached
+    // .geode/plugins/ another way — "Import from Obsidian"
+    // (src/main/obsidian-import.ts) or the default-vault bootstrap — have no
+    // entry there, so keying this list off it alone left them invisible, and
+    // therefore impossible to disable. Render a row for every installed
+    // manifest too, merging provenance in where it exists. Mobile is excluded:
+    // renderMobilePluginRow above already covers every manifest there.
+    const deps = this.communityListViewDeps(listEl);
+    const untrackedManifests = deps.isMobileRuntime()
+      ? []
+      : selectUntrackedManifests(
+          this.geodeApp.pluginManager.listManifests(),
+          cfg.items,
+          deps.quarantinedIds(),
+        );
+
+    if (!cfg.items.length && !untrackedManifests.length && !Object.keys(quarantined).length) {
       if (this.geodeApp.pluginManager.isMobileRuntime() && this.geodeApp.pluginManager.listManifests().length) return;
       const empty = document.createElement("div");
       empty.className = "community-empty";
@@ -1111,6 +1136,30 @@ class SettingsModal extends Modal {
     for (const item of cfg.items) {
       listEl.appendChild(this.renderCommunityRow(item, listEl));
     }
+    for (const manifest of untrackedManifests) {
+      listEl.appendChild(renderInstalledPluginRow(manifest, deps));
+    }
+  }
+
+  /**
+   * Bind the community-list row builders to this app + this list element.
+   * Kept as a narrow seam (see community-list-view.ts) so the enable control's
+   * policy / quarantine / theme exclusions are unit-testable without an App.
+   */
+  private communityListViewDeps(listEl: HTMLElement): CommunityListViewDeps {
+    const manager = this.geodeApp.pluginManager;
+    return {
+      isMobileRuntime: () => manager.isMobileRuntime(),
+      isBlocked: (id) => manager.isBlocked(id),
+      isEnabled: (id) => manager.isEnabled(id),
+      getManifest: (id) => manager.getManifest(id),
+      getLoadError: (id) => manager.getLoadError(id),
+      quarantinedIds: () => new Set(Object.keys(manager.listQuarantined())),
+      enable: (id) => manager.enable(id),
+      disable: (id) => manager.disable(id),
+      notify: (message) => this.geodeApp.notify(message),
+      refresh: () => this.renderCommunityList(listEl),
+    };
   }
 
   private renderMobilePluginRow(
@@ -1187,6 +1236,8 @@ class SettingsModal extends Modal {
     const row = document.createElement("div");
     row.className = "community-item";
     row.dataset.repo = item.repo;
+    // Only plugins carry a plugin id; a theme id is not one.
+    if (item.type === "plugin") row.dataset.pluginId = item.id;
 
     const info = document.createElement("div");
     info.className = "community-item-info";
@@ -1203,6 +1254,13 @@ class SettingsModal extends Modal {
 
     const controls = document.createElement("div");
     controls.className = "community-item-controls";
+
+    const listDeps = this.communityListViewDeps(listEl);
+    // Returns null for themes (applied from the theme picker, never enabled)
+    // and for plugins another row already owns — see community-list-view.ts.
+    const enableToggle = createTrackedItemEnableControl(item, listDeps);
+    if (enableToggle) controls.appendChild(enableToggle);
+    if (item.type === "plugin") appendLoadErrorDiagnostic(info, item.id, listDeps);
 
     const autoLabel = document.createElement("label");
     autoLabel.className = "community-item-toggle";

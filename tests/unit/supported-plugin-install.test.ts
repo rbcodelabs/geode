@@ -91,6 +91,31 @@ describe("CommunityManager catalog install", () => {
     expect(rescan).toHaveBeenCalledOnce();
   });
 
+  // The catalog's opt-in "enable after installing" calls pluginManager.enable()
+  // as soon as installSupported() resolves, and enable() throws "Unknown plugin"
+  // for an id it has not discovered. So the rescan must have *finished* by then,
+  // not merely been kicked off.
+  it("finishes the rescan before resolving, so the installed id can be enabled immediately", async () => {
+    const installed = {
+      repo: "polyipseity/obsidian-terminal", type: "plugin" as const, id: "terminal", name: "Terminal",
+      version: "3.27.2", minAppVersion: "0.1.0", source: "release" as const, ref: "3.27.2",
+    };
+    let rescanFinished = false;
+    (globalThis as any).window = { geode: {
+      installSupportedPlugin: vi.fn(async () => installed),
+      readConfig: vi.fn(async () => null),
+      writeConfig: vi.fn(async () => {}),
+    } };
+    const rescan = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      rescanFinished = true;
+    });
+    const manager = new CommunityManager({ pluginManager: { rescan } } as any);
+
+    await manager.installSupported("terminal", "tested");
+    expect(rescanFinished).toBe(true);
+  });
+
   it("records an explicitly selected latest catalog install as unpinned", async () => {
     const installed = {
       repo: "liamcain/obsidian-calendar-plugin", type: "plugin" as const, id: "calendar", name: "Calendar",

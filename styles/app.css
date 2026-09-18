@@ -3538,6 +3538,13 @@ body:not(.is-mobile) .modal-button-container .mod-secondary {
   font-size: var(--font-ui-small);
   padding: 3px 8px;
 }
+.community-item-info { min-width: 0; }
+/* Last load/enable failure, surfaced inline on tracked, untracked and mobile rows. */
+.community-plugin-diagnostic {
+  margin-top: 4px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error, #e06c75);
+}
 
 .supported-plugin-catalog {
   margin: 18px 0 8px;
@@ -3567,6 +3574,17 @@ body:not(.is-mobile) .modal-button-container .mod-secondary {
   color: var(--text-warning, #d99b3d);
   font-size: var(--font-ui-smaller);
 }
+/* Opt-in "enable after installing" — off by default (supported-catalog-view.ts). */
+.supported-plugin-enable-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 280px;
+  text-align: left;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.supported-plugin-enable-row input { flex-shrink: 0; margin-top: 2px; }
 .supported-plugin-status {
   min-height: 1.2em;
   font-size: var(--font-ui-smaller);
@@ -3582,6 +3600,7 @@ body:not(.is-mobile) .modal-button-container .mod-secondary {
     align-items: stretch;
   }
   .mod-settings .supported-latest-warning { max-width: none; }
+  .mod-settings .supported-plugin-enable-row { max-width: none; }
 }
 
 /* Settings → Performance tab */
