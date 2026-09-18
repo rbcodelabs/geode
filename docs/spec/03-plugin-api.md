@@ -196,6 +196,10 @@ hierarchy, `parsePropertyId`, `Keymap` — ships alongside it. Built-in types
 (`table`, `cards`) are reserved and cannot be claimed, mirroring
 `registerView`'s guard.
 
+The registration's `name` is what the Bases toolbar's View menu shows: every
+registered type is listed there as a "+ New <name> view" creation entry and as
+a "Change type to <name>" entry, alongside the built-in Table and Cards.
+
 The write path works: a view can move an entry between groups by rewriting its
 note's frontmatter through `fileManager.processFrontMatter`, and can add one
 with `BasesView.createFileForView`, which creates the named note with the
@@ -970,6 +974,15 @@ find(selector): HTMLElement; findAll(selector): HTMLElement[]; findAllSelf(selec
 // Globals: createEl/createDiv/createSpan/createFragment also exist as free functions
 //          (attach to activeDocument for popout-window correctness).
 ```
+
+The `createEl` family is installed on `HTMLElement`, `DocumentFragment` **and
+`Document`**, and the parent kind decides whether the new element is attached.
+Element and fragment parents append (or prepend, per `DomElementInfo.prepend`).
+A `Document` parent does not: a document may hold exactly one element child, so
+appending would throw `HierarchyRequestError`, and `document.createDiv()`
+therefore returns a *detached* element created from that document. Plugins use
+it as a plain factory — `kanban-bases-view` builds every column, card and
+colour swatch through `ctx.doc.createDiv()`.
 
 Other exported utilities a compatible layer should provide: `normalizePath(path)`, `debounce(fn, timeout, resetTimer)`, `setTooltip(el, tooltip, options)`, `sanitizeHTMLToDom(html)`, `getAllTags(cache)`, `parseFrontMatterEntry/Aliases/Tags(frontmatter, key)`, `parseYaml`/`stringifyYaml`, `parseLinktext(linktext)`, `getLinkpath(linktext)`, `htmlToMarkdown(html)`, `prepareFuzzySearch(query)`, `prepareSimpleSearch(query)`, `renderMath`/`loadMathJax`, `loadPrism`, `loadMermaid`, `moment` (bundled), `apiVersion`.
 
