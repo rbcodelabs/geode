@@ -3028,6 +3028,14 @@ export class App {
       this.workspace.trigger("web-viewer:event", ev);
     });
     if (stopWebViewerBridge) this.hostDisposers.add(stopWebViewerBridge);
+    // Routed the same way as onGuestWindowOpen above: the guest that
+    // reported the rejection is identified by WebContents id, resolved back
+    // to the one Web Viewer tab that owns it (a window may host many).
+    const stopWebAuthnEscalation = this.host.desktop?.onWebAuthnEscalationNeeded((ev) => {
+      const leaf = this.leafOwningGuest(ev.guestId);
+      if (leaf?.view instanceof WebView) leaf.view.showWebAuthnEscalationPrompt(ev);
+    });
+    if (stopWebAuthnEscalation) this.hostDisposers.add(stopWebAuthnEscalation);
   }
 
   private async openGuestWindowInTab(request: {
@@ -3344,6 +3352,19 @@ export class App {
         const view = context.webView!;
         void this.addLinkBookmark(view.getState().url, view.pageTitle);
       },
+    });
+    this.actions.register({
+      id: "web.continue-signin",
+      label: "Continue sign-in in a separate window",
+      icon: "external-link",
+      // Available whenever the desktop host exposes the escalation window
+      // API — this is the user-driven counterpart to the automatic
+      // rejection-signal path (web-view.ts's escalation banner), for a
+      // relying party that fails a WebAuthn ceremony without throwing a
+      // detectable error (silently hangs, shows its own "unsupported
+      // browser" message, etc).
+      isAvailable: (context) => !!context.webView && !!this.host.desktop?.openWebAuthnEscalationWindow,
+      run: (context) => context.webView!.escalateAuth(),
     });
   }
 

@@ -16,6 +16,7 @@ import type { PrivilegedFetchRequest, PrivilegedFetchResponse } from "../shared/
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
 import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
+import type { NormalizedWebAuthnEscalationSignal } from "../shared/webauthn-escalation";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
   const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
@@ -299,6 +300,25 @@ const api = {
     ipcRenderer.on("web-viewer-bridge-event", listener);
     return () => { ipcRenderer.removeListener("web-viewer-bridge-event", listener); };
   },
+  /**
+   * A guest `<webview>` reported a rejected WebAuthn ceremony (see
+   * webviewer-bridge-preload.ts's injected wrapper and main.ts's
+   * `trackWebAuthnEscalationGuest`). `guestId` lets app.ts route the event to
+   * the specific Web Viewer tab whose guest reported it.
+   */
+  onWebAuthnEscalationNeeded: (
+    cb: (ev: { guestId: number } & NormalizedWebAuthnEscalationSignal) => void
+  ) => {
+    const listener = (
+      _e: Electron.IpcRendererEvent,
+      ev: { guestId: number } & NormalizedWebAuthnEscalationSignal
+    ) => cb(ev);
+    ipcRenderer.on("webauthn-escalation-needed", listener);
+    return () => { ipcRenderer.removeListener("webauthn-escalation-needed", listener); };
+  },
+  /** Open a real top-level window on the Web Viewer's shared session partition for one WebAuthn ceremony (webauthn-escalation-window.ts). */
+  webauthnOpenEscalationWindow: (url: string): Promise<{ closed: true; cookieObserved: boolean }> =>
+    ipcRenderer.invoke("webauthn-open-escalation-window", url),
   checkForUpdates: (): Promise<UpdaterCheckResult> => ipcRenderer.invoke("updater-check"),
 };
 
