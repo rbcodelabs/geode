@@ -45,6 +45,12 @@ class FakeElement {
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
   children: FakeElement[] = [];
+  /**
+   * Modelled because `TabGroup` now keeps revealed leaves mounted and hides
+   * them, so it asks whether a `leafEl` is already parented by the content
+   * host and detaches it explicitly when the leaf leaves the group.
+   */
+  parentElement: FakeElement | null = null;
   textContent = "";
   title = "";
   id = "";
@@ -77,8 +83,15 @@ class FakeElement {
 
   set innerHTML(value: string) {
     this.html = value;
+    for (const child of this.children) child.parentElement = null;
     this.children.length = 0;
     if (this.counts && value === "") this.counts.rebuilds++;
+  }
+
+  remove(): void {
+    const siblings = this.parentElement?.children;
+    if (siblings) siblings.splice(siblings.indexOf(this), 1);
+    this.parentElement = null;
   }
 
   setAttribute(name: string, value: string): void {
@@ -94,10 +107,13 @@ class FakeElement {
   focus(): void {}
 
   append(...kids: FakeElement[]): void {
+    for (const kid of kids) kid.parentElement = this;
     this.children.push(...kids);
   }
 
   appendChild(kid: FakeElement): FakeElement {
+    kid.remove();
+    kid.parentElement = this;
     this.children.push(kid);
     if (this.counts) this.counts.appends++;
     return kid;

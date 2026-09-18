@@ -186,6 +186,10 @@ export interface DesktopHostService {
     guestId: number;
     disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
   }) => void): () => void;
+  /** A popup handle's `close()`: close the Web Viewer tab hosting that guest. */
+  onGuestWindowClose(cb: (guestId: number) => void): () => void;
+  /** A popup/opener handle's `focus()`: reveal and activate that guest's tab. */
+  onGuestWindowFocus(cb: (guestId: number) => void): () => void;
   onWebViewerBridgeEvent(cb: (ev: import("../../shared/web-viewer-connectors").NormalizedWebViewerEvent) => void): () => void;
   revealInFileManager(path: string): Promise<void>;
 }

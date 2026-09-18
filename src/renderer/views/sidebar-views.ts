@@ -29,7 +29,7 @@ abstract class SidebarView implements View {
     // active-leaf-change is the unconditional signal.
     app.workspace.on("active-leaf-change", () => this.syncActiveFile());
     app.workspace.on("layout-change", () => {
-      this.onVisibilityChanged(this.containerEl.isConnected);
+      this.onVisibilityChanged(this.isShowing);
       // Swapping a leaf's view in place (opening an HTML file over the active
       // markdown tab) goes through WorkspaceLeaf.setView, which emits neither
       // active-leaf-change nor file-open — layout-change is its only signal.
@@ -62,11 +62,33 @@ abstract class SidebarView implements View {
     if ((next?.path ?? null) === (this.file?.path ?? null)) return;
     this.file = next;
     this.onFileChanged();
-    // Inactive fixed sidebar views are detached from the sidebar content
-    // host. Keep their file state current, but defer potentially expensive
-    // rendering (notably Backlinks' vault-wide unlinked-mention scan) until
-    // Sidebar.show() calls onOpen() for the view again.
-    if (this.containerEl.isConnected) this.render();
+    // A pane that isn't on screen keeps its file state current but defers
+    // potentially expensive rendering (notably Backlinks' vault-wide
+    // unlinked-mention scan) until `Sidebar.show()` reveals it again.
+    if (this.isShowing) this.render();
+  }
+
+  /**
+   * Whether this pane is the one actually on screen in whatever hosts it.
+   *
+   * This was `containerEl.isConnected`, which worked only because an inactive
+   * pane used to be detached outright — "in the document" and "on screen" were
+   * the same question. Both hosts now keep inactive panes mounted and hide them
+   * with CSS (`Sidebar.revealInDock`, `TabGroup.revealActiveLeaf`), so
+   * connectedness answers nothing and the hidden markers have to be consulted
+   * directly. Without this, a background Backlinks pane would restart its
+   * vault-wide unlinked-mention scan on every file change.
+   *
+   * Deliberately narrower than `checkVisibility()`: a *collapsed* sidebar also
+   * hides its content, but its shown pane must keep tracking the open file so
+   * that expanding the sidebar reveals current content rather than a render
+   * from whenever it was collapsed.
+   */
+  private get isShowing(): boolean {
+    if (!this.containerEl.isConnected) return false;
+    return !this.containerEl.closest(
+      ".sidebar-content > :not(.mod-active), .workspace-tab-container > .workspace-leaf:not(.mod-active)"
+    );
   }
 
   private scheduleRender(): void {
@@ -76,7 +98,7 @@ abstract class SidebarView implements View {
       this.renderScheduled = false;
       // The view can be hidden after this render was queued but before the
       // microtask runs; avoid doing stale hidden-pane work in that race too.
-      if (this.containerEl.isConnected) this.render();
+      if (this.isShowing) this.render();
     });
   }
 

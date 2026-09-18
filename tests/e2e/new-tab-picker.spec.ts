@@ -43,8 +43,15 @@ async function launch(extraFiles: string[] = []) {
 }
 
 const rootTabs = (window: Page) => window.locator(".workspace-split.mod-root .workspace-tab-header");
-const pickerInput = (window: Page) => window.locator(".new-tab-picker-input");
-const pickerResults = (window: Page) => window.locator(".new-tab-picker-result");
+/**
+ * Everything the picker owns is scoped to the active leaf. A background tab
+ * stays mounted (hidden) rather than being detached, so with the vault's
+ * initial empty tab still open, `Mod+T` leaves two New Tab views in the
+ * document and an unscoped `.new-tab-picker-input` is genuinely ambiguous.
+ */
+const ACTIVE_LEAF = ".workspace-split.mod-root .workspace-leaf.mod-active";
+const pickerInput = (window: Page) => window.locator(`${ACTIVE_LEAF} .new-tab-picker-input`);
+const pickerResults = (window: Page) => window.locator(`${ACTIVE_LEAF} .new-tab-picker-result`);
 const activeFilePath = (window: Page) =>
   window.evaluate(() => (window as any).app.workspace.activeLeaf?.view?.file?.path ?? null);
 
@@ -229,7 +236,7 @@ test("the four existing New Tab action buttons are still present and functional"
   const { app, window, cleanup } = await launch();
   try {
     await openNewTab(window);
-    const buttons = window.locator(".empty-state-action");
+    const buttons = window.locator(`${ACTIVE_LEAF} .empty-state-action`);
     await expect(buttons).toHaveCount(4);
     await expect(buttons.nth(0)).toHaveText(/Create new note/);
     await expect(buttons.nth(1)).toHaveText(/Open quick switcher/);

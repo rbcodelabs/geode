@@ -61,8 +61,14 @@ async function launch() {
   return { app, window, cleanup };
 }
 
+/**
+ * Scoped to the pane on screen: a dock keeps every pane it has shown mounted
+ * and hides it (so a docked view holding a live resource survives a pane
+ * switch), which means several `.sidebar-view-body` elements coexist once this
+ * test has cycled through `PANELS`.
+ */
 function panelBody(window: Page) {
-  return window.locator(".workspace-sidebar.mod-right .sidebar-view-body");
+  return window.locator(".workspace-sidebar.mod-right .sidebar-view.mod-active .sidebar-view-body");
 }
 
 async function showPanel(window: Page, type: string) {

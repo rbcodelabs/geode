@@ -48,6 +48,10 @@ class FakeElement {
     return this.ownText + this.children.map((child) => child.textContent).join("");
   }
 
+  /** `SidebarView.isShowing` asks whether a hidden host is above it; this fake is never inside one. */
+  closest(): FakeElement | null {
+    return null;
+  }
   appendChild(child: FakeElement): FakeElement {
     this.children.push(child);
     return child;

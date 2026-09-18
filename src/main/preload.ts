@@ -290,6 +290,23 @@ const api = {
     return () => { ipcRenderer.removeListener("guest-window-open", listener); };
   },
   /**
+   * A shimmed `handle.close()` from the guest that opened this popup (see
+   * src/main/webviewer-popups.ts). Sent to the host renderer rather than
+   * asking the popup guest to call `window.close()` itself, so closing still
+   * works when that guest is wedged or has stopped running script.
+   */
+  onGuestWindowClose: (cb: (guestId: number) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, guestId: number) => cb(guestId);
+    ipcRenderer.on("guest-window-close", listener);
+    return () => { ipcRenderer.removeListener("guest-window-close", listener); };
+  },
+  /** A shimmed `handle.focus()` / `window.opener.focus()`: raise that guest's tab. */
+  onGuestWindowFocus: (cb: (guestId: number) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, guestId: number) => cb(guestId);
+    ipcRenderer.on("guest-window-focus", listener);
+    return () => { ipcRenderer.removeListener("guest-window-focus", listener); };
+  },
+  /**
    * A normalized, origin-checked event posted from inside a Web Viewer guest
    * via `window.__geode.postEvent` (see webviewer-bridge-preload.ts and
    * main.ts's `trackWebViewerBridgeGuest`).

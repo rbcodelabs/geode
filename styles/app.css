@@ -1297,6 +1297,15 @@ body.is-mobile .tab-collection-label { display: none; }
   display: flex;
 }
 
+/* Every tab that has been revealed stays mounted in its group's content host;
+   only the active one is shown. Hiding rather than detaching is what keeps a
+   background tab's view alive — Electron destroys a `<webview>`'s guest the
+   moment the element leaves the document, so detaching reloaded every Web
+   Viewer tab on every tab switch. See `TabGroup.revealActiveLeaf`. */
+.workspace-tab-container > .workspace-leaf:not(.mod-active) {
+  display: none;
+}
+
 .workspace-leaf-content {
   flex: 1;
   min-width: 0;
@@ -1811,6 +1820,13 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   min-width: 0;
   overflow-y: auto;
   display: flex;
+}
+
+/* The dock's counterpart to the tab-container rule above: a pane that has been
+   shown stays mounted here and is hidden, so a docked Web Viewer (or any view
+   holding a live resource) survives switching panes. See `Sidebar.revealInDock`. */
+.sidebar-content > :not(.mod-active) {
+  display: none;
 }
 
 /* ---- Drag-and-drop (moving panes) ---- */

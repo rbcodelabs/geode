@@ -38,7 +38,16 @@ export interface View {
   resumeAutosave?(): void;
   /** Serialized state for WorkspaceLeaf.getViewState(). */
   getState?(): unknown;
-  /** Optional visibility callback; unlike onOpen, may run whenever a tab is revealed. */
+  /**
+   * Optional visibility callback; unlike onOpen, may run whenever a tab is
+   * revealed.
+   *
+   * Since inactive leaves stay mounted but hidden (see
+   * `TabGroup.revealActiveLeaf`), a view is laid out at zero size for as long
+   * as its tab is in the background. Anything that caches measured geometry —
+   * CodeMirror's viewport, a canvas backing store — has to re-measure here, or
+   * it renders against the size it had while hidden.
+   */
   onReveal?(): void;
   /** Views showing a file implement this. */
   getFile?(): TFile | null;
@@ -651,6 +660,9 @@ export class TabGroup implements LeafContainer {
   /** Resume rendering and perform exactly one rebuild for everything changed since `beginBatch()`. */
   endBatch(): void {
     this.batchRestoring = false;
+    // The batch suppressed mounting as well as rendering (see
+    // `revealActiveLeaf`), so this is the restore's single real reveal.
+    this.revealActiveLeaf();
     this.renderTabs();
   }
 
@@ -845,16 +857,74 @@ export class TabGroup implements LeafContainer {
     }
   }
 
+  /**
+   * Mount the active leaf and make it the only visible one.
+   *
+   * The invariant this method establishes, and which every other method that
+   * touches `contentHostEl` has to preserve: **`contentHostEl` holds the
+   * `leafEl` of every leaf that has been revealed since it joined this group,
+   * not just the visible one.** Background tabs stay in the document and are
+   * hidden by CSS (`.workspace-tab-container > .workspace-leaf:not(.mod-active)`).
+   *
+   * That matters because detaching an element destroys whatever live resource
+   * the view behind it owns. Electron tears down a `<webview>`'s guest
+   * WebContents the instant the element leaves the document and builds a brand
+   * new one on re-attach — measured as guest id 2 -> 3 -> 4 for an A, B, back-to-A
+   * tab switch — so the old "wipe the host, append the active leaf" approach
+   * silently reloaded every Web Viewer tab, discarding its page state, every
+   * time the user looked at another tab. CodeMirror state, scroll positions
+   * and in-progress view work were rebuilt for the same reason.
+   *
+   * The cost of the trade is that a background tab's view is laid out at zero
+   * size. Views that cache measured geometry re-measure in `onReveal()`.
+   *
+   * A batch restore is deliberately excluded. `createLeaf()` activates every
+   * leaf it builds, so accumulating during restore would attach all N restored
+   * tabs at once — spawning one guest process per restored Web Viewer tab at
+   * startup — and would construct each view's DOM inside a detached host.
+   * Restore therefore keeps the historical one-at-a-time behaviour and the
+   * accumulating set starts from whatever leaf `endBatch()` leaves visible.
+   */
+  private revealActiveLeaf(): void {
+    const active = this.active;
+    if (active && active.leafEl.parentElement !== this.contentHostEl) {
+      this.contentHostEl.appendChild(active.leafEl);
+    }
+    for (const child of Array.from(this.contentHostEl.children)) {
+      const isActive = !!active && child === active.leafEl;
+      // Unmount rather than hide while restoring, so a bulk restore never
+      // holds more than one live view at a time (see the note above).
+      if (!isActive && this.batchRestoring) {
+        child.remove();
+        continue;
+      }
+      child.classList.toggle("mod-active", isActive);
+    }
+  }
+
+  /**
+   * Take a leaf's element out of this group's content host. Required on *every*
+   * path that removes a leaf from `this.leaves` — not only when it happened to
+   * be the visible one — because under the mounted-but-hidden invariant an
+   * inactive leaf's element is still a child of `contentHostEl`, and leaving it
+   * there would keep a closed or moved-away tab (and its view, and any guest
+   * process it owns) alive and reachable forever.
+   */
+  private unmountLeaf(leaf: WorkspaceLeaf): void {
+    if (leaf.leafEl.parentElement === this.contentHostEl) leaf.leafEl.remove();
+    leaf.leafEl.classList.remove("mod-active");
+  }
+
   /** Detach a leaf without destroying its view (for moves). */
   extractLeaf(leaf: WorkspaceLeaf) {
     const i = this.leaves.indexOf(leaf);
     if (i === -1) return;
     this.leaves.splice(i, 1);
     leaf.collectionId = undefined;
+    this.unmountLeaf(leaf);
     if (this.active === leaf) {
       this.active = this.leaves[Math.min(i, this.leaves.length - 1)] ?? null;
-      this.contentHostEl.innerHTML = "";
-      if (this.active) this.contentHostEl.appendChild(this.active.leafEl);
+      this.revealActiveLeaf();
     }
     this.normalizeCollections();
     this.renderTabs();
@@ -870,6 +940,9 @@ export class TabGroup implements LeafContainer {
       leaf.contentEl.appendChild(leaf.view.containerEl);
     }
     leaf.refreshDocumentNavigationControls();
+    // No mounting here on purpose: an adopted leaf joins the group hidden and
+    // is mounted by the first `setActiveLeaf` that reveals it, which is what
+    // keeps `contentHostEl` to "leaves the user has actually looked at".
     const at = index ?? this.leaves.length;
     this.leaves.splice(Math.max(0, Math.min(at, this.leaves.length)), 0, leaf);
     this.renderTabs();
@@ -885,15 +958,22 @@ export class TabGroup implements LeafContainer {
         const file = leaf.view?.getFile?.();
         if (file) this.workspace.trigger("file-open", file);
       }
+      // Idempotent, and deliberately not skipped: re-selecting the current tab
+      // is the one call that can repair a content host left unmounted by a
+      // restore that ended with this leaf already active.
+      this.revealActiveLeaf();
       return;
     }
     markStart("leaf-activate");
     try {
       const changesWorkspaceGroup = !this.sidebar && this.workspace.activeGroup !== this;
       this.active = leaf;
-      this.contentHostEl.innerHTML = "";
-      this.contentHostEl.appendChild(leaf.leafEl);
+      this.revealActiveLeaf();
       void leaf.ensureOpen();
+      // The leaf is visible as of the line above, so a view that caches
+      // measured geometry can measure correctly from here. `onOpen()` cannot
+      // stand in for this: it runs once, and a re-activated tab never sees it.
+      if (!this.batchRestoring) leaf.view?.onReveal?.();
       this.renderTabs();
       if (!this.sidebar) this.workspace.setActiveGroup(this);
       // setActiveGroup emits when moving between center groups. Activating a
@@ -911,12 +991,14 @@ export class TabGroup implements LeafContainer {
     const i = this.leaves.indexOf(leaf);
     if (i === -1) return;
     this.leaves.splice(i, 1);
+    // Unconditional: a closed background tab is still mounted here.
+    this.unmountLeaf(leaf);
     if (this.active === leaf) {
       const next = this.leaves[Math.min(i, this.leaves.length - 1)] ?? null;
       if (next) this.setActiveLeaf(next);
       else {
         this.active = null;
-        this.contentHostEl.innerHTML = "";
+        this.revealActiveLeaf();
         this.workspace.groupEmptied(this);
       }
     }
@@ -1702,13 +1784,47 @@ export class Sidebar implements LeafContainer {
     }
   }
 
+  /**
+   * Show one docked pane and hide the rest, keeping every pane that has been
+   * shown mounted in `contentEl`.
+   *
+   * Same invariant, and the same reason, as `TabGroup.revealActiveLeaf`:
+   * detaching an element destroys whatever live resource its view owns — most
+   * visibly an Electron `<webview>` guest, torn down the moment the element
+   * leaves the document and rebuilt from scratch on re-attach — so switching
+   * docked panes must not detach the outgoing one. A dock is the *other* place
+   * a plugin can put a Web Viewer (`getRightLeaf` + `revealLeaf`), so it had
+   * the identical state-loss bug tab groups did.
+   *
+   * Wiping the host also did the garbage collection, so that job becomes
+   * explicit here: a child whose view is no longer one of this dock's leaves —
+   * a pane dragged out into a tab group, or a view swapped in place when a
+   * plugin unloads — is removed, while the surviving panes stay put.
+   *
+   * Unlike a tab group, a dock's `contentEl` hosts the *view's* element
+   * directly rather than the leaf wrapper, so the visibility class lands on
+   * whatever root the view built.
+   */
+  private revealInDock(item: SidebarItem | null): void {
+    const el = item ? this.metaOf(item).el : null;
+    if (el && el.parentElement !== this.contentEl) this.contentEl.appendChild(el);
+    const live = new Set(
+      this.leaves.map((leaf) => leaf.view?.containerEl).filter((candidate): candidate is HTMLElement => !!candidate)
+    );
+    for (const child of Array.from(this.contentEl.children)) {
+      if (child !== el && !live.has(child as HTMLElement)) {
+        child.remove();
+        continue;
+      }
+      child.classList.toggle("mod-active", child === el);
+    }
+  }
+
   presentMobile(item: SidebarItem): void {
     const resolved = this.isLeaf(item) ? item : this.leaves.find((leaf) => leaf.view === item);
     if (!resolved) return;
     this.mobilePresented = resolved;
-    this.contentEl.innerHTML = "";
-    const { el } = this.metaOf(resolved);
-    if (el) this.contentEl.appendChild(el);
+    this.revealInDock(resolved);
     void resolved.ensureOpen();
     resolved.view?.onReveal?.();
     this.renderIcons();
@@ -1717,11 +1833,7 @@ export class Sidebar implements LeafContainer {
   restorePersistentPresentation(): void {
     if (!this.mobilePresented) return;
     this.mobilePresented = null;
-    this.contentEl.innerHTML = "";
-    if (this.active) {
-      const { el } = this.metaOf(this.active);
-      if (el) this.contentEl.appendChild(el);
-    }
+    this.revealInDock(this.active);
     this.renderIcons();
   }
 
@@ -1729,9 +1841,7 @@ export class Sidebar implements LeafContainer {
     const resolved = this.isLeaf(item) ? item : this.leaves.find((leaf) => leaf.view === item);
     if (!resolved) return;
     this.active = resolved;
-    this.contentEl.innerHTML = "";
-    const { el } = this.metaOf(resolved);
-    if (el) this.contentEl.appendChild(el);
+    this.revealInDock(resolved);
     void resolved.ensureOpen();
     resolved.view?.onReveal?.();
     this.renderIcons();
@@ -1764,9 +1874,13 @@ export class Sidebar implements LeafContainer {
     const i = this.leaves.indexOf(leaf);
     if (i === -1) return;
     this.leaves.splice(i, 1);
-    if (this.active === leaf) {
-      this.active = null;
-      this.contentEl.innerHTML = "";
+    const wasShowing = this.active === leaf;
+    if (wasShowing) this.active = null;
+    if (this.mobilePresented === leaf) this.mobilePresented = null;
+    // Unconditional: a hidden docked pane is still parented by `contentEl`, so
+    // every extraction has to collect its element, not only a visible one's.
+    this.revealInDock(this.mobilePresented ?? this.active);
+    if (wasShowing) {
       const fallback = this.leaves[0];
       if (fallback) this.show(fallback);
     }
@@ -1788,13 +1902,10 @@ export class Sidebar implements LeafContainer {
     // way a tab group does it. So when a view is swapped *in place* — a
     // deferred placeholder hydrating into the real view, or the reverse when a
     // plugin unloads — `setView` alone leaves the sidebar still displaying the
-    // outgoing element. Re-attach the current one here.
-    const active = this.active;
-    if (!(active instanceof WorkspaceLeaf)) return;
-    const el = active.view?.containerEl;
-    if (!el || el.parentElement === this.contentEl) return;
-    this.contentEl.innerHTML = "";
-    this.contentEl.appendChild(el);
+    // outgoing element. Re-attach the current one here, and let `revealInDock`
+    // collect the outgoing one: the host is no longer wiped, so the swap has to
+    // be surgical rather than a rebuild.
+    this.revealInDock(this.mobilePresented ?? this.active);
   }
 
   toggle() {
