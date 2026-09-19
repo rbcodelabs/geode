@@ -76,11 +76,40 @@ describe("publishSql", () => {
   });
 });
 
-describe("commit failure path", () => {
+describe("publishSql — pre-receipt injection", () => {
+  const catalog = createPostgresCatalog({ schema: "unit_test_schema" });
+
+  it("omits the eighth argument entirely unless the pre-receipt failure is asked for", () => {
+    // The schema default carries the common case, so the SQL an ordinary
+    // publication generates is byte-identical to the SQL generated before the
+    // injection point existed.
+    expect(catalog.publishSql(publication()).trimEnd().endsWith("false);")).toBe(true);
+    expect(catalog.publishSql(publication())).not.toContain("false, ");
+  });
+
+  it("appends it when asked, alongside the existing post-receipt flag", () => {
+    expect(catalog.publishSql(publication(), { failBeforeReceipt: true }).trimEnd().endsWith("false, true);")).toBe(true);
+    expect(catalog.publishSql(publication(), { fail: true, failBeforeReceipt: true }).trimEnd().endsWith("true, true);")).toBe(true);
+  });
+});
+
+describe("failure paths that need no database", () => {
   it("reports store-failed when psql cannot be executed at all", async () => {
     const catalog = createPostgresCatalog({ schema: "unit_test_schema", psql: "/nonexistent/psql" });
     try {
       expect(await catalog.store.commit(publication())).toEqual({ status: "store-failed" });
+    } finally {
+      catalog.close();
+    }
+  });
+
+  it("reports store-failed rather than throwing when a restore cannot reach the store", async () => {
+    // A restore has no named database-side refusals, so an unreachable server
+    // has exactly one honest answer — and it must be an answer, not an
+    // exception escaping the port.
+    const catalog = createPostgresCatalog({ schema: "unit_test_schema", psql: "/nonexistent/psql" });
+    try {
+      expect(await catalog.restoreSource().restore("vault-a")).toEqual({ status: "store-failed" });
     } finally {
       catalog.close();
     }

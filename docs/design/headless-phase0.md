@@ -131,7 +131,8 @@ timeouts fail visibly when a lock wait cannot be observed.
 > `vault_id` is a first-class key, attachment bytes are immutable and
 > content-addressed, and a publication locks only its own vault. The fixture
 > below is unchanged and remains valid Phase 0 evidence; it is no longer the
-> model to extend. The restore half of increment 3 is **not** built.
+> model to extend. Both halves of increment 3 — publish and restore — are now
+> built against that schema.
 
 The fixture is one vault in a disposable schema, not a production migration.
 It does not implement object uploads, revisions, tombstones, rename planning,
@@ -174,11 +175,28 @@ The increment 3 catalog proofs follow the same discipline:
 ```sh
 npm run proof:catalog            # portable contract, no database at all
 npm run proof:catalog:postgres   # VM-A publish, randomized geode_catalog_* schema
+npm run proof:catalog:restore    # two processes: VM-A publish, then VM-B restore
 ```
 
-`proof:catalog` needs no database and runs in the normal unit suite. Only
-`proof:catalog:postgres` needs `PG*` configured, and it too drops exactly its
-own schema in `finally`.
+`proof:catalog` needs no database and runs in the normal unit suite. The other
+two need `PG*` configured, and each drops exactly its own schema in `finally`.
+
+`proof:catalog:restore` is the two-process harness. It installs one disposable
+schema, runs VM A as its own OS process, waits for that process to be gone —
+confirmed by `process.kill(pid, 0)` failing, and again by VM B observing no
+remaining backend under the schema's application name — then runs VM B as a
+second process and diffs the two projections. VM B is handed nothing but the
+schema name: not VM A's snapshot, not its vault directory, not its output.
+
+The equality being claimed is written down explicitly in
+`src/wiki/query-projection.ts` rather than left implicit: `listFiles`,
+`readNote` text and metadata, `resolve`, `outgoing`, `backlinks` and `search`.
+Capture provenance — `scanStartedAt`, `scanEndedAt`, folder-walk diagnostics,
+`exclusionPolicy`, capture `limits` — is deliberately **out** of scope, because
+a catalog restore has no equivalent of a wall-clock folder walk. Capture facts
+that do change query answers (`discoveryComplete`, `aliasCoverageComplete`,
+search `complete`, graph `coverage`) travel inside the query results and are
+compared.
 
 ## Verification evidence
 
@@ -206,18 +224,19 @@ authorize or implement the subsequent phases. Suggested reviewable increments:
 > `scripts/local-wiki-write-proof.mts` proves the loop in fresh Node. See
 > [ADR 0020](../adr/0020-write-capable-local-wiki-provider.md).
 >
-> **Status, 2026-09-19.** Increment 3 is implemented **to its publish-side
-> checkpoint only**. `src/wiki/catalog-contract.ts` adds a portable,
-> driver-free catalog contract with content-addressed immutable bytes and
-> named upload-validation refusals; `src/catalog/` adds the PostgreSQL
-> reference adapter and reviewed multi-vault schema;
-> `scripts/catalog-publish-proof.mts` is the VM-A publish proof. See
+> **Status, 2026-09-19.** Increment 3 is implemented on both sides.
+> `src/wiki/catalog-contract.ts` adds a portable, driver-free catalog contract
+> with content-addressed immutable bytes, named upload-validation refusals and
+> named restore refusals; `src/catalog/` adds the PostgreSQL reference adapter
+> and reviewed multi-vault schema; `scripts/catalog-publish-proof.mts` is the
+> VM-A publish proof and `scripts/catalog-restore-proof.mts` the VM-B restore
+> proof, driven by the two-process harness
+> `scripts/run-catalog-restore-proof.mjs`. See
 > [ADR 0022](../adr/0022-transactional-multi-vault-catalog-contract.md).
 >
-> The VM-B restore side is **declared and not implemented**, by design: the
-> build package requires a progress report at this checkpoint. Database hosting
-> selection with measured limits and cost is also not done — the proof runs
-> against a local disposable container only, at zero spend.
+> Database hosting selection with measured limits and cost is **not** done —
+> the proofs run against a local disposable container only, at zero spend, and
+> selecting or paying for a managed service remains outside this package.
 >
 > Increments 4–5 remain unimplemented and unauthorized. Synchronization and any
 > external document-store integration are **not** part of increments 1–3 and

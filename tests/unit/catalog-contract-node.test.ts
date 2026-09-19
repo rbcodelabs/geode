@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { expect, it } from "vitest";
 
-it("validates and refuses publications in a fresh Node process with no database and an audited input graph", () => {
+it("validates and refuses publications and restores in a fresh Node process with no database and an audited input graph", () => {
   const output = execFileSync(process.execPath, ["scripts/run-catalog-contract-proof.mjs"], { encoding: "utf8" });
   const [proof, dependencies] = output.trim().split("\n").map((line) => JSON.parse(line));
 
@@ -16,6 +16,11 @@ it("validates and refuses publications in a fresh Node process with no database 
     refusalsObserved: 19,
     distinctStatuses: 14,
     storeContactedAfterRefusal: false,
+    // The restore side is refused on the same terms, and — the point of this
+    // proof — with no database anywhere in the process.
+    restoreRefusalsObserved: 21,
+    restoreDistinctStatuses: 17,
+    restoreSourceContactedAfterRefusal: false,
   });
 
   // The portable contract reaches exactly one other engine module, and no

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { openLocalWikiProvider } from "../src/wiki/folder-provider";
@@ -11,23 +11,35 @@ import {
   type CatalogNote,
   type PublishRequest,
 } from "../src/wiki/catalog-contract";
+import { serializeWikiQueryProjection } from "../src/wiki/query-projection";
 import { createPostgresCatalog, literal } from "../src/catalog/postgres-catalog-store";
+import { buildProofVault, proofContentType, PROOF_PROJECTION, RESTORE_VAULT_ID } from "./catalog-proof-vault.mts";
 
 /**
- * VM A: publish side only.
+ * VM A: the publish side.
  *
  * A fresh Node process builds a synthetic multi-note vault on disk, reads it
  * back through the real local provider, and publishes it — notes, wikilinks
- * and one binary attachment — into a disposable PostgreSQL schema through the
+ * and binary attachments — into a disposable PostgreSQL schema through the
  * portable catalog contract.
  *
- * The VM-B restore side is deliberately NOT here. This increment stops at the
- * approved checkpoint: publish proven, restore unbuilt.
+ * It runs in two modes:
+ *
+ * - **Standalone** (`npm run proof:catalog:postgres`): it creates its own
+ *   randomly-named schema and drops it in `finally`, exactly as before.
+ * - **Harness-driven** (`GEODE_CATALOG_SCHEMA` set): the harness owns the
+ *   schema's whole lifecycle, and this process neither creates nor drops it.
+ *   That is what lets VM B run afterwards, in its own process, against the
+ *   same durable state — the only thing the two share.
+ *
+ * With `GEODE_PROJECTION_OUT` set, it writes the canonical projection of its
+ * **pre-publish** snapshot to that path. VM B never reads that file; the
+ * harness does, as the diff oracle.
  *
  * Phase 0's discipline is preserved and extended: every concurrency claim is
  * backed by an observed `pg_stat_activity` lock wait rather than a sleep, the
- * schema is randomly named and dropped in `finally`, and no password is passed
- * as a command argument.
+ * schema is randomly named and dropped by whoever created it, and no password
+ * is passed as a command argument.
  */
 
 assert.ok(!("window" in globalThis), "window must not exist");
@@ -35,8 +47,11 @@ assert.ok(!("document" in globalThis), "document must not exist");
 assert.equal(process.versions.electron, undefined, "must not run under Electron");
 
 const sha = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+/** Set by the two-process harness, which then owns create and drop. */
+const providedSchema = process.env.GEODE_CATALOG_SCHEMA;
+const projectionOut = process.env.GEODE_PROJECTION_OUT;
 const catalog = createPostgresCatalog({
-  schema: `geode_catalog_${randomUUID().replaceAll("-", "")}`,
+  schema: providedSchema ?? `geode_catalog_${randomUUID().replaceAll("-", "")}`,
   schemaDirectory: resolve("src/catalog"),
 });
 
@@ -63,16 +78,8 @@ let installed = false;
 const root = await mkdtemp(join(tmpdir(), "geode-catalog-vault-a-"));
 try {
   // --- A synthetic vault on disk, read back through the real provider -------
-  await mkdir(join(root, "assets"));
-  await mkdir(join(root, "notes"));
-  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3, 0xff, 0xfe]);
-  await writeFile(join(root, "assets/diagram.png"), pngBytes);
-  await writeFile(join(root, "Index.md"), "# Index\n\nSee [[Decision]] and ![[assets/diagram.png]].\n", "utf8");
-  await writeFile(
-    join(root, "notes/Decision.md"),
-    "---\naliases: [Choice]\n---\n\n# Decision\n\nBack to [[Index]]. Mentions plesiosaur.\n",
-    "utf8",
-  );
+  await buildProofVault(root);
+  const pngBytes = new Uint8Array(await readFile(join(root, "assets/diagram.png")));
 
   const opened = await openLocalWikiProvider(root);
   assert.equal(opened.status, "ok", "the local provider must open the synthetic vault");
@@ -81,19 +88,26 @@ try {
 
   // The publication carries exactly what the engine sees, so the catalog is
   // never a second, hand-curated view of the vault.
-  assert.equal(view.listFiles().length, 3, "two notes and one attachment");
+  assert.equal(view.listFiles().length, 6, "three notes and three attachments");
   assert.deepEqual(
-    view.backlinks("Index.md").references.map((reference) => reference.sourcePath),
-    ["notes/Decision.md"],
-    "the synthetic vault must actually contain a resolving wikilink",
+    [...new Set(view.backlinks("Index.md").references.map((reference) => reference.sourcePath))].sort(),
+    ["notes/Decision.md", "notes/Deep note.md"],
+    "the synthetic vault must actually contain resolving wikilinks",
   );
   const sourceResolution = {
     decision: view.resolve("Index.md", "Decision").path,
     alias: view.resolve("Index.md", "Choice").path,
     asset: view.resolve("Index.md", "assets/diagram.png").path,
+    missing: view.resolve("Index.md", "Nothing Here").status,
+    external: view.resolve("Index.md", "https://example.com/page").status,
     search: view.search("plesiosaur").hits.map((hit) => hit.path),
     backlinks: view.backlinks("Index.md").references.length,
   };
+
+  // The equality VM B has to reproduce, captured *before* anything is
+  // published. Written for the harness to diff; VM B never sees it.
+  const projection = serializeWikiQueryProjection(view, PROOF_PROJECTION);
+  if (projectionOut) await writeFile(projectionOut, projection, "utf8");
 
   const notes: CatalogNote[] = [];
   const assets: CatalogAsset[] = [];
@@ -105,14 +119,18 @@ try {
     } else {
       // Snapshots never carry attachment bytes; the publisher supplies them.
       const bytes = new Uint8Array(await readFile(join(root, file.path)));
-      assets.push({ path: file.path, contentAddress: sha(bytes), contentType: "image/png", bytes });
+      assets.push({ path: file.path, contentAddress: sha(bytes), contentType: proofContentType(file.path), bytes });
     }
   }
-  assert.equal(notes.length, 2);
-  assert.equal(assets.length, 1);
+  assert.equal(notes.length, 3);
+  assert.equal(assets.length, 3);
+  assert.equal(new Set(assets.map((asset) => asset.contentAddress)).size, 2,
+    "two attachments must share one content address, so restore has to expand one object into two files");
 
-  await catalog.install();
-  installed = true;
+  if (!providedSchema) {
+    await catalog.install();
+    installed = true;
+  }
 
   const vaultA = "vault-a";
   const vaultB = "vault-b";
@@ -125,8 +143,23 @@ try {
   assert.equal(first.status, "ok", "the initial publication must commit");
   if (first.status !== "ok") throw new Error("unreachable");
   assert.equal(first.receipt.sequence, 1);
-  assert.equal(first.receipt.noteCount, 2);
-  assert.equal(first.receipt.assetCount, 1);
+  assert.equal(first.receipt.noteCount, 3);
+  assert.equal(first.receipt.assetCount, 3);
+
+  // --- 1b. The vault VM B restores ------------------------------------------
+  // Published once, from the same captured snapshot, and never touched again.
+  // `vault-a` below goes on to absorb conflict, rollback and mismatch
+  // scenarios, so it is deliberately not the vault the restore claim is made
+  // about.
+  const pristine = await publish(catalog.store, request({ vaultId: RESTORE_VAULT_ID, mutationId: "publish-1" }));
+  assert.equal(pristine.status, "ok", "the restore fixture must publish");
+  if (pristine.status !== "ok") throw new Error("unreachable");
+  assert.equal(pristine.receipt.sequence, 1);
+  assert.equal(
+    await catalog.query(`SELECT count(*) FROM object WHERE vault_id = ${literal(RESTORE_VAULT_ID)};`),
+    "2",
+    "identical bytes at two paths must be stored once",
+  );
 
   // Bytes round-trip out of `bytea` byte-identical, not merely same-length.
   const storedHex = await catalog.query(
@@ -134,9 +167,11 @@ try {
   );
   assert.equal(storedHex, Buffer.from(pngBytes).toString("hex"), "attachment bytes must be stored exactly");
   assert.equal(
-    await catalog.query(`SELECT encode(sha256(bytes), 'hex') FROM object WHERE vault_id = ${literal(vaultA)};`),
-    assets[0].contentAddress,
-    "the store's own digest must equal the declared content address",
+    await catalog.query(
+      `SELECT count(*) FROM object WHERE vault_id = ${literal(vaultA)} AND encode(sha256(bytes), 'hex') <> content_address;`,
+    ),
+    "0",
+    "the store's own digest must equal the declared content address for every object",
   );
 
   // --- 2. Identical retry is free; a reused id with a changed payload is not -
@@ -208,13 +243,98 @@ try {
 
   // Per-vault mutation ids: vault-b reused "publish-1" with a different payload
   // and was accepted, because idempotency keys are scoped to their vault.
-  assert.equal(await catalog.query(`SELECT count(*) FROM receipt WHERE mutation_id = 'publish-1';`), "2");
+  // Three vaults now hold a receipt under that one id: vault-a, vault-restore
+  // and vault-b.
+  assert.equal(await catalog.query(`SELECT count(*) FROM receipt WHERE mutation_id = 'publish-1';`), "3");
 
   held.child.stdin.end("COMMIT;\n");
   await held.done;
   await assert.rejects(waiter.done, /GEODE_CATALOG:CONFLICT/, "the blocked same-vault publication must lose on its base");
   assert.equal(await catalog.query(`SELECT count(*) FROM catalog_entry WHERE path = 'Loser.md';`), "0");
   assert.equal(await catalog.query(`SELECT sequence FROM vault WHERE vault_id = ${literal(vaultA)};`), "2");
+
+  // --- 4b/4c. Concurrent reuse of one mutation id --------------------------
+  // Phase 0 asserts these two as separate scenario groups, and the sequential
+  // versions above do not stand in for them: the schema's claim is that a
+  // *waiting* duplicate checks its receipt after the winner commits and before
+  // its own base is tested. That ordering only exists under contention, so it
+  // is only observable under contention.
+  //
+  // Run on their own vault so vault-a's sequence arithmetic below is
+  // untouched, and so the claim is stated where it is true — per vault.
+  const vaultDup = "vault-dup";
+  const dupBase = await publish(catalog.store, request({
+    vaultId: vaultDup, mutationId: "seed", baseSequence: 0,
+    notes: [{ path: "Dup.md", text: "seed" }], assets: [],
+  }));
+  assert.equal(dupBase.status, "ok");
+
+  /**
+   * Hold one publication open, block a second behind it on an observed lock
+   * wait, then release the first and hand back both outcomes.
+   */
+  async function contend(label: string, first: PublishRequest, second: PublishRequest): Promise<{
+    winner: string; waiter: Promise<string>;
+  }> {
+    const held = validatePublication(first);
+    const challenger = validatePublication(second);
+    assert.equal(held.status, "ok");
+    assert.equal(challenger.status, "ok");
+    if (held.status !== "ok" || challenger.status !== "ok") throw new Error("unreachable");
+    const prefix = `SET search_path TO ${catalog.schema}; SET statement_timeout = '10s'; SET lock_timeout = '8s';\n`;
+    const holder = catalog.openSession(`${catalog.schema}_${label}_holder`);
+    holder.child.stdin.write(prefix + "BEGIN;\n" + catalog.publishSql(held.publication) + "\\echo HELD\n");
+    await until(() => holder.output().includes("HELD"), `${label}: the winner holding the publication lock`);
+    const name = `${catalog.schema}_${label}_waiter`;
+    const blocked = catalog.openSession(name);
+    blocked.child.stdin.end(prefix + catalog.publishSql(challenger.publication));
+    await until(
+      async () => (await catalog.query(
+        `SELECT count(*) FROM pg_stat_activity WHERE application_name = ${literal(name)} AND wait_event_type = 'Lock';`,
+      )) === "1",
+      `${label}: the duplicate blocked on the publication lock`,
+    );
+    holder.child.stdin.end("COMMIT;\n");
+    const winner = (await holder.done).split("\n").map((line) => line.trim()).find((line) => line.startsWith("{")) ?? "";
+    return { winner, waiter: blocked.done };
+  }
+
+  // Group 4: same id, same payload. The waiter must return the *winner's*
+  // receipt rather than conflicting on a base that is now stale — which is the
+  // whole reason the schema checks receipts after taking the lock.
+  const identical = request({
+    vaultId: vaultDup, mutationId: "concurrent", baseSequence: 1,
+    notes: [{ path: "Dup.md", text: "published once" }], assets: [],
+  });
+  const same = await contend("same", identical, { ...identical });
+  assert.deepEqual(
+    JSON.parse(await same.waiter),
+    JSON.parse(same.winner),
+    "a concurrent identical duplicate must return the winner's receipt verbatim",
+  );
+  assert.equal(JSON.parse(same.winner).sequence, 2);
+  assert.equal(await catalog.query(`SELECT sequence FROM vault WHERE vault_id = ${literal(vaultDup)};`), "2",
+    "two concurrent identical publications must advance the sequence exactly once");
+  assert.equal(await catalog.query(`SELECT count(*) FROM receipt WHERE vault_id = ${literal(vaultDup)};`), "2",
+    "a concurrent duplicate must not create a second receipt");
+
+  // Group 5: same id, different payload. The waiter must reject, and the
+  // winner's bytes must survive the rejection intact.
+  const divergent = request({
+    vaultId: vaultDup, mutationId: "diverging", baseSequence: 2,
+    notes: [{ path: "Dup.md", text: "the winner's bytes" }], assets: [],
+  });
+  const diverged = await contend("diverge", divergent, {
+    ...divergent, notes: [{ path: "Dup.md", text: "the loser's bytes" }],
+  });
+  await assert.rejects(diverged.waiter, /GEODE_CATALOG:MUTATION_ID_REUSED/,
+    "a concurrent duplicate with a changed payload must be refused, not silently accepted");
+  assert.equal(
+    await catalog.query(`SELECT text FROM catalog_entry WHERE vault_id = ${literal(vaultDup)} AND path = 'Dup.md';`),
+    "the winner's bytes",
+    "a rejected concurrent duplicate must leave the winner's bytes intact",
+  );
+  assert.equal(await catalog.query(`SELECT sequence FROM vault WHERE vault_id = ${literal(vaultDup)};`), "3");
 
   // --- 5. Rollback: a failure after writes leaves nothing behind ------------
   const before = await snapshot();
@@ -311,31 +431,42 @@ try {
   assert.equal(await catalog.query("SELECT count(*) FROM receipt;"), receiptsBefore,
     "a refused publication must not write a receipt");
 
-  // --- 9. What VM B will have to reconstruct -------------------------------
-  // Recorded, not restored. The restore side is the next increment.
+  // --- 9. What VM B has to reconstruct -------------------------------------
+  // Stated here as durable state, not as a value handed to anyone: VM B reads
+  // the schema for itself, in its own process.
   const published = JSON.parse(await catalog.query(
-    `SELECT jsonb_build_object('sequence', (SELECT sequence FROM vault WHERE vault_id = ${literal(vaultA)}),
-      'noteCount', (SELECT count(*) FROM catalog_entry WHERE vault_id = ${literal(vaultA)} AND kind = 'note'),
-      'assetCount', (SELECT count(*) FROM catalog_entry WHERE vault_id = ${literal(vaultA)} AND kind = 'attachment'),
-      'objectCount', (SELECT count(*) FROM object WHERE vault_id = ${literal(vaultA)}));`,
+    `SELECT jsonb_build_object('sequence', (SELECT sequence FROM vault WHERE vault_id = ${literal(RESTORE_VAULT_ID)}),
+      'noteCount', (SELECT count(*) FROM catalog_entry WHERE vault_id = ${literal(RESTORE_VAULT_ID)} AND kind = 'note'),
+      'assetCount', (SELECT count(*) FROM catalog_entry WHERE vault_id = ${literal(RESTORE_VAULT_ID)} AND kind = 'attachment'),
+      'objectCount', (SELECT count(*) FROM object WHERE vault_id = ${literal(RESTORE_VAULT_ID)}));`,
   ));
 
   console.log(JSON.stringify({
     nodeOnly: true,
     postgres: await catalog.query("SHOW server_version;"),
-    vaultsPublished: 2,
+    schemaOwnedByHarness: Boolean(providedSchema),
+    vaultsPublished: 4,
+    // Phase 0's six scenario groups, re-asserted against the multi-vault
+    // schema: initial/retry/reuse, stale base, concurrent distinct ids,
+    // concurrent same id and payload, concurrent same id and changed payload,
+    // and failure after writes and receipt insertion.
+    phase0ScenarioGroups: 6,
     sourceResolution,
     firstReceipt: first.receipt,
+    restoreVaultId: RESTORE_VAULT_ID,
     published,
-    lockWaitsObserved: 1,
+    projectionBytes: Buffer.byteLength(projection, "utf8"),
+    projectionWritten: Boolean(projectionOut),
+    lockWaitsObserved: 3,
     concurrentDifferentVaultCompleted: true,
     rollbackVerified: true,
     immutabilityEnforced: true,
     portableRefusals: Object.keys(portableRefusals).length,
-    restoreImplemented: false,
   }));
 } finally {
   catalog.close();
+  // Only whoever created the schema drops it. Under the harness that is the
+  // harness, in a `finally` of its own, after VM B has also finished.
   if (installed) await catalog.drop();
   await rm(root, { recursive: true, force: true });
 }

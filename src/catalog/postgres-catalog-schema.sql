@@ -70,6 +70,10 @@ CREATE TABLE receipt (
 -- and recorded verbatim; the database compares it but does not define it.
 -- `notes` is [{path, text}]; `assets` is [{path, contentAddress, contentType,
 -- hex}]. `fail` injects a post-write failure so rollback is observable.
+-- `fail_before_receipt` injects one *earlier* — after the sequence, objects and
+-- catalog entries are written but before the receipt row exists. That window is
+-- the one a reader is most likely to get wrong, so it is worth being able to
+-- die inside it on purpose rather than reasoning about it.
 -- Parameters are `p_`-prefixed: `vault` and `receipt` are table names here, and
 -- a parameter that shadows one turns a later edit into a silent behavior change.
 CREATE FUNCTION publish_catalog(
@@ -79,7 +83,8 @@ CREATE FUNCTION publish_catalog(
   p_base bigint,
   p_notes jsonb,
   p_assets jsonb,
-  p_fail boolean DEFAULT false
+  p_fail boolean DEFAULT false,
+  p_fail_before_receipt boolean DEFAULT false
 ) RETURNS jsonb LANGUAGE plpgsql AS $$
 DECLARE
   prior receipt%ROWTYPE;
@@ -147,6 +152,9 @@ BEGIN
     'vaultId', p_vault, 'mutationId', p_mutation, 'sequence', next_sequence,
     'digest', p_digest,
     'noteCount', jsonb_array_length(p_notes), 'assetCount', jsonb_array_length(p_assets));
+  IF p_fail_before_receipt THEN
+    RAISE EXCEPTION 'GEODE_CATALOG:INJECTED_FAILURE_BEFORE_RECEIPT';
+  END IF;
   INSERT INTO receipt (vault_id, mutation_id, digest, receipt)
     VALUES (p_vault, p_mutation, p_digest, result);
   IF p_fail THEN
@@ -154,4 +162,40 @@ BEGIN
   END IF;
   RETURN result;
 END;
+$$;
+
+-- Read one vault back in a single statement.
+--
+-- One statement, so the read is consistent by MVCC alone: it cannot observe a
+-- concurrent publication half-applied, and it needs no lock and blocks no
+-- publisher. The caller wraps it in an explicit REPEATABLE READ transaction
+-- anyway, so that splitting this into several statements later cannot silently
+-- turn one consistent read into several inconsistent ones.
+--
+-- Returns NULL when the vault does not exist, which the adapter reports as
+-- `absent`. The join to `object` is a LEFT JOIN on purpose: a catalog entry
+-- pointing at bytes the store cannot produce must come back as an entry with
+-- no bytes, so the contract can refuse it by name, rather than silently
+-- vanishing from the result set.
+CREATE FUNCTION restore_catalog(p_vault text) RETURNS jsonb LANGUAGE sql STABLE AS $$
+  SELECT CASE
+    WHEN NOT EXISTS (SELECT 1 FROM vault WHERE vault_id = p_vault) THEN NULL
+    ELSE jsonb_build_object(
+      'vaultId', p_vault,
+      'sequence', (SELECT sequence FROM vault WHERE vault_id = p_vault),
+      'entries', COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'path', e.path,
+          'kind', e.kind,
+          'text', e.text,
+          'contentAddress', e.content_address,
+          'contentType', o.content_type,
+          'byteLength', o.byte_length,
+          'hex', encode(o.bytes, 'hex')
+        ) ORDER BY e.path)
+        FROM catalog_entry e
+        LEFT JOIN object o ON o.vault_id = e.vault_id AND o.content_address = e.content_address
+        WHERE e.vault_id = p_vault
+      ), '[]'::jsonb))
+  END;
 $$;

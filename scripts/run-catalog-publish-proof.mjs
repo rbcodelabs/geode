@@ -23,7 +23,7 @@ try {
     "src/catalog/postgres-catalog-store.ts",
     "src/wiki/catalog-contract.ts", "src/wiki/folder-provider.ts", "src/wiki/contracts.ts",
     "src/wiki/local-filesystem.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts",
-    "src/wiki/link-candidates.ts", "src/wiki/constants.ts",
+    "src/wiki/link-candidates.ts", "src/wiki/constants.ts", "src/wiki/query-projection.ts",
     "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts",
   ]);
   for (const path of sources) assert.ok(permitted.has(path), `Unexpected runtime dependency: ${path}`);

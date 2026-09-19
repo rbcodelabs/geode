@@ -2,12 +2,18 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  CatalogStore,
-  CommitStatus,
-  PublishReceipt,
-  PublishResult,
-  ValidatedPublication,
+import {
+  verifyRestoredVault,
+  type CatalogRestoreSource,
+  type CatalogStore,
+  type CommitStatus,
+  type PublishReceipt,
+  type PublishResult,
+  type RawRestoredEntry,
+  type RawRestoredVault,
+  type RestoreOptions,
+  type RestoreResult,
+  type ValidatedPublication,
 } from "../wiki/catalog-contract";
 
 /**
@@ -83,12 +89,30 @@ export interface PostgresCatalog {
   readonly schema: string;
   /** The contract surface. Hand this to `publish()`; nothing else should reach the adapter. */
   readonly store: CatalogStore;
+  /**
+   * The read surface. Hand this to `restore()`.
+   *
+   * A factory rather than a property because the verification limits are a
+   * per-call policy, not a property of the connection — a caller restoring
+   * under tighter ceilings should not have to build a second adapter.
+   */
+  restoreSource(options?: RestoreOptions): CatalogRestoreSource;
+  /**
+   * The raw, unverified read. Exposed so a proof can observe what the store
+   * actually returned *before* the contract refused it; ordinary callers want
+   * `restoreSource`, which verifies.
+   */
+  readVault(vaultId: string): Promise<RawRestoredVault | null>;
   /** Run SQL in a fresh session against the adapter's schema. */
   query(sql: string): Promise<string>;
   /** Start a session the caller drives, e.g. to hold a transaction open. */
   openSession(applicationName?: string): PostgresSession;
-  /** The exact `publish_catalog(...)` call for a publication, for callers driving their own session. */
-  publishSql(publication: ValidatedPublication, options?: { fail?: boolean }): string;
+  /**
+   * The exact `publish_catalog(...)` call for a publication, for callers
+   * driving their own session. `failBeforeReceipt` dies in the window after
+   * the entries are written and before the receipt exists.
+   */
+  publishSql(publication: ValidatedPublication, options?: { fail?: boolean; failBeforeReceipt?: boolean }): string;
   install(): Promise<void>;
   /** Drop exactly this adapter's schema. Safe to call when `install` never ran. */
   drop(): Promise<void>;
@@ -134,7 +158,7 @@ export function createPostgresCatalog(options: PostgresCatalogOptions): Postgres
     return current.done;
   }
 
-  function publishSql(publication: ValidatedPublication, { fail = false } = {}): string {
+  function publishSql(publication: ValidatedPublication, { fail = false, failBeforeReceipt = false } = {}): string {
     const notes = publication.notes.map((note) => ({ path: note.path, text: note.text }));
     // Bytes travel as hex and are decoded server-side, which keeps binary
     // content out of the JSON payload and out of any shell quoting question.
@@ -144,9 +168,13 @@ export function createPostgresCatalog(options: PostgresCatalogOptions): Postgres
       contentType: asset.contentType,
       hex: hex(asset.bytes),
     }));
+    // The eighth argument is emitted only when it is set, so the ordinary call
+    // this generates stays byte-identical to the one before the injection
+    // point existed, and the schema default carries the common case.
+    const before = failBeforeReceipt ? ", true" : "";
     return `SELECT publish_catalog(${literal(publication.vaultId)}, ${literal(publication.mutationId)}, ` +
       `${literal(publication.digest)}, ${publication.baseSequence}, ` +
-      `${literal(JSON.stringify(notes))}::jsonb, ${literal(JSON.stringify(assets))}::jsonb, ${fail});\n`;
+      `${literal(JSON.stringify(notes))}::jsonb, ${literal(JSON.stringify(assets))}::jsonb, ${fail}${before});\n`;
   }
 
   const store: CatalogStore = {
@@ -177,9 +205,79 @@ export function createPostgresCatalog(options: PostgresCatalogOptions): Postgres
     },
   };
 
+  /**
+   * One row as `restore_catalog` emits it. Every field is optional because
+   * this is what the *database* said, not what the contract will accept.
+   */
+  interface RestoreRow {
+    path?: unknown; kind?: unknown; text?: unknown;
+    contentAddress?: unknown; contentType?: unknown; byteLength?: unknown; hex?: unknown;
+  }
+
+  const asString = (value: unknown): string | null => (typeof value === "string" ? value : null);
+
+  function toEntry(row: RestoreRow): RawRestoredEntry {
+    // `hex` is the only place a malformed value could throw rather than be
+    // refused, so a hex string the store cannot have produced yields no bytes
+    // and becomes `missing-object` — never an exception out of a read.
+    const raw = asString(row.hex);
+    const bytes = raw !== null && /^(?:[0-9a-fA-F]{2})*$/.test(raw) ? new Uint8Array(Buffer.from(raw, "hex")) : null;
+    return {
+      path: asString(row.path) ?? "",
+      kind: asString(row.kind) ?? "",
+      text: asString(row.text),
+      contentAddress: asString(row.contentAddress),
+      contentType: asString(row.contentType),
+      byteLength: typeof row.byteLength === "number" ? row.byteLength : null,
+      bytes,
+    };
+  }
+
+  async function readVault(vaultId: string): Promise<RawRestoredVault | null> {
+    // REPEATABLE READ is redundant for a single statement and stated anyway:
+    // it is the property the restore depends on, and a future edit that splits
+    // the read should not have to rediscover that.
+    const raw = await query(
+      "BEGIN ISOLATION LEVEL REPEATABLE READ;\n" +
+      `SELECT restore_catalog(${literal(vaultId)});\n` +
+      "COMMIT;\n",
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { vaultId?: unknown; sequence?: unknown; entries?: unknown };
+    return {
+      vaultId: asString(parsed.vaultId) ?? vaultId,
+      sequence: typeof parsed.sequence === "number" ? parsed.sequence : Number.NaN,
+      entries: Array.isArray(parsed.entries) ? parsed.entries.map((row) => toEntry(row as RestoreRow)) : [],
+    };
+  }
+
+  function restoreSource(options: RestoreOptions = {}): CatalogRestoreSource {
+    return {
+      async restore(vaultId): Promise<RestoreResult> {
+        let raw: RawRestoredVault | null;
+        try {
+          raw = await readVault(vaultId);
+        } catch {
+          // A read has no named database-side refusals — the schema raises
+          // none on this path — so an unreachable server, a dropped schema and
+          // unparseable output all land on the one honest status.
+          return { status: "store-failed" };
+        }
+        if (!raw) return { status: "absent" };
+        // The adapter does I/O; the portable contract decides. Every refusal a
+        // restore can produce is named in `src/wiki/catalog-contract.ts`, so a
+        // second adapter cannot invent its own vocabulary — or quietly skip
+        // the verification by answering from its own reasoning about the read.
+        return verifyRestoredVault(raw, options);
+      },
+    };
+  }
+
   return {
     schema,
     store,
+    restoreSource,
+    readVault,
     query,
     openSession,
     publishSql,

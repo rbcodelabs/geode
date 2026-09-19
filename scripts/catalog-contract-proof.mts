@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   DEFAULT_CATALOG_LIMITS,
+  DEFAULT_RESTORE_LIMITS,
   publish,
+  restore,
   validatePublication,
+  verifyRestoredVault,
   type CatalogAsset,
+  type CatalogRestoreSource,
   type CatalogStore,
   type PublishRequest,
+  type RawRestoredEntry,
   type ValidatedPublication,
 } from "../src/wiki/catalog-contract";
 
@@ -190,6 +195,128 @@ assert.equal(passed.status, "ok");
 assert.equal(contacted.length, 1, "a valid publication must reach the store exactly once");
 assert.equal(contacted[0].digest, accepted.publication.digest);
 
+// --- The restore side, equally database-free --------------------------------
+// The same discipline in the other direction: a store's answer is checked, not
+// trusted, and every way it can be wrong has its own name. None of this needs
+// a database, so none of it waits for one.
+const entry = (overrides: Partial<RawRestoredEntry> = {}): RawRestoredEntry => ({
+  path: "assets/diagram.png", kind: "attachment", contentAddress: sha(pngBytes),
+  contentType: "image/png", byteLength: pngBytes.byteLength, bytes: pngBytes, ...overrides,
+});
+const noteEntry = (overrides: Partial<RawRestoredEntry> = {}): RawRestoredEntry => ({
+  path: "Index.md", kind: "note", text: "# Index\n\nSee [[Decision]].\n", ...overrides,
+});
+const vault = (entries: RawRestoredEntry[], sequence = 4) => ({ vaultId: "vault-a", sequence, entries });
+
+const restored = verifyRestoredVault(vault([noteEntry(), entry()]));
+assert.equal(restored.status, "ok", "a well-formed restored vault must verify");
+if (restored.status !== "ok") throw new Error("unreachable");
+assert.equal(restored.vault.notes.length, 1);
+assert.equal(restored.vault.assets.length, 1);
+assert.equal(restored.vault.sequence, 4, "the restored sequence comes from the store, not from a guess");
+assert.equal(
+  restored.vault.totalBytes,
+  Buffer.byteLength(noteEntry().text as string, "utf8") + pngBytes.byteLength,
+  "restored bytes must be measured on the way out",
+);
+
+// Two paths sharing one content address is the *accepting* case: one stored
+// object, two files. Refusing it would make attachment dedup impossible.
+const shared = verifyRestoredVault(vault([entry(), entry({ path: "assets/copy.png" })]));
+assert.equal(shared.status, "ok", "two paths may share one content address when the bytes agree");
+
+const restoreRefusals = {
+  invalidVaultId: verifyRestoredVault({ vaultId: "has space", sequence: 1, entries: [noteEntry()] }),
+  absent: verifyRestoredVault(vault([], 0)),
+  invalidSequence: verifyRestoredVault(vault([noteEntry()], 0)),
+  entryLimit: verifyRestoredVault(
+    vault(Array.from({ length: 5 }, (_unused, index) => noteEntry({ path: `N-${index}.md` }))),
+    { limits: { ...DEFAULT_RESTORE_LIMITS, maxEntries: 4 } },
+  ),
+  unknownEntryKind: verifyRestoredVault(vault([noteEntry({ kind: "directory" })])),
+  invalidPath: verifyRestoredVault(vault([noteEntry({ path: "../Escape.md" })])),
+  invalidPathDotted: verifyRestoredVault(vault([noteEntry({ path: ".secret/Note.md" })])),
+  notANote: verifyRestoredVault(vault([noteEntry({ path: "Image.png" })])),
+  assetIsANote: verifyRestoredVault(vault([entry({ path: "Sneaky.md" })])),
+  duplicatePath: verifyRestoredVault(vault([noteEntry(), noteEntry({ text: "different" })])),
+  portabilityCollision: verifyRestoredVault(vault([noteEntry(), noteEntry({ path: "INDEX.md" })])),
+  incompleteNote: verifyRestoredVault(vault([noteEntry({ text: null })])),
+  incompleteAsset: verifyRestoredVault(vault([entry({ contentType: null })])),
+  missingObject: verifyRestoredVault(vault([entry({ bytes: null })])),
+  byteLengthMismatch: verifyRestoredVault(vault([entry({ byteLength: pngBytes.byteLength + 1 })])),
+  oversizeNote: verifyRestoredVault(vault([noteEntry({ text: "x".repeat(DEFAULT_RESTORE_LIMITS.maxNoteBytes + 1) })])),
+  oversizeAsset: verifyRestoredVault(vault([entry({
+    bytes: new Uint8Array(DEFAULT_RESTORE_LIMITS.maxAssetBytes + 1), byteLength: DEFAULT_RESTORE_LIMITS.maxAssetBytes + 1,
+    contentAddress: sha(new Uint8Array(DEFAULT_RESTORE_LIMITS.maxAssetBytes + 1)),
+  })])),
+  unsupportedContentType: verifyRestoredVault(vault([entry({ contentType: "application/x-msdownload" })])),
+  invalidContentAddress: verifyRestoredVault(vault([entry({ contentAddress: sha(otherBytes) })])),
+  invalidContentAddressShape: verifyRestoredVault(vault([entry({ contentAddress: "not-a-hash" })])),
+  duplicateWithMismatchedBytes: verifyRestoredVault(vault([
+    entry(),
+    entry({ path: "assets/b.png", bytes: otherBytes, byteLength: otherBytes.byteLength }),
+  ])),
+};
+
+assert.deepEqual(
+  Object.fromEntries(Object.entries(restoreRefusals).map(([name, result]) => [name, result.status])),
+  {
+    invalidVaultId: "invalid-vault-id",
+    absent: "absent",
+    invalidSequence: "invalid-sequence",
+    entryLimit: "entry-limit",
+    unknownEntryKind: "unknown-entry-kind",
+    invalidPath: "invalid-path",
+    invalidPathDotted: "invalid-path",
+    notANote: "not-a-note",
+    assetIsANote: "asset-is-a-note",
+    duplicatePath: "duplicate-path",
+    portabilityCollision: "portability-collision",
+    incompleteNote: "incomplete-entry",
+    incompleteAsset: "incomplete-entry",
+    missingObject: "missing-object",
+    byteLengthMismatch: "byte-length-mismatch",
+    oversizeNote: "oversize",
+    oversizeAsset: "oversize",
+    unsupportedContentType: "unsupported-content-type",
+    invalidContentAddress: "invalid-content-address",
+    invalidContentAddressShape: "invalid-content-address",
+    duplicateWithMismatchedBytes: "duplicate-with-mismatched-bytes",
+  },
+  "every restore refusal must be reported by its own distinct status",
+);
+
+// A truncated read trips both the recorded length and the digest. The store
+// contradicting its own metadata is the sharper diagnosis, and this pins that
+// order so a refactor cannot silently downgrade it to `invalid-content-address`.
+const truncated = new Uint8Array(pngBytes.slice(0, 4));
+assert.equal(
+  verifyRestoredVault(vault([entry({ bytes: truncated })])).status,
+  "byte-length-mismatch",
+  "a truncated read must be diagnosed against the store's own recorded length first",
+);
+
+assert.deepEqual(
+  ["oversizeNote", "oversizeAsset"].map((name) => (restoreRefusals[name as keyof typeof restoreRefusals] as { limit?: string }).limit),
+  ["note-bytes", "asset-bytes"],
+  "an oversize restore must name which limit it tripped",
+);
+assert.equal(
+  (verifyRestoredVault(vault([noteEntry()]), { limits: { ...DEFAULT_RESTORE_LIMITS, maxVaultBytes: 1 } }) as { limit?: string }).limit,
+  "vault-bytes",
+  "the whole-vault ceiling is its own measurable cause",
+);
+
+// --- A refused restore never reaches the source -----------------------------
+const asked: string[] = [];
+const recordingSource: CatalogRestoreSource = {
+  restore: async (vaultId) => { asked.push(vaultId); return verifyRestoredVault(vault([noteEntry(), entry()])); },
+};
+assert.equal((await restore(recordingSource, "has space")).status, "invalid-vault-id");
+assert.equal(asked.length, 0, "a malformed vault id must not become a query");
+assert.equal((await restore(recordingSource, "vault-a")).status, "ok");
+assert.deepEqual(asked, ["vault-a"], "a valid vault id must reach the source exactly once");
+
 console.log(JSON.stringify({
   nodeOnly: true,
   databaseFree: true,
@@ -199,4 +326,7 @@ console.log(JSON.stringify({
   refusalsObserved: Object.keys(refusals).length,
   distinctStatuses: new Set(Object.values(refusals).map((result) => result.status)).size,
   storeContactedAfterRefusal: false,
+  restoreRefusalsObserved: Object.keys(restoreRefusals).length,
+  restoreDistinctStatuses: new Set(Object.values(restoreRefusals).map((result) => result.status)).size,
+  restoreSourceContactedAfterRefusal: false,
 }));

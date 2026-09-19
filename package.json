@@ -28,6 +28,7 @@
     "proof:catalog": "npm run typecheck:headless && node scripts/run-catalog-contract-proof.mjs",
     "proof:headless:postgres": "node scripts/headless-postgres-proof.mjs",
     "proof:catalog:postgres": "node scripts/run-catalog-publish-proof.mjs",
+    "proof:catalog:restore": "npm run typecheck:headless && node scripts/run-catalog-restore-proof.mjs",
     "dist": "npm run build && electron-builder --mac",
     "release": "npm run build && electron-builder --mac --publish always"
   },

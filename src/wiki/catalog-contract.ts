@@ -26,8 +26,8 @@ import { normalizeWikiPath } from "./link-candidates";
  * told me one content address means two different things" without parsing
  * prose.
  *
- * Restore is *declared* here and deliberately not implemented in this
- * increment — see `CatalogRestoreSource`.
+ * Restore is implemented here too, and on the same terms: a store's answer is
+ * *verified*, never trusted. See `verifyRestoredVault`.
  */
 
 /** Lowercase hex SHA-256 of an object's exact bytes. 64 characters. */
@@ -94,8 +94,12 @@ export const DEFAULT_CATALOG_LIMITS: Readonly<CatalogLimits> = Object.freeze({
   ]),
 });
 
-/** Which limit an `oversize` refusal tripped. One named status, three measurable causes. */
-export type OversizeLimit = "note-bytes" | "asset-bytes" | "publication-bytes";
+/**
+ * Which limit an `oversize` refusal tripped. One named status, four measurable
+ * causes — three on the publish side, and `vault-bytes` on the restore side,
+ * where the ceiling is the whole vault rather than one publication.
+ */
+export type OversizeLimit = "note-bytes" | "asset-bytes" | "publication-bytes" | "vault-bytes";
 
 /**
  * Why a publication was refused.
@@ -215,32 +219,134 @@ export interface CatalogStore {
 }
 
 /**
- * The narrow outbound port for restoring — **declared, not implemented.**
+ * The narrow outbound port for restoring.
  *
- * It is stated here because the publish side's shape is only reviewable
- * against the read it has to satisfy: a restore must return enough to rebuild
- * a snapshot whose resolution, search and backlink results equal the
- * publisher's. It is deliberately separate from `CatalogStore` so that an
- * implementer of one is not forced to stub the other, the same way
- * `WikiIndexSink` and `WikiEventSink` are two interfaces rather than one.
- *
- * No adapter in this increment implements this. Building it is the next
- * increment's scope, and this declaration does not authorize it.
+ * Deliberately separate from `CatalogStore` so that an implementer of one is
+ * not forced to stub the other, the same way `WikiIndexSink` and
+ * `WikiEventSink` are two interfaces rather than one.
  */
 export interface CatalogRestoreSource {
   restore(vaultId: string): Promise<RestoreResult>;
 }
 
+/** A verified vault, ready to be materialized. Entries are sorted by path. */
 export interface RestoredVault {
   readonly vaultId: string;
   readonly sequence: number;
   readonly notes: readonly CatalogNote[];
   readonly assets: readonly CatalogAsset[];
+  /** Sum of note UTF-8 bytes and asset bytes, measured on the way out. */
+  readonly totalBytes: number;
 }
+
+/**
+ * One row exactly as a store hands it back, before anything has been checked.
+ *
+ * Every field beyond `path` is nullable and loosely typed on purpose. A store
+ * that returns something impossible — an attachment with no bytes, a kind this
+ * contract has never heard of, a byte length that disagrees with the bytes —
+ * must be refused *by name*, not crash a destructuring assignment. This is the
+ * restore-side equivalent of accepting a caller-declared content address so it
+ * can be checked rather than trusted.
+ */
+export interface RawRestoredEntry {
+  readonly path: string;
+  readonly kind: string;
+  readonly text?: string | null;
+  readonly contentAddress?: string | null;
+  readonly contentType?: string | null;
+  /** The length the store *recorded*, which may disagree with the bytes it returned. */
+  readonly byteLength?: number | null;
+  readonly bytes?: Uint8Array | null;
+}
+
+export interface RawRestoredVault {
+  readonly vaultId: string;
+  readonly sequence: number;
+  readonly entries: readonly RawRestoredEntry[];
+}
+
+/**
+ * Ceilings applied to a restore.
+ *
+ * Separate from `CatalogLimits` because the quantities are different: a vault
+ * accumulates across many publications, so measuring it against
+ * `maxPublicationBytes` would refuse a legitimately large vault that was
+ * published correctly in small pieces.
+ */
+export interface RestoreLimits {
+  readonly maxNoteBytes: number;
+  readonly maxAssetBytes: number;
+  /** Ceiling on the whole restored vault's note + asset bytes. */
+  readonly maxVaultBytes: number;
+  readonly maxEntries: number;
+  /** Exact-match allowlist, applied on the way out as well as on the way in. */
+  readonly allowedContentTypes: readonly string[];
+}
+
+export const DEFAULT_RESTORE_LIMITS: Readonly<RestoreLimits> = Object.freeze({
+  maxNoteBytes: 2 * 1024 * 1024,
+  maxAssetBytes: 16 * 1024 * 1024,
+  maxVaultBytes: 256 * 1024 * 1024,
+  maxEntries: 10_000,
+  allowedContentTypes: DEFAULT_CATALOG_LIMITS.allowedContentTypes,
+});
+
+/**
+ * Why a restore was refused.
+ *
+ * The publish-side names are reused wherever the invariant is the same one,
+ * because a reviewer should not have to learn two vocabularies for "this path
+ * is not portable". The statuses that exist only here describe a store
+ * contradicting *itself* — which is exactly the class of failure a restore that
+ * trusted its store would materialize onto disk without noticing.
+ */
+export type RestoreStatus =
+  /** `vaultId` is not a portable identifier. Refused before the store is contacted. */
+  | "invalid-vault-id"
+  /** No such vault, or a vault with no entries. There is nothing to restore. */
+  | "absent"
+  /** The stored sequence is not a positive safe integer. */
+  | "invalid-sequence"
+  /** The vault holds more entries than `maxEntries`. */
+  | "entry-limit"
+  /** A stored path is not a portable vault-relative path. */
+  | "invalid-path"
+  /** A stored note's path is not `.md`. */
+  | "not-a-note"
+  /** A stored attachment's path *is* `.md`. */
+  | "asset-is-a-note"
+  /** Two stored entries claim the same path. */
+  | "duplicate-path"
+  /** Two stored entries fold onto the same NFC-lowercased identity. */
+  | "portability-collision"
+  /** A stored `kind` is neither `note` nor `attachment`. */
+  | "unknown-entry-kind"
+  /** A note with no text, or an attachment missing its address or content type. */
+  | "incomplete-entry"
+  /** An attachment entry whose content address resolves to no bytes at all. */
+  | "missing-object"
+  /** The store's own recorded byte length disagrees with the bytes it returned. */
+  | "byte-length-mismatch"
+  /** A restored note or asset exceeds `maxNoteBytes`, `maxAssetBytes` or `maxVaultBytes`. */
+  | "oversize"
+  /** A stored content type is not in the allowlist. */
+  | "unsupported-content-type"
+  /** A stored address is not 64 lowercase hex characters, or is not the SHA-256 of the returned bytes. */
+  | "invalid-content-address"
+  /** One content address came back describing two different byte strings. */
+  | "duplicate-with-mismatched-bytes"
+  /** The store could not be reached, or failed for a reason it does not name. */
+  | "store-failed";
 
 export type RestoreResult =
   | { readonly status: "ok"; readonly vault: RestoredVault }
-  | { readonly status: "absent" | "invalid-vault-id" | "invalid-content-address" | "store-failed" };
+  | ({ readonly status: RestoreStatus } & RefusalDetail);
+
+export interface RestoreOptions {
+  limits?: RestoreLimits;
+  digest?: Digest;
+}
 
 /** The hashing seam. `node:crypto` supplies the default; a caller may substitute one. */
 export interface Digest {
@@ -410,4 +516,149 @@ export async function publish(
   const validation = validatePublication(request, options);
   if (validation.status !== "ok") return validation;
   return store.commit(validation.publication);
+}
+
+/**
+ * Check everything a store handed back, before a single byte is written down.
+ *
+ * A restore is not a privileged read. The bytes coming *out* get the same
+ * treatment as the bytes going in: the address is recomputed from the payload
+ * and compared, paths are re-validated against the same portability rules, and
+ * content types are re-checked against the allowlist. The publish side already
+ * verified all of this — which is exactly why re-verifying is worth doing, as
+ * the only failures it can catch are the ones that happened *after* a
+ * successful publication: corruption, truncation, a partial read, an
+ * out-of-band write, or a store bug.
+ *
+ * Check order mirrors `validatePublication`: identity, shape, per-entry paths,
+ * cross-entry identity, sizes, then content addresses. Within the byte checks,
+ * `byte-length-mismatch` is tested before the digest, because "the store's own
+ * metadata disagrees with the store's own bytes" is a sharper diagnosis than
+ * "this hash is wrong", and both are true of a truncated read.
+ */
+export function verifyRestoredVault(raw: RawRestoredVault, options: RestoreOptions = {}): RestoreResult {
+  const limits = options.limits ?? DEFAULT_RESTORE_LIMITS;
+  const digest = options.digest ?? nodeDigest;
+
+  if (!IDENTIFIER_RE.test(raw.vaultId)) return { status: "invalid-vault-id" };
+  if (!raw.entries.length) return { status: "absent" };
+  if (!Number.isSafeInteger(raw.sequence) || raw.sequence < 1) return { status: "invalid-sequence", observed: raw.sequence };
+  if (raw.entries.length > limits.maxEntries) {
+    return { status: "entry-limit", observed: raw.entries.length, allowed: limits.maxEntries };
+  }
+
+  for (const entry of raw.entries) {
+    if (entry.kind !== "note" && entry.kind !== "attachment") {
+      return { status: "unknown-entry-kind", path: entry.path };
+    }
+    if (invalidPath(entry.path)) return { status: "invalid-path", path: entry.path };
+    if (entry.kind === "note" && !isNote(entry.path)) return { status: "not-a-note", path: entry.path };
+    if (entry.kind === "attachment" && isNote(entry.path)) return { status: "asset-is-a-note", path: entry.path };
+  }
+
+  const seenPaths = new Set<string>();
+  const seenIdentities = new Set<string>();
+  for (const entry of raw.entries) {
+    if (seenPaths.has(entry.path)) return { status: "duplicate-path", path: entry.path };
+    seenPaths.add(entry.path);
+    const key = identityKey(entry.path);
+    if (seenIdentities.has(key)) return { status: "portability-collision", path: entry.path };
+    seenIdentities.add(key);
+  }
+
+  const notes: CatalogNote[] = [];
+  const assets: CatalogAsset[] = [];
+  for (const entry of raw.entries) {
+    if (entry.kind === "note") {
+      if (typeof entry.text !== "string") return { status: "incomplete-entry", path: entry.path };
+      notes.push({ path: entry.path, text: entry.text });
+      continue;
+    }
+    if (typeof entry.contentAddress !== "string" || typeof entry.contentType !== "string") {
+      return { status: "incomplete-entry", path: entry.path };
+    }
+    // A catalog entry pointing at an address the store cannot produce bytes for
+    // is a dangling reference, not a corrupt object — its own name.
+    if (!(entry.bytes instanceof Uint8Array)) {
+      return { status: "missing-object", path: entry.path, contentAddress: entry.contentAddress };
+    }
+    assets.push({
+      path: entry.path, contentAddress: entry.contentAddress,
+      contentType: entry.contentType, bytes: entry.bytes,
+    });
+  }
+
+  let totalBytes = 0;
+  for (const note of notes) {
+    const bytes = utf8.encode(note.text).byteLength;
+    if (bytes > limits.maxNoteBytes) {
+      return { status: "oversize", limit: "note-bytes", path: note.path, observed: bytes, allowed: limits.maxNoteBytes };
+    }
+    totalBytes += bytes;
+  }
+  for (const asset of assets) {
+    if (asset.bytes.byteLength > limits.maxAssetBytes) {
+      return {
+        status: "oversize", limit: "asset-bytes", path: asset.path,
+        observed: asset.bytes.byteLength, allowed: limits.maxAssetBytes,
+      };
+    }
+    totalBytes += asset.bytes.byteLength;
+  }
+  if (totalBytes > limits.maxVaultBytes) {
+    return { status: "oversize", limit: "vault-bytes", observed: totalBytes, allowed: limits.maxVaultBytes };
+  }
+
+  for (const asset of assets) {
+    if (!limits.allowedContentTypes.includes(asset.contentType)) {
+      return { status: "unsupported-content-type", path: asset.path, contentType: asset.contentType };
+    }
+  }
+
+  for (const entry of raw.entries) {
+    if (entry.kind !== "attachment" || typeof entry.byteLength !== "number") continue;
+    const actual = (entry.bytes as Uint8Array).byteLength;
+    if (entry.byteLength !== actual) {
+      return {
+        status: "byte-length-mismatch", path: entry.path,
+        contentAddress: entry.contentAddress ?? undefined, observed: actual, allowed: entry.byteLength,
+      };
+    }
+  }
+
+  const byAddress = new Map<ContentAddress, Uint8Array>();
+  for (const asset of assets) {
+    const existing = byAddress.get(asset.contentAddress);
+    if (existing && !bytesEqual(existing, asset.bytes)) {
+      return { status: "duplicate-with-mismatched-bytes", path: asset.path, contentAddress: asset.contentAddress };
+    }
+    byAddress.set(asset.contentAddress, asset.bytes);
+  }
+  for (const asset of assets) {
+    if (!CONTENT_ADDRESS_RE.test(asset.contentAddress) || digest.sha256Hex(asset.bytes) !== asset.contentAddress) {
+      return { status: "invalid-content-address", path: asset.path, contentAddress: asset.contentAddress };
+    }
+  }
+
+  const byPath = (a: { path: string }, b: { path: string }): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  return {
+    status: "ok",
+    vault: Object.freeze({
+      vaultId: raw.vaultId,
+      sequence: raw.sequence,
+      notes: Object.freeze([...notes].sort(byPath)),
+      assets: Object.freeze([...assets].sort(byPath)),
+      totalBytes,
+    }),
+  };
+}
+
+/**
+ * Validate the request, then read. The only supported way to reach a
+ * `CatalogRestoreSource`, and the mirror of `publish`: a malformed vault id is
+ * refused here rather than turned into a query.
+ */
+export async function restore(source: CatalogRestoreSource, vaultId: string): Promise<RestoreResult> {
+  if (!IDENTIFIER_RE.test(vaultId)) return { status: "invalid-vault-id" };
+  return source.restore(vaultId);
 }
