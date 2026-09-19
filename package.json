@@ -3,6 +3,11 @@
   "version": "0.22.2",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
+  "//exports": "The desktop app entry stays on `main`, which is what Electron reads. `./wiki` is the headless engine SDK: one curated entry point (src/wiki/index.ts), not the directory. Everything else under src/wiki/ is internal by omission — see docs/design/headless-wiki-sdk.md. It resolves to TypeScript source on purpose: in-repo consumers (the proof scripts, and the MCP server that follows) bundle from source with esbuild exactly as every existing proof does, and publishing this package to a registry is out of scope by contract, so a separate dist artifact would be build surface with no consumer.",
+  "exports": {
+    ".": "./dist/main.js",
+    "./wiki": "./src/wiki/index.ts"
+  },
   "scripts": {
     "test": "vitest run && npm run build && playwright test",
     "test:unit": "vitest run",
@@ -26,6 +31,7 @@
     "proof:local-wiki": "npm run typecheck:headless && node scripts/run-local-wiki-node-proof.mjs",
     "proof:local-wiki-write": "npm run typecheck:headless && node scripts/run-local-wiki-write-proof.mjs",
     "proof:catalog": "npm run typecheck:headless && node scripts/run-catalog-contract-proof.mjs",
+    "proof:wiki-sdk": "npm run typecheck:headless && node scripts/run-wiki-sdk-proof.mjs",
     "proof:headless:postgres": "node scripts/headless-postgres-proof.mjs",
     "proof:catalog:postgres": "node scripts/run-catalog-publish-proof.mjs",
     "proof:catalog:restore": "npm run typecheck:headless && node scripts/run-catalog-restore-proof.mjs",
