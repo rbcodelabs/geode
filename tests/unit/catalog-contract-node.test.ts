@@ -13,8 +13,8 @@ it("validates and refuses publications and restores in a fresh Node process with
     // Measured from the fixture, so a contract that stopped counting bytes
     // would change this rather than still print the same constant.
     totalBytes: 125,
-    refusalsObserved: 19,
-    distinctStatuses: 14,
+    refusalsObserved: 20,
+    distinctStatuses: 15,
     storeContactedAfterRefusal: false,
     // The restore side is refused on the same terms, and — the point of this
     // proof — with no database anywhere in the process.
