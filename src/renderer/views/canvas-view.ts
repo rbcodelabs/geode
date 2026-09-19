@@ -2824,6 +2824,15 @@ export class CanvasView implements View {
     this.containerEl.dataset.canvasDirty = "true";
     delete this.containerEl.dataset.canvasSaveError;
     this.setSaveStatus("Saving Canvas…", false, false);
+    // Our own write echoes back through the vault's "modify" event (Vault.modify
+    // updates its content cache and triggers synchronously, before this await
+    // resolves and before lastKnownText below is updated) — reloadFromFile's
+    // guard compares against the not-yet-updated lastKnownText and can never
+    // catch it. Without this flag, every successful persist spuriously replays
+    // reloadFromFile(true), swapping this.document for a freshly parsed clone
+    // and silently discarding any in-flight edit (a just-typed text change, a
+    // just-dropped node) that hasn't itself reached disk yet.
+    this.suppressReconcileModify = true;
     try {
       await this.app.vault.modify(this.file, text);
       if (prior !== null) this.pushHistory(this.undoStack, prior);
@@ -2833,6 +2842,9 @@ export class CanvasView implements View {
       this.containerEl.dataset.canvasSaved = text;
       this.setSaveStatus("Canvas saved", false, false);
     } catch (error) {
+      // The write never reached the vault, so it never fired (and therefore
+      // never consumed) the "modify" event that would otherwise clear this.
+      this.suppressReconcileModify = false;
       this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
       this.containerEl.dataset.canvasDirty = "true";
       this.setSaveStatus("Canvas save failed", true, true);
@@ -2915,6 +2927,9 @@ export class CanvasView implements View {
     this.selectedEdgeIds.clear();
     this.render();
     this.containerEl.dataset.canvasDirty = "true";
+    // Same self-write echo as doPersist() (see the comment there): this write
+    // must not let its own "modify" event bounce back into a spurious reload.
+    this.suppressReconcileModify = true;
     try {
       await this.app.vault.modify(this.file, snapshot);
       source.pop();
@@ -2924,6 +2939,7 @@ export class CanvasView implements View {
       this.containerEl.dataset.canvasSaved = snapshot;
       delete this.containerEl.dataset.canvasSaveError;
     } catch (error) {
+      this.suppressReconcileModify = false;
       this.document = currentDocument;
       this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
       this.render();

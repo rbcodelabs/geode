@@ -70,8 +70,14 @@ test("undoes and redoes exact Canvas document snapshots within one view session"
       w.__canvasHistoryWrites = 0;
       const modify = w.app.vault.modify.bind(w.app.vault);
       w.app.vault.modify = async (file: { path: string }, data: string) => {
+        // Count the write only once it has actually landed on disk (see the
+        // matching comment in canvas-group-resize-expand.spec.ts). Counting
+        // at call-time lets expectWriteCount's poll resolve while the real
+        // write is still in flight, so a same-tick disk read here can race a
+        // non-atomic truncate-then-write and observe a torn/incomplete file.
+        const result = await modify(file, data);
         if (file.path === "History.canvas") w.__canvasHistoryWrites += 1;
-        return modify(file, data);
+        return result;
       };
     });
     await view.locator('[data-canvas-action="fit"]').click();

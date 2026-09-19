@@ -87,8 +87,17 @@ test("expands pointer-down containing groups around resized cards with dynamic S
       w.__groupResizeWrites = 0;
       const modify = w.app.vault.modify.bind(w.app.vault);
       w.app.vault.modify = async (file: { path: string }, data: string) => {
+        // Count the write only once it has actually landed on disk, not when
+        // it's merely called. Counting at call-time races the later
+        // `expect.poll(...writes).toBe(N)` — that poll resolves as soon as
+        // this counter ticks, but the real write is still in flight (through
+        // an IPC round trip to the main process), so a `diskBefore` snapshot
+        // taken right after can capture stale bytes. The write then lands a
+        // moment later, during the *next* gesture's mid-drag "disk unchanged"
+        // check, which reads as a spurious mid-drag write.
+        const result = await modify(file, data);
         if (file.path === "Group resize.canvas") w.__groupResizeWrites += 1;
-        return modify(file, data);
+        return result;
       };
     });
     await view.locator('[data-canvas-action="fit"]').click();
