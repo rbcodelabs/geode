@@ -27,6 +27,16 @@ export class ChromeCookieImportModal extends Modal {
       "This copies live session cookies from the selected Chrome profile into Geode's Web Viewer session, so tabs open already logged in. One-time, explicit action — cookies are not kept in sync afterward.";
     this.contentEl.appendChild(warning);
 
+    // Electron keeps cookies with no expiry in memory only and never writes
+    // them to disk, so session-scoped logins (Gmail's GMAIL_AT and
+    // __Host-GMAIL_SCH among them) are gone after a restart. Stated up front
+    // rather than letting the user discover it as a silent logout.
+    const restartNote = document.createElement("p");
+    restartNote.className = "community-trust-warning";
+    restartNote.textContent =
+      "Cookies Chrome holds only for the current browsing session cannot be saved to disk, so they are lost when Geode restarts. Sites that rely on them will need another import after a restart.";
+    this.contentEl.appendChild(restartNote);
+
     this.statusEl = document.createElement("div");
     this.statusEl.className = "community-status";
     this.contentEl.appendChild(this.statusEl);
@@ -79,7 +89,17 @@ export class ChromeCookieImportModal extends Modal {
     this.statusEl.textContent = `Importing cookies from ${profile.name}…`;
     try {
       const result = await window.geode.importChromeCookies(profile.dir);
-      this.app.notify(`Imported ${result.imported} cookie(s) from ${profile.name}${result.skipped ? ` (${result.skipped} skipped)` : ""}`);
+      const notes = [
+        result.skipped ? `${result.skipped} skipped` : "",
+        // Concrete count, so "you may need to re-import" is an observation
+        // about this profile rather than boilerplate.
+        result.sessionScoped
+          ? `${result.sessionScoped} session-only, lost on restart`
+          : "",
+      ].filter(Boolean);
+      this.app.notify(
+        `Imported ${result.imported} cookie(s) from ${profile.name}${notes.length ? ` (${notes.join("; ")})` : ""}`,
+      );
       this.close();
     } catch (err) {
       this.statusEl.textContent = `Import failed: ${(err as Error).message}`;
