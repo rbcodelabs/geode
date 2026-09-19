@@ -1801,6 +1801,45 @@ function installApplicationMenu(): void {
 }
 
 app.whenReady().then(() => {
+  // Electron does not enable the macOS platform authenticator (Touch ID /
+  // Secure Enclave) for `navigator.credentials` unless this is called. Until
+  // it is, `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`
+  // resolves `false` and a ceremony started by a relying party never gets a
+  // provider — it hangs indefinitely rather than rejecting, so a page cannot
+  // even detect the failure and fall back. Measured on 2026-09-18: `IUVPAA`
+  // was `false` in a top-level window, in a top-level window on
+  // `persist:webviewer`, and in a `<webview>` guest — i.e. the capability was
+  // absent process-wide, not specific to the embedded browsing context.
+  //
+  // MUST be inside `whenReady()`. Calling it at module scope (before the app
+  // is ready) terminates the process *inside the call* with SIGTRAP — no JS
+  // exception is raised, so a try/catch around it does not help and the crash
+  // reports carry no readable assertion. The placement is load-bearing.
+  //
+  // NOT SUFFICIENT ON ITS OWN. `keychainAccessGroup` must be backed by a
+  // matching `keychain-access-groups` entitlement on the signed binary. The
+  // desktop build currently signs ad-hoc (`build.mac.identity: "-"`, no
+  // entitlements file, no embedded provisioning profile), so this call returns
+  // successfully and `IUVPAA` still resolves `false` — verified, not assumed.
+  // Adding the entitlement without a provisioning profile that grants this
+  // group is worse than not adding it: AMFI then refuses to start the app at
+  // all (isolated by signing the same binary with and without that one
+  // entitlement — with it the process is killed, without it the app runs).
+  //
+  // So this is the first half of a two-part change, landed on its own because
+  // it is inert and harmless until the second half exists. Passkeys remain
+  // non-functional until an App ID + macOS provisioning profile granting
+  // `C48JWUNF89.com.rbcodelabs.geode.webauthn` is created and the build signs
+  // with it. Whether that fully enables ceremonies in the Web Viewer is still
+  // untested — it is the one remaining variable.
+  if (process.platform === "darwin") {
+    app.configureWebAuthn({
+      touchID: {
+        keychainAccessGroup: "C48JWUNF89.com.rbcodelabs.geode.webauthn",
+        promptReason: "sign in to $1",
+      },
+    });
+  }
   if (!isHeadless) {
     app.setAsDefaultProtocolClient("geode");
     // Hosted Obsidian plugins hand the OS `obsidian://` links for their own
