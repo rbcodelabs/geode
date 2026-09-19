@@ -70,6 +70,12 @@ async function bundle(entry, name, allowed) {
 function run(outfile, env, label) {
   return new Promise((settle, fail) => {
     const child = spawn(process.execPath, [outfile], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    // Decode once, across chunk boundaries — see the same call in
+    // `src/catalog/postgres-catalog-store.ts`. Benign here today, because these
+    // children print ASCII summaries, but the pattern is the bug and a future
+    // summary carrying a vault path would inherit it.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });

@@ -123,6 +123,8 @@ export type ValidationStatus =
   | "invalid-path"
   /** A note entry whose path is not `.md`. */
   | "not-a-note"
+  /** A note's text contains a NUL, which no text file holds and no JSON-carrying store can represent. */
+  | "invalid-note-text"
   /** An asset entry whose path *is* `.md`. Attachments must not masquerade as notes. */
   | "asset-is-a-note"
   /** Two entries in one publication claim the same path. */
@@ -366,6 +368,21 @@ const utf8 = new TextEncoder();
 const identityKey = (path: string): string => path.normalize("NFC").toLowerCase();
 const isNote = (path: string): boolean => /\.md$/i.test(path);
 
+/**
+ * A NUL anywhere in note text.
+ *
+ * Paths are already screened for this by `normalizeWikiPath`; note *text* was
+ * not, and the failure was neither portable nor named. `JSON.stringify` encodes
+ * a NUL as a six-character backslash-u escape, PostgreSQL's `::jsonb` cast
+ * rejects that escape outright, and the adapter's `classifyFailure` has no
+ * marker to match — so a `.md` file that happens to contain a NUL captured
+ * cleanly, travelled all the way to the database, and came back as an unnamed
+ * `store-failed`. That contradicts this module's own rule that everything
+ * decidable without a store is decided before one is contacted. A NUL is not
+ * text in any portable sense, so it is refused here, by name, with the path.
+ */
+const hasNul = (text: string): boolean => text.includes("\u0000");
+
 /** Rejects the same paths the capture walk in `./local-filesystem` skips, so a publishable path is also a capturable one. */
 function invalidPath(path: string): boolean {
   if (normalizeWikiPath(path) !== path) return true;
@@ -427,6 +444,7 @@ export function validatePublication(request: PublishRequest, options: ValidateOp
   for (const note of notes) {
     if (invalidPath(note.path)) return { status: "invalid-path", path: note.path };
     if (!isNote(note.path)) return { status: "not-a-note", path: note.path };
+    if (hasNul(note.text)) return { status: "invalid-note-text", path: note.path };
   }
   for (const asset of assets) {
     if (invalidPath(asset.path)) return { status: "invalid-path", path: asset.path };

@@ -146,6 +146,8 @@ describe("validatePublication — refusals", () => {
     ["invalid-path on node_modules", request({ notes: [{ path: "node_modules/N.md", text: "x" }], assets: [] }), { status: "invalid-path" }],
     ["invalid-path on unnormalized", request({ notes: [{ path: "a/./N.md", text: "x" }], assets: [] }), { status: "invalid-path" }],
     ["not-a-note", request({ notes: [{ path: "Image.png", text: "x" }], assets: [] }), { status: "not-a-note", path: "Image.png" }],
+    ["invalid-note-text on NUL", request({ notes: [{ path: "A.md", text: "before\0after" }], assets: [] }), { status: "invalid-note-text", path: "A.md" }],
+    ["invalid-note-text on a leading NUL", request({ notes: [{ path: "A.md", text: "\0" }], assets: [] }), { status: "invalid-note-text", path: "A.md" }],
     ["asset-is-a-note", request({ notes: [], assets: [asset({ path: "Sneaky.md" })] }), { status: "asset-is-a-note", path: "Sneaky.md" }],
     ["duplicate-path", request({ notes: [{ path: "A.md", text: "1" }, { path: "A.md", text: "2" }], assets: [] }), { status: "duplicate-path", path: "A.md" }],
     ["duplicate-path across kinds", request({ notes: [{ path: "A.md", text: "1" }], assets: [asset({ path: "A.md" })] }), { status: "asset-is-a-note" }],
@@ -221,6 +223,18 @@ describe("publish", () => {
     const { store, seen } = recordingStore();
     const result = await publish(store, request({ notes: [{ path: "../Escape.md", text: "x" }], assets: [] }));
     expect(result).toMatchObject({ status: "invalid-path" });
+    expect(seen).toHaveLength(0);
+  });
+
+  it("never contacts the store for a note whose text carries a NUL", async () => {
+    // This is the case the refusal was added for. A `.md` file containing a
+    // NUL captures cleanly, so without a validation-time check it travelled all
+    // the way to the `::jsonb` cast, which rejects the escape `JSON.stringify`
+    // produces for it — and came back as an unnamed `store-failed` from a
+    // database that had already been contacted.
+    const { store, seen } = recordingStore();
+    const result = await publish(store, request({ notes: [{ path: "A.md", text: "a\0b" }], assets: [] }));
+    expect(result).toMatchObject({ status: "invalid-note-text", path: "A.md" });
     expect(seen).toHaveLength(0);
   });
 

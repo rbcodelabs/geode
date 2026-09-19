@@ -61,8 +61,19 @@ a caller-declared lowercase-hex SHA-256 address. The contract verifies the
 address against the bytes; the *database* verifies it again rather than
 trusting the client, because a content address that is only checked
 client-side is a naming convention, not a guarantee. Stored objects are
-insert-only, enforced by a `BEFORE UPDATE OR DELETE` trigger, so an address
-that ever meant one byte string can never come to mean another.
+insert-only, enforced by a `BEFORE UPDATE OR DELETE` row trigger *and* a
+`BEFORE TRUNCATE` statement trigger — a row trigger does not fire on TRUNCATE,
+and `TRUNCATE object, catalog_entry` satisfies the foreign key that refuses
+`TRUNCATE object` on its own. So an address that ever meant one byte string
+cannot come to mean another, and the bytes cannot be erased wholesale either.
+
+That enforcement stops at owner privilege, and the ADR says so rather than
+overclaiming: the adapter connects as the schema owner, so
+`ALTER TABLE object DISABLE TRIGGER ALL` is available to a session that means
+to use it. "Insert-only, enforced" is a guarantee against a buggy client, not
+against a privileged one. Closing that gap needs a role model — a non-owner
+role the adapter actually connects as — which this reference schema does not
+have and which is recorded as follow-up rather than half-built.
 
 **A publication is one transaction or nothing.** `publish_catalog` advances the
 vault sequence, inserts every object, applies every catalog entry and records
@@ -87,6 +98,7 @@ Decided by the portable contract, without a database:
 | `empty-publication` | Nothing to publish; a no-op must not consume a sequence number |
 | `invalid-path` | Absolute, drive-qualified, escaping, backslashed, NUL-bearing, unnormalized, dot-prefixed, or `node_modules` |
 | `not-a-note` | A note entry whose path is not `.md` |
+| `invalid-note-text` | A note's text contains a NUL. Paths were already screened for this; text was not, and a NUL reached the `::jsonb` cast and came back as an unnamed `store-failed` |
 | `asset-is-a-note` | An asset entry whose path *is* `.md` |
 | `duplicate-path` | Two entries in one publication claim the same path |
 | `portability-collision` | Two entries fold onto the same NFC-lowercased identity |

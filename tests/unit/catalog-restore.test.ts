@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -210,6 +210,45 @@ describe("materializeRestoredVault", () => {
     };
     expect(await materializeRestoredVault(root, escaping))
       .toMatchObject({ status: "escaping-path", path: "../escaped.md", noteCount: 0 });
+  });
+
+  it("refuses to write through a pre-existing symlinked directory", async () => {
+    // The gap `O_EXCL` alone leaves open. `O_EXCL` refuses a symlink planted at
+    // the *final* component, and lexical containment only inspects how the path
+    // is spelled — so with a parent directory replaced by a symlink,
+    // `mkdir(..., { recursive: true })` walks straight through it and
+    // `assets/diagram.png` lands wherever it points.
+    const root = await freshRoot();
+    const outside = await freshRoot();
+    await symlink(outside, join(root, "assets"), "dir");
+
+    expect(await materializeRestoredVault(root, restored))
+      .toMatchObject({ status: "escaping-path", path: "assets/diagram.png" });
+    // The claim that matters is not the status but the absence of the file.
+    await expect(readFile(join(outside, "diagram.png"))).rejects.toThrow();
+  });
+
+  it("refuses a symlink planted at the final component rather than following it", async () => {
+    const root = await freshRoot();
+    const outside = await freshRoot();
+    await symlink(join(outside, "planted.md"), join(root, "Index.md"), "file");
+
+    expect(await materializeRestoredVault(root, restored))
+      .toMatchObject({ status: "write-failed", path: "Index.md" });
+    await expect(readFile(join(outside, "planted.md"))).rejects.toThrow();
+  });
+
+  it("writes into a symlinked target root the caller chose, which is not an escape", async () => {
+    // Containment is measured against the root's *resolved* path, so a caller
+    // that legitimately hands over a symlinked directory is served rather than
+    // refused. Anchoring on the unresolved string would break this.
+    const real = await freshRoot();
+    const link = join(await freshRoot(), "vault-link");
+    await symlink(real, link, "dir");
+
+    expect(await materializeRestoredVault(link, restored))
+      .toMatchObject({ status: "ok", noteCount: 2, assetCount: 2 });
+    expect(new Uint8Array(await readFile(join(real, "assets/copy.png")))).toEqual(pngBytes);
   });
 
   it("refuses rather than overwrites when an entry already exists", async () => {

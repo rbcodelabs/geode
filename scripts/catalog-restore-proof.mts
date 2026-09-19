@@ -114,7 +114,7 @@ try {
   // --- 2. Restore, verified rather than trusted -----------------------------
   const first = ok(await restore(source, RESTORE_VAULT_ID), "the published vault");
   assert.equal(first.sequence, 1, "the restored vault carries the sequence it was published at");
-  assert.equal(first.notes.length, 3);
+  assert.equal(first.notes.length, 4);
   assert.equal(first.assets.length, 3);
   assert.equal(new Set(first.assets.map((asset) => asset.contentAddress)).size, 2,
     "one stored object must expand back into the two paths that shared it");
@@ -132,14 +132,14 @@ try {
   // --- 3. Materialize, then open with the real engine -----------------------
   const written = await materializeRestoredVault(materialized, first);
   assert.equal(written.status, "ok", "the restored vault must materialize");
-  assert.equal(written.noteCount, 3);
+  assert.equal(written.noteCount, 4);
   assert.equal(written.assetCount, 3);
 
   const opened = await openLocalWikiProvider(materialized);
   assert.equal(opened.status, "ok", "the real provider must open the restored folder");
   if (opened.status !== "ok") throw new Error("unreachable");
   const view = opened.provider.snapshot();
-  assert.equal(view.listFiles().length, 6, "the restored folder must hold every published entry");
+  assert.equal(view.listFiles().length, 7, "the restored folder must hold every published entry");
   assert.ok(view.info.discoveryComplete, "the restored capture must be complete");
 
   const projection = serializeWikiQueryProjection(view, PROOF_PROJECTION);

@@ -33,8 +33,26 @@ $$;
 
 -- Enforced, not merely documented. `DROP SCHEMA ... CASCADE` is DDL and is
 -- unaffected, so the disposable-schema lifecycle still works.
+--
+-- Two triggers, because one shape of destruction does not fire the other.
+-- A row-level `BEFORE UPDATE OR DELETE` trigger never fires on TRUNCATE, and
+-- while `TRUNCATE object` alone is refused by the foreign key from
+-- `catalog_entry`, `TRUNCATE object, catalog_entry` and `TRUNCATE object
+-- CASCADE` both satisfy that foreign key and would otherwise erase every
+-- content-addressed byte in the vault without raising anything. A TRUNCATE
+-- trigger must be statement-level: there are no rows to hand a row-level one.
+--
+-- The honest boundary this stops at is owner privilege. The adapter connects
+-- as the schema's owner, so a session that means to can run
+-- `ALTER TABLE object DISABLE TRIGGER ALL` and then do as it likes. "Objects
+-- are insert-only, enforced" is therefore a guarantee against a buggy client,
+-- not against a privileged one; separating those would take a role model this
+-- reference schema deliberately does not have.
 CREATE TRIGGER object_no_mutation BEFORE UPDATE OR DELETE ON object
   FOR EACH ROW EXECUTE FUNCTION object_is_immutable();
+
+CREATE TRIGGER object_no_truncate BEFORE TRUNCATE ON object
+  FOR EACH STATEMENT EXECUTE FUNCTION object_is_immutable();
 
 -- The mutable path namespace. Notes carry their text; attachments carry a
 -- reference to immutable bytes. The CHECK makes the two shapes exclusive, so

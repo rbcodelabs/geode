@@ -13,7 +13,13 @@ import {
 } from "../src/wiki/catalog-contract";
 import { serializeWikiQueryProjection } from "../src/wiki/query-projection";
 import { createPostgresCatalog, literal } from "../src/catalog/postgres-catalog-store";
-import { buildProofVault, proofContentType, PROOF_PROJECTION, RESTORE_VAULT_ID } from "./catalog-proof-vault.mts";
+import {
+  buildProofVault,
+  buildWideNoteText,
+  proofContentType,
+  PROOF_PROJECTION,
+  RESTORE_VAULT_ID,
+} from "./catalog-proof-vault.mts";
 
 /**
  * VM A: the publish side.
@@ -81,6 +87,20 @@ try {
   await buildProofVault(root);
   const pngBytes = new Uint8Array(await readFile(join(root, "assets/diagram.png")));
 
+  // The fixture is half a megabyte rather than half a kilobyte for one reason:
+  // a restore read has to cross several 64 KiB pipe boundaries before a
+  // per-chunk UTF-8 decode can corrupt anything, and only a boundary landing
+  // strictly *inside* a multi-byte character does any damage. An earlier
+  // version of this note crossed two boundaries, both landed on ASCII, and the
+  // proof passed against a demonstrably broken adapter. The margin is asserted
+  // here so shrinking the fixture fails loudly instead of quietly narrowing
+  // what this proof covers.
+  const wideNoteBytes = Buffer.byteLength(buildWideNoteText(), "utf8");
+  assert.ok(
+    wideNoteBytes > 6 * 64 * 1024,
+    `the wide note must span several 64 KiB pipe chunks; it is ${wideNoteBytes} bytes`,
+  );
+
   const opened = await openLocalWikiProvider(root);
   assert.equal(opened.status, "ok", "the local provider must open the synthetic vault");
   if (opened.status !== "ok") throw new Error("unreachable");
@@ -88,10 +108,10 @@ try {
 
   // The publication carries exactly what the engine sees, so the catalog is
   // never a second, hand-curated view of the vault.
-  assert.equal(view.listFiles().length, 6, "three notes and three attachments");
+  assert.equal(view.listFiles().length, 7, "four notes and three attachments");
   assert.deepEqual(
     [...new Set(view.backlinks("Index.md").references.map((reference) => reference.sourcePath))].sort(),
-    ["notes/Decision.md", "notes/Deep note.md"],
+    ["notes/Decision.md", "notes/Deep note.md", "notes/Wide note.md"],
     "the synthetic vault must actually contain resolving wikilinks",
   );
   const sourceResolution = {
@@ -122,7 +142,7 @@ try {
       assets.push({ path: file.path, contentAddress: sha(bytes), contentType: proofContentType(file.path), bytes });
     }
   }
-  assert.equal(notes.length, 3);
+  assert.equal(notes.length, 4);
   assert.equal(assets.length, 3);
   assert.equal(new Set(assets.map((asset) => asset.contentAddress)).size, 2,
     "two attachments must share one content address, so restore has to expand one object into two files");
@@ -143,7 +163,7 @@ try {
   assert.equal(first.status, "ok", "the initial publication must commit");
   if (first.status !== "ok") throw new Error("unreachable");
   assert.equal(first.receipt.sequence, 1);
-  assert.equal(first.receipt.noteCount, 3);
+  assert.equal(first.receipt.noteCount, 4);
   assert.equal(first.receipt.assetCount, 3);
 
   // --- 1b. The vault VM B restores ------------------------------------------
@@ -375,6 +395,26 @@ try {
     catalog.query(`DELETE FROM object WHERE vault_id = ${literal(vaultA)};`),
     /GEODE_CATALOG:OBJECT_IMMUTABLE/,
   );
+  // TRUNCATE is the shape a row-level trigger does not see. `TRUNCATE object`
+  // on its own is refused by the foreign key from `catalog_entry`, which is
+  // why the hole stayed hidden — but truncating both tables together, or
+  // CASCADE, satisfies that key and would erase every content-addressed byte
+  // silently. Both must reach the statement-level trigger instead.
+  await assert.rejects(
+    catalog.query("TRUNCATE object, catalog_entry;"),
+    /GEODE_CATALOG:OBJECT_IMMUTABLE/,
+    "truncating object alongside its referrer must still be refused",
+  );
+  await assert.rejects(
+    catalog.query("TRUNCATE object CASCADE;"),
+    /GEODE_CATALOG:OBJECT_IMMUTABLE/,
+    "truncating object with CASCADE must still be refused",
+  );
+  assert.notEqual(
+    await catalog.query(`SELECT count(*) FROM object WHERE vault_id = ${literal(vaultA)};`),
+    "0",
+    "the refused truncates must have left the objects in place",
+  );
 
   // --- 7. Store-side duplicate-with-mismatched-bytes ------------------------
   // Plant an object whose recorded address does not describe its bytes — the
@@ -456,11 +496,13 @@ try {
     restoreVaultId: RESTORE_VAULT_ID,
     published,
     projectionBytes: Buffer.byteLength(projection, "utf8"),
+    wideNoteBytes,
     projectionWritten: Boolean(projectionOut),
     lockWaitsObserved: 3,
     concurrentDifferentVaultCompleted: true,
     rollbackVerified: true,
     immutabilityEnforced: true,
+    truncateRefused: true,
     portableRefusals: Object.keys(portableRefusals).length,
   }));
 } finally {

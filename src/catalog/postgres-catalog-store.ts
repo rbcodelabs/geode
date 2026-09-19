@@ -58,8 +58,41 @@ export interface PostgresSession {
   output(): string;
 }
 
-/** Single-quoted SQL literal. `standard_conforming_strings` is on by default, so only quotes need doubling. */
+/**
+ * Single-quoted SQL literal.
+ *
+ * Only quotes need doubling *because* `standard_conforming_strings` is on —
+ * with it off, a backslash in note text would escape the closing quote. That
+ * used to be an unstated dependency on a server default reachable from
+ * `postgresql.conf` or `PGOPTIONS`; the session prefix below now sets it
+ * explicitly, so this is an enforced invariant rather than an assumption.
+ */
 export const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
+/**
+ * Schemas this adapter will create, use and drop.
+ *
+ * Unquoted interpolation into `CREATE SCHEMA` / `DROP SCHEMA ... CASCADE` needs
+ * the name to be a plain lowercase identifier, and the name arrives from the
+ * caller — in every current caller, from the `GEODE_CATALOG_SCHEMA` environment
+ * variable. The realistic failure is not an injection but a typo:
+ * `GEODE_CATALOG_SCHEMA=public` would make `drop()` run
+ * `DROP SCHEMA IF EXISTS public CASCADE` against a developer's own database.
+ * So the pattern is checked *and* the schemas nobody means to hand to a
+ * disposable adapter are named and refused.
+ */
+const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,62}$/;
+const RESERVED_SCHEMAS = new Set(["public", "information_schema"]);
+
+export function assertOwnableSchema(schema: string): string {
+  if (!SCHEMA_RE.test(schema)) {
+    throw new Error(`GEODE_CATALOG: schema ${JSON.stringify(schema)} is not a plain lowercase SQL identifier`);
+  }
+  if (RESERVED_SCHEMAS.has(schema) || schema.startsWith("pg_")) {
+    throw new Error(`GEODE_CATALOG: schema ${JSON.stringify(schema)} is not a schema this adapter may create or drop`);
+  }
+  return schema;
+}
 
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
 
@@ -122,9 +155,16 @@ export interface PostgresCatalog {
 
 export function createPostgresCatalog(options: PostgresCatalogOptions): PostgresCatalog {
   const psql = options.psql ?? process.env.PSQL ?? "psql";
-  const schema = options.schema;
+  // Refused at construction, before any statement is built — the same
+  // "decide it without a database" discipline the portable contract applies to
+  // a publication.
+  const schema = assertOwnableSchema(options.schema);
   const prefix =
     `SET search_path TO ${schema}; ` +
+    // Not a default to rely on: `literal()` doubles quotes and nothing else,
+    // which is only sufficient while this is on. Note text is fully
+    // caller-controlled and flows through `literal()`.
+    `SET standard_conforming_strings = on; ` +
     `SET statement_timeout = '${options.statementTimeout ?? "10s"}'; ` +
     `SET lock_timeout = '${options.lockTimeout ?? "8s"}';\n`;
   const live = new Set<ChildProcessWithoutNullStreams>();
@@ -135,10 +175,20 @@ export function createPostgresCatalog(options: PostgresCatalogOptions): Postgres
       stdio: ["pipe", "pipe", "pipe"],
     });
     live.add(child);
+    // `setEncoding` before the first `data` listener, not `String(chunk)` after
+    // it. A pipe delivers 64 KiB chunks at arbitrary byte offsets, so a
+    // multi-byte character routinely straddles a chunk boundary; decoding each
+    // Buffer independently turns exactly that character into U+FFFD. Nothing
+    // downstream would catch it — every JSON structural character is ASCII, so
+    // the mangled payload still parses, and notes carry no content address for
+    // `verifyRestoredVault` to check. The decoder these calls install holds the
+    // partial sequence across the boundary and emits it whole.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
     const done = new Promise<string>((resolve, reject) => {
       child.on("error", reject);
       child.on("close", (code) => {

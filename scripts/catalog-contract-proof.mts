@@ -88,6 +88,7 @@ const refusals = {
   invalidPathAbsolute: validatePublication({ ...base, notes: [{ path: "/Escape.md", text: "x" }], assets: [] }),
   invalidPathDotted: validatePublication({ ...base, notes: [{ path: ".secret/Note.md", text: "x" }], assets: [] }),
   notANote: validatePublication({ ...base, notes: [{ path: "Image.png", text: "x" }], assets: [] }),
+  invalidNoteText: validatePublication({ ...base, notes: [{ path: "Index.md", text: "a\u0000b" }], assets: [] }),
   assetIsANote: validatePublication({ ...base, notes: [], assets: [asset({ path: "Sneaky.md", bytes: pngBytes })] }),
   duplicatePath: validatePublication({
     ...base,
@@ -147,6 +148,7 @@ assert.deepEqual(
     invalidPathAbsolute: "invalid-path",
     invalidPathDotted: "invalid-path",
     notANote: "not-a-note",
+    invalidNoteText: "invalid-note-text",
     assetIsANote: "asset-is-a-note",
     duplicatePath: "duplicate-path",
     portabilityCollision: "portability-collision",
