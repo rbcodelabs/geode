@@ -125,6 +125,14 @@ only the prior committed snapshot. It then releases the first transaction.
 Assertions do not depend on assuming a delay implies concurrency. Bounded
 timeouts fail visibly when a lock wait cannot be observed.
 
+> **Superseded as a schema model, 2026-09-19.** The reviewed multi-vault schema
+> now exists at `src/catalog/postgres-catalog-schema.sql`
+> ([ADR 0022](../adr/0022-transactional-multi-vault-catalog-contract.md)):
+> `vault_id` is a first-class key, attachment bytes are immutable and
+> content-addressed, and a publication locks only its own vault. The fixture
+> below is unchanged and remains valid Phase 0 evidence; it is no longer the
+> model to extend. The restore half of increment 3 is **not** built.
+
 The fixture is one vault in a disposable schema, not a production migration.
 It does not implement object uploads, revisions, tombstones, rename planning,
 authorization, multi-tenant isolation, garbage collection, or cryptographic
@@ -161,6 +169,17 @@ schema in `finally`, including failed assertions. It does not alter `public` or
 start/stop a database server. Interrupted process termination may require manual
 cleanup of that run's schema. Tests use synthetic note content only.
 
+The increment 3 catalog proofs follow the same discipline:
+
+```sh
+npm run proof:catalog            # portable contract, no database at all
+npm run proof:catalog:postgres   # VM-A publish, randomized geode_catalog_* schema
+```
+
+`proof:catalog` needs no database and runs in the normal unit suite. Only
+`proof:catalog:postgres` needs `PG*` configured, and it too drops exactly its
+own schema in `finally`.
+
 ## Verification evidence
 
 - Node v25.9.0: fresh process proof passed; 2 notes, 3 resolved references and missing target verified.
@@ -187,8 +206,21 @@ authorize or implement the subsequent phases. Suggested reviewable increments:
 > `scripts/local-wiki-write-proof.mts` proves the loop in fresh Node. See
 > [ADR 0020](../adr/0020-write-capable-local-wiki-provider.md).
 >
-> Increments 3–5 remain unimplemented and unauthorized. Synchronization and any
-> external document-store integration are **not** part of increments 1–2 and
+> **Status, 2026-09-19.** Increment 3 is implemented **to its publish-side
+> checkpoint only**. `src/wiki/catalog-contract.ts` adds a portable,
+> driver-free catalog contract with content-addressed immutable bytes and
+> named upload-validation refusals; `src/catalog/` adds the PostgreSQL
+> reference adapter and reviewed multi-vault schema;
+> `scripts/catalog-publish-proof.mts` is the VM-A publish proof. See
+> [ADR 0022](../adr/0022-transactional-multi-vault-catalog-contract.md).
+>
+> The VM-B restore side is **declared and not implemented**, by design: the
+> build package requires a progress report at this checkpoint. Database hosting
+> selection with measured limits and cost is also not done — the proof runs
+> against a local disposable container only, at zero spend.
+>
+> Increments 4–5 remain unimplemented and unauthorized. Synchronization and any
+> external document-store integration are **not** part of increments 1–3 and
 > still require their own package and decision.
 
 1. **Core boundary and semantics:** finish moving pure comment/frontmatter/index constants to portable ownership; define paths, ambiguity, subpath diagnostics and coverage. Tests must distinguish desktop compatibility from agent strict mode.

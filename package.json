@@ -25,7 +25,9 @@
     "proof:headless": "npm run typecheck:headless && node scripts/run-headless-node-proof.mjs",
     "proof:local-wiki": "npm run typecheck:headless && node scripts/run-local-wiki-node-proof.mjs",
     "proof:local-wiki-write": "npm run typecheck:headless && node scripts/run-local-wiki-write-proof.mjs",
+    "proof:catalog": "npm run typecheck:headless && node scripts/run-catalog-contract-proof.mjs",
     "proof:headless:postgres": "node scripts/headless-postgres-proof.mjs",
+    "proof:catalog:postgres": "node scripts/run-catalog-publish-proof.mjs",
     "dist": "npm run build && electron-builder --mac",
     "release": "npm run build && electron-builder --mac --publish always"
   },
