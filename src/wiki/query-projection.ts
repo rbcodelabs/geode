@@ -1,0 +1,181 @@
+import type { WikiSnapshot } from "./snapshot";
+
+/**
+ * A canonical, comparable projection of a snapshot's *query results*.
+ *
+ * This module exists to make one specific equality claim legible: that a vault
+ * restored from a catalog answers the same questions as the vault it was
+ * published from. Asserting that by eyeballing two snapshots would be neither
+ * reviewable nor stable, so the claim is written down here instead, as an
+ * explicit function with a documented scope.
+ *
+ * ## What is in scope
+ *
+ * `listFiles`, `readNote` (text and parsed metadata), `resolve`, `outgoing`,
+ * `backlinks`, and `search` — the query surface. Two snapshots whose
+ * projections are equal answer every one of those questions identically for
+ * every path they hold and every supplied query.
+ *
+ * ## What is deliberately NOT in scope, and why
+ *
+ * Everything on `snapshot.info` that describes *the capture*, rather than the
+ * vault: `scanStartedAt`, `scanEndedAt`, the folder-walk `diagnostics`,
+ * `exclusionPolicy` and `limits`. A catalog restore has no equivalent of a
+ * wall-clock folder walk, so those fields cannot be equal and should not be
+ * asserted equal — a restored vault was never scanned at the moment the
+ * original was.
+ *
+ * That exclusion is a scope boundary, not an escape hatch. Capture-derived
+ * facts that genuinely *do* change query answers are still compared, because
+ * they are carried inside the query results themselves:
+ * `Resolution.discoveryComplete`, `Resolution.aliasCoverageComplete`,
+ * `SearchResult.complete` and the graph `coverage` block are all projected. A
+ * restore that silently lost discovery completeness would change those and
+ * fail, even though `info` is not compared.
+ *
+ * Per-note `diagnostics` and `coverage` *are* projected: those are derived from
+ * note text by the parser, not from the walk, so a restore that altered a byte
+ * of note content would move them.
+ *
+ * Attachment *content* is also not in scope, and for a different reason than
+ * the capture fields above: `listFiles` is projected as `[path, kind]` pairs,
+ * so an asset contributes its path and its kind here and nothing else. This is
+ * not a gap in the overall claim — asset bytes are covered by content
+ * addressing instead, which is the stronger check: `verifyRestoredVault`
+ * recomputes the SHA-256 of every restored attachment against its stored
+ * address, and `scripts/catalog-restore-proof.mts` asserts the materialized
+ * bytes per asset. Said plainly here so a reader does not infer from "the query
+ * surface is equal" that this function compared any attachment's bytes.
+ */
+
+/** Extra `resolve` calls to project, beyond the links the notes themselves contain. */
+export interface ProjectedResolveTarget {
+  readonly from: string;
+  readonly target: string;
+}
+
+export interface QueryProjectionOptions {
+  /** Applied to `search` in the order given. */
+  readonly searchQueries: readonly string[];
+  /** Aliases, ambiguous names and absent targets a note does not happen to link to. */
+  readonly resolveTargets?: readonly ProjectedResolveTarget[];
+}
+
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Reduce an arbitrary parsed value to a JSON-safe one with keys sorted.
+ *
+ * Object key order is an accident of construction, so it must not be part of
+ * the comparison. The tagged forms below exist because YAML frontmatter can
+ * legitimately produce values `JSON.stringify` would silently mangle or drop —
+ * a dropped value that differed between two vaults would make this projection
+ * report equality it had not actually checked.
+ */
+function canonical(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : `#non-finite:${String(value)}`;
+  if (typeof value === "bigint") return `#bigint:${value.toString()}`;
+  if (value instanceof Date) return `#date:${value.toISOString()}`;
+  if (ArrayBuffer.isView(value)) {
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return `#bytes:${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value instanceof Map) {
+    return { "#map": [...value.entries()].map(([key, entry]) => [canonical(key), canonical(entry)]) };
+  }
+  if (value instanceof Set) return { "#set": [...value].map(canonical) };
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort(compare)) out[key] = canonical(record[key]);
+    return out;
+  }
+  return `#unserializable:${typeof value}`;
+}
+
+/** A reference, reduced to what a caller can actually observe about it. */
+const projectReference = (reference: {
+  sourcePath: string;
+  link: string;
+  original?: string;
+  displayText?: string;
+  position: unknown;
+  resolution: unknown;
+}) => ({
+  sourcePath: reference.sourcePath,
+  link: reference.link,
+  original: reference.original ?? null,
+  displayText: reference.displayText ?? null,
+  position: canonical(reference.position),
+  resolution: canonical(reference.resolution),
+});
+
+/**
+ * Build the comparable value. Returns a structure, not a string, so a caller
+ * can diff it richly; `serializeWikiQueryProjection` is the stable text form.
+ */
+export function projectWikiQueries(snapshot: WikiSnapshot, options: QueryProjectionOptions): unknown {
+  const files = [...snapshot.listFiles()].sort((a, b) => compare(a.path, b.path));
+  const paths = files.map((file) => file.path);
+
+  const notes: Record<string, unknown> = {};
+  for (const file of files) {
+    if (file.kind !== "note") continue;
+    const read = snapshot.readNote(file.path);
+    notes[file.path] = read.status === "ok"
+      ? {
+        status: read.status,
+        text: read.note.text,
+        metadata: canonical(read.note.metadata),
+        diagnostics: canonical(read.note.diagnostics),
+        coverage: canonical(read.note.coverage),
+      }
+      : { status: read.status, reason: read.reason };
+  }
+
+  const outgoing: Record<string, unknown> = {};
+  const backlinks: Record<string, unknown> = {};
+  for (const path of paths) {
+    const out = snapshot.outgoing(path);
+    outgoing[path] = {
+      status: out.status,
+      coverage: canonical(out.coverage),
+      references: out.references.map(projectReference),
+    };
+    const back = snapshot.backlinks(path);
+    backlinks[path] = {
+      status: back.status,
+      coverage: canonical(back.coverage),
+      // Backlink order follows note iteration order, which is path-sorted, but
+      // sorting here makes the projection independent of that implementation
+      // detail rather than quietly dependent on it.
+      //
+      // NUL joins the two sort keys because it is the one byte a portable path
+      // can never contain, so no pair of (sourcePath, link) values can collide
+      // onto one key. It is spelled as a backslash-u escape rather than as a
+      // literal NUL byte in this source file: identical at runtime, and it keeps
+      // this file plain text rather than a blob git reports as Bin and refuses
+      // to diff.
+      references: back.references
+        .map(projectReference)
+        .sort((a, b) => compare(a.sourcePath + "\u0000" + a.link, b.sourcePath + "\u0000" + b.link)),
+    };
+  }
+
+  const resolved: unknown[] = [];
+  for (const target of options.resolveTargets ?? []) {
+    resolved.push({ from: target.from, target: target.target, resolution: canonical(snapshot.resolve(target.from, target.target)) });
+  }
+
+  const search = options.searchQueries.map((query) => ({ query, result: canonical(snapshot.search(query)) }));
+
+  return canonical({ files: files.map((file) => [file.path, file.kind]), notes, outgoing, backlinks, resolved, search });
+}
+
+/** The stable text form. Indented so a failing comparison produces a readable diff. */
+export function serializeWikiQueryProjection(snapshot: WikiSnapshot, options: QueryProjectionOptions): string {
+  return JSON.stringify(projectWikiQueries(snapshot, options), null, 2) + "\n";
+}
