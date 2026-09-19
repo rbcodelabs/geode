@@ -181,6 +181,16 @@ npm run proof:catalog:restore    # two processes: VM-A publish, then VM-B restor
 `proof:catalog` needs no database and runs in the normal unit suite. The other
 two need `PG*` configured, and each drops exactly its own schema in `finally`.
 
+Increment 5's SDK half adds one more, which also needs no database:
+
+```sh
+npm run proof:wiki-sdk           # the whole engine through the SDK entry point alone
+```
+
+It imports only `src/wiki/index.ts`, and audits the esbuild input graph as an
+exact set rather than a permitted superset — a module that quietly disappears
+fails as loudly as one that appears.
+
 `proof:catalog:restore` is the two-process harness. It installs one disposable
 schema, runs VM A as its own OS process, waits for that process to be gone —
 confirmed by `process.kill(pid, 0)` failing, and again by VM B observing no
@@ -238,7 +248,26 @@ authorize or implement the subsequent phases. Suggested reviewable increments:
 > the proofs run against a local disposable container only, at zero spend, and
 > selecting or paying for a managed service remains outside this package.
 >
-> Increments 4–5 remain unimplemented and unauthorized. Synchronization and any
+> **Status, 2026-09-19.** Increment 5 is implemented **up to its SDK half, and
+> stops there**. `src/wiki/index.ts` is the engine's one curated entry point,
+> named as `./wiki` in `package.json`'s export map, and it is a deliberate
+> *narrowing* rather than a re-export of the directory — parser regexes, the
+> candidate-selection pipeline, the adapter filesystem seams, the desktop
+> scan-cap setting, the desktop operator query language and the
+> desktop-compatibility resolver all stay internal. The surface hands out a
+> *session*, never a snapshot, so a write is visible to the caller's very next
+> read and a stale handle is unobtainable. See
+> [ADR 0023](../adr/0023-wiki-sdk-session-semantics.md) for that decision and
+> [`headless-wiki-sdk.md`](headless-wiki-sdk.md) for the full public/not-public
+> ledger. `scripts/wiki-sdk-proof.mts` (npm `proof:wiki-sdk`) drives the whole
+> loop through the SDK alone in fresh Node against an exactly-audited input
+> graph.
+>
+> **The MCP server, the CLI, bounded import/export, diagnostics, the pilot and
+> any latency or contention measurement are NOT done and are not authorized by
+> this increment.** No package was published to any registry.
+>
+> Increment 4 remains unimplemented and unauthorized. Synchronization and any
 > external document-store integration are **not** part of increments 1–3 and
 > still require their own package and decision.
 

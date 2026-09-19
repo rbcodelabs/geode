@@ -4,5 +4,6 @@
     "lib": ["ES2022"],
     "types": ["node"]
   },
-  "include": ["src/wiki/**/*.ts", "scripts/headless-node-proof.mts", "scripts/local-wiki-node-proof.mts", "scripts/shared-link-node-proof.mts", "scripts/local-wiki-write-proof.mts", "scripts/catalog-contract-proof.mts", "scripts/catalog-publish-proof.mts", "scripts/catalog-restore-proof.mts", "scripts/catalog-schema-admin.mts", "scripts/catalog-proof-vault.mts"]
+  "//include": "src/cli/ and src/catalog/ are here for the same reason src/wiki/ is: this configuration removes the DOM lib entirely, so anything that reached for a host API fails here rather than at run time in a terminal.",
+  "include": ["src/wiki/**/*.ts", "src/cli/**/*.ts", "src/catalog/**/*.ts", "scripts/headless-node-proof.mts", "scripts/local-wiki-node-proof.mts", "scripts/shared-link-node-proof.mts", "scripts/local-wiki-write-proof.mts", "scripts/catalog-contract-proof.mts", "scripts/wiki-sdk-proof.mts", "scripts/catalog-publish-proof.mts", "scripts/catalog-restore-proof.mts", "scripts/catalog-schema-admin.mts", "scripts/catalog-proof-vault.mts"]
 }
