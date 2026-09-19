@@ -1822,13 +1822,6 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   display: flex;
 }
 
-/* The dock's counterpart to the tab-container rule above: a pane that has been
-   shown stays mounted here and is hidden, so a docked Web Viewer (or any view
-   holding a live resource) survives switching panes. See `Sidebar.revealInDock`. */
-.sidebar-content > :not(.mod-active) {
-  display: none;
-}
-
 /* ---- Drag-and-drop (moving panes) ---- */
 
 .workspace-tab-header.is-dragging {
@@ -1858,6 +1851,16 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   flex-direction: column;
   overflow: hidden;
 }
+
+/* The dock's counterpart to the tab-container rule above: a pane that has been
+   shown stays mounted here and is hidden, so a docked Web Viewer (or any view
+   holding a live resource) survives switching panes. This must follow the
+   ItemView fill rule above: both selectors have equal specificity, and an
+   earlier hide would lose to `display: flex` on inactive plugin ItemViews. */
+.sidebar-content > :not(.mod-active) {
+  display: none;
+}
+
 .sidebar-content > .view-content-host > .view-content {
   flex: 1;
   min-height: 0;

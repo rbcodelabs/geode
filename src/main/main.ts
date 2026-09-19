@@ -92,12 +92,47 @@ import {
   SupportedPluginCatalogService,
 } from "./supported-plugin-catalog";
 import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
+import { attachGuestClientHints, guestClientHints, normalizeGuestUserAgent } from "./guest-fingerprint";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
 // Claude Agent SDK) can use it; Geode does the same for plugin
 // compatibility. Must be set before app 'ready'.
 app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
+
+// Present every <webview> guest as the authentic stock Chromium it actually is
+// rather than as an embedder: bot-detection systems reject the default UA's
+// `Electron/<ver>` token outright, and united.com answers
+// ERR_HTTP2_PROTOCOL_ERROR at the protocol level over it. Two embedder tokens
+// come off, not one — Electron also injects `geode/<ver>` ahead of the Chrome
+// token — and the product half is read from app.getName() so a rename cannot
+// silently reintroduce the bug. See src/main/guest-fingerprint.ts for the
+// evidence, the four affected guest surfaces, and the consistency rule.
+//
+// `app.userAgentFallback` is the lever because it is process-global, so a guest
+// on a partition that does not exist yet still picks it up — which is what
+// covers the Agent Browser's `persist:agent-browser`, created later by a
+// plugin. (`session.fromPartition(p).setUserAgent(...)` was measured to
+// silently do nothing.) Must run before any window or session is created.
+app.userAgentFallback = normalizeGuestUserAgent(app.userAgentFallback, app.getName());
+
+// Electron sends none of the three Sec-CH-UA client hints that real Chrome
+// sends on every request, and the Chromium feature flags that would restore
+// them (UserAgentClientHint,CriticalClientHint,AcceptCHFrame) were measured not
+// to. Fill them in at the request layer instead, via `session-created` because
+// it is the only hook that also sees partitions a plugin creates after startup.
+// Values are derived from the running Chromium, never hardcoded, and `Sec-CH-UA`
+// is built to match the guest's real `navigator.userAgentData.brands` exactly.
+//
+// Accept-Language is deliberately NOT touched here, and that is the same rule
+// applied to a case where it points the other way: `setUserAgent`'s
+// acceptLanguages argument does move the header to `en-US,en;q=0.9`, but
+// `navigator.languages` stays `["en-US"]`. Today the header and the JS surface
+// agree (both bare `en-US`) — unusual but coherent. "Fixing" only the header
+// would make them contradict each other, which detectors score worse.
+const guestHints = guestClientHints(process.versions.chrome, process.platform);
+app.on("session-created", (created) => attachGuestClientHints(created, guestHints));
+
 protocol.registerSchemesAsPrivileged([{
   scheme: ARTIFACT_SCHEME,
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false },

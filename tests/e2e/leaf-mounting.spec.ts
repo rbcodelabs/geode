@@ -6,6 +6,35 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+const SIDEBAR_ITEM_VIEW_MANIFEST = {
+  id: "sidebar-item-view-probe",
+  name: "Sidebar ItemView Probe",
+  version: "1.0.0",
+  minAppVersion: "0.1.0",
+  description: "Registers a real plugin ItemView for sidebar mounting tests.",
+  author: "geode",
+};
+
+const SIDEBAR_ITEM_VIEW_MAIN = `
+  const obsidian = require('obsidian');
+  const VIEW = 'sidebar-item-view-probe';
+
+  class SidebarItemViewProbe extends obsidian.ItemView {
+    getViewType() { return VIEW; }
+    getDisplayText() { return 'Sidebar ItemView Probe'; }
+    getIcon() { return 'star'; }
+    async onOpen() {
+      this.contentEl.createDiv({ cls: 'sidebar-item-view-probe-body', text: 'plugin ItemView' });
+    }
+  }
+
+  module.exports.default = class extends obsidian.Plugin {
+    async onload() {
+      this.registerView(VIEW, (leaf) => new SidebarItemViewProbe(leaf));
+    }
+  };
+`;
+
 /**
  * Tab activation hides the outgoing leaf instead of detaching it. These tests
  * pin the two halves of that contract against the real app, because both are
@@ -20,7 +49,11 @@ const repoRoot = path.resolve(__dirname, "..", "..");
  *   for Web Viewer tabs, spawn a guest process for) every saved tab at once.
  */
 
-async function launch(files: Record<string, string> = {}, workspaceJson?: unknown) {
+async function launch(
+  files: Record<string, string> = {},
+  workspaceJson?: unknown,
+  options: { withSidebarItemView?: boolean } = {},
+) {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-leaf-mount-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-leaf-mount-ud-"));
   for (const [name, content] of Object.entries(files)) {
@@ -29,6 +62,16 @@ async function launch(files: Record<string, string> = {}, workspaceJson?: unknow
   if (workspaceJson) {
     fs.mkdirSync(path.join(vaultDir, ".geode"), { recursive: true });
     fs.writeFileSync(path.join(vaultDir, ".geode", "workspace.json"), JSON.stringify(workspaceJson));
+  }
+  if (options.withSidebarItemView) {
+    const pluginDir = path.join(vaultDir, ".geode", "plugins", SIDEBAR_ITEM_VIEW_MANIFEST.id);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "manifest.json"), JSON.stringify(SIDEBAR_ITEM_VIEW_MANIFEST));
+    fs.writeFileSync(path.join(pluginDir, "main.js"), SIDEBAR_ITEM_VIEW_MAIN);
+    fs.writeFileSync(
+      path.join(vaultDir, ".geode", "plugins.json"),
+      JSON.stringify([SIDEBAR_ITEM_VIEW_MANIFEST.id]),
+    );
   }
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
@@ -219,6 +262,59 @@ test("a docked Web Viewer pane keeps its guest across a sidebar pane switch", as
   } finally {
     await app.close();
     await closeServer(server);
+    cleanup();
+  }
+});
+
+test("a docked plugin ItemView stays mounted but hidden when another sidebar pane is active", async () => {
+  const { app, window, consoleErrors, cleanup } = await launch({}, undefined, { withSidebarItemView: true });
+
+  try {
+    await window.evaluate(async () => {
+      const geode = (window as any).app;
+      const leaf = geode.workspace.getRightLeaf(false);
+      await leaf.setViewState({ type: "sidebar-item-view-probe", active: true });
+      geode.workspace.revealLeaf(leaf);
+    });
+
+    const sidebar = window.locator(".workspace-sidebar.mod-right");
+    const pluginHost = sidebar.locator(".view-content-host", {
+      has: window.locator(".sidebar-item-view-probe-body"),
+    });
+    await expect(pluginHost).toBeVisible();
+
+    await window.evaluate(() => {
+      const dock = (window as any).app.workspace.rightSidebar;
+      dock.show(dock.views.find((view: { viewType: string }) => view.viewType === "outline"));
+    });
+
+    // Inactive panes remain connected so live resources survive tab switches,
+    // but exactly one direct child may paint inside the dock.
+    await expect(pluginHost).toHaveCount(1);
+    expect(await pluginHost.evaluate((element) => element.isConnected)).toBe(true);
+    await expect(pluginHost).not.toHaveClass(/mod-active/);
+    await expect(pluginHost).toBeHidden();
+    await expect(sidebar.locator(".sidebar-content > .mod-active")).toHaveCount(1);
+
+    const widths = await sidebar.locator(".sidebar-content").evaluate((content) => {
+      const active = content.querySelector<HTMLElement>(":scope > .mod-active");
+      return {
+        active: active?.getBoundingClientRect().width ?? 0,
+        content: content.getBoundingClientRect().width,
+      };
+    });
+    expect(widths.active).toBeCloseTo(widths.content, 0);
+
+    const screenshotDir = process.env.GEODE_QA_SCREENSHOT_DIR;
+    if (screenshotDir) {
+      await window.screenshot({
+        path: path.join(screenshotDir, "sidebar-inactive-plugin-pane-hidden.png"),
+      });
+    }
+
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  } finally {
+    await app.close();
     cleanup();
   }
 });
