@@ -42,7 +42,13 @@ try {
       assert.ok(!sources.includes(path), `${description} must not be in the SDK graph: ${path}`);
     }
   }
-  for (const prefix of ["src/catalog/", "src/indexer/", "src/main/", "src/preload/"]) {
+  // `src/cli/` is here for the mirror image of the reason the others are. The
+  // command layer is a *consumer* of this SDK, and that dependency has to point
+  // one way: an engine module reaching back into argument parsing or output
+  // formatting would make the SDK unusable by anything that is not a terminal.
+  // `scripts/run-wiki-cli-proof.mjs` enforces the other half — that nothing
+  // under `src/cli/` reaches past this entry point.
+  for (const prefix of ["src/catalog/", "src/cli/", "src/indexer/", "src/main/", "src/preload/"]) {
     assert.ok(
       !sources.some(path => path.startsWith(prefix)),
       `nothing under ${prefix} may reach the SDK graph`,

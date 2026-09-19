@@ -3,10 +3,15 @@
   "version": "0.22.2",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
-  "//exports": "The desktop app entry stays on `main`, which is what Electron reads. `./wiki` is the headless engine SDK: one curated entry point (src/wiki/index.ts), not the directory. Everything else under src/wiki/ is internal by omission — see docs/design/headless-wiki-sdk.md. It resolves to TypeScript source on purpose: in-repo consumers (the proof scripts, and the MCP server that follows) bundle from source with esbuild exactly as every existing proof does, and publishing this package to a registry is out of scope by contract, so a separate dist artifact would be build surface with no consumer.",
+  "//exports": "The desktop app entry stays on `main`, which is what Electron reads. `./wiki` is the headless engine SDK and `./catalog` is the publish/restore SDK: one curated entry point each, not the directories. Everything else under src/wiki/ and src/catalog/ is internal by omission — see docs/design/headless-wiki-sdk.md and docs/design/headless-wiki-cli.md. Both resolve to TypeScript source on purpose: in-repo consumers bundle from source with esbuild exactly as every existing proof does, and publishing this package to a registry is out of scope by contract, so a separate dist artifact would be build surface with no consumer.",
   "exports": {
     ".": "./dist/main.js",
-    "./wiki": "./src/wiki/index.ts"
+    "./wiki": "./src/wiki/index.ts",
+    "./catalog": "./src/catalog/index.ts"
+  },
+  "//bin": "`geode-wiki` is a build artifact, produced by `npm run build:cli`, not committed. Node 26 strips types natively but cannot load the engine from source: the package is CommonJS, the engine is written in ESM syntax with extensionless relative imports, and the two resolution modes do not overlap. scripts/build-cli.mjs records the three failures in full. In-repo bin only — no registry publication is authorized.",
+  "bin": {
+    "geode-wiki": "dist/cli/geode-wiki.mjs"
   },
   "scripts": {
     "test": "vitest run && npm run build && playwright test",
@@ -21,6 +26,7 @@
     "benchmark:stress-vault": "node scripts/run-large-vault-benchmark.mjs",
     "benchmark:offset-to-loc": "node scripts/run-offset-to-loc-benchmark.mjs",
     "build": "node esbuild.config.mjs",
+    "build:cli": "node scripts/build-cli.mjs",
     "build:mobile": "node esbuild.config.mjs --mobile-only",
     "ios:sync": "npm run build:mobile && cap sync ios",
     "dev": "node esbuild.config.mjs --watch",
@@ -32,9 +38,11 @@
     "proof:local-wiki-write": "npm run typecheck:headless && node scripts/run-local-wiki-write-proof.mjs",
     "proof:catalog": "npm run typecheck:headless && node scripts/run-catalog-contract-proof.mjs",
     "proof:wiki-sdk": "npm run typecheck:headless && node scripts/run-wiki-sdk-proof.mjs",
+    "proof:wiki-cli": "npm run typecheck:headless && node scripts/run-wiki-cli-proof.mjs",
     "proof:headless:postgres": "node scripts/headless-postgres-proof.mjs",
     "proof:catalog:postgres": "node scripts/run-catalog-publish-proof.mjs",
     "proof:catalog:restore": "npm run typecheck:headless && node scripts/run-catalog-restore-proof.mjs",
+    "proof:wiki-cli:postgres": "npm run typecheck:headless && node scripts/run-wiki-cli-catalog-proof.mjs",
     "dist": "npm run build && electron-builder --mac",
     "release": "npm run build && electron-builder --mac --publish always"
   },

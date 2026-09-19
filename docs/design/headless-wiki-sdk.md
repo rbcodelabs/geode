@@ -9,12 +9,19 @@ why the SDK hands out a session rather than a snapshot — are decided in
 behaviour underneath is [ADR 0019](../adr/0019-readonly-local-wiki-snapshot.md)
 and [ADR 0020](../adr/0020-write-capable-local-wiki-provider.md), unchanged.
 
-**This is not published.** There is no registry publication, no external
-distribution, no CLI and no MCP server. `package.json`'s export map names
-`./wiki` and resolves it to TypeScript source, because every in-repo consumer
-bundles from source with esbuild exactly as the existing proof scripts do. The
-desktop app entry stays on `main`, which is what Electron reads; the export map
-does not disturb it.
+**This is not published.** There is no registry publication and no external
+distribution. `package.json`'s export map names `./wiki` and resolves it to
+TypeScript source, because every in-repo consumer bundles from source with
+esbuild exactly as the existing proof scripts do. The desktop app entry stays on
+`main`, which is what Electron reads; the export map does not disturb it.
+
+**There is now one in-repo consumer.** `geode-wiki` — see
+[headless-wiki-cli.md](headless-wiki-cli.md) and
+[ADR 0024](../adr/0024-wiki-cli-over-mcp-server.md) — is a command over this
+entry point, and the increment that added it also extended this SDK's input
+graph audit: `src/cli/` joined the prefixes that may not appear in the SDK's own
+dependency set, because the dependency has to point one way. An MCP server
+remains deferred, not begun.
 
 ## Entry point
 

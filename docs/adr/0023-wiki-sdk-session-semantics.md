@@ -2,6 +2,10 @@
 
 Status: Accepted
 Date: 2026-09-19
+Update 2026-09-19: the "Boundary" section below names an MCP server as the next
+increment. On owner challenge that was revised to a **CLI**, with MCP deferred —
+see [ADR 0024](0024-wiki-cli-over-mcp-server.md). Everything this ADR decides
+about session semantics is unaffected and still in force.
 Supersedes: nothing. Extends [ADR 0019](0019-readonly-local-wiki-snapshot.md) and
 [ADR 0020](0020-write-capable-local-wiki-provider.md).
 
