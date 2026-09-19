@@ -28,7 +28,14 @@ npm start           # launch Electron
 npm run dev         # esbuild watch mode
 npm run typecheck   # strict tsc
 npm run e2e:kill    # reap orphaned e2e Electron processes + temp dirs
+
+npm run build:cli   # bundle the headless `geode-wiki` command to dist/cli/
 ```
+
+`geode-wiki` is the headless engine as a command — see
+[`docs/design/headless-wiki-cli.md`](docs/design/headless-wiki-cli.md). It is a
+build artifact, so `build:cli` is a prerequisite for invoking it, and an in-repo
+`bin` only: nothing is published to a registry.
 
 A demo vault lives in `test-vault/`.
 
