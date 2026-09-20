@@ -5,7 +5,39 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
-function makeVault() {
+const THREAD_HISTORY_PROBE_MANIFEST = {
+  id: "thread-history-probe",
+  name: "Thread History Probe",
+  version: "1.0.0",
+  minAppVersion: "0.1.0",
+  description: "Models a stateful Agent Threads main-pane view.",
+  author: "geode",
+};
+
+const THREAD_HISTORY_PROBE_MAIN = `
+  const obsidian = require('obsidian');
+  const VIEW = 'thread-history-probe';
+
+  class ThreadHistoryProbeView extends obsidian.ItemView {
+    state = {};
+    getViewType() { return VIEW; }
+    getDisplayText() { return 'Agent Threads'; }
+    getState() { return this.state; }
+    async setState(state) {
+      this.state = state || {};
+      this.contentEl.empty();
+      this.contentEl.createDiv({ cls: 'thread-history-probe-body', text: this.state.threadId || 'no thread' });
+    }
+  }
+
+  module.exports.default = class extends obsidian.Plugin {
+    async onload() {
+      this.registerView(VIEW, (leaf) => new ThreadHistoryProbeView(leaf));
+    }
+  };
+`;
+
+function makeVault(options: { withThreadHistoryProbe?: boolean } = {}) {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-actions-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-actions-ud-"));
   for (const name of ["A.md", "B.md", "C.md", "D.md"]) fs.writeFileSync(path.join(vaultDir, name), `# ${name}\n`);
@@ -13,9 +45,59 @@ function makeVault() {
   fs.writeFileSync(path.join(vaultDir, "Board 2.canvas"), JSON.stringify({ nodes: [], edges: [] }));
   fs.writeFileSync(path.join(vaultDir, "Data.base"), "filters:\n  and: []\nviews:\n  - type: table\n    name: Table\n");
   fs.writeFileSync(path.join(vaultDir, "Data 2.base"), "filters:\n  and: []\nviews:\n  - type: table\n    name: Table\n");
+  if (options.withThreadHistoryProbe) {
+    const pluginDir = path.join(vaultDir, ".geode", "plugins", THREAD_HISTORY_PROBE_MANIFEST.id);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "manifest.json"), JSON.stringify(THREAD_HISTORY_PROBE_MANIFEST));
+    fs.writeFileSync(path.join(pluginDir, "main.js"), THREAD_HISTORY_PROBE_MAIN);
+    fs.writeFileSync(
+      path.join(vaultDir, ".geode", "plugins.json"),
+      JSON.stringify([THREAD_HISTORY_PROBE_MANIFEST.id]),
+    );
+  }
   fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
   return { vaultDir, userDataDir };
 }
+
+test("a file picked from a stateful plugin view can navigate back to that view", async () => {
+  const { vaultDir, userDataDir } = makeVault({ withThreadHistoryProbe: true });
+  const screenshotDir = process.env.GEODE_QA_SCREENSHOT_DIR;
+  if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true });
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const win = await app.firstWindow();
+    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await win.evaluate(async () => {
+      const geode = (window as any).app;
+      const leaf = geode.workspace.getLeaf(false);
+      await leaf.setViewState({
+        type: "thread-history-probe",
+        active: true,
+        state: { threadId: "thread-42" },
+      });
+      await geode.openFile(geode.vault.getFileByPath("A.md"), false);
+    });
+
+    const active = win.locator(".workspace-leaf.mod-active");
+    const back = active.getByRole("button", { name: "Navigate back" });
+    await expect(active.locator(".view-header-title")).toHaveText("A");
+    await expect(back).toHaveAttribute("aria-disabled", "false");
+    await back.click();
+    await expect(active.locator(".view-header-title")).toHaveText("Agent Threads");
+    await expect(active.locator(".thread-history-probe-body")).toHaveText("thread-42");
+    if (screenshotDir) {
+      await win.screenshot({ path: path.join(screenshotDir, "agent-threads-restored-after-picked-file.png") });
+    }
+    const forward = active.getByRole("button", { name: "Navigate forward" });
+    await expect(forward).toHaveAttribute("aria-disabled", "false");
+    await forward.click();
+    await expect(active.locator(".view-header-title")).toHaveText("A");
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
 
 test("same-type document navigation preserves view identity and lifecycle", async () => {
   const { vaultDir, userDataDir } = makeVault();

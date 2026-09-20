@@ -313,7 +313,8 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
   split-local tab collections with persistent collapse state, split panes with
   pointer- and keyboard-resizable persisted proportions, pinned tabs, vertically
   stacked and independently resizable sidebar groups, recursive layout persistence,
-  independent session-only back/forward document history in each tab,
+  independent session-only back/forward history in each tab, including
+  restorable plugin views when a picked file replaces the current pane,
   [durable companion splits](docs/design/companion-panes.md) for plugins that
   feature-detect Geode's workspace extension,
   a hideable left ribbon with persistent Settings and
