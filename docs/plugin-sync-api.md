@@ -48,6 +48,12 @@ The optional `excludePath(path, bytes?)` hook declares ownership exclusions. Geo
 
 ## Lifecycle and approval
 
+During append-only sync, the local planning walk reports processed entries, its
+known total, a percentage, the current path, and elapsed time. The provider's
+remote scan remains indeterminate when it has no incremental progress channel.
+Consecutive failed runs show an attempt number; a successful run resets it, and
+a preview followed by sync is not counted as a retry.
+
 Registration belongs to the plugin generation and disappears during unload. A vault can have one active provider. First run requires `app.sync.preview()` followed by `app.sync.run({ approvePreview: true })`; Geode rejects approval if the vault, provider, cursor, or plan changed. Settings → Sync exposes selection, preview/approval, pause/resume, conflicts, and errors.
 
 Conditional and append-only providers share lifecycle arbitration from initial hydration through operation settlement. Disconnect cancels pending initialization and clears both device-local provider selections, including selections whose plugin is temporarily unregistered. Registering another plugin during activation or cleanup cannot silently select a second protocol.

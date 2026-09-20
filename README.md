@@ -5,17 +5,21 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.22.5). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.22.6). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## Fixed in v0.22.5
+## Fixed in v0.22.6
 
-Internal links now open in the pane you clicked, even when another pane was
-active. This includes links to Bases files and Cmd/Ctrl-clicks opening a new tab.
-Plugin selection dialogs that register keyboard shortcuts during construction,
-including Terminal's selection commands, also open correctly.
+Sync's local planning phase now shows processed-file counts and a percentage.
+Repeated failed attempts show an attempt number, making restarts visible.
+Remote scans remain indeterminate when the provider cannot report a total.
+
+The opt-in Node DSQL/private Blob catalog adapter adds bounded publication and
+verified restore for in-repository tooling. It does not enable cloud sync in the
+desktop app. Filesystem object publication now exposes complete bytes atomically,
+preventing concurrent readers from mistaking an in-progress write for corruption.
 
 ## New in v0.18.0: shared wiki foundations and bounded cache loading
 
