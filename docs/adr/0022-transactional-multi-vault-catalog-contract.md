@@ -9,6 +9,20 @@ unchanged.
 
 ## Context
 
+### Target-specific amendment — 2026-09-20
+
+The enforcement claims below describe the conventional PostgreSQL reference
+adapter, which remains unchanged. The separate, throwaway Aurora DSQL/private
+Blob feasibility spike does **not** inherit its triggers, foreign keys or
+blocking-lock guarantees. It uses verified content-addressed note and asset
+reads, upload-before-catalog ordering and bounded optimistic-concurrency retry.
+Failed publications can leave orphan bytes; privileged or buggy direct writers
+can violate integrity that PostgreSQL prevents. Two-process cloud restore and
+SQL-conflict retry were observed, not production readiness or tenant isolation.
+See [DSQL findings](../design/dsql-catalog-findings.md) for measured evidence,
+weakened guarantees, the upload-race regression and remaining limits. The
+portable contract and this reference adapter are not replaced by the spike.
+
 ADR 0019 gave the portable engine a read-only view of a local folder; ADR 0020
 added validated writes. Both stop at the local filesystem. Nothing downstream
 of a write existed: no catalog, no remote bytes, no way for a second process to
