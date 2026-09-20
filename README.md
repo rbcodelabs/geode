@@ -30,6 +30,11 @@ tooling, not a published SDK, cloud service or replacement desktop application.
 The [headless extraction report](docs/design/headless-phase0.md) describes the
 portable foundation and its plain-Node proofs.
 
+An opt-in [Node DSQL/private Blob adapter](docs/design/node-dsql-cloud-adapter.md)
+is available to in-repository consumers at `geode/catalog/cloud`. It provides
+bounded catalog publication and verified restore; it does not enable desktop
+sync, provision a cloud service, or change the application's local-first storage.
+
 Persisted desktop metadata now loads through session-bound snapshot pages of at
 most 50 examined rows and 256 KiB per response. Newer edits and deletions take
 precedence; omitted entries are recovered with yielded file reads. Startup
