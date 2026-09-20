@@ -92,7 +92,12 @@ import {
   SupportedPluginCatalogService,
 } from "./supported-plugin-catalog";
 import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
-import { attachGuestClientHints, guestClientHints, normalizeGuestUserAgent } from "./guest-fingerprint";
+import {
+  attachGuestClientHints,
+  guestClientHints,
+  guestHighEntropyHints,
+  normalizeGuestUserAgent,
+} from "./guest-fingerprint";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -130,8 +135,28 @@ app.userAgentFallback = normalizeGuestUserAgent(app.userAgentFallback, app.getNa
 // `navigator.languages` stays `["en-US"]`. Today the header and the JS surface
 // agree (both bare `en-US`) — unusual but coherent. "Fixing" only the header
 // would make them contradict each other, which detectors score worse.
+//
+// Electron also implements no client-hint NEGOTIATION: real Chrome remembers the
+// `Accept-CH` a response asked for and sends those high-entropy hints on later
+// requests to that origin, and Geode sent none of them. The negotiated set is
+// per-origin — never broadcast — and is derived the same way, from the running
+// Chromium, this machine's architecture, and the OS product version.
+//
+// `process.getSystemVersion()` is the OS lever rather than `os.release()`: the
+// former returns the product version ("26.4.1") that Chromium itself reports as
+// `platformVersion`, while the latter returns the Darwin kernel version
+// ("25.4.0"), which would contradict the JS surface.
+//
+// Both the fill and the negotiation share ONE `onBeforeSendHeaders` listener
+// inside attachGuestClientHints, because Electron silently replaces a session's
+// existing listener when a second is registered.
 const guestHints = guestClientHints(process.versions.chrome, process.platform);
-app.on("session-created", (created) => attachGuestClientHints(created, guestHints));
+const guestHighEntropy = guestHighEntropyHints({
+  chromeVersion: process.versions.chrome,
+  arch: process.arch,
+  systemVersion: process.getSystemVersion(),
+});
+app.on("session-created", (created) => attachGuestClientHints(created, guestHints, guestHighEntropy));
 
 protocol.registerSchemesAsPrivileged([{
   scheme: ARTIFACT_SCHEME,
