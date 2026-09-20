@@ -2706,8 +2706,27 @@ export class Workspace extends Events {
    *
    * `direction` is forwarded to `splitActiveLeaf()`, which currently only
    * produces side-by-side (vertical) splits.
+   *
+   * `sourceLeaf` is the leaf the request physically came from — the pane whose
+   * DOM the user clicked in. When supplied it replaces `activeGroup` as the
+   * destination, because the global active leaf is not trustworthy at the
+   * moment a link handler runs. Live Preview routes internal links on
+   * `mousedown`, which bubbles target-first, so the `TabGroup` mousedown
+   * listener that promotes a pane to active (see its constructor) runs *after*
+   * the link handler. A first click into a not-yet-active pane therefore
+   * reaches this method while `activeGroup` still names the previously active
+   * pane, and the file opens in the wrong one. Threading the originating leaf
+   * makes the destination independent of that ordering rather than racing it.
+   *
+   * Omitting `sourceLeaf` preserves the previous behavior exactly, so callers
+   * that genuinely mean "wherever the user is" (command palette, quick
+   * switcher, plugins) are unaffected.
    */
-  getLeaf(newLeaf?: PaneType | boolean, direction?: "vertical" | "horizontal"): WorkspaceLeaf {
+  getLeaf(
+    newLeaf?: PaneType | boolean,
+    direction?: "vertical" | "horizontal",
+    sourceLeaf?: WorkspaceLeaf | null
+  ): WorkspaceLeaf {
     if (newLeaf === "window") {
       throw new Error(
         "Workspace.getLeaf('window') is not supported: Geode has no pop-out windows. " +
@@ -2716,9 +2735,35 @@ export class Workspace extends Events {
     }
     if (newLeaf === "split") return this.splitActiveLeaf(direction);
     const newTab = newLeaf === true || newLeaf === "tab";
+    const source = this.resolveSourceLeaf(sourceLeaf);
+    if (source) {
+      // Same rule as the active-leaf path below, scoped to the originating
+      // pane: reuse the leaf in place, or add a tab beside it.
+      if (!newTab && !source.pinned) return source;
+      return (source.group as TabGroup).createLeaf();
+    }
     const active = this.getActiveLeaf();
     if (!newTab && active && !active.pinned) return active;
     return this.activeGroup.createLeaf();
+  }
+
+  /**
+   * Narrow a caller-supplied originating leaf to one `getLeaf` may target, or
+   * null to fall back to the active leaf.
+   *
+   * Rejected, in order: nothing supplied; a leaf docked in a sidebar (clicking
+   * a link in a sidebar note opens it in the main area, and `activeGroup` is
+   * only ever a main-area group, so a sidebar source must not redirect it); a
+   * group that is not a live main-area group; and a leaf that has since been
+   * closed out of its group. The last two matter because a click handler can
+   * outlive the pane it was installed in.
+   */
+  private resolveSourceLeaf(leaf: WorkspaceLeaf | null | undefined): WorkspaceLeaf | null {
+    if (!leaf) return null;
+    const group = leaf.group;
+    if (!(group instanceof TabGroup) || group.isSidebar) return null;
+    if (!this.groups.includes(group) || !group.leaves.includes(leaf)) return null;
+    return leaf;
   }
 
   /**
