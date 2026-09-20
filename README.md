@@ -16,6 +16,9 @@ Sync's local planning phase now shows processed-file counts and a percentage.
 Repeated failed attempts show an attempt number, making restarts visible.
 Remote scans remain indeterminate when the provider cannot report a total.
 
+The filesystem adapter now supplies `getFullPath` for plugin compatibility,
+restoring Terminal plugin command checks for the active file's parent folder.
+
 The opt-in Node DSQL/private Blob catalog adapter adds bounded publication and
 verified restore for in-repository tooling. It does not enable cloud sync in the
 desktop app. Filesystem object publication now exposes complete bytes atomically,
