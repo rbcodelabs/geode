@@ -48,7 +48,15 @@ function client(r: ReturnType<typeof remote>, initial: Record<string, string> = 
     const ports: HistoryControllerPorts = {
         load: async () => state ? clone(state) : null, save: async (next) => { metadataBytes += JSON.stringify(next).length; savedStates++; state = clone(next); },
         loadOperations: async () => [...operations.values()].map(clone), saveOperation: async (op) => { metadataBytes += JSON.stringify(op).length; operations.set(op.id, clone(op)); },
-        snapshot: async () => ({ authoritative: authority, scopeKey, entries: [...[...folders].map(path => ({ namespace: 'content' as const, path, kind: 'folder' as const })), ...[...files].map(([path, data]) => ({ namespace: 'content' as const, path, kind: 'file' as const, sha256: hash(data), size: data.byteLength }))], excluded: excluded.map(path => ({ namespace: 'content' as const, path, reason: 'excluded' })), blocked: blocked.map(path => ({ namespace: 'content' as const, path, reason: 'blocked' })) }),
+        snapshot: async (onProgress) => {
+            const entries: HistoryLocalResource[] = [...[...folders].map(path => ({ namespace: 'content' as const, path, kind: 'folder' as const })), ...[...files].map(([path, data]) => ({ namespace: 'content' as const, path, kind: 'file' as const, sha256: hash(data), size: data.byteLength }))];
+            // Mirrors the real host in sync-service.ts: the entry list is known up
+            // front, and each entry ticks *before* the read/hash/exclude work it
+            // stands for, so `completed` can never claim an unfinished entry.
+            entries.forEach((entry, index) => onProgress?.(index, entries.length, entry.path));
+            onProgress?.(entries.length, entries.length);
+            return { authoritative: authority, scopeKey, entries, excluded: excluded.map(path => ({ namespace: 'content' as const, path, reason: 'excluded' })), blocked: blocked.map(path => ({ namespace: 'content' as const, path, reason: 'blocked' })) };
+        },
         read: async (resource) => { reads++; return files.get(resource.path)!.slice(0); }, stage: async (id, data) => { const prior = staged.get(id); if (prior && hash(prior) !== hash(data))
             throw new Error('stage overwrite'); staged.set(id, data.slice(0)); return id; }, readStage: async (key) => staged.get(key)!.slice(0),
         apply: async (input) => {
@@ -319,6 +327,44 @@ describe('append-only history controller', () => {
         // The terminal count for the batch: the update whose absence would leave a panel at 96%.
         expect(ticks.some(t => t.phase === 'finalizing' && t.completed === 4 && t.total === 4)).toBe(true);
     });
+    it('counts the local reconcile against a real denominator instead of reporting zero of zero', async () => {
+        const ticks: SyncProgress[] = [];
+        const r = remote(), a = client(r, { 'notes/a.md': 'one', 'notes/b.md': 'two', 'c.md': 'three' }, p => ticks.push({ ...p }));
+        await a.controller.preview(signal());
+        const planning = ticks.filter(t => t.phase === 'planning');
+        // The phase-entry tick still has no denominator: it is emitted before the
+        // host's scan returns, and is what puts a label on screen immediately.
+        expect(planning[0]).toMatchObject({ completed: 0, total: 0 });
+        const walk = planning.slice(1);
+        expect(walk.length).toBeGreaterThan(1);
+        // 3 files + 1 folder ('notes') — the whole point: a denominator that was
+        // knowable before the expensive per-entry work began.
+        const total = 4;
+        expect(walk.every(t => t.total === total)).toBe(true);
+        const counts = walk.map(t => t.completed);
+        expect([...counts].sort((x, y) => x - y)).toEqual(counts);
+        expect(counts[0]).toBe(0);
+        expect(walk.at(-1)).toMatchObject({ completed: total, total });
+        // Every walk tick names the entry it is working on, and is a position in a
+        // real batch — never a completed count that outruns its own total.
+        expect(new Set(walk.map(t => t.currentPath).filter(Boolean))).toEqual(new Set(['notes', 'notes/a.md', 'notes/b.md', 'c.md']));
+        for (const tick of walk) expect(tick.completed).toBeLessThanOrEqual(tick.total);
+    });
+    it('leaves the opaque remote scan indeterminate while the countable local walk carries numbers', async () => {
+        const ticks: SyncProgress[] = [];
+        const r = remote(), a = client(r, { 'a.md': 'one', 'b.md': 'two' }, p => ticks.push({ ...p }));
+        await a.controller.preview(signal());
+        // session.scan() is a single provider call with no incremental channel, so
+        // there is nothing honest to count. It must never acquire a denominator by
+        // guesswork — an indeterminate bar is the truthful rendering.
+        const scanning = ticks.filter(t => t.phase === 'scanning');
+        expect(scanning.length).toBeGreaterThan(0);
+        expect(scanning.every(t => t.completed === 0 && t.total === 0)).toBe(true);
+        // The two sub-phases are distinguishable by what they emit, not merely by
+        // their label: only one of them ever carries a countable batch.
+        expect(ticks.some(t => t.phase === 'planning' && t.total > 0)).toBe(true);
+        expect(ticks.some(t => t.phase === 'scanning' && t.total > 0)).toBe(false);
+    });
     it('reports progress when a pending batch is recovered after a restart', async () => {
         const ticks: SyncProgress[] = [];
         let collect = false;
@@ -340,11 +386,16 @@ describe('append-only history controller', () => {
     });
     it('completes the sync and leaves state intact when the progress callback throws on every tick', async () => {
         let calls = 0;
-        const r = remote(), a = client(r, { 'a.md': 'one', 'b.md': 'two' }, () => { calls++; throw new Error('listener exploded'); });
+        const phases = new Set<string>();
+        const r = remote(), a = client(r, { 'a.md': 'one', 'b.md': 'two' }, p => { calls++; phases.add(p.phase); throw new Error('listener exploded'); });
         // A progress listener is an observer. If it can abort a run or strand a
         // pendingBatch, the instrumentation is more dangerous than the blindness.
         await expect(start(a)).resolves.toBeDefined();
         expect(calls).toBeGreaterThan(0);
+        // Specifically including the per-entry planning ticks: those fire from
+        // inside the host's snapshot walk, so a throw there escaping into the port
+        // would take out the reconcile rather than just one status update.
+        expect(phases.has('planning')).toBe(true);
         expect(a.state()!.pendingBatch).toBeUndefined();
         const verify = client(r);
         await start(verify);

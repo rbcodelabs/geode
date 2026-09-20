@@ -90,7 +90,14 @@ export interface HistoryControllerPorts {
     save(state: HistoryControllerState): Promise<void>;
     loadOperations(): Promise<HistoryOperation[]>;
     saveOperation(operation: HistoryOperation): Promise<void>;
-    snapshot(): Promise<HistoryLocalSnapshot>;
+    /**
+     * @param onProgress observational only, and optional precisely so that a host
+     * which cannot count its own walk stays conformant. A host that *can* should
+     * call it once per entry before doing that entry's work, with `completed`
+     * counting entries already finished. It must never be given a callback whose
+     * failure can matter: the controller's is synchronous and swallows throws.
+     */
+    snapshot(onProgress?: (completed: number, total: number, currentPath?: string) => void): Promise<HistoryLocalSnapshot>;
     read(resource: HistoryLocalResource): Promise<ArrayBuffer>;
     stage(operationId: string, bytes: ArrayBuffer): Promise<string>;
     readStage(key: string): Promise<ArrayBuffer>;
@@ -352,8 +359,15 @@ export class HistoryController {
     private included(snapshot: HistoryLocalSnapshot, namespace: HistoryNamespace, path: string): boolean {
         return this.ports.isIncluded(namespace, path) && ![...snapshot.excluded, ...snapshot.blocked].some(item => item.namespace === namespace && (path === item.path || path.startsWith(`${item.path}/`)));
     }
-    private async snapshot(signal: AbortSignal): Promise<HistoryLocalSnapshot> {
-        const snapshot = await this.checked(signal, () => this.ports.snapshot());
+    /**
+     * @param phase which phase the host's walk is reported under. The walk is the
+     * expensive half of planning — one read, one SHA-256 and one content-based
+     * exclusion test per entry — so it is where a large vault actually spends its
+     * time, and it is countable because the host knows its entry list up front.
+     */
+    private async snapshot(signal: AbortSignal, phase: SyncProgressPhase): Promise<HistoryLocalSnapshot> {
+        const snapshot = await this.checked(signal, () => this.ports.snapshot(
+            (completed, total, currentPath) => this.report(phase, completed, total, currentPath)));
         if (!snapshot.authoritative)
             throw new Error('Authoritative local snapshot unavailable');
         const entries: HistoryLocalResource[] = [];
@@ -394,10 +408,12 @@ export class HistoryController {
      * same lie this feature exists to remove.
      */
     private async plan(state: HistoryControllerState, signal: AbortSignal, as?: SyncProgressPhase): Promise<Plan> {
-        // Neither of these is countable in advance — the remote scan is one call
-        // and the local snapshot walks the vault — so they report phase entry with
-        // a total of 0. That is still the difference between "planning" on screen
-        // and a blank panel for the ten minutes this takes on a large vault.
+        // The remote scan is one opaque provider call with no incremental channel,
+        // so it genuinely cannot be counted without changing the session contract.
+        // It reports phase entry with a total of 0 and renders as an indeterminate
+        // bar — a rising fake percentage here would be worse than no number, and
+        // "Scanning remote history" with no counter is already the difference
+        // between a labelled wait and a blank panel.
         this.report(as ?? 'scanning', 0, 0);
         const scan = await this.checked(signal, () => this.options.session.scan(state.cursor, signal));
         const availability: Record<string, 'pending' | 'corrupt'> = Object.assign(Object.create(null), state.blobAvailability ?? {});
@@ -416,8 +432,12 @@ export class HistoryController {
             throw new Error('Complete remote history scan unavailable');
         }
         state.cursor = scan.cursor;
+        // The local reconcile, by contrast, *is* countable: the host's entry list
+        // is known before the per-entry read/hash/exclude loop that consumes the
+        // time. Phase entry still reports 0/0 because reconcileScan() itself runs
+        // before the first tick can arrive; the real denominator lands with it.
         this.report(as ?? 'planning', 0, 0);
-        const snapshot = await this.snapshot(signal);
+        const snapshot = await this.snapshot(signal, as ?? 'planning');
         if (state.scopeKey !== snapshot.scopeKey) {
             state.approved = false;
             state.scopeKey = snapshot.scopeKey;
@@ -821,7 +841,7 @@ export class HistoryController {
         // when they reopen the app on a sync that already looked dead once. It
         // reports through exactly the same performAll() as a fresh run.
         this.report('planning', 0, 0);
-        const snapshot = await this.snapshot(signal);
+        const snapshot = await this.snapshot(signal, 'planning');
         await this.performAll(operations, snapshot, signal);
         this.finish(state, operations);
         await this.save(state, signal);
