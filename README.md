@@ -5,10 +5,17 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.18.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.22.5). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## Fixed in v0.22.5
+
+Internal links now open in the pane you clicked, even when another pane was
+active. This includes links to Bases files and Cmd/Ctrl-clicks opening a new tab.
+Plugin selection dialogs that register keyboard shortcuts during construction,
+including Terminal's selection commands, also open correctly.
 
 ## New in v0.18.0: shared wiki foundations and bounded cache loading
 
