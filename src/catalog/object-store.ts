@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { nodeDigest, type ContentAddress, type Digest } from "../wiki/catalog-contract";
 
@@ -229,7 +230,15 @@ export function createFilesystemObjectStore(root: string): ObjectStore {
     async put(key, bytes) {
       const file = resolveKey(key);
       await mkdir(dirname(file), { recursive: true });
-      await writeFile(file, bytes);
+      // Readers must see a complete object or absence, including while another
+      // process publishes the same content-addressed object concurrently.
+      const temporary = join(dirname(file), `.geode-object-${randomUUID()}`);
+      try {
+        await writeFile(temporary, bytes, { flag: "wx" });
+        await rename(temporary, file);
+      } finally {
+        await rm(temporary, { force: true });
+      }
       return key;
     },
     async get(key) {
@@ -256,6 +265,8 @@ export function createFilesystemObjectStore(root: string): ObjectStore {
           throw error;
         }
         for (const entry of entries) {
+          // Valid object keys cannot start with '.', so staging files are never objects.
+          if (entry.name.startsWith(".")) continue;
           const key = relative ? `${relative}/${entry.name}` : entry.name;
           if (entry.isDirectory()) await walk(key);
           else if (key.startsWith(prefix)) found.push(key);

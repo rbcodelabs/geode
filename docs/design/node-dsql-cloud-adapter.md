@@ -154,6 +154,12 @@ never infer zero spend from missing billing data.
 
 ## Reproducible local proof
 
+The filesystem object store stages complete bytes beside the destination before
+an atomic rename. Concurrent reads observe absence or a complete object, and
+object listings omit staging files. The exclusive-create proof fixture uses a
+hard link after staging to retain create-if-absent behavior. This establishes
+atomic visibility, not power-loss durability or automatic orphan cleanup.
+
 ```sh
 # Explicit local PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD already configured:
 node scripts/run-node-dsql-proof.mjs
