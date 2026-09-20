@@ -66,6 +66,11 @@ describe("Vault.adapter", () => {
     expect(vault.adapter.basePath).toBe(ROOT);
   });
 
+  it("getFullPath() resolves a vault-relative folder under the vault root", async () => {
+    const { vault } = await openTestVault();
+    expect(vault.adapter.getFullPath("Projects/Geode")).toBe(`${ROOT}/Projects/Geode`);
+  });
+
   it("getResourcePath() space-encodes into a file:// URL under the root", async () => {
     const { vault } = await openTestVault();
     expect(vault.adapter.getResourcePath("a b.md")).toBe(`file://${ROOT}/a%20b.md`);
