@@ -66,7 +66,11 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
       // (xterm's own textarea captures keys directly), confirmed by manual
       // verification — this is a real, tracked limitation, not a load-
       // bearing failure of the require()/spawn path this test certifies.
-      if (text.includes("pushScope")) return;
+      // The `.select.root` command below hits the same pair from its own
+      // input's focus/blur handling (confirmed in the plugin's minified
+      // source: matching `g.pushScope(r)`/`g.popScope(r)` call sites), so
+      // both halves of the pair are filtered identically here.
+      if (text.includes("pushScope") || text.includes("popScope")) return;
       // This one reproduces inside the plugin's own bundled event-emitter
       // code (traced to `@polyipseity/obsidian-plugin-library`'s vendored
       // disposable/emitter internals, deep under xterm's own `.write()` ->
@@ -92,6 +96,7 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
       Object.keys((window as any).app.commands.commands).filter((id: string) => id.startsWith("terminal:"))
     );
     expect(commandIds).toContain("terminal:open-terminal.integrated.root");
+    expect(commandIds).toContain("terminal:open-terminal.select.root");
     expect(commandIds.length).toBeGreaterThan(15);
 
     // Its ribbon icon registered too (uses the same private-API-guarded path
@@ -137,6 +142,26 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
     // (already asserted below) or surface as a notice/closed pane.
     await expect(xterm).toBeVisible();
     await expect(window.locator(".notice", { hasText: /error|fail/i })).toHaveCount(0);
+
+    // "select"-family commands open a `FuzzySuggestModal` (a shell-profile
+    // picker) instead of spawning directly, and this plugin's subclass
+    // registers a modal-scoped hotkey (`this.scope.register(null, "Enter",
+    // ...)`) in its own constructor, per Obsidian. That's a distinct code
+    // path from `.integrated.root` above: it surfaced a real Geode compat
+    // gap where `Modal` never set a `scope`, so `this.scope.register(...)`
+    // in a SuggestModal/FuzzySuggestModal subclass's constructor threw
+    // "Cannot read properties of undefined (reading 'register')" before the
+    // modal ever rendered (see `Modal.scope` in src/renderer/api/obsidian.ts).
+    const selectRan = await window.evaluate(() =>
+      (window as any).app.commands.execute("terminal:open-terminal.select.root")
+    );
+    expect(selectRan).toBe(true);
+
+    const suggestInput = window.locator(".prompt-input-container input.prompt-input").first();
+    await expect(suggestInput).toBeVisible({ timeout: 5_000 });
+    await expect(window.locator(".notice", { hasText: /error|fail/i })).toHaveCount(0);
+    await window.keyboard.press("Escape");
+    await expect(suggestInput).toHaveCount(0);
 
     expect(consoleErrors, `Unexpected console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
     expect(pageErrors, `Unexpected page errors:\n${pageErrors.join("\n")}`).toEqual([]);
