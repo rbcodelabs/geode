@@ -11,7 +11,13 @@ const root = path.resolve(__dirname, "../..");
  * whole point of the feature is that a long run is legible while it runs, which
  * cannot be observed against an instant fixture.
  */
-const FIXTURE = (uploadDelayMs: number) => `(() => {
+/**
+ * @param planDelayMs slows `excludePath`, which the host calls per entry inside
+ * the local reconcile walk. That walk is the countable half of planning, so this
+ * is to the planning phase what uploadDelayMs is to transferring: the only way to
+ * observe a phase that is otherwise over before a single assertion can run.
+ */
+const FIXTURE = (uploadDelayMs: number, planDelayMs = 0) => `(() => {
   const app = window.app;
   const descriptor = { schema: 1, protocol: "append-only-history-v1", vaultId: "12345678-1234-4234-8234-123456789012", rootId: "synthetic-root", descriptorId: "synthetic-descriptor", name: "Synthetic shared vault" };
   const blobs = new Map();
@@ -21,6 +27,7 @@ const FIXTURE = (uploadDelayMs: number) => `(() => {
     capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 },
     discover: async () => [descriptor],
     createVault: async () => descriptor,
+    ...(${planDelayMs} ? { excludePath: async () => { await new Promise(done => setTimeout(done, ${planDelayMs})); return null; } } : {}),
     open: async () => ({
       scan: async () => ({ status: "complete", records: records.map(r => JSON.parse(JSON.stringify(r))) }),
       putBlob: async (input) => { await new Promise(done => setTimeout(done, ${uploadDelayMs})); blobs.set(input.operationId, input.data.slice(0)); return { id: input.operationId, sha256: input.sha256, size: input.size }; },
@@ -125,6 +132,112 @@ test("the sync panel reports live progress during a run without re-rendering the
     // And when the run ends, the progress surface is retired rather than left
     // showing a frozen percentage over a finished sync.
     await expect(activity).toBeHidden({ timeout: 30_000 });
+  } finally {
+    await app.close();
+    fs.rmSync(vault, { recursive: true, force: true });
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Planning used to report (0, 0): a label, a bar with no numbers in it and a
+ * clock, for the longest silent stretch of a large sync. This drives the real
+ * app through a real reconcile over a few thousand files and demands the numbers
+ * on screen — the only evidence that the denominator survives the whole path
+ * from the host's walk, through the port, the throttle and into the DOM.
+ */
+test("the planning phase counts the local reconcile against a real denominator", async ({}, info) => {
+  const shots = process.env.GEODE_SHOT_DIR;
+  const { vault, profile } = launchVault(1500);
+  const app = await electron.launch({ args: [root, `--user-data-dir=${profile}`], cwd: root });
+  try {
+    const page = await app.firstWindow();
+    await page.waitForFunction(() => Boolean((window as any).app?.workspace));
+    await page.setViewportSize({ width: 1100, height: 760 });
+    await page.evaluate(FIXTURE(0, 3));
+
+    const modal = page.locator('.modal.mod-settings[aria-label="Settings"]');
+    await modal.getByRole("combobox", { name: "Sync provider" }).selectOption("history.fixture");
+    await modal.getByRole("textbox", { name: "Shared vault name" }).fill("Synthetic shared vault");
+    await modal.getByRole("button", { name: "Create shared vault", exact: true }).click();
+    await expect(modal).toContainText("Shared vault created");
+
+    const phase = modal.locator(".sync-progress-phase");
+    const counts = modal.locator(".sync-progress-counts");
+    const bar = modal.locator(".sync-progress-bar");
+
+    await modal.getByRole("button", { name: "Preview", exact: true }).click();
+    await expect(phase).toHaveText("Planning changes", { timeout: 60_000 });
+    // The whole fix, as a user sees it: a count, a denominator and a percentage
+    // during the phase that used to render as an empty bar.
+    await expect(counts).toHaveText(/[\d,]+ \/ [\d,]+ \(\d+%\)/, { timeout: 60_000 });
+
+    // A determinate bar, not the indeterminate one planning was stuck with.
+    expect(await bar.getAttribute("value")).not.toBeNull();
+    const parse = async () => {
+      const [completed, total] = (await counts.textContent())!.match(/[\d,]+/g)!.slice(0, 2).map(n => Number(n.replace(/,/g, "")));
+      return { completed, total };
+    };
+    const first = await parse();
+    // 1,500 generated files: a denominator that is real, not a placeholder.
+    expect(first.total).toBeGreaterThan(1000);
+    expect(first.completed).toBeLessThanOrEqual(first.total);
+    // And it climbs well past where it started — a count that merely appeared
+    // once would still be a bar that only looks alive.
+    await expect.poll(async () => (await parse()).completed, { timeout: 60_000 }).toBeGreaterThan(first.total / 5);
+    const later = await parse();
+    expect(later.total).toBe(first.total);
+    await expect(modal.locator(".sync-progress-elapsed")).toContainText("Elapsed");
+    // Captured here rather than on first paint, so the artifact shows the phase
+    // genuinely underway instead of a 1% that proves less than it appears to.
+    if (shots) await page.screenshot({ path: path.join(shots, "planning-real-denominator.png") });
+    await page.screenshot({ path: info.outputPath("sync-planning-counts.png") });
+  } finally {
+    await app.close();
+    fs.rmSync(vault, { recursive: true, force: true });
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The restart signal, rendered the same injected way as the stall warning below
+ * and for the same reason: producing a genuine fourth consecutive failed run
+ * end-to-end would mean driving a provider to fail four times on a backoff that
+ * reaches 16s. What this proves is the part that matters on screen — that a
+ * restarted pass does not read like a continuing one. The counter's lifecycle
+ * across endProgress() is covered in tests/unit/sync-progress.test.ts.
+ */
+test("a restarted pass names itself instead of passing for continued progress", async ({}, info) => {
+  const shots = process.env.GEODE_SHOT_DIR;
+  const { vault, profile } = launchVault(2);
+  const app = await electron.launch({ args: [root, `--user-data-dir=${profile}`], cwd: root });
+  try {
+    const page = await app.firstWindow();
+    await page.waitForFunction(() => Boolean((window as any).app?.workspace));
+    await page.setViewportSize({ width: 1100, height: 760 });
+    await page.evaluate(FIXTURE(0));
+    const modal = page.locator('.modal.mod-settings[aria-label="Settings"]');
+    await modal.getByRole("combobox", { name: "Sync provider" }).selectOption("history.fixture");
+    await expect(modal).toContainText("Create or join a shared vault");
+
+    await page.evaluate(() => {
+      const sync = (window as any).app.sync;
+      const now = Date.now();
+      sync.status = {
+        state: "syncing", providerId: "history.fixture", conflicts: 0,
+        progress: { phase: "planning", completed: 3102, total: 17251, currentPath: "note-2.md", startedAt: now - 23_000, lastProgressAt: now, attempt: 4 },
+      };
+      sync.trigger("status", sync.status);
+    });
+
+    const phase = modal.locator(".sync-progress-phase");
+    // 23 seconds elapsed on attempt four is the user's report made legible: the
+    // clock restarting no longer masquerades as one slow first pass.
+    await expect(phase).toHaveText("Planning changes — attempt 4");
+    await expect(modal.locator(".sync-progress-counts")).toHaveText("3,102 / 17,251 (17%)");
+    await expect(modal.locator(".sync-progress-elapsed")).toContainText("Elapsed 23s");
+    if (shots) await page.screenshot({ path: path.join(shots, "planning-restart-attempt.png") });
+    await page.screenshot({ path: info.outputPath("sync-planning-attempt.png") });
   } finally {
     await app.close();
     fs.rmSync(vault, { recursive: true, force: true });
