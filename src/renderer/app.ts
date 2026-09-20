@@ -3543,14 +3543,23 @@ export class App {
     await leaf.runDocumentNavigation(() => leaf.setViewState({ type: "geode-external-source", state, active: true }));
   }
 
-  async openFile(file: TFile, newTab: boolean): Promise<void> {
+  /**
+   * `sourceLeaf` is the pane the request came from, when the caller knows it —
+   * a link clicked inside a specific document. It is forwarded to
+   * `Workspace.getLeaf`, which targets that pane instead of the global active
+   * one; see the comment there for why the active pane cannot be trusted
+   * during a Live Preview link `mousedown`. Omitting it keeps the previous
+   * behavior, so callers that mean "the active pane" (command palette, quick
+   * switcher, File Explorer) are unchanged.
+   */
+  async openFile(file: TFile, newTab: boolean, sourceLeaf?: WorkspaceLeaf | null): Promise<void> {
     if (file.extension === "canvas") {
       const existing = this.workspace.findLeafForFile(file.path);
       if (existing && !newTab) {
         existing.group.setActiveLeaf(existing);
         return;
       }
-      const leaf = this.workspace.getLeaf(newTab);
+      const leaf = this.workspace.getLeaf(newTab, undefined, sourceLeaf);
       await this.openFileInLeaf(leaf, file);
       return;
     }
@@ -3567,7 +3576,7 @@ export class App {
         this.notify("Local HTML preview is available on desktop only");
         return;
       }
-      const leaf = this.workspace.getLeaf(newTab);
+      const leaf = this.workspace.getLeaf(newTab, undefined, sourceLeaf);
       await leaf.setViewState({
         type: "webviewer",
         active: true,
@@ -3581,7 +3590,7 @@ export class App {
         existing.group.setActiveLeaf(existing);
         return;
       }
-      const leaf = this.workspace.getLeaf(newTab);
+      const leaf = this.workspace.getLeaf(newTab, undefined, sourceLeaf);
       await this.openFileInLeaf(leaf, file);
       return;
     }
@@ -3877,10 +3886,26 @@ export class App {
     }
   }
 
-  async openLink(linktext: string, sourcePath: string, newTab: boolean): Promise<void> {
+  /**
+   * `sourceLeaf` is the pane holding the document the link was clicked in.
+   * Every in-app link handler that knows its own leaf passes it, so the
+   * destination no longer depends on whether the click has already promoted
+   * that pane to active — see `Workspace.getLeaf`.
+   *
+   * The `#anchor` follow-up deliberately still routes through
+   * `revealOffsetInActiveMarkdownView`: by that point the file is open in
+   * `sourceLeaf`, so its own `openFile` takes the `findLeafForFile`
+   * short-circuit, which activates that leaf before the scroll.
+   */
+  async openLink(
+    linktext: string,
+    sourcePath: string,
+    newTab: boolean,
+    sourceLeaf?: WorkspaceLeaf | null
+  ): Promise<void> {
     const dest = this.metadataCache.getFirstLinkpathDest(linktext, sourcePath);
     if (dest) {
-      await this.openFile(dest, newTab);
+      await this.openFile(dest, newTab, sourceLeaf);
       const hash = linktext.indexOf("#");
       if (hash !== -1) {
         const offset = await this.resolveSubpathOffset(dest, linktext.slice(hash));
@@ -3891,7 +3916,7 @@ export class App {
       const name = linktext.split("#")[0].trim();
       if (!name) return;
       const file = await this.vault.create(this.vault.availablePath("", name, "md"), "");
-      await this.openFile(file, newTab);
+      await this.openFile(file, newTab, sourceLeaf);
     }
   }
 

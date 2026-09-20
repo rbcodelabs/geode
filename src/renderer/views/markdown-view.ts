@@ -17,7 +17,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { App, ContextMenuItemSpec } from "../app";
-import { buildViewHeaderNavButtons, type View } from "../workspace";
+import { buildViewHeaderNavButtons, type View, type WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import type { HeadingCache, TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
@@ -191,6 +191,20 @@ export class MarkdownView implements View {
     return this.file;
   }
 
+  /**
+   * The pane this view is currently mounted in, for link clicks originating
+   * inside it. Resolved on demand rather than cached: a tab can be dragged
+   * into another pane while this view stays alive, and the view is constructed
+   * before any leaf adopts it.
+   *
+   * Passed to `App.openLink` (via `livePreview` and `MarkdownRenderer.render`)
+   * so a link opens in the pane the user clicked in, even on the first click
+   * into a pane that is not yet the active one — see `Workspace.getLeaf`.
+   */
+  private ownLeaf(): WorkspaceLeaf | null {
+    return this.app.workspace?.findLeafForView(this) ?? null;
+  }
+
   async setFile(file: TFile): Promise<void> {
     this.pagePreview.hide();
     await this.flush();
@@ -265,7 +279,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
+            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion] }),
@@ -296,7 +310,10 @@ export class MarkdownView implements View {
             const link = view.wikilinkAt(v.state.doc.toString(), pos);
             if (link) {
               e.preventDefault();
-              app.openLink(link, view.file?.path ?? "", false);
+              // Source mode's Cmd/Ctrl-click on a raw `[[wikilink]]`. Same
+              // `mousedown` ordering hazard as Live Preview's handlers, so it
+              // names its own pane rather than trusting the active one.
+              app.openLink(link, view.file?.path ?? "", false, view.ownLeaf());
               return true;
             }
             return false;
@@ -405,7 +422,7 @@ export class MarkdownView implements View {
       this.mode = "live";
       this.lastEditingMode = "live";
       this.editor?.dispatch({ effects: this.editingCompartment.reconfigure([
-        livePreview(this.app, () => this.file?.path ?? ""),
+        livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()),
         commentDecorations,
         commentInteractions((id) => this.app.selectComment(id)),
       ]) });
@@ -685,7 +702,7 @@ export class MarkdownView implements View {
     this.lastEditingMode = this.mode;
     this.editor?.dispatch({
       effects: this.editingCompartment.reconfigure(
-        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? ""), commentDecorations, commentInteractions((id) => this.app.selectComment(id))] : []
+        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()), commentDecorations, commentInteractions((id) => this.app.selectComment(id))] : []
       ),
     });
     this.applyMode();
@@ -716,7 +733,7 @@ export class MarkdownView implements View {
     const contentEl = document.createElement("div");
     this.readingContentEl = contentEl;
     inner.appendChild(contentEl);
-    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "");
+    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf());
   }
 
   /** Jump the editor to a given offset (used by outline/search). */
