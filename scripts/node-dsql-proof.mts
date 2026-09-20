@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import {createHash} from "node:crypto";
-import {mkdir,writeFile} from "node:fs/promises";
+import {createHash,randomUUID} from "node:crypto";
+import {link,mkdir,rm,writeFile} from "node:fs/promises";
 import {join,dirname} from "node:path";
 import {Pool} from "pg";
 import {createCloudCatalog,type NodeDsqlPool,type NodeDsqlOptions} from "../src/catalog/cloud";
@@ -69,7 +69,17 @@ if(mode==="publish") {
   // genuinely cold race, not just database contention over preuploaded bytes.
   let gets=0;let releaseReads!:()=>void;
   const readGate=new Promise<void>(resolve=>{releaseReads=resolve;});
-  const cold={...objects,get:async(key:string)=>{if(key.startsWith("race/") && gets<2){if(++gets===2)releaseReads();await readGate;}return objects.get(key);},put:async(key:string,value:Uint8Array)=>{const file=join(root,"objects",key);await mkdir(dirname(file),{recursive:true});await writeFile(file,value,{flag:"wx"});return key;}};
+  const cold={...objects,get:async(key:string)=>{if(key.startsWith("race/") && gets<2){if(++gets===2)releaseReads();await readGate;}return objects.get(key);},put:async(key:string,value:Uint8Array)=>{
+    const file=join(root,"objects",key);await mkdir(dirname(file),{recursive:true});
+    const temporary=join(dirname(file),`.geode-object-${randomUUID()}`);
+    try {
+      await writeFile(temporary,value,{flag:"wx"});
+      // A Blob create is visible as complete bytes. link preserves exclusive
+      // creation without exposing writeFile's partially written final path.
+      await link(temporary,file);
+      return key;
+    } finally {await rm(temporary,{force:true});}
+  }};
   const catalog=createCloudCatalog({...options(racing),objects:cold});
   try {
     const race={vaultId:"race",mutationId:"same",baseSequence:0,notes:[{path:"race.md",text:"cold object"}]};
