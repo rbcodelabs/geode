@@ -1,6 +1,6 @@
 {
   "name": "geode",
-  "version": "0.22.4",
+  "version": "0.22.5",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
   "//exports": "The desktop app entry stays on `main`, which is what Electron reads. `./wiki` is the headless engine SDK and `./catalog` is the publish/restore SDK: one curated entry point each, not the directories. Everything else under src/wiki/ and src/catalog/ is internal by omission — see docs/design/headless-wiki-sdk.md and docs/design/headless-wiki-cli.md. Both resolve to TypeScript source on purpose: in-repo consumers bundle from source with esbuild exactly as every existing proof does, and publishing this package to a registry is out of scope by contract, so a separate dist artifact would be build surface with no consumer.",
