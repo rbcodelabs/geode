@@ -14,7 +14,7 @@ cloud, no lock-in.
 
 - **Built-in Ivory theme** — the website-inspired green theme now ships with
   the desktop app and is available in existing vaults without a separate download.
-  Choose **Ivory** in Settings → Community plugins & themes. Default remains
+  Choose **Ivory** in Settings → Appearance → Theme. Default remains
   the default, and a vault-installed theme with the same name takes precedence.
 - **Search saved websites** — New Tab and the quick switcher (Cmd+O) include
   saved website bookmarks, so you can find them alongside vault files.
