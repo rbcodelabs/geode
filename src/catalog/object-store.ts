@@ -101,7 +101,7 @@ export function objectKeyFor(vaultId: string, contentAddress: ContentAddress): O
  * convention on the read path, and it is the only such check a note ever gets.
  */
 export async function readVerified(
-  store: ObjectStore,
+  store: Pick<ObjectStore, "get">,
   key: ObjectKey,
   contentAddress: ContentAddress,
   digest: Digest = nodeDigest,
@@ -135,7 +135,7 @@ export async function readVerified(
  * `putImmutable` cannot detect that it was skipped.
  */
 export async function putImmutable(
-  store: ObjectStore,
+  store: Pick<ObjectStore, "get" | "put">,
   key: ObjectKey,
   bytes: Uint8Array,
   contentType: string,

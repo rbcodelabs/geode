@@ -50,6 +50,12 @@ compatibility and strict ambiguity reporting. This is a
 [read-only Node API](docs/design/local-wiki-usage.md) supports folder snapshots,
 metadata, literal search, links and backlinks without Electron; it is internal
 tooling, not a published SDK, cloud service or replacement desktop application.
+The independently versioned [Geode Headless package](packages/headless/README.md)
+provides compiled Node 22+ ESM and TypeScript declarations for local wiki operations,
+the DSQL/private Blob catalog, and immutable namespace-bound document content.
+Build and test an installable tarball with `npm run proof:headless-package`.
+The package is prepared for npm publication; registry publication is a separate release step.
+
 The [headless extraction report](docs/design/headless-phase0.md) describes the
 portable foundation and its plain-Node proofs.
 
