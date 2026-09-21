@@ -90,6 +90,11 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
       })
       .toBe(true);
 
+    // isEnabled becomes true before async onload settles. Await the actual
+    // startup promise before checking registrations; rejection must still fail.
+    await window.evaluate(async () => {
+      await (window as any).app.pluginManager.getPlugin("terminal").onloadResult;
+    });
     // A real, complete set of the plugin's commands registered — proof
     // onload() ran to completion rather than partially crashing.
     const commandIds: string[] = await window.evaluate(() =>
