@@ -3668,7 +3668,7 @@ export class App {
   }
 
   private async mountDocumentInLeaf(leaf: WorkspaceLeaf, file: TFile, recordHistory: boolean): Promise<void> {
-    const previousPath = leaf.view?.getFile?.()?.path;
+    const previousNavigation = recordHistory ? leaf.captureDocumentNavigation() : null;
     if (file.extension === "canvas") {
       if (leaf.view instanceof CanvasView) {
         await leaf.view.setFile(file, true);
@@ -3723,7 +3723,7 @@ export class App {
       }
     }
     if (recordHistory) {
-      if (previousPath) leaf.recordDocumentNavigation(previousPath);
+      if (previousNavigation) leaf.recordCapturedDocumentNavigation(previousNavigation);
       leaf.recordDocumentNavigation(file.path);
     }
   }
