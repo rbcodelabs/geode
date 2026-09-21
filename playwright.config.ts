@@ -11,6 +11,11 @@ if (process.env.HEADED === "1" || process.env.GEODE_HEADLESS === "0") {
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // This spec must show a real macOS window and enter native fullscreen. Keep
+  // background/default runs non-disruptive while retaining an explicit opt-in.
+  testIgnore: process.env.GEODE_NATIVE_FULLSCREEN_E2E === "1"
+    ? []
+    : ["**/window-chrome.spec.ts"],
   fullyParallel: false,
   workers: 1,
   // Electron apps launched by specs hold a throwaway --user-data-dir under the
