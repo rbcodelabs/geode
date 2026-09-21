@@ -56,12 +56,14 @@ import { RenderContext } from "./api/bases-values";
 import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
 import {
   addBookmark,
+  collectLinkBookmarks,
   createEmptyRoot,
   findBookmark,
   findBookmarkByPath,
   normalizeBookmarksRoot,
   removeBookmark,
   type Bookmark,
+  type BookmarkLink,
   type BookmarksRoot,
 } from "./bookmarks";
 import { renamePathForBasename, rewriteWikilinksForRename } from "./rename";
@@ -133,41 +135,55 @@ interface AppSettings {
   metadataScanCapBytes: number;
 }
 
-/** One row of the New Tab universal picker: a vault file, a pinned "open this URL", or one of the two always-available fallbacks. */
+/** One row of the New Tab universal picker. */
 export type PickerItem =
   | { kind: "file"; file: TFile }
+  | { kind: "bookmark"; bookmark: BookmarkLink }
   | { kind: "open-url"; url: string }
   | { kind: "new-note"; title: string }
   | { kind: "search-web"; query: string };
 
 /**
- * Builds the New Tab picker's result list for one query: vault files ranked
- * by `fuzzyMatch` (the same scorer the Quick Switcher uses), with a pinned
+ * Builds the New Tab picker's result list for one query: vault files and saved
+ * website bookmarks ranked together by `fuzzyMatch` (the same scorer the
+ * Quick Switcher uses), with a pinned
  * "Open `<url>`" item first when `query` is URL/domain-shaped
  * (`isUrlShaped`), and — whenever `query` is non-empty — "New note" and
  * "Search the web" always appended last, regardless of whether files also
  * matched. This never silently guesses one fallback action; both are always
  * offered, selectable like any other result.
  *
- * File matches are capped below `SuggestList`'s own 80-item cap by however
+ * Ranked matches are capped below `SuggestList`'s own 80-item cap by however
  * many fixed items (0-3) are present, so a very large match count can never
  * push "New note" / "Search the web" out of the rendered list.
  */
-export function buildPickerItems(query: string, files: TFile[], searchEngine: string): PickerItem[] {
+export function buildPickerItems(
+  query: string,
+  files: TFile[],
+  bookmarks: BookmarkLink[],
+  searchEngine: string,
+): PickerItem[] {
   const items: PickerItem[] = [];
   const urlShaped = isUrlShaped(query);
   const nonEmpty = query.length > 0;
   if (urlShaped) items.push({ kind: "open-url", url: resolveWebInput(query, searchEngine) });
 
   const reserved = (urlShaped ? 1 : 0) + (nonEmpty ? 2 : 0);
-  const scored: FuzzyMatch<TFile>[] = [];
+  const scored: FuzzyMatch<PickerItem>[] = [];
   for (const file of files) {
     const score = fuzzyMatch(query, file.path);
-    if (score !== null) scored.push({ item: file, score });
+    if (score !== null) scored.push({ item: { kind: "file", file }, score });
+  }
+  for (const bookmark of bookmarks) {
+    const title = bookmark.title?.trim() ?? "";
+    const titleScore = title ? fuzzyMatch(query, title) : null;
+    const urlScore = fuzzyMatch(query, bookmark.url);
+    const score = Math.max(titleScore ?? Number.NEGATIVE_INFINITY, urlScore ?? Number.NEGATIVE_INFINITY);
+    if (Number.isFinite(score)) scored.push({ item: { kind: "bookmark", bookmark }, score });
   }
   scored.sort((a, b) => b.score - a.score);
   for (const { item } of scored.slice(0, Math.max(0, 80 - reserved))) {
-    items.push({ kind: "file", file: item });
+    items.push(item);
   }
 
   if (nonEmpty) {
@@ -217,6 +233,7 @@ class NewTabPickerList extends SuggestList<PickerItem> {
     return buildPickerItems(
       this.inputEl.value,
       this.geodeApp.vault.getMarkdownFiles(),
+      collectLinkBookmarks(this.geodeApp.bookmarksRoot),
       this.geodeApp.settings.webViewer.searchEngine,
     );
   }
@@ -230,6 +247,20 @@ class NewTabPickerList extends SuggestList<PickerItem> {
       case "file":
         el.innerHTML = `<div class="new-tab-picker-result-title">${item.file.basename}</div><div class="new-tab-picker-result-path">${item.file.parent || ""}</div>`;
         break;
+      case "bookmark": {
+        const title = item.bookmark.title?.trim() || item.bookmark.url;
+        const titleEl = document.createElement("div");
+        titleEl.className = "new-tab-picker-result-title";
+        titleEl.textContent = title;
+        el.appendChild(titleEl);
+        if (title !== item.bookmark.url) {
+          const urlEl = document.createElement("div");
+          urlEl.className = "new-tab-picker-result-path";
+          urlEl.textContent = item.bookmark.url;
+          el.appendChild(urlEl);
+        }
+        break;
+      }
       case "open-url":
         el.textContent = `Open ${item.url}`;
         break;
@@ -246,6 +277,9 @@ class NewTabPickerList extends SuggestList<PickerItem> {
     switch (item.kind) {
       case "file":
         this.geodeApp.openFile(item.file, evt.metaKey || evt.ctrlKey);
+        break;
+      case "bookmark":
+        void this.geodeApp.openBookmark(item.bookmark, evt.metaKey || evt.ctrlKey);
         break;
       case "open-url":
         this.geodeApp.openWebViewer(item.url);
@@ -340,30 +374,54 @@ export interface AppActionContext {
   reloadable?: ReloadableView | null;
 }
 
-class QuickSwitcherModal extends SuggestModal<TFile> {
+type QuickSwitcherItem =
+  | { kind: "file"; file: TFile }
+  | { kind: "bookmark"; bookmark: BookmarkLink };
+
+class QuickSwitcherModal extends SuggestModal<QuickSwitcherItem> {
   constructor(private geodeApp: App) {
     super(geodeApp);
-    this.inputEl.placeholder = "Find or create a note…";
-    this.emptyStateText = "No matching notes. Press Enter to create one.";
+    this.inputEl.placeholder = "Find a file or website bookmark…";
+    this.emptyStateText = "No matching files or bookmarks. Press Enter to create a note.";
   }
 
-  getItems(): TFile[] {
+  getItems(): QuickSwitcherItem[] {
     // Not getMarkdownFiles(): the quick switcher should match any existing
     // vault file (.base, .canvas, images, ...), not just Markdown notes.
     // onNoMatch() still only offers to create a new Markdown note.
-    return this.geodeApp.vault.getFiles();
+    return [
+      ...this.geodeApp.vault.getFiles().map((file): QuickSwitcherItem => ({ kind: "file", file })),
+      ...collectLinkBookmarks(this.geodeApp.bookmarksRoot).map(
+        (bookmark): QuickSwitcherItem => ({ kind: "bookmark", bookmark }),
+      ),
+    ];
   }
 
-  getItemText(file: TFile): string {
-    return file.path;
+  getItemText(item: QuickSwitcherItem): string {
+    if (item.kind === "file") return item.file.path;
+    const title = item.bookmark.title?.trim();
+    return title ? `${title} ${item.bookmark.url}` : item.bookmark.url;
   }
 
-  renderItem(file: TFile, el: HTMLElement): void {
-    el.innerHTML = `<div class="prompt-result-title">${file.basename}</div><div class="prompt-result-path">${file.parent || ""}</div>`;
+  renderItem(item: QuickSwitcherItem, el: HTMLElement): void {
+    const title = document.createElement("div");
+    title.className = "prompt-result-title";
+    const path = document.createElement("div");
+    path.className = "prompt-result-path";
+    if (item.kind === "file") {
+      title.textContent = item.file.basename;
+      path.textContent = item.file.parent || "";
+    } else {
+      const displayTitle = item.bookmark.title?.trim() || item.bookmark.url;
+      title.textContent = displayTitle;
+      path.textContent = displayTitle === item.bookmark.url ? "" : item.bookmark.url;
+    }
+    el.append(title, path);
   }
 
-  onChooseItem(file: TFile, evt: KeyboardEvent | MouseEvent): void {
-    this.geodeApp.openFile(file, evt.metaKey || evt.ctrlKey);
+  onChooseItem(item: QuickSwitcherItem, evt: KeyboardEvent | MouseEvent): void {
+    if (item.kind === "file") this.geodeApp.openFile(item.file, evt.metaKey || evt.ctrlKey);
+    else void this.geodeApp.openBookmark(item.bookmark, evt.metaKey || evt.ctrlKey);
   }
 
   onNoMatch(query: string): void {
