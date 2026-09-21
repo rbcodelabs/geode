@@ -1,6 +1,6 @@
 {
   "name": "geode",
-  "version": "0.22.6",
+  "version": "0.22.7",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
   "//exports": "The desktop app entry stays on `main`, which is what Electron reads. `./wiki` is the headless engine SDK, `./catalog` is the conventional PostgreSQL publish/restore SDK, and `./catalog/cloud` is the opt-in Node DSQL/private Blob adapter. These curated entries do not expose their directories. Other modules remain internal by omission. SDK entries resolve to TypeScript source for in-repo bundling; registry publication is out of scope. See docs/design/headless-wiki-sdk.md and docs/design/node-dsql-cloud-adapter.md.",
