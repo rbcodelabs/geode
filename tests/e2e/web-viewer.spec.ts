@@ -905,7 +905,9 @@ test("A main-frame load failure shows the recoverable error overlay instead of a
 });
 
 test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript, and images", async () => {
-  const { app, window, userDataDir, consoleErrors } = await launch();
+  const htmlVault = fs.mkdtempSync(path.join(os.tmpdir(), "geode-html-isolated-"));
+  for (const name of ["Local page.html", "local-page.css", "local-page.js", "geode-logo.png"]) fs.copyFileSync(path.join(testVaultPath, name), path.join(htmlVault, name));
+  const { app, window, userDataDir, consoleErrors } = await launch(htmlVault);
 
   try {
     // `launch()` only waits for `.workspace`; the restored session paints its
@@ -923,6 +925,16 @@ test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript,
     await expect(frame).toHaveAttribute("partition", "persist:webviewer");
     await expect(webView.locator(".web-view-address")).toHaveValue(/^file:\/\/.*Local%20page\.html$/);
     await expect(window.locator(".workspace-split.mod-root .workspace-tab-header")).toHaveCount(initialTabCount);
+
+    // The address reflects the request before the about:blank bootstrap has
+    // navigated. Executing script in that retiring context can strand its
+    // promise even when the target document loads successfully. Wait for the
+    // native guest's committed, finished navigation before inspecting content.
+    await expect.poll(() => frame.evaluate(guest => {
+      const webview = guest as unknown as { getURL(): string; isLoading(): boolean };
+      try { return !webview.isLoading() && /\/Local%20page\.html$/.test(webview.getURL()); }
+      catch { return false; }
+    })).toBe(true);
 
     await expect
       .poll(() =>
@@ -954,5 +966,6 @@ test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript,
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(htmlVault, { recursive: true, force: true });
   }
 });
