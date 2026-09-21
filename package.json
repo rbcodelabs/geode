@@ -18,6 +18,7 @@
     "test": "vitest run && npm run build && playwright test",
     "test:unit": "vitest run",
     "test:e2e": "npm run build && playwright test",
+    "test:e2e:native-fullscreen": "npm run build && GEODE_NATIVE_FULLSCREEN_E2E=1 playwright test tests/e2e/window-chrome.spec.ts",
     "test:mobile": "npm run build:mobile && playwright test --config playwright.mobile.config.ts",
     "e2e:kill": "node scripts/e2e-clean.mts",
     "parity:generate": "node scripts/generate-parity-ledger.mts",
