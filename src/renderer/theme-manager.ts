@@ -1,16 +1,12 @@
 import type { App } from "./app";
 
-const THEME_STYLE_ID = "geode-community-theme";
-
-function themePath(name: string): string {
-  return `.geode/themes/${name}/theme.css`;
-}
+const ACTIVE_THEME_STYLE_ID = "geode-active-theme";
 
 /**
- * Loads Obsidian community themes. A theme is a `theme.css` (plus
- * `manifest.json`) under `<vault>/.geode/themes/<name>/`, exactly as
- * Obsidian stores them. Applying a theme injects its CSS after Geode's own
- * stylesheet so it overrides the default via the shared CSS-variable
+ * Loads app-owned built-in themes and Obsidian-compatible vault themes.
+ * A vault theme with the same name overrides the built-in. Applying either
+ * kind injects its CSS after Geode's own stylesheet so it overrides the
+ * default via the shared CSS-variable
  * contract (see styles/app.css). Selecting "" (default) removes it.
  *
  * Themes drive the look entirely through CSS custom properties + Geode's
@@ -21,10 +17,10 @@ export class ThemeManager {
 
   constructor(private app: App) {}
 
-  /** Names of installed themes (subdirs of `.geode/themes/` with a theme.css). */
+  /** Names of built-in and installed vault themes. */
   async list(): Promise<string[]> {
     try {
-      return await window.geode.listThemes();
+      return await this.app.host.plugins.listThemes();
     } catch {
       return [];
     }
@@ -35,7 +31,7 @@ export class ThemeManager {
   }
 
   /**
-   * Apply a theme by name, or the built-in default when `name` is falsy.
+   * Apply a theme by name, or the default Geode palette when `name` is falsy.
    * Missing/unreadable themes fall back to the default rather than throwing.
    */
   async apply(name: string): Promise<void> {
@@ -47,14 +43,14 @@ export class ThemeManager {
     }
     let css: string;
     try {
-      css = await window.geode.read(themePath(name));
+      css = await this.app.host.plugins.readThemeCss(name);
     } catch (err) {
       console.error(`Failed to load theme "${name}"`, err);
       this.app.syncWindowBackgroundColor();
       return;
     }
     const styleEl = document.createElement("style");
-    styleEl.id = THEME_STYLE_ID;
+    styleEl.id = ACTIVE_THEME_STYLE_ID;
     styleEl.dataset.theme = name;
     styleEl.textContent = css;
     document.head.appendChild(styleEl); // after app.css → theme wins the cascade
@@ -63,6 +59,6 @@ export class ThemeManager {
   }
 
   private remove(): void {
-    document.getElementById(THEME_STYLE_ID)?.remove();
+    document.getElementById(ACTIVE_THEME_STYLE_ID)?.remove();
   }
 }

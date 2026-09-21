@@ -78,6 +78,7 @@ import { DeepLinkDispatcher, shouldClaimObsidianProtocol } from "./deep-link";
 import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
 import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
+import { listThemes, readThemeCss } from "./builtin-themes";
 import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performPluginFetch, performRequestUrl } from "./request-url";
@@ -1136,29 +1137,20 @@ function registerIpc() {
     return inspected.filter((entry) => entry.hasManifest).map((entry) => entry.id);
   });
 
-  // Community themes: subdirectories of <vault>/.geode/themes/ that contain a
-  // theme.css (Obsidian's theme layout). Returns their names for the picker.
+  // App-owned built-ins plus vault-owned community themes. Local themes with
+  // the same name override their built-in counterpart when read.
   ipcMain.handle("themes-list", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) return [];
-    const themesDir = path.join(session.root, ".geode", "themes");
-    let entries;
-    try {
-      entries = await fsp.readdir(themesDir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-    const names: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const hasCss = await fsp
-        .access(path.join(themesDir, entry.name, "theme.css"))
-        .then(() => true)
-        .catch(() => false);
-      if (hasCss) names.push(entry.name);
-    }
-    return names.sort((a, b) => a.localeCompare(b));
+    return listThemes(session.root);
+  });
+
+  ipcMain.handle("theme-read-css", async (e, id: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault is open");
+    return readThemeCss(session.root, id);
   });
 
   ipcMain.handle("open-external", (_e, url: string) => {

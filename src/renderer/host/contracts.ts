@@ -153,6 +153,7 @@ export interface NavigationService {
 export interface PluginHostService {
   listPluginIds(): Promise<string[]>;
   listThemes(): Promise<string[]>;
+  readThemeCss(id: string): Promise<string>;
   readPluginFile(path: string, rendererSentAt: number): Promise<{
     ok: boolean;
     content?: string;

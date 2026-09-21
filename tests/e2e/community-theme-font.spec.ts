@@ -64,7 +64,7 @@ test("a community theme can ship its own font as a data: URI", async () => {
       const faces = await document.fonts.load('16px "GeodeEmbeddedFont"');
       return faces.map((face) => face.status);
     });
-    await expect(window.locator("style#geode-community-theme")).toHaveCount(1);
+    await expect(window.locator("style#geode-active-theme")).toHaveCount(1);
     expect(statuses).toEqual(["loaded"]);
 
     const afterTheme = await window.evaluate(

@@ -41,6 +41,7 @@ function createElectronPreloadFixture(): ElectronPreloadApi {
     openLocalFile: vi.fn(async () => ({ kind: "rejected" })),
     listPluginIds: vi.fn(async () => []),
     listThemes: vi.fn(async () => []),
+    readThemeCss: vi.fn(async () => "/* theme */"),
     readPluginFile: vi.fn(async (_path, sentAt) => ({
       ok: true,
       content: "module.exports = {}",
@@ -102,6 +103,12 @@ describe("HostServices", () => {
     const replacement = { manifest: "old", main: "main", styles: null };
     await host.plugins.replacePluginFiles("probe", "new", replacement);
     expect(preload.replacePluginFiles).toHaveBeenCalledWith("probe", "new", replacement);
+  });
+  it("forwards theme CSS reads through the narrow typed Electron adapter", async () => {
+    const preload = createElectronPreloadFixture();
+    const host = createElectronHost(preload);
+    await expect(host.plugins.readThemeCss("Ivory")).resolves.toBe("/* theme */");
+    expect(preload.readThemeCss).toHaveBeenCalledWith("Ivory");
   });
   it("only reports browser foreground when the document becomes visible", () => {
     const documentTarget = new EventTarget() as EventTarget & { visibilityState: string };

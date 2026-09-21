@@ -209,6 +209,7 @@ const api = {
   > => ipcRenderer.invoke("open-local-file", href),
   listPluginIds: (): Promise<string[]> => ipcRenderer.invoke("plugins-list-ids"),
   listThemes: (): Promise<string[]> => ipcRenderer.invoke("themes-list"),
+  readThemeCss: (id: string): Promise<string> => ipcRenderer.invoke("theme-read-css", id),
   getSupportedPluginCatalog: (): Promise<SupportedPluginCatalogIpcState> =>
     ipcRenderer.invoke("supported-plugin-catalog"),
   installSupportedPlugin: (

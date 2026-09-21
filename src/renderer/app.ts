@@ -119,7 +119,7 @@ interface AppSettings {
   showLineNumber: boolean;
   showRibbon: boolean;
   showStatusBar: boolean;
-  /** Selected community theme name ("" = built-in default). */
+  /** Selected built-in or vault theme name ("" = default Geode palette). */
   cssTheme: string;
   webViewer: WebViewerOptions;
   /**
@@ -768,7 +768,7 @@ class SettingsModal extends Modal {
       this.geodeApp.applySettings();
       this.geodeApp.saveSettings();
     });
-    // Community theme picker: "Default" + any installed under .geode/themes/.
+    // Theme picker: Default + app-owned built-ins + vault-owned themes.
     this.addDropdown(
       container,
       "Theme",
@@ -2440,7 +2440,7 @@ export class App {
     this.hostDisposers.add(this.commands.attach(document));
     this.attachGuestHotkeyBridge();
     this.applySettings();
-    // Apply the selected community theme (if the vault has it installed).
+    // Apply the selected built-in or vault-owned theme.
     this.themeManager.apply(this.settings.cssTheme);
 
     this.pluginManager = new PluginManager(this);
@@ -4792,7 +4792,7 @@ export class App {
     void this.host.config.write("app", this.settings);
   }
 
-  /** Select a community theme by name (or "" for the built-in default): apply it and persist. */
+  /** Select a built-in or vault theme by name (or "" for the default palette), apply it, and persist. */
   async applyCommunityTheme(name: string): Promise<void> {
     this.settings.cssTheme = name;
     await this.themeManager.apply(name);
