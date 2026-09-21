@@ -15,6 +15,8 @@
     "geode-wiki": "dist/cli/geode-wiki.mjs"
   },
   "scripts": {
+    "build:headless": "node scripts/build-headless-package.mjs",
+    "proof:headless-package": "node scripts/proof-headless-package.mjs",
     "test": "vitest run && npm run build && playwright test",
     "test:unit": "vitest run",
     "test:e2e": "npm run build && playwright test",
