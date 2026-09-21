@@ -5,10 +5,26 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.22.6). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.22.7). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
+
+## New and fixed in v0.22.7
+
+- **Built-in Ivory theme** — the website-inspired green theme now ships with
+  the desktop app and is available in existing vaults without a separate download.
+  Choose **Ivory** in Settings → Community plugins & themes. Default remains
+  the default, and a vault-installed theme with the same name takes precedence.
+- **Search saved websites** — New Tab and the quick switcher (Cmd+O) include
+  saved website bookmarks, so you can find them alongside vault files.
+- **Separate companion panes** — opening a companion preserves its own split
+  instead of combining it with its anchor, including chat panes.
+- **Plugin Back/Forward navigation** — after a picked file replaces a plugin
+  pane, tab history can restore the plugin view and its saved state.
+- **Safer multi-window refresh** — one window's sync checkpoint can no longer
+  hide another window's pending refresh or bypass stale-writer protection after
+  a rejected Canvas refresh.
 
 ## Fixed in v0.22.6
 
@@ -250,7 +266,7 @@ or a path escaping the vault all reject instead of writing a note somewhere the
 user did not configure; `getLeaf('window')` throws rather than substituting a
 tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
 
-## Features (v0.17.0)
+## Features
 
 - **Keychain-backed plugin secrets** — `app.secretStorage` encrypts through the
   OS keychain via Electron `safeStorage`, migrating any previously stored
