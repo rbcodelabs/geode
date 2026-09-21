@@ -28,6 +28,23 @@ function setup() {
 }
 
 describe("durable companion destination", () => {
+  it("separates a restored companion group that now contains the anchor without closing its tabs", () => {
+    const { workspace, anchor } = setup();
+    const group = anchor.group as TabGroup;
+    group.companionOwner = owner;
+    const previous = group.createLeaf(owner);
+    previous.pinned = true;
+    const result = workspace.getOrCreateCompanionLeaf(owner, anchor, 0.3);
+    expect(result.leaf.group).not.toBe(group);
+    expect(group.leaves).toEqual([anchor, previous]);
+    expect(previous.pinned).toBe(true);
+    expect(group.companionOwner).toBeUndefined();
+    expect(previous.companionOwner).toBeUndefined();
+    expect(workspace.groups.filter(g => g.companionOwner === owner)).toEqual([result.leaf.group]);
+    expect(workspace.getOrCreateCompanionLeaf(owner, anchor, 0.3).leaf).toBe(result.leaf);
+    expect(workspace.groups).toHaveLength(2);
+  });
+
   it("reuses one destination despite different anchors and pin state", () => {
     const { workspace, anchor } = setup();
     const first = workspace.getOrCreateCompanionLeaf(owner, anchor, 0.3);
@@ -171,7 +188,11 @@ describe("companion layout metadata", () => {
     });
     await workspace.deserialize(layout([tabs()]));
     expect(mounted).toEqual([[owner, owner], [owner, undefined]]);
-    expect(workspace.getOrCreateCompanionLeaf(owner, workspace.groups[0].leaves[1], 0.3).reused).toBe(true);
+    const restoredGroup = workspace.groups[0];
+    const result = workspace.getOrCreateCompanionLeaf(owner, restoredGroup.leaves[1], 0.3);
+    expect(result.reused).toBe(false);
+    expect(result.leaf.group).not.toBe(restoredGroup);
+    expect(restoredGroup.leaves).toHaveLength(2);
   });
 
   it("restores an empty owned group with one reusable designated placeholder", async () => {
@@ -187,7 +208,9 @@ describe("companion layout metadata", () => {
         left: { root: null }, right: { root: null },
       })).toBe(true);
       const restored = workspace.groups[0].leaves[0];
-      expect(workspace.getOrCreateCompanionLeaf(owner, restored, 0.3)).toEqual({ leaf: restored, reused: true });
+      const destination = workspace.getOrCreateCompanionLeaf(owner, restored, 0.3);
+      expect(destination.leaf.group).not.toBe(restored.group);
+      expect(destination.reused).toBe(false);
       expect(workspace.groups[0].leaves).toHaveLength(1);
     } finally {
       setView.mockRestore();

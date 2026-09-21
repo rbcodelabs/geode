@@ -26,6 +26,12 @@ chooses its navigation target. Otherwise a destination tab is created inside
 the owned split, or a new split is created beside the anchor if necessary.
 The API selects a destination synchronously; callers open content and reveal it.
 
+The destination must be in a different group from the anchor. If restoration or
+tab rearrangement places the anchor inside the owned group, the next request
+clears that group's ownership and creates a new companion beside the anchor.
+Existing tabs and their pin state are preserved; subsequent requests reuse the
+new companion.
+
 Ownership survives plugin reloads, workspace restoration, document/browser
 changes, and deferred plugin views. Closing the designated tab while other tabs
 remain retains split ownership. Moving that tab elsewhere clears its designation
