@@ -6,7 +6,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rmdir" | "rename" | "exists" | "reveal" | "onVaultEvent"
   | "readConfig" | "writeConfig" | "readMetadataCache" | "writeMetadataCache"
   | "startMetadataIndexer" | "onMetadataIndexerMessage" | "openExternal" | "openLocalFile"
-  | "listPluginIds" | "listThemes" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
+  | "listPluginIds" | "listThemes" | "readThemeCss" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent"
@@ -127,6 +127,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
     plugins: {
       listPluginIds: () => preload.listPluginIds(),
       listThemes: () => preload.listThemes(),
+      readThemeCss: (id) => preload.readThemeCss(id),
       readPluginFile: (path, rendererSentAt) => preload.readPluginFile(path, rendererSentAt),
       replacePluginFiles: (id, expected, replacement) => preload.replacePluginFiles(id, expected, replacement),
       getPolicy: () => preload.getPluginPolicy(),

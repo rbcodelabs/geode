@@ -1,4 +1,5 @@
 import type { HostServices, VaultEvent, VaultFileEntry } from "./contracts";
+import { assertValidThemeId } from "../../shared/theme-id";
 
 export interface BrowserHostState {
   readonly vaultName: string;
@@ -417,6 +418,13 @@ export function createBrowserHost(
         return [...ids].sort();
       },
       listThemes: async () => [],
+      readThemeCss: async (id) => {
+        assertValidThemeId(id);
+        requireOpen();
+        const content = activeState.files.get(`.geode/themes/${id}/theme.css`)?.data;
+        if (content === undefined) throw new Error(`Theme not found: ${id}`);
+        return content;
+      },
       readPluginFile: async (path, rendererSentAt) => {
         requireOpen();
         options.onPluginFileRead?.(path);
