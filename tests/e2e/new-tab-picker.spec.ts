@@ -18,7 +18,10 @@ const MOD = isMac ? "Meta" : "Control";
  * webview-hotkeys.spec.ts, so absolute tab/file counts don't depend on state
  * left behind by another spec.
  */
-async function launch(extraFiles: string[] = []) {
+async function launch(
+  extraFiles: string[] = [],
+  bookmarks?: { items: unknown[] },
+) {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-new-tab-picker-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-new-tab-picker-ud-"));
   fs.writeFileSync(path.join(vaultDir, "Daily Plan.md"), "# Daily Plan\n\nBody text.\n");
@@ -26,6 +29,10 @@ async function launch(extraFiles: string[] = []) {
   // files written after the window opens depend on watcher latency.
   for (const name of extraFiles) {
     fs.writeFileSync(path.join(vaultDir, name), `# ${name.replace(/\.md$/, "")}\n`);
+  }
+  if (bookmarks) {
+    fs.mkdirSync(path.join(vaultDir, ".geode"));
+    fs.writeFileSync(path.join(vaultDir, ".geode", "bookmarks.json"), JSON.stringify(bookmarks));
   }
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
@@ -77,6 +84,36 @@ test("typing an existing note's name shows it, and Enter opens it in the same ta
     await expect(window.locator(".workspace-leaf.mod-active .markdown-source-view")).toBeVisible();
     expect(await activeFilePath(window)).toBe("Daily Plan.md");
     await expect(rootTabs(window)).toHaveCount(tabsBefore);
+  } finally {
+    await app.close();
+    cleanup();
+  }
+});
+
+test("typing a nested website bookmark's title shows its URL and opens it in the Web Viewer", async () => {
+  const targetUrl = "https://example.com/saved-guide";
+  const { app, window, cleanup } = await launch([], {
+    items: [
+      {
+        type: "group",
+        id: "reading",
+        title: "Reading",
+        expanded: false,
+        items: [{ type: "link", id: "guide", title: "  Saved Web Guide  ", url: targetUrl }],
+      },
+    ],
+  });
+  try {
+    const input = await openNewTab(window);
+    await input.fill("Saved Web Guide");
+
+    const result = pickerResults(window).filter({ has: window.locator(".new-tab-picker-result-title", { hasText: "Saved Web Guide" }) });
+    await expect(result).toBeVisible();
+    await expect(result).toContainText(targetUrl);
+    await result.click();
+
+    await expect(window.locator(".web-view-frame")).toBeVisible();
+    await expect(window.locator(".web-view-address")).toHaveValue(targetUrl);
   } finally {
     await app.close();
     cleanup();

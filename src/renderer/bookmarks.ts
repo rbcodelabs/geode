@@ -409,6 +409,19 @@ export function collectGroups(root: BookmarksRoot): { id: string; title: string;
   return out;
 }
 
+/** Return every saved website bookmark in stable depth-first tree order. */
+export function collectLinkBookmarks(root: BookmarksRoot): BookmarkLink[] {
+  const links: BookmarkLink[] = [];
+  const walk = (items: BookmarkItem[]) => {
+    for (const item of items) {
+      if (item.type === "group") walk(item.items);
+      else if (item.type === "link") links.push(item);
+    }
+  };
+  walk(root.items);
+  return links;
+}
+
 /**
  * The ids of every group nested (at any depth) inside the group `groupId` —
  * its descendant subtree, NOT including `groupId` itself. Used by the Edit
