@@ -2871,7 +2871,16 @@ export class Workspace extends Events {
     if (!(anchor instanceof TabGroup) || !this.groups.includes(anchor) || !anchor.leaves.includes(anchorLeaf)) {
       throw new Error("Companion anchor must be an attached center leaf");
     }
-    const group = this.groups.find((candidate) => candidate.companionOwner === ownerKey)
+    // A restored or rearranged workspace can put the anchor inside its former
+    // companion. Retire that role before publishing a replacement split so
+    // reentrant layout callbacks also resolve a destination beside the anchor.
+    if (anchor.companionOwner === ownerKey) {
+      anchor.companionOwner = undefined;
+      for (const leaf of anchor.leaves) {
+        if (leaf.companionOwner === ownerKey) leaf.companionOwner = undefined;
+      }
+    }
+    const group = this.groups.find((candidate) => candidate !== anchor && candidate.companionOwner === ownerKey)
       ?? this.addGroup(anchor, leadingRatio, ownerKey);
     // addGroup may synchronously trigger another caller that already created
     // the destination, so resolve the leaf only after the group is published.
