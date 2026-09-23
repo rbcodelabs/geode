@@ -67,6 +67,10 @@ test("a file picked from a stateful plugin view can navigate back to that view",
   try {
     const win = await app.firstWindow();
     await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    // Explorer rows appear before plugin loading and workspace restoration
+    // finish. Do not race either phase when creating the probe's history.
+    await win.waitForFunction(() => (window as any).app?.workspace?.layoutReady
+      && (window as any).app.workspace.getViewFactory("thread-history-probe"));
     await win.evaluate(async () => {
       const geode = (window as any).app;
       const leaf = geode.workspace.getLeaf(false);
