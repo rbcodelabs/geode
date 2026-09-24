@@ -63,7 +63,7 @@
     "@types/node": "^25.9.2",
     "@types/pg": "8.23.1",
     "electron": "^42.4.0",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.16.1",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
@@ -97,6 +97,7 @@
   "build": {
     "appId": "com.rbcodelabs.geode",
     "productName": "Geode",
+    "forceCodeSigning": true,
     "protocols": [
       {
         "name": "Geode deep links",
@@ -137,21 +138,21 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "x64",
             "arm64"
           ]
         }
       ],
-      "identity": "-",
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist"
     }
   }
 }

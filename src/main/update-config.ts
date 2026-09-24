@@ -5,59 +5,32 @@
  *
  * Two decisions live here:
  *
- *  1. **Is auto-update allowed to run at all?** It is OFF by default, even in
- *     a packaged build, and stays off until someone explicitly opts in. ADR
- *     0003 documents an open, unverified risk: `quitAndInstall()` between two
- *     ad-hoc-signed builds (`build.mac.identity: "-"`,
- *     `hardenedRuntime: false`) may fail Squirrel.Mac's self-replace signature
- *     check, and the documented mitigation — the "Open Releases Page" fallback
- *     dialog — only fires for a MANUAL check, which no menu item or renderer
- *     caller triggers. Until the packaged update/recovery path has actually
- *     been exercised, shipping this live would mean shipping a download/install
- *     path whose failure mode is invisible.
+ *  1. **Is this a packaged build?** Signed production packages update by
+ *     default. Development and E2E builds remain inert.
  *
  *  2. **Is a custom feed URL safe to use?** `GEODE_UPDATE_FEED_URL` is handed
- *     straight to `setFeedURL({provider: "generic", url})`. These builds carry
- *     no publisher-identity check, so a plaintext `http://` feed would let
- *     anything on the network path hand the app an "update" to install.
- *     HTTPS only.
+ *     straight to `setFeedURL({provider: "generic", url})`. Developer ID is
+ *     the final publisher boundary, but update discovery and metadata must
+ *     still be protected from transport tampering. HTTPS only.
  */
 
-/** Env var that must be explicitly set for auto-update to run in a packaged build. */
-export const AUTO_UPDATE_OPT_IN_ENV = "GEODE_ENABLE_AUTO_UPDATE";
 /** Env var that overrides the baked-in `app-update.yml` feed. HTTPS only. */
 export const UPDATE_FEED_URL_ENV = "GEODE_UPDATE_FEED_URL";
-
-const TRUTHY = new Set(["1", "true", "yes", "on"]);
-
-/** Whether an env-var string reads as an explicit "yes". Unset/empty ⇒ false. */
-export function isTruthyFlag(raw: string | undefined): boolean {
-  return raw !== undefined && TRUTHY.has(raw.trim().toLowerCase());
-}
 
 export type AutoUpdateGate =
   | { enabled: true }
   | { enabled: false; reason: string };
 
 /**
- * Decide whether `initAutoUpdater()` should do anything. Both conditions must
- * hold: the app is packaged AND the operator explicitly opted in. Default OFF.
+ * Decide whether `initAutoUpdater()` should do anything. Signed packaged
+ * builds are live by default; unpackaged builds never touch electron-updater.
  */
 export function resolveAutoUpdateGate(
-  env: Record<string, string | undefined>,
+  _env: Record<string, string | undefined>,
   isPackaged: boolean
 ): AutoUpdateGate {
   if (!isPackaged) {
     return { enabled: false, reason: "app is not packaged (app.isPackaged === false)" };
-  }
-  if (!isTruthyFlag(env[AUTO_UPDATE_OPT_IN_ENV])) {
-    return {
-      enabled: false,
-      reason:
-        `${AUTO_UPDATE_OPT_IN_ENV} is not set — auto-update stays off by default until the ` +
-        "packaged update/recovery path has been verified on an ad-hoc-signed build " +
-        "(docs/adr/0003-auto-update-mechanism.md)",
-    };
   }
   return { enabled: true };
 }
@@ -88,7 +61,7 @@ export function resolveUpdateFeedUrl(raw: string | undefined): UpdateFeedUrl {
     return {
       kind: "invalid",
       raw: trimmed,
-      reason: `must use https: (got "${parsed.protocol}") — these builds have no publisher-identity check to fall back on`,
+      reason: `must use https: (got "${parsed.protocol}") to protect update metadata in transit`,
     };
   }
   return { kind: "custom", url: trimmed };
@@ -99,7 +72,7 @@ export type UpdaterState =
   | {
       live: false;
       /**
-       * True when the packaged + opt-in gate PASSED and only the feed URL was
+       * True when the packaged-build gate passed and only the feed URL was
        * rejected. In that state electron-updater's singleton is fair game in
        * this process, so its dangerous defaults (`autoDownload = true`,
        * `autoInstallOnAppQuit = true`) must be pinned off before bailing out.
@@ -117,7 +90,7 @@ export type UpdaterState =
  *
  * They previously consulted different subsets: `initAutoUpdater()` checked the
  * gate AND the feed, while `checkForUpdatesManually()` checked only the gate.
- * A packaged, opted-in build with a rejected `http://` feed therefore left
+ * A packaged build with a rejected `http://` feed therefore left
  * `initAutoUpdater()` bailing out early — before `autoDownload = false` and
  * before any event handler was wired — while a manual check sailed through and
  * called `autoUpdater.checkForUpdates()` with no feed override at all,

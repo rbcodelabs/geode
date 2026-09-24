@@ -19,7 +19,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTO_UPDATE_OPT_IN_ENV, UPDATE_FEED_URL_ENV } from "../../src/main/update-config";
+import { UPDATE_FEED_URL_ENV } from "../../src/main/update-config";
 
 const mocks = vi.hoisted(() => ({
   // Seeded with electron-updater's REAL defaults, so a test can catch code
@@ -55,7 +55,7 @@ async function loadUpdater(): Promise<Updater> {
   return import("../../src/main/auto-updater");
 }
 
-const ENV_KEYS = [AUTO_UPDATE_OPT_IN_ENV, UPDATE_FEED_URL_ENV];
+const ENV_KEYS = [UPDATE_FEED_URL_ENV];
 const savedEnv = new Map<string, string | undefined>();
 
 beforeEach(() => {
@@ -69,7 +69,10 @@ beforeEach(() => {
   mocks.autoUpdater.on.mockClear();
   mocks.autoUpdater.setFeedURL.mockClear();
   mocks.autoUpdater.checkForUpdates.mockClear();
-  mocks.showMessageBox.mockClear();
+  mocks.autoUpdater.downloadUpdate.mockClear();
+  mocks.autoUpdater.quitAndInstall.mockClear();
+  mocks.showMessageBox.mockReset();
+  mocks.showMessageBox.mockResolvedValue({ response: 0, checkboxChecked: false });
   vi.useFakeTimers();
 });
 
@@ -85,7 +88,6 @@ afterEach(() => {
 
 describe("an invalid feed URL fails closed at BOTH entry points", () => {
   beforeEach(() => {
-    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
     process.env[UPDATE_FEED_URL_ENV] = "http://staging.internal/geode/";
   });
 
@@ -145,40 +147,10 @@ describe("an invalid feed URL fails closed at BOTH entry points", () => {
   });
 });
 
-describe("no opt-in", () => {
-  it("touches the updater singleton not at all", async () => {
-    const { initAutoUpdater } = await loadUpdater();
-
-    initAutoUpdater();
-    vi.advanceTimersByTime(60 * 60 * 1000);
-
-    expect(mocks.autoUpdater.on).not.toHaveBeenCalled();
-    expect(mocks.autoUpdater.setFeedURL).not.toHaveBeenCalled();
-    expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
-  });
-
-  it("reports disabled from a manual check", async () => {
-    const { checkForUpdatesManually } = await loadUpdater();
-
-    await expect(checkForUpdatesManually()).resolves.toEqual({ status: "disabled" });
-    expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
-  });
-
-  it("does not show an end user the internal gate reason", async () => {
-    const { checkForUpdatesManually } = await loadUpdater();
-
-    await checkForUpdatesManually();
-
-    // The no-opt-in reason is a log line naming an env var and a repo doc
-    // path — fine in a console, wrong in a dialog aimed at a person.
-    const options = mocks.showMessageBox.mock.calls[0]?.[0];
-    expect(options?.message).toBe("Updates are turned off in this build");
-    expect(options?.detail).toBeUndefined();
-  });
-
-  it("is disabled when unpackaged even with the opt-in set", async () => {
+describe("unpackaged builds", () => {
+  it("is inert even if a feed override is set", async () => {
     mocks.app.isPackaged = false;
-    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
+    process.env[UPDATE_FEED_URL_ENV] = "https://updates.example.com/geode/";
     const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
 
     initAutoUpdater();
@@ -190,9 +162,8 @@ describe("no opt-in", () => {
   });
 });
 
-describe("packaged, opted in, feed accepted", () => {
+describe("packaged build with an accepted feed", () => {
   it("wires handlers, disables auto-download, and applies an https feed override", async () => {
-    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
     process.env[UPDATE_FEED_URL_ENV] = "https://updates.example.com/geode/";
     const { initAutoUpdater } = await loadUpdater();
 
@@ -223,7 +194,6 @@ describe("packaged, opted in, feed accepted", () => {
   });
 
   it("leaves the baked-in feed alone when no override is set", async () => {
-    process.env[AUTO_UPDATE_OPT_IN_ENV] = "true";
     const { initAutoUpdater } = await loadUpdater();
 
     initAutoUpdater();
@@ -233,7 +203,6 @@ describe("packaged, opted in, feed accepted", () => {
   });
 
   it("lets a manual check through", async () => {
-    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
     const { checkForUpdatesManually } = await loadUpdater();
 
     await expect(checkForUpdatesManually()).resolves.toEqual({ status: "checking" });
@@ -241,7 +210,6 @@ describe("packaged, opted in, feed accepted", () => {
   });
 
   it("actually runs the first scheduled check after the startup delay", async () => {
-    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
     const { initAutoUpdater } = await loadUpdater();
 
     initAutoUpdater();
@@ -264,15 +232,16 @@ describe("an install that fails after an explicit click is not silent", () => {
   }
 
   beforeEach(() => {
-    process.env[AUTO_UPDATE_OPT_IN_ENV] = "1";
   });
 
   it("shows a recovery dialog when quitAndInstall fails after 'Restart Now'", async () => {
-    const { initAutoUpdater } = await loadUpdater();
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
     initAutoUpdater();
 
-    // "Restart Now" (response 0) on the update-downloaded dialog.
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
     mocks.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+    await Promise.resolve();
     handlerFor("update-downloaded")();
     await vi.waitFor(() => expect(mocks.autoUpdater.quitAndInstall).toHaveBeenCalled());
 
@@ -295,5 +264,127 @@ describe("an install that fails after an explicit click is not silent", () => {
     handlerFor("error")(new Error("offline"));
 
     expect(mocks.showMessageBox).not.toHaveBeenCalled();
+  });
+});
+
+describe("bounded updater phases", () => {
+  function handlerFor(event: string): (...args: unknown[]) => void {
+    const call = mocks.autoUpdater.on.mock.calls.find((c) => c[0] === event);
+    if (!call) throw new Error(`no handler wired for "${event}"`);
+    return call[1] as (...args: unknown[]) => void;
+  }
+
+  it("coalesces overlapping manual checks", async () => {
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    await checkForUpdatesManually();
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("initializes event handlers and timers only once", async () => {
+    const { initAutoUpdater } = await loadUpdater();
+    initAutoUpdater();
+    initAutoUpdater();
+    expect(mocks.autoUpdater.on).toHaveBeenCalledTimes(5);
+    vi.advanceTimersByTime(5_000);
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a coalesced manual request silent when the active check is background", async () => {
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    vi.advanceTimersByTime(5_000);
+    await checkForUpdatesManually();
+    mocks.showMessageBox.mockClear();
+    handlerFor("error")(new Error("offline"));
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it("shows recovery when an explicitly approved download fails", async () => {
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
+    await vi.waitFor(() => expect(mocks.autoUpdater.downloadUpdate).toHaveBeenCalled());
+    mocks.showMessageBox.mockClear();
+    handlerFor("error")(new Error("download failed"));
+    expect(mocks.showMessageBox.mock.calls[0]?.[0]?.message).toContain("Update download failed");
+  });
+
+  it("shows exactly one recovery dialog when download rejection and error event both occur", async () => {
+    mocks.autoUpdater.downloadUpdate.mockRejectedValueOnce(new Error("rejected"));
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
+    await Promise.resolve();
+    handlerFor("error")(new Error("emitted"));
+    await Promise.resolve();
+    const recoveries = mocks.showMessageBox.mock.calls.filter((call) =>
+      String(call[0]?.message).includes("Update download failed"),
+    );
+    expect(recoveries).toHaveLength(1);
+  });
+
+  it("ignores duplicate available and downloaded events", async () => {
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
+    handlerFor("update-available")({ version: "9.9.9" });
+    await Promise.resolve();
+    expect(mocks.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
+    mocks.showMessageBox.mockClear();
+    mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
+    handlerFor("update-downloaded")();
+    handlerFor("update-downloaded")();
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a stale availability dialog download into a newer check", async () => {
+    let resolveOld!: (value: { response: number; checkboxChecked: boolean }) => void;
+    mocks.showMessageBox.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
+    handlerFor("error")(new Error("old check failed"));
+    await checkForUpdatesManually();
+    resolveOld({ response: 0, checkboxChecked: false });
+    await Promise.resolve();
+    expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a stale downloaded dialog install or clear a newer check", async () => {
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
+    await Promise.resolve();
+    let resolveOld!: (value: { response: number; checkboxChecked: boolean }) => void;
+    mocks.showMessageBox.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+    handlerFor("update-downloaded")();
+    handlerFor("error")(new Error("old download failed"));
+    await checkForUpdatesManually();
+    resolveOld({ response: 0, checkboxChecked: false });
+    await Promise.resolve();
+    expect(mocks.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    await checkForUpdatesManually();
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the phase when Later is chosen so a new manual check can run", async () => {
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    mocks.showMessageBox.mockResolvedValueOnce({ response: 1, checkboxChecked: false });
+    handlerFor("update-available")({ version: "9.9.9" });
+    await vi.waitFor(() => expect(mocks.showMessageBox).toHaveBeenCalled());
+    await Promise.resolve();
+    await checkForUpdatesManually();
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 });

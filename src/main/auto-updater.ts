@@ -13,9 +13,8 @@
  * false` — see `initAutoUpdater()`; without it, "Later" silently defers the
  * install to the next quit rather than declining it).
  *
- * The whole feature is additionally gated OFF by default behind
- * `GEODE_ENABLE_AUTO_UPDATE` — see `initAutoUpdater()` and
- * `./update-config.ts`.
+ * Signed packaged builds enable this by default. Development builds remain
+ * inert, and custom feeds must use HTTPS.
  */
 
 import { app, BrowserWindow, dialog, shell, type MessageBoxOptions, type MessageBoxReturnValue } from "electron";
@@ -32,9 +31,21 @@ const RELEASES_URL = "https://github.com/rbcodelabs/geode/releases/latest";
 
 let lastCheckedAt: number | null = null;
 /** True only while the in-flight check was triggered by the user (manual "check now"), not the background scheduler. */
-let manualCheckInFlight = false;
-/** True between an explicit "Restart Now" click and the install either happening or failing. */
-let installRequested = false;
+type UpdaterPhase =
+  | { kind: "idle" }
+  | { kind: "checking"; origin: "background" | "manual"; operationId: number }
+  | { kind: "offering"; origin: "background" | "manual"; operationId: number }
+  | { kind: "downloading"; operationId: number }
+  | { kind: "downloaded"; operationId: number }
+  | { kind: "installing"; operationId: number };
+
+let phase: UpdaterPhase = { kind: "idle" };
+let initialized = false;
+let nextOperationId = 1;
+
+function ownsPhase(kind: Exclude<UpdaterPhase["kind"], "idle">, operationId: number): boolean {
+  return phase.kind !== "idle" && phase.kind === kind && phase.operationId === operationId;
+}
 
 function targetWindow(): BrowserWindow | undefined {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
@@ -83,6 +94,10 @@ function showRecoverableFailure(message: string, detail?: string): void {
 
 function wireEventHandlers(): void {
   autoUpdater.on("update-available", (info) => {
+    if (phase.kind !== "checking") return;
+    const origin = phase.origin;
+    const operationId = phase.operationId;
+    phase = { kind: "offering", origin, operationId };
     lastCheckedAt = Date.now();
     showMessageBox({
       type: "info",
@@ -90,25 +105,38 @@ function wireEventHandlers(): void {
       buttons: ["Download Update", "Later"],
       defaultId: 0,
       cancelId: 1,
-    })
+      })
       .then((result) => {
+        if (!ownsPhase("offering", operationId)) return;
         if (result.response === 0) {
-          autoUpdater.downloadUpdate().catch(logRejection("downloadUpdate()"));
+          phase = { kind: "downloading", operationId };
+          autoUpdater.downloadUpdate().catch((err) => {
+            if (!ownsPhase("downloading", operationId)) return;
+            phase = { kind: "idle" };
+            showRecoverableFailure(`Update download failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        } else {
+          phase = { kind: "idle" };
         }
       })
-      .catch(logRejection("update-available dialog"));
+      .catch((err) => {
+        if (!ownsPhase("offering", operationId)) return;
+        phase = { kind: "idle" };
+        logRejection("update-available dialog")(err);
+      });
   });
 
   autoUpdater.on("update-not-available", () => {
+    if (phase.kind !== "checking") return;
     lastCheckedAt = Date.now();
-    if (manualCheckInFlight) {
+    if (phase.origin === "manual") {
       showMessageBox({
         type: "info",
         message: "You're up to date",
         buttons: ["OK"],
       }).catch(logRejection("up-to-date dialog"));
     }
-    manualCheckInFlight = false;
+    phase = { kind: "idle" };
   });
 
   autoUpdater.on("download-progress", (progress) => {
@@ -117,20 +145,35 @@ function wireEventHandlers(): void {
   });
 
   autoUpdater.on("update-downloaded", () => {
+    if (phase.kind !== "downloading") return;
+    const operationId = phase.operationId;
+    phase = { kind: "downloaded", operationId };
     showMessageBox({
       type: "info",
       message: "Update downloaded — restart Geode to finish installing",
       buttons: ["Restart Now", "Later"],
       defaultId: 0,
       cancelId: 1,
-    })
+      })
       .then((result) => {
+        if (!ownsPhase("downloaded", operationId)) return;
         if (result.response === 0) {
-          installRequested = true;
-          autoUpdater.quitAndInstall();
+          phase = { kind: "installing", operationId };
+          try {
+            autoUpdater.quitAndInstall();
+          } catch (err) {
+            phase = { kind: "idle" };
+            showRecoverableFailure(`Update install failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        } else {
+          phase = { kind: "idle" };
         }
       })
-      .catch(logRejection("update-downloaded dialog"));
+      .catch((err) => {
+        if (!ownsPhase("downloaded", operationId)) return;
+        phase = { kind: "idle" };
+        logRejection("update-downloaded dialog")(err);
+      });
   });
 
   autoUpdater.on("error", (err) => {
@@ -143,12 +186,10 @@ function wireEventHandlers(): void {
     // pull the artifact from the local proxy server
     // (`MacUpdater.js` `quitAndInstall` → `nativeUpdater.checkForUpdates()`);
     // if that fetch errors, `handleUpdateDownloaded()` never fires and the app
-    // simply never restarts. `manualCheckInFlight` is false by then, so without
-    // this branch the click would die in `console.error` and the user would be
-    // left staring at an app that ignored them.
-    if (installRequested) {
-      installRequested = false;
-      manualCheckInFlight = false;
+    // simply never restarts. The explicit `installing` phase ensures that
+    // user-approved action cannot die only in `console.error`.
+    if (phase.kind === "installing") {
+      phase = { kind: "idle" };
       showRecoverableFailure(
         `Update install failed: ${err.message}`,
         "Geode has not been updated and is still running the current version. You can install the new version manually from the releases page."
@@ -156,43 +197,44 @@ function wireEventHandlers(): void {
       return;
     }
 
-    if (manualCheckInFlight) {
+    if (phase.kind === "downloading") {
+      phase = { kind: "idle" };
+      showRecoverableFailure(`Update download failed: ${err.message}`);
+      return;
+    }
+
+    if (phase.kind === "checking" && phase.origin === "manual") {
       showRecoverableFailure(`Update check failed: ${err.message}`);
     }
-    manualCheckInFlight = false;
+    phase = { kind: "idle" };
   });
 }
 
 function runScheduledCheck(): void {
+  if (phase.kind !== "idle") return;
   if (!shouldCheckForUpdates(lastCheckedAt, Date.now())) return;
-  manualCheckInFlight = false;
+  const operationId = nextOperationId++;
+  phase = { kind: "checking", origin: "background", operationId };
   autoUpdater.checkForUpdates().catch((err) => {
     // checkForUpdates() already emits an 'error' event for handler-visible
     // failures; this catch only guards against an unhandled rejection.
     console.error("Auto-updater: background check failed:", err);
+    if (ownsPhase("checking", operationId) && phase.kind === "checking" && phase.origin === "background") phase = { kind: "idle" };
   });
 }
 
 /**
  * Wire up electron-updater and start the background check schedule.
  *
- * OFF BY DEFAULT. Two things must both be true: the app is packaged, AND
- * `GEODE_ENABLE_AUTO_UPDATE` is explicitly set (see `update-config.ts` and
- * docs/adr/0003-auto-update-mechanism.md). Being packaged alone is not enough —
- * ADR 0003's documented mitigation for the `quitAndInstall()` ad-hoc-signing
- * risk (the "Open Releases Page" dialog) only fires on a *manual* check, and
- * nothing in the app triggers one, so an unverified update path would fail
- * silently for users. The gate comes off when that path has actually been
- * exercised on a packaged build.
- *
- * When gated off: no network calls, no dialogs, no timers — just one log line
- * saying why.
+ * Packaged builds are live by default. When unpackaged or misconfigured: no
+ * network calls, dialogs, or timers.
  */
 export function initAutoUpdater(): void {
+  if (initialized) return;
   const state = resolveUpdaterState(process.env, app.isPackaged);
   if (!state.live) {
     if (state.gatePassed) {
-      // Fail closed. We're past the packaged + opt-in gate, so the
+      // Fail closed. We're in a packaged build but its feed was rejected, so the
       // electron-updater singleton is live in this process and something else
       // could still reach `checkForUpdates()`. Its defaults are
       // `autoDownload = true` / `autoInstallOnAppQuit = true`
@@ -211,6 +253,8 @@ export function initAutoUpdater(): void {
     return;
   }
 
+  initialized = true;
+
   autoUpdater.autoDownload = false;
   // Not merely defensive, and NOT the `BaseUpdater.addQuitHandler()` mechanism
   // — `MacUpdater extends AppUpdater` (MacUpdater.js:13), not `BaseUpdater`, so
@@ -221,10 +265,8 @@ export function initAutoUpdater(): void {
   // { this.nativeUpdater.checkForUpdates() }`, handing the artifact to
   // Squirrel.Mac and staging the install before the user has answered.
   // Clicking "Later" would then not decline the install, it would defer it to
-  // the next quit: a silent, unclicked route into exactly the ad-hoc-signed
-  // self-replace path this whole feature is gated off to keep dormant, and a
-  // direct contradiction of the no-install-without-a-click constraint at the
-  // top of this file and in ADR 0003.
+  // the next quit: a silent, unclicked route that directly contradicts the
+  // no-install-without-a-click constraint at the top of this file and in ADR 0003.
   autoUpdater.autoInstallOnAppQuit = false;
   if (state.feed.kind === "custom") {
     autoUpdater.setFeedURL({ provider: "generic", url: state.feed.url });
@@ -252,9 +294,7 @@ export async function checkForUpdatesManually(): Promise<{ status: "checking" | 
   if (!state.live) {
     // `state.reason` is written for a log line, not for an end user. Surface it
     // only when the gate passed and the FEED was rejected — that's an operator
-    // misconfiguration and they need the specifics to fix it. In the default
-    // no-opt-in case the reason is a sentence about a repo doc path, so keep
-    // the user-facing text terse.
+    // misconfiguration and they need the specifics to fix it.
     await showMessageBox({
       type: "info",
       message: !app.isPackaged
@@ -268,9 +308,15 @@ export async function checkForUpdatesManually(): Promise<{ status: "checking" | 
     return { status: "disabled" };
   }
 
-  manualCheckInFlight = true;
+  if (phase.kind !== "idle") return { status: "checking" };
+  const operationId = nextOperationId++;
+  phase = { kind: "checking", origin: "manual", operationId };
   autoUpdater.checkForUpdates().catch((err) => {
     console.error("Auto-updater: manual check failed:", err);
+    if (ownsPhase("checking", operationId) && phase.kind === "checking" && phase.origin === "manual") {
+      phase = { kind: "idle" };
+      showRecoverableFailure(`Update check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
   return { status: "checking" };
 }

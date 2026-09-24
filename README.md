@@ -152,7 +152,7 @@ intercept them.
 
 ## Install
 
-Prebuilt macOS installers (dmg + zip, Apple Silicon + Intel) are published on
+Prebuilt macOS installers (dmg + zip, Apple Silicon only) are published on
 the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 `v*` tag is pushed. Windows and Linux builds aren't set up yet — see the
 [roadmap](docs/spec/00-overview.md) item for packaging.
@@ -162,10 +162,12 @@ the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 `scripts/geode-update.mts` installs the latest release, or updates an
 existing install, in one command. It talks to the public GitHub API directly
 (no `gh` CLI, no account, no auth needed — this repo is public) and
-**automatically fixes the Gatekeeper "damaged app" warning** described below,
-so the manual `xattr`/right-click steps become a fallback rather than a
-required step. Requires macOS and Node.js 23.6+ (no install needed — Node
-runs `.mts` files directly). Run it straight from GitHub, no clone required:
+verifies the release's Developer ID signature, stable Apple Team ID and bundle
+ID, hardened runtime, Gatekeeper acceptance, and stapled notarization ticket
+before replacing an install. It preserves Apple's signature and leaves the
+current app in place if verification or staging fails. Requires an Apple Silicon Mac and
+native arm64 Node.js 23.6+. Intel Macs can continue using their last compatible
+release, but receive no new builds. Run it straight from GitHub, no clone required:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rbcodelabs/geode/main/scripts/geode-update.mts -o /tmp/geode-update.mts && node /tmp/geode-update.mts
@@ -184,27 +186,32 @@ node scripts/geode-update.mts --help       # full usage
 
 ### Install manually
 
-1. Download `Geode-<version>-arm64.dmg` (Apple Silicon) or
-   `Geode-<version>.dmg` (Intel) from the latest release.
+1. Download `Geode-<version>-arm64.dmg` for Apple Silicon from the latest release.
 2. Open the dmg and drag **Geode.app** to **Applications**.
-3. **These builds are ad-hoc signed but not notarized** (no Apple Developer
-   ID yet). The ad-hoc signature lets the app launch on any Mac — including
-   Apple Silicon, which refuses to run fully-unsigned apps — but Gatekeeper
-   still shows an "unidentified developer" warning, or reports the app as
-   "damaged," on the first launch of a downloaded copy. To open it (only
-   needed if you installed manually — the script above handles this for
-   you):
-   - Right-click (or Control-click) **Geode.app** → **Open** → **Open** again
-     in the confirmation dialog (also available under System Settings →
-     Privacy & Security → **Open Anyway**), **or**
-   - Run `xattr -dr com.apple.quarantine /Applications/Geode.app` in Terminal
-     once, then launch normally. If Gatekeeper instead says the app is
-     "damaged," that's not a quarantine issue and `xattr` won't fix it — the
-     dmg's ad-hoc signature is missing its resource manifest. Re-sign it
-     locally instead: `codesign --force --deep --sign - /Applications/Geode.app`.
+3. Launch Geode normally. Release builds are Developer ID signed, hardened,
+   notarized, and stapled; do not remove quarantine metadata or re-sign them.
 
-   Full Developer ID signing + notarization (no warning at all) is a
-   follow-up that needs a paid Apple Developer account.
+### Updates and the first signed release
+
+Existing ad-hoc-signed installations must install the first Developer ID
+release manually (drag from the dmg or run the script above) to establish the
+trusted signing baseline. Releases after that baseline check quietly in the
+background. Geode always asks before downloading and asks again before
+restarting to install. **Help → Check for Updates…** runs a manual check. If
+an approved download or install fails, Geode offers the Releases page as a
+recovery path.
+
+Release operators provision a protected GitHub environment named
+`macos-release` with `CSC_LINK`, `CSC_KEY_PASSWORD`,
+`APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and
+`APPLE_TEAM_ID`. `CSC_LINK` is the base64-encoded Developer ID Application
+certificate/private-key `.p12`; `APPLE_API_KEY_BASE64` is a base64-encoded
+team App Store Connect API `.p8`. The checked-in `EXPECTED_TEAM_ID` in
+`scripts/geode-update.mts` pins RB Code Labs LLC's publisher identity to
+`6M8F464WCQ`. The workflow rejects an `APPLE_TEAM_ID` secret that differs
+from this pin. The workflow refuses unsigned builds or
+incomplete credentials, verifies every packaged app, and publishes an update
+feed only after the draft release has the complete artifact inventory.
 
 ## Develop
 
@@ -225,8 +232,8 @@ npm start          # launch Electron
 npm run dev        # esbuild watch mode
 npm run typecheck  # strict tsc
 npm run parity:check # verify the checked-in Obsidian compatibility ledger is current
-npm run dist        # package a local ad-hoc-signed macOS build (dmg + zip) into release/
-npm run release     # same, plus publish to GitHub Releases (requires GH_TOKEN)
+npm run dist        # package a signed/notarized macOS build (requires release credentials)
+npm run release     # same, plus publish (prefer the protected GitHub workflow)
 ```
 
 A demo vault lives in `test-vault/`.
@@ -389,10 +396,11 @@ and evidence from real third-party plugins remain Slice 3A2 gates.
 ### Cutting a release
 
 Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`) —
-the `.github/workflows/release.yml` GitHub Action builds ad-hoc-signed macOS
-installers and publishes them to a GitHub Release automatically. You can also
-trigger it manually from the Actions tab (`workflow_dispatch`) without cutting
-a tag, useful for testing the pipeline.
+the `.github/workflows/release.yml` GitHub Action signs, notarizes, verifies,
+and staples the Apple Silicon macOS build. It uploads into a draft and publishes
+only after the complete artifact inventory is present. A protected
+`macos-release` environment must approve credential access. A manual Actions
+run (`workflow_dispatch`) builds and verifies without publishing.
 
 ## Documentation
 

@@ -6,7 +6,7 @@ type Item = Electron.MenuItemConstructorOptions;
 const PLATFORMS: NodeJS.Platform[] = ["darwin", "win32", "linux"];
 
 function template(platform: NodeJS.Platform): Item[] {
-  return buildApplicationMenuTemplate(platform, () => {}, () => {});
+  return buildApplicationMenuTemplate(platform, () => {}, () => {}, () => {});
 }
 
 /** Every item in the template, depth-first, including nested submenus. */
@@ -60,7 +60,7 @@ const viewMenu = (platform: NodeJS.Platform): Item | undefined =>
 describe("application menu", () => {
   it("installs Help -> Export Diagnostics and delegates its click", async () => {
     const exportDiagnostics = vi.fn(async () => {});
-    const template = buildApplicationMenuTemplate("darwin", exportDiagnostics, () => {});
+    const template = buildApplicationMenuTemplate("darwin", exportDiagnostics, () => {}, () => {});
     const help = template.find((item) => item.role === "help");
     expect(help).toBeDefined();
     expect(Array.isArray(help?.submenu)).toBe(true);
@@ -71,6 +71,16 @@ describe("application menu", () => {
 
     await (exportItem?.click as () => Promise<void>)();
     expect(exportDiagnostics).toHaveBeenCalledOnce();
+  });
+
+  it("installs Help -> Check for Updates and delegates its click", async () => {
+    const checkForUpdates = vi.fn(async () => {});
+    const built = buildApplicationMenuTemplate("darwin", () => {}, () => {}, checkForUpdates);
+    const help = built.find((item) => item.role === "help");
+    const updateItem = (help?.submenu as Item[]).find((item) => item.label === "Check for Updates…");
+    expect(updateItem).toBeDefined();
+    await (updateItem?.click as () => Promise<void>)();
+    expect(checkForUpdates).toHaveBeenCalledOnce();
   });
 
   // Regression: Cmd+W is Geode's "close-tab" command. Any menu item bound to
@@ -149,7 +159,7 @@ describe("application menu", () => {
 
   it("delegates Reload app to the injected handler with the clicked window", () => {
     const reloadApp = vi.fn();
-    const built = buildApplicationMenuTemplate("darwin", () => {}, reloadApp);
+    const built = buildApplicationMenuTemplate("darwin", () => {}, reloadApp, () => {});
     const view = built.find((item) => item.label === "View");
     const reloadItem = (view?.submenu as Item[]).find(
       (item) => typeof item.label === "string" && item.label.startsWith("Reload app"),
