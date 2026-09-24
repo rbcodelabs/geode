@@ -88,6 +88,7 @@ import {
 } from "./daily-notes";
 import type { Command } from "./commands";
 import moment from "moment";
+import { TemplatesService, renderTemplate, templateFiles, templatePath, templateNoteName, type TemplatesConfig } from "./templates";
 import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
@@ -613,8 +614,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "sync", "advanced", "performance", "project-folders"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders"];
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -722,6 +723,8 @@ class SettingsModal extends Modal {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "daily-notes") {
       this.renderDailyNotesTab(this.contentContainerEl);
+    } else if (id === "templates") {
+      this.renderTemplatesTab(this.contentContainerEl);
     } else if (id === "core-plugins") {
       this.renderCorePluginsTab(this.contentContainerEl);
     } else if (id === "community-plugins") {
@@ -780,6 +783,7 @@ class SettingsModal extends Modal {
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("hotkeys", "Hotkeys", this.navEl);
     addNavItem("daily-notes", "Daily Notes", this.navEl);
+    addNavItem("templates", "Templates", this.navEl);
     addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
     addNavItem("sync", "Sync", this.navEl);
@@ -913,6 +917,26 @@ class SettingsModal extends Modal {
     search.addEventListener("input", render); assigned.addEventListener("change", render);
     this.unsubscribeHotkeys = this.geodeApp.commands.onChange(render);
     render();
+  }
+
+  private renderTemplatesTab(container: HTMLElement): void {
+    const templates = this.geodeApp.templates;
+    container.innerHTML = `<h2>Templates</h2>`;
+    const update = async (patch: Partial<TemplatesConfig>, sync?: () => void) => {
+      try { await templates.update(patch); }
+      catch (err) {
+        console.error(err);
+        this.geodeApp.notify("Could not save Templates settings. Your previous settings are still active.");
+        if (!sync && this.activeTabId === "templates") this.activateTab("templates");
+      }
+      sync?.();
+    };
+    this.addToggle(container, "Enable Templates", templates.enabled, enabled => void update({ enabled }));
+    for (const [key, label] of [["folder", "Template folder location"], ["dateFormat", "Date format"], ["timeFormat", "Time format"]] as const) {
+      const input = this.addTextInput(container, label, templates.options[key], value => {
+        void update({ [key]: value }, () => { input.value = templates.options[key]; });
+      });
+    }
   }
 
   private renderDailyNotesTab(container: HTMLElement): void {
@@ -1841,6 +1865,7 @@ export class App {
   private pendingProtocolLinks = new Map<string, Record<string, string>[]>();
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
+  readonly templates: TemplatesService;
   readonly webViewer: WebViewerService;
   readonly sync: SyncService;
   readonly comments: CommentService;
@@ -1934,6 +1959,7 @@ export class App {
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
     this.dailyNotes = new DailyNotesService(host.config);
+    this.templates = new TemplatesService(host.config);
     this.webViewer = new WebViewerService(host.config, () => this.applyWebViewerLifecycle());
     this.sync = new SyncService(host, () => this.vault.root, () => this.reloadPortableSettings());
     this.settings.webViewer = this.webViewer.options;
@@ -2312,6 +2338,7 @@ export class App {
     // shim (installObsidianAppCompat in api/obsidian.ts) has settings ready
     // before any hosted plugin (e.g. Calendar) can query "daily-notes".
     await this.dailyNotes.load();
+    await this.templates.load();
     await this.webViewer.load(saved?.webViewer);
 
     // Same shape as daily-notes above: read the persisted Bookmarks tree
@@ -3427,6 +3454,19 @@ export class App {
     c("command-palette", "Open command palette", "Mod+P", () => this.openCommandPalette());
     c("quick-switcher", "Quick switcher: Open", "Mod+O", () => this.openQuickSwitcher());
     c("new-note", "Create new note", "Mod+N", () => this.createNewNote());
+    for (const [id, name, needsEditor, run] of [
+      ["templates:insert-template", "Templates: Insert template", true, () => this.insertTemplate()],
+      ["templates:create-note", "Templates: Create new note from template", false, () => this.createNoteFromTemplate()],
+      ["templates:insert-date", "Templates: Insert current date", true, () => this.insertTemplateDateTime("date")],
+      ["templates:insert-time", "Templates: Insert current time", true, () => this.insertTemplateDateTime("time")],
+    ] as const) {
+      this.commands.add({ id, name, checkCallback: checking => {
+        const view = this.getActiveMarkdownView();
+        if (!this.templates.enabled || (needsEditor && (!view?.editor || view.mode === "reading"))) return false;
+        if (!checking) run();
+        return true;
+      } });
+    }
     this.commands.add(createActionCommand(this.actions, "view.toggle-reading", "Toggle reading view", () => this.activeActionContext(), "Mod+E", "toggle-reading"));
     this.commands.add(createActionCommand(this.actions, "view.toggle-source", "Toggle Live Preview/Source mode", () => this.activeActionContext(), undefined, "toggle-source"));
     c("new-tab", "New tab", "Mod+T", () => this.openEmptyTab(this.workspace.activeGroup));
@@ -3978,6 +4018,87 @@ export class App {
     }
   }
 
+  private async readTemplate(path: string): Promise<string> {
+    const resolved = templatePath(path);
+    const file = this.vault.getAbstractFileByPath(resolved);
+    if (!isTFile(file)) throw new Error(`Template not found: ${resolved}`);
+    try { return await this.vault.read(file); }
+    catch { throw new Error(`Could not read template: ${resolved}`); }
+  }
+
+  private chooseTemplate(onChoose: (file: TFile) => void): void {
+    const files = templateFiles(this.vault.getMarkdownFiles(), this.templates.options.folder);
+    if (!files.length) {
+      this.notify(`No templates found in ${this.templates.options.folder || "the vault root"}. Add a Markdown template or update Settings → Templates.`);
+      return;
+    }
+    const picker = new (class extends SuggestModal<TFile> {
+      getItems(): TFile[] { return files; }
+      getItemText(file: TFile): string { return file.path; }
+      onChooseItem(file: TFile): void { onChoose(file); }
+    })(this);
+    picker.inputEl.placeholder = "Choose a template…";
+    picker.open();
+  }
+
+  insertTemplate(): void {
+    const view = this.getActiveMarkdownView();
+    if (!this.templates.enabled || !view?.editor || !view.file || view.mode === "reading") return;
+    const editor = view.editor;
+    const file = view.file;
+    const doc = editor.state.doc;
+    const { from, to } = editor.state.selection.main;
+    this.chooseTemplate(template => {
+      void (async () => {
+        try {
+          const content = renderTemplate(await this.readTemplate(template.path), file.basename, moment(), this.templates.options);
+          // A modal can outlive a tab switch, external edit, or editor rebuild.
+          if (view.editor !== editor || view.file !== file || editor.state.doc !== doc) {
+            this.notify("The target note changed. Choose Insert template again.");
+            return;
+          }
+          editor.dispatch({ changes: { from, to, insert: content }, selection: { anchor: from + content.length } });
+          editor.focus();
+        } catch (err) {
+          this.notify(`Could not insert template: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+    });
+  }
+
+  createNoteFromTemplate(): void {
+    if (!this.templates.enabled) return;
+    this.chooseTemplate(template => {
+      new PromptModal(this, {
+        placeholder: "New note name",
+        initialValue: template.basename,
+        onSubmit: name => {
+          void (async () => {
+            try {
+              const basename = templateNoteName(name);
+              const source = await this.readTemplate(template.path);
+              const path = this.vault.availablePath("", basename, "md");
+              const content = renderTemplate(source, pathName(path).replace(/\.md$/, ""), moment(), this.templates.options);
+              const file = await this.vault.create(path, content);
+              await this.openFile(file, false);
+            } catch (err) {
+              this.notify(`Could not create note from template: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          })();
+        },
+      }).open();
+    });
+  }
+
+  private insertTemplateDateTime(kind: "date" | "time"): void {
+    const view = this.getActiveMarkdownView();
+    if (!this.templates.enabled || !view?.editor || view.mode === "reading") return;
+    const { from, to } = view.editor.state.selection.main;
+    const insert = moment().format(kind === "date" ? this.templates.options.dateFormat : this.templates.options.timeFormat);
+    view.editor.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length } });
+    view.editor.focus();
+  }
+
   async createNewNote(folder?: string, name?: string): Promise<void> {
     const path = name
       ? this.vault.availablePath(folder ?? "", name, "md")
@@ -4002,7 +4123,16 @@ export class App {
     const index = matchDailyNoteFile(this.vault.getMarkdownFiles(), settings);
     let file = index.get(key) ?? null;
     if (!file) {
-      file = await this.vault.create(dailyNotePath(today, settings), `# ${key}\n\n`);
+      const path = dailyNotePath(today, settings);
+      try {
+        const content = settings.template
+          ? renderTemplate(await this.readTemplate(settings.template), pathName(path).replace(/\.md$/, ""), today, this.templates.options)
+          : `# ${key}\n\n`;
+        file = await this.vault.create(path, content);
+      } catch (err) {
+        this.notify(`Could not create daily note: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
     }
     await this.openFile(file, false);
   }

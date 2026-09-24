@@ -91,6 +91,9 @@ for the latest published notes.
   and CSS snippets apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), and Daily Notes (Cmd+D) with per-vault enable, folder, date-format, and template-path settings,
   dark/light themes via CSS variables
+- **Templates** — create a named note from a template or insert one at the current
+  editor selection. Daily Notes applies its configured template when creating a
+  note. Both expand title, date, and time variables. See [Using templates](docs/templates.md).
 - **Settings** — tabbed Settings window with searchable **Hotkeys**, Appearance,
   Community plugins & themes, and an **Advanced** per-vault metadata body-scan
   cap (300 KB by default). Oversized note bodies skip heading, tag, link, and
