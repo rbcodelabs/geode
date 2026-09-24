@@ -160,7 +160,9 @@ describe("signed release trust", () => {
     expect(() => parseReleaseTrust('{"teamId":"TEAMID","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toThrow(/teamId/);
     expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"wrong"}', "A1B2C3D4E5")).toThrow(/bundleId/);
     expect(() => parseReleaseTrust('{"teamId":"Z9Y8X7W6V5","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toThrow(/pinned/);
-    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}')).toThrow(/not provisioned/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}', "UNPROVISIONED")).toThrow(/not provisioned/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}')).toThrow(/pinned/);
+    expect(parseReleaseTrust('{"teamId":"6M8F464WCQ","bundleId":"com.rbcodelabs.geode"}').teamId).toBe("6M8F464WCQ");
   });
 
   it("verifies the Developer ID signature, Gatekeeper, ticket, team ID, and bundle ID", () => {

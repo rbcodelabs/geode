@@ -68,8 +68,8 @@ const GITHUB_API_BASE = (process.env.GEODE_GITHUB_API_BASE ?? "https://api.githu
 const USER_AGENT = "geode-update-script (+https://github.com/rbcodelabs/geode)";
 const RELEASE_TRUST_ASSET = "geode-release.json";
 const EXPECTED_BUNDLE_ID = "com.rbcodelabs.geode";
-/** Replace once, in source control, during Developer ID credential provisioning. */
-export const EXPECTED_TEAM_ID = "UNPROVISIONED";
+/** RB Code Labs LLC's Developer ID publisher identity, pinned independently of release assets. */
+export const EXPECTED_TEAM_ID = "6M8F464WCQ";
 
 export interface ReleaseTrust {
   teamId: string;
