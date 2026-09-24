@@ -162,10 +162,14 @@ test("real PluginManager bridges Threads manager lifecycle without attaching aut
     }, rootId)).toBe("denied");
     await page.evaluate(() => (window.app.pluginManager.getPlugin("claude-threads") as unknown as { change(kind: string): void }).change("delete"));
     await expect(section).toBeHidden();
-    expect(await page.evaluate(async rootId => {
-      const root = (await window.geode.externalRoots!.listGrants!()).find(grant => grant.root.rootId === rootId);
-      return { retained: !!root, associations: root?.associations.length };
-    }, rootId)).toEqual({ retained: true, associations: 0 });
+    // Contribution withdrawal hides the section before async registry persistence
+    // finishes. Await that separate postcondition, including in-flight probes.
+    await expect(async () => {
+      expect(await page.evaluate(async rootId => {
+        const root = (await window.geode.externalRoots!.listGrants!()).find(grant => grant.root.rootId === rootId);
+        return { retained: !!root, associations: root?.associations.length };
+      }, rootId)).toEqual({ retained: true, associations: 0 });
+    }).toPass({ timeout: 5_000 });
     await page.evaluate(() => window.app.pluginManager.disable("claude-threads"));
     await page.evaluate(() => window.app.pluginManager.enable("claude-threads"));
     await expect(section).toContainText("First Project");

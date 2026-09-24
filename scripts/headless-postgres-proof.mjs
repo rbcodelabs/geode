@@ -14,6 +14,11 @@ function session(name = `${schema}_query`) {
     env: { ...process.env, PGAPPNAME: name }, stdio: ["pipe", "pipe", "pipe"],
   });
   sessions.add(child);
+  // Decode once, across chunk boundaries — see the same call in
+  // `src/catalog/postgres-catalog-store.ts`. A multi-byte character straddling
+  // a 64 KiB pipe boundary decodes to U+FFFD if each Buffer is decoded alone.
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
   let stdout = "", stderr = "";
   child.stdout.on("data", (chunk) => { stdout += chunk; });
   child.stderr.on("data", (chunk) => { stderr += chunk; });

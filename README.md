@@ -5,233 +5,18 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.18.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.23.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
 
-## New in v0.18.0: shared wiki foundations and bounded cache loading
+## Release history
 
-Desktop link navigation and the internal Node wiki snapshot now use the same
-candidate-selection machinery, with separate policies preserving desktop
-compatibility and strict ambiguity reporting. This is a
-[desktop link-resolution milestone](docs/design/shared-engine-desktop-resolution.md),
-**not a full desktop backend migration**. The
-[read-only Node API](docs/design/local-wiki-usage.md) supports folder snapshots,
-metadata, literal search, links and backlinks without Electron; it is internal
-tooling, not a published SDK, cloud service or replacement desktop application.
-The [headless extraction report](docs/design/headless-phase0.md) describes the
-portable foundation and its plain-Node proofs.
+Browse the [website changelog](https://geode.rbcodelabs.com/changelog/) for
+release history, or [GitHub Releases](https://github.com/rbcodelabs/geode/releases)
+for the latest published notes.
 
-Persisted desktop metadata now loads through session-bound snapshot pages of at
-most 50 examined rows and 256 KiB per response. Newer edits and deletions take
-precedence; omitted entries are recovered with yielded file reads. Startup
-database initialization is ordered before the utility indexer starts. These
-bounds reduce the size of individual cache transfers, not all indexing or
-rendering work. See [bounded cache hydration](docs/large-vault-benchmark.md#bounded-desktop-cache-hydration).
-
-New synthetic-vault tooling generates linked and dense workloads and compares
-baseline/candidate runs with same-revision controls. The
-[benchmark safeguards](docs/large-vault-benchmark.md#methodology-v2-safeguards)
-separate terminal indexing readiness from correctness validation, monitor owned
-process RSS independently, and retain failed samples. The default memory limit
-is half physical RAM; failures are not replaced with successful retries.
-
-**Large-vault limits remain.** In the three-pair synthetic comparison, 10,000-note
-warm startup was slower by paired medians of approximately 2.6 seconds for the
-linked profile and 11.9 seconds for the dense profile. At 50,000 notes, every
-linked-profile sample failed on both revisions. All three dense-profile
-candidate samples passed, while all three baseline samples failed. The failures
-involved renderer-watchdog recovery; bounded hydration does not eliminate every
-stall. These measurements are not a blanket speedup, a production guarantee, or
-a claim that 50,000-note vaults are now reliably supported. See the
-[benchmark methodology and limitations](docs/large-vault-benchmark.md).
-
-## New in v0.17.3: Canvas media cards render again
-
-**A Canvas card pointing at an image, audio or video file could come up blank
-and stay blank.** Every path that opens a Canvas renders the whole board
-*before* the view is attached to the document. A card's file read that happened
-to finish inside that window was discarded as belonging to a stale render — and
-because nothing re-rendered after the view was attached, the card never
-recovered. It was a race, so it struck under load and looked intermittent:
-reopening the same board could show the media or not.
-
-Liveness is now decided by whether the node still belongs to the view being
-rendered, rather than by whether it had already been inserted into the document,
-so a card rendered ahead of attachment is filled in correctly. The read-failure
-path is also no longer discarded alongside it: a file that genuinely cannot be
-read now always shows the visible "Could not load file" fallback instead of
-leaving an empty card and no explanation.
-
-## New in v0.17.2: comment on headings, list items and table cells
-
-**Comments are no longer limited to ordinary paragraphs.** You can now anchor a
-thread to prose inside a heading, a list item (bullet, ordered, task, nested) or
-a table cell. Previously any text that was not a plain paragraph was refused:
-the rule protected *every* node that was not a paragraph, so the words in a
-heading were treated as untouchable along with the `#` that made it one.
-
-Only the structural syntax itself is off-limits now — a heading's `#`, a list
-bullet or `[ ]` checkbox, a table's `|` separators and its delimiter row. Code,
-links, images, math, raw HTML, blockquotes and Obsidian comments are still
-protected in full. And a selection that merely *straddles* structural syntax —
-a triple-click that sweeps up a heading's `#`, or a drag starting on a bullet —
-is now trimmed automatically to the prose it covers rather than rejected
-outright. When a selection genuinely has nothing commentable left in it, the
-rejection names the specific reason instead of failing generically.
-
-Widening this surfaced two defects that had been latent all along:
-
-- **Live Preview decorations could silently disappear.** Comment markers begin
-  with `<!--`, which is CommonMark's HTML-block start condition, so a marker at
-  a line's first content position made the parser treat the whole line as an
-  HTML block — dropping that line's list and heading decorations. This already
-  affected plain paragraphs; it simply had never been hit, because nothing else
-  reads the unstripped document.
-- **A commented heading broke its own links.** Heading text is extracted from a
-  copy in which markers are masked to spaces to keep offsets stable — correct
-  for positions, wrong for text. A commented heading yielded heading text with
-  a run of spaces buried in it, which broke `[[Note#Heading]]` resolution,
-  heading bookmarks and transclusion.
-
-One known limit: a comment anchored inside a **table cell** shows no inline
-highlight in Live Preview, because tables are rendered there as a widget rather
-than as decorated source, leaving no source text to highlight — the same reason
-Reading view never highlights anchors. The thread itself is unaffected; it
-persists in the note, appears in the Comments pane, and replies and resolves
-normally.
-
-## New in v0.17.1: plugins can use `fetch()`, and links into Project folders open in-app
-
-**Plugins that call `fetch()` directly now work.** Geode's renderer runs under a
-deliberately strict `default-src 'self'` policy, and plugin code executes in that
-same renderer — so a plugin calling the ambient `fetch()` was blocked from
-reaching any remote origin. `requestUrl` already avoided this by doing the real
-request in the privileged main process, but plugins cannot always use it: its
-body type is `string | ArrayBuffer`, which cannot carry a `FormData` multipart
-upload. Anything uploading a file — audio to a transcription endpoint, an image
-to an API — had no working path at all, and failed with a bare network error.
-
-Plugin bundles now get their own privileged `fetch`, mirroring `requestUrl`'s
-transport: the body (including a `FormData` boundary) is serialized in the
-renderer, sent to the main process, and issued there, with a spec-compliant
-`Response` handed back. **The content security policy is unchanged and
-`window.fetch` is untouched** — the identifier is shadowed only inside a
-plugin's own compiled bundle, so nothing else in the app gains network reach.
-
-**Links into attached Project folders open in Geode, not the OS.** Clicking a
-file link pointing into an attached read-only Project folder opened it in the
-system default app, and attaching the folder appeared to change nothing — while
-the *same* file reached through the Projects tree opened correctly in the
-in-app viewer. `open-local-file` only tested containment against the vault root,
-so an explicit user grant had no effect on link handling. It now classifies the
-path against the roots the window exposes and routes to the read-only viewer.
-Containment is decided on **canonical real paths**, so a symlink cannot widen a
-grant, and only roots bound in the current vault session are eligible.
-
-See the [plugin API reference](docs/spec/03-plugin-api.md).
-
-## New in v0.17.0: secrets in the OS keychain, and six plugin-API fixes
-
-**Plugin secrets now live in the OS keychain.** `app.secretStorage` previously
-persisted secrets as plaintext in `localStorage` — so an API key a plugin stored
-sat in the clear on disk, even where the plugin's own UI told the user it was
-keychain-protected. Secrets are now encrypted through Electron's `safeStorage`
-and written as ciphertext, and `isEncryptionAvailable()` reports the real
-answer instead of a hardcoded `false`. **Existing `geode:secret:*` entries
-migrate automatically on first access and are removed from `localStorage`.**
-Where no keychain backend exists (some Linux setups), Geode falls back to the
-previous behaviour and says so honestly rather than pretending.
-
-**Five other divergences from Obsidian's API, all found by auditing a real
-plugin against the shim.** Each was the same failure mode: an API that returned
-successfully and quietly did the wrong thing, leaving the plugin no way to
-detect it and the user nothing to see.
-
-- `SecretComponent` now takes Obsidian's `(app, containerEl)` and renders a
-  picker **button**, not a password input — the previous signature threw inside
-  the caller's click handler, so the button did nothing at all.
-- `obsidian://` deep links now reach Geode, so a plugin's
-  `registerObsidianProtocolHandler` callbacks fire. Registration is deliberately
-  **non-hijacking**: Geode claims the scheme only when nothing else answers it,
-  advertises itself as a `Viewer` rather than an owner, and leaves an existing
-  Obsidian install untouched. `GEODE_CLAIM_OBSIDIAN_PROTOCOL=1` forces it.
-- `Vault.adapter.rmdir()` exists, so plugins can clean up their own
-  directories. It removes directly rather than trashing, and refuses anything
-  resolving outside the vault, the vault root itself, or a symlink pointing out
-  of the vault.
-- `sanitizeHTMLToDom` strips `on*` handlers, `javascript:`/`vbscript:` URLs and
-  `iframe`/`object`/`embed`/`link`/`meta`/`base`, not just `<script>`. Policy
-  tracks DOMPurify's stock configuration, so `<style>`, `<form>` and
-  `data:image/…` still render.
-- `WorkspaceLeaf.openFile` honours `eState.subpath`, so heading and block
-  anchors scroll to their target — including when a plugin opens one *before*
-  the metadata cache has finished indexing, which previously returned no match
-  and silently landed at the top of the file.
-
-See the [plugin API reference](docs/spec/03-plugin-api.md).
-
-## New in v0.16.0: a supported plugin catalog, and two new plugin events
-
-**Install certified plugins without hunting for a repository.** Settings →
-Community plugins & themes now lists a supported catalog. Installing a *tested*
-release verifies the manifest and the SHA-256 of every runtime artifact before
-replacing any file, then pins that version. Choosing *latest* instead requires
-an explicit unverified acknowledgement and leaves the install unpinned. The
-catalog is fetched with an 8-second timeout and a 256 KiB cap, and an atomic
-last-known-good cache keeps it usable when a refresh fails. The manual GitHub
-installer is still there.
-
-**Plugins can now populate Geode's context menus.** The `file-menu` and
-`editor-menu` workspace events fire, so a plugin can add its own items to a
-file's context menu in the explorer or to the editor's menu.
-
-**Plugins can react to a web app running in the Web Viewer.** A cooperating
-"connector" page can call `window.__geode.postEvent(type, payload)`, and Geode
-re-emits it on the workspace bus as `web-viewer:event`. Geode's main process
-checks the posting frame's origin against an allowlist and validates the event
-type, serializability and payload size before anything reaches a plugin — the
-guest is never trusted about which page it is. Canvas link previews run in
-their own session precisely so that merely *viewing* a canvas can never stand
-up such a bridge. See the [plugin API reference](docs/spec/03-plugin-api.md).
-
-## New in v0.15.2: a unified file explorer
-
-External Projects now share one scrolling panel with vault files. Matching
-headers, standard folder and file rows, and quieter refresh and detach actions
-keep the explorer consistent across narrow and wide sidebars and light/dark themes.
-
-## New in v0.15.1: preserved Web Viewer history
-
-Opening another URL in the same Web Viewer tab now keeps its live browser and
-Back/Forward history. Rapid navigation and redirects preserve the newest
-requested URL, and a later navigation can restore the viewer after its browser
-process exits.
-
-## New in v0.15.0: interactive Bases views for plugins
-
-A community plugin can now provide a Bases view that **writes to the vault**, not
-just renders one. `kanban-bases-view` runs unmodified in Geode: drag a card
-between columns and the note's frontmatter is rewritten on disk; the per-column
-**+** creates a note in the view's configured folder with that column's value
-already set; middle-click opens a card's note behind the board and a plain click
-opens it in place; card cover images resolve and load.
-
-The plugin API surface behind that grew accordingly —
-`BasesView.createFileForView`, `Vault.getResourcePath(file)`,
-`Workspace.getMostRecentLeaf()`, `Workspace.setActiveLeaf(leaf, { focus })` and
-`Workspace.getLeaf(PaneType | boolean)` — and `GEODE_API_VERSION` advertises
-**1.10.2** (from 1.8.0), so plugins gating on the host's API version see the
-Bases surface they require.
-
-Where Geode cannot honour a request exactly it refuses loudly rather than
-guessing: `createFileForView()` with no file name, a folder that does not exist,
-or a path escaping the vault all reject instead of writing a note somewhere the
-user did not configure; `getLeaf('window')` throws rather than substituting a
-tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
-
-## Features (v0.17.0)
+## Features
 
 - **Keychain-backed plugin secrets** — `app.secretStorage` encrypts through the
   OS keychain via Electron `safeStorage`, migrating any previously stored
@@ -294,7 +79,8 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
   split-local tab collections with persistent collapse state, split panes with
   pointer- and keyboard-resizable persisted proportions, pinned tabs, vertically
   stacked and independently resizable sidebar groups, recursive layout persistence,
-  independent session-only back/forward document history in each tab,
+  independent session-only back/forward history in each tab, including
+  restorable plugin views when a picked file replaces the current pane,
   [durable companion splits](docs/design/companion-panes.md) for plugins that
   feature-detect Geode's workspace extension,
   a hideable left ribbon with persistent Settings and
@@ -329,7 +115,10 @@ tab. See the [plugin API reference](docs/spec/03-plugin-api.md).
   Settings versions and other plugins requiring 1.13 remain unverified.
   Desktop plugins can make HTTP(S) requests through `requestUrl()`, including
   text, JSON, and binary responses; requests use the main process while raw
-  renderer `fetch()` remains subject to the existing Content Security Policy
+  renderer `fetch()` remains subject to the existing Content Security Policy.
+  Desktop voice plugins can use the [packaged PCM AudioWorklet](docs/design/packaged-audio-capture.md)
+  to capture audio off the UI thread without enabling blob scripts; microphone
+  permission and stream lifetime remain the plugin's responsibility.
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
   once with community plugins suppressed and reversible restart controls.
@@ -366,7 +155,7 @@ intercept them.
 
 ## Install
 
-Prebuilt macOS installers (dmg + zip, Apple Silicon + Intel) are published on
+Prebuilt macOS installers (dmg + zip, Apple Silicon only) are published on
 the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 `v*` tag is pushed. Windows and Linux builds aren't set up yet — see the
 [roadmap](docs/spec/00-overview.md) item for packaging.
@@ -376,10 +165,12 @@ the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 `scripts/geode-update.mts` installs the latest release, or updates an
 existing install, in one command. It talks to the public GitHub API directly
 (no `gh` CLI, no account, no auth needed — this repo is public) and
-**automatically fixes the Gatekeeper "damaged app" warning** described below,
-so the manual `xattr`/right-click steps become a fallback rather than a
-required step. Requires macOS and Node.js 23.6+ (no install needed — Node
-runs `.mts` files directly). Run it straight from GitHub, no clone required:
+verifies the release's Developer ID signature, stable Apple Team ID and bundle
+ID, hardened runtime, Gatekeeper acceptance, and stapled notarization ticket
+before replacing an install. It preserves Apple's signature and leaves the
+current app in place if verification or staging fails. Requires an Apple Silicon Mac and
+native arm64 Node.js 23.6+. Intel Macs can continue using their last compatible
+release, but receive no new builds. Run it straight from GitHub, no clone required:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rbcodelabs/geode/main/scripts/geode-update.mts -o /tmp/geode-update.mts && node /tmp/geode-update.mts
@@ -398,27 +189,32 @@ node scripts/geode-update.mts --help       # full usage
 
 ### Install manually
 
-1. Download `Geode-<version>-arm64.dmg` (Apple Silicon) or
-   `Geode-<version>.dmg` (Intel) from the latest release.
+1. Download `Geode-<version>-arm64.dmg` for Apple Silicon from the latest release.
 2. Open the dmg and drag **Geode.app** to **Applications**.
-3. **These builds are ad-hoc signed but not notarized** (no Apple Developer
-   ID yet). The ad-hoc signature lets the app launch on any Mac — including
-   Apple Silicon, which refuses to run fully-unsigned apps — but Gatekeeper
-   still shows an "unidentified developer" warning, or reports the app as
-   "damaged," on the first launch of a downloaded copy. To open it (only
-   needed if you installed manually — the script above handles this for
-   you):
-   - Right-click (or Control-click) **Geode.app** → **Open** → **Open** again
-     in the confirmation dialog (also available under System Settings →
-     Privacy & Security → **Open Anyway**), **or**
-   - Run `xattr -dr com.apple.quarantine /Applications/Geode.app` in Terminal
-     once, then launch normally. If Gatekeeper instead says the app is
-     "damaged," that's not a quarantine issue and `xattr` won't fix it — the
-     dmg's ad-hoc signature is missing its resource manifest. Re-sign it
-     locally instead: `codesign --force --deep --sign - /Applications/Geode.app`.
+3. Launch Geode normally. Release builds are Developer ID signed, hardened,
+   notarized, and stapled; do not remove quarantine metadata or re-sign them.
 
-   Full Developer ID signing + notarization (no warning at all) is a
-   follow-up that needs a paid Apple Developer account.
+### Updates and the first signed release
+
+Existing ad-hoc-signed installations must install the first Developer ID
+release manually (drag from the dmg or run the script above) to establish the
+trusted signing baseline. Releases after that baseline check quietly in the
+background. Geode always asks before downloading and asks again before
+restarting to install. **Help → Check for Updates…** runs a manual check. If
+an approved download or install fails, Geode offers the Releases page as a
+recovery path.
+
+Release operators provision a protected GitHub environment named
+`macos-release` with `CSC_LINK`, `CSC_KEY_PASSWORD`,
+`APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and
+`APPLE_TEAM_ID`. `CSC_LINK` is the base64-encoded Developer ID Application
+certificate/private-key `.p12`; `APPLE_API_KEY_BASE64` is a base64-encoded
+team App Store Connect API `.p8`. The checked-in `EXPECTED_TEAM_ID` in
+`scripts/geode-update.mts` pins RB Code Labs LLC's publisher identity to
+`6M8F464WCQ`. The workflow rejects an `APPLE_TEAM_ID` secret that differs
+from this pin. The workflow refuses unsigned builds or
+incomplete credentials, verifies every packaged app, and publishes an update
+feed only after the draft release has the complete artifact inventory.
 
 ## Develop
 
@@ -439,8 +235,8 @@ npm start          # launch Electron
 npm run dev        # esbuild watch mode
 npm run typecheck  # strict tsc
 npm run parity:check # verify the checked-in Obsidian compatibility ledger is current
-npm run dist        # package a local ad-hoc-signed macOS build (dmg + zip) into release/
-npm run release     # same, plus publish to GitHub Releases (requires GH_TOKEN)
+npm run dist        # package a signed/notarized macOS build (requires release credentials)
+npm run release     # same, plus publish (prefer the protected GitHub workflow)
 ```
 
 A demo vault lives in `test-vault/`.
@@ -603,10 +399,11 @@ and evidence from real third-party plugins remain Slice 3A2 gates.
 ### Cutting a release
 
 Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`) —
-the `.github/workflows/release.yml` GitHub Action builds ad-hoc-signed macOS
-installers and publishes them to a GitHub Release automatically. You can also
-trigger it manually from the Actions tab (`workflow_dispatch`) without cutting
-a tag, useful for testing the pipeline.
+the `.github/workflows/release.yml` GitHub Action signs, notarizes, verifies,
+and staples the Apple Silicon macOS build. It uploads into a draft and publishes
+only after the complete artifact inventory is present. A protected
+`macos-release` environment must approve credential access. A manual Actions
+run (`workflow_dispatch`) builds and verifies without publishing.
 
 ## Documentation
 

@@ -8,6 +8,7 @@ import {
   formatSyncDuration,
   formatSyncProgressCounts,
   isSyncStalled,
+  syncAttemptLabel,
   syncProgressPercent,
   syncStalledFor,
 } from "../../src/renderer/sync/progress";
@@ -24,6 +25,7 @@ function service() {
     endProgress: () => void;
     setStatus: (status: SyncStatus) => void;
     summarize: (preview: unknown) => unknown;
+    failedRuns: number;
   };
   return {
     instance,
@@ -32,6 +34,14 @@ function service() {
     endProgress: internals.endProgress.bind(internals),
     setStatus: internals.setStatus.bind(internals),
     summarize: internals.summarize.bind(internals),
+    /**
+     * Stands in for the retry catch in schedule(), which increments this and
+     * doubles retryDelay together. Driving the real catch would need a full host
+     * plus a live provider; what these tests are about is the field's lifecycle
+     * across the progress teardown, which is observable directly.
+     */
+    failRun: () => { internals.failedRuns++; },
+    succeedRun: () => { internals.failedRuns = 0; },
     progressEvents: () => seen.filter(status => status.progress),
   };
 }
@@ -140,6 +150,73 @@ for (const [label, end] of [
     }
   });
 }
+
+it("keeps the attempt count across the teardown that resets the clock, so a retry loop cannot pass for slow progress", () => {
+  vi.useFakeTimers();
+  try {
+    const s = service();
+    // Attempt one: planning gets underway and the user watches elapsed climb.
+    s.publishProgress({ phase: "planning", completed: 400, total: 17251, currentPath: "a.md" });
+    const first = s.progressEvents().at(-1)!.progress!;
+    expect(first.attempt).toBe(1);
+
+    // The run fails. endProgress() fires in withController's finally, so the whole
+    // progress session — startedAt included — is discarded before the retry.
+    s.endProgress();
+    s.failRun();
+    vi.advanceTimersByTime(23_000);
+    s.publishProgress({ phase: "planning", completed: 400, total: 17251, currentPath: "a.md" });
+    const second = s.progressEvents().at(-1)!.progress!;
+
+    // This is the bug as the user experienced it: identical counters, and a clock
+    // that started over. Nothing here distinguishes a restart from continuation...
+    expect(second.completed).toBe(first.completed);
+    expect(second.startedAt).toBeGreaterThan(first.startedAt);
+    // ...except the attempt counter, which is deliberately not progress state.
+    expect(second.attempt).toBe(2);
+
+    s.endProgress();
+    s.failRun();
+    s.publishProgress({ phase: "planning", completed: 12, total: 17251 });
+    expect(s.progressEvents().at(-1)!.progress!.attempt).toBe(3);
+
+    // A completed run clears it: the next poll-driven sync is not "attempt 4".
+    s.endProgress();
+    s.succeedRun();
+    s.publishProgress({ phase: "planning", completed: 0, total: 17251 });
+    expect(s.progressEvents().at(-1)!.progress!.attempt).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("names the retry on the phase line only once there has actually been one", () => {
+  const at = (attempt: number) => describeSyncProgress({ phase: "planning", completed: 400, total: 17251, currentPath: "a.md", startedAt: 0, lastProgressAt: 0, attempt }, 23_000);
+  expect(at(1).phaseLabel).toBe("Planning changes");
+  expect(at(3).phaseLabel).toBe("Planning changes — attempt 3");
+  // The two must not read alike, including to a screen reader — a restart that
+  // announces identically to continued progress is the failure being fixed.
+  expect(at(3).phaseLabel).not.toBe(at(1).phaseLabel);
+  expect(at(3).announcement).not.toBe(at(1).announcement);
+  expect(at(3).announcement).toContain("attempt 3");
+  // Injected or replayed status predating the field must not render "attempt NaN".
+  expect(describeSyncProgress({ phase: "planning", completed: 1, total: 2, startedAt: 0, lastProgressAt: 0 } as SyncStatusProgress, 0).phaseLabel).toBe("Planning changes");
+  expect(syncAttemptLabel("scanning", undefined)).toBe("Scanning remote history");
+});
+
+it("gives the local reconcile a real percentage while the remote scan stays indeterminate", () => {
+  const scanning = describeSyncProgress({ phase: "scanning", completed: 0, total: 0, startedAt: 0, lastProgressAt: 0, attempt: 1 }, 23_000);
+  const planning = describeSyncProgress({ phase: "planning", completed: 3102, total: 17251, currentPath: "note-2.md", startedAt: 0, lastProgressAt: 0, attempt: 1 }, 23_000);
+  // What the user actually had on a 17,251-file vault: a label, a bar with no
+  // numbers in it, and a clock. The scan half stays that way because it honestly
+  // cannot be counted — but it is now the only half that is.
+  expect(scanning.percent).toBeNull();
+  expect(scanning.counts).toBe("");
+  expect(planning.percent).toBe(17);
+  expect(planning.counts).toBe("3,102 / 17,251 (17%)");
+  expect(planning.path).toBe("note-2.md");
+  expect(planning.phaseLabel).not.toBe(scanning.phaseLabel);
+});
 
 it("raises a stall only after the threshold and never during steady slow progress", () => {
   const start = 1_000_000;

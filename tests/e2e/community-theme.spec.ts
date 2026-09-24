@@ -58,7 +58,7 @@ test("discovers, applies, persists, and clears a community theme", async () => {
       await a.themeManager.apply("Sunset");
       a.saveSettings();
     });
-    await expect(window.locator("style#geode-community-theme")).toHaveCount(1);
+    await expect(window.locator("style#geode-active-theme")).toHaveCount(1);
     expect(await bgVar()).toBe("#101418");
     expect(await bgVar()).not.toBe(defaultBg);
     const accent = await window.evaluate(() =>
@@ -81,7 +81,7 @@ test("discovers, applies, persists, and clears a community theme", async () => {
     await window.evaluate(async () => {
       await (window as any).app.themeManager.apply("");
     });
-    await expect(window.locator("style#geode-community-theme")).toHaveCount(0);
+    await expect(window.locator("style#geode-active-theme")).toHaveCount(0);
     expect(await bgVar()).toBe(defaultBg);
     expect(await tabHeaderInnerBg()).not.toBe("rgb(17, 34, 51)");
 
@@ -98,7 +98,7 @@ test("discovers, applies, persists, and clears a community theme", async () => {
     const app2 = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
     const win2 = await app2.firstWindow();
     await expect(win2.locator(".workspace")).toBeVisible();
-    await expect(win2.locator("style#geode-community-theme")).toHaveCount(1);
+    await expect(win2.locator("style#geode-active-theme")).toHaveCount(1);
     expect(
       await win2.evaluate(() => getComputedStyle(document.body).getPropertyValue("--background-primary").trim())
     ).toBe("#101418");

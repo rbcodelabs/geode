@@ -308,6 +308,14 @@ export class Modal {
   bgEl: HTMLElement;
   /** The `×` affordance in the corner. Exposed so subclasses can hide it. */
   closeEl: HTMLElement;
+  /**
+   * Modal-scoped keymap handlers, per Obsidian. Plugin constructors commonly
+   * call `this.scope.register(...)` (e.g. SuggestModal/FuzzySuggestModal
+   * subclasses binding Enter/Tab) before `onOpen()` ever runs, so this must
+   * exist eagerly rather than being lazily created on first open. Like
+   * `Scope` everywhere else in this shim, it is store-only — see suggest.ts.
+   */
+  scope: Scope = new Scope();
   private keyHandler: (e: KeyboardEvent) => void;
 
   constructor(app: App) {

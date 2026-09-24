@@ -132,7 +132,7 @@ test("imports plugins & themes from an existing .obsidian/ folder", async () => 
       (window as unknown as { app: any }).app.themeManager.activeTheme
     );
     expect(active).toBe("Sample Theme");
-    await expect(window.locator("style#geode-community-theme")).toHaveCount(1);
+    await expect(window.locator("style#geode-active-theme")).toHaveCount(1);
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {

@@ -68,7 +68,7 @@ only human admins decide, and no outcome automatically applies another action.
 | review_requests | compass_decisions |
 | decision_records | compass_decisions |
 | notifications | geode |
-| prototype_artifacts | compass_docs |
+| prototype_artifacts | compass_artifacts |
 | product_analytics | manual_input |
 
 ## Provider Connections
@@ -113,7 +113,9 @@ only human admins decide, and no outcome automatically applies another action.
   Claude Threads environment. No fallback channel is configured; per the
   integration-routing invariants, notification fallbacks must stay explicit, so none is
   assumed.
-- **Prototype artifacts:** compass_docs -- Compass workspace `geode` Docs.
+- **Prototype artifacts:** compass_artifacts -- Compass workspace `geode` Artifacts,
+  as resolved by the selected `compass-native-review` profile. Versioned build
+  plans remain Compass Docs; they are not prototype artifacts.
 - **Product analytics:** manual_input -- no automated analytics provider is connected;
   metrics are recorded manually when needed. No credential required.
 

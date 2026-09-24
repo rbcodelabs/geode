@@ -2,9 +2,7 @@
  * The auto-updater's two safety decisions, tested without Electron
  * (docs/adr/0003-auto-update-mechanism.md):
  *
- *  - the explicit opt-in gate that keeps the feature OFF by default, so a
- *    packaged build can't ship an unverified `quitAndInstall()` path whose
- *    documented mitigation is unreachable;
+ *  - packaged builds update by default while development builds stay inert;
  *  - HTTPS-only validation of the `GEODE_UPDATE_FEED_URL` override, which is
  *    handed straight to `setFeedURL({provider: "generic", url})` on builds
  *    that carry no publisher-identity check.
@@ -12,62 +10,28 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  AUTO_UPDATE_OPT_IN_ENV,
   UPDATE_FEED_URL_ENV,
-  isTruthyFlag,
   resolveAutoUpdateGate,
   resolveUpdateFeedUrl,
   resolveUpdaterState,
 } from "../../src/main/update-config";
 
-describe("resolveAutoUpdateGate — opt-in required (B4.1)", () => {
-  it("is off in a packaged build when the opt-in is absent", () => {
-    const gate = resolveAutoUpdateGate({}, true);
-    expect(gate.enabled).toBe(false);
-    expect(gate.enabled === false && gate.reason).toContain(AUTO_UPDATE_OPT_IN_ENV);
-  });
-
-  it("is off when the opt-in is present but not affirmative", () => {
-    for (const value of ["", "0", "false", "no", "off", "maybe"]) {
-      const gate = resolveAutoUpdateGate({ [AUTO_UPDATE_OPT_IN_ENV]: value }, true);
-      expect(gate.enabled, `value=${JSON.stringify(value)}`).toBe(false);
-    }
-  });
-
-  it("is off when unpackaged even with the opt-in set", () => {
-    const gate = resolveAutoUpdateGate({ [AUTO_UPDATE_OPT_IN_ENV]: "1" }, false);
+describe("resolveAutoUpdateGate — packaged builds are live by default", () => {
+  it("is off when unpackaged", () => {
+    const gate = resolveAutoUpdateGate({}, false);
     expect(gate.enabled).toBe(false);
     expect(gate.enabled === false && gate.reason).toContain("not packaged");
   });
 
-  it("is on only when packaged AND explicitly opted in", () => {
-    for (const value of ["1", "true", "TRUE", "yes", " on "]) {
-      expect(
-        resolveAutoUpdateGate({ [AUTO_UPDATE_OPT_IN_ENV]: value }, true).enabled,
-        `value=${JSON.stringify(value)}`
-      ).toBe(true);
-    }
-  });
-
-  it("explains why it is off, so the log line is actionable", () => {
-    const gate = resolveAutoUpdateGate({}, true);
-    expect(gate.enabled === false && gate.reason).toMatch(/verified|ad-hoc/i);
+  it("is on for a packaged build without an opt-in environment variable", () => {
+    expect(resolveAutoUpdateGate({}, true)).toEqual({ enabled: true });
   });
 });
 
 describe("resolveUpdaterState — the single decision both entry points share", () => {
-  const optedIn = { [AUTO_UPDATE_OPT_IN_ENV]: "1" };
-
-  it("is not live, and marks the gate as not passed, without the opt-in", () => {
-    const state = resolveUpdaterState({}, true);
-    expect(state.live).toBe(false);
-    // gatePassed false ⇒ never touch the electron-updater singleton.
-    expect(state.live === false && state.gatePassed).toBe(false);
-  });
-
   it("is not live when the gate passes but the feed is rejected", () => {
     const state = resolveUpdaterState(
-      { ...optedIn, [UPDATE_FEED_URL_ENV]: "http://staging.internal/geode/" },
+      { [UPDATE_FEED_URL_ENV]: "http://staging.internal/geode/" },
       true
     );
     expect(state.live).toBe(false);
@@ -78,28 +42,18 @@ describe("resolveUpdaterState — the single decision both entry points share", 
   });
 
   it("is live against the default feed when no override is set", () => {
-    expect(resolveUpdaterState(optedIn, true)).toEqual({ live: true, feed: { kind: "default" } });
+    expect(resolveUpdaterState({}, true)).toEqual({ live: true, feed: { kind: "default" } });
   });
 
   it("is live against a validated https override", () => {
     expect(
-      resolveUpdaterState({ ...optedIn, [UPDATE_FEED_URL_ENV]: "https://u.example.com/" }, true)
+      resolveUpdaterState({ [UPDATE_FEED_URL_ENV]: "https://u.example.com/" }, true)
     ).toEqual({ live: true, feed: { kind: "custom", url: "https://u.example.com/" } });
   });
 
   it("never reports the gate as passed when unpackaged", () => {
-    const state = resolveUpdaterState({ ...optedIn, [UPDATE_FEED_URL_ENV]: "http://nope/" }, false);
+    const state = resolveUpdaterState({ [UPDATE_FEED_URL_ENV]: "http://nope/" }, false);
     expect(state.live === false && state.gatePassed).toBe(false);
-  });
-});
-
-describe("isTruthyFlag", () => {
-  it("treats only explicit affirmatives as true", () => {
-    expect(isTruthyFlag(undefined)).toBe(false);
-    expect(isTruthyFlag("")).toBe(false);
-    expect(isTruthyFlag("0")).toBe(false);
-    expect(isTruthyFlag("1")).toBe(true);
-    expect(isTruthyFlag("Yes")).toBe(true);
   });
 });
 

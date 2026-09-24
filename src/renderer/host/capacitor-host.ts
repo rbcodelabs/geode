@@ -1,6 +1,7 @@
 import { registerPlugin, type Plugin, type PluginListenerHandle } from "@capacitor/core";
 import { VaultAccessError, type HostServices, type VaultAccessState, type VaultEvent, type VaultFileEntry } from "./contracts";
 import type { PluginFileSet } from "./contracts";
+import { assertValidThemeId } from "../../shared/theme-id";
 
 type EmptyResult = Record<string, never>;
 
@@ -191,6 +192,10 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     plugins: {
       listPluginIds: async () => (await plugin.listPluginIds()).ids,
       listThemes: async () => (await plugin.listThemes()).ids,
+      readThemeCss: async (id) => {
+        assertValidThemeId(id);
+        return (await plugin.read({ path: `.geode/themes/${id}/theme.css` })).data;
+      },
       readPluginFile: async (path, rendererSentAt) => {
         const started = Date.now();
         try {

@@ -43,6 +43,8 @@ describe("CapacitorHostServices", () => {
     await host.vaultRegistry.openVault("managed://default");
     await expect(host.plugins.listPluginIds()).resolves.toEqual(["mobile-probe"]);
     await expect(host.plugins.listThemes()).resolves.toEqual(["mobile-theme"]);
+    await expect(host.plugins.readThemeCss("mobile-theme")).resolves.toBe("welcome");
+    expect(plugin.read).toHaveBeenCalledWith({ path: ".geode/themes/mobile-theme/theme.css" });
     await expect(host.plugins.readPluginFile(".geode/plugins/mobile-probe/main.js", 10)).resolves.toMatchObject({
       ok: true, content: "module.exports = class {}",
     });

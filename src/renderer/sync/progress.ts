@@ -72,7 +72,19 @@ export function formatSyncProgressCounts(progress: { completed: number; total: n
   return `${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()} (${percent}%)`;
 }
 
+/**
+ * Renders the retry count into the phase line, or "" on a first attempt.
+ *
+ * It rides on the phase text rather than a field of its own because the whole
+ * failure being fixed is a restart that *looked* like continuous progress: the
+ * one line a user already reads to answer "what is it doing" is where "and this
+ * is the third time" has to appear to be seen at all.
+ */
+export const syncAttemptLabel = (phase: SyncProgressPhase, attempt: number | undefined): string =>
+  (attempt ?? 1) > 1 ? `${syncPhaseLabel(phase)} — attempt ${attempt}` : syncPhaseLabel(phase);
+
 export interface SyncProgressView {
+  /** Includes "— attempt N" from the second attempt on; bare phase text before that. */
   phaseLabel: string;
   /** "1,234 / 17,251 (7%)", or "" while the batch size is still unknown. */
   counts: string;
@@ -95,7 +107,10 @@ export interface SyncProgressView {
  * wording and the stall arithmetic are testable without a DOM or a live sync.
  */
 export function describeSyncProgress(progress: SyncStatusProgress, now: number): SyncProgressView {
-  const phaseLabel = syncPhaseLabel(progress.phase);
+  // `?? 1` rather than a bare read: status can be injected or replayed from a
+  // source that predates this field, and a missing counter means "nothing has
+  // restarted", never a blank or NaN on the one line the user is reading.
+  const phaseLabel = syncAttemptLabel(progress.phase, progress.attempt);
   const percent = syncProgressPercent(progress);
   const counts = formatSyncProgressCounts(progress);
   const path = progress.currentPath ?? "";

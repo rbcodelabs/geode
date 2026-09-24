@@ -74,7 +74,20 @@ export interface SyncProgress { phase: SyncProgressPhase; completed: number; tot
  * of stall detection: a wedged sync stops updating it while wall-clock time
  * keeps moving, which is exactly the condition the UI must be able to show.
  */
-export interface SyncStatusProgress extends SyncProgress { startedAt: number; lastProgressAt: number; }
+export interface SyncStatusProgress extends SyncProgress {
+  startedAt: number;
+  lastProgressAt: number;
+  /**
+   * Which try this is, counting from 1. Every run gets a fresh progress session
+   * — `endProgress()` fires in `withController`'s finally — so a retry loop
+   * restarts `startedAt` and the counters from zero, and on screen that is
+   * indistinguishable from a first attempt making slow progress. This survives
+   * that teardown: it tracks consecutive *failed* runs, so it rises only when
+   * work is genuinely being thrown away and redone, and returns to 1 as soon as
+   * a run completes. A preview followed by a run is not a retry and stays at 1.
+   */
+  attempt: number;
+}
 export interface SyncStatus { state: SyncStatusState; providerId?: string; message?: string; conflicts: number; progress?: SyncStatusProgress; }
 export interface SyncPreview { uploads: number; downloads: number; deletes: number; conflicts: number; skipped: number; requiresApproval: boolean; }
 export interface SyncRunResult extends Omit<SyncPreview, "requiresApproval"> { cursor?: string; }

@@ -206,6 +206,10 @@ export class FileSystemAdapter extends DataAdapter {
     return this.basePath;
   }
 
+  getFullPath(relativePath: string): string {
+    return `${this.basePath}/${relativePath}`;
+  }
+
   getResourcePath(normalizedPath: string): string {
     return `file://${encodeFileUrlPath(`${this.basePath}/${normalizedPath}`)}`;
   }

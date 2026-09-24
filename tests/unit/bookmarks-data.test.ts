@@ -3,6 +3,7 @@ import {
   addBookmark,
   bookmarkDefaultLabel,
   collectGroups,
+  collectLinkBookmarks,
   createEmptyRoot,
   createGroup,
   descendantGroupIds,
@@ -474,6 +475,55 @@ describe("collectGroups", () => {
       { id: "deep", title: "Deep", depth: 2 },
       { id: "sib", title: "Sibling", depth: 0 },
     ]);
+  });
+});
+
+describe("collectLinkBookmarks", () => {
+  it("returns link bookmarks in depth-first tree order, including collapsed groups", () => {
+    const first: Bookmark = { type: "link", id: "first", url: "https://first.example", title: " First " };
+    const nested: Bookmark = { type: "link", id: "nested", url: "https://nested.example", title: "Nested" };
+    const last: Bookmark = { type: "link", id: "last", url: "https://last.example" };
+    const root: BookmarksRoot = {
+      items: [
+        first,
+        {
+          type: "group",
+          id: "outer",
+          title: "Outer",
+          expanded: false,
+          items: [
+            { type: "file", id: "file", path: "A.md" },
+            {
+              type: "group",
+              id: "inner",
+              title: "Inner",
+              expanded: true,
+              items: [nested],
+            },
+          ],
+        },
+        last,
+      ],
+    };
+
+    expect(collectLinkBookmarks(root)).toEqual([first, nested, last]);
+  });
+
+  it("excludes groups and every non-link bookmark type", () => {
+    const link: Bookmark = { type: "link", id: "link", url: "https://example.com" };
+    const root: BookmarksRoot = {
+      items: [
+        { type: "file", id: "file", path: "A.md" },
+        { type: "folder", id: "folder", path: "Folder" },
+        { type: "search", id: "search", query: "tag:#todo" },
+        { type: "heading", id: "heading", path: "A.md", heading: "Intro", level: 1 },
+        { type: "block", id: "block", path: "A.md", blockId: "block-id" },
+        { type: "graph", id: "graph" },
+        { type: "group", id: "group", title: "Group", expanded: true, items: [link] },
+      ],
+    };
+
+    expect(collectLinkBookmarks(root)).toEqual([link]);
   });
 });
 

@@ -125,6 +125,15 @@ only the prior committed snapshot. It then releases the first transaction.
 Assertions do not depend on assuming a delay implies concurrency. Bounded
 timeouts fail visibly when a lock wait cannot be observed.
 
+> **Superseded as a schema model, 2026-09-19.** The reviewed multi-vault schema
+> now exists at `src/catalog/postgres-catalog-schema.sql`
+> ([ADR 0022](../adr/0022-transactional-multi-vault-catalog-contract.md)):
+> `vault_id` is a first-class key, attachment bytes are immutable and
+> content-addressed, and a publication locks only its own vault. The fixture
+> below is unchanged and remains valid Phase 0 evidence; it is no longer the
+> model to extend. Both halves of increment 3 — publish and restore — are now
+> built against that schema.
+
 The fixture is one vault in a disposable schema, not a production migration.
 It does not implement object uploads, revisions, tombstones, rename planning,
 authorization, multi-tenant isolation, garbage collection, or cryptographic
@@ -161,6 +170,44 @@ schema in `finally`, including failed assertions. It does not alter `public` or
 start/stop a database server. Interrupted process termination may require manual
 cleanup of that run's schema. Tests use synthetic note content only.
 
+The increment 3 catalog proofs follow the same discipline:
+
+```sh
+npm run proof:catalog            # portable contract, no database at all
+npm run proof:catalog:postgres   # VM-A publish, randomized geode_catalog_* schema
+npm run proof:catalog:restore    # two processes: VM-A publish, then VM-B restore
+```
+
+`proof:catalog` needs no database and runs in the normal unit suite. The other
+two need `PG*` configured, and each drops exactly its own schema in `finally`.
+
+Increment 5's SDK half adds one more, which also needs no database:
+
+```sh
+npm run proof:wiki-sdk           # the whole engine through the SDK entry point alone
+```
+
+It imports only `src/wiki/index.ts`, and audits the esbuild input graph as an
+exact set rather than a permitted superset — a module that quietly disappears
+fails as loudly as one that appears.
+
+`proof:catalog:restore` is the two-process harness. It installs one disposable
+schema, runs VM A as its own OS process, waits for that process to be gone —
+confirmed by `process.kill(pid, 0)` failing, and again by VM B observing no
+remaining backend under the schema's application name — then runs VM B as a
+second process and diffs the two projections. VM B is handed nothing but the
+schema name: not VM A's snapshot, not its vault directory, not its output.
+
+The equality being claimed is written down explicitly in
+`src/wiki/query-projection.ts` rather than left implicit: `listFiles`,
+`readNote` text and metadata, `resolve`, `outgoing`, `backlinks` and `search`.
+Capture provenance — `scanStartedAt`, `scanEndedAt`, folder-walk diagnostics,
+`exclusionPolicy`, capture `limits` — is deliberately **out** of scope, because
+a catalog restore has no equivalent of a wall-clock folder walk. Capture facts
+that do change query answers (`discoveryComplete`, `aliasCoverageComplete`,
+search `complete`, graph `coverage`) travel inside the query results and are
+compared.
+
 ## Verification evidence
 
 - Node v25.9.0: fresh process proof passed; 2 notes, 3 resolved references and missing target verified.
@@ -187,8 +234,41 @@ authorize or implement the subsequent phases. Suggested reviewable increments:
 > `scripts/local-wiki-write-proof.mts` proves the loop in fresh Node. See
 > [ADR 0020](../adr/0020-write-capable-local-wiki-provider.md).
 >
-> Increments 3–5 remain unimplemented and unauthorized. Synchronization and any
-> external document-store integration are **not** part of increments 1–2 and
+> **Status, 2026-09-19.** Increment 3 is implemented on both sides.
+> `src/wiki/catalog-contract.ts` adds a portable, driver-free catalog contract
+> with content-addressed immutable bytes, named upload-validation refusals and
+> named restore refusals; `src/catalog/` adds the PostgreSQL reference adapter
+> and reviewed multi-vault schema; `scripts/catalog-publish-proof.mts` is the
+> VM-A publish proof and `scripts/catalog-restore-proof.mts` the VM-B restore
+> proof, driven by the two-process harness
+> `scripts/run-catalog-restore-proof.mjs`. See
+> [ADR 0022](../adr/0022-transactional-multi-vault-catalog-contract.md).
+>
+> Database hosting selection with measured limits and cost is **not** done —
+> the proofs run against a local disposable container only, at zero spend, and
+> selecting or paying for a managed service remains outside this package.
+>
+> **Status, 2026-09-19.** Increment 5 is implemented **up to its SDK half, and
+> stops there**. `src/wiki/index.ts` is the engine's one curated entry point,
+> named as `./wiki` in `package.json`'s export map, and it is a deliberate
+> *narrowing* rather than a re-export of the directory — parser regexes, the
+> candidate-selection pipeline, the adapter filesystem seams, the desktop
+> scan-cap setting, the desktop operator query language and the
+> desktop-compatibility resolver all stay internal. The surface hands out a
+> *session*, never a snapshot, so a write is visible to the caller's very next
+> read and a stale handle is unobtainable. See
+> [ADR 0023](../adr/0023-wiki-sdk-session-semantics.md) for that decision and
+> [`headless-wiki-sdk.md`](headless-wiki-sdk.md) for the full public/not-public
+> ledger. `scripts/wiki-sdk-proof.mts` (npm `proof:wiki-sdk`) drives the whole
+> loop through the SDK alone in fresh Node against an exactly-audited input
+> graph.
+>
+> **The MCP server, the CLI, bounded import/export, diagnostics, the pilot and
+> any latency or contention measurement are NOT done and are not authorized by
+> this increment.** No package was published to any registry.
+>
+> Increment 4 remains unimplemented and unauthorized. Synchronization and any
+> external document-store integration are **not** part of increments 1–3 and
 > still require their own package and decision.
 
 1. **Core boundary and semantics:** finish moving pure comment/frontmatter/index constants to portable ownership; define paths, ambiguity, subpath diagnostics and coverage. Tests must distinguish desktop compatibility from agent strict mode.

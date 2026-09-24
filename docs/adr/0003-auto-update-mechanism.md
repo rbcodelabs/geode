@@ -1,9 +1,84 @@
 # ADR 0003 — Auto-update mechanism
 
-**Status:** Accepted (MVP scope). **Feature gated OFF by default — see
-"Amendment 2026-09-04" below.**
-**Date:** 2026-08-14 (amended 2026-09-04)
+**Status:** Accepted. **Developer ID signed updates are live by default in
+packaged builds — see the 2026-09-23 amendment.**
+**Date:** 2026-08-14 (amended 2026-09-04, 2026-09-23, and 2026-09-24)
 **Compass:** Roadmap item `d36470c9` — "Mobile (Capacitor) + packaging/auto-update, pop-out windows, splits" (this ADR advances the packaging/auto-update part of that item).
+
+---
+
+## Amendment (2026-09-23) — Developer ID trust and live updater
+
+### Platform scope update (2026-09-24)
+
+The maintainer approved Apple Silicon-only releases. DMG and ZIP targets now
+build arm64 only; verification requires one of each and checks the app executable's
+architecture. The updater manifest must reference one arm64 ZIP. This supersedes
+the dual-architecture scope described below. Keeping Intel builds would retain
+compatibility but double architecture-specific packaging and notarization work;
+universal builds would retain that work and increase downloads. We chose arm64
+only for the current audience and operational cost. Intel users can keep their
+last compatible release, but new releases no longer support their machines.
+The standalone installer rejects non-arm64 Node processes before network or
+installation work, with guidance to use native Node on Apple Silicon if running
+under Rosetta. Revisit this decision if actual user demand requires Intel support.
+
+Developer ID provisioning is complete: the checked-in publisher pin is
+`6M8F464WCQ` (RB Code Labs LLC), replacing the initial sentinel described below.
+
+This amendment supersedes the ad-hoc-signing and opt-in-gate decisions below;
+the older text remains as the historical record of why the gate existed.
+
+Geode releases are now signed with a stable **Developer ID Application**
+identity, use hardened runtime with only the JIT entitlement, and are notarized
+and stapled by electron-builder. Signing and the team App Store Connect API key
+live only in a protected `macos-release` GitHub environment. The workflow fails
+closed when any credential is absent, verifies both architectures' DMG and ZIP
+apps with `codesign`, `spctl`, and `stapler`, and creates a public release only
+after a draft contains the complete updater artifact set. A manual workflow
+dispatch builds and verifies but does not publish.
+
+Packaged builds therefore run the updater by default; unpackaged builds remain
+inert and a custom feed remains HTTPS-only and fail-closed. A bounded updater
+phase preserves the origin of each check, coalesces overlapping events, and
+keeps background failures quiet. Downloads and installs still require separate
+explicit clicks. Failures after either click offer the Releases page. **Help →
+Check for Updates…** exposes the existing manual path.
+
+The standalone installer consumes a checked release asset,
+`geode-release.json`, containing the nonsecret expected Apple Team ID and
+stable `com.rbcodelabs.geode` bundle ID. It verifies the mounted source before
+quitting Geode or mutating the installation, verifies a temporary sibling copy,
+then swaps it into place with rollback. It never clears quarantine or ad-hoc
+re-signs the bundle.
+
+Publisher continuity is anchored by the checked-in `EXPECTED_TEAM_ID` constant
+in the standalone installer, not by release metadata alone. It intentionally
+ships as invalid `UNPROVISIONED` until initial credential setup replaces it
+with the certificate's 10-character Team ID. CI requires its protected secret
+to match that pin before packaging and writes the pinned value into release
+metadata; a missing pin or mismatch stops both release and install.
+
+The first signed release is a manual bootstrap from every historical ad-hoc
+build. Acceptance requires a signed release N installed manually, then a staged
+N→N+1 update proving: Later survives quit/relaunch without installing; Restart
+Now installs and relaunches; download/install failures expose recovery; and N+1
+retains the Team ID, bundle ID, hardened runtime, and notarization ticket.
+Certificate rotation must preserve Team ID and app ID. Loss or revocation of
+the signing identity stops releases and requires documented manual recovery;
+it must never be worked around by weakening verification.
+
+### Options considered
+
+| Option | Advantages | Costs |
+|---|---|---|
+| Developer ID + notarized GitHub Releases (chosen) | Native Gatekeeper trust and stable Squirrel identity without changing distribution | Protected credentials and notarization operations |
+| Keep ad-hoc signing | No credential operations | Unreliable self-replace identity and hostile install UX |
+| Mac App Store | Apple-managed distribution | Sandbox and review constraints conflict with arbitrary vault/plugin filesystem access |
+
+The riskiest assumption is that the minimal JIT entitlement preserves all
+packaged Electron/plugin behavior. Any request for broader entitlements is a
+new security/design decision, not a release-pipeline tweak.
 
 ---
 

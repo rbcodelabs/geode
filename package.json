@@ -1,12 +1,26 @@
 {
   "name": "geode",
-  "version": "0.22.2",
+  "version": "0.23.0",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
+  "//exports": "The desktop app entry stays on `main`, which is what Electron reads. `./wiki` is the headless engine SDK, `./catalog` is the conventional PostgreSQL publish/restore SDK, and `./catalog/cloud` is the opt-in Node DSQL/private Blob adapter. These curated entries do not expose their directories. Other modules remain internal by omission. SDK entries resolve to TypeScript source for in-repo bundling; registry publication is out of scope. See docs/design/headless-wiki-sdk.md and docs/design/node-dsql-cloud-adapter.md.",
+  "exports": {
+    ".": "./dist/main.js",
+    "./wiki": "./src/wiki/index.ts",
+    "./catalog": "./src/catalog/index.ts",
+    "./catalog/cloud": "./src/catalog/cloud.ts"
+  },
+  "//bin": "`geode-wiki` is a build artifact, produced by `npm run build:cli`, not committed. Node 26 strips types natively but cannot load the engine from source: the package is CommonJS, the engine is written in ESM syntax with extensionless relative imports, and the two resolution modes do not overlap. scripts/build-cli.mjs records the three failures in full. In-repo bin only — no registry publication is authorized.",
+  "bin": {
+    "geode-wiki": "dist/cli/geode-wiki.mjs"
+  },
   "scripts": {
+    "build:headless": "node scripts/build-headless-package.mjs",
+    "proof:headless-package": "node scripts/proof-headless-package.mjs",
     "test": "vitest run && npm run build && playwright test",
     "test:unit": "vitest run",
     "test:e2e": "npm run build && playwright test",
+    "test:e2e:native-fullscreen": "npm run build && GEODE_NATIVE_FULLSCREEN_E2E=1 playwright test tests/e2e/window-chrome.spec.ts",
     "test:mobile": "npm run build:mobile && playwright test --config playwright.mobile.config.ts",
     "e2e:kill": "node scripts/e2e-clean.mts",
     "parity:generate": "node scripts/generate-parity-ledger.mts",
@@ -16,6 +30,7 @@
     "benchmark:stress-vault": "node scripts/run-large-vault-benchmark.mjs",
     "benchmark:offset-to-loc": "node scripts/run-offset-to-loc-benchmark.mjs",
     "build": "node esbuild.config.mjs",
+    "build:cli": "node scripts/build-cli.mjs",
     "build:mobile": "node esbuild.config.mjs --mobile-only",
     "ios:sync": "npm run build:mobile && cap sync ios",
     "dev": "node esbuild.config.mjs --watch",
@@ -25,7 +40,16 @@
     "proof:headless": "npm run typecheck:headless && node scripts/run-headless-node-proof.mjs",
     "proof:local-wiki": "npm run typecheck:headless && node scripts/run-local-wiki-node-proof.mjs",
     "proof:local-wiki-write": "npm run typecheck:headless && node scripts/run-local-wiki-write-proof.mjs",
+    "proof:catalog": "npm run typecheck:headless && node scripts/run-catalog-contract-proof.mjs",
+    "proof:wiki-sdk": "npm run typecheck:headless && node scripts/run-wiki-sdk-proof.mjs",
+    "proof:wiki-cli": "npm run typecheck:headless && node scripts/run-wiki-cli-proof.mjs",
     "proof:headless:postgres": "node scripts/headless-postgres-proof.mjs",
+    "proof:catalog:postgres": "node scripts/run-catalog-publish-proof.mjs",
+    "proof:catalog:restore": "npm run typecheck:headless && node scripts/run-catalog-restore-proof.mjs",
+    "proof:catalog:dsql": "npm run typecheck:headless && node scripts/run-dsql-catalog-publish-proof.mjs",
+    "proof:catalog:dsql-restore": "npm run typecheck:headless && node scripts/run-dsql-catalog-restore-proof.mjs",
+    "proof:catalog:node-dsql": "node scripts/run-node-dsql-proof.mjs",
+    "proof:wiki-cli:postgres": "npm run typecheck:headless && node scripts/run-wiki-cli-catalog-proof.mjs",
     "dist": "npm run build && electron-builder --mac",
     "release": "npm run build && electron-builder --mac --publish always"
   },
@@ -37,13 +61,15 @@
     "@capacitor/cli": "^8.5.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^25.9.2",
+    "@types/pg": "8.23.1",
     "electron": "^42.4.0",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.16.1",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@aws-sdk/dsql-signer": "3.1136.0",
     "@capacitor/core": "^8.5.0",
     "@capacitor/ios": "^8.5.0",
     "@codemirror/autocomplete": "^6.20.3",
@@ -56,6 +82,8 @@
     "@lezer/common": "^1.5.2",
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.6.4",
+    "@vercel/blob": "2.8.0",
+    "@vercel/functions": "3.9.8",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
     "es-module-lexer": "2.3.1",
@@ -63,11 +91,13 @@
     "marked": "^18.0.5",
     "mermaid": "^11.17.2",
     "moment": "^2.30.1",
+    "pg": "8.23.0",
     "yaml": "^2.9.0"
   },
   "build": {
     "appId": "com.rbcodelabs.geode",
     "productName": "Geode",
+    "forceCodeSigning": true,
     "protocols": [
       {
         "name": "Geode deep links",
@@ -108,21 +138,21 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "x64",
             "arm64"
           ]
         }
       ],
-      "identity": "-",
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist"
     }
   }
 }

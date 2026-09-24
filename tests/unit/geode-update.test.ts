@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   assetNameFor,
@@ -7,6 +8,8 @@ import {
   parseArgs,
   parseHdiutilMountPoint,
   parsePsOutput,
+  parseReleaseTrust,
+  signatureVerificationSteps,
 } from "../../scripts/geode-update.mts";
 
 describe("parseArgs", () => {
@@ -82,8 +85,8 @@ describe("assetNameFor", () => {
     expect(assetNameFor("0.11.1", "arm64")).toBe("Geode-0.11.1-arm64.dmg");
   });
 
-  it("names the plain dmg for any non-arm64 arch", () => {
-    expect(assetNameFor("0.11.1", "x64")).toBe("Geode-0.11.1.dmg");
+  it.each(["x64", "ia32", "unknown"])("rejects unsupported architecture %s", (arch) => {
+    expect(() => assetNameFor("0.11.1", arch)).toThrow(/Apple Silicon/);
   });
 
   it("normalizes a v-prefixed version first", () => {
@@ -144,5 +147,46 @@ describe("parsePsOutput", () => {
 
   it("ignores blank lines and lines without a leading pid", () => {
     expect(parsePsOutput("\n   \nnot-a-pid comm\n")).toEqual([]);
+  });
+});
+
+describe("signed release trust", () => {
+  it("requires a valid non-placeholder Apple team ID and stable bundle ID", () => {
+    expect(parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toEqual({
+      teamId: "A1B2C3D4E5",
+      bundleId: "com.rbcodelabs.geode",
+    });
+    expect(() => parseReleaseTrust('{}', "A1B2C3D4E5")).toThrow(/teamId/);
+    expect(() => parseReleaseTrust('{"teamId":"TEAMID","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toThrow(/teamId/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"wrong"}', "A1B2C3D4E5")).toThrow(/bundleId/);
+    expect(() => parseReleaseTrust('{"teamId":"Z9Y8X7W6V5","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toThrow(/pinned/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}', "UNPROVISIONED")).toThrow(/not provisioned/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}')).toThrow(/pinned/);
+    expect(parseReleaseTrust('{"teamId":"6M8F464WCQ","bundleId":"com.rbcodelabs.geode"}').teamId).toBe("6M8F464WCQ");
+  });
+
+  it("verifies the Developer ID signature, Gatekeeper, ticket, team ID, and bundle ID", () => {
+    const steps = signatureVerificationSteps("/tmp/Geode.app");
+    expect(steps).toEqual(expect.arrayContaining([
+      { cmd: "codesign", args: ["--verify", "--deep", "--strict", "/tmp/Geode.app"] },
+      { cmd: "spctl", args: ["--assess", "--type", "execute", "/tmp/Geode.app"] },
+      { cmd: "xcrun", args: ["stapler", "validate", "/tmp/Geode.app"] },
+    ]));
+    expect(steps).toContainEqual({ cmd: "codesign", args: ["-dv", "--verbose=4", "/tmp/Geode.app"] });
+    expect(steps.some((step) => step.args.includes("Print :CFBundleIdentifier"))).toBe(true);
+    expect(JSON.stringify(steps)).not.toContain("--sign");
+    expect(JSON.stringify(steps)).not.toContain("xattr");
+  });
+
+  it("verifies before quitting and uses a verified sibling swap with rollback", () => {
+    const source = readFileSync("scripts/geode-update.mts", "utf8");
+    const sourceVerify = source.lastIndexOf("verifyTrustedApp(sourceApp, trust)");
+    const quit = source.lastIndexOf("await quitGeodeIfRunning(appPath)");
+    expect(sourceVerify).toBeGreaterThan(0);
+    expect(sourceVerify).toBeLessThan(quit);
+    expect(source).toContain("verifyTrustedApp(staged, trust)");
+    expect(source).toContain("renameSync(previous, destApp)");
+    expect(source).not.toContain('run("xattr"');
+    expect(source).not.toContain('"--sign", "-"');
   });
 });

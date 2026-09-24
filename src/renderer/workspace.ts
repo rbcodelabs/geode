@@ -129,6 +129,10 @@ export interface LeafContainer {
 let leafIdCounter = 0;
 const DOCUMENT_NAVIGATION_HISTORY_LIMIT = 100;
 
+type DocumentNavigationEntry =
+  | { kind: "file"; path: string }
+  | { kind: "view"; viewState: { type: string; state?: unknown } };
+
 /**
  * First natively focusable thing inside a view, in the order a user would
  * expect focus to land: the editor surface, then a text input, then anything
@@ -186,7 +190,7 @@ export class WorkspaceLeaf {
   /** Split-local Phase 1 collection membership. Never carried across containers. */
   collectionId?: string;
   private opened = false;
-  private documentHistory: string[] = [];
+  private documentHistory: DocumentNavigationEntry[] = [];
   private documentHistoryIndex = -1;
   private documentNavigationQueue: Promise<void> = Promise.resolve();
   private boundDocumentNavigationButtons = new WeakSet<HTMLElement>();
@@ -374,21 +378,55 @@ export class WorkspaceLeaf {
     }
   }
 
-  /** Record a normal file navigation in this leaf without persisting it. */
-  recordDocumentNavigation(path: string): void {
+  /** Capture the current file or restorable main-pane view before replacing it. */
+  captureDocumentNavigation(): DocumentNavigationEntry | null {
+    if (this.group.isSidebar) return null;
+    const path = this.view?.getFile?.()?.path;
+    if (path) return { kind: "file", path };
+    const type = this.view?.viewType;
+    if (!type || type === "empty" || !this.app.workspace.getViewFactory(type)) return null;
+    let state: unknown;
+    try {
+      state = this.getViewState().state;
+    } catch {
+      state = this.getPersistedState();
+    }
+    try {
+      state = structuredClone(state);
+    } catch {
+      // Plugin state should be serializable, but retaining the live value is
+      // still more useful than dropping the view from navigation entirely.
+    }
+    return { kind: "view", viewState: { type, state } };
+  }
+
+  /** Record a captured file or view navigation without persisting it. */
+  recordCapturedDocumentNavigation(entry: DocumentNavigationEntry): void {
     if (this.group.isSidebar) return;
     this.ensureDocumentHistory();
-    if (this.documentHistory[this.documentHistoryIndex] === path) {
+    const current = this.documentHistory[this.documentHistoryIndex];
+    const sameDestination = current?.kind === "file" && entry.kind === "file"
+      ? current.path === entry.path
+      : current?.kind === "view" && entry.kind === "view"
+        ? current.viewState.type === entry.viewState.type
+        : false;
+    if (sameDestination) {
+      this.documentHistory[this.documentHistoryIndex] = entry;
       this.updateDocumentNavigationButtons();
       return;
     }
     this.documentHistory.splice(this.documentHistoryIndex + 1);
-    this.documentHistory.push(path);
+    this.documentHistory.push(entry);
     if (this.documentHistory.length > DOCUMENT_NAVIGATION_HISTORY_LIMIT) {
       this.documentHistory.splice(0, this.documentHistory.length - DOCUMENT_NAVIGATION_HISTORY_LIMIT);
     }
     this.documentHistoryIndex = this.documentHistory.length - 1;
     this.updateDocumentNavigationButtons();
+  }
+
+  /** Record a normal file navigation in this leaf without persisting it. */
+  recordDocumentNavigation(path: string): void {
+    this.recordCapturedDocumentNavigation({ kind: "file", path });
   }
 
   canNavigateBack(): boolean {
@@ -424,7 +462,12 @@ export class WorkspaceLeaf {
       index >= 0 && index < this.documentHistory.length;
       index += direction
     ) {
-      if (this.app.vault.getFileByPath(this.documentHistory[index])) return index;
+      const entry = this.documentHistory[index];
+      if (entry.kind === "file") {
+        if (this.app.vault.getFileByPath(entry.path)) return index;
+      } else if (this.app.workspace.getViewFactory(entry.viewState.type)) {
+        return index;
+      }
     }
     return -1;
   }
@@ -437,10 +480,15 @@ export class WorkspaceLeaf {
       this.updateDocumentNavigationButtons();
       return;
     }
-    const file = this.app.vault.getFileByPath(this.documentHistory[index]);
-    if (!file) return;
+    const entry = this.documentHistory[index];
     try {
-      await this.app.openFileInLeaf(this, file, false, true);
+      if (entry.kind === "file") {
+        const file = this.app.vault.getFileByPath(entry.path);
+        if (!file) return;
+        await this.app.openFileInLeaf(this, file, false, true);
+      } else {
+        await this.setViewState({ ...entry.viewState, active: true });
+      }
       this.documentHistoryIndex = index;
     } finally {
       this.updateDocumentNavigationButtons();
@@ -2706,8 +2754,27 @@ export class Workspace extends Events {
    *
    * `direction` is forwarded to `splitActiveLeaf()`, which currently only
    * produces side-by-side (vertical) splits.
+   *
+   * `sourceLeaf` is the leaf the request physically came from — the pane whose
+   * DOM the user clicked in. When supplied it replaces `activeGroup` as the
+   * destination, because the global active leaf is not trustworthy at the
+   * moment a link handler runs. Live Preview routes internal links on
+   * `mousedown`, which bubbles target-first, so the `TabGroup` mousedown
+   * listener that promotes a pane to active (see its constructor) runs *after*
+   * the link handler. A first click into a not-yet-active pane therefore
+   * reaches this method while `activeGroup` still names the previously active
+   * pane, and the file opens in the wrong one. Threading the originating leaf
+   * makes the destination independent of that ordering rather than racing it.
+   *
+   * Omitting `sourceLeaf` preserves the previous behavior exactly, so callers
+   * that genuinely mean "wherever the user is" (command palette, quick
+   * switcher, plugins) are unaffected.
    */
-  getLeaf(newLeaf?: PaneType | boolean, direction?: "vertical" | "horizontal"): WorkspaceLeaf {
+  getLeaf(
+    newLeaf?: PaneType | boolean,
+    direction?: "vertical" | "horizontal",
+    sourceLeaf?: WorkspaceLeaf | null
+  ): WorkspaceLeaf {
     if (newLeaf === "window") {
       throw new Error(
         "Workspace.getLeaf('window') is not supported: Geode has no pop-out windows. " +
@@ -2716,9 +2783,35 @@ export class Workspace extends Events {
     }
     if (newLeaf === "split") return this.splitActiveLeaf(direction);
     const newTab = newLeaf === true || newLeaf === "tab";
+    const source = this.resolveSourceLeaf(sourceLeaf);
+    if (source) {
+      // Same rule as the active-leaf path below, scoped to the originating
+      // pane: reuse the leaf in place, or add a tab beside it.
+      if (!newTab && !source.pinned) return source;
+      return (source.group as TabGroup).createLeaf();
+    }
     const active = this.getActiveLeaf();
     if (!newTab && active && !active.pinned) return active;
     return this.activeGroup.createLeaf();
+  }
+
+  /**
+   * Narrow a caller-supplied originating leaf to one `getLeaf` may target, or
+   * null to fall back to the active leaf.
+   *
+   * Rejected, in order: nothing supplied; a leaf docked in a sidebar (clicking
+   * a link in a sidebar note opens it in the main area, and `activeGroup` is
+   * only ever a main-area group, so a sidebar source must not redirect it); a
+   * group that is not a live main-area group; and a leaf that has since been
+   * closed out of its group. The last two matter because a click handler can
+   * outlive the pane it was installed in.
+   */
+  private resolveSourceLeaf(leaf: WorkspaceLeaf | null | undefined): WorkspaceLeaf | null {
+    if (!leaf) return null;
+    const group = leaf.group;
+    if (!(group instanceof TabGroup) || group.isSidebar) return null;
+    if (!this.groups.includes(group) || !group.leaves.includes(leaf)) return null;
+    return leaf;
   }
 
   /**
@@ -2826,7 +2919,16 @@ export class Workspace extends Events {
     if (!(anchor instanceof TabGroup) || !this.groups.includes(anchor) || !anchor.leaves.includes(anchorLeaf)) {
       throw new Error("Companion anchor must be an attached center leaf");
     }
-    const group = this.groups.find((candidate) => candidate.companionOwner === ownerKey)
+    // A restored or rearranged workspace can put the anchor inside its former
+    // companion. Retire that role before publishing a replacement split so
+    // reentrant layout callbacks also resolve a destination beside the anchor.
+    if (anchor.companionOwner === ownerKey) {
+      anchor.companionOwner = undefined;
+      for (const leaf of anchor.leaves) {
+        if (leaf.companionOwner === ownerKey) leaf.companionOwner = undefined;
+      }
+    }
+    const group = this.groups.find((candidate) => candidate !== anchor && candidate.companionOwner === ownerKey)
       ?? this.addGroup(anchor, leadingRatio, ownerKey);
     // addGroup may synchronously trigger another caller that already created
     // the destination, so resolve the leaf only after the group is published.

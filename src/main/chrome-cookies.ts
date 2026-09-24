@@ -32,6 +32,14 @@ export interface ChromeProfile {
 export interface ChromeCookieImportResult {
   imported: number;
   skipped: number;
+  /**
+   * How many of the imported cookies were session-scoped (Chrome's
+   * `expires_utc === 0`, so no `expirationDate`). Electron keeps session
+   * cookies in memory only and never writes them to disk, so these are gone
+   * after a Geode restart and the affected sites need a re-import. Surfaced to
+   * the user rather than hidden — see chrome-cookie-modal.ts.
+   */
+  sessionScoped: number;
 }
 
 function chromeUserDataDir(): string {
@@ -158,7 +166,7 @@ export function chromeEpochToUnixSeconds(expiresUtc: number | bigint): number | 
   return Number(expiresUtc) / 1_000_000 - WINDOWS_TO_UNIX_EPOCH_OFFSET_SECONDS;
 }
 
-interface CookieRow {
+export interface CookieRow {
   host_key: string;
   name: string;
   value: string;
@@ -169,10 +177,43 @@ interface CookieRow {
   // don't throw a RangeError when SQLite returns them.
   is_secure: number | bigint;
   expires_utc: number | bigint;
+  /**
+   * Optional because they are only present when the profile's schema has them
+   * (see OPTIONAL_COOKIE_COLUMNS) — a cookie store old enough to lack either
+   * still imports, it just can't carry the attribute.
+   */
+  is_httponly?: number | bigint | null;
+  samesite?: number | bigint | null;
+}
+
+/** Columns every supported Chrome cookie schema has. */
+const REQUIRED_COOKIE_COLUMNS = [
+  "host_key",
+  "name",
+  "value",
+  "encrypted_value",
+  "path",
+  "is_secure",
+  "expires_utc",
+] as const;
+
+/**
+ * Columns selected when present. Both have been in Chrome's schema for many
+ * years, but selecting a column a profile doesn't have makes SQLite fail the
+ * whole statement ("no such column"), turning a partial import into a total
+ * one — so their presence is probed rather than assumed.
+ */
+const OPTIONAL_COOKIE_COLUMNS = ["is_httponly", "samesite"] as const;
+
+/** Which of the required + optional columns this cookie store actually has. */
+function presentCookieColumns(db: DatabaseSync): string[] {
+  const rows = db.prepare("SELECT name FROM pragma_table_info('cookies')").all() as { name: string }[];
+  const present = new Set(rows.map((r) => r.name));
+  return [...REQUIRED_COOKIE_COLUMNS, ...OPTIONAL_COOKIE_COLUMNS].filter((c) => present.has(c));
 }
 
 /** Read all cookie rows out of a Chrome profile's Cookies DB. Copies the file first — Chrome keeps its live DB locked while running. */
-async function readCookieRows(dbPath: string): Promise<CookieRow[]> {
+export async function readCookieRows(dbPath: string): Promise<CookieRow[]> {
   const tmpPath = path.join(
     await fs.mkdtemp(path.join(os.tmpdir(), "geode-chrome-cookies-")),
     "Cookies"
@@ -181,9 +222,7 @@ async function readCookieRows(dbPath: string): Promise<CookieRow[]> {
   try {
     const db = new DatabaseSync(tmpPath, { readOnly: true });
     try {
-      const stmt = db.prepare(
-        "SELECT host_key, name, value, encrypted_value, path, is_secure, expires_utc FROM cookies"
-      );
+      const stmt = db.prepare(`SELECT ${presentCookieColumns(db).join(", ")} FROM cookies`);
       // Read integer columns as BigInt: `expires_utc` for far-future cookies
       // exceeds Number.MAX_SAFE_INTEGER, and node:sqlite throws a RangeError
       // rather than silently losing precision when returning such a value as
@@ -196,6 +235,102 @@ async function readCookieRows(dbPath: string): Promise<CookieRow[]> {
   } finally {
     await fs.rm(path.dirname(tmpPath), { recursive: true, force: true });
   }
+}
+
+/** The SameSite policies Electron's `cookies.set` accepts (electron.d.ts, `CookiesSetDetails.sameSite`). */
+export type ElectronSameSite = "unspecified" | "no_restriction" | "lax" | "strict";
+
+/**
+ * Map Chrome's integer `cookies.samesite` column onto Electron's string enum.
+ * Chrome stores `net::CookieSameSite` (cookie_constants.h): `-1` UNSPECIFIED,
+ * `0` NO_RESTRICTION (`SameSite=None`), `1` LAX, `2` STRICT.
+ *
+ * Getting this wrong is what breaks cross-site auth: a cookie that Chrome
+ * holds as `SameSite=None` becomes Lax if the attribute is dropped, and
+ * Chromium then refuses to send it on cross-site requests. Anything
+ * unrecognized maps to `"unspecified"` so a future Chrome value degrades to
+ * Chromium's own default instead of being silently coerced to something
+ * stricter or looser.
+ */
+export function chromeSameSiteToElectron(samesite: number | bigint | null | undefined): ElectronSameSite {
+  switch (Number(samesite ?? -1)) {
+    case 0:
+      return "no_restriction";
+    case 1:
+      return "lax";
+    case 2:
+      return "strict";
+    default:
+      return "unspecified";
+  }
+}
+
+/**
+ * Whether a Chrome `host_key` denotes a host-only cookie. Chrome marks domain
+ * cookies (those that were set with a `Domain` attribute, and so apply to
+ * subdomains) with a leading dot; a `host_key` without one is bound to exactly
+ * that host.
+ */
+export function isHostOnlyCookie(hostKey: string): boolean {
+  return !hostKey.startsWith(".");
+}
+
+/**
+ * Convert one decrypted Chrome cookie row into Electron's `cookies.set` shape.
+ *
+ * Three things here are load-bearing, each of which was previously wrong:
+ *
+ *  1. `domain` is set ONLY for domain cookies. Chromium rejects any
+ *     `__Host-`-prefixed cookie that carries a Domain attribute outright
+ *     ("The cookie was set with an invalid __Host- or __Secure- prefix"), so
+ *     passing `host_key` unconditionally made every `__Host-` cookie
+ *     unimportable. For host-only rows the `url` binds the host instead, which
+ *     also stops Electron widening `mail.google.com` into `.mail.google.com`.
+ *  2. `sameSite` and `httpOnly` are carried across rather than defaulted away.
+ *  3. `SameSite=None` is only legal on a Secure cookie. Rather than let
+ *     Chromium reject the pair, an insecure row claiming None is demoted to
+ *     `"unspecified"` — the attribute cannot be honored, so the cookie is
+ *     imported under Chromium's default instead of being dropped entirely.
+ *
+ * `__Host-` and `__Secure-` both also require Secure, and both are Secure by
+ * construction in any cookie store Chrome wrote, so the flag is asserted from
+ * the prefix as well as the column. `path` is passed through unchanged:
+ * `__Host-` additionally requires exactly `/`, which Chrome already enforced
+ * on the way in, and inventing a different path here would silently widen the
+ * cookie's scope.
+ */
+export function chromeCookieToSetDetails(
+  row: Pick<CookieRow, "host_key" | "name" | "path" | "is_secure" | "expires_utc"> &
+    Partial<Pick<CookieRow, "is_httponly" | "samesite">>,
+  value: string
+): Electron.CookiesSetDetails {
+  const hostOnly = isHostOnlyCookie(row.host_key);
+  const host = hostOnly ? row.host_key : row.host_key.slice(1);
+  const cookiePath = row.path || "/";
+
+  const prefixRequiresSecure = row.name.startsWith("__Host-") || row.name.startsWith("__Secure-");
+  const secure = !!row.is_secure || prefixRequiresSecure;
+
+  let sameSite = chromeSameSiteToElectron(row.samesite);
+  if (sameSite === "no_restriction" && !secure) sameSite = "unspecified";
+
+  const details: Electron.CookiesSetDetails = {
+    url: `${secure ? "https" : "http"}://${host}${cookiePath}`,
+    name: row.name,
+    value,
+    path: cookiePath,
+    secure,
+    httpOnly: !!row.is_httponly,
+    sameSite,
+  };
+  // Domain cookies keep host_key verbatim (leading dot included); host-only
+  // cookies must omit the field entirely — see (1) above.
+  if (!hostOnly) details.domain = row.host_key;
+
+  const expirationDate = chromeEpochToUnixSeconds(row.expires_utc);
+  if (expirationDate !== undefined) details.expirationDate = expirationDate;
+
+  return details;
 }
 
 /**
@@ -214,6 +349,7 @@ export async function importChromeCookies(profileDir: string): Promise<ChromeCoo
   const target = session.fromPartition("persist:webviewer");
   let imported = 0;
   let skipped = 0;
+  let sessionScoped = 0;
 
   for (const row of rows) {
     let value: string;
@@ -229,29 +365,18 @@ export async function importChromeCookies(profileDir: string): Promise<ChromeCoo
       continue;
     }
 
-    // host_key can have a leading "." for domain cookies; Electron's
-    // cookies.set wants a concrete URL, so build one from the domain/path,
-    // stripping the leading dot only for the scheme+host portion.
-    const domain = row.host_key.startsWith(".") ? row.host_key.slice(1) : row.host_key;
-    const scheme = row.is_secure ? "https" : "http";
-    const url = `${scheme}://${domain}${row.path}`;
-
+    const details = chromeCookieToSetDetails(row, value);
     try {
-      await target.cookies.set({
-        url,
-        name: row.name,
-        value,
-        domain: row.host_key,
-        path: row.path,
-        secure: !!row.is_secure,
-        expirationDate: chromeEpochToUnixSeconds(row.expires_utc),
-      });
+      await target.cookies.set(details);
       imported++;
+      // No expirationDate means a session cookie: Electron holds it in memory
+      // only, so it will not survive a restart. Counted so the UI can say so.
+      if (details.expirationDate === undefined) sessionScoped++;
     } catch {
       skipped++;
     }
   }
 
   await target.cookies.flushStore();
-  return { imported, skipped };
+  return { imported, skipped, sessionScoped };
 }

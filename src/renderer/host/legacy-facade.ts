@@ -57,6 +57,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     openLocalFile: (href) => host.navigation.openLocalFile(href),
     listPluginIds: () => host.plugins.listPluginIds(),
     listThemes: () => host.plugins.listThemes(),
+    readThemeCss: (id) => host.plugins.readThemeCss(id),
     resolveCommunity: unavailable("nodePlugins") as never,
     installCommunity: unavailable("nodePlugins") as never,
     importFromObsidian: unavailable("nodePlugins") as never,

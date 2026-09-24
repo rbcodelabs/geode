@@ -30,6 +30,14 @@ export class SyncService extends Events implements SyncApi {
   private debounce?: ReturnType<typeof setTimeout>;
   private polling?: ReturnType<typeof setInterval>;
   private retryDelay = 2000;
+  /**
+   * Consecutive runs that ended in failure, sharing `retryDelay`'s exact
+   * lifecycle: both grow in the retry catch and both reset once a run completes.
+   * It is deliberately *not* progress state — `endProgress()` runs in
+   * `withController`'s finally, so anything kept there dies with each attempt,
+   * which is precisely how a retry loop came to look like one slow first try.
+   */
+  private failedRuns = 0;
   private stopObserving?: () => void;
   private renameHints = new Map<string, string>();
   private observedRoot?: string;
@@ -117,7 +125,7 @@ export class SyncService extends Events implements SyncApi {
     this.progressPending = undefined;
     if (this.progressTimer) { clearTimeout(this.progressTimer); this.progressTimer = undefined; }
     this.progressEmittedAt = now;
-    this.status = { ...this.status, progress: { ...pending, startedAt: this.progressStartedAt, lastProgressAt: now } };
+    this.status = { ...this.status, progress: { ...pending, startedAt: this.progressStartedAt, lastProgressAt: now, attempt: this.failedRuns + 1 } };
     this.trigger("status", this.status);
   }
   private key(root = this.vaultId()) { return `sync-history-binding/${root}`; }
@@ -239,11 +247,25 @@ export class SyncService extends Events implements SyncApi {
         const data = await this.host.vaultFiles.readBinary(resource.namespace === "portable-config" ? ".geode/" + resource.path : resource.path); assertContext(); return data;
       };
       let includedAncestors = new Set<string>();
-      const snapshot = async (): Promise<HistoryLocalSnapshot> => {
+      // `onProgress` is what makes planning countable. reconcileScan() hands back
+      // the whole entry list up front and costs comparatively nothing; the loop
+      // below is where a 12 GB vault spends its time, because every entry pays a
+      // full read, a SHA-256 and a content-based exclusion test. So the entry
+      // count is a real denominator that is known before any of that work starts.
+      // A tick per entry is negligible against a read plus a hash, and the 250 ms
+      // throttle collapses them to ~4 status events/sec exactly as transfers do.
+      const snapshot = async (onProgress?: (completed: number, total: number, currentPath?: string) => void): Promise<HistoryLocalSnapshot> => {
         const scan = await this.host.vaultFiles.reconcileScan(); assertContext();
         const result: HistoryLocalSnapshot = { authoritative: scan.status === "complete", scopeKey: JSON.stringify(state.scope), entries: [], excluded: [], blocked: [] };
         const folders = new Map<string, HistoryLocalResource>();
+        const walked = scan.entries.length;
+        let visited = 0;
         for (const entry of scan.entries) {
+          // Before the work, counting entries already finished — the same
+          // convention `transferring` uses, so `completed` can never claim an
+          // entry that has not been dealt with. Reported ahead of every `continue`
+          // path so a vault full of skipped entries still advances.
+          onProgress?.(visited++, walked, entry.path);
           const namespace = entry.path.startsWith(".geode/") ? "portable-config" : "content";
           const path = namespace === "portable-config" ? entry.path.slice(7) : entry.path;
           if (entry.isFolder) { if (!entry.path.split("/").some(part => part.startsWith(".")) || namespace === "portable-config" && isPortableAssetPath(path)) folders.set(`${namespace}:${path}`, { namespace, path, kind: "folder" }); continue; }
@@ -258,6 +280,11 @@ export class SyncService extends Events implements SyncApi {
           if (namespace === "portable-config") resource.entityId = await this.stableId(state.binding!.vaultId, path);
           result.entries.push(resource);
         }
+        // Terminal tick for the walk, mirroring performAll()'s: the throttle's
+        // trailing timer would deliver the last held-back tick anyway, but a run
+        // that ends one entry short on screen is the exact frozen-at-96% bug the
+        // progress work exists to remove, so it is stated rather than inferred.
+        onProgress?.(walked, walked);
         for (const document of await projectPortableConfig(this.host.config, state.scope)) {
           const data = serializePortableConfig(document);
           const source = document.name === "hotkeys.json" ? "hotkeys" : document.name === "daily-notes.json" ? "daily-notes" : "app";
@@ -329,7 +356,7 @@ export class SyncService extends Events implements SyncApi {
   async preview(): Promise<SyncPreview> { return this.selected ? this.summarize(await this.withController((controller, signal) => controller.preview(signal))) : this.withConditional(() => this.conditional.preview()); }
   async run(options: { approvePreview?: boolean } = {}): Promise<SyncRunResult> {
     if (!this.selected) return this.withConditional(() => this.conditional.run(options));
-    const result = this.summarize(await this.withController((controller, signal) => controller.run(options, signal))); this.retryDelay = 2000; this.renameHints.clear(); this.observe();
+    const result = this.summarize(await this.withController((controller, signal) => controller.run(options, signal))); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();
     this.polling ??= setInterval(() => this.schedule(0), 30_000); if (this.status.state === "pending") this.schedule(0); return result;
   }
   async listConflicts(): Promise<SyncConflict[]> {
@@ -381,7 +408,7 @@ export class SyncService extends Events implements SyncApi {
     clearTimeout(this.debounce); this.debounce = setTimeout(() => {
       if (!current() || this.closing || this.cancellations) return;
       if (this.running) { this.schedule(); return; }
-      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return; this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.retryDelay = Math.min(this.retryDelay * 2, 60_000); this.schedule(this.retryDelay); });
+      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return; this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.retryDelay = Math.min(this.retryDelay * 2, 60_000); this.schedule(this.retryDelay); });
     }, delay);
   }
   async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }

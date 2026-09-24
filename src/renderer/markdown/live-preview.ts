@@ -11,6 +11,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { App } from "../app";
+import type { WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import { CanvasView } from "../views/canvas-view";
 import { IMAGE_EXTENSIONS, type TFile } from "../types";
@@ -404,7 +405,8 @@ class TableWidget extends WidgetType {
     private raw: string,
     private table: ParsedTable,
     private app: App,
-    private getPath: () => string
+    private getPath: () => string,
+    private getLeaf: () => WorkspaceLeaf | null
   ) {
     super();
   }
@@ -461,7 +463,7 @@ class TableWidget extends WidgetType {
     const link = target.closest("a.internal-link") as HTMLElement | null;
     if (link?.dataset.href) {
       e.preventDefault();
-      this.app.openLink(link.dataset.href, this.getPath(), e.metaKey || e.ctrlKey);
+      this.app.openLink(link.dataset.href, this.getPath(), e.metaKey || e.ctrlKey, this.getLeaf());
       return;
     }
     const tag = target.closest("a.tag") as HTMLElement | null;
@@ -885,7 +887,12 @@ class EmbedWidget extends WidgetType {
     private param: string,
     private sourcePath: string,
     private app: App,
-    private block: boolean
+    private block: boolean,
+    /**
+     * Not part of `eq()`: it is the same stable thunk for every widget built
+     * by one editor, so comparing it would never distinguish two widgets.
+     */
+    private getLeaf: () => WorkspaceLeaf | null
   ) {
     super();
   }
@@ -1008,7 +1015,7 @@ class EmbedWidget extends WidgetType {
     link.href = "#";
     link.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      this.app.openLink(this.target, this.sourcePath, e.metaKey || e.ctrlKey);
+      this.app.openLink(this.target, this.sourcePath, e.metaKey || e.ctrlKey, this.getLeaf());
     });
     root.appendChild(link);
     return root;
@@ -1312,7 +1319,20 @@ class MermaidWidget extends WidgetType {
 
 // --- Live preview extension -------------------------------------------------
 
-export function livePreview(app: App, getPath: () => string): Extension {
+/**
+ * `getLeaf`, like `getPath`, is a thunk: the hosting view outlives any single
+ * leaf lookup, and a tab can be dragged into another pane while these handlers
+ * stay installed. It answers the pane this editor is currently mounted in, and
+ * every internal-link handler below forwards it to `App.openLink` so the
+ * destination does not depend on `mousedown` bubbling order — see
+ * `Workspace.getLeaf`. Callers with no leaf (tests, detached editors) pass a
+ * thunk returning null, which restores the active-leaf behavior.
+ */
+export function livePreview(
+  app: App,
+  getPath: () => string,
+  getLeaf: () => WorkspaceLeaf | null = () => null
+): Extension {
   const hide = Decoration.replace({});
 
   const frontmatterField = StateField.define<DecorationSet>({
@@ -1392,7 +1412,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
         // markdown — editing goes through the widget's cell inputs instead.
         decos.push(
           Decoration.replace({
-            widget: new TableWidget(trimmed, table, app, getPath),
+            widget: new TableWidget(trimmed, table, app, getPath, getLeaf),
             block: true,
           }).range(nodeFrom, to)
         );
@@ -1619,7 +1639,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
             // giving it block layout — the same technique HRWidget already
             // uses for full-line widgets in this file.
             const isBlock = (resolved.kind === "note" || resolved.kind === "canvas") && wholeLine;
-            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock);
+            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock, getLeaf);
             decos.push(
               Decoration.replace({ widget }).range(isBlock ? line.from : start, isBlock ? line.to : end)
             );
@@ -1756,7 +1776,7 @@ export function livePreview(app: App, getPath: () => string): Extension {
       const wikilink = target.closest(".cm-live-wikilink") as HTMLElement | null;
       if (wikilink?.dataset.href) {
         e.preventDefault();
-        app.openLink(wikilink.dataset.href, getPath(), e.metaKey || e.ctrlKey);
+        app.openLink(wikilink.dataset.href, getPath(), e.metaKey || e.ctrlKey, getLeaf());
         return true;
       }
       const extlink = target.closest(".cm-live-extlink") as HTMLElement | null;

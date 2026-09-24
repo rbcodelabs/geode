@@ -1,0 +1,24 @@
+{
+  "name": "@rbcodelabs/geode-headless",
+  "version": "0.1.0",
+  "description": "Headless Markdown wiki and immutable document storage for Node.js",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "files": ["dist", "README.md", "LICENSE"],
+  "exports": {
+    "./wiki": { "types": "./dist/types/wiki/index.d.ts", "import": "./dist/wiki/index.js" },
+    "./catalog/cloud": { "types": "./dist/types/catalog/cloud.d.ts", "import": "./dist/catalog/cloud.js" },
+    "./documents": { "types": "./dist/types/documents/index.d.ts", "import": "./dist/documents/index.js" }
+  },
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "https://github.com/rbcodelabs/geode.git", "directory": "packages/headless" },
+  "dependencies": {
+    "@aws-sdk/dsql-signer": "3.1136.0",
+    "@lezer/markdown": "1.6.4",
+    "@vercel/blob": "2.8.0",
+    "@vercel/functions": "3.9.8",
+    "pg": "8.23.0",
+    "yaml": "2.9.0"
+  }
+}

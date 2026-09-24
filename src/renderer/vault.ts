@@ -99,6 +99,9 @@ export class Vault extends Events {
   private pendingHostEvents: VaultEvent[] = [];
   private hostEventFlushScheduled = false;
   private hasDurableReconcileBaseline = false;
+  // Shared durable state bootstraps a session; only this window can acknowledge
+  // its live views. A peer's checkpoint must never hide our pending refresh.
+  private reconcileBaseline: VaultManifest | null = null;
   private acknowledgedPathsSinceManifest = new Set<string>();
 
   constructor(
@@ -113,6 +116,7 @@ export class Vault extends Events {
     this.stopHostChanges = null;
     this.ownMutationIds.clear();
     this.acknowledgedPathsSinceManifest.clear();
+    this.reconcileBaseline = null;
     const { root, name } = await measureOperation("vault-discovery-ipc", () =>
       this.host.vaultRegistry.openVault(vaultPath)
     );
@@ -133,9 +137,12 @@ export class Vault extends Events {
       // open. Reconciliation remains unavailable until the host supplies it.
     }
     this.hasDurableReconcileBaseline = this.isValidManifest(storedManifest);
+    this.reconcileBaseline = this.isValidManifest(storedManifest)
+      ? storedManifest
+      : buildVaultManifest(root, files);
     try {
       if (!this.hasDurableReconcileBaseline) {
-        await this.host.config.write(this.reconcileManifestKey(), buildVaultManifest(root, files));
+        await this.host.config.write(this.reconcileManifestKey(), this.reconcileBaseline);
       }
     } catch {
       // The manifest is derived. A host without device-config persistence can
@@ -232,10 +239,7 @@ export class Vault extends Events {
     manifest?: VaultManifest;
     errorCode?: string;
   }> {
-    const stored = await this.host.config.read(this.reconcileManifestKey());
-    const previous = this.isValidManifest(stored)
-      ? stored
-      : this.currentManifest();
+    const previous = this.reconcileBaseline ?? this.currentManifest();
     const scan = await this.host.vaultFiles.reconcileScan();
     if (scan.status !== "complete") {
       return { status: scan.status, changes: [], errorCode: scan.errorCode };
@@ -261,6 +265,7 @@ export class Vault extends Events {
   async commitReconcileManifest(manifest: VaultManifest): Promise<void> {
     if (manifest.vaultId !== this.root) throw new Error("Cannot commit a manifest for a different vault");
     await this.host.config.write(this.reconcileManifestKey(), manifest);
+    this.reconcileBaseline = manifest;
     this.hasDurableReconcileBaseline = true;
     this.acknowledgedPathsSinceManifest.clear();
   }

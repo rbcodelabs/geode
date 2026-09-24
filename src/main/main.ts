@@ -78,6 +78,7 @@ import { DeepLinkDispatcher, shouldClaimObsidianProtocol } from "./deep-link";
 import type { GuestWindowOpenRequest, PluginFileSet } from "./preload";
 import { ExternalRootService, externalRootReply, submitExternalProjects, type ExternalRootServiceSession } from "./external-root-service";
 import { JsonRootRegistryStore, RootRegistry } from "./root-registry";
+import { listThemes, readThemeCss } from "./builtin-themes";
 import type { ExternalProjectContribution, ExternalProjectContributionOptions } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef } from "../shared/root-registry";
 import { performPluginFetch, performRequestUrl } from "./request-url";
@@ -92,12 +93,72 @@ import {
   SupportedPluginCatalogService,
 } from "./supported-plugin-catalog";
 import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
+import {
+  attachGuestClientHints,
+  guestClientHints,
+  guestHighEntropyHints,
+  normalizeGuestUserAgent,
+} from "./guest-fingerprint";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
 // Claude Agent SDK) can use it; Geode does the same for plugin
 // compatibility. Must be set before app 'ready'.
 app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
+
+// Present every <webview> guest as the authentic stock Chromium it actually is
+// rather than as an embedder: bot-detection systems reject the default UA's
+// `Electron/<ver>` token outright, and united.com answers
+// ERR_HTTP2_PROTOCOL_ERROR at the protocol level over it. Two embedder tokens
+// come off, not one — Electron also injects `geode/<ver>` ahead of the Chrome
+// token — and the product half is read from app.getName() so a rename cannot
+// silently reintroduce the bug. See src/main/guest-fingerprint.ts for the
+// evidence, the four affected guest surfaces, and the consistency rule.
+//
+// `app.userAgentFallback` is the lever because it is process-global, so a guest
+// on a partition that does not exist yet still picks it up — which is what
+// covers the Agent Browser's `persist:agent-browser`, created later by a
+// plugin. (`session.fromPartition(p).setUserAgent(...)` was measured to
+// silently do nothing.) Must run before any window or session is created.
+app.userAgentFallback = normalizeGuestUserAgent(app.userAgentFallback, app.getName());
+
+// Electron sends none of the three Sec-CH-UA client hints that real Chrome
+// sends on every request, and the Chromium feature flags that would restore
+// them (UserAgentClientHint,CriticalClientHint,AcceptCHFrame) were measured not
+// to. Fill them in at the request layer instead, via `session-created` because
+// it is the only hook that also sees partitions a plugin creates after startup.
+// Values are derived from the running Chromium, never hardcoded, and `Sec-CH-UA`
+// is built to match the guest's real `navigator.userAgentData.brands` exactly.
+//
+// Accept-Language is deliberately NOT touched here, and that is the same rule
+// applied to a case where it points the other way: `setUserAgent`'s
+// acceptLanguages argument does move the header to `en-US,en;q=0.9`, but
+// `navigator.languages` stays `["en-US"]`. Today the header and the JS surface
+// agree (both bare `en-US`) — unusual but coherent. "Fixing" only the header
+// would make them contradict each other, which detectors score worse.
+//
+// Electron also implements no client-hint NEGOTIATION: real Chrome remembers the
+// `Accept-CH` a response asked for and sends those high-entropy hints on later
+// requests to that origin, and Geode sent none of them. The negotiated set is
+// per-origin — never broadcast — and is derived the same way, from the running
+// Chromium, this machine's architecture, and the OS product version.
+//
+// `process.getSystemVersion()` is the OS lever rather than `os.release()`: the
+// former returns the product version ("26.4.1") that Chromium itself reports as
+// `platformVersion`, while the latter returns the Darwin kernel version
+// ("25.4.0"), which would contradict the JS surface.
+//
+// Both the fill and the negotiation share ONE `onBeforeSendHeaders` listener
+// inside attachGuestClientHints, because Electron silently replaces a session's
+// existing listener when a second is registered.
+const guestHints = guestClientHints(process.versions.chrome, process.platform);
+const guestHighEntropy = guestHighEntropyHints({
+  chromeVersion: process.versions.chrome,
+  arch: process.arch,
+  systemVersion: process.getSystemVersion(),
+});
+app.on("session-created", (created) => attachGuestClientHints(created, guestHints, guestHighEntropy));
+
 protocol.registerSchemesAsPrivileged([{
   scheme: ARTIFACT_SCHEME,
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false },
@@ -1076,29 +1137,20 @@ function registerIpc() {
     return inspected.filter((entry) => entry.hasManifest).map((entry) => entry.id);
   });
 
-  // Community themes: subdirectories of <vault>/.geode/themes/ that contain a
-  // theme.css (Obsidian's theme layout). Returns their names for the picker.
+  // App-owned built-ins plus vault-owned community themes. Local themes with
+  // the same name override their built-in counterpart when read.
   ipcMain.handle("themes-list", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) return [];
-    const themesDir = path.join(session.root, ".geode", "themes");
-    let entries;
-    try {
-      entries = await fsp.readdir(themesDir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-    const names: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const hasCss = await fsp
-        .access(path.join(themesDir, entry.name, "theme.css"))
-        .then(() => true)
-        .catch(() => false);
-      if (hasCss) names.push(entry.name);
-    }
-    return names.sort((a, b) => a.localeCompare(b));
+    return listThemes(session.root);
+  });
+
+  ipcMain.handle("theme-read-css", async (e, id: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault is open");
+    return readThemeCss(session.root, id);
   });
 
   ipcMain.handle("open-external", (_e, url: string) => {
@@ -1796,7 +1848,8 @@ function installApplicationMenu(): void {
     // types the argument as BaseWindow; only a BrowserWindow has webContents.
     const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow();
     target?.webContents.reload();
-  });
+  },
+  async () => { await checkForUpdatesManually(); });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

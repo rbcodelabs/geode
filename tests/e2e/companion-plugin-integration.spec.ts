@@ -59,12 +59,13 @@ test("real Agent Threads retains one companion across tab closure, plugin reload
         const group = groups[0];
         return {
           groups: w.groups.length, owned: groups.length,
+          separate: w.getLeavesOfType("claude-threads:chat")[0]?.group !== group,
           chat: w.getLeavesOfType("claude-threads:chat").length,
           context: group?.leaves.filter((l: any) => l.view?.getFile?.()?.path === "Context.md").length,
           sibling: group?.leaves.filter((l: any) => l.view?.getFile?.()?.path === "Sibling.md").length,
           designated: group?.leaves.filter((l: any) => l.companionOwner === key).length,
         };
-      }, owner)).toEqual({ groups: 2, owned: 1, chat: 1, context: 1, sibling: 1, designated: 1 });
+      }, owner)).toEqual({ groups: 2, owned: 1, separate: true, chat: 1, context: 1, sibling: 1, designated: 1 });
     };
     const waitPersisted = async () => {
       await expect.poll(() => {
@@ -81,6 +82,16 @@ test("real Agent Threads retains one companion across tab closure, plugin reload
     };
 
     let win = await launch();
+    await openContext(win);
+    // Reproduce a saved/rearranged layout in which chat and its former
+    // companion share one tab group. Opening context must repair the split.
+    expect(await win.evaluate((key) => {
+      const w = (window as any).app.workspace;
+      const owned = w.groups.find((g: any) => g.companionOwner === key);
+      const chatGroup = w.getLeavesOfType("claude-threads:chat")[0].group;
+      for (const leaf of [...chatGroup.leaves]) w.moveLeaf(leaf, owned);
+      return w.groups.length;
+    }, owner)).toBe(1);
     await openContext(win);
     await win.evaluate(async (key) => {
       const a = (window as any).app;
