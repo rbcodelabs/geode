@@ -5,7 +5,7 @@ Obsidian built from its public documentation. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.23.0). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.23.1). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
@@ -40,6 +40,11 @@ for the latest published notes.
 
 - **Vaults** — open any folder; external edits are picked up live; manage recent
   vaults and open multiple vaults in isolated top-level windows
+- **Actionable refresh errors** — a compact banner offers Retry and an on-demand
+  details dialog with recovery guidance and privacy-safe diagnostic copying.
+  Ordinary refresh ignores hidden development trees; failed scans preserve the
+  previous file list, and saving-paused warnings remain visible. See
+  [vault refresh troubleshooting](docs/vault-refresh-troubleshooting.md).
 - **Editor** — CodeMirror 6, markdown highlighting, `[[wikilink]]` autocomplete,
   Cmd/Ctrl+click to follow, autosave, rename-updates-links, and immediate inline
   naming for new notes with collision-safe validation
