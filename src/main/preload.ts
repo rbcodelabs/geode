@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { pathToFileURL } from "node:url";
+import * as path from "node:path";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
 import type { ObsidianImportResult } from "./obsidian-import";
 import type { ManagedPolicy } from "../renderer/policy";
@@ -58,6 +60,11 @@ export interface UpdaterCheckResult {
 }
 
 const api = {
+  /** Desktop-only, packaged PCM processor. No blob scripts or microphone access granted here. */
+  audioCaptureWorklet: Object.freeze({
+    moduleUrl: pathToFileURL(path.join(__dirname, "pcm-capture-worklet.js")).href,
+    processorName: "geode-pcm-capture-v1" as const,
+  }),
   externalRoots: (process.platform === "darwin" ? Object.freeze({
     version: 1,
     contribute: (projects, options) => invokeExternalRoot("external-roots-contribute", projects, options),
@@ -343,11 +350,12 @@ type ElectronOnlyGeodeApi = typeof api;
  */
 export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
-  "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
+  "audioCaptureWorklet" | "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead"
 > & {
+  audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
   readMetadataCachePage?: ElectronOnlyGeodeApi["readMetadataCachePage"];
   cancelMetadataCacheRead?: ElectronOnlyGeodeApi["cancelMetadataCacheRead"];
