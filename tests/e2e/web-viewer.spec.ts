@@ -8,7 +8,7 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const testVaultPath = path.join(repoRoot, "test-vault");
 const isMac = process.platform === "darwin";
 
-async function launch(vaultPath = testVaultPath) {
+async function launch(vaultPath: string) {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-e2e-"));
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
@@ -43,6 +43,52 @@ async function close(server: http.Server): Promise<void> {
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
+
+// User-data isolation alone is insufficient: workspace tabs are persisted in
+// the vault. Give each command test its own vault as well as its own guest
+// server, so neither earlier tests nor Internet availability affect the result.
+const commandTest = test.extend<{
+  commandViewer: Awaited<ReturnType<typeof launch>> & { homeUrl: string; searchEngine: string };
+}>({
+  commandViewer: async ({}, use) => {
+    const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-webviewer-command-vault-"));
+    const server = http.createServer((request, response) => {
+      if (request.url === "/fail") {
+        request.socket.destroy();
+        return;
+      }
+      const title = request.url?.startsWith("/search?") ? "Search fixture"
+        : request.url === "/recovered" ? "Recovered fixture" : "Home fixture";
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><head><title>${title}</title></head><body><h1>${title}</h1></body></html>`);
+    });
+    let launched: Awaited<ReturnType<typeof launch>> | undefined;
+    try {
+      const port = await listen(server);
+      const homeUrl = `http://127.0.0.1:${port}/home`;
+      const searchEngine = `http://127.0.0.1:${port}/search?q=`;
+      fs.mkdirSync(path.join(vaultDir, ".geode"));
+      fs.writeFileSync(path.join(vaultDir, ".geode", "web-viewer.json"), JSON.stringify({ homeUrl, searchEngine }));
+      launched = await launch(vaultDir);
+      await expect(launched.window.locator(".web-view")).toHaveCount(0);
+      await use({ ...launched, homeUrl, searchEngine });
+    } finally {
+      try {
+        await launched?.app.close();
+      } finally {
+        try {
+          if (server.listening) await close(server);
+        } finally {
+          try {
+            if (launched) fs.rmSync(launched.userDataDir, { recursive: true, force: true });
+          } finally {
+            fs.rmSync(vaultDir, { recursive: true, force: true });
+          }
+        }
+      }
+    }
+  },
+});
 
 test("setViewState preserves the Web Viewer guest and its back-forward history", async () => {
   const server = http.createServer((request, response) => {
@@ -799,109 +845,106 @@ test("a background popup does not override a tab the user selects while the dest
   }
 });
 
-test("Open web viewer mounts a <webview> tab in its own persist:webviewer session, loads the home URL, and tracks the page title", async () => {
-  const { app, window, userDataDir, consoleErrors } = await launch();
+commandTest("Open web viewer mounts a <webview> tab in its own persist:webviewer session, loads the home URL, and tracks the page title", async ({ commandViewer }) => {
+  const { window, consoleErrors, homeUrl } = commandViewer;
+  await runCommand(window, "Open web viewer");
 
-  try {
-    await runCommand(window, "Open web viewer");
+  const webView = window.locator(".web-view");
+  await expect(webView).toBeVisible();
 
-    const webView = window.locator(".web-view");
-    await expect(webView).toBeVisible();
+  const frame = webView.locator(".web-view-frame");
+  await expect(frame).toBeVisible();
+  await expect(frame).toHaveAttribute("partition", "persist:webviewer");
 
-    const frame = webView.locator(".web-view-frame");
-    await expect(frame).toBeVisible();
-    await expect(frame).toHaveAttribute("partition", "persist:webviewer");
+  // The address bar reflects the loaded URL once the webview navigates.
+  await expect(webView.locator(".web-view-address")).toHaveValue(homeUrl, {
+    timeout: 20000,
+  });
 
-    // The address bar reflects the loaded URL once the webview navigates.
-    await expect(webView.locator(".web-view-address")).toHaveValue(/duckduckgo\.com/, {
-      timeout: 20000,
-    });
+  // The tab title tracks the page's <title> once it loads, not staying on
+  // the initial URL-derived fallback text forever.
+  await expect(
+    window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")
+  ).toHaveText("Home fixture", { timeout: 20000 });
 
-    // The tab title tracks the page's <title> once it loads, not staying on
-    // the initial URL-derived fallback text forever.
-    await expect(
-      window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")
-    ).not.toHaveText("", { timeout: 20000 });
+  // Persist the open tab, as a slower CI run does naturally. The following
+  // command tests must start empty even when this layout reached disk.
+  await window.evaluate(async () => {
+    const a = (window as any).app;
+    await a.host.config.write("workspace", a.workspace.serialize());
+  });
 
-    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
-  } finally {
-    await app.close();
-    fs.rmSync(userDataDir, { recursive: true, force: true });
-  }
+  expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
 });
 
-test("Search the web opens a viewer tab with the query appended to the configured search engine", async () => {
-  const { app, window, userDataDir, consoleErrors } = await launch();
+commandTest("Search the web opens a viewer tab with the query appended to the configured search engine", async ({ commandViewer }) => {
+  const { window, consoleErrors, searchEngine } = commandViewer;
+  await runCommand(window, "Search the web");
+  await expect(window.locator(".prompt-input")).toBeVisible();
+  await window.locator(".prompt-input").fill("geode markdown editor");
+  await window.keyboard.press("Enter");
 
-  try {
-    await runCommand(window, "Search the web");
-    await expect(window.locator(".prompt-input")).toBeVisible();
-    await window.locator(".prompt-input").fill("geode markdown editor");
-    await window.keyboard.press("Enter");
+  const addressBar = window.locator(".web-view .web-view-address");
+  await expect(addressBar).toHaveValue(`${searchEngine}geode%20markdown%20editor`, {
+    timeout: 20000,
+  });
+  await expect(window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title"))
+    .toHaveText("Search fixture");
 
-    const addressBar = window.locator(".web-view .web-view-address");
-    await expect(addressBar).toHaveValue(/duckduckgo\.com\/\?q=geode(%20|\+)markdown(%20|\+)editor/, {
-      timeout: 20000,
-    });
-
-    expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
-  } finally {
-    await app.close();
-    fs.rmSync(userDataDir, { recursive: true, force: true });
-  }
+  expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
 });
 
-test("A main-frame load failure shows the recoverable error overlay instead of a silent gray screen, and reloading recovers", async () => {
-  const { app, window, userDataDir, consoleErrors } = await launch();
+commandTest("A main-frame load failure shows the recoverable error overlay instead of a silent gray screen, and navigating recovers", async ({ commandViewer }) => {
+  const { window, consoleErrors, homeUrl } = commandViewer;
+  await runCommand(window, "Open web viewer");
 
-  try {
-    await runCommand(window, "Open web viewer");
+  const webView = window.locator(".web-view");
+  await expect(webView).toBeVisible();
 
-    const webView = window.locator(".web-view");
-    await expect(webView).toBeVisible();
+  // Wait for the normal home page to load first, so the failure below is a
+  // real navigation away from a healthy guest, not a cold-start artifact.
+  const addressBar = webView.locator(".web-view-address");
+  await expect(addressBar).toHaveValue(homeUrl, { timeout: 20000 });
+  await expect(window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title"))
+    .toHaveText("Home fixture");
 
-    // Wait for the normal home page to load first, so the failure below is a
-    // real navigation away from a healthy guest, not a cold-start artifact.
-    const addressBar = webView.locator(".web-view-address");
-    await expect(addressBar).toHaveValue(/duckduckgo\.com/, { timeout: 20000 });
+  const overlay = webView.locator(".web-view-error");
+  await expect(overlay).toBeHidden();
 
-    const overlay = webView.locator(".web-view-error");
-    await expect(overlay).toBeHidden();
+  // The fixture drops this request without a response, exercising a real
+  // did-fail-load event without relying on an unused port or external DNS.
+  await addressBar.fill(new URL("/fail", homeUrl).href);
+  await addressBar.press("Enter");
 
-    // Drive the address bar to a guaranteed-fail URL (nothing listens on
-    // localhost:1). This exercises the did-fail-load path deterministically.
-    await addressBar.fill("http://localhost:1/");
-    await addressBar.press("Enter");
+  // The overlay appears with a non-empty, human-readable reason — the whole
+  // point of the fix: a visible error state instead of a dead gray surface.
+  await expect(overlay).toBeVisible({ timeout: 20000 });
+  await expect(webView.locator(".web-view-error-title")).toHaveText(/failed to load/i);
+  await expect(webView.locator(".web-view-error-detail")).not.toHaveText("");
 
-    // The overlay appears with a non-empty, human-readable reason — the whole
-    // point of the fix: a visible error state instead of a dead gray surface.
-    await expect(overlay).toBeVisible({ timeout: 20000 });
-    await expect(webView.locator(".web-view-error-title")).toHaveText(/failed to load/i);
-    await expect(webView.locator(".web-view-error-detail")).not.toHaveText("");
+  // The toolbar stays interactive (the overlay covers only the frame), so the
+  // user can navigate to a working page and recover.
+  const recoveredUrl = new URL("/recovered", homeUrl).href;
+  await addressBar.fill(recoveredUrl);
+  await addressBar.press("Enter");
 
-    // The toolbar stays interactive (the overlay covers only the frame), so the
-    // user can navigate to a working page and recover.
-    await addressBar.fill("duckduckgo.com");
-    await addressBar.press("Enter");
+  // Recovery: overlay clears and a real page loads again (title tracks the
+  // page's <title>, which only happens after a successful load).
+  await expect(overlay).toBeHidden({ timeout: 20000 });
+  await expect(addressBar).toHaveValue(recoveredUrl, { timeout: 20000 });
+  await expect.poll(() => webView.locator(".web-view-frame").evaluate((guest) =>
+    (guest as unknown as { getURL(): string }).getURL()
+  )).toBe(recoveredUrl);
+  await expect(
+    window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")
+  ).toHaveText("Recovered fixture", { timeout: 20000 });
 
-    // Recovery: overlay clears and a real page loads again (title tracks the
-    // page's <title>, which only happens after a successful load).
-    await expect(overlay).toBeHidden({ timeout: 20000 });
-    await expect(addressBar).toHaveValue(/duckduckgo\.com/, { timeout: 20000 });
-    await expect(
-      window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")
-    ).not.toHaveText("", { timeout: 20000 });
-
-    // This test intentionally triggers a load failure, so the guest emits
-    // expected connection/navigation console noise. Tolerate that known noise
-    // (do NOT assert empty), but still fail on any UNEXPECTED console error.
-    const expectedNoise = /localhost:1|ERR_|net::|Failed to load resource|Not allowed to load|GUEST_VIEW_MANAGER/i;
-    const unexpected = consoleErrors.filter((msg) => !expectedNoise.test(msg));
-    expect(unexpected, `Unexpected console errors: ${unexpected.join("\n")}`).toEqual([]);
-  } finally {
-    await app.close();
-    fs.rmSync(userDataDir, { recursive: true, force: true });
-  }
+  // This test intentionally triggers a load failure, so the guest emits
+  // expected connection/navigation console noise. Tolerate that known noise
+  // (do NOT assert empty), but still fail on any UNEXPECTED console error.
+  const expectedNoise = /ERR_EMPTY_RESPONSE|ERR_CONNECTION_RESET|Failed to load resource.*net::/i;
+  const unexpected = consoleErrors.filter((msg) => !expectedNoise.test(msg));
+  expect(unexpected, `Unexpected console errors: ${unexpected.join("\n")}`).toEqual([]);
 });
 
 test("Opening vault HTML uses the Web Viewer and loads relative CSS, JavaScript, and images", async () => {
