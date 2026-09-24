@@ -26,6 +26,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     applySyncMutation: async (token, input) => { if (!host.syncSafety) throw new Error("Guarded sync unavailable"); return host.syncSafety.apply(token, input); },
     onSyncPrepare: handler => host.syncSafety?.onPrepare(handler) ?? (() => {}),
     onSyncRelease: handler => host.syncSafety?.onRelease(handler) ?? (() => {}),
+    scanForRefresh: () => host.vaultFiles.refreshScan?.() ?? host.vaultFiles.reconcileScan(),
     scanForSync: async () => { const scan = await host.vaultFiles.reconcileScan(); if (scan.status !== "complete") throw new Error("Complete sync scan unavailable"); return scan.entries; },
     read: (path) => host.vaultFiles.read(path),
     readPluginFile: (path, sent) => host.plugins.readPluginFile(path, sent),

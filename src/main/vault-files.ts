@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { isIgnoredSegment } from "./vault-ignore";
 import { birthtimeOf } from "./fs-utils";
+import { vaultRefreshFailure, type VaultRefreshFailure } from "../shared/vault-refresh";
 
 export interface VaultFileEntry {
   path: string;
@@ -14,6 +15,8 @@ export interface VaultFileEntry {
 export interface ListVaultFilesOptions {
   /** Sync must never mistake unreadable files/subtrees for deletion. */
   strictSync?: boolean;
+  /** Authoritative ordinary refresh: retain hidden-path pruning, fail closed on visible I/O errors. */
+  refreshOnly?: boolean;
   ioDelayMs?: number;
   yieldEveryOperations?: number;
   yieldToEventLoop?: () => Promise<void>;
@@ -44,6 +47,11 @@ export async function listVaultFiles(
     : Promise.resolve();
   const yieldEveryOperations = options.yieldEveryOperations ?? YIELD_EVERY_OPERATIONS;
   const yieldToEventLoop = options.yieldToEventLoop ?? immediate;
+  const failure = (error: unknown, operation: VaultRefreshFailure["operation"], target: string) => {
+    const detail = vaultRefreshFailure(error, operation, toRel(root, target));
+    if (!options.refreshOnly) return error instanceof Error ? error : new Error(detail.category === "unsupported-link" ? `Sync scan does not support symbolic links: ${toRel(root, target)}` : `Unsupported sync entry: ${toRel(root, target)}`);
+    return Object.assign(new Error(detail.category === "unsupported-link" ? "Unsupported symbolic link" : `Unsupported or unreadable vault entry (${detail.code})`), { failure: detail });
+  };
 
   // Endpoint security can add material latency to every filesystem operation.
   // Bound concurrency globally across the recursive walk so that latency is
@@ -85,20 +93,20 @@ export async function listVaultFiles(
         return fsp.readdir(dir, { withFileTypes: true });
       });
     } catch (error) {
-      if (options.strictSync) throw error;
+      if (options.strictSync) throw failure(error, "read-directory", dir);
       return [];
     }
     const nested = await Promise.all(entries.map(async (entry): Promise<VaultFileEntry[]> => {
       // Pruning during traversal, so a segment test is enough here — but it
       // must be the same rule the watcher applies (see ./vault-ignore).
-      if (isIgnoredSegment(entry.name) && !(options.strictSync && dir === root && entry.name === ".geode")) return [];
+      if (isIgnoredSegment(entry.name) && !(options.strictSync && !options.refreshOnly && dir === root && entry.name === ".geode")) return [];
       const abs = path.join(dir, entry.name);
-      if (options.strictSync && entry.isSymbolicLink()) throw new Error(`Sync scan does not support symbolic links: ${toRel(root, abs)}`);
+      if (options.strictSync && entry.isSymbolicLink()) throw failure({ code: "SYMLINK_UNSUPPORTED" }, "scan", abs);
       if (entry.isDirectory()) {
         const [st, children] = await Promise.all([
           limited(async () => {
             await injectDelay();
-            return fsp.stat(abs).catch(error => { if (options.strictSync) throw error; return null; });
+            return fsp.stat(abs).catch(error => { if (options.strictSync) throw failure(error, "stat", abs); return null; });
           }),
           walk(abs),
         ]);
@@ -113,8 +121,8 @@ export async function listVaultFiles(
       if (entry.isFile()) {
         const st = await limited(async () => {
           await injectDelay();
-          const stat = await (options.strictSync ? fsp.lstat(abs) : fsp.stat(abs)).catch(error => { if (options.strictSync) throw error; return null; });
-          if (options.strictSync && !stat?.isFile()) throw new Error(`Unsupported sync entry: ${toRel(root, abs)}`);
+          const stat = await (options.strictSync ? fsp.lstat(abs) : fsp.stat(abs)).catch(error => { if (options.strictSync) throw failure(error, "stat", abs); return null; });
+          if (options.strictSync && !stat?.isFile()) throw failure({ code: "ENTRY_UNSUPPORTED" }, "stat", abs);
           return stat;
         });
         return [{
@@ -125,7 +133,7 @@ export async function listVaultFiles(
           size: st?.size ?? 0,
         }];
       }
-      if (options.strictSync) throw new Error(`Unsupported sync entry: ${toRel(root, abs)}`);
+      if (options.strictSync) throw failure({ code: "ENTRY_UNSUPPORTED" }, "scan", abs);
       return [];
     }));
     return nested.flat();

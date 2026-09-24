@@ -305,6 +305,8 @@ security-scope start/stop counts are DEBUG seam simulations, not delegate-level
 UI automation or physical-provider evidence.
 
 Slice 5B1 adds deterministic foreground and explicit-refresh reconciliation.
+For failed refreshes, see [vault refresh troubleshooting](docs/vault-refresh-troubleshooting.md)
+for cause-specific guidance, preservation limits, and privacy-safe diagnostics.
 Autosave pauses until an authoritative scan completes or reaches a visible,
 recoverable state; incomplete scans retain the prior device-local manifest and
 cannot synthesize deletes. A clean open note reloads provider bytes in place. If

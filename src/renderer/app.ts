@@ -1,4 +1,6 @@
 import { Vault } from "./vault";
+import { version as appVersion } from "../../package.json";
+import { vaultRefreshFailure, vaultRefreshPresentation, type VaultRefreshFailure } from "../shared/vault-refresh";
 import { MetadataCache, parseMetadata } from "./metadata-cache";
 import {
   DEFAULT_METADATA_SCAN_CAP_BYTES,
@@ -2672,13 +2674,17 @@ export class App {
   private async performReconcile(generation: number): Promise<void> {
     let didPause = false;
     let holdViewsForRetry = false;
+    let manifestCommitted = false;
+    let operation: VaultRefreshFailure["operation"] = "pause-autosave";
+    let affectedPath: string | undefined;
     const preparedConflictPresentations: Array<() => void> = [];
     try {
       await this.workspace.pauseAutosave();
       didPause = true;
+      operation = "scan";
       const result = await this.vault.reconcile();
       if (result.status !== "complete") {
-        this.showReconcileState(result.status, result.errorCode);
+        if (generation === this.reconcileGeneration) this.showReconcileState(result.status, result.failure ?? vaultRefreshFailure(result.errorCode));
         return;
       }
       if (!result.manifest || generation !== this.reconcileGeneration) return;
@@ -2686,6 +2692,8 @@ export class App {
       const refreshEditors: Array<() => void | Promise<void>> = [];
       for (let index = 0; index < result.changes.length; index += 1) {
         const change = result.changes[index];
+        affectedPath = change.path;
+        operation = "prepare-recovery";
         if (change.event === "modify") {
           const file = this.vault.getFileByPath(change.path);
           const view = file ? this.workspace.findLeafForFile(file.path)?.view : null;
@@ -2699,7 +2707,9 @@ export class App {
             }
           }
           const textBackedView = view instanceof MarkdownView || view instanceof BaseView || view instanceof CanvasView;
+          operation = "read-file";
           const externalText = textBackedView || baseSource ? await this.host.vaultFiles.read(change.path) : undefined;
+          operation = "prepare-recovery";
           if (baseSource && externalText !== undefined) {
             const conflictPath = buildConflictPath(
               change.path,
@@ -2733,6 +2743,7 @@ export class App {
             }
           } else if (view instanceof BaseView && externalText !== undefined) {
             try {
+              operation = "refresh-editors";
               await view.acceptExternalText(externalText);
             } catch (error) {
               holdViewsForRetry = true;
@@ -2757,10 +2768,15 @@ export class App {
         if (index > 0 && index % 100 === 0) await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       }
       if (generation !== this.reconcileGeneration) return;
+      affectedPath = undefined;
+      operation = "refresh-editors";
       try {
         for (const refresh of refreshEditors) { await refresh(); if (generation !== this.reconcileGeneration) return; }
       } catch (error) { holdViewsForRetry = true; throw error; }
+      operation = "save-manifest";
       await this.vault.commitReconcileManifest(result.manifest);
+      manifestCommitted = true;
+      operation = "finish-refresh";
       this.clearReconcileState();
       for (const apply of publish) {
         try { apply(); } catch { /* Durable decisions must not be rolled back by view rendering. */ }
@@ -2771,7 +2787,7 @@ export class App {
       for (const present of preparedConflictPresentations) {
         try { present(); } catch { /* Preserve the remaining local editor state below. */ }
       }
-      this.showReconcileState("unavailable", error instanceof Error ? error.message : undefined);
+      if (generation === this.reconcileGeneration) this.showReconcileState("unavailable", vaultRefreshFailure(error, operation, affectedPath), holdViewsForRetry, manifestCommitted);
     } finally {
       if (didPause && !holdViewsForRetry) this.workspace.resumeAutosave();
     }
@@ -2952,7 +2968,7 @@ export class App {
     return { cleanLeaves, conflicts: await Promise.all(work) };
   }
 
-  private showReconcileState(status: string, detail?: string): void {
+  private showReconcileState(status: string, failure: VaultRefreshFailure = vaultRefreshFailure(undefined), savesPaused = false, manifestCommitted = false): void {
     let state = document.querySelector<HTMLElement>(".vault-reconcile-state");
     if (!state) {
       state = document.createElement("div");
@@ -2961,21 +2977,33 @@ export class App {
       document.querySelector(".app-shell")?.prepend(state);
     }
     state.empty();
+    const presentation = vaultRefreshPresentation(status, failure, { version: appVersion, savesPaused, manifestCommitted });
+    const title = document.createElement("strong");
+    title.textContent = "Vault refresh couldn’t finish";
     const message = document.createElement("span");
-    if (status === "partial" || status === "cancelled") {
-      message.textContent = "Vault refresh was incomplete. The previous file manifest is still active.";
-    } else if (detail === "CONTENT_UNAVAILABLE") {
-      message.textContent = "This provider item is offline and has not downloaded yet. No file was overwritten.";
-    } else if (detail?.includes("PERMISSION") || detail?.includes("REVOKED")) {
-      message.textContent = "Access to this vault was revoked. Reconnect the same vault to continue.";
-    } else {
-      message.textContent = "Vault provider is temporarily unavailable. Your previous manifest and local edits are preserved.";
-    }
+    message.textContent = presentation.message;
     const retry = document.createElement("button");
     retry.type = "button";
     retry.textContent = "Retry refresh";
     retry.addEventListener("click", () => void this.reconcileVault("manual"));
-    state.append(message, retry);
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Show details";
+    const diagnostic = document.createElement("pre");
+    diagnostic.textContent = presentation.details;
+    details.append(summary, diagnostic);
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy diagnostic report";
+    const feedback = document.createElement("span");
+    feedback.setAttribute("role", "status");
+    copy.addEventListener("click", () => {
+      void (async () => {
+        try { await navigator.clipboard.writeText(presentation.report); feedback.textContent = "Copied (paths redacted)."; }
+        catch { feedback.textContent = "Could not copy. Review Show details and copy the operation and code manually."; }
+      })();
+    });
+    state.append(title, message, retry, copy, feedback, details);
   }
 
   private clearReconcileState(): void {

@@ -610,6 +610,14 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   min-height: 44px;
 }
 
+.vault-reconcile-state > strong,
+.vault-reconcile-state > span:first-of-type {
+  flex-basis: 100%;
+}
+.vault-reconcile-state details { flex-basis: 100%; min-width: 0; max-width: 100%; }
+.vault-reconcile-state summary { cursor: pointer; padding: 12px 0; }
+.vault-reconcile-state pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Sync conflict advisory banner — mounted below the view header, above the
    body, so it can coexist with the external-edit recovery banner that is
    prepended above the header. Advisory only: the note stays editable. */

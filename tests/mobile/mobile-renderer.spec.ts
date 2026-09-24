@@ -929,7 +929,7 @@ test("@phone partial foreground scan retains the prior manifest and emits no del
     testApi.reconcileStatus = "partial";
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("previous file manifest is still active");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("previous file list is still active");
   expect(await page.evaluate(() => (window as any).app.vault.getFileByPath("Notes/Proof.md")?.path)).toBe("Notes/Proof.md");
   const after = await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
@@ -1021,7 +1021,7 @@ test("@phone failed processing or manifest commit retains the prior manifest and
     testApi.externalWrite("Notes/Proof.md", "retry-provider-bytes");
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("temporarily unavailable");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Geode could not finish the refresh");
   await expect(page.locator(".cm-content")).toContainText("provider-bytes");
   expect(await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
@@ -1053,7 +1053,7 @@ test("@phone failed provider read does not advance the manifest and retry remain
     testApi.externalWrite("Notes/Proof.md", "read-retry-provider");
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("temporarily unavailable");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Geode could not finish the refresh");
   await expect(page.locator(".cm-content")).toContainText("provider-bytes");
   expect(await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
@@ -1148,7 +1148,8 @@ test("@phone Base apply failure keeps the old manifest and view inert until retr
     testApi.externalWrite("Views/Proof.base", "views:\n  - type: cards\n    name: ProviderRetry\n");
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("temporarily unavailable");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Geode could not finish the refresh");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Saves remain paused");
   await expect(page.locator(".base-view")).toHaveAttribute("inert", "");
   expect(await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
