@@ -38,6 +38,13 @@ const mobileBoundaryPlugin = {
 const builds = [
   {
     ...common,
+    entryPoints: ["src/renderer/audio/pcm-capture-worklet.js"],
+    outfile: "dist/pcm-capture-worklet.js",
+    platform: "browser",
+    format: "esm",
+  },
+  {
+    ...common,
     entryPoints: ["src/main/main.ts"],
     outfile: "dist/main.js",
     platform: "node",

@@ -115,7 +115,10 @@ for the latest published notes.
   Settings versions and other plugins requiring 1.13 remain unverified.
   Desktop plugins can make HTTP(S) requests through `requestUrl()`, including
   text, JSON, and binary responses; requests use the main process while raw
-  renderer `fetch()` remains subject to the existing Content Security Policy
+  renderer `fetch()` remains subject to the existing Content Security Policy.
+  Desktop voice plugins can use the [packaged PCM AudioWorklet](docs/design/packaged-audio-capture.md)
+  to capture audio off the UI thread without enabling blob scripts; microphone
+  permission and stream lifetime remain the plugin's responsibility.
 - **Plugin crash recovery** — attributes and quarantines failures at plugin
   boundaries, journals diagnostic context, and recovers a crashed renderer
   once with community plugins suppressed and reversible restart controls.

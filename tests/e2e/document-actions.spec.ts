@@ -32,6 +32,9 @@ const THREAD_HISTORY_PROBE_MAIN = `
 
   module.exports.default = class extends obsidian.Plugin {
     async onload() {
+      // Exercise the startup race seen on slower CI runners: file explorer
+      // visibility does not mean plugin views or workspace restoration are ready.
+      await new Promise(resolve => setTimeout(resolve, 300));
       this.registerView(VIEW, (leaf) => new ThreadHistoryProbeView(leaf));
     }
   };
@@ -69,6 +72,9 @@ test("a file picked from a stateful plugin view can navigate back to that view",
     await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
     await win.evaluate(async () => {
       const geode = (window as any).app;
+      // Explorer entries render before plugins load and layout restore can
+      // replace leaves. Use the app's readiness signal before manipulating them.
+      await new Promise<void>(resolve => geode.workspace.onLayoutReady(resolve));
       const leaf = geode.workspace.getLeaf(false);
       await leaf.setViewState({
         type: "thread-history-probe",
