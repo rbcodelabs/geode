@@ -1848,7 +1848,8 @@ function installApplicationMenu(): void {
     // types the argument as BaseWindow; only a BrowserWindow has webContents.
     const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow();
     target?.webContents.reload();
-  });
+  },
+  async () => { await checkForUpdatesManually(); });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

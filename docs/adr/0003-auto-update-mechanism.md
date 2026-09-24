@@ -1,9 +1,60 @@
 # ADR 0003 — Auto-update mechanism
 
-**Status:** Accepted (MVP scope). **Feature gated OFF by default — see
-"Amendment 2026-09-04" below.**
-**Date:** 2026-08-14 (amended 2026-09-04)
+**Status:** Accepted. **Developer ID signed updates are live by default in
+packaged builds — see the 2026-09-23 amendment.**
+**Date:** 2026-08-14 (amended 2026-09-04 and 2026-09-23)
 **Compass:** Roadmap item `d36470c9` — "Mobile (Capacitor) + packaging/auto-update, pop-out windows, splits" (this ADR advances the packaging/auto-update part of that item).
+
+---
+
+## Amendment (2026-09-23) — Developer ID trust and live updater
+
+This amendment supersedes the ad-hoc-signing and opt-in-gate decisions below;
+the older text remains as the historical record of why the gate existed.
+
+Geode releases are now signed with a stable **Developer ID Application**
+identity, use hardened runtime with only the JIT entitlement, and are notarized
+and stapled by electron-builder. Signing and the team App Store Connect API key
+live only in a protected `macos-release` GitHub environment. The workflow fails
+closed when any credential is absent, verifies both architectures' DMG and ZIP
+apps with `codesign`, `spctl`, and `stapler`, and creates a public release only
+after a draft contains the complete updater artifact set. A manual workflow
+dispatch builds and verifies but does not publish.
+
+Packaged builds therefore run the updater by default; unpackaged builds remain
+inert and a custom feed remains HTTPS-only and fail-closed. A bounded updater
+phase preserves the origin of each check, coalesces overlapping events, and
+keeps background failures quiet. Downloads and installs still require separate
+explicit clicks. Failures after either click offer the Releases page. **Help →
+Check for Updates…** exposes the existing manual path.
+
+The standalone installer consumes a checked release asset,
+`geode-release.json`, containing the nonsecret expected Apple Team ID and
+stable `com.rbcodelabs.geode` bundle ID. It verifies the mounted source before
+quitting Geode or mutating the installation, verifies a temporary sibling copy,
+then swaps it into place with rollback. It never clears quarantine or ad-hoc
+re-signs the bundle.
+
+The first signed release is a manual bootstrap from every historical ad-hoc
+build. Acceptance requires a signed release N installed manually, then a staged
+N→N+1 update proving: Later survives quit/relaunch without installing; Restart
+Now installs and relaunches; download/install failures expose recovery; and N+1
+retains the Team ID, bundle ID, hardened runtime, and notarization ticket.
+Certificate rotation must preserve Team ID and app ID. Loss or revocation of
+the signing identity stops releases and requires documented manual recovery;
+it must never be worked around by weakening verification.
+
+### Options considered
+
+| Option | Advantages | Costs |
+|---|---|---|
+| Developer ID + notarized GitHub Releases (chosen) | Native Gatekeeper trust and stable Squirrel identity without changing distribution | Protected credentials and notarization operations |
+| Keep ad-hoc signing | No credential operations | Unreliable self-replace identity and hostile install UX |
+| Mac App Store | Apple-managed distribution | Sandbox and review constraints conflict with arbitrary vault/plugin filesystem access |
+
+The riskiest assumption is that the minimal JIT entitlement preserves all
+packaged Electron/plugin behavior. Any request for broader entitlements is a
+new security/design decision, not a release-pipeline tweak.
 
 ---
 

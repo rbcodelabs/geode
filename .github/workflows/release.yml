@@ -1,14 +1,5 @@
 name: Release
 
-# Builds unsigned macOS installers (dmg + zip, x64 + arm64) via electron-builder
-# and publishes them to a GitHub Release. Triggered by pushing a `v*` tag, or
-# manually via workflow_dispatch for testing.
-#
-# No code signing / notarization is configured yet — installers are unsigned,
-# so macOS Gatekeeper will warn on first launch. See README.md's "Install"
-# section for the user-facing workaround. Revisit once there's an Apple
-# Developer ID to sign + notarize with.
-
 on:
   push:
     tags: ["v*"]
@@ -20,62 +11,131 @@ permissions:
 jobs:
   build-mac:
     runs-on: macos-latest
+    environment: macos-release
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v5
-
       - uses: actions/setup-node@v5
         with:
           node-version: "25"
           cache: npm
 
+      - name: Require signing and notarization credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID; do
+            [[ -n "${!name:-}" ]] || { echo "Missing required macos-release secret: $name" >&2; exit 1; }
+          done
+          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo "APPLE_TEAM_ID must be a 10-character Apple Team ID" >&2; exit 1; }
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          [[ "$GITHUB_REF_NAME" == "v$version" ]] || { echo "Tag $GITHUB_REF_NAME does not match package version v$version" >&2; exit 1; }
+
       - name: Install dependencies
         run: npm ci
-
       - name: Typecheck
         run: npm run typecheck
-
-      - name: Bundle (esbuild)
+      - name: Bundle
         run: npm run build
-
-      # Build only — do NOT let electron-builder publish. Its GitHub uploader
-      # intermittently fails mid-upload (transient HTTP errors), which left
-      # releases with missing/partial assets. We upload separately, with retry.
-      - name: Package (macOS, unsigned)
+      - name: Package, sign, notarize, and staple
         run: npx electron-builder --mac --publish never
 
-      # Publish the release and upload artifacts via gh, retrying transient
-      # upload failures. Only on tag pushes (workflow_dispatch just builds).
-      - name: Publish GitHub Release (with retry)
+      - name: Verify signed artifacts and updater manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_app() {
+            local app_path="$1" details entitlements bundle_id
+            codesign --verify --deep --strict "$app_path"
+            details="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
+            grep -Fq "Authority=Developer ID Application:" <<<"$details"
+            grep -Fq "TeamIdentifier=$APPLE_TEAM_ID" <<<"$details"
+            grep -Fq "Identifier=com.rbcodelabs.geode" <<<"$details"
+            grep -Eq 'flags=.*\(runtime\)' <<<"$details"
+            bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
+            [[ "$bundle_id" == "com.rbcodelabs.geode" ]]
+            entitlements="$(codesign -d --entitlements :- "$app_path" 2>/dev/null)"
+            grep -Fq '<key>com.apple.security.cs.allow-jit</key>' <<<"$entitlements"
+            for forbidden in com.apple.security.get-task-allow com.apple.security.cs.disable-library-validation com.apple.security.cs.allow-dyld-environment-variables com.apple.security.cs.allow-unsigned-executable-memory; do
+              ! grep -Fq "<key>$forbidden</key>" <<<"$entitlements"
+            done
+            spctl --assess --type execute "$app_path"
+            xcrun stapler validate "$app_path"
+          }
+
+          shopt -s nullglob
+          dmgs=(release/*.dmg)
+          zips=(release/*.zip)
+          [[ ${#dmgs[@]} -eq 2 ]] || { echo "Expected 2 DMGs, found ${#dmgs[@]}" >&2; exit 1; }
+          [[ ${#zips[@]} -eq 2 ]] || { echo "Expected 2 ZIPs, found ${#zips[@]}" >&2; exit 1; }
+          for dmg in "${dmgs[@]}"; do
+            mount_dir="$(mktemp -d "$RUNNER_TEMP/geode-dmg.XXXXXX")"
+            hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir"
+            verify_app "$mount_dir/Geode.app"
+            hdiutil detach "$mount_dir"
+          done
+          for zip in "${zips[@]}"; do
+            extract_dir="$(mktemp -d "$RUNNER_TEMP/geode-zip.XXXXXX")"
+            ditto -x -k "$zip" "$extract_dir"
+            verify_app "$extract_dir/Geode.app"
+          done
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const YAML = require('yaml');
+          const manifestPath = 'release/latest-mac.yml';
+          if (!fs.existsSync(manifestPath)) throw new Error('latest-mac.yml is missing');
+          const manifest = YAML.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const zipPaths = (manifest.files ?? []).map(entry => entry.url ?? entry.path).filter(value => typeof value === 'string' && value.endsWith('.zip'));
+          if (zipPaths.length !== 2) throw new Error(`latest-mac.yml must reference 2 ZIPs; found ${zipPaths.length}`);
+          for (const relative of zipPaths) {
+            const name = path.basename(relative);
+            if (!fs.existsSync(path.join('release', name))) throw new Error(`Manifest ZIP missing: ${name}`);
+            if (!fs.existsSync(path.join('release', `${name}.blockmap`))) throw new Error(`Manifest blockmap missing: ${name}.blockmap`);
+          }
+          NODE
+          printf '{"teamId":"%s","bundleId":"com.rbcodelabs.geode"}\n' "$APPLE_TEAM_ID" > release/geode-release.json
+
+      - name: Publish complete draft release atomically
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-
-          # Ensure the release exists (create from the tag if not).
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]] || { echo "Refusing to modify already-published release $tag" >&2; exit 1; }
+          else
+            gh release create "$tag" --draft --title "$tag" --generate-notes
           fi
-
-          # Collect built artifacts (installers + auto-update metadata).
           shopt -s nullglob
-          assets=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap)
-          if [ ${#assets[@]} -eq 0 ]; then
-            echo "No build artifacts found in release/" >&2
-            exit 1
-          fi
-          echo "Uploading ${#assets[@]} assets: ${assets[*]}"
-
-          # Retry the upload — transient GitHub upload errors are the whole
-          # reason this step is separate from electron-builder.
+          assets=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap release/geode-release.json)
+          [[ ${#assets[@]} -ge 8 ]] || { echo "Incomplete artifact set (${#assets[@]} files)" >&2; exit 1; }
+          uploaded=false
           for attempt in 1 2 3 4 5; do
-            if gh release upload "$tag" "${assets[@]}" --clobber; then
-              echo "Upload succeeded on attempt $attempt"
-              exit 0
-            fi
-            echo "Upload attempt $attempt failed; retrying in $((attempt * 10))s..." >&2
+            if gh release upload "$tag" "${assets[@]}" --clobber; then uploaded=true; break; fi
             sleep $((attempt * 10))
           done
-          echo "All upload attempts failed" >&2
-          exit 1
+          [[ "$uploaded" == "true" ]] || { echo "All upload attempts failed" >&2; exit 1; }
+          expected="$(for asset in "${assets[@]}"; do basename "$asset"; done | sort)"
+          actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
+          [[ "$actual" == "$expected" ]] || { echo "Draft asset inventory mismatch" >&2; diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true; exit 1; }
+          gh release edit "$tag" --draft=false

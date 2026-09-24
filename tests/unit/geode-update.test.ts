@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   assetNameFor,
@@ -7,6 +8,8 @@ import {
   parseArgs,
   parseHdiutilMountPoint,
   parsePsOutput,
+  parseReleaseTrust,
+  signatureVerificationSteps,
 } from "../../scripts/geode-update.mts";
 
 describe("parseArgs", () => {
@@ -144,5 +147,42 @@ describe("parsePsOutput", () => {
 
   it("ignores blank lines and lines without a leading pid", () => {
     expect(parsePsOutput("\n   \nnot-a-pid comm\n")).toEqual([]);
+  });
+});
+
+describe("signed release trust", () => {
+  it("requires a valid non-placeholder Apple team ID and stable bundle ID", () => {
+    expect(parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}')).toEqual({
+      teamId: "A1B2C3D4E5",
+      bundleId: "com.rbcodelabs.geode",
+    });
+    expect(() => parseReleaseTrust('{}')).toThrow(/teamId/);
+    expect(() => parseReleaseTrust('{"teamId":"TEAMID","bundleId":"com.rbcodelabs.geode"}')).toThrow(/teamId/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"wrong"}')).toThrow(/bundleId/);
+  });
+
+  it("verifies the Developer ID signature, Gatekeeper, ticket, team ID, and bundle ID", () => {
+    const steps = signatureVerificationSteps("/tmp/Geode.app");
+    expect(steps).toEqual(expect.arrayContaining([
+      { cmd: "codesign", args: ["--verify", "--deep", "--strict", "/tmp/Geode.app"] },
+      { cmd: "spctl", args: ["--assess", "--type", "execute", "/tmp/Geode.app"] },
+      { cmd: "xcrun", args: ["stapler", "validate", "/tmp/Geode.app"] },
+    ]));
+    expect(steps).toContainEqual({ cmd: "codesign", args: ["-dv", "--verbose=4", "/tmp/Geode.app"] });
+    expect(steps.some((step) => step.args.includes("Print :CFBundleIdentifier"))).toBe(true);
+    expect(JSON.stringify(steps)).not.toContain("--sign");
+    expect(JSON.stringify(steps)).not.toContain("xattr");
+  });
+
+  it("verifies before quitting and uses a verified sibling swap with rollback", () => {
+    const source = readFileSync("scripts/geode-update.mts", "utf8");
+    const sourceVerify = source.lastIndexOf("verifyTrustedApp(sourceApp, trust)");
+    const quit = source.lastIndexOf("await quitGeodeIfRunning(appPath)");
+    expect(sourceVerify).toBeGreaterThan(0);
+    expect(sourceVerify).toBeLessThan(quit);
+    expect(source).toContain("verifyTrustedApp(staged, trust)");
+    expect(source).toContain("renameSync(previous, destApp)");
+    expect(source).not.toContain('run("xattr"');
+    expect(source).not.toContain('"--sign", "-"');
   });
 });

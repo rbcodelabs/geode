@@ -19,6 +19,7 @@ export function buildApplicationMenuTemplate(
   platform: NodeJS.Platform,
   onExportDiagnostics: () => void | Promise<void>,
   onReloadApp: ReloadAppHandler,
+  onCheckForUpdates: () => void | Promise<void>,
 ): MenuItemConstructorOptions[] {
   const isMac = platform === "darwin";
   return [
@@ -77,7 +78,11 @@ export function buildApplicationMenuTemplate(
         },
     {
       role: "help",
-      submenu: [{ label: "Export Diagnostics…", click: () => { void onExportDiagnostics(); } }],
+      submenu: [
+        { label: "Check for Updates…", click: () => { void onCheckForUpdates(); } },
+        { type: "separator" },
+        { label: "Export Diagnostics…", click: () => { void onExportDiagnostics(); } },
+      ],
     },
   ];
 }

@@ -8,19 +8,10 @@
  * `src/main/github-resolve.ts` already use for the in-app "install plugin
  * from GitHub" feature.
  *
- * Why this exists: electron-builder is configured with `identity: "-"`
- * (ad-hoc) but the published dmg ships WITHOUT a `_CodeSignature/
- * CodeResources` manifest. The embedded linker-signed ad-hoc signature
- * asserts that sealed resources must be present, so macOS reports the app as
- * "damaged" — which is NOT a quarantine problem and is not fixed by
- * `xattr -dr com.apple.quarantine` (the workaround in the README's Install
- * section). The real fix is to regenerate the signature locally, which
- * creates the missing resource manifest:
- *
- *   codesign --force --deep --sign - Geode.app
- *
- * This script automates that fix as part of every install/update, so running
- * it once means never seeing the Gatekeeper "damaged" dialog.
+ * Every release is Developer ID signed and notarized. This installer verifies
+ * that trust before touching the installed app, copies to a sibling staging
+ * bundle, verifies again, and only then swaps it into place. It never removes
+ * quarantine metadata or replaces Apple's signature.
  *
  * Standalone by design: no imports outside Node's standard library, so it
  * runs identically whether it's part of a checkout (`node scripts/
@@ -46,7 +37,7 @@
  *                           replacing the default "home dir + its and ~/Documents's immediate subdirs" scan
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   accessSync,
   constants,
@@ -56,11 +47,12 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const REPO = "rbcodelabs/geode";
@@ -74,6 +66,38 @@ const GITHUB_API_BASE = (process.env.GEODE_GITHUB_API_BASE ?? "https://api.githu
 // GitHub's REST API rejects requests with no User-Agent header, even for
 // public, unauthenticated, read-only calls.
 const USER_AGENT = "geode-update-script (+https://github.com/rbcodelabs/geode)";
+const RELEASE_TRUST_ASSET = "geode-release.json";
+const EXPECTED_BUNDLE_ID = "com.rbcodelabs.geode";
+
+export interface ReleaseTrust {
+  teamId: string;
+  bundleId: typeof EXPECTED_BUNDLE_ID;
+}
+
+export function parseReleaseTrust(raw: string): ReleaseTrust {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { fail(`${RELEASE_TRUST_ASSET} is not valid JSON`); }
+  const record = value as { teamId?: unknown; bundleId?: unknown };
+  if (!record || typeof record !== "object" || typeof record.teamId !== "string" || !/^[A-Z0-9]{10}$/.test(record.teamId)) {
+    fail(`${RELEASE_TRUST_ASSET} must contain a 10-character Apple teamId`);
+  }
+  if (record.bundleId !== EXPECTED_BUNDLE_ID) {
+    fail(`${RELEASE_TRUST_ASSET} bundleId must be ${EXPECTED_BUNDLE_ID}`);
+  }
+  return { teamId: record.teamId, bundleId: EXPECTED_BUNDLE_ID };
+}
+
+export interface VerificationStep { cmd: string; args: string[] }
+
+export function signatureVerificationSteps(appPath: string): VerificationStep[] {
+  return [
+    { cmd: "codesign", args: ["--verify", "--deep", "--strict", appPath] },
+    { cmd: "codesign", args: ["-dv", "--verbose=4", appPath] },
+    { cmd: "/usr/libexec/PlistBuddy", args: ["-c", "Print :CFBundleIdentifier", join(appPath, "Contents", "Info.plist")] },
+    { cmd: "spctl", args: ["--assess", "--type", "execute", appPath] },
+    { cmd: "xcrun", args: ["stapler", "validate", appPath] },
+  ];
+}
 
 export interface Args {
   check: boolean;
@@ -202,6 +226,13 @@ function run(cmd: string, args: string[], quiet = false): string {
     const stderr = e.stderr ? e.stderr.toString().trim() : "";
     throw new Error(stderr || e.message || `${cmd} failed`);
   }
+}
+
+function runCombined(cmd: string, args: string[]): string {
+  const result = spawnSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+  if (result.error || result.status !== 0) throw new Error(output || result.error?.message || `${cmd} failed`);
+  return output;
 }
 
 function delay(ms: number): Promise<void> {
@@ -438,7 +469,7 @@ function backupPluginData(): void {
   }
 }
 
-// ---- dmg mount / app replace / re-sign -----------------------------------
+// ---- dmg mount / signed app verification / atomic replacement ------------
 
 function mountDmg(dmgPath: string): string {
   const stdout = run("hdiutil", ["attach", dmgPath, "-nobrowse"], true);
@@ -465,17 +496,40 @@ function findAppBundle(mountPoint: string): string {
   return join(mountPoint, entry.name);
 }
 
-function replaceApp(sourceApp: string, destApp: string): void {
-  mkdirSync(dirname(destApp), { recursive: true });
-  rmSync(destApp, { recursive: true, force: true });
-  run("ditto", [sourceApp, destApp], true);
+function verifyTrustedApp(appPath: string, trust: ReleaseTrust): void {
+  run("codesign", ["--verify", "--deep", "--strict", appPath], true);
+  const signature = runCombined("codesign", ["-dv", "--verbose=4", appPath]);
+  if (!signature.includes("Authority=Developer ID Application:")) fail("App is not signed with Developer ID Application");
+  if (!signature.includes(`TeamIdentifier=${trust.teamId}`)) fail(`App TeamIdentifier does not match ${trust.teamId}`);
+  if (!signature.includes(`Identifier=${trust.bundleId}`)) fail(`App signing identifier does not match ${trust.bundleId}`);
+  if (!/flags=.*\(runtime\)/.test(signature)) fail("App signature does not enable hardened runtime");
+  const bundleId = run("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleIdentifier", join(appPath, "Contents", "Info.plist")], true);
+  if (bundleId !== trust.bundleId) fail(`App bundle ID does not match ${trust.bundleId}`);
+  run("spctl", ["--assess", "--type", "execute", appPath], true);
+  run("xcrun", ["stapler", "validate", appPath], true);
 }
 
-/** The actual fix for the "damaged app" Gatekeeper dialog — see file header. */
-function resignApp(appPath: string): void {
-  run("xattr", ["-cr", appPath], true);
-  run("codesign", ["--force", "--deep", "--sign", "-", appPath], true);
-  run("codesign", ["--verify", "--strict", appPath], true);
+function replaceApp(sourceApp: string, destApp: string, trust: ReleaseTrust): void {
+  mkdirSync(dirname(destApp), { recursive: true });
+  const staged = join(dirname(destApp), `.${basename(destApp)}.update-${process.pid}`);
+  const previous = join(dirname(destApp), `.${basename(destApp)}.previous-${process.pid}`);
+  rmSync(staged, { recursive: true, force: true });
+  rmSync(previous, { recursive: true, force: true });
+  try {
+    run("ditto", [sourceApp, staged], true);
+    verifyTrustedApp(staged, trust);
+    const hadPrevious = existsSync(destApp);
+    if (hadPrevious) renameSync(destApp, previous);
+    try {
+      renameSync(staged, destApp);
+    } catch (err) {
+      if (hadPrevious && existsSync(previous)) renameSync(previous, destApp);
+      throw err;
+    }
+    rmSync(previous, { recursive: true, force: true });
+  } finally {
+    rmSync(staged, { recursive: true, force: true });
+  }
 }
 
 function printUsage(): void {
@@ -490,8 +544,8 @@ Usage:
   node geode-update.mts --keep       keep the downloaded dmg in ~/Downloads instead of deleting it
 
 No GitHub CLI, account, or authentication required — ${REPO} is a public repository.
-Also re-signs the app locally after install, which fixes the "Geode is damaged
-and can't be opened" Gatekeeper dialog (see the top of this file for why).
+The release's Developer ID signature, Team ID, bundle ID, hardened runtime,
+Gatekeeper assessment, and stapled notarization ticket are verified before install.
 `);
 }
 
@@ -545,6 +599,12 @@ async function main(): Promise<void> {
     const release = await fetchReleaseByTag(targetTag);
     const downloadUrl = findReleaseAsset(release.assets, asset);
     if (!downloadUrl) fail(`Release ${targetTag} does not have an asset named "${asset}"`);
+    const trustUrl = findReleaseAsset(release.assets, RELEASE_TRUST_ASSET);
+    if (!trustUrl) fail(`Release ${targetTag} does not have required ${RELEASE_TRUST_ASSET}`);
+
+    const trustResponse = await fetch(trustUrl, { headers: { "User-Agent": USER_AGENT } });
+    if (!trustResponse.ok) fail(`Failed to download ${RELEASE_TRUST_ASSET} (HTTP ${trustResponse.status})`);
+    const trust = parseReleaseTrust(await trustResponse.text());
 
     console.log(`  downloading ${asset}...`);
     const res = await fetch(downloadUrl, { headers: { "User-Agent": USER_AGENT } });
@@ -555,14 +615,14 @@ async function main(): Promise<void> {
     mountPoint = mountDmg(dmgPath);
     const sourceApp = findAppBundle(mountPoint);
 
+    console.log("  verifying Developer ID signature and notarization...");
+    verifyTrustedApp(sourceApp, trust);
+
     await quitGeodeIfRunning(appPath);
     backupPluginData();
 
     console.log(`  installing to ${appPath}...`);
-    replaceApp(sourceApp, appPath);
-
-    console.log('  re-signing (fixes the "damaged app" Gatekeeper dialog)...');
-    resignApp(appPath);
+    replaceApp(sourceApp, appPath, trust);
 
     const finalVersion = installedVersion(appPath);
     console.log(`✓ installed Geode ${finalVersion ?? targetVersion} -> ${appPath}`);
