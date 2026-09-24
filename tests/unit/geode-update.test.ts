@@ -85,8 +85,8 @@ describe("assetNameFor", () => {
     expect(assetNameFor("0.11.1", "arm64")).toBe("Geode-0.11.1-arm64.dmg");
   });
 
-  it("names the plain dmg for any non-arm64 arch", () => {
-    expect(assetNameFor("0.11.1", "x64")).toBe("Geode-0.11.1.dmg");
+  it.each(["x64", "ia32", "unknown"])("rejects unsupported architecture %s", (arch) => {
+    expect(() => assetNameFor("0.11.1", arch)).toThrow(/Apple Silicon/);
   });
 
   it("normalizes a v-prefixed version first", () => {

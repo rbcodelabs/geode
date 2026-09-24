@@ -2,12 +2,29 @@
 
 **Status:** Accepted. **Developer ID signed updates are live by default in
 packaged builds — see the 2026-09-23 amendment.**
-**Date:** 2026-08-14 (amended 2026-09-04 and 2026-09-23)
+**Date:** 2026-08-14 (amended 2026-09-04, 2026-09-23, and 2026-09-24)
 **Compass:** Roadmap item `d36470c9` — "Mobile (Capacitor) + packaging/auto-update, pop-out windows, splits" (this ADR advances the packaging/auto-update part of that item).
 
 ---
 
 ## Amendment (2026-09-23) — Developer ID trust and live updater
+
+### Platform scope update (2026-09-24)
+
+The maintainer approved Apple Silicon-only releases. DMG and ZIP targets now
+build arm64 only; verification requires one of each and checks the app executable's
+architecture. The updater manifest must reference one arm64 ZIP. This supersedes
+the dual-architecture scope described below. Keeping Intel builds would retain
+compatibility but double architecture-specific packaging and notarization work;
+universal builds would retain that work and increase downloads. We chose arm64
+only for the current audience and operational cost. Intel users can keep their
+last compatible release, but new releases no longer support their machines.
+The standalone installer rejects non-arm64 Node processes before network or
+installation work, with guidance to use native Node on Apple Silicon if running
+under Rosetta. Revisit this decision if actual user demand requires Intel support.
+
+Developer ID provisioning is complete: the checked-in publisher pin is
+`6M8F464WCQ` (RB Code Labs LLC), replacing the initial sentinel described below.
 
 This amendment supersedes the ad-hoc-signing and opt-in-gate decisions below;
 the older text remains as the historical record of why the gate existed.

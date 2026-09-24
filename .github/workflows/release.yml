@@ -70,6 +70,7 @@ jobs:
           set -euo pipefail
           verify_app() {
             local app_path="$1" details entitlements bundle_id
+            [[ "$(lipo -archs "$app_path/Contents/MacOS/Geode")" == "arm64" ]] || { echo "Expected arm64-only app" >&2; exit 1; }
             codesign --verify --deep --strict "$app_path"
             details="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
             grep -Fq "Authority=Developer ID Application:" <<<"$details"
@@ -90,8 +91,8 @@ jobs:
           shopt -s nullglob
           dmgs=(release/*.dmg)
           zips=(release/*.zip)
-          [[ ${#dmgs[@]} -eq 2 ]] || { echo "Expected 2 DMGs, found ${#dmgs[@]}" >&2; exit 1; }
-          [[ ${#zips[@]} -eq 2 ]] || { echo "Expected 2 ZIPs, found ${#zips[@]}" >&2; exit 1; }
+          [[ ${#dmgs[@]} -eq 1 && "${dmgs[0]}" == *-arm64.dmg ]] || { echo "Expected one arm64 DMG" >&2; exit 1; }
+          [[ ${#zips[@]} -eq 1 && "${zips[0]}" == *-arm64-mac.zip ]] || { echo "Expected one arm64 ZIP" >&2; exit 1; }
           for dmg in "${dmgs[@]}"; do
             mount_dir="$(mktemp -d "$RUNNER_TEMP/geode-dmg.XXXXXX")"
             hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir"
@@ -112,7 +113,7 @@ jobs:
           if (!fs.existsSync(manifestPath)) throw new Error('latest-mac.yml is missing');
           const manifest = YAML.parse(fs.readFileSync(manifestPath, 'utf8'));
           const zipPaths = (manifest.files ?? []).map(entry => entry.url ?? entry.path).filter(value => typeof value === 'string' && value.endsWith('.zip'));
-          if (zipPaths.length !== 2) throw new Error(`latest-mac.yml must reference 2 ZIPs; found ${zipPaths.length}`);
+          if (zipPaths.length !== 1 || !zipPaths[0].endsWith('-arm64-mac.zip')) throw new Error('latest-mac.yml must reference exactly one arm64 ZIP');
           for (const relative of zipPaths) {
             const name = path.basename(relative);
             if (!fs.existsSync(path.join('release', name))) throw new Error(`Manifest ZIP missing: ${name}`);
@@ -136,7 +137,7 @@ jobs:
           fi
           shopt -s nullglob
           assets=(release/*.dmg release/*.zip release/latest-mac.yml release/*.blockmap release/geode-release.json)
-          [[ ${#assets[@]} -ge 8 ]] || { echo "Incomplete artifact set (${#assets[@]} files)" >&2; exit 1; }
+          [[ ${#assets[@]} -ge 5 ]] || { echo "Incomplete artifact set (${#assets[@]} files)" >&2; exit 1; }
           uploaded=false
           for attempt in 1 2 3 4 5; do
             if gh release upload "$tag" "${assets[@]}" --clobber; then uploaded=true; break; fi

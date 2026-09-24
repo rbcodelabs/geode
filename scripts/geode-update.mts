@@ -171,8 +171,15 @@ export function cmpVersion(a: string, b: string): number {
 
 /** The dmg filename electron-builder publishes for a given version + arch. */
 export function assetNameFor(version: string, arch: string = process.arch): string {
+  requireSupportedArchitecture(arch);
   const v = norm(version);
-  return arch === "arm64" ? `Geode-${v}-arm64.dmg` : `Geode-${v}.dmg`;
+  return `Geode-${v}-arm64.dmg`;
+}
+
+function requireSupportedArchitecture(arch: string): void {
+  if (arch !== "arm64") {
+    fail("New Geode releases require Apple Silicon (arm64). Intel Macs can keep their last compatible release. On Apple Silicon, run this installer with native arm64 Node.js instead of Rosetta.");
+  }
 }
 
 export interface GithubReleaseAsset {
@@ -249,6 +256,7 @@ function delay(ms: number): Promise<void> {
 
 function preflight(): void {
   if (process.platform !== "darwin") fail("geode-update only supports macOS.");
+  requireSupportedArchitecture(process.arch);
 }
 
 function installedVersion(appPath: string): string | null {

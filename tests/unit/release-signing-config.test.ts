@@ -1,4 +1,7 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import { runInNewContext } from "node:vm";
+import YAML from "yaml";
 import { describe, expect, it } from "vitest";
 
 const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -6,6 +9,36 @@ const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
 };
 
 describe("macOS release trust configuration", () => {
+  it("executes the workflow manifest check against arm64, Intel, mixed, and incomplete releases", () => {
+    const workflow = YAML.parse(readFileSync(".github/workflows/release.yml", "utf8"));
+    const step = workflow.jobs["build-mac"].steps.find((item: { name?: string }) => item.name === "Verify signed artifacts and updater manifest");
+    const script = step.run.split("node <<'NODE'\n")[1].split("\nNODE")[0];
+    const arm = "Geode-1.0.0-arm64-mac.zip";
+    const intel = "Geode-1.0.0-mac.zip";
+    const check = (names: string[], missing?: string) => runInNewContext(script, {
+      require: (name: string) => {
+        if (name === "node:path") return path;
+        if (name === "yaml") return YAML;
+        if (name === "node:fs") return {
+          existsSync: (file: string) => file !== missing,
+          readFileSync: () => YAML.stringify({ files: names.map(url => ({ url })) }),
+        };
+        throw new Error(`Unexpected module ${name}`);
+      },
+    });
+    expect(() => check([arm])).not.toThrow();
+    expect(() => check([intel])).toThrow(/one arm64 ZIP/);
+    expect(() => check([arm, intel])).toThrow(/one arm64 ZIP/);
+    expect(() => check([])).toThrow(/one arm64 ZIP/);
+    expect(() => check([arm], `release/${arm}`)).toThrow(/ZIP missing/);
+    expect(() => check([arm], `release/${arm}.blockmap`)).toThrow(/blockmap missing/);
+  });
+  it("ships only Apple Silicon DMG and ZIP targets", () => {
+    expect(pkg.build.mac.target).toEqual([
+      { target: "dmg", arch: ["arm64"] },
+      { target: "zip", arch: ["arm64"] },
+    ]);
+  });
   it("requires Developer ID signing, hardened runtime, notarization, and explicit entitlements", () => {
     expect(pkg.build.appId).toBe("com.rbcodelabs.geode");
     expect(pkg.build.forceCodeSigning).toBe(true);

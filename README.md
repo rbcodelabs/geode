@@ -152,7 +152,7 @@ intercept them.
 
 ## Install
 
-Prebuilt macOS installers (dmg + zip, Apple Silicon + Intel) are published on
+Prebuilt macOS installers (dmg + zip, Apple Silicon only) are published on
 the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 `v*` tag is pushed. Windows and Linux builds aren't set up yet — see the
 [roadmap](docs/spec/00-overview.md) item for packaging.
@@ -165,8 +165,9 @@ existing install, in one command. It talks to the public GitHub API directly
 verifies the release's Developer ID signature, stable Apple Team ID and bundle
 ID, hardened runtime, Gatekeeper acceptance, and stapled notarization ticket
 before replacing an install. It preserves Apple's signature and leaves the
-current app in place if verification or staging fails. Requires macOS and
-Node.js 23.6+. Run it straight from GitHub, no clone required:
+current app in place if verification or staging fails. Requires an Apple Silicon Mac and
+native arm64 Node.js 23.6+. Intel Macs can continue using their last compatible
+release, but receive no new builds. Run it straight from GitHub, no clone required:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rbcodelabs/geode/main/scripts/geode-update.mts -o /tmp/geode-update.mts && node /tmp/geode-update.mts
@@ -185,8 +186,7 @@ node scripts/geode-update.mts --help       # full usage
 
 ### Install manually
 
-1. Download `Geode-<version>-arm64.dmg` (Apple Silicon) or
-   `Geode-<version>.dmg` (Intel) from the latest release.
+1. Download `Geode-<version>-arm64.dmg` for Apple Silicon from the latest release.
 2. Open the dmg and drag **Geode.app** to **Applications**.
 3. Launch Geode normally. Release builds are Developer ID signed, hardened,
    notarized, and stapled; do not remove quarantine metadata or re-sign them.
@@ -397,7 +397,7 @@ and evidence from real third-party plugins remain Slice 3A2 gates.
 
 Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`) —
 the `.github/workflows/release.yml` GitHub Action signs, notarizes, verifies,
-and staples both macOS architectures. It uploads into a draft and publishes
+and staples the Apple Silicon macOS build. It uploads into a draft and publishes
 only after the complete artifact inventory is present. A protected
 `macos-release` environment must approve credential access. A manual Actions
 run (`workflow_dispatch`) builds and verifies without publishing.
