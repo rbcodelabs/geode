@@ -35,6 +35,13 @@ quitting Geode or mutating the installation, verifies a temporary sibling copy,
 then swaps it into place with rollback. It never clears quarantine or ad-hoc
 re-signs the bundle.
 
+Publisher continuity is anchored by the checked-in `EXPECTED_TEAM_ID` constant
+in the standalone installer, not by release metadata alone. It intentionally
+ships as invalid `UNPROVISIONED` until initial credential setup replaces it
+with the certificate's 10-character Team ID. CI requires its protected secret
+to match that pin before packaging and writes the pinned value into release
+metadata; a missing pin or mismatch stops both release and install.
+
 The first signed release is a manual bootstrap from every historical ad-hoc
 build. Acceptance requires a signed release N installed manually, then a staged
 N→N+1 update proving: Later survives quit/relaunch without installing; Restart

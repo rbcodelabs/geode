@@ -33,14 +33,19 @@ let lastCheckedAt: number | null = null;
 /** True only while the in-flight check was triggered by the user (manual "check now"), not the background scheduler. */
 type UpdaterPhase =
   | { kind: "idle" }
-  | { kind: "checking"; origin: "background" | "manual" }
-  | { kind: "offering"; origin: "background" | "manual" }
-  | { kind: "downloading" }
-  | { kind: "downloaded" }
-  | { kind: "installing" };
+  | { kind: "checking"; origin: "background" | "manual"; operationId: number }
+  | { kind: "offering"; origin: "background" | "manual"; operationId: number }
+  | { kind: "downloading"; operationId: number }
+  | { kind: "downloaded"; operationId: number }
+  | { kind: "installing"; operationId: number };
 
 let phase: UpdaterPhase = { kind: "idle" };
 let initialized = false;
+let nextOperationId = 1;
+
+function ownsPhase(kind: Exclude<UpdaterPhase["kind"], "idle">, operationId: number): boolean {
+  return phase.kind !== "idle" && phase.kind === kind && phase.operationId === operationId;
+}
 
 function targetWindow(): BrowserWindow | undefined {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
@@ -91,7 +96,8 @@ function wireEventHandlers(): void {
   autoUpdater.on("update-available", (info) => {
     if (phase.kind !== "checking") return;
     const origin = phase.origin;
-    phase = { kind: "offering", origin };
+    const operationId = phase.operationId;
+    phase = { kind: "offering", origin, operationId };
     lastCheckedAt = Date.now();
     showMessageBox({
       type: "info",
@@ -99,12 +105,13 @@ function wireEventHandlers(): void {
       buttons: ["Download Update", "Later"],
       defaultId: 0,
       cancelId: 1,
-    })
+      })
       .then((result) => {
+        if (!ownsPhase("offering", operationId)) return;
         if (result.response === 0) {
-          phase = { kind: "downloading" };
+          phase = { kind: "downloading", operationId };
           autoUpdater.downloadUpdate().catch((err) => {
-            if (phase.kind !== "downloading") return;
+            if (!ownsPhase("downloading", operationId)) return;
             phase = { kind: "idle" };
             showRecoverableFailure(`Update download failed: ${err instanceof Error ? err.message : String(err)}`);
           });
@@ -113,6 +120,7 @@ function wireEventHandlers(): void {
         }
       })
       .catch((err) => {
+        if (!ownsPhase("offering", operationId)) return;
         phase = { kind: "idle" };
         logRejection("update-available dialog")(err);
       });
@@ -138,17 +146,19 @@ function wireEventHandlers(): void {
 
   autoUpdater.on("update-downloaded", () => {
     if (phase.kind !== "downloading") return;
-    phase = { kind: "downloaded" };
+    const operationId = phase.operationId;
+    phase = { kind: "downloaded", operationId };
     showMessageBox({
       type: "info",
       message: "Update downloaded — restart Geode to finish installing",
       buttons: ["Restart Now", "Later"],
       defaultId: 0,
       cancelId: 1,
-    })
+      })
       .then((result) => {
+        if (!ownsPhase("downloaded", operationId)) return;
         if (result.response === 0) {
-          phase = { kind: "installing" };
+          phase = { kind: "installing", operationId };
           try {
             autoUpdater.quitAndInstall();
           } catch (err) {
@@ -160,6 +170,7 @@ function wireEventHandlers(): void {
         }
       })
       .catch((err) => {
+        if (!ownsPhase("downloaded", operationId)) return;
         phase = { kind: "idle" };
         logRejection("update-downloaded dialog")(err);
       });
@@ -202,12 +213,13 @@ function wireEventHandlers(): void {
 function runScheduledCheck(): void {
   if (phase.kind !== "idle") return;
   if (!shouldCheckForUpdates(lastCheckedAt, Date.now())) return;
-  phase = { kind: "checking", origin: "background" };
+  const operationId = nextOperationId++;
+  phase = { kind: "checking", origin: "background", operationId };
   autoUpdater.checkForUpdates().catch((err) => {
     // checkForUpdates() already emits an 'error' event for handler-visible
     // failures; this catch only guards against an unhandled rejection.
     console.error("Auto-updater: background check failed:", err);
-    if (phase.kind === "checking" && phase.origin === "background") phase = { kind: "idle" };
+    if (ownsPhase("checking", operationId) && phase.kind === "checking" && phase.origin === "background") phase = { kind: "idle" };
   });
 }
 
@@ -297,10 +309,11 @@ export async function checkForUpdatesManually(): Promise<{ status: "checking" | 
   }
 
   if (phase.kind !== "idle") return { status: "checking" };
-  phase = { kind: "checking", origin: "manual" };
+  const operationId = nextOperationId++;
+  phase = { kind: "checking", origin: "manual", operationId };
   autoUpdater.checkForUpdates().catch((err) => {
     console.error("Auto-updater: manual check failed:", err);
-    if (phase.kind === "checking" && phase.origin === "manual") {
+    if (ownsPhase("checking", operationId) && phase.kind === "checking" && phase.origin === "manual") {
       phase = { kind: "idle" };
       showRecoverableFailure(`Update check failed: ${err instanceof Error ? err.message : String(err)}`);
     }

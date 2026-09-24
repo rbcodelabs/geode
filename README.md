@@ -206,7 +206,11 @@ Release operators provision a protected GitHub environment named
 `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and
 `APPLE_TEAM_ID`. `CSC_LINK` is the base64-encoded Developer ID Application
 certificate/private-key `.p12`; `APPLE_API_KEY_BASE64` is a base64-encoded
-team App Store Connect API `.p8`. The workflow refuses unsigned builds or
+team App Store Connect API `.p8`. During initial provisioning, replace the
+checked-in `EXPECTED_TEAM_ID = "UNPROVISIONED"` in
+`scripts/geode-update.mts` with the certificate's 10-character Team ID. The
+workflow and installer fail closed until that pin is populated, and the
+workflow rejects a secret that differs from it. The workflow refuses unsigned builds or
 incomplete credentials, verifies every packaged app, and publishes an update
 feed only after the draft release has the complete artifact inventory.
 

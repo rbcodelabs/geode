@@ -71,7 +71,8 @@ beforeEach(() => {
   mocks.autoUpdater.checkForUpdates.mockClear();
   mocks.autoUpdater.downloadUpdate.mockClear();
   mocks.autoUpdater.quitAndInstall.mockClear();
-  mocks.showMessageBox.mockClear();
+  mocks.showMessageBox.mockReset();
+  mocks.showMessageBox.mockResolvedValue({ response: 0, checkboxChecked: false });
   vi.useFakeTimers();
 });
 
@@ -340,6 +341,39 @@ describe("bounded updater phases", () => {
     handlerFor("update-downloaded")();
     handlerFor("update-downloaded")();
     expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a stale availability dialog download into a newer check", async () => {
+    let resolveOld!: (value: { response: number; checkboxChecked: boolean }) => void;
+    mocks.showMessageBox.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
+    handlerFor("error")(new Error("old check failed"));
+    await checkForUpdatesManually();
+    resolveOld({ response: 0, checkboxChecked: false });
+    await Promise.resolve();
+    expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a stale downloaded dialog install or clear a newer check", async () => {
+    const { initAutoUpdater, checkForUpdatesManually } = await loadUpdater();
+    initAutoUpdater();
+    await checkForUpdatesManually();
+    handlerFor("update-available")({ version: "9.9.9" });
+    await Promise.resolve();
+    let resolveOld!: (value: { response: number; checkboxChecked: boolean }) => void;
+    mocks.showMessageBox.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+    handlerFor("update-downloaded")();
+    handlerFor("error")(new Error("old download failed"));
+    await checkForUpdatesManually();
+    resolveOld({ response: 0, checkboxChecked: false });
+    await Promise.resolve();
+    expect(mocks.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    await checkForUpdatesManually();
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
   it("clears the phase when Later is chosen so a new manual check can run", async () => {

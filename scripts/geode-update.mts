@@ -68,13 +68,18 @@ const GITHUB_API_BASE = (process.env.GEODE_GITHUB_API_BASE ?? "https://api.githu
 const USER_AGENT = "geode-update-script (+https://github.com/rbcodelabs/geode)";
 const RELEASE_TRUST_ASSET = "geode-release.json";
 const EXPECTED_BUNDLE_ID = "com.rbcodelabs.geode";
+/** Replace once, in source control, during Developer ID credential provisioning. */
+export const EXPECTED_TEAM_ID = "UNPROVISIONED";
 
 export interface ReleaseTrust {
   teamId: string;
   bundleId: typeof EXPECTED_BUNDLE_ID;
 }
 
-export function parseReleaseTrust(raw: string): ReleaseTrust {
+export function parseReleaseTrust(raw: string, expectedTeamId = EXPECTED_TEAM_ID): ReleaseTrust {
+  if (!/^[A-Z0-9]{10}$/.test(expectedTeamId)) {
+    fail("Apple Team ID is not provisioned in scripts/geode-update.mts");
+  }
   let value: unknown;
   try { value = JSON.parse(raw); } catch { fail(`${RELEASE_TRUST_ASSET} is not valid JSON`); }
   const record = value as { teamId?: unknown; bundleId?: unknown };
@@ -83,6 +88,9 @@ export function parseReleaseTrust(raw: string): ReleaseTrust {
   }
   if (record.bundleId !== EXPECTED_BUNDLE_ID) {
     fail(`${RELEASE_TRUST_ASSET} bundleId must be ${EXPECTED_BUNDLE_ID}`);
+  }
+  if (record.teamId !== expectedTeamId) {
+    fail(`${RELEASE_TRUST_ASSET} teamId does not match the pinned Apple Team ID`);
   }
   return { teamId: record.teamId, bundleId: EXPECTED_BUNDLE_ID };
 }

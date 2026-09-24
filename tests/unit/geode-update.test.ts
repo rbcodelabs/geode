@@ -152,13 +152,15 @@ describe("parsePsOutput", () => {
 
 describe("signed release trust", () => {
   it("requires a valid non-placeholder Apple team ID and stable bundle ID", () => {
-    expect(parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}')).toEqual({
+    expect(parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toEqual({
       teamId: "A1B2C3D4E5",
       bundleId: "com.rbcodelabs.geode",
     });
-    expect(() => parseReleaseTrust('{}')).toThrow(/teamId/);
-    expect(() => parseReleaseTrust('{"teamId":"TEAMID","bundleId":"com.rbcodelabs.geode"}')).toThrow(/teamId/);
-    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"wrong"}')).toThrow(/bundleId/);
+    expect(() => parseReleaseTrust('{}', "A1B2C3D4E5")).toThrow(/teamId/);
+    expect(() => parseReleaseTrust('{"teamId":"TEAMID","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toThrow(/teamId/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"wrong"}', "A1B2C3D4E5")).toThrow(/bundleId/);
+    expect(() => parseReleaseTrust('{"teamId":"Z9Y8X7W6V5","bundleId":"com.rbcodelabs.geode"}', "A1B2C3D4E5")).toThrow(/pinned/);
+    expect(() => parseReleaseTrust('{"teamId":"A1B2C3D4E5","bundleId":"com.rbcodelabs.geode"}')).toThrow(/not provisioned/);
   });
 
   it("verifies the Developer ID signature, Gatekeeper, ticket, team ID, and bundle ID", () => {

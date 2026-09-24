@@ -12,13 +12,6 @@ jobs:
   build-mac:
     runs-on: macos-latest
     environment: macos-release
-    env:
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-      APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -26,18 +19,13 @@ jobs:
           node-version: "25"
           cache: npm
 
-      - name: Require signing and notarization credentials
+      - name: Read pinned Apple Team ID
         shell: bash
         run: |
           set -euo pipefail
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID; do
-            [[ -n "${!name:-}" ]] || { echo "Missing required macos-release secret: $name" >&2; exit 1; }
-          done
-          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo "APPLE_TEAM_ID must be a 10-character Apple Team ID" >&2; exit 1; }
-          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$key_path"
-          chmod 600 "$key_path"
-          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          pinned="$(sed -nE 's/^export const EXPECTED_TEAM_ID = "([^"]+)";.*/\1/p' scripts/geode-update.mts)"
+          [[ -n "$pinned" ]] || { echo "Could not read EXPECTED_TEAM_ID pin" >&2; exit 1; }
+          echo "GEODE_PINNED_TEAM_ID=$pinned" >> "$GITHUB_ENV"
 
       - name: Verify tag matches package version
         if: github.ref_type == 'tag'
@@ -54,7 +42,27 @@ jobs:
       - name: Bundle
         run: npm run build
       - name: Package, sign, notarize, and staple
-        run: npx electron-builder --mac --publish never
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID; do
+            [[ -n "${!name:-}" ]] || { echo "Missing required macos-release secret: $name" >&2; exit 1; }
+          done
+          [[ "$GEODE_PINNED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo "Checked-in EXPECTED_TEAM_ID is not provisioned" >&2; exit 1; }
+          [[ "$APPLE_TEAM_ID" == "$GEODE_PINNED_TEAM_ID" ]] || { echo "APPLE_TEAM_ID does not match checked-in EXPECTED_TEAM_ID" >&2; exit 1; }
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$key_path"
+          chmod 600 "$key_path"
+          export APPLE_API_KEY="$key_path"
+          npx electron-builder --mac --publish never
 
       - name: Verify signed artifacts and updater manifest
         shell: bash
@@ -65,7 +73,7 @@ jobs:
             codesign --verify --deep --strict "$app_path"
             details="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
             grep -Fq "Authority=Developer ID Application:" <<<"$details"
-            grep -Fq "TeamIdentifier=$APPLE_TEAM_ID" <<<"$details"
+            grep -Fq "TeamIdentifier=$GEODE_PINNED_TEAM_ID" <<<"$details"
             grep -Fq "Identifier=com.rbcodelabs.geode" <<<"$details"
             grep -Eq 'flags=.*\(runtime\)' <<<"$details"
             bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
@@ -111,7 +119,7 @@ jobs:
             if (!fs.existsSync(path.join('release', `${name}.blockmap`))) throw new Error(`Manifest blockmap missing: ${name}.blockmap`);
           }
           NODE
-          printf '{"teamId":"%s","bundleId":"com.rbcodelabs.geode"}\n' "$APPLE_TEAM_ID" > release/geode-release.json
+          printf '{"teamId":"%s","bundleId":"com.rbcodelabs.geode"}\n' "$GEODE_PINNED_TEAM_ID" > release/geode-release.json
 
       - name: Publish complete draft release atomically
         if: github.ref_type == 'tag'

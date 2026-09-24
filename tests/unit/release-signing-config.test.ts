@@ -41,5 +41,13 @@ describe("macOS release trust configuration", () => {
     expect(workflow.indexOf("--draft --title")).toBeLessThan(workflow.indexOf("gh release upload"));
     expect(workflow.indexOf("gh release upload")).toBeLessThan(workflow.indexOf("--draft=false"));
     expect(workflow).toContain("if: github.ref_type == 'tag'");
+    const jobPrefix = workflow.slice(0, workflow.indexOf("steps:"));
+    expect(jobPrefix).not.toContain("CSC_LINK:");
+    expect(jobPrefix).not.toContain("APPLE_API_KEY_BASE64:");
+    const installIndex = workflow.indexOf("name: Install dependencies");
+    const packageIndex = workflow.indexOf("name: Package, sign, notarize, and staple");
+    expect(workflow.indexOf("CSC_LINK:")).toBeGreaterThan(packageIndex);
+    expect(workflow.indexOf("CSC_LINK:")).toBeGreaterThan(installIndex);
+    expect(workflow).toContain("GEODE_PINNED_TEAM_ID");
   });
 });
