@@ -47,6 +47,7 @@ import { WebView, isUrlShaped, resolveWebInput } from "./views/web-view";
 import { ArtifactView } from "./views/artifact-view";
 import { Modal, PromptModal, SuggestList, SuggestModal, fuzzyMatch, type FuzzyMatch } from "./modals/modals";
 import { ConflictCompareModal } from "./modals/conflict-compare-modal";
+import { ErrorDetailsModal } from "./modals/error-details-modal";
 import { SyncConflictBannerController } from "./sync/conflict-banner";
 import { SYNC_CONFLICT_COMPARE_LABEL, SYNC_CONFLICT_COMPARE_ROW_LIMIT, planConflictRow } from "./sync/conflict-presentation";
 import type { HistoryConflictComparison } from "./sync/history-controller";
@@ -1932,6 +1933,7 @@ export class App {
   private commentsView?: CommentsView;
   private syncConflictBanners: SyncConflictBannerController | null = null;
   private openConflictModal: ConflictCompareModal | null = null;
+  private refreshDetailsModal: ErrorDetailsModal | null = null;
 
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
@@ -2969,6 +2971,7 @@ export class App {
   }
 
   private showReconcileState(status: string, failure: VaultRefreshFailure = vaultRefreshFailure(undefined), savesPaused = false, manifestCommitted = false): void {
+    this.refreshDetailsModal?.close();
     let state = document.querySelector<HTMLElement>(".vault-reconcile-state");
     if (!state) {
       state = document.createElement("div");
@@ -2978,35 +2981,32 @@ export class App {
     }
     state.empty();
     const presentation = vaultRefreshPresentation(status, failure, { version: appVersion, savesPaused, manifestCommitted });
-    const title = document.createElement("strong");
-    title.textContent = "Vault refresh couldn’t finish";
+    const icon = document.createElement("span");
+    icon.className = "vault-reconcile-icon";
+    icon.textContent = "!";
+    icon.setAttribute("aria-hidden", "true");
     const message = document.createElement("span");
-    message.textContent = presentation.message;
+    message.className = "vault-reconcile-message";
+    message.textContent = presentation.banner;
     const retry = document.createElement("button");
     retry.type = "button";
-    retry.textContent = "Retry refresh";
+    retry.textContent = "Retry";
     retry.addEventListener("click", () => void this.reconcileVault("manual"));
-    const details = document.createElement("details");
-    const summary = document.createElement("summary");
-    summary.textContent = "Show details";
-    const diagnostic = document.createElement("pre");
-    diagnostic.textContent = presentation.details;
-    details.append(summary, diagnostic);
-    const copy = document.createElement("button");
-    copy.type = "button";
-    copy.textContent = "Copy diagnostic report";
-    const feedback = document.createElement("span");
-    feedback.setAttribute("role", "status");
-    copy.addEventListener("click", () => {
-      void (async () => {
-        try { await navigator.clipboard.writeText(presentation.report); feedback.textContent = "Copied (paths redacted)."; }
-        catch { feedback.textContent = "Could not copy. Review Show details and copy the operation and code manually."; }
-      })();
+    const details = document.createElement("button");
+    details.type = "button";
+    details.textContent = "Details…";
+    details.addEventListener("click", () => {
+      if (this.refreshDetailsModal) return;
+      this.refreshDetailsModal = new ErrorDetailsModal(this, { title: "Vault refresh couldn’t finish", ...presentation }, () => { this.refreshDetailsModal = null; });
+      this.refreshDetailsModal.open();
     });
-    state.append(title, message, retry, copy, feedback, details);
+    const actions = document.createElement("div"); actions.className = "vault-reconcile-actions";
+    actions.append(retry, details);
+    state.append(icon, message, actions);
   }
 
   private clearReconcileState(): void {
+    this.refreshDetailsModal?.close();
     document.querySelector(".vault-reconcile-state")?.remove();
   }
 
@@ -3159,6 +3159,7 @@ export class App {
   }
 
   async dispose(): Promise<void> {
+    this.clearReconcileState();
     this.reconcileGeneration += 1;
     await this.sync.cancel();
     for (const dispose of this.hostDisposers) dispose();
@@ -3175,6 +3176,7 @@ export class App {
   }
 
   private async disposeVaultSession(): Promise<void> {
+    this.clearReconcileState();
     this.reconcileGeneration += 1;
     for (const dispose of this.hostDisposers) dispose();
     this.hostDisposers.clear();

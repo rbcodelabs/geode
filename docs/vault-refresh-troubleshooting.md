@@ -4,8 +4,10 @@ Vault refresh checks for files changed outside Geode. If a scan is incomplete or
 fails, Geode does not treat the missing scan results as deleted files or replace
 the previous file list with them.
 
-The refresh banner explains the known cause and offers **Retry refresh**. Open
-**Show details** to inspect the failed operation and error code. When available,
+The compact refresh banner shows file-list status and offers **Retry** and
+**Details…**. Details opens a dialog with the known cause, recovery guidance,
+failed operation and error code; it never opens automatically. Close it with
+**Close** or Escape to return to your work. When available,
 the affected path is relative to the vault, not an absolute location on your
 computer.
 
@@ -41,7 +43,7 @@ and retry the refresh before assuming saving has resumed.
 
 ## Sharing diagnostics
 
-**Copy diagnostic report** copies the app version and structured failure details
+**Copy diagnostics** in the details dialog copies the app version and structured failure details
 for troubleshooting. Paths are redacted in the copied report. Note contents,
 raw exception messages and stack traces are not included. You can inspect the
 report before sharing it; copying it does not automatically send it anywhere.

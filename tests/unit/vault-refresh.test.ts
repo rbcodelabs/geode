@@ -1,6 +1,14 @@
 import { expect, it } from "vitest";
 import * as refresh from "../../src/shared/vault-refresh";
 
+it("keeps the banner compact and retains safety and committed-state distinctions", () => {
+  const failure = refresh.vaultRefreshFailure("EACCES");
+  expect(refresh.vaultRefreshPresentation("unavailable", failure, { version: "1", savesPaused: false }).banner).toBe("Vault refresh failed. Your previous file list is unchanged.");
+  expect(refresh.vaultRefreshPresentation("unavailable", failure, { version: "1", savesPaused: true }).banner).toContain("Saving is paused—keep Geode open.");
+  const committed = refresh.vaultRefreshPresentation("unavailable", failure, { version: "1", savesPaused: false, manifestCommitted: true });
+  expect(committed.banner).toBe("File list refreshed; a follow-up step failed.");
+});
+
 it.each(["/Users/private/note.md", "../note.md", "C:\\secret.md", "https://example.com", "note.md?token=secret", "note\nsecret.md", "file\u202etxt.md", "file#secret"])("redacts unsafe paths: %s", path => {
   expect(refresh.safeRelativePath(path)).toBeUndefined();
 });

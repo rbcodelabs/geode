@@ -32,7 +32,7 @@ export function vaultRefreshFailure(error: unknown, operation: VaultRefreshFailu
   return { operation: safeOperation, category: known[code] ?? "internal", code, ...(safeRelativePath(relativePath) ? { path: relativePath } : {}) };
 }
 
-export function vaultRefreshPresentation(status: string, failure: VaultRefreshFailure, context: { version: string; savesPaused: boolean; manifestCommitted?: boolean }): { message: string; details: string; report: string } {
+export function vaultRefreshPresentation(status: string, failure: VaultRefreshFailure, context: { version: string; savesPaused: boolean; manifestCommitted?: boolean }) {
   failure = vaultRefreshFailure({ code: failure.code }, failure.operation, failure.path);
   const explanation: Record<VaultRefreshFailure["category"], string> = {
     permission: "Access was denied while refreshing the vault. Check folder access permissions, then retry. On mobile, reconnect the same vault if access needs renewing.",
@@ -51,5 +51,15 @@ export function vaultRefreshPresentation(status: string, failure: VaultRefreshFa
   const safe = vaultRefreshFailure({ code: failure.code }, failure.operation, failure.path);
   const details = `Operation: ${safe.operation}\nCategory: ${safe.category}\nCode: ${safe.code}\nPath: ${safe.path ?? "Not available (or vault root)"}`;
   const report = `Geode ${context.version}\nVault refresh: ${status}\nOperation: ${safe.operation}\nCategory: ${safe.category}\nCode: ${safe.code}\nPath: ${safe.path ? "<redacted>" : "Not available (or vault root)"}\nRefresh holding saves: ${context.savesPaused ? "yes" : "no"}\nManifest committed: ${context.manifestCommitted ? "yes" : "no"}`;
-  return { message: `${reason} ${preservation}${edits}`, details, report };
+  const banner = context.manifestCommitted ? "File list refreshed; a follow-up step failed." : "Vault refresh failed. Your previous file list is unchanged.";
+  const sentenceEnd = reason.indexOf(". ");
+  return {
+    banner: context.savesPaused ? `${context.manifestCommitted ? banner : "Vault refresh failed."} Saving is paused—keep Geode open.` : banner,
+    message: `${reason} ${preservation}${edits}`, details, report,
+    cause: sentenceEnd < 0 ? reason : reason.slice(0, sentenceEnd + 1),
+    guidance: sentenceEnd < 0 ? "Retry; if it keeps failing, copy diagnostics for troubleshooting." : reason.slice(sentenceEnd + 2),
+    preservation: `${context.manifestCommitted ? preservation : "Your previous file list is unchanged."} This does not confirm that unsaved edits are on disk.`,
+    warning: context.savesPaused ? "Saving is paused. Keep Geode open and copy unsaved text somewhere safe. Check note recovery warnings before retrying." : undefined,
+    rows: [ { label: "Operation", value: safe.operation }, { label: "Error code", value: safe.code }, { label: "Path in vault", value: safe.path ?? "Not available (or vault root)" } ],
+  };
 }
