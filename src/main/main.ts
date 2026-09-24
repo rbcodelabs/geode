@@ -750,6 +750,21 @@ function registerIpc() {
     });
   });
 
+  ipcMain.handle("vault-refresh-scan", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (!session) return { status: "unavailable", entries: [], failure: { operation: "scan", category: "missing-path", code: "VAULT_NOT_FOUND" } };
+    try {
+      const entries = await listVaultFiles(session.root, { strictSync: true, refreshOnly: true });
+      if (sessions.get(win!.id) !== session) return { status: "cancelled", entries: [] };
+      return { status: "complete", entries };
+    } catch (error) {
+      // Return an envelope: Electron does not preserve custom thrown Error fields.
+      const failure = error instanceof Error && "failure" in error ? error.failure : { operation: "scan", category: "internal", code: "UNKNOWN" };
+      return { status: "unavailable", entries: [], failure };
+    }
+  });
+
   ipcMain.handle("vault-sync-scan", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);

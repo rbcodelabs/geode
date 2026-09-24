@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { VaultRefreshResult } from "../shared/vault-refresh";
 import { pathToFileURL } from "node:url";
 import * as path from "node:path";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
@@ -112,6 +113,7 @@ const api = {
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
   scanForSync: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-sync-scan"),
+  scanForRefresh: (): Promise<VaultRefreshResult<VaultFileEntry>> => ipcRenderer.invoke("vault-refresh-scan"),
   httpRequest: (id: string, request: HostHttpRequest): Promise<HostHttpResponse> => ipcRenderer.invoke("host-http-request", id, request),
   cancelHttpRequest: (id: string): void => ipcRenderer.send("host-http-cancel", id),
   claimSyncOwner: (): Promise<string | null> => ipcRenderer.invoke("sync-owner-claim"),

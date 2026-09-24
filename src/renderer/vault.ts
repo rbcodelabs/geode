@@ -238,11 +238,12 @@ export class Vault extends Events {
     changes: ReconcileChange[];
     manifest?: VaultManifest;
     errorCode?: string;
+    failure?: import("../shared/vault-refresh").VaultRefreshFailure;
   }> {
     const previous = this.reconcileBaseline ?? this.currentManifest();
-    const scan = await this.host.vaultFiles.reconcileScan();
+    const scan = await (this.host.vaultFiles.refreshScan?.() ?? this.host.vaultFiles.reconcileScan());
     if (scan.status !== "complete") {
-      return { status: scan.status, changes: [], errorCode: scan.errorCode };
+      return { status: scan.status, changes: [], errorCode: scan.errorCode, failure: scan.failure };
     }
     // The sync scanner includes configuration; ordinary vault refresh must keep
     // the same hidden-path policy as initial loading and watcher events.

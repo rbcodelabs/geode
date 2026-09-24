@@ -605,10 +605,34 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.editor-conflict-banner button,
-.vault-reconcile-state button {
+.editor-conflict-banner button {
   min-height: 44px;
 }
+
+.vault-reconcile-state { padding: 6px 16px; font-size: var(--font-ui-small); flex-shrink: 0; }
+.vault-reconcile-icon { border: 1px solid var(--color-orange); border-radius: 50%; width: 18px; height: 18px; text-align: center; flex-shrink: 0; }
+.vault-reconcile-message { flex: 1 1 240px; min-width: 0; }
+.vault-reconcile-actions { display: flex; gap: 8px; margin-left: auto; }
+.vault-reconcile-actions button { min-height: 32px; }
+.modal.error-details-modal { width: 500px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 48px); padding: 0; border-radius: 12px; }
+.error-details-modal .modal-title { margin: 0; padding: 20px 48px 16px 24px; font-size: var(--font-ui-large); flex-shrink: 0; }
+.error-details-modal .modal-content { padding: 0 24px; min-height: 0; overflow-y: auto; overflow-wrap: anywhere; }
+.error-details-modal p { margin: 0 0 16px; line-height: 1.5; }
+.error-details-cause { font-weight: var(--font-semibold); }
+.error-details-guidance, .error-details-privacy { color: var(--text-muted); }
+.error-details-preservation { padding: 12px; background: var(--background-secondary); border-left: 3px solid var(--interactive-accent); border-radius: 4px; }
+.error-details-warning { padding: 12px; background: color-mix(in srgb, var(--color-orange) 18%, var(--background-primary)); border-radius: 4px; }
+.error-details-modal h3 { font-size: var(--font-ui-small); margin: 20px 0 12px; }
+.error-details-modal dl { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px 12px; font-size: var(--font-ui-small); margin: 0 0 16px; padding: 12px; border: 1px solid var(--background-modifier-border); background: var(--background-secondary); border-radius: 6px; }
+.error-details-modal dt { color: var(--text-muted); }
+.error-details-modal dd { margin: 0; font-family: var(--font-monospace); }
+.error-details-privacy, .error-details-feedback { font-size: var(--font-ui-smaller); }
+.error-details-feedback:empty { display: none; }
+.error-details-footer { display: flex; justify-content: space-between; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--background-modifier-border); flex-shrink: 0; }
+.error-details-footer button { min-height: 36px; }
+body.is-mobile .vault-reconcile-actions button,
+body.is-mobile .error-details-footer button { min-height: 44px; }
+body.is-mobile .error-details-modal .modal-close-button { width: 44px; height: 44px; top: 4px; inset-inline-end: 4px; }
 
 /* Sync conflict advisory banner — mounted below the view header, above the
    body, so it can coexist with the external-edit recovery banner that is

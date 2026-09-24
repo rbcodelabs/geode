@@ -1,4 +1,5 @@
 import type { GeodeApi } from "../../main/preload";
+import { vaultRefreshFailure } from "../../shared/vault-refresh";
 import type { HostServices, VaultFileEntry } from "./contracts";
 
 export type ElectronPreloadApi = Pick<GeodeApi,
@@ -12,7 +13,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "list" | "scanForSync" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "list" | "scanForSync" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
 >>;
 
@@ -93,6 +94,13 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
         if (!preload.scanForSync) return { status: "unavailable", entries: [], errorCode: "strict-scan-unavailable" };
         try { return { status: "complete", entries: await preload.scanForSync() }; }
         catch { return { status: "unavailable", entries: [], errorCode: "local-scan-failed" }; }
+      },
+      refreshScan: async () => {
+        try {
+          if (preload.scanForRefresh) return await preload.scanForRefresh();
+          if (preload.scanForSync) return { status: "complete", entries: await preload.scanForSync() };
+          return { status: "unavailable", entries: [], failure: vaultRefreshFailure(undefined) };
+        } catch (error) { return { status: "unavailable", entries: [], failure: vaultRefreshFailure(error) }; }
       },
     },
     deviceState: {

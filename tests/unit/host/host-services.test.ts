@@ -66,6 +66,15 @@ function createElectronPreloadFixture(): ElectronPreloadApi {
 }
 
 describe("HostServices", () => {
+  it("preserves structured desktop refresh failures across the host boundary without invoking sync", async () => {
+    const failure = { operation: "read-directory" as const, category: "permission" as const, code: "EACCES", path: "Folder" };
+    const scanForSync = vi.fn(async () => []);
+    const host = createElectronHost({ ...createElectronPreloadFixture(), scanForSync,
+      scanForRefresh: async () => ({ status: "unavailable", entries: [], failure }),
+    });
+    expect(await host.vaultFiles.refreshScan!()).toEqual({ status: "unavailable", entries: [], failure });
+    expect(scanForSync).not.toHaveBeenCalled();
+  });
   it("exposes the narrow external-root service only when provided by desktop", () => {
     const preload = createElectronPreloadFixture();
     expect(createElectronHost(preload).externalRoots).toBeUndefined();

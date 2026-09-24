@@ -102,11 +102,9 @@ export interface VaultFilesService {
   exists(path: string): Promise<boolean>;
   onChange(cb: (event: VaultEvent) => void): () => void;
   /** A bounded authoritative scan; non-complete results must not be diffed as deletion. */
-  reconcileScan(): Promise<{
-    status: "complete" | "partial" | "cancelled" | "unavailable";
-    entries: VaultFileEntry[];
-    errorCode?: string;
-  }>;
+  reconcileScan(): Promise<import("../../shared/vault-refresh").VaultRefreshResult<VaultFileEntry>>;
+  /** Ordinary refresh may exclude hidden configuration while remaining fail-closed. */
+  refreshScan?(): Promise<import("../../shared/vault-refresh").VaultRefreshResult<VaultFileEntry>>;
 }
 
 /** Device-local structured state. Implementations must keep this outside the active vault. */
