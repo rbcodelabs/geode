@@ -120,6 +120,68 @@ test("pointer cancellation cleans up resize listeners without accepting later mo
   await expect(handle).not.toHaveClass(/is-resizing/);
 });
 
+/**
+ * Regression: a *stacked* (top/bottom) split with content tall enough to
+ * overflow its assigned share rendered at its content's natural height
+ * instead of shrinking to the resized percentage — the resize handle still
+ * computed and applied correct `sizes`/`flex-basis` values throughout, but
+ * `.workspace-tabs.mod-top` had no `min-height: 0`, so its default
+ * `min-height: auto` (a flex item's default — "never shrink below your
+ * content's intrinsic height") silently overrode the assigned share. Only
+ * ever visible with content tall enough to hit that floor: every existing
+ * split/resize test used one-line `# Title`-style content, and this file's
+ * own `splitActiveLeaf("vertical")` calls above are actually horizontal
+ * (side-by-side) splits in disguise — `splitActiveLeaf`'s `_direction`
+ * parameter is unused; it's a horizontal-only facade over `addGroup` — so
+ * none of them exercised the stacked/column-flex layout this bug lives in.
+ * `Workspace.splitGroup(target, "bottom", ratio)` is used directly here to
+ * get a genuine vertical (column-direction) split.
+ */
+test("a vertical split with tall content still shrinks to its resized share", async () => {
+  await window.evaluate(async () => {
+    const app = (window as any).app;
+    const tallBody = Array.from({ length: 200 }, (_, i) => `Line ${i}`).join("\n\n");
+    const tall = await app.vault.create("Tall.md", `# Tall\n\n${tallBody}`);
+    await app.openFile(tall, false);
+    const short = await app.vault.create("Short.md", "# Short");
+    const group = app.workspace.groups[0];
+    const target = app.workspace.splitGroup(group, "bottom", 0.5);
+    app.workspace.setActiveGroup(target);
+    await app.openFile(short, false);
+  });
+  await expect(window.locator(".workspace-center .workspace-split.mod-vertical:not(.mod-root)")).toHaveCount(1);
+
+  const handle = window.getByRole("separator");
+  const box = await handle.boundingBox();
+  expect(box).not.toBeNull();
+  // Drag the divider most of the way down: the tall-content (top) pane
+  // should end up with a *small* share despite its content wanting far more
+  // room than that.
+  await handle.dispatchEvent("pointerdown", { clientX: box!.x + 2, clientY: box!.y + 2, pointerId: 9 });
+  // Drag UP (smaller clientY) to shrink the leading (top) pane's share.
+  await window.evaluate(() => window.dispatchEvent(new PointerEvent("pointermove", { clientY: 80, pointerId: 9 })));
+  await handle.dispatchEvent("pointerup", { clientY: 80, pointerId: 9 });
+
+  const result = await window.evaluate(() => {
+    const panes = [...document.querySelectorAll<HTMLElement>(".workspace-center .workspace-tabs")];
+    const containerHeight = document.querySelector(".workspace-center .workspace-split.mod-vertical:not(.mod-root)")!.getBoundingClientRect().height;
+    return {
+      heights: panes.map((pane) => pane.getBoundingClientRect().height),
+      sizes: (window as any).app.workspace.serialize().center.root.sizes,
+      containerHeight,
+    };
+  });
+  // `attachResize`'s own 240px-minimum-pane clamp is the floor here (240px
+  // of an ~800px-tall window), not a target this test picked.
+  expect(result.sizes[0]).toBeLessThan(0.32);
+  // The bug: the tall pane refused to shrink below its content's intrinsic
+  // height (hundreds of lines — far more than 30% of an 800px window) and
+  // rendered close to `containerHeight`, starving the short pane down near
+  // zero. Fixed, it tracks its assigned share within a few px of rounding.
+  expect(result.heights[0]).toBeLessThanOrEqual(result.containerHeight * 0.37);
+  expect(result.heights[0]).toBeCloseTo(result.containerHeight * result.sizes[0], -1);
+});
+
 test("three panes retain unrelated shares and persisted sizes restore after restart", async () => {
   const saved = await window.evaluate(async () => {
     const app = (window as any).app;
