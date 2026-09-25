@@ -32,7 +32,7 @@ test("ordinary and ratio splits preserve their requested allocations", async () 
   expect(result.ordinary).toEqual([0.5, 0.5]);
   expect(result.ratio[0]).toBeCloseTo(0.3, 6);
   expect(result.ratio[1]).toBeCloseTo(0.7, 6);
-  await expect(window.locator(".workspace-center > .workspace-center-resize-handle")).toHaveCount(1);
+  await expect(window.locator(".workspace-center .workspace-center-resize-handle")).toHaveCount(1);
 });
 
 test("a split workspace keeps a usable right sidebar collapse and expand control", async () => {
@@ -65,7 +65,7 @@ test("a real center-divider drag clamps, serializes, and restores after restart"
     const second = await app.vault.create("Drag second.md", "# Second");
     await app.openFile(second, false);
   });
-  const handle = window.locator(".workspace-center > .workspace-center-resize-handle");
+  const handle = window.locator(".workspace-center .workspace-center-resize-handle");
   const box = await handle.boundingBox();
   expect(box).not.toBeNull();
   await window.mouse.move(box!.x + 2, box!.y + 2);
@@ -73,7 +73,7 @@ test("a real center-divider drag clamps, serializes, and restores after restart"
   await window.mouse.move(0, box!.y + 2);
   await window.mouse.up();
   const result = await window.evaluate(() => {
-    const panes = [...document.querySelectorAll<HTMLElement>(".workspace-center > .workspace-tabs")];
+    const panes = [...document.querySelectorAll<HTMLElement>(".workspace-center .workspace-tabs")];
     return {
       widths: panes.map((pane) => pane.getBoundingClientRect().width),
       sizes: (window as any).app.workspace.serialize().center.root.sizes,
@@ -144,24 +144,29 @@ test("three panes retain unrelated shares and persisted sizes restore after rest
   expect(saved[1]).toBeCloseTo(0.35, 6);
   expect(saved[2]).toBeCloseTo(0.35, 6);
   expect(restored).toEqual(saved);
-  await expect(window.locator(".workspace-center > .workspace-center-resize-handle")).toHaveCount(2);
+  await expect(window.locator(".workspace-center .workspace-center-resize-handle")).toHaveCount(2);
 });
 
 test("removing first, middle, and last panes keeps sizes aligned after resize", async () => {
   const result = await window.evaluate(() => {
     const workspace = (window as any).app.workspace;
+    // `centerRoot` collapses to a lone (wrapper-less) TabGroup once only one
+    // pane remains, so it has no `.sizes` array at all then — the natural
+    // equivalent of the old flat `centerGroupSizes === [1]` is "one group,
+    // 100% implied share".
+    const sizesOf = () => Array.isArray(workspace.centerRoot?.sizes) ? [...workspace.centerRoot.sizes] : [1];
     workspace.splitActiveLeafWithRatio("vertical", 0.4);
     workspace.setActiveGroup(workspace.groups[1]);
     workspace.splitActiveLeafWithRatio("vertical", 0.5);
-    workspace.centerGroupSizes = [0.2, 0.3, 0.5];
+    workspace.centerRoot.sizes = [0.2, 0.3, 0.5];
     const snapshots: number[][] = [];
     workspace.groupEmptied(workspace.groups[1]);
-    snapshots.push([...workspace.centerGroupSizes]);
+    snapshots.push(sizesOf());
     workspace.groupEmptied(workspace.groups[0]);
-    snapshots.push([...workspace.centerGroupSizes]);
+    snapshots.push(sizesOf());
     workspace.splitActiveLeaf("vertical");
     workspace.groupEmptied(workspace.groups[1]);
-    snapshots.push([...workspace.centerGroupSizes]);
+    snapshots.push(sizesOf());
     return snapshots;
   });
   expect(result[0][0]).toBeCloseTo(2 / 7, 6);

@@ -792,25 +792,62 @@ body.is-mobile .error-details-modal .modal-close-button { width: 44px; height: 4
   min-width: 0;
 }
 
-.workspace-center > .workspace-center-resize-handle {
+/* Runtime split-tree wrapper divs (`CenterSplit.containerEl` in
+   workspace.ts). `.workspace-center` itself already lays its own direct
+   child out via the rule above and is excluded here (`:not(.mod-root)`) —
+   it always carries a hardcoded `mod-root mod-vertical` for Obsidian-compat
+   theme hooks that is unrelated to its actual (always-row) layout, and this
+   rule's `mod-vertical` would otherwise wrongly force it into a column. */
+.workspace-split.mod-horizontal:not(.mod-root) {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.workspace-split.mod-vertical:not(.mod-root) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-center .workspace-center-resize-handle {
   position: relative;
   flex: 0 0 5px;
-  width: 5px;
-  cursor: col-resize;
   background: var(--background-modifier-border);
   z-index: 2;
   -webkit-app-region: no-drag;
 }
 
-.workspace-center > .workspace-center-resize-handle::before {
+/* A resize handle's own drag axis follows its owning split's direction — a
+   horizontal split (panes side by side) gets a vertical bar you drag
+   left/right; a vertical split (panes stacked) gets a horizontal bar you
+   drag up/down. */
+.workspace-split.mod-horizontal > .workspace-center-resize-handle {
+  width: 5px;
+  cursor: col-resize;
+}
+.workspace-split.mod-vertical > .workspace-center-resize-handle {
+  height: 5px;
+  cursor: row-resize;
+}
+
+.workspace-split.mod-horizontal > .workspace-center-resize-handle::before {
   content: "";
   position: absolute;
   inset: 0 -4px;
 }
+.workspace-split.mod-vertical > .workspace-center-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
 
-.workspace-center > .workspace-center-resize-handle:hover,
-.workspace-center > .workspace-center-resize-handle.is-resizing,
-.workspace-center > .workspace-center-resize-handle:focus-visible {
+.workspace-center .workspace-center-resize-handle:hover,
+.workspace-center .workspace-center-resize-handle.is-resizing,
+.workspace-center .workspace-center-resize-handle:focus-visible {
   background: var(--interactive-accent);
   outline: none;
 }
@@ -1389,19 +1426,19 @@ body.is-mobile .workspace-ribbon {
     transform: translateY(var(--geode-visual-viewport-top, 0px));
   }
 
-  body.is-mobile .workspace-center > .workspace-tabs {
+  body.is-mobile .workspace-center .workspace-tabs {
     display: none;
   }
 
-  body.is-mobile .workspace-center > .workspace-tabs.is-mobile-center-active {
+  body.is-mobile .workspace-center .workspace-tabs.is-mobile-center-active {
     display: flex;
   }
 
-  body.is-mobile .workspace-center > .workspace-center-resize-handle {
+  body.is-mobile .workspace-center .workspace-center-resize-handle {
     display: none;
   }
 
-  body.is-mobile .workspace-center > .workspace-tabs > .workspace-tab-header-container {
+  body.is-mobile .workspace-center .workspace-tabs > .workspace-tab-header-container {
     display: none;
   }
 
@@ -1729,13 +1766,18 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   color: var(--text-normal);
 }
 
-/* Horizontal splits: only the outermost tab groups' toggle buttons are
-   meaningful (a left toggle in a middle/right group, or a right toggle in a
-   middle/left group, wouldn't sit next to the sidebar it controls). */
-.workspace-tabs:not(:first-child) .sidebar-toggle-button.mod-left {
+/* Only the true leftmost/rightmost tab groups' toggle buttons are meaningful
+   (a left toggle in a middle/right group, or a right toggle in a
+   middle/left group, wouldn't sit next to the sidebar it controls).
+   `mod-first-in-row`/`mod-last-in-row` are stamped by
+   `Workspace.syncSidebarToggleButtons()` from the flattened `groups` order —
+   a DOM sibling selector (`:first-child`/`:has(~ …)`) can't identify the true
+   visual edge once splits nest, since a group can be `:first-child` of an
+   inner nested split while sitting in a middle column overall. */
+.workspace-tabs:not(.mod-first-in-row) .sidebar-toggle-button.mod-left {
   display: none;
 }
-.workspace-center > .workspace-tabs:has(~ .workspace-tabs) .sidebar-toggle-button.mod-right {
+.workspace-tabs:not(.mod-last-in-row) .sidebar-toggle-button.mod-right {
   display: none;
 }
 

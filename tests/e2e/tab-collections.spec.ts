@@ -217,8 +217,12 @@ test("restores pane sizes with independent split-local collections and the activ
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const window = await app.firstWindow();
-    await expect(window.locator(".workspace-center > .workspace-tabs")).toHaveCount(2);
-    await expect(window.locator(".workspace-center > .workspace-center-resize-handle")).toHaveCount(1);
+    // Descendant, not direct-child: `.workspace-center`'s sole DOM child is the
+    // center root node's `containerEl` (a `CenterSplit` wrapper here, since
+    // there are two groups), so groups and the resize handle both sit one
+    // level deeper than they did in the old flat-row DOM.
+    await expect(window.locator(".workspace-center .workspace-tabs")).toHaveCount(2);
+    await expect(window.locator(".workspace-center .workspace-center-resize-handle")).toHaveCount(1);
     await expect(window.locator(".workspace-center .tab-collection-label")).toHaveCount(2);
     await expect(window.locator(".sidebar-tab-group .tab-collection-label")).toHaveCount(0);
     const state = await window.evaluate(() => {
