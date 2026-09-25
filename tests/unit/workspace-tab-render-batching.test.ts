@@ -250,9 +250,18 @@ describe("TabGroup render batching", () => {
 /** A `Workspace` built off the prototype, restoring into `group` only. */
 function fakeWorkspace(group: TabGroup, restoreLeafView: () => Promise<void>): Workspace {
   const workspace = Object.create(Workspace.prototype) as Workspace;
+  // `Workspace.groups` is a getter-only accessor (derived from `centerRoot`),
+  // so a fake built via `Object.create` — which never runs the constructor —
+  // can't set it through plain assignment/`Object.assign` (there's no
+  // setter). `defineProperty` installs a genuine own data property that
+  // shadows the accessor instead.
+  Object.defineProperty(workspace, "groups", { value: [group], writable: true, configurable: true, enumerable: true });
   Object.assign(workspace, {
-    groups: [group],
-    centerGroupSizes: [1],
+    // `restoreLayout`'s single-tabs-node fast path checks
+    // `this.centerRoot instanceof TabGroup` and, if so, restores directly
+    // into it (rather than building a detached replacement tree) — matching
+    // this fixture's single pre-existing `group` under test.
+    centerRoot: group,
     leftSidebar: { groups: [] },
     rightSidebar: { groups: [] },
     app: {
@@ -265,7 +274,7 @@ function fakeWorkspace(group: TabGroup, restoreLeafView: () => Promise<void>): W
     activeGroup: group,
     iterateLeaves() {},
     addGroup() {},
-    layoutCenterGroups() {},
+    syncSidebarToggleButtons() {},
     restoreSidebar: async () => {},
     restoreLeafView,
     getViewFactory: () => undefined,

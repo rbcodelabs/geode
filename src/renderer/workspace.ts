@@ -665,6 +665,13 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
 export class TabGroup implements LeafContainer {
   /** Geode companion split ownership; survives loss of its destination tab. */
   companionOwner?: string;
+  /**
+   * The `CenterSplit` this group is nested directly under, or `null` when the
+   * group itself *is* `Workspace.centerRoot` (no wrapping split at all — the
+   * common single-pane case). Always `null` for sidebar groups; only the
+   * center region has a runtime split tree.
+   */
+  parent: CenterSplit | null = null;
   readonly isSidebar: boolean;
   leaves: WorkspaceLeaf[] = [];
   active: WorkspaceLeaf | null = null;
@@ -870,7 +877,7 @@ export class TabGroup implements LeafContainer {
           target.extractLeaf(placeholder);
           this.workspace.moveLeaf(draggingLeaf, target);
         } else {
-          const target = this.workspace.addGroup(this.bodyDropEdge === "left" || this.bodyDropEdge === "top" ? undefined : this);
+          const target = this.workspace.splitGroup(this, this.bodyDropEdge, 0.5);
           this.workspace.moveLeaf(draggingLeaf, target);
         }
       } else {
@@ -1480,6 +1487,147 @@ export class TabGroup implements LeafContainer {
         logical[next]?.target.focus();
       };
     });
+  }
+}
+
+/** A node of `Workspace.centerRoot`'s runtime split tree: either a leaf pane or an internal split. */
+export type CenterNode = TabGroup | CenterSplit;
+
+/**
+ * An internal node of the center region's split tree. `TabGroup` is the only
+ * leaf type; `CenterSplit` is the only internal-node type — together they let
+ * the center region nest horizontal and vertical splits arbitrarily deep,
+ * mirroring the already-general `WorkspaceTreeNode` persisted shape.
+ *
+ * Sidebars are explicitly out of scope: `Sidebar` keeps its own separate,
+ * flat (single-level) group list untouched by this class.
+ */
+export class CenterSplit {
+  parent: CenterSplit | null;
+  children: CenterNode[] = [];
+  /** Parallel to `children`; sums to 1. */
+  sizes: number[] = [];
+  containerEl: HTMLElement;
+  private dividerEls: HTMLElement[] = [];
+  private activeResizeCleanup: (() => void) | null = null;
+
+  constructor(
+    private readonly workspace: Workspace,
+    readonly direction: "horizontal" | "vertical",
+    parent: CenterSplit | null
+  ) {
+    this.parent = parent;
+    this.containerEl = document.createElement("div");
+    this.containerEl.className = `workspace-split mod-${direction}`;
+  }
+
+  /** (Re)sync divider count, `order`, and flex-basis percentages for `children`/`sizes`. */
+  layout(): void {
+    this.sizes = normalizeCenterGroupSizes(this.sizes, this.children.length);
+    while (this.dividerEls.length < Math.max(0, this.children.length - 1)) {
+      const divider = document.createElement("div");
+      divider.className = "workspace-split-resize-handle workspace-center-resize-handle";
+      divider.setAttribute("role", "separator");
+      divider.setAttribute("aria-orientation", this.direction === "horizontal" ? "vertical" : "horizontal");
+      divider.setAttribute("aria-valuemin", "0");
+      divider.setAttribute("aria-valuemax", "100");
+      divider.tabIndex = 0;
+      this.containerEl.appendChild(divider);
+      this.dividerEls.push(divider);
+      this.attachResize(divider);
+    }
+    while (this.dividerEls.length > Math.max(0, this.children.length - 1)) {
+      this.dividerEls.pop()?.remove();
+    }
+    this.children.forEach((child, index) => {
+      child.containerEl.style.order = `${index * 2}`;
+      child.containerEl.style.flex = `1 1 ${this.sizes[index] * 100}%`;
+    });
+    this.dividerEls.forEach((divider, index) => {
+      divider.style.order = `${index * 2 + 1}`;
+      const pairShare = this.sizes[index] + this.sizes[index + 1];
+      const value = pairShare > 0 ? Math.round(this.sizes[index] / pairShare * 100) : 50;
+      divider.setAttribute("aria-valuenow", `${value}`);
+      divider.setAttribute("aria-label", `Resize panes (${value}% / ${100 - value}%)`);
+    });
+  }
+
+  resizePair(dividerIndex: number, leadingShare: number): void {
+    const leading = this.children[dividerIndex]?.containerEl;
+    const trailing = this.children[dividerIndex + 1]?.containerEl;
+    if (!leading || !trailing) return;
+    const dimension = this.direction === "horizontal" ? "width" : "height";
+    const pairShare = this.sizes[dividerIndex] + this.sizes[dividerIndex + 1];
+    const total = leading.getBoundingClientRect()[dimension] + trailing.getBoundingClientRect()[dimension];
+    const minimumShare = total > 0 ? pairShare * Math.min(240, total / 2) / total : 0;
+    const clamped = Math.max(minimumShare, Math.min(pairShare - minimumShare, leadingShare));
+    this.sizes[dividerIndex] = clamped;
+    this.sizes[dividerIndex + 1] = pairShare - clamped;
+    this.layout();
+  }
+
+  private attachResize(handle: HTMLElement): void {
+    const forwardKey = this.direction === "horizontal" ? "ArrowRight" : "ArrowDown";
+    const backwardKey = this.direction === "horizontal" ? "ArrowLeft" : "ArrowUp";
+    const dimension = this.direction === "horizontal" ? "width" : "height";
+    handle.addEventListener("keydown", (event) => {
+      if (event.key !== forwardKey && event.key !== backwardKey) return;
+      event.preventDefault();
+      const dividerIndex = this.dividerEls.indexOf(handle);
+      const pairShare = this.sizes[dividerIndex] + this.sizes[dividerIndex + 1];
+      const delta = pairShare * 0.05 * (event.key === forwardKey ? 1 : -1);
+      this.resizePair(dividerIndex, this.sizes[dividerIndex] + delta);
+      this.workspace.trigger("layout-change");
+    });
+    handle.addEventListener("pointerdown", (event) => {
+      if (this.workspace.isCompactMobile()) return;
+      event.preventDefault();
+      this.activeResizeCleanup?.();
+      const dividerIndex = this.dividerEls.indexOf(handle);
+      const leading = this.children[dividerIndex]?.containerEl;
+      const trailing = this.children[dividerIndex + 1]?.containerEl;
+      if (!leading || !trailing) return;
+      const axisStart = this.direction === "horizontal" ? event.clientX : event.clientY;
+      const leadingStart = leading.getBoundingClientRect()[dimension];
+      const trailingStart = trailing.getBoundingClientRect()[dimension];
+      const total = leadingStart + trailingStart;
+      const pairShare = this.sizes[dividerIndex] + this.sizes[dividerIndex + 1];
+      const minimum = Math.min(240, total / 2);
+      let finished = false;
+      const move = (moveEvent: PointerEvent) => {
+        const axisNow = this.direction === "horizontal" ? moveEvent.clientX : moveEvent.clientY;
+        const leadingPx = Math.max(minimum, Math.min(total - minimum, leadingStart + axisNow - axisStart));
+        this.resizePair(dividerIndex, pairShare * leadingPx / total);
+      };
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        window.removeEventListener("blur", finish);
+        handle.removeEventListener("pointercancel", finish);
+        handle.removeEventListener("lostpointercapture", finish);
+        handle.classList.remove("is-resizing");
+        if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+        if (this.activeResizeCleanup === finish) this.activeResizeCleanup = null;
+        this.workspace.trigger("layout-change");
+      };
+      handle.classList.add("is-resizing");
+      try { handle.setPointerCapture(event.pointerId); } catch { /* Synthetic events may not own a native pointer. */ }
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+      window.addEventListener("blur", finish);
+      handle.addEventListener("pointercancel", finish);
+      handle.addEventListener("lostpointercapture", finish);
+      this.activeResizeCleanup = finish;
+    });
+  }
+
+  /** Release any in-flight resize listeners. Called when this split is collapsed away or the workspace is torn down. */
+  dispose(): void {
+    this.activeResizeCleanup?.();
   }
 }
 
@@ -2115,6 +2263,26 @@ export interface PersistedSplitNode {
 
 export type WorkspaceTreeNode = PersistedTabNode | PersistedSplitNode;
 
+/** True if this node (or any descendant, at any depth) has real leaf/companion content. */
+export function nodeHasContent(node: WorkspaceTreeNode | null | undefined): boolean {
+  if (!node) return false;
+  if (node.type === "tabs") return !!(node.leaves.length || node.companionOwner);
+  return node.children.some(nodeHasContent);
+}
+
+/**
+ * If `node` is (or, through a chain of redundant single-child splits,
+ * reduces to) exactly one leaf group, return that group's node. A real
+ * `serialize()` never emits a single-child split, but hand-built or
+ * legacy-migrated persisted data can — and restoring one as an actual
+ * `CenterSplit` would violate the "every split has >=2 children" invariant
+ * the rest of the runtime tree relies on.
+ */
+export function soleTabsNode(node: WorkspaceTreeNode): PersistedTabNode | undefined {
+  if (node.type === "tabs") return node;
+  return node.children.length === 1 ? soleTabsNode(node.children[0]) : undefined;
+}
+
 export function normalizeCenterGroupSizes(sizes: readonly number[] | undefined, count: number): number[] {
   if (count <= 0) return [];
   const equal = () => Array.from({ length: count }, () => 1 / count);
@@ -2273,10 +2441,8 @@ export class Workspace extends Events {
   leftSidebar: Sidebar;
   rightSidebar: Sidebar;
   mobileDrawerBackdropEl: HTMLButtonElement;
-  groups: TabGroup[] = [];
-  centerGroupSizes: number[] = [];
-  private centerDividers: HTMLElement[] = [];
-  private activeCenterResizeCleanup: (() => void) | null = null;
+  /** Source of truth for the center region's layout — a single leaf or a recursive split tree. */
+  centerRoot!: CenterNode;
   activeGroup: TabGroup;
   /** viewType -> factory, populated by `Plugin.registerView` (see plugin.ts). */
   private viewFactories = new Map<string, (leaf: WorkspaceLeaf) => View>();
@@ -2317,9 +2483,54 @@ export class Workspace extends Events {
     this.compactQuery.addEventListener("change", this.breakpointHandler);
     this.tabletQuery.addEventListener("change", this.breakpointHandler);
     document.addEventListener("keydown", this.documentKeyHandler, true);
-    this.activeGroup = this.addGroup();
+    const initialGroup = new TabGroup(this, this.app);
+    this.setCenterRoot(initialGroup);
+    this.activeGroup = initialGroup;
     this.on("file-open", () => this.closeMobileDrawers(false));
+    // Stamps `mod-first-in-row`/`mod-last-in-row` on the lone initial group.
+    // CSS keys sidebar-toggle-button visibility off those classes (not DOM
+    // `:first-child`/`:last-child`, which nested splits make unreliable — see
+    // `syncSidebarToggleButtons`'s own doc comment), so without this call the
+    // cold-launch group never gets either class and both toggle buttons stay
+    // hidden until the next split or close event happens to sync them.
+    this.syncSidebarToggleButtons();
     this.syncAdaptivePresentation();
+  }
+
+  /**
+   * `Workspace.groups` — a depth-first flatten of `centerRoot`, in the same
+   * left-to-right/top-to-bottom reading order the DOM has always visually
+   * shown. Derived (not stored) so every existing read-only call site
+   * (`iterateLeaves`, `findLeafForFile`, etc.) keeps working unmodified.
+   *
+   * Sharp edge: this is a fresh array on every read. `.push`/`.splice` on it
+   * is a silent no-op — mutate `centerRoot`'s tree (via `splitGroup`/
+   * `closeGroup`) instead.
+   */
+  get groups(): TabGroup[] {
+    const out: TabGroup[] = [];
+    const walk = (node: CenterNode) => {
+      if (node instanceof CenterSplit) node.children.forEach(walk);
+      else out.push(node);
+    };
+    walk(this.centerRoot);
+    return out;
+  }
+
+  /** Swap `centerEl`'s one child to `node` and make it the new `centerRoot`. */
+  private setCenterRoot(node: CenterNode): void {
+    this.centerRoot = node;
+    node.parent = null;
+    if (this.centerEl.firstElementChild !== node.containerEl) {
+      this.centerEl.replaceChildren(node.containerEl);
+    }
+  }
+
+  /** Recursively release resize listeners for every split in the center tree. */
+  private disposeCenterTree(node: CenterNode): void {
+    if (!(node instanceof CenterSplit)) return;
+    node.dispose();
+    for (const child of node.children) this.disposeCenterTree(child);
   }
 
   isCompactMobile(): boolean {
@@ -2450,7 +2661,7 @@ export class Workspace extends Events {
   }
 
   dispose(): void {
-    this.activeCenterResizeCleanup?.();
+    this.disposeCenterTree(this.centerRoot);
     this.compactQuery.removeEventListener("change", this.breakpointHandler);
     this.tabletQuery.removeEventListener("change", this.breakpointHandler);
     document.removeEventListener("keydown", this.documentKeyHandler, true);
@@ -2540,134 +2751,98 @@ export class Workspace extends Events {
     return this.rightSidebar;
   }
 
-  addGroup(after?: TabGroup, leadingRatio = 0.5, companionOwner?: string): TabGroup {
+  /**
+   * Split `target` on `edge`, inserting a fresh empty `TabGroup` adjacent to
+   * it and returning it. The single primitive behind every center-region
+   * split: a same-direction parent gains a sibling (Case A); otherwise
+   * `target` is wrapped in a brand-new `CenterSplit` that takes its old slot
+   * (Case B). `target` always keeps `leadingRatio` of its prior allocation.
+   */
+  splitGroup(
+    target: TabGroup,
+    edge: "left" | "right" | "top" | "bottom",
+    leadingRatio = 0.5,
+    // Internal-only: lets `addGroup` publish companion ownership before this
+    // method's own layout/trigger calls below can let a reentrant caller
+    // observe the new group without it.
+    companionOwner?: string
+  ): TabGroup {
+    const direction: "horizontal" | "vertical" = edge === "left" || edge === "right" ? "horizontal" : "vertical";
+    const before = edge === "left" || edge === "top";
     const group = new TabGroup(this, this.app);
-    // Publish ownership before layout/activation events can reenter the API.
     group.companionOwner = companionOwner;
-    const donorIndex = after ? this.groups.indexOf(after) : Math.max(0, this.groups.length - 1);
-    this.centerGroupSizes = insertCenterGroupSize(this.centerGroupSizes, donorIndex, leadingRatio);
-    if (after) {
-      const i = this.groups.indexOf(after);
-      this.groups.splice(i + 1, 0, group);
-      after.containerEl.after(group.containerEl);
+    const parent = target.parent;
+
+    if (parent && parent.direction === direction) {
+      // Case A: same-direction parent — insert as a direct sibling.
+      const targetIndex = parent.children.indexOf(target);
+      const insertIndex = before ? targetIndex : targetIndex + 1;
+      parent.sizes = insertCenterGroupSize(parent.sizes, targetIndex, before ? 1 - leadingRatio : leadingRatio);
+      parent.children.splice(insertIndex, 0, group);
+      group.parent = parent;
+      if (before) target.containerEl.before(group.containerEl);
+      else target.containerEl.after(group.containerEl);
+      parent.layout();
     } else {
-      this.groups.push(group);
-      this.centerEl.appendChild(group.containerEl);
+      // Case B: no parent, or parent's direction doesn't match — wrap
+      // `target` alone in a brand-new split that takes its exact old slot.
+      const split = new CenterSplit(this, direction, parent);
+      split.children = before ? [group, target] : [target, group];
+      split.sizes = before ? [1 - leadingRatio, leadingRatio] : [leadingRatio, 1 - leadingRatio];
+      group.parent = split;
+      target.parent = split;
+      target.containerEl.replaceWith(split.containerEl);
+      for (const child of split.children) split.containerEl.appendChild(child.containerEl);
+      if (parent) {
+        const targetIndex = parent.children.indexOf(target);
+        parent.children[targetIndex] = split;
+        split.parent = parent;
+        // `parent.sizes[targetIndex]` already holds `target`'s old share —
+        // unchanged, it now belongs to `split` as a whole.
+      } else {
+        this.setCenterRoot(split);
+      }
+      split.layout();
     }
-    this.layoutCenterGroups();
+
     this.syncSidebarToggleButtons();
     this.syncAdaptivePresentation();
     this.trigger("layout-change");
     return group;
   }
 
-  private layoutCenterGroups(): void {
-    this.centerGroupSizes = normalizeCenterGroupSizes(this.centerGroupSizes, this.groups.length);
-    while (this.centerDividers.length < Math.max(0, this.groups.length - 1)) {
-      const divider = document.createElement("div");
-      divider.className = "workspace-split-resize-handle workspace-center-resize-handle";
-      divider.setAttribute("role", "separator");
-      divider.setAttribute("aria-orientation", "vertical");
-      divider.setAttribute("aria-valuemin", "0");
-      divider.setAttribute("aria-valuemax", "100");
-      divider.tabIndex = 0;
-      this.centerEl.appendChild(divider);
-      this.centerDividers.push(divider);
-      this.attachCenterResize(divider);
-    }
-    while (this.centerDividers.length > Math.max(0, this.groups.length - 1)) {
-      this.centerDividers.pop()?.remove();
-    }
-    this.groups.forEach((group, index) => {
-      group.containerEl.style.order = `${index * 2}`;
-      group.containerEl.style.flex = `1 1 ${this.centerGroupSizes[index] * 100}%`;
-    });
-    this.centerDividers.forEach((divider, index) => {
-      divider.style.order = `${index * 2 + 1}`;
-      const pairShare = this.centerGroupSizes[index] + this.centerGroupSizes[index + 1];
-      const value = pairShare > 0 ? Math.round(this.centerGroupSizes[index] / pairShare * 100) : 50;
-      divider.setAttribute("aria-valuenow", `${value}`);
-      divider.setAttribute("aria-label", `Resize panes (${value}% / ${100 - value}%)`);
-    });
-  }
-
-  private resizeCenterPair(dividerIndex: number, leadingShare: number): void {
-    const leading = this.groups[dividerIndex]?.containerEl;
-    const trailing = this.groups[dividerIndex + 1]?.containerEl;
-    if (!leading || !trailing) return;
-    const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
-    const total = leading.getBoundingClientRect().width + trailing.getBoundingClientRect().width;
-    const minimumShare = total > 0 ? pairShare * Math.min(240, total / 2) / total : 0;
-    const clamped = Math.max(minimumShare, Math.min(pairShare - minimumShare, leadingShare));
-    this.centerGroupSizes[dividerIndex] = clamped;
-    this.centerGroupSizes[dividerIndex + 1] = pairShare - clamped;
-    this.layoutCenterGroups();
-  }
-
-  private attachCenterResize(handle: HTMLElement): void {
-    handle.addEventListener("keydown", (event) => {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      event.preventDefault();
-      const dividerIndex = this.centerDividers.indexOf(handle);
-      const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
-      const delta = pairShare * 0.05 * (event.key === "ArrowRight" ? 1 : -1);
-      this.resizeCenterPair(dividerIndex, this.centerGroupSizes[dividerIndex] + delta);
-      this.trigger("layout-change");
-    });
-    handle.addEventListener("pointerdown", (event) => {
-      if (this.isCompactMobile()) return;
-      event.preventDefault();
-      this.activeCenterResizeCleanup?.();
-      const dividerIndex = this.centerDividers.indexOf(handle);
-      const leading = this.groups[dividerIndex]?.containerEl;
-      const trailing = this.groups[dividerIndex + 1]?.containerEl;
-      if (!leading || !trailing) return;
-      const startX = event.clientX;
-      const leadingStart = leading.getBoundingClientRect().width;
-      const trailingStart = trailing.getBoundingClientRect().width;
-      const total = leadingStart + trailingStart;
-      const pairShare = this.centerGroupSizes[dividerIndex] + this.centerGroupSizes[dividerIndex + 1];
-      const minimum = Math.min(240, total / 2);
-      let finished = false;
-      const move = (moveEvent: PointerEvent) => {
-        const leadingPx = Math.max(minimum, Math.min(total - minimum, leadingStart + moveEvent.clientX - startX));
-        this.resizeCenterPair(dividerIndex, pairShare * leadingPx / total);
-      };
-      const finish = () => {
-        if (finished) return;
-        finished = true;
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", finish);
-        window.removeEventListener("pointercancel", finish);
-        window.removeEventListener("blur", finish);
-        handle.removeEventListener("pointercancel", finish);
-        handle.removeEventListener("lostpointercapture", finish);
-        handle.classList.remove("is-resizing");
-        if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-        if (this.activeCenterResizeCleanup === finish) this.activeCenterResizeCleanup = null;
-        this.trigger("layout-change");
-      };
-      handle.classList.add("is-resizing");
-      try { handle.setPointerCapture(event.pointerId); } catch { /* Synthetic events may not own a native pointer. */ }
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", finish);
-      window.addEventListener("pointercancel", finish);
-      window.addEventListener("blur", finish);
-      handle.addEventListener("pointercancel", finish);
-      handle.addEventListener("lostpointercapture", finish);
-      this.activeCenterResizeCleanup = finish;
-    });
+  /**
+   * Compatibility facade over `splitGroup`: a new group to the right of
+   * `after` (or the last group), horizontal-only. Every pre-existing caller
+   * (`splitActiveLeaf`, `splitActiveLeafWithRatio`, `getOrCreateCompanionLeaf`,
+   * `restoreLayout`'s legacy backfill) keeps this exact signature.
+   */
+  addGroup(after?: TabGroup, leadingRatio = 0.5, companionOwner?: string): TabGroup {
+    const list = this.groups;
+    const target = after ?? list[list.length - 1];
+    return this.splitGroup(target, "right", leadingRatio, companionOwner);
   }
 
   /**
    * Keep every `TabGroup`'s sidebar-toggle buttons' `aria-label`/`title` in
    * sync with actual collapsed state. Called whenever a sidebar is toggled
-   * and whenever a new group is added (splits), so a freshly-created group
-   * doesn't start with stale "Collapse sidebar" labels if a sidebar is
+   * and whenever the center split tree changes shape, so a freshly-created
+   * group doesn't start with stale "Collapse sidebar" labels if a sidebar is
    * already collapsed.
+   *
+   * Also stamps `mod-first-in-row`/`mod-last-in-row` on each group's
+   * `containerEl`, in `groups`' flattened (visual reading-order) position.
+   * With nested splits, DOM `:first-child`/`:last-child` no longer identifies
+   * the true leftmost/rightmost pane (a group can be `:first-child` of an
+   * inner nested split while sitting in a middle column) — CSS keys off
+   * these classes instead of sibling position for the sidebar-toggle-button
+   * visibility rules.
    */
   syncSidebarToggleButtons(): void {
-    for (const group of this.groups) {
+    const groups = this.groups;
+    groups.forEach((group, index) => {
+      group.containerEl.classList.toggle("mod-first-in-row", index === 0);
+      group.containerEl.classList.toggle("mod-last-in-row", index === groups.length - 1);
       const leftLabel = this.isCompactMobile()
         ? "Open files drawer"
         : this.leftSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
@@ -2678,7 +2853,7 @@ export class Workspace extends Events {
         : this.rightSidebar.collapsed ? "Expand sidebar" : "Collapse sidebar";
       group.rightToggleEl.setAttribute("aria-label", rightLabel);
       group.rightToggleEl.title = rightLabel;
-    }
+    });
   }
 
   groupEmptied(group: TabGroup) {
@@ -2692,13 +2867,48 @@ export class Workspace extends Events {
       this.app.openEmptyTab(group);
       return;
     }
-    const i = this.groups.indexOf(group);
-    this.centerGroupSizes = removeCenterGroupSize(this.centerGroupSizes, i);
-    this.groups.splice(i, 1);
-    group.containerEl.remove();
-    this.layoutCenterGroups();
-    this.setActiveGroup(this.groups[Math.max(0, i - 1)]);
+    this.closeGroup(group);
     this.trigger("layout-change");
+  }
+
+  /** Splice `group` out of the center split tree, collapsing redundant single-child splits, then activate its nearest neighbor. */
+  private closeGroup(group: TabGroup): void {
+    const flatBefore = this.groups;
+    const flatIndex = flatBefore.indexOf(group);
+    const parent = group.parent!; // non-null: groupEmptied only calls this when groups.length > 1
+    const childIndex = parent.children.indexOf(group);
+    parent.children.splice(childIndex, 1);
+    parent.sizes = removeCenterGroupSize(parent.sizes, childIndex);
+    group.containerEl.remove();
+    this.collapseIfSingleChild(parent);
+    this.syncSidebarToggleButtons();
+    const remaining = this.groups;
+    this.setActiveGroup(remaining[Math.max(0, flatIndex - 1)] ?? remaining[0]);
+  }
+
+  /**
+   * If `split` was collapsed down to exactly one surviving child, unwrap it:
+   * the survivor takes `split`'s old slot in its own parent (preserving
+   * `split`'s old size share), one level up. Recurses upward since one
+   * collapse can cascade (a grandparent can itself become single-child).
+   */
+  private collapseIfSingleChild(split: CenterSplit): void {
+    if (split.children.length !== 1) {
+      split.layout();
+      return;
+    }
+    const survivor = split.children[0];
+    const grandparent = split.parent;
+    split.containerEl.replaceWith(survivor.containerEl);
+    split.dispose();
+    if (grandparent) {
+      const index = grandparent.children.indexOf(split);
+      grandparent.children[index] = survivor;
+      survivor.parent = grandparent;
+      this.collapseIfSingleChild(grandparent);
+    } else {
+      this.setCenterRoot(survivor);
+    }
   }
 
   setActiveGroup(group: TabGroup) {
@@ -3252,7 +3462,17 @@ export class Workspace extends Events {
       target.setActiveLeaf(leaf);
       // Moving a destination does not close its companion split. Retain the
       // empty group so subsequent navigation creates its replacement there.
-      if (from instanceof TabGroup && from.leaves.length === 0 && !from.companionOwner) this.groupEmptied(from);
+      //
+      // `this.groups.includes(from)` guards against acting on a `from` that
+      // is no longer reachable from `centerRoot` — `restoreLayout` builds its
+      // new split tree fully detached before swapping it in via
+      // `setCenterRoot`, and draining a preexisting builtin leaf out of the
+      // *old* (still-live, not-yet-swapped) tree during that build must only
+      // ever mutate whichever tree is actually live right now, never a
+      // detached one still being assembled or already discarded.
+      if (from instanceof TabGroup && from.leaves.length === 0 && !from.companionOwner && this.groups.includes(from)) {
+        this.groupEmptied(from);
+      }
     }
     this.trigger("layout-change");
   }
@@ -3324,9 +3544,13 @@ export class Workspace extends Events {
         type: "split", direction, sizes: sizes?.length === children.length ? sizes : children.map(() => 1 / children.length), children,
       };
     };
+    const serializeCenterNode = (node: CenterNode): WorkspaceTreeNode =>
+      node instanceof CenterSplit
+        ? { type: "split", direction: node.direction, sizes: [...node.sizes], children: node.children.map(serializeCenterNode) }
+        : nodeFor(node);
     return {
       version: 3,
-      center: { root: regionRoot(this.groups, "horizontal", this.centerGroupSizes), activeGroup },
+      center: { root: serializeCenterNode(this.centerRoot), activeGroup },
       left: {
         root: regionRoot(this.leftSidebar.groups as (Sidebar | TabGroup)[], "vertical", this.leftSidebar.groupSizes),
         collapsed: this.leftSidebar.collapsed,
@@ -3457,10 +3681,7 @@ export class Workspace extends Events {
     // sidebar pane.
     const preExisting = new Set<WorkspaceLeaf>();
     this.iterateLeaves((leaf) => preExisting.add(leaf));
-    const centerNodes = state.center.root?.type === "split" ? state.center.root.children : state.center.root ? [state.center.root] : [];
-    const hasContent =
-      centerNodes.some((node) => node.type === "tabs" && (node.leaves.length || node.companionOwner)) ||
-      !!state.left.root || !!state.right.root;
+    const hasContent = nodeHasContent(state.center.root) || !!state.left.root || !!state.right.root;
 
     // Restore sidebar chrome (width/collapsed/docked leaves) unconditionally,
     // even when there's no tab/leaf content at all — a sidebar the user
@@ -3471,83 +3692,131 @@ export class Workspace extends Events {
 
     if (!hasContent) return false;
 
-    // Rebuild the (non-empty) tab groups. Groups the snapshot didn't include
-    // are added as needed; a restored group that ends up empty gets exactly
-    // one placeholder tab (never accumulating empties across launches).
-    const targetGroups = Math.max(1, centerNodes.length);
-    while (this.groups.length < targetGroups) this.addGroup();
-    this.centerGroupSizes = normalizeCenterGroupSizes(
-      state.center.root?.type === "split" ? state.center.root.sizes : undefined,
-      this.groups.length
-    );
-    this.layoutCenterGroups();
-    for (let gi = 0; gi < this.groups.length; gi++) {
-      const group = this.groups[gi];
-      const gs = centerNodes[gi];
-      group.companionOwner = gs?.type === "tabs" ? gs.companionOwner : undefined;
-      if (gs?.type === "tabs") {
-        // Do not install the registry until all leaves exist: createLeaf()
-        // renders/normalizes after each addition, when no restored membership
-        // has been assigned yet, and would correctly (but prematurely) prune it.
-        const restoredCollections = (gs.collections ?? []).map((collection) => ({ ...collection }));
-        group.collections = [];
-        const restored: Array<{ leaf: WorkspaceLeaf; sourceIndex: number; collectionId?: string }> = [];
-        // Suppress the group's per-leaf tab-header rebuilds for the whole
-        // restore. `createLeaf()`, `moveLeaf()`, `setView()` and
-        // `setActiveLeaf()` below each call `renderTabs()`, which rebuilds every
-        // header built so far — O(N^2) across a group of N tabs (see
-        // `beginBatch()`). `finally` guarantees rendering resumes even if a view
-        // fails to restore, since a leaked flag would freeze every later render.
-        group.beginBatch();
-        try {
-          for (let sourceIndex = 0; sourceIndex < gs.leaves.length; sourceIndex++) {
-            const ls = gs.leaves[sourceIndex];
-            if ((ls.type === "markdown" || ls.type === "canvas") && ls.file && !this.app.vault.getFileByPath(ls.file)) continue;
-            const factory = this.getViewFactory(ls.type);
-            const existingBuiltin = ls.type !== "markdown" && ls.type !== "empty" && !factory
-              ? pickExistingBuiltinLeaf(this.getLeavesOfType(ls.type), preExisting)
-              : undefined;
-            if (existingBuiltin) {
-              this.moveLeaf(existingBuiltin, group);
-              existingBuiltin.companionOwner = ls.companionOwner;
-              if (ls.pinned) existingBuiltin.setPinned(true);
-              existingBuiltin.collectionId = ls.collectionId;
-              restored.push({ leaf: existingBuiltin, sourceIndex, collectionId: ls.collectionId });
-            } else {
-              const leaf = group.createLeaf(ls.companionOwner);
-              await this.restoreLeafView(leaf, ls);
-              leaf.collectionId = ls.collectionId;
-              restored.push({ leaf, sourceIndex, collectionId: ls.collectionId });
-            }
-          }
-          const normalized = normalizeTabCollections(
-            restored.map((entry) => ({ ...entry, id: entry.leaf.id })),
-            restoredCollections,
-          );
-          group.collections = normalized.collections;
-          const restoredByLeaf = new Map(normalized.leaves.map((entry) => [entry.leaf, entry]));
-          group.leaves = normalized.leaves.map((entry) => entry.leaf);
-          for (const entry of normalized.leaves) entry.leaf.collectionId = entry.collectionId;
-          const chosen = selectNearestSurvivor(normalized.leaves, gs.active);
-          if (chosen && restoredByLeaf.has(chosen.leaf)) group.setActiveLeaf(chosen.leaf);
-        } finally {
-          // Collection metadata is installed above, after every leaf exists, so
-          // the suppressed incremental renders cannot prune partial membership.
-          // This is the group's single rebuild, and it renders that completed
-          // registry explicitly: the chosen leaf may already be active, and the
-          // runtime same-leaf contract is a no-op.
-          group.endBatch();
-        }
-      }
-      if (group.leaves.length === 0) {
-        const leaf = group.createLeaf(group.companionOwner);
-        await leaf.setView(this.app.createEmptyView());
-      }
-      const active = group.active || group.leaves[0];
-      if (active) group.setActiveLeaf(active);
+    // Build the whole persisted shape as a fresh, fully detached tree — a
+    // recursive walk of `WorkspaceTreeNode`, mirroring its already-general
+    // shape — and only then swap it in as `centerRoot` in one step. Building
+    // detached (rather than growing the live tree in place, as the old flat
+    // implementation did) is what lets this handle arbitrary split nesting
+    // with one code path instead of a flat pre-allocate-then-backfill dance.
+    const root = state.center.root ?? { type: "tabs" as const, leaves: [], active: 0 };
+    const singleGroupNode = soleTabsNode(root);
+    if (singleGroupNode && this.centerRoot instanceof TabGroup) {
+      // The common case (a freshly constructed workspace's lone bootstrap
+      // group, restoring a single-pane layout — or a legacy/hand-built
+      // persisted tree that reduces to one group through redundant
+      // single-child splits): populate that group in place rather than
+      // discarding it for an equivalent new one.
+      await this.restoreGroupLeaves(this.centerRoot, singleGroupNode, preExisting);
+    } else {
+      const newRoot = await this.restoreCenterNode(root, null, preExisting);
+      this.setCenterRoot(newRoot);
     }
-    const ag = this.groups[state.center.activeGroup ?? 0] ?? this.groups[0];
+    this.syncSidebarToggleButtons();
+
+    const groups = this.groups;
+    const ag = groups[state.center.activeGroup ?? 0] ?? groups[0];
     if (ag?.active) ag.setActiveLeaf(ag.active);
     return true;
+  }
+
+  /** Recursively rebuild one `WorkspaceTreeNode` into a live (but not-yet-attached) `CenterNode`. */
+  private async restoreCenterNode(
+    node: WorkspaceTreeNode,
+    parent: CenterSplit | null,
+    preExisting: ReadonlySet<WorkspaceLeaf>
+  ): Promise<CenterNode> {
+    if (node.type === "split" && node.children.length === 1) {
+      // Collapse a redundant single-child split away rather than
+      // materializing a `CenterSplit` that would itself violate the "every
+      // split has >=2 children" invariant `splitGroup`/`closeGroup` rely on.
+      return this.restoreCenterNode(node.children[0], parent, preExisting);
+    }
+    if (node.type === "split") {
+      const split = new CenterSplit(this, node.direction, parent);
+      const children: CenterNode[] = [];
+      for (const childNode of node.children) {
+        children.push(await this.restoreCenterNode(childNode, split, preExisting));
+      }
+      split.children = children;
+      split.sizes = normalizeCenterGroupSizes(node.sizes, children.length);
+      for (const child of children) split.containerEl.appendChild(child.containerEl);
+      split.layout();
+      return split;
+    }
+    const group = new TabGroup(this, this.app);
+    group.parent = parent;
+    await this.restoreGroupLeaves(group, node, preExisting);
+    return group;
+  }
+
+  /**
+   * Populate one restored `TabGroup`'s leaves/collections/active-leaf from
+   * its persisted node. Extracted from the old flat `restoreLayout` loop
+   * body unchanged, just invoked per-node from the recursive walk above.
+   */
+  private async restoreGroupLeaves(
+    group: TabGroup,
+    gs: PersistedTabNode,
+    preExisting: ReadonlySet<WorkspaceLeaf>
+  ): Promise<void> {
+    group.companionOwner = gs.companionOwner;
+    // Do not install the registry until all leaves exist: createLeaf()
+    // renders/normalizes after each addition, when no restored membership
+    // has been assigned yet, and would correctly (but prematurely) prune it.
+    const restoredCollections = (gs.collections ?? []).map((collection) => ({ ...collection }));
+    group.collections = [];
+    const restored: Array<{ leaf: WorkspaceLeaf; sourceIndex: number; collectionId?: string }> = [];
+    // Suppress the group's per-leaf tab-header rebuilds for the whole
+    // restore. `createLeaf()`, `moveLeaf()`, `setView()` and
+    // `setActiveLeaf()` below each call `renderTabs()`, which rebuilds every
+    // header built so far — O(N^2) across a group of N tabs (see
+    // `beginBatch()`). `finally` guarantees rendering resumes even if a view
+    // fails to restore, since a leaked flag would freeze every later render.
+    group.beginBatch();
+    try {
+      for (let sourceIndex = 0; sourceIndex < gs.leaves.length; sourceIndex++) {
+        const ls = gs.leaves[sourceIndex];
+        if ((ls.type === "markdown" || ls.type === "canvas") && ls.file && !this.app.vault.getFileByPath(ls.file)) continue;
+        const factory = this.getViewFactory(ls.type);
+        const existingBuiltin = ls.type !== "markdown" && ls.type !== "empty" && !factory
+          ? pickExistingBuiltinLeaf(this.getLeavesOfType(ls.type), preExisting)
+          : undefined;
+        if (existingBuiltin) {
+          this.moveLeaf(existingBuiltin, group);
+          existingBuiltin.companionOwner = ls.companionOwner;
+          if (ls.pinned) existingBuiltin.setPinned(true);
+          existingBuiltin.collectionId = ls.collectionId;
+          restored.push({ leaf: existingBuiltin, sourceIndex, collectionId: ls.collectionId });
+        } else {
+          const leaf = group.createLeaf(ls.companionOwner);
+          await this.restoreLeafView(leaf, ls);
+          leaf.collectionId = ls.collectionId;
+          restored.push({ leaf, sourceIndex, collectionId: ls.collectionId });
+        }
+      }
+      const normalized = normalizeTabCollections(
+        restored.map((entry) => ({ ...entry, id: entry.leaf.id })),
+        restoredCollections,
+      );
+      group.collections = normalized.collections;
+      const restoredByLeaf = new Map(normalized.leaves.map((entry) => [entry.leaf, entry]));
+      group.leaves = normalized.leaves.map((entry) => entry.leaf);
+      for (const entry of normalized.leaves) entry.leaf.collectionId = entry.collectionId;
+      const chosen = selectNearestSurvivor(normalized.leaves, gs.active);
+      if (chosen && restoredByLeaf.has(chosen.leaf)) group.setActiveLeaf(chosen.leaf);
+    } finally {
+      // Collection metadata is installed above, after every leaf exists, so
+      // the suppressed incremental renders cannot prune partial membership.
+      // This is the group's single rebuild, and it renders that completed
+      // registry explicitly: the chosen leaf may already be active, and the
+      // runtime same-leaf contract is a no-op.
+      group.endBatch();
+    }
+    if (group.leaves.length === 0) {
+      const leaf = group.createLeaf(group.companionOwner);
+      await leaf.setView(this.app.createEmptyView());
+    }
+    const active = group.active || group.leaves[0];
+    if (active) group.setActiveLeaf(active);
   }
 }
