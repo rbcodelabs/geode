@@ -1410,6 +1410,27 @@ function isWebViewerGuest(guest: Electron.WebContents): boolean {
 }
 
 /**
+ * The Claude Threads plugin's "Agent Browser" partition (a separate repo,
+ * `rbcodelabs/agent-threads`, out of scope here). Independent literal, same
+ * pattern as WEBVIEWER_PARTITION above relative to web-view.ts: Geode cannot
+ * import the plugin's own `AGENT_BROWSER_PARTITION` constant across repos, so
+ * this string is kept in sync with it by convention/comment, not by import.
+ * See docs/adr/0022-agent-browser-popup-bridge.md.
+ */
+const AGENT_BROWSER_PARTITION = "persist:agent-browser";
+
+/**
+ * Exact-instance session check, mirroring `isWebViewerGuest` above. Agent
+ * Browser guests are hosted off-screen, outside Geode's tab system entirely
+ * (see `agentBrowserHost.ts` in the plugin), but they still attach as
+ * ordinary `<webview>` guests to this same `BrowserWindow`, so the same
+ * partition-identity check applies.
+ */
+function isAgentBrowserGuest(guest: Electron.WebContents): boolean {
+  return guest.session === session.fromPartition(AGENT_BROWSER_PARTITION);
+}
+
+/**
  * Every live Web Viewer guest, by WebContents id. The popup relay resolves its
  * delivery target through this map rather than `webContents.fromId`, so a
  * handle id that somehow named a WebContents outside the Web Viewer — an
@@ -1419,11 +1440,34 @@ function isWebViewerGuest(guest: Electron.WebContents): boolean {
 const webViewerGuests = new Map<number, Electron.WebContents>();
 
 /**
+ * The Agent Browser equivalent of `webViewerGuests`, kept as a fully separate
+ * map rather than a second partition folded into the same one. See
+ * `agentBrowserPopups` below for why the separation must be structural, not
+ * just conventional.
+ */
+const agentBrowserGuests = new Map<number, Electron.WebContents>();
+
+/**
  * Pairing state for the popup/opener shim. One registry for the whole app:
  * WebContents ids are process-global, and the registry scopes pairing to a
  * single BrowserWindow itself rather than relying on per-window instances.
  */
 const webViewerPopups = new WebViewerPopupRegistry({ newHandleId: randomUUID });
+
+/**
+ * A second, fully independent `WebViewerPopupRegistry` instance for Agent
+ * Browser guests — deliberately not a shared registry with `webViewerPopups`.
+ * Both guest kinds attach `<webview>`s inside the *same* `BrowserWindow` (one
+ * off-screen container in the same renderer document as the Web Viewer's own
+ * tabs), so `windowId` alone gives zero separation between them. A shared
+ * registry would let a Web Viewer popup request and an Agent Browser guest's
+ * navigation to the same URL in the same window pair with each other across
+ * the two security domains — handing an attacker-navigable, agent-driven page
+ * a live `window.opener` onto the user's Web Viewer tab, or vice versa. Two
+ * independent instances make that structurally impossible rather than
+ * heuristically unlikely. See docs/adr/0022-agent-browser-popup-bridge.md §3.
+ */
+const agentBrowserPopups = new WebViewerPopupRegistry({ newHandleId: randomUUID });
 
 /**
  * Relay a popup/opener `postMessage` after checking it authoritatively here.
@@ -1433,8 +1477,14 @@ const webViewerPopups = new WebViewerPopupRegistry({ newHandleId: randomUUID });
  * main frame — so a page cannot lie about who it is, and cannot learn where
  * the other side has navigated by probing targetOrigin (a mismatch is dropped
  * silently, exactly as a browser drops it).
+ *
+ * `guests` is passed in rather than hardcoded so the same logic serves both
+ * `webViewerGuests` and `agentBrowserGuests` — the send-target lookup must
+ * stay scoped to the caller's own guest map, never able to resolve into the
+ * other partition's guests.
  */
 function deliverPopupMessage(input: {
+  guests: Map<number, Electron.WebContents>;
   senderFrameUrl: string | undefined;
   receiverGuestId: number;
   handleId: string;
@@ -1443,7 +1493,7 @@ function deliverPopupMessage(input: {
   targetOrigin: unknown;
 }): void {
   if (typeof input.targetOrigin !== "string") return;
-  const receiver = webViewerGuests.get(input.receiverGuestId);
+  const receiver = input.guests.get(input.receiverGuestId);
   if (!receiver || receiver.isDestroyed()) return;
   const senderOrigin = originOf(input.senderFrameUrl ?? "");
   const receiverOrigin = originOf(receiver.mainFrame?.url ?? "");
@@ -1458,16 +1508,39 @@ function deliverPopupMessage(input: {
   } satisfies PopupRelayMessage);
 }
 
-function notifyPopupGuest(guestId: number, message: PopupRelayMessage): void {
-  const target = webViewerGuests.get(guestId);
+function notifyPopupGuest(
+  guests: Map<number, Electron.WebContents>,
+  guestId: number,
+  message: PopupRelayMessage,
+): void {
+  const target = guests.get(guestId);
   if (!target || target.isDestroyed()) return;
   target.send(POPUP_RELAY_CHANNEL, message);
 }
 
 /**
- * Wire one Web Viewer guest into the popup/opener shim (see
+ * Everything `trackWebViewerPopupGuest`/`trackAgentBrowserPopupGuest` need to
+ * stay scoped to their own guest kind: which guest map and registry to use,
+ * and which IPC channel names to send the close/focus control messages on.
+ * The channel names differ per guest kind on purpose — `guest-window-close`/
+ * `guest-window-focus` are consumed by `app.ts`'s Web-Viewer-tab-owning logic,
+ * which has no notion of an Agent Browser guest and must not receive them.
+ */
+interface PopupGuestWiring {
+  guests: Map<number, Electron.WebContents>;
+  popups: WebViewerPopupRegistry;
+  closeChannel: string;
+  focusChannel: string;
+}
+
+/**
+ * Wire one guest into a popup/opener shim registry (see
  * src/main/webviewer-popups.ts for why the shim exists and what it does not
- * try to be).
+ * try to be). Shared by `trackWebViewerPopupGuest` and
+ * `trackAgentBrowserPopupGuest` — the two callers differ only in which guest
+ * map/registry/channel names they pass, per `PopupGuestWiring` above; the
+ * wiring logic itself is identical and kept in one place so a fix here cannot
+ * land for one guest kind and drift from the other.
  *
  * As with `trackWebViewerBridgeGuest` below, every handler is registered on
  * `guest.ipc` rather than globally, because only the WebContents-scoped
@@ -1476,16 +1549,18 @@ function notifyPopupGuest(guestId: number, message: PopupRelayMessage): void {
  * same turn it is called, and `window.opener` must exist before the page's
  * first inline script runs. Both of those depend on the opening guest staying
  * alive while the popup's tab is created — which is only true because
- * `TabGroup.revealActiveLeaf` keeps background tabs mounted.
+ * `TabGroup.revealActiveLeaf` keeps background tabs mounted (Web Viewer) or,
+ * for Agent Browser guests, because `agentBrowserHost.ts` never detaches them
+ * in the first place (see docs/adr/0022-agent-browser-popup-bridge.md §5).
  */
-function trackWebViewerPopupGuest(win: BrowserWindow, guest: Electron.WebContents): void {
-  if (!isWebViewerGuest(guest)) return;
+function trackPopupGuest(win: BrowserWindow, guest: Electron.WebContents, wiring: PopupGuestWiring): void {
+  const { guests, popups, closeChannel, focusChannel } = wiring;
   const guestId = guest.id;
-  webViewerGuests.set(guestId, guest);
-  webViewerPopups.noteGuestAttached(guestId);
+  guests.set(guestId, guest);
+  popups.noteGuestAttached(guestId);
 
   guest.ipc.on(POPUP_CLAIM_HANDLE_CHANNEL, (event) => {
-    event.returnValue = webViewerPopups.claimHandle(event.sender.id);
+    event.returnValue = popups.claimHandle(event.sender.id);
   });
   // Pairing is decided here, not when the page asks for it. A popup's first
   // navigation starts at the URL that was *requested*; by the time a document
@@ -1500,18 +1575,19 @@ function trackWebViewerPopupGuest(win: BrowserWindow, guest: Electron.WebContent
     // Subframes get no preload and so no shim; a same-document navigation is
     // not a load at all and must not spend the guest's one pairing chance.
     if (!details.isMainFrame || details.isSameDocument) return;
-    webViewerPopups.noteGuestNavigationStart(guestId, win.id, details.url);
+    popups.noteGuestNavigationStart(guestId, win.id, details.url);
   });
   guest.ipc.on(POPUP_CLAIM_OPENER_CHANNEL, (event) => {
     // No arguments, by design, and now not even a URL lookup: the page asks
     // only "am I paired?", and the answer is keyed by the guest id main read
     // off `event.sender`.
-    event.returnValue = webViewerPopups.claimOpener(event.sender.id);
+    event.returnValue = popups.claimOpener(event.sender.id);
   });
   guest.ipc.on(POPUP_POST_TO_OPENER_CHANNEL, (event, payload: { message?: unknown; targetOrigin?: unknown }) => {
-    const pair = webViewerPopups.pairForPopup(event.sender.id);
+    const pair = popups.pairForPopup(event.sender.id);
     if (!pair) return;
     deliverPopupMessage({
+      guests,
       senderFrameUrl: event.senderFrame?.url,
       receiverGuestId: pair.openerGuestId,
       handleId: pair.handleId,
@@ -1523,9 +1599,10 @@ function trackWebViewerPopupGuest(win: BrowserWindow, guest: Electron.WebContent
   guest.ipc.on(POPUP_POST_TO_POPUP_CHANNEL, (event, payload: { handleId?: unknown; message?: unknown; targetOrigin?: unknown }) => {
     // The handle id travels through the page, so ownership is re-checked
     // against the sending guest before it can address anything.
-    const pair = webViewerPopups.pairForOpenerHandle(event.sender.id, payload?.handleId);
+    const pair = popups.pairForOpenerHandle(event.sender.id, payload?.handleId);
     if (!pair) return;
     deliverPopupMessage({
+      guests,
       senderFrameUrl: event.senderFrame?.url,
       receiverGuestId: pair.popupGuestId,
       handleId: pair.handleId,
@@ -1539,34 +1616,60 @@ function trackWebViewerPopupGuest(win: BrowserWindow, guest: Electron.WebContent
     if (action !== "close" && action !== "focus") return;
     // Pairing never crosses BrowserWindows, so the target guest is always in
     // `win` and this window's renderer is always the one that owns its tab.
-    const send = (channel: "guest-window-close" | "guest-window-focus", targetGuestId: number) => {
+    const send = (channel: string, targetGuestId: number) => {
       if (!win.isDestroyed()) win.webContents.send(channel, targetGuestId);
     };
     if (request.target === "popup") {
-      const pair = webViewerPopups.pairForOpenerHandle(event.sender.id, request.handleId);
+      const pair = popups.pairForOpenerHandle(event.sender.id, request.handleId);
       if (!pair) return;
-      send(action === "close" ? "guest-window-close" : "guest-window-focus", pair.popupGuestId);
+      send(action === "close" ? closeChannel : focusChannel, pair.popupGuestId);
       return;
     }
     if (request.target === "opener") {
-      const pair = webViewerPopups.pairForPopup(event.sender.id);
+      const pair = popups.pairForPopup(event.sender.id);
       // A popup may raise its opener but never close it — Chromium refuses
       // close() on a window the script did not open, and the opener tab was
       // opened by the user. The shim already declines to send this, so
       // reaching it means the page called the internal bridge directly.
       if (!pair || action !== "focus") return;
-      send("guest-window-focus", pair.openerGuestId);
+      send(focusChannel, pair.openerGuestId);
     }
   });
   guest.once("destroyed", () => {
-    webViewerGuests.delete(guestId);
-    const outcome = webViewerPopups.noteGuestDestroyed(guestId);
+    guests.delete(guestId);
+    const outcome = popups.noteGuestDestroyed(guestId);
     for (const target of outcome.popupClosed) {
-      notifyPopupGuest(target.guestId, { kind: "popup-closed", handleId: target.handleId });
+      notifyPopupGuest(guests, target.guestId, { kind: "popup-closed", handleId: target.handleId });
     }
     for (const target of outcome.openerGone) {
-      notifyPopupGuest(target.guestId, { kind: "opener-gone", handleId: target.handleId });
+      notifyPopupGuest(guests, target.guestId, { kind: "opener-gone", handleId: target.handleId });
     }
+  });
+}
+
+/** `trackPopupGuest` wired to the Web Viewer's registry, guest map, and IPC channel names. */
+function trackWebViewerPopupGuest(win: BrowserWindow, guest: Electron.WebContents): void {
+  if (!isWebViewerGuest(guest)) return;
+  trackPopupGuest(win, guest, {
+    guests: webViewerGuests,
+    popups: webViewerPopups,
+    closeChannel: "guest-window-close",
+    focusChannel: "guest-window-focus",
+  });
+}
+
+/**
+ * `trackPopupGuest` wired to the Agent Browser's own registry, guest map, and
+ * IPC channel names — see `agentBrowserPopups` above for why this must be a
+ * fully independent registry rather than sharing `webViewerPopups`.
+ */
+function trackAgentBrowserPopupGuest(win: BrowserWindow, guest: Electron.WebContents): void {
+  if (!isAgentBrowserGuest(guest)) return;
+  trackPopupGuest(win, guest, {
+    guests: agentBrowserGuests,
+    popups: agentBrowserPopups,
+    closeChannel: "agent-browser-window-close",
+    focusChannel: "agent-browser-window-focus",
   });
 }
 
@@ -1684,6 +1787,35 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
       webPreferences.contextIsolation = true;
       webPreferences.sandbox = true;
       webPreferences.preload = path.join(__dirname, "webviewer-bridge-preload.js");
+    } else if (params.partition === AGENT_BROWSER_PARTITION) {
+      // The Claude Threads plugin's "Agent Browser" guests (a separate repo —
+      // see AGENT_BROWSER_PARTITION above). Same security floor as the Web
+      // Viewer branch above, forced the same way and for the same reason:
+      // main decides, never trusts the guest. `agentBrowserHost.ts` sets
+      // `GUEST_WEBPREFERENCES` on the tag directly and does not set every
+      // field this bridge needs — most notably `sandbox`/`contextIsolation`
+      // are the plugin's own responsibility to request, but this handler is
+      // the actual enforcement point per docs/adr/0022-agent-browser-popup-
+      // bridge.md §4 (Gap G3), not merely a backstop for it.
+      //
+      // Deliberately NOT touched here: `backgroundThrottling`. The plugin
+      // sets `backgroundThrottling=no` on its tag for a real, load-bearing
+      // reason (an occlusion-throttled off-screen guest looks exactly like a
+      // hung page to it), and this branch only forces the same
+      // security-relevant subset the Web Viewer branch above forces — no
+      // more. Also deliberately out of scope: `allowpopups`, a tag attribute
+      // this handler cannot set (`params` is read-only here; only
+      // `webPreferences` is mutated) — until the plugin's own `<webview>` tag
+      // sets it, `window.open()` inside an Agent Browser guest stays blocked
+      // before `setWindowOpenHandler` below ever runs. That is a documented,
+      // expected gap on the other repo's side, not a bug here.
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      webPreferences.webSecurity = true;
+      webPreferences.allowRunningInsecureContent = false;
+      webPreferences.preload = path.join(__dirname, "agent-browser-bridge-preload.js");
     }
   });
   win.webContents.on("did-attach-webview", (_event, guest) => {
@@ -1693,6 +1825,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     bridgeGuestHotkeys(win, guest);
     trackWebViewerBridgeGuest(win, guest);
     trackWebViewerPopupGuest(win, guest);
+    trackAgentBrowserPopupGuest(win, guest);
     guest.setWindowOpenHandler(({ url, disposition }) => {
       let protocol = "";
       try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }
@@ -1701,13 +1834,26 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
         // handler returns: Chromium's CreateNewWindow is a synchronous call
         // into the browser process, so the guest's shimmed `window.open` runs
         // its claim on the same turn its native call returns and must find
-        // this entry already queued. Only Web Viewer guests take part — an
-        // artifact or canvas-preview guest keeps plain deny-and-reparent.
+        // this entry already queued.
+        //
+        // Web Viewer and Agent Browser guests each pair against their own
+        // registry and get their own event name — see docs/adr/0022-agent-
+        // browser-popup-bridge.md §2–3 for why these must stay independent.
+        // An artifact or canvas-preview guest matches neither branch and
+        // keeps the plain deny-and-reparent behavior this handler always had:
+        // unconditional `guest-window-open`, unchanged.
         if (isWebViewerGuest(guest)) {
           webViewerPopups.requestPopup({ openerGuestId: guest.id, windowId: win.id, url });
+          const request: GuestWindowOpenRequest = { url, guestId: guest.id, disposition };
+          win.webContents.send("guest-window-open", request);
+        } else if (isAgentBrowserGuest(guest)) {
+          agentBrowserPopups.requestPopup({ openerGuestId: guest.id, windowId: win.id, url });
+          const request: GuestWindowOpenRequest = { url, guestId: guest.id, disposition };
+          win.webContents.send("agent-browser-window-open", request);
+        } else {
+          const request: GuestWindowOpenRequest = { url, guestId: guest.id, disposition };
+          win.webContents.send("guest-window-open", request);
         }
-        const request: GuestWindowOpenRequest = { url, guestId: guest.id, disposition };
-        win.webContents.send("guest-window-open", request);
       }
       return { action: "deny" };
     });

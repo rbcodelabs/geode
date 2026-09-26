@@ -69,6 +69,14 @@ const builds = [
   },
   {
     ...common,
+    entryPoints: ["src/main/agent-browser-bridge-preload.ts"],
+    outfile: "dist/agent-browser-bridge-preload.js",
+    platform: "node",
+    format: "cjs",
+    external: ["electron"],
+  },
+  {
+    ...common,
     entryPoints: ["src/indexer/indexer-process.ts"],
     outfile: "dist/indexer-process.js",
     platform: "node",
