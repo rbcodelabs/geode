@@ -1,5 +1,5 @@
 import { Events } from "../events";
-import type { HostServices } from "../host/contracts";
+import type { HashCacheEntry, HostServices } from "../host/contracts";
 import { SyncCoordinator } from "./coordinator";
 import type { SyncApi, SyncConflict, SyncPreview, SyncProgress, SyncProgressPhase, SyncProvider, SyncRunResult, SyncStatus } from "./types";
 import { SYNC_PROGRESS_THROTTLE_MS } from "./progress";
@@ -268,6 +268,15 @@ export class SyncService extends Events implements SyncApi {
         const folders = new Map<string, HistoryLocalResource>();
         const walked = scan.entries.length;
         let visited = 0;
+        // Every entry pays a full binary read plus a SHA-256 on every preview()/run()
+        // cycle even when its content hasn't changed since the last cycle — this
+        // cache (persisted per vault, keyed by (path, size, mtime), see
+        // HostServices.hashCache and metadata-cache-store.ts's hash_cache_entries
+        // table) skips both for any entry whose stat still matches. Absent host
+        // support (mobile/browser, where append-only sync never runs anyway) this
+        // degrades to the unconditional behavior that existed before it.
+        const hashCache = (await this.host.hashCache?.readAll()) ?? {}; assertContext();
+        const hashCacheUpdates: Record<string, HashCacheEntry> = {};
         for (const entry of scan.entries) {
           // Before the work, counting entries already finished — the same
           // convention `transferring` uses, so `completed` can never claim an
@@ -282,9 +291,16 @@ export class SyncService extends Events implements SyncApi {
           if (entry.size > SYNC_MAX_FILE_BYTES) { result.blocked.push({ namespace, path, reason: "File exceeds 100 MiB limit" }); continue; }
           const reason = namespace === "content" ? await provider.excludePath?.(path) : null; assertContext();
           if (reason) { result.excluded.push({ namespace, path, reason }); continue; }
-          const data = await read(resource); const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
-          if (contentReason) { result.excluded.push({ namespace, path, reason: contentReason }); continue; }
-          resource.sha256 = await hash(data); resource.size = data.byteLength;
+          const cached = hashCache[entry.path];
+          if (cached && cached.mtimeMs === entry.mtime && cached.size === entry.size) {
+            // Stat unchanged since the last cycle's hash: reuse it, no read, no digest.
+            resource.sha256 = cached.sha256;
+          } else {
+            const data = await read(resource); const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
+            if (contentReason) { result.excluded.push({ namespace, path, reason: contentReason }); continue; }
+            resource.sha256 = await hash(data); resource.size = data.byteLength;
+            hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: resource.size, sha256: resource.sha256 };
+          }
           if (namespace === "portable-config") resource.entityId = await this.stableId(state.binding!.vaultId, path);
           result.entries.push(resource);
         }
@@ -293,6 +309,11 @@ export class SyncService extends Events implements SyncApi {
         // that ends one entry short on screen is the exact frozen-at-96% bug the
         // progress work exists to remove, so it is stated rather than inferred.
         onProgress?.(walked, walked);
+        if (Object.keys(hashCacheUpdates).length) { await this.host.hashCache?.upsertBatch(hashCacheUpdates); assertContext(); }
+        // Only a complete scan is authoritative about which paths still exist —
+        // reusing pruneMetadataEntries' precedent, pruning against a partial/capped
+        // scan would delete cache rows for files the walk simply hasn't reached yet.
+        if (scan.status === "complete") { await this.host.hashCache?.prune(scan.entries.filter(item => !item.isFolder).map(item => item.path)); assertContext(); }
         for (const document of await projectPortableConfig(this.host.config, state.scope)) {
           const data = serializePortableConfig(document);
           const source = document.name === "hotkeys.json" ? "hotkeys" : document.name === "daily-notes.json" ? "daily-notes" : "app";

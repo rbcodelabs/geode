@@ -116,6 +116,30 @@ export interface VaultFilesService {
   refreshScan?(): Promise<import("../../shared/vault-refresh").VaultRefreshResult<VaultFileEntry>>;
 }
 
+/** A file's last-known content hash, keyed by `(path, size, mtime)` — see `HashCacheService`. */
+export interface HashCacheEntry {
+  mtimeMs: number;
+  size: number;
+  sha256: string;
+}
+
+/**
+ * Vault-local file-hash cache backing the append-only sync engine's per-cycle
+ * reuse check: a file whose size/mtime still match its cached entry can reuse
+ * `sha256` instead of paying a full binary read + SHA-256 digest again. Only
+ * ever populated when append-only sync (which itself requires `syncSafety`)
+ * is in use, so it is optional here and every caller must treat its absence
+ * as "no cache, always re-hash" rather than an error.
+ */
+export interface HashCacheService {
+  /** Every currently-cached entry, keyed by path. `null` means the cache could not be read (treat as empty). */
+  readAll(): Promise<Record<string, HashCacheEntry> | null>;
+  /** Upsert freshly-computed hashes after a cycle's re-hash. */
+  upsertBatch(entries: Record<string, HashCacheEntry>): Promise<void>;
+  /** Delete any cached entry whose path is not in `keepPaths` — call once per cycle with that cycle's full local path list. */
+  prune(keepPaths: string[]): Promise<void>;
+}
+
 /** Device-local structured state. Implementations must keep this outside the active vault. */
 export interface DeviceStateService {
   read<T>(key: string): Promise<T | null>;
@@ -223,6 +247,7 @@ export interface HostServices {
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;
   readonly vaultFiles: VaultFilesService;
+  readonly hashCache?: HashCacheService;
   readonly deviceState: DeviceStateService;
   readonly secrets: SecureSecretService;
   readonly config: ConfigService;

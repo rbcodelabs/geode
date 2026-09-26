@@ -184,6 +184,14 @@ const api = {
     ipcRenderer.invoke("metadata-cache-upsert", data),
   /** Delete any persisted row whose path is not in `paths` — call once, after all upsert batches have landed. */
   pruneMetadataCache: (paths: string[]): Promise<void> => ipcRenderer.invoke("metadata-cache-prune", paths),
+  /** Full `(path, size, mtime)` -> sha256 read of the append-only sync engine's local file-hash cache. */
+  readHashCache: (): Promise<Record<string, { mtimeMs: number; size: number; sha256: string }> | null> =>
+    ipcRenderer.invoke("hash-cache-read"),
+  /** Upsert a batch of freshly-computed hashes after a sync cycle's re-hash. */
+  upsertHashCacheEntries: (data: Record<string, { mtimeMs: number; size: number; sha256: string }>): Promise<void> =>
+    ipcRenderer.invoke("hash-cache-upsert", data),
+  /** Delete any cached hash whose path is not in `paths` — called once per cycle with that cycle's full local path list. */
+  pruneHashCache: (paths: string[]): Promise<void> => ipcRenderer.invoke("hash-cache-prune", paths),
   startMetadataIndexer: (): Promise<true | null> => ipcRenderer.invoke("metadata-indexer-start"),
   /** Fire-and-forget diagnostic: the renderer had to fall back to indexing the vault itself because the background utility process was unavailable. */
   reportMetadataFallback: (info: { reason: string; fileCount: number }): Promise<void> =>
@@ -382,7 +390,8 @@ export type GeodeApi = Omit<
   "audioCaptureWorklet" | "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
-  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead"
+  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 > & {
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
@@ -392,6 +401,18 @@ export type GeodeApi = Omit<
   upsertMetadataCacheEntries?: ElectronOnlyGeodeApi["upsertMetadataCacheEntries"];
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
+  /**
+   * Local file-hash cache, backing the append-only sync engine's per-cycle
+   * reuse check. Electron-only (like `syncSafety`/append-only sync itself,
+   * which requires desktop's guarded-mutation support) — declared optional
+   * here so `createLegacyGeodeFacade` (mobile/browser) isn't forced to fake
+   * an implementation it has no use for; `SyncService` already treats a
+   * missing cache as "always re-hash", which is exactly what those hosts did
+   * before this cache existed.
+   */
+  readHashCache?: ElectronOnlyGeodeApi["readHashCache"];
+  upsertHashCacheEntries?: ElectronOnlyGeodeApi["upsertHashCacheEntries"];
+  pruneHashCache?: ElectronOnlyGeodeApi["pruneHashCache"];
   requestUrl?: ElectronOnlyGeodeApi["requestUrl"];
   /** Absent on the mobile/browser facade — see `pluginFetch` in `src/renderer/plugin-fetch.ts` for its native-`fetch` fallback when unset. */
   pluginFetch?: ElectronOnlyGeodeApi["pluginFetch"];

@@ -5,14 +5,19 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   METADATA_DB_RELATIVE_PATH,
+  deleteHashCacheEntries,
   deleteMetadataEntries,
   deleteMetadataEntry,
+  isHashCacheEntries,
   openMetadataDb,
+  pruneHashCacheEntries,
   pruneMetadataEntries,
   readAllMetadataEntries,
+  readHashCacheEntries,
   readMetadataStats,
   replaceAllMetadataEntries,
   safeStringify,
+  upsertHashCacheEntries,
   upsertMetadataEntries,
 } from "../../src/main/metadata-cache-store";
 import {
@@ -271,6 +276,102 @@ describe("metadata cache store", () => {
     } finally {
       writer.close();
     }
+  });
+});
+
+describe("hash cache store", () => {
+  it("round-trips an upserted entry through readHashCacheEntries, sharing the same db handle/file as metadata_entries", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, { "A.md": entry() }); // proves the two tables coexist on one handle
+      upsertHashCacheEntries(db, { "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64) } });
+      expect(readHashCacheEntries(db)).toEqual({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64) } });
+      expect(Object.keys(readAllMetadataEntries(db).entries)).toEqual(["A.md"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("upsertHashCacheEntries overwrites an existing row for the same path (ON CONFLICT update, not a duplicate row)", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, { "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64) } });
+      upsertHashCacheEntries(db, { "A.md": { mtimeMs: 2, size: 5, sha256: "b".repeat(64) } });
+      expect(readHashCacheEntries(db)).toEqual({ "A.md": { mtimeMs: 2, size: 5, sha256: "b".repeat(64) } });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("deleteHashCacheEntries removes multiple rows in one transaction and is a no-op for an empty list", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, {
+        "A.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64) },
+        "B.md": { mtimeMs: 1, size: 1, sha256: "b".repeat(64) },
+        "C.md": { mtimeMs: 1, size: 1, sha256: "c".repeat(64) },
+      });
+      deleteHashCacheEntries(db, ["A.md", "C.md"]);
+      expect(Object.keys(readHashCacheEntries(db))).toEqual(["B.md"]);
+      expect(() => deleteHashCacheEntries(db, [])).not.toThrow();
+      expect(Object.keys(readHashCacheEntries(db))).toEqual(["B.md"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("pruneHashCacheEntries deletes rows absent from keepPaths and leaves the rest untouched", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, {
+        "Kept.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64) },
+        "Stale.md": { mtimeMs: 1, size: 1, sha256: "b".repeat(64) },
+      });
+      pruneHashCacheEntries(db, ["Kept.md"]);
+      expect(readHashCacheEntries(db)).toEqual({ "Kept.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64) } });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("pruneHashCacheEntries with an empty keep list deletes every row, mirroring an empty vault", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, { "A.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64) } });
+      pruneHashCacheEntries(db, []);
+      expect(readHashCacheEntries(db)).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+
+  it("treats a missing/never-created database file as a cache miss (empty entries, not an error)", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      expect(readHashCacheEntries(db)).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("isHashCacheEntries", () => {
+  it("accepts an empty object and a well-formed batch", () => {
+    expect(isHashCacheEntries({})).toBe(true);
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64) } })).toBe(true);
+  });
+
+  it("rejects an array, null, and an entry missing a required field", () => {
+    expect(isHashCacheEntries([])).toBe(false);
+    expect(isHashCacheEntries(null)).toBe(false);
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4 } })).toBe(false);
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: "1", size: 4, sha256: "a".repeat(64) } })).toBe(false);
   });
 });
 

@@ -319,3 +319,90 @@ it("summarizes blocked files into a short status message while keeping the full 
   expect(service.getStatus().message).not.toContain("Weird");
   expect(service.getHistoryDetails()?.blocked).toEqual(blocked);
 });
+
+// ---------------------------------------------------------------------------
+// Local file-hash cache (host.hashCache): sync-service.ts's `snapshot` closure
+// checks a persisted (path, size, mtime) -> sha256 cache before paying a full
+// binary read + SHA-256 for each scanned entry. These tests exercise that
+// through the real preview() -> plan() -> snapshot() path, stubbing only
+// host.vaultFiles/host.hashCache/host.syncSafety, exactly like the existing
+// "keeps structural parents..." test above.
+function makeHashCacheHarness(files: { path: string; isFolder: boolean; size: number; mtime: number; ctime: number }[], text: Record<string, string>) {
+  const stored = new Map<string, unknown>();
+  const cacheRows = new Map<string, { mtimeMs: number; size: number; sha256: string }>();
+  const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Shared" };
+  const readBinary = vi.fn(async (path: string) => new TextEncoder().encode(text[path]).buffer);
+  const hashCache = {
+    readAll: vi.fn(async () => Object.fromEntries(cacheRows)),
+    upsertBatch: vi.fn(async (entries: Record<string, { mtimeMs: number; size: number; sha256: string }>) => { for (const [path, entry] of Object.entries(entries)) cacheRows.set(path, entry); }),
+    prune: vi.fn(async (paths: string[]) => { const keep = new Set(paths); for (const path of [...cacheRows.keys()]) if (!keep.has(path)) cacheRows.delete(path); }),
+  };
+  const host = {
+    config: { read: async () => null },
+    deviceState: { read: async (key: string) => structuredClone(stored.get(key) ?? null), write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); } },
+    vaultFiles: { onChange: () => () => {}, reconcileScan: async () => ({ status: "complete", entries: files }), readBinary },
+    hashCache,
+    syncSafety: { claimOwner: async () => "lease", releaseOwner: async () => {}, storage: async (_token: string, _binding: string, request: any) => request.action === "load-operations" ? [] : undefined },
+  };
+  const service = new SyncService(host as never, () => "/synthetic/vault");
+  service.register("owner", {
+    id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL,
+    capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 },
+    discover: async () => [descriptor], createVault: async () => descriptor,
+    open: async () => ({ scan: async () => ({ status: "complete", records: [] }), close: async () => {} }),
+  } as never);
+  return { service, readBinary, hashCache, cacheRows };
+}
+
+it("reuses a cached hash and skips the binary read when a file's mtime and size are unchanged", async () => {
+  const files = [{ path: "Note.md", isFolder: false, size: 3, mtime: 1, ctime: 1 }];
+  const { service, readBinary, hashCache } = makeHashCacheHarness(files, { "Note.md": "old" });
+  try {
+    await service.activate("history"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    await service.preview();
+    expect(readBinary).toHaveBeenCalledTimes(1);
+    expect(hashCache.upsertBatch).toHaveBeenCalledWith({ "Note.md": { mtimeMs: 1, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+
+    readBinary.mockClear(); hashCache.upsertBatch.mockClear();
+    await service.preview();
+    expect(readBinary).not.toHaveBeenCalled();
+    expect(hashCache.upsertBatch).not.toHaveBeenCalled();
+  } finally { await service.cancel(); }
+});
+
+for (const changed of ["mtime", "size"] as const) it(`still re-hashes and updates the cache when a file's ${changed} changes`, async () => {
+  const files = [{ path: "Note.md", isFolder: false, size: 3, mtime: 1, ctime: 1 }];
+  const { service, readBinary, hashCache } = makeHashCacheHarness(files, { "Note.md": "old" });
+  try {
+    await service.activate("history"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    await service.preview();
+    expect(readBinary).toHaveBeenCalledTimes(1);
+
+    readBinary.mockClear(); hashCache.upsertBatch.mockClear();
+    if (changed === "mtime") files[0].mtime = 2; else files[0].size = 4;
+    await service.preview();
+    expect(readBinary).toHaveBeenCalledTimes(1);
+    expect(hashCache.upsertBatch).toHaveBeenCalledWith({ "Note.md": { mtimeMs: files[0].mtime, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+  } finally { await service.cancel(); }
+});
+
+it("prunes a removed file's cached hash on the next authoritative scan", async () => {
+  const files = [
+    { path: "Kept.md", isFolder: false, size: 3, mtime: 1, ctime: 1 },
+    { path: "Removed.md", isFolder: false, size: 3, mtime: 1, ctime: 1 },
+  ];
+  const { service, hashCache, cacheRows } = makeHashCacheHarness(files, { "Kept.md": "old", "Removed.md": "old" });
+  try {
+    await service.activate("history"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    await service.preview();
+    expect([...cacheRows.keys()].sort()).toEqual(["Kept.md", "Removed.md"]);
+
+    files.splice(1, 1); // "Removed.md" no longer present in the scan
+    await service.preview();
+    expect(hashCache.prune).toHaveBeenCalledWith(["Kept.md"]);
+    expect([...cacheRows.keys()]).toEqual(["Kept.md"]);
+  } finally { await service.cancel(); }
+});

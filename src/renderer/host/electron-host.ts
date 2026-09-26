@@ -14,7 +14,8 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
   "list" | "scanForSync" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
-  "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
+  "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" |
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 >>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
@@ -109,6 +110,13 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       write: async (key, value) => { if (preload.writeDeviceState) await preload.writeDeviceState(key, value); else fallbackDeviceState.set(key, structuredClone(value)); },
       remove: async key => { if (preload.removeDeviceState) await preload.removeDeviceState(key); else fallbackDeviceState.delete(key); },
     },
+    ...(preload.readHashCache && preload.upsertHashCacheEntries && preload.pruneHashCache ? {
+      hashCache: {
+        readAll: () => preload.readHashCache!(),
+        upsertBatch: entries => preload.upsertHashCacheEntries!(entries),
+        prune: paths => preload.pruneHashCache!(paths),
+      },
+    } : {}),
     secrets: {
       available: preload.isSecretStorageAvailable?.() ?? false,
       fromCapability: (capability) => {

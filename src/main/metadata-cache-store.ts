@@ -31,6 +31,43 @@ export function initializeMetadataSchema(db: DatabaseSync): void {
       mention_keys_json TEXT
     )
   `);
+  // Same vault, same file, same session lifecycle as metadata_entries above —
+  // a second table on the shared per-vault handle rather than a second sqlite
+  // file, so main.ts's session bookkeeping (open/close/generation) doesn't
+  // have to be duplicated for a cache that is operationally identical, just
+  // logically distinct (a file's content hash rather than its parsed
+  // frontmatter/links). See HashCacheEntry's doc comment for what this backs.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hash_cache_entries (
+      path     TEXT PRIMARY KEY,
+      mtime_ms REAL    NOT NULL,
+      size     INTEGER NOT NULL,
+      sha256   TEXT    NOT NULL
+    )
+  `);
+}
+
+/**
+ * A file's last-known content hash, keyed by `(path, size, mtime)` — the
+ * append-only sync engine's per-cycle reuse check (see
+ * `src/renderer/sync/sync-service.ts`'s `snapshot` closure): the file is
+ * re-hashed only when its size or mtime no longer match the cached values,
+ * exactly mirroring `MetadataFileStat`'s reuse check in
+ * `src/indexer/metadata-indexer.ts`.
+ */
+export interface HashCacheEntry {
+  mtimeMs: number;
+  size: number;
+  sha256: string;
+}
+
+/** IPC payload validator for a hash-cache upsert batch — mirrors `isPersistedMetadataIndexSnapshot`'s shape-check convention. */
+export function isHashCacheEntries(value: unknown): value is Record<string, HashCacheEntry> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every((entry) => {
+    const item = entry as Partial<HashCacheEntry> | null;
+    return !!item && typeof item.mtimeMs === "number" && typeof item.size === "number" && typeof item.sha256 === "string";
+  });
 }
 
 /**
@@ -219,6 +256,67 @@ export function pruneMetadataEntries(db: DatabaseSync, keepPaths: readonly strin
     .map((stat) => stat.path)
     .filter((path) => !keep.has(path));
   deleteMetadataEntries(db, stale);
+}
+
+/** Full (path, mtimeMs, size, sha256) read of every cached hash — the sync engine's per-cycle reuse-check load. */
+export function readHashCacheEntries(db: DatabaseSync): Record<string, HashCacheEntry> {
+  const rows = db
+    .prepare("SELECT path, mtime_ms AS mtimeMs, size, sha256 FROM hash_cache_entries")
+    .all() as unknown as { path: string; mtimeMs: number; size: number; sha256: string }[];
+  const entries: Record<string, HashCacheEntry> = {};
+  for (const row of rows) entries[row.path] = { mtimeMs: row.mtimeMs, size: row.size, sha256: row.sha256 };
+  return entries;
+}
+
+function hashCacheUpsertStatement(db: DatabaseSync) {
+  return db.prepare(`
+    INSERT INTO hash_cache_entries (path, mtime_ms, size, sha256)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(path) DO UPDATE SET
+      mtime_ms = excluded.mtime_ms,
+      size = excluded.size,
+      sha256 = excluded.sha256
+  `);
+}
+
+/** Upsert a batch of hash cache entries in one transaction — same rationale as `upsertMetadataEntries`. */
+export function upsertHashCacheEntries(db: DatabaseSync, entries: Record<string, HashCacheEntry>): void {
+  const paths = Object.keys(entries);
+  if (!paths.length) return;
+  const stmt = hashCacheUpsertStatement(db);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const path of paths) {
+      const entry = entries[path];
+      stmt.run(path, entry.mtimeMs, entry.size, entry.sha256);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Delete multiple hash cache rows in one transaction (e.g. a since-deleted or renamed-away path). */
+export function deleteHashCacheEntries(db: DatabaseSync, paths: string[]): void {
+  if (!paths.length) return;
+  const stmt = db.prepare("DELETE FROM hash_cache_entries WHERE path = ?");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const path of paths) stmt.run(path);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Delete hash cache rows whose path is NOT in `keepPaths` — same pattern as `pruneMetadataEntries`, called once per sync cycle with the cycle's full local path list. */
+export function pruneHashCacheEntries(db: DatabaseSync, keepPaths: readonly string[]): void {
+  const keep = new Set(keepPaths);
+  const rows = db.prepare("SELECT path FROM hash_cache_entries").all() as unknown as { path: string }[];
+  const stale = rows.map((row) => row.path).filter((path) => !keep.has(path));
+  deleteHashCacheEntries(db, stale);
 }
 
 /**
