@@ -199,6 +199,18 @@ export interface DesktopHostService {
   /** A popup/opener handle's `focus()`: reveal and activate that guest's tab. */
   onGuestWindowFocus(cb: (guestId: number) => void): () => void;
   onWebViewerBridgeEvent(cb: (ev: import("../../shared/web-viewer-connectors").NormalizedWebViewerEvent) => void): () => void;
+  /**
+   * The Agent Browser equivalent of `onGuestWindowOpen`: a URL a `<webview>`
+   * guest on the Claude Threads plugin's `persist:agent-browser` partition
+   * requested in a new browsing context (see main.ts's AGENT_BROWSER_PARTITION
+   * and docs/adr/0022-agent-browser-popup-bridge.md). No listener in this repo
+   * consumes it yet — it exists for the plugin's own login-handoff UI.
+   */
+  onAgentBrowserWindowOpen(cb: (request: {
+    url: string;
+    guestId: number;
+    disposition: "default" | "foreground-tab" | "background-tab" | "new-window" | "other";
+  }) => void): () => void;
   revealInFileManager(path: string): Promise<void>;
 }
 

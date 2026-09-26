@@ -374,3 +374,68 @@ describe("WebViewerPopupRegistry — teardown", () => {
     expect(registry.noteGuestNavigationStart(20, WINDOW_A, POPUP_URL)).toBeNull();
   });
 });
+
+/**
+ * Regression guard for docs/adr/0022-agent-browser-popup-bridge.md §3: main.ts
+ * now instantiates a second, fully independent `WebViewerPopupRegistry` for
+ * `persist:agent-browser` guests (`agentBrowserPopups`) alongside the
+ * existing `webViewerPopups`, specifically so a Web Viewer popup and an Agent
+ * Browser guest can never cross-pair even though both attach `<webview>`s
+ * inside the same `BrowserWindow` — `windowId` alone gives them zero
+ * separation. These tests use identical `windowId`/`url`/guest ids across two
+ * registries to prove that similarity alone, without a shared registry
+ * instance, cannot produce a pairing.
+ */
+describe("WebViewerPopupRegistry — cross-registry isolation", () => {
+  it("does not let a navigation on registry B claim a request made on registry A", () => {
+    const a = makeRegistry().registry;
+    const b = makeRegistry().registry;
+
+    a.noteGuestAttached(10);
+    a.requestPopup({ openerGuestId: 10, windowId: WINDOW_A, url: POPUP_URL });
+
+    // Same window id, same URL, same guest id shape as the paired case above —
+    // but noted on registry B, which has no pending entry of its own.
+    b.noteGuestAttached(20);
+    expect(b.noteGuestNavigationStart(20, WINDOW_A, POPUP_URL)).toBeNull();
+    expect(b.pairForPopup(20)).toBeNull();
+
+    // Registry A's own request is untouched and still claimable/pairable —
+    // registry B's call had no visibility into A's state at all.
+    expect(a.pendingCount()).toBe(1);
+    a.noteGuestAttached(21);
+    const pair = a.noteGuestNavigationStart(21, WINDOW_A, POPUP_URL);
+    expect(pair).not.toBeNull();
+    expect(pair?.openerGuestId).toBe(10);
+  });
+
+  it("does not let registry B's claimHandle see a request recorded on registry A", () => {
+    const a = makeRegistry().registry;
+    const b = makeRegistry().registry;
+
+    a.noteGuestAttached(10);
+    a.requestPopup({ openerGuestId: 10, windowId: WINDOW_A, url: POPUP_URL });
+
+    // Same opener guest id on registry B: nothing to claim there.
+    expect(b.claimHandle(10)).toBeNull();
+    expect(b.pendingCount()).toBe(0);
+    // Registry A still has it.
+    expect(a.pendingCount()).toBe(1);
+  });
+
+  it("does not let a guest destroyed on registry B affect registry A's pairing", () => {
+    const a = makeRegistry().registry;
+    const b = makeRegistry().registry;
+
+    a.noteGuestAttached(10);
+    const pending = a.requestPopup({ openerGuestId: 10, windowId: WINDOW_A, url: POPUP_URL });
+    a.noteGuestAttached(20);
+    const pair = a.noteGuestNavigationStart(20, WINDOW_A, POPUP_URL);
+    expect(pair).not.toBeNull();
+
+    // Destroying "guest 20" on registry B (which never heard of it) must not
+    // touch registry A's live pairing.
+    expect(b.noteGuestDestroyed(20)).toEqual({ popupClosed: [], openerGone: [] });
+    expect(a.pairForPopup(20)).toEqual({ handleId: pending.handleId, openerGuestId: 10, popupGuestId: 20 });
+  });
+});

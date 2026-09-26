@@ -311,6 +311,22 @@ const api = {
     return () => { ipcRenderer.removeListener("guest-window-open", listener); };
   },
   /**
+   * The Agent Browser equivalent of `onGuestWindowOpen`, for a `<webview>`
+   * guest on the Claude Threads plugin's `persist:agent-browser` partition
+   * (see main.ts's AGENT_BROWSER_PARTITION and
+   * docs/adr/0022-agent-browser-popup-bridge.md). Denied popups from that
+   * partition arrive here instead of `onGuestWindowOpen`, so a consumer can
+   * tell an ordinary Web Viewer/artifact/canvas-preview popup apart from one
+   * an agent-driven guest requested. No listener anywhere in this repo
+   * consumes it yet — it exists for the plugin to build a login-handoff UI
+   * on top of.
+   */
+  onAgentBrowserWindowOpen: (cb: (request: GuestWindowOpenRequest) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, request: GuestWindowOpenRequest) => cb(request);
+    ipcRenderer.on("agent-browser-window-open", listener);
+    return () => { ipcRenderer.removeListener("agent-browser-window-open", listener); };
+  },
+  /**
    * A shimmed `handle.close()` from the guest that opened this popup (see
    * src/main/webviewer-popups.ts). Sent to the host renderer rather than
    * asking the popup guest to call `window.close()` itself, so closing still

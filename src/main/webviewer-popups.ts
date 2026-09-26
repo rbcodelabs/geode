@@ -1,5 +1,12 @@
 /**
- * The pure state machine behind the Web Viewer's popup/opener bridge.
+ * The pure state machine behind Geode's popup/opener bridge. Designed to be
+ * instantiated once per guest kind rather than assuming the Web Viewer
+ * specifically: `main.ts` holds one `WebViewerPopupRegistry` for
+ * `persist:webviewer` guests and a second, fully independent instance for the
+ * Claude Threads plugin's `persist:agent-browser` guests (see
+ * docs/adr/0022-agent-browser-popup-bridge.md §3). Nothing below references
+ * "Web Viewer" beyond prose — `guestId`/`windowId`/`url` are already opaque to
+ * this module, and two instances share no state by construction.
  *
  * This depends on background tabs staying mounted. `TabGroup.revealActiveLeaf`
  * keeps every revealed leaf's element in `contentHostEl` and hides the

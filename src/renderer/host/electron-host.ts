@@ -10,7 +10,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "listPluginIds" | "listThemes" | "readThemeCss" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
-  | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent"
+  | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent" | "onAgentBrowserWindowOpen"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
   "list" | "scanForSync" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
@@ -154,6 +154,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       onGuestWindowClose: (cb) => preload.onGuestWindowClose(cb),
       onGuestWindowFocus: (cb) => preload.onGuestWindowFocus(cb),
       onWebViewerBridgeEvent: (cb) => preload.onWebViewerBridgeEvent(cb),
+      onAgentBrowserWindowOpen: (cb) => preload.onAgentBrowserWindowOpen(cb),
       revealInFileManager: (path) => preload.reveal(path),
     },
   };
