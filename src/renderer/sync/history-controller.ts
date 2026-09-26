@@ -79,7 +79,6 @@ export interface HistoryControllerState {
     previewSignature?: string;
     conflicts: HistoryConflict[];
     blocked: HistoryPathIssue[];
-    completedOperations: string[];
     pendingBatch?: string[];
     abandonRequested?: boolean;
     recoveryIssues?: HistoryPathIssue[];
@@ -304,9 +303,9 @@ export class HistoryController {
     private async load(signal: AbortSignal): Promise<HistoryControllerState> {
         const raw = await this.checked(signal, () => this.ports.load());
         if (raw === null || raw === undefined)
-            return { schema: 1, bindingKey: this.options.bindingKey, vaultId: this.options.vaultId, deviceId: this.options.deviceId, history: { records: {}, quarantined: {} }, baseline: {}, reservedEntities: {}, approved: false, conflicts: [], blocked: [], completedOperations: [] };
+            return { schema: 1, bindingKey: this.options.bindingKey, vaultId: this.options.vaultId, deviceId: this.options.deviceId, history: { records: {}, quarantined: {} }, baseline: {}, reservedEntities: {}, approved: false, conflicts: [], blocked: [] };
         const state = raw as HistoryControllerState;
-        if (state.schema !== 1 || state.bindingKey !== this.options.bindingKey || state.vaultId !== this.options.vaultId || state.deviceId !== this.options.deviceId || !state.history?.records || !state.history.quarantined || !state.baseline || !state.reservedEntities || !Array.isArray(state.completedOperations) || !Array.isArray(state.conflicts))
+        if (state.schema !== 1 || state.bindingKey !== this.options.bindingKey || state.vaultId !== this.options.vaultId || state.deviceId !== this.options.deviceId || !state.history?.records || !state.history.quarantined || !state.baseline || !state.reservedEntities || !Array.isArray(state.conflicts))
             throw new Error('Unsupported sync state; reconnect with a fresh preview');
         return state;
     }
@@ -826,7 +825,6 @@ export class HistoryController {
         for (const operation of operations)
             if (operation.phase === 'committed' && operation.baseline)
                 state.baseline[operation.entityId] = operation.baseline;
-        state.completedOperations = [...new Set([...state.completedOperations, ...operations.map(o => o.id)])];
         delete state.pendingBatch;
     }
     private async recover(state: HistoryControllerState, signal: AbortSignal) {

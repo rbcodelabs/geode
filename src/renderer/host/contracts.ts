@@ -1,4 +1,5 @@
 import type { ResourceRef } from "../../shared/root-registry";
+import type { HistoryLedgerService } from "../../shared/history-ledger";
 
 export interface VaultFileEntry {
   path: string;
@@ -224,6 +225,14 @@ export interface HostServices {
   readonly vaultRegistry: VaultRegistryService;
   readonly vaultFiles: VaultFilesService;
   readonly deviceState: DeviceStateService;
+  /**
+   * ADR-0027: backs the split history ledger — Electron-desktop only, used
+   * exclusively for the `sync-history/${root}/${bindingKey}` device-state
+   * key. Absent on hosts that can't provide it; `sync-service.ts` never
+   * reaches for it unless an append-only provider registered, which already
+   * requires `syncSafety` (guarded desktop support) to be present too.
+   */
+  readonly historyLedger?: HistoryLedgerService;
   readonly secrets: SecureSecretService;
   readonly config: ConfigService;
   readonly metadataIndex: MetadataIndexService;

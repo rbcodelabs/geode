@@ -46,6 +46,8 @@ import {
   replaceAllMetadataEntries,
   upsertMetadataEntries,
 } from "./metadata-cache-store";
+import { readHistoryLedgerState, writeHistoryLedgerState } from "./history-ledger-service";
+import type { HistoryLedgerWritePayload } from "../shared/history-ledger";
 import { parseLocalFileHref } from "../renderer/external-links";
 import { isAllowedAppNavigation } from "./navigation-policy";
 import { MetadataIndexerHost } from "./metadata-indexer-host";
@@ -868,7 +870,8 @@ function registerIpc() {
     return withVaultMutation(sessions.get(win.id)!.root, [abs], () => writeVaultBinary(abs, data, options));
   });
 
-  const deviceStore = new PrivateKeyStore(path.join(app.getPath("userData"), "device-state"), "json");
+  const deviceStateDir = path.join(app.getPath("userData"), "device-state");
+  const deviceStore = new PrivateKeyStore(deviceStateDir, "json");
   const secretStore = new PrivateKeyStore(path.join(app.getPath("userData"), "secrets"), "bin");
   const stateKey = (key: string) => {
     if (!key || key.includes("\0")) throw new Error("Invalid device-state key");
@@ -886,6 +889,10 @@ function registerIpc() {
   ipcMain.handle("device-state-read", async (_e, key: string) => JSON.parse((await deviceStore.read(stateKey(key)))?.toString("utf8") ?? "null"));
   ipcMain.handle("device-state-write", async (_e, key: string, value: unknown) => deviceStore.write(stateKey(key), Buffer.from(JSON.stringify(value))));
   ipcMain.handle("device-state-remove", async (_e, key: string) => deviceStore.remove(stateKey(key)));
+  // ADR-0027: the split history ledger. Used only for `sync-history/*` keys —
+  // every other device-state key keeps going through the plain handlers above.
+  ipcMain.handle("history-state-read", async (_e, key: string) => readHistoryLedgerState(deviceStore, deviceStateDir, stateKey(key)));
+  ipcMain.handle("history-state-write", async (_e, key: string, payload: HistoryLedgerWritePayload) => writeHistoryLedgerState(deviceStore, deviceStateDir, stateKey(key), payload));
   ipcMain.handle("secret-read", async (e, capability: string, key: string) => {
     if (!safeStorage.isEncryptionAvailable()) return null;
     const namespace = secretOwner(e.sender.id, capability);

@@ -322,9 +322,34 @@ export class SyncService extends Events implements SyncApi {
         assertContext(); return result;
       };
       this.session = await provider.open({ binding: state.binding, deviceId: state.deviceId }, abort.signal); assertContext();
+      // ADR-0027: history.records/quarantined is split into its own per-identity
+      // SQLite ledger — only this stateKey's port wiring changes; every other
+      // device-state-* key (coordinator.ts's sync/ and sync-history-binding/
+      // prefixes) is untouched. `knownLedgerIds` tracks which record/quarantine
+      // ids this identity's ledger already has, reseeded by load() and grown by
+      // save(), so each save only ever sends this cycle's new/changed ids.
+      let knownLedgerIds: Set<string> | undefined;
       const controller = new HistoryController({ vaultId: state.binding.vaultId, deviceId: state.deviceId, bindingKey, session: this.session, ports: {
-        load: async () => { const value = await this.host.deviceState.read(stateKey); assertContext(); return value; },
-        save: async (value: HistoryControllerState) => { assertContext(); await this.host.deviceState.write(stateKey, value); assertContext(); },
+        load: async () => {
+          const value = await this.host.historyLedger!.read(stateKey); assertContext();
+          const history = (value as { history?: { records?: Record<string, unknown>; quarantined?: Record<string, unknown> } } | null)?.history;
+          knownLedgerIds = new Set([...Object.keys(history?.records ?? {}), ...Object.keys(history?.quarantined ?? {})]);
+          return value;
+        },
+        save: async (value: HistoryControllerState) => {
+          assertContext();
+          const known = knownLedgerIds ??= new Set();
+          const upsertRecords: Record<string, { entityId: string }> = {};
+          for (const [id, record] of Object.entries(value.history.records)) if (!known.has(id)) upsertRecords[id] = record;
+          const upsertQuarantine: Record<string, unknown> = {};
+          const deleteRecordIds: string[] = [];
+          for (const [id, entry] of Object.entries(value.history.quarantined)) if (!known.has(id)) { upsertQuarantine[id] = entry; deleteRecordIds.push(id); }
+          const { history: _history, ...small } = value;
+          await this.host.historyLedger!.write(stateKey, { small, delta: { upsertRecords, upsertQuarantine, deleteRecordIds } });
+          for (const id of Object.keys(upsertRecords)) known.add(id);
+          for (const id of Object.keys(upsertQuarantine)) known.add(id);
+          assertContext();
+        },
         loadOperations: async () => await storage({ action: "load-operations" }) as HistoryOperation[],
         saveOperation: async value => { await storage({ action: "save-operation", key: value.id, value }); },
         stage: async (key, data) => await storage({ action: "stage", key, data }) as string,
