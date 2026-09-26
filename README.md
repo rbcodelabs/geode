@@ -1,7 +1,7 @@
 # Geode
 
-**An open-source, local-first Markdown knowledge base** — a clean-room clone of
-Obsidian built from its public documentation. Your notes are plain `.md` files
+**An open-source, local-first Markdown knowledge base**, inspired by Obsidian,
+with plugin and partial theme compatibility. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
@@ -92,8 +92,8 @@ for the latest published notes.
   plugin-contributed actions, shared document actions (including reveal-in-Finder/
   system-file-manager) across tab, view, command, and File Explorer menus,
   pinned-safe bulk tab closing, and status-bar word
-  count; tab bar and view header DOM/CSS match real Obsidian so community themes
-  and CSS snippets apply correctly
+  count; tab bar and view header DOM/CSS follow the conventions community
+  themes and CSS snippets expect, so they apply correctly
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), and Daily Notes (Cmd+D) with per-vault enable, folder, date-format, and template-path settings,
   dark/light themes via CSS variables
 - **Settings** — tabbed Settings window with searchable **Hotkeys**, Appearance,
@@ -111,7 +111,7 @@ for the latest published notes.
   metadata cache with list items/sections + frontmatter tag helpers) so real
   plugins like **obsidian-tasks** load and render their query blocks. Editor
   command callbacks work, but currently receive CM6's `EditorView` rather than
-  Obsidian's full `Editor` adapter. `FileManager.processFrontMatter` safely
+  the full `Editor` adapter plugins expect. `FileManager.processFrontMatter` safely
   serializes same-file calls within one renderer runtime; it does not lock out
   direct vault/external writes, and forwarded timestamp options are not yet
   applied by the host. **Minimal Theme Settings 9.0.0** is certified on desktop,
