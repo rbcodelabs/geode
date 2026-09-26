@@ -904,6 +904,25 @@ function registerIpc() {
     const target = resolveVaultPath(win, rel); await withVaultMutation(sessions.get(win.id)!.root, [target], () => fsp.mkdir(target, { recursive: true }));
   });
 
+  // Obsidian's `adapter.list(normalizedPath)`: the direct children of a
+  // folder, split into files/folders — not the recursive whole-vault walk
+  // `vault-list` above does. Lets `fsp.readdir` throw ENOENT/ENOTDIR as-is
+  // (rather than swallowing to an empty result, the way `vault-exists` does)
+  // so callers can tell "empty folder" apart from "no such folder".
+  ipcMain.handle("vault-list-dir", async (e, rel: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const root = requireVaultRoot(win);
+    const target = resolveVaultPath(win, rel);
+    const entries = await fsp.readdir(target, { withFileTypes: true });
+    const files: string[] = [];
+    const folders: string[] = [];
+    for (const entry of entries) {
+      const abs = toRel(root, path.join(target, entry.name));
+      (entry.isDirectory() ? folders : files).push(abs);
+    }
+    return { files, folders };
+  });
+
   ipcMain.handle("vault-delete", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);

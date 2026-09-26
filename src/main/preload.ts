@@ -34,6 +34,12 @@ export interface VaultFileEntry {
   size: number;
 }
 
+/** Obsidian's `adapter.list()` result: direct children of a folder, split by kind. */
+export interface ListedFiles {
+  files: string[];
+  folders: string[];
+}
+
 export interface VaultEvent {
   event: "create" | "modify" | "delete" | "create-folder" | "delete-folder";
   path: string;
@@ -154,6 +160,11 @@ const api = {
   /** Obsidian's `adapter.rmdir`: remove a vault folder outright, no trash. */
   rmdir: (path: string, recursive: boolean): Promise<void> =>
     ipcRenderer.invoke("vault-rmdir", path, recursive),
+  /**
+   * Obsidian's `adapter.list(normalizedPath)`: direct children of `path`
+   * (not a recursive whole-vault walk, unlike `list` above).
+   */
+  listDir: (path: string): Promise<ListedFiles> => ipcRenderer.invoke("vault-list-dir", path),
   rename: (path: string, newPath: string): Promise<void> =>
     ipcRenderer.invoke("vault-rename", path, newPath),
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),

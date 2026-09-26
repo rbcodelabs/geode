@@ -4,7 +4,7 @@ import type { HostServices, VaultFileEntry } from "./contracts";
 
 export type ElectronPreloadApi = Pick<GeodeApi,
   | "chooseVault" | "openVault" | "getRecentVaults" | "getLaunchVault" | "openVaultWindow"
-  | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rmdir" | "rename" | "exists" | "reveal" | "onVaultEvent"
+  | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rmdir" | "listDir" | "rename" | "exists" | "reveal" | "onVaultEvent"
   | "readConfig" | "writeConfig" | "readMetadataCache" | "writeMetadataCache"
   | "startMetadataIndexer" | "onMetadataIndexerMessage" | "openExternal" | "openLocalFile"
   | "listPluginIds" | "listThemes" | "readThemeCss" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
@@ -85,6 +85,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       mkdir: (path) => preload.mkdir(path),
       trash: (path) => preload.trash(path),
       rmdir: (path, recursive) => preload.rmdir(path, recursive),
+      listDir: (path) => preload.listDir(path),
       rename: (path, newPath) => preload.rename(path, newPath),
       // Electron IPC does not echo renderer-originated mutation IDs.
       settleMutation: async () => {},

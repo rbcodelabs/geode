@@ -458,6 +458,13 @@ export class Vault extends Events {
           }
           await files.rmdir(p, recursive);
         },
+        list: async (p: string) => {
+          const files = this.host.vaultFiles;
+          if (!files.listDir) {
+            throw new Error(`Vault.adapter.list is not supported on this platform (cannot list "${p}")`);
+          }
+          return files.listDir(p);
+        },
       };
       this._adapter = this.host.capabilities.nodePlugins
         ? new FileSystemAdapter(this.root, options)

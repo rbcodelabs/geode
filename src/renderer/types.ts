@@ -151,22 +151,33 @@ export class TFolderClass {
  * module stays dependency-free; safe defaults keep any bare
  * `new FileSystemAdapter(basePath)` construction working.
  */
+/** Obsidian's `adapter.list()` result: the direct children of a folder, split by kind. */
+export interface ListedFiles {
+  files: string[];
+  folders: string[];
+}
+
 export interface DataAdapterOptions {
   getName?: () => string;
   exists?: (normalizedPath: string) => Promise<boolean> | boolean;
   rmdir?: (normalizedPath: string, recursive: boolean) => Promise<void>;
+  list?: (normalizedPath: string) => Promise<ListedFiles>;
 }
 
 export class DataAdapter {
   private readonly nameProvider: () => string;
   private readonly existsProvider: (normalizedPath: string) => Promise<boolean> | boolean;
   private readonly rmdirProvider: (normalizedPath: string, recursive: boolean) => Promise<void>;
+  private readonly listProvider: (normalizedPath: string) => Promise<ListedFiles>;
 
   constructor(opts?: DataAdapterOptions) {
     this.nameProvider = opts?.getName ?? (() => "");
     this.existsProvider = opts?.exists ?? (() => false);
     this.rmdirProvider = opts?.rmdir ?? ((normalizedPath) => Promise.reject(
       new Error(`Vault.adapter.rmdir is not supported on this platform (cannot remove "${normalizedPath}")`)
+    ));
+    this.listProvider = opts?.list ?? ((normalizedPath) => Promise.reject(
+      new Error(`Vault.adapter.list is not supported on this platform (cannot list "${normalizedPath}")`)
     ));
   }
 
@@ -191,6 +202,21 @@ export class DataAdapter {
    */
   rmdir(normalizedPath: string, recursive = false): Promise<void> {
     return this.rmdirProvider(normalizedPath, recursive);
+  }
+
+  /**
+   * Obsidian's `adapter.list(normalizedPath)`: the direct children of a
+   * folder, split into `files` and `folders` (full vault-relative paths, not
+   * bare names) — Node's `fs.readdir(dir, { withFileTypes: true })`
+   * semantics, not a recursive whole-vault walk. Distinct from
+   * `VaultFilesService.list()` (used internally to seed/sync the whole
+   * vault), which is flat and recursive.
+   *
+   * Rejects when `normalizedPath` does not exist or is not a folder, so
+   * callers can tell "empty folder" apart from "no such folder".
+   */
+  list(normalizedPath: string): Promise<ListedFiles> {
+    return this.listProvider(normalizedPath);
   }
 }
 

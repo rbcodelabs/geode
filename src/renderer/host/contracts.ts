@@ -96,6 +96,15 @@ export interface VaultFilesService {
    * of pretending the folder is gone.
    */
   rmdir?(path: string, recursive: boolean, mutationId?: string): Promise<void>;
+  /**
+   * Obsidian's `adapter.list(normalizedPath)`: direct children of `path`,
+   * split into full vault-relative `files`/`folders` paths — not a recursive
+   * walk, and unrelated to the flat whole-vault `list()` above. Optional
+   * because not every host can enumerate a single directory cheaply (the
+   * in-memory browser host has no such native call yet); `Vault.adapter.list`
+   * reports that honestly rather than pretending the folder is empty.
+   */
+  listDir?(path: string): Promise<{ files: string[]; folders: string[] }>;
   rename(path: string, newPath: string, mutationId?: string): Promise<void>;
   /** Resolves after every change event carrying this mutation id has been delivered. */
   settleMutation(mutationId: string): Promise<void>;
