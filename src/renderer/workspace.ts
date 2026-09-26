@@ -1930,6 +1930,7 @@ export class Sidebar implements LeafContainer {
       tab = buildTabHeader(item, isActive);
       const leaf = item;
       tab.draggable = true;
+      tab.oncontextmenu = (e) => this.app.showTabContextMenu(e, leaf);
       tab.ondragstart = (e) => {
         draggingLeaf = leaf;
         e.dataTransfer?.setData("text/plain", leaf.id);
