@@ -325,29 +325,46 @@ export class SyncService extends Events implements SyncApi {
       // ADR-0027: history.records/quarantined is split into its own per-identity
       // SQLite ledger — only this stateKey's port wiring changes; every other
       // device-state-* key (coordinator.ts's sync/ and sync-history-binding/
-      // prefixes) is untouched. `knownLedgerIds` tracks which record/quarantine
-      // ids this identity's ledger already has, reseeded by load() and grown by
-      // save(), so each save only ever sends this cycle's new/changed ids.
-      let knownLedgerIds: Set<string> | undefined;
+      // prefixes) is untouched. Two separate known-id sets — not one flat set —
+      // because a record's *table membership* can change: mergeHistory's
+      // quarantine-on-contradiction path (history-reducer.ts:61-71) deletes an
+      // id from `records` and adds it to `quarantined` in the same merge, and
+      // that id is already "known" from an earlier save as a plain record. A
+      // single shared known-set would treat that transition as a no-op (the id
+      // fails the naive `!known.has(id)` check on the quarantine side too),
+      // silently leaving a stale `history_records` row that un-quarantines the
+      // id on the next load(). `knownQuarantineIds` also lets an
+      // already-quarantined id skip re-upserting on every later save, since a
+      // quarantine entry is terminal — mergeHistory's "Union is monotonic"
+      // guarantee (never rehabilitated back into `records`) means it can only
+      // ever be re-quarantined identically, never actually change again.
+      let knownRecordIds: Set<string> | undefined;
+      let knownQuarantineIds: Set<string> | undefined;
       const controller = new HistoryController({ vaultId: state.binding.vaultId, deviceId: state.deviceId, bindingKey, session: this.session, ports: {
         load: async () => {
           const value = await this.host.historyLedger!.read(stateKey); assertContext();
           const history = (value as { history?: { records?: Record<string, unknown>; quarantined?: Record<string, unknown> } } | null)?.history;
-          knownLedgerIds = new Set([...Object.keys(history?.records ?? {}), ...Object.keys(history?.quarantined ?? {})]);
+          knownRecordIds = new Set(Object.keys(history?.records ?? {}));
+          knownQuarantineIds = new Set(Object.keys(history?.quarantined ?? {}));
           return value;
         },
         save: async (value: HistoryControllerState) => {
           assertContext();
-          const known = knownLedgerIds ??= new Set();
+          const knownRecords = knownRecordIds ??= new Set();
+          const knownQuarantine = knownQuarantineIds ??= new Set();
           const upsertRecords: Record<string, { entityId: string }> = {};
-          for (const [id, record] of Object.entries(value.history.records)) if (!known.has(id)) upsertRecords[id] = record;
+          for (const [id, record] of Object.entries(value.history.records)) if (!knownRecords.has(id) && !knownQuarantine.has(id)) upsertRecords[id] = record;
           const upsertQuarantine: Record<string, unknown> = {};
           const deleteRecordIds: string[] = [];
-          for (const [id, entry] of Object.entries(value.history.quarantined)) if (!known.has(id)) { upsertQuarantine[id] = entry; deleteRecordIds.push(id); }
+          for (const [id, entry] of Object.entries(value.history.quarantined)) {
+            if (knownQuarantine.has(id)) continue; // terminal — never changes once persisted quarantined
+            upsertQuarantine[id] = entry;
+            if (knownRecords.has(id)) deleteRecordIds.push(id); // was a plain record before — move it, don't just add it
+          }
           const { history: _history, ...small } = value;
           await this.host.historyLedger!.write(stateKey, { small, delta: { upsertRecords, upsertQuarantine, deleteRecordIds } });
-          for (const id of Object.keys(upsertRecords)) known.add(id);
-          for (const id of Object.keys(upsertQuarantine)) known.add(id);
+          for (const id of Object.keys(upsertRecords)) knownRecords.add(id);
+          for (const id of Object.keys(upsertQuarantine)) { knownQuarantine.add(id); knownRecords.delete(id); }
           assertContext();
         },
         loadOperations: async () => await storage({ action: "load-operations" }) as HistoryOperation[],

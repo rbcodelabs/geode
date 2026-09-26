@@ -128,6 +128,47 @@ describe("sync-service.ts history ledger delta tracking (ADR-0027)", () => {
     } finally { await service.cancel(); }
   });
 
+  it("REGRESSION: a record already upserted as a plain record, later quarantined by a contradictory remote record, must move tables (upsertQuarantine + deleteRecordIds) even though its id is already known", async () => {
+    const { service, records, ledger } = setupService();
+    try {
+      await service.activate("history");
+      await service.createVault("Shared");
+      await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+      await service.preview();
+      await service.run({ approvePreview: true });
+
+      // The first sync persisted this record as a plain record — its id is
+      // already in `knownLedgerIds` by the time the contradiction below arrives.
+      const original = records.find(r => r.location?.name === "Note.md");
+      expect(original).toBeDefined();
+      const originalId = original.recordId;
+
+      // Simulate a contradictory record arriving from elsewhere for the SAME
+      // recordId (mergeHistory's quarantine-on-contradiction path,
+      // history-reducer.ts:61-71): same id, different content. Pushed directly
+      // onto the fake session's record list — real remote history is exactly
+      // this kind of raw batch the reducer has to reconcile.
+      records.push({ ...original, location: { ...original.location, name: "Contradictory.md" } });
+
+      ledger.writes.length = 0;
+      await service.preview(); // plan() -> mergeHistory quarantines originalId, then preview() calls save()
+
+      const delta = { upsertRecords: {} as Record<string, unknown>, upsertQuarantine: {} as Record<string, unknown>, deleteRecordIds: [] as string[] };
+      for (const write of ledger.writes) {
+        Object.assign(delta.upsertRecords, write.delta.upsertRecords);
+        Object.assign(delta.upsertQuarantine, write.delta.upsertQuarantine);
+        delta.deleteRecordIds.push(...write.delta.deleteRecordIds);
+      }
+      // The bug: knownLedgerIds already contains originalId (from the first
+      // save), so the naive `!known.has(id)` quarantine check silently drops
+      // this transition — the SQLite ledger would keep a stale `history_records`
+      // row for originalId forever, and `history_quarantine` would never get
+      // it, silently un-quarantining it on the next load().
+      expect(delta.upsertQuarantine[originalId]).toBeDefined();
+      expect(delta.deleteRecordIds).toContain(originalId);
+    } finally { await service.cancel(); }
+  });
+
   it("skips the history-state-write call entirely for a preview with nothing new (empty delta)", async () => {
     const { service, ledger } = setupService();
     try {
