@@ -750,6 +750,21 @@ function registerIpc() {
     });
   });
 
+  ipcMain.handle("vault-refresh-scan", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win && sessions.get(win.id);
+    if (!session) return { status: "unavailable", entries: [], failure: { operation: "scan", category: "missing-path", code: "VAULT_NOT_FOUND" } };
+    try {
+      const entries = await listVaultFiles(session.root, { strictSync: true, refreshOnly: true });
+      if (sessions.get(win!.id) !== session) return { status: "cancelled", entries: [] };
+      return { status: "complete", entries };
+    } catch (error) {
+      // Return an envelope: Electron does not preserve custom thrown Error fields.
+      const failure = error instanceof Error && "failure" in error ? error.failure : { operation: "scan", category: "internal", code: "UNKNOWN" };
+      return { status: "unavailable", entries: [], failure };
+    }
+  });
+
   ipcMain.handle("vault-sync-scan", async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
@@ -887,6 +902,25 @@ function registerIpc() {
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const target = resolveVaultPath(win, rel); await withVaultMutation(sessions.get(win.id)!.root, [target], () => fsp.mkdir(target, { recursive: true }));
+  });
+
+  // Obsidian's `adapter.list(normalizedPath)`: the direct children of a
+  // folder, split into files/folders — not the recursive whole-vault walk
+  // `vault-list` above does. Lets `fsp.readdir` throw ENOENT/ENOTDIR as-is
+  // (rather than swallowing to an empty result, the way `vault-exists` does)
+  // so callers can tell "empty folder" apart from "no such folder".
+  ipcMain.handle("vault-list-dir", async (e, rel: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const root = requireVaultRoot(win);
+    const target = resolveVaultPath(win, rel);
+    const entries = await fsp.readdir(target, { withFileTypes: true });
+    const files: string[] = [];
+    const folders: string[] = [];
+    for (const entry of entries) {
+      const abs = toRel(root, path.join(target, entry.name));
+      (entry.isDirectory() ? folders : files).push(abs);
+    }
+    return { files, folders };
   });
 
   ipcMain.handle("vault-delete", async (e, rel: string) => {

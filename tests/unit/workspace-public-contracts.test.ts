@@ -6,11 +6,24 @@ import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 
 afterEach(() => vi.unstubAllGlobals());
 
+/**
+ * `Workspace.groups` is a getter-only accessor (a derived flatten of
+ * `centerRoot`), so a fake built via `Object.create(Workspace.prototype)` —
+ * which never runs the constructor and so never gets a real `centerRoot` —
+ * can't set it via plain assignment or `Object.assign` (`{ groups: value }`
+ * hits the accessor and throws, since there is no setter). `defineProperty`
+ * installs a genuine own data property that shadows the accessor instead,
+ * exactly like these fakes rely on for every other stubbed field.
+ */
+function defineGroups(workspace: object, groups: unknown): void {
+  Object.defineProperty(workspace, "groups", { value: groups, writable: true, configurable: true, enumerable: true });
+}
+
 function fakeWorkspace(leaves: WorkspaceLeaf[], active: WorkspaceLeaf | null): Workspace {
   const workspace = Object.create(Workspace.prototype) as Workspace;
+  defineGroups(workspace, [{ leaves }]);
   Object.assign(workspace, {
     activeGroup: { active, leaves },
-    groups: [{ leaves }],
     leftSidebar: { groups: [] },
     rightSidebar: { groups: [] },
   });
@@ -68,9 +81,9 @@ function fakeContentHost(): { children: unknown[]; appendChild(child: { parentEl
 describe("Workspace active leaf events", () => {
   function eventWorkspace(firstGroup: object, groups: object[]): Workspace {
     const workspace = Object.create(Workspace.prototype) as Workspace;
+    defineGroups(workspace, groups);
     Object.assign(workspace, {
       activeGroup: firstGroup,
-      groups,
       syncAdaptivePresentation: vi.fn(),
       trigger: vi.fn(),
     });
@@ -295,6 +308,7 @@ describe("Workspace pane targeting (getLeaf / getMostRecentLeaf / setActiveLeaf)
     const created: WorkspaceLeaf[] = [];
     const split = { leaf: {} as WorkspaceLeaf };
     const workspace = Object.create(Workspace.prototype) as Workspace;
+    defineGroups(workspace, [{ active, leaves: active ? [active] : [] }]);
     Object.assign(workspace, {
       activeGroup: {
         active,
@@ -305,7 +319,6 @@ describe("Workspace pane targeting (getLeaf / getMostRecentLeaf / setActiveLeaf)
           return leaf;
         },
       },
-      groups: [{ active, leaves: active ? [active] : [] }],
       splitActiveLeaf: vi.fn(() => split.leaf),
     });
     return { workspace, created, split };
@@ -400,7 +413,11 @@ describe("Workspace/View through require('obsidian')", () => {
             const view = Object.create(ProbeView.prototype);
             const leaf = { view };
             workspace.activeGroup = { active: leaf, leaves: [leaf] };
-            workspace.groups = [{ leaves: [leaf] }];
+            // \`groups\` is a getter-only accessor on the real Workspace
+            // prototype (derived from \`centerRoot\`, which this fake never
+            // sets) — defineProperty installs a shadowing own data property
+            // instead of a plain assignment, which would throw.
+            Object.defineProperty(workspace, "groups", { value: [{ leaves: [leaf] }], writable: true, configurable: true, enumerable: true });
             workspace.leftSidebar = { groups: [] };
             workspace.rightSidebar = { groups: [] };
             return [workspace.getActiveViewOfType(ProbeView) === view, workspace.getLeavesOfType("probe").length];

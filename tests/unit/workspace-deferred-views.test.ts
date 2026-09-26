@@ -34,9 +34,14 @@ afterEach(() => vi.unstubAllGlobals());
  */
 function fakeWorkspace(leaves: WorkspaceLeaf[]): Workspace {
   const workspace = Object.create(Workspace.prototype) as Workspace;
+  // `Workspace.groups` is a getter-only accessor (derived from `centerRoot`),
+  // so a fake built via `Object.create` — which never runs the constructor —
+  // can't set it through plain assignment/`Object.assign` (there's no
+  // setter). `defineProperty` installs a genuine own data property that
+  // shadows the accessor instead.
+  Object.defineProperty(workspace, "groups", { value: [{ leaves }], writable: true, configurable: true, enumerable: true });
   Object.assign(workspace, {
     activeGroup: { active: leaves[0] ?? null, leaves },
-    groups: [{ leaves }],
     leftSidebar: { groups: [] },
     rightSidebar: { groups: [] },
     viewFactories: new Map<string, unknown>(),

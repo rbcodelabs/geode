@@ -12,8 +12,16 @@ const fixtureVaultPath = path.join(repoRoot, "test-vault");
  * (data-graph-node-count/edge-count/node-positions) instead of pixel
  * reading. See graph-view.ts's rebuild()/updateNodePositionsDataset() for
  * where those are set.
+ *
+ * Regression coverage for Compass feedback 397035c4-3ebd-4422-8148-193721f68df1
+ * ("Cmd+G replaces the current document with no way back"): `openGraphView`
+ * used to do `workspace.getLeaf(false)`, which reused the active main-pane
+ * leaf and blew away whatever note was open there, with no way to get back
+ * to it. It now docks Graph view in the right sidebar instead — the same
+ * pattern Backlinks/Outline/Tag pane/Comments already use — so the main
+ * pane, and whatever the user had open in it, is never touched.
  */
-test("opens the graph view, builds nodes/edges from the vault, and click-to-opens a note", async () => {
+test("opens the graph view in the right sidebar without disturbing the active note, builds nodes/edges from the vault, and click-to-opens a note", async () => {
   const testVaultPath = fs.mkdtempSync(path.join(os.tmpdir(), "geode-graph-vault-"));
   fs.cpSync(fixtureVaultPath, testVaultPath, { recursive: true, filter: source => !path.relative(fixtureVaultPath, source).split(path.sep).includes(".geode") });
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-graph-e2e-"));
@@ -37,6 +45,12 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
 
     await expect(window.locator('.nav-file-title[data-path="Welcome.md"]')).toBeVisible();
 
+    // Open a note first, exactly like a user mid-session — this is the "what
+    // was I looking at" state the old bug destroyed.
+    await window.locator('.nav-file-title[data-path="Welcome.md"]').click();
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveText("Welcome");
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(1);
+
     // Open via the command palette, same path a user would take (no
     // dedicated sidebar button for it in v1).
     const isMac = process.platform === "darwin";
@@ -44,9 +58,21 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
     await window.locator(".prompt-input").fill("Graph view");
     await window.getByText("Graph view: Open graph view").click();
 
-    const graphView = window.locator(".graph-view");
+    // The main pane is untouched: still exactly the one tab, still Welcome,
+    // still the same view instance showing it. This is the actual bug fix —
+    // before it, this main-pane tab would have been replaced by the graph.
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(1);
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveText("Welcome");
+    await expect(window.locator(".workspace-split.mod-root .markdown-source-view")).toBeVisible();
+
+    // Graph view docked in the right sidebar instead, revealed automatically
+    // (matching the Calendar-plugin docked-leaf pattern — see
+    // calendar-plugin.spec.ts — since GraphView, like Calendar, renders its
+    // own header rather than the generic ItemView title bar).
+    await expect(window.locator(".workspace-sidebar.mod-right .workspace-tab-header[aria-label=\"Graph view\"]")).toBeVisible();
+    const graphView = window.locator(".workspace-sidebar.mod-right .graph-view");
     await expect(graphView).toBeVisible();
-    await expect(window.locator(".graph-view-canvas")).toBeVisible();
+    await expect(window.locator(".workspace-sidebar.mod-right .graph-view-canvas")).toBeVisible();
 
     // test-vault has 5 markdown files (Welcome, Daily Plan, Projects/Roadmap,
     // Notes/Scratch, Mermaid) and 5 resolved-link edges: Welcome->Daily Plan,
@@ -83,36 +109,39 @@ test("opens the graph view, builds nodes/edges from the vault, and click-to-open
       })
       .toBe(5);
 
-    // Open a second, unrelated tab, then re-invoke "Open graph view" — it
-    // should switch back to the existing graph tab (singleton view)
-    // instead of stacking a duplicate "Graph view" tab.
-    await window.keyboard.press(isMac ? "Meta+T" : "Control+T");
-    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(2);
+    // Re-invoke "Open graph view" — it should reveal the existing docked
+    // pane (singleton view) instead of stacking a duplicate sidebar icon or
+    // pane.
     await window.keyboard.press(isMac ? "Meta+P" : "Control+P");
     await window.locator(".prompt-input").fill("Graph view");
     await window.getByText("Graph view: Open graph view").click();
-    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(2); // still 2, not 3
-    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title:text-is('Graph view')")).toHaveCount(1);
-    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText(
-      "Graph view"
-    );
+    await expect(window.locator(".workspace-sidebar.mod-right .workspace-tab-header[aria-label=\"Graph view\"]")).toHaveCount(1);
+    await expect(window.locator(".workspace-sidebar.mod-right .graph-view")).toHaveCount(1);
+    // Main pane still untouched by the re-invocation too.
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(1);
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveText("Welcome");
 
     // Click-to-open: compute Welcome.md's current screen position from its
     // world position (camera starts untransformed: pan 0,0, scale 1) and
-    // click it, same as a user clicking a node.
+    // click it, same as a user clicking a node. Welcome.md is already open
+    // in the one main-pane tab, so this exercises "click a node whose file
+    // is already the active tab" rather than opening a second tab.
     const box = (await graphView.boundingBox())!;
     const positions = JSON.parse((await graphView.getAttribute("data-graph-node-positions"))!) as Record<
       string,
       [number, number]
     >;
-    const [wx, wy] = positions["Welcome.md"];
+    const [wx, wy] = positions["Daily Plan.md"];
     await window.mouse.click(box.x + box.width / 2 + wx, box.y + box.height / 2 + wy);
 
     await expect(window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText(
-      "Welcome"
+      "Daily Plan"
     );
-    await expect(window.locator(".markdown-source-view")).toBeVisible();
-    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(2); // the other tab is untouched
+    await expect(window.locator(".workspace-split.mod-root .markdown-source-view")).toBeVisible();
+    // Still exactly one main-pane tab: clicking a graph node navigates the
+    // existing tab, it doesn't open a second one, and the sidebar's graph
+    // pane never became a main-pane tab.
+    await expect(window.locator(".workspace-split.mod-root .workspace-tab-header-inner-title")).toHaveCount(1);
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {

@@ -35,6 +35,7 @@ function installFakeGeode(initialEntries: VaultFileEntry[] = []) {
     mkdir: vi.fn(async () => {}),
     trash: vi.fn(async () => {}),
     rmdir: vi.fn(async () => {}),
+    listDir: vi.fn(async () => ({ files: [], folders: [] })),
     rename: vi.fn(async () => {}),
     exists: vi.fn(async (path: string) => files.has(path)),
     onVaultEvent: vi.fn(() => {}),
@@ -223,6 +224,44 @@ describe("Vault.adapter.rmdir", () => {
     await vault.open("managed://default");
 
     await expect(vault.adapter.rmdir("Anything", true)).rejects.toThrow(
+      /not supported on this platform/,
+    );
+  });
+});
+
+/**
+ * `adapter.list(normalizedPath)` did not exist anywhere on Geode's adapter
+ * surface (documented in docs/spec/03-plugin-api.md's `DataAdapter`
+ * interface but never implemented), so a plugin calling
+ * `app.vault.adapter.list(normalizedPath)` to enumerate a folder's direct
+ * children had no way to do so short of the flat, recursive
+ * `VaultFilesService.list()` used internally to seed the vault.
+ */
+describe("Vault.adapter.list", () => {
+  afterEach(() => {
+    delete (globalThis as any).window;
+  });
+
+  it("delegates to the host and returns its files/folders split", async () => {
+    const { vault, geode } = await openTestVault();
+    (geode.listDir as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      files: ["Notes/a.md", "Notes/b.md"],
+      folders: ["Notes/Sub"],
+    });
+
+    await expect(vault.adapter.list("Notes")).resolves.toEqual({
+      files: ["Notes/a.md", "Notes/b.md"],
+      folders: ["Notes/Sub"],
+    });
+    expect(geode.listDir).toHaveBeenCalledWith("Notes");
+  });
+
+  it("rejects with a clear message on a host that cannot list a folder", async () => {
+    const host = createBrowserHost(createBrowserHostState({ files: { "Note.md": "x" } }));
+    const vault = new Vault({ ...host, vaultFiles: { ...host.vaultFiles, listDir: undefined } });
+    await vault.open("managed://default");
+
+    await expect(vault.adapter.list("Anything")).rejects.toThrow(
       /not supported on this platform/,
     );
   });

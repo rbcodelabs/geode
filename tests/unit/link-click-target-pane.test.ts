@@ -105,9 +105,16 @@ function scenario(vaultFiles: TFile[]) {
   const right = makeGroup(false);
   const sidebarGroup = makeGroup(true);
 
+  // `Workspace.groups` is a getter-only accessor (a derived flatten of
+  // `centerRoot`), so this `Object.create(Workspace.prototype)` fake — which
+  // never runs the constructor and so never gets a real `centerRoot` — can't
+  // set it via plain assignment (`{ groups: value }` hits the accessor and
+  // throws, since there is no setter). `defineProperty` installs a genuine
+  // own data property that shadows the accessor instead.
+  Object.defineProperty(workspace, "groups", { value: [left, right], writable: true, configurable: true, enumerable: true });
+
   Object.assign(workspace, {
     layoutReady: true,
-    groups: [left, right],
     leftSidebar: { groups: [] },
     rightSidebar: { groups: [] },
     activeGroup: left,

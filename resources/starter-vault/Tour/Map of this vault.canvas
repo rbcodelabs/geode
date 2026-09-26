@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    { "id": "intro", "type": "text", "text": "## A canvas\nDrag notes around, draw arrows, add cards. Use it to lay out an idea before you write it.", "x": -620, "y": -340, "width": 360, "height": 150, "color": "5" },
+    { "id": "start", "type": "file", "file": "Start here.md", "x": -160, "y": -340, "width": 320, "height": 200 },
+    { "id": "links", "type": "file", "file": "Tour/Links are the whole idea.md", "x": -620, "y": -60, "width": 320, "height": 200 },
+    { "id": "props", "type": "file", "file": "Tour/Properties and Bases.md", "x": -160, "y": -60, "width": 320, "height": 200 },
+    { "id": "daily", "type": "file", "file": "Tour/Daily notes.md", "x": 300, "y": -60, "width": 320, "height": 200 },
+    { "id": "smart", "type": "file", "file": "Reading/How to Take Smart Notes.md", "x": -620, "y": 240, "width": 320, "height": 200 },
+    { "id": "mind", "type": "file", "file": "Reading/The Extended Mind.md", "x": -160, "y": 240, "width": 320, "height": 200 },
+    { "id": "words", "type": "file", "file": "Ideas/Write in your own words.md", "x": -390, "y": 540, "width": 320, "height": 180, "color": "4" }
+  ],
+  "edges": [
+    { "id": "e1", "fromNode": "start", "fromSide": "bottom", "toNode": "links", "toSide": "top" },
+    { "id": "e2", "fromNode": "start", "fromSide": "bottom", "toNode": "props", "toSide": "top" },
+    { "id": "e3", "fromNode": "start", "fromSide": "bottom", "toNode": "daily", "toSide": "top" },
+    { "id": "e4", "fromNode": "smart", "fromSide": "bottom", "toNode": "words", "toSide": "top", "label": "both lead here" },
+    { "id": "e5", "fromNode": "mind", "fromSide": "bottom", "toNode": "words", "toSide": "top" }
+  ]
+}

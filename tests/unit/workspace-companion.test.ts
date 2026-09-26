@@ -5,6 +5,20 @@ const owner = "test-plugin:context";
 beforeEach(() => vi.stubGlobal("document", { createElement: () => ({ appendChild() {}, className: "" }) }));
 afterEach(() => vi.unstubAllGlobals());
 
+/**
+ * `Workspace.groups` is a getter-only accessor (a derived flatten of
+ * `centerRoot`), so a fake built via `Object.create(Workspace.prototype)` —
+ * which never runs the constructor and so never gets a real `centerRoot` —
+ * can't set it via plain assignment or `Object.assign` (`{ groups: value }`
+ * hits the accessor and throws, since there is no setter). `defineProperty`
+ * installs a genuine own data property that shadows the accessor instead;
+ * once installed, `.push()`/`.splice()` and later reassignment on it behave
+ * like an ordinary array/field again.
+ */
+function defineGroups(workspace: object, groups: unknown): void {
+  Object.defineProperty(workspace, "groups", { value: groups, writable: true, configurable: true, enumerable: true });
+}
+
 function setup() {
   const workspace = Object.create(Workspace.prototype) as Workspace;
   function group() {
@@ -17,7 +31,15 @@ function setup() {
     return result;
   }
   const anchorGroup = group();
-  Object.assign(workspace, { layoutReady: true, groups: [anchorGroup], trigger: vi.fn(),
+  defineGroups(workspace, [anchorGroup]);
+  Object.assign(workspace, { layoutReady: true, trigger: vi.fn(),
+    // `restoreLayout`'s single-group fast path checks
+    // `this.centerRoot instanceof TabGroup` and, if so, restores directly
+    // into it — matching this fixture's single pre-existing `anchorGroup`.
+    centerRoot: anchorGroup,
+    // Real `syncSidebarToggleButtons()` touches `group.containerEl`, which
+    // these fixture groups don't stub (irrelevant to what's under test here).
+    syncSidebarToggleButtons() {},
     addGroup: vi.fn((_anchor, _ratio, companionOwner) => {
       const next = group(); next.companionOwner = companionOwner; workspace.groups.push(next);
       workspace.trigger("layout-change"); return next;
@@ -182,7 +204,7 @@ describe("companion layout metadata", () => {
     const { workspace, anchor } = setup();
     (anchor.group as TabGroup).leaves.length = 0;
     const mounted: Array<[string | undefined, string | undefined]> = [];
-    Object.assign(workspace, { iterateLeaves() {}, restoreSidebar: async () => {}, layoutCenterGroups() {},
+    Object.assign(workspace, { iterateLeaves() {}, restoreSidebar: async () => {},
       app: { vault: { getFileByPath: () => null } }, getViewFactory: () => undefined, getLeavesOfType: () => [],
       restoreLeafView: async (leaf: WorkspaceLeaf) => { mounted.push([(leaf.group as TabGroup).companionOwner, leaf.companionOwner]); },
     });
@@ -198,7 +220,7 @@ describe("companion layout metadata", () => {
   it("restores an empty owned group with one reusable designated placeholder", async () => {
     const { workspace, anchor } = setup();
     (anchor.group as TabGroup).leaves.length = 0;
-    Object.assign(workspace, { iterateLeaves() {}, restoreSidebar: async () => {}, layoutCenterGroups() {},
+    Object.assign(workspace, { iterateLeaves() {}, restoreSidebar: async () => {},
       app: { createEmptyView: () => ({ viewType: "empty" }) },
     });
     const setView = vi.spyOn(WorkspaceLeaf.prototype, "setView").mockResolvedValue(undefined);

@@ -20,6 +20,37 @@ afterEach(() => {
 });
 
 describe("listVaultFiles", () => {
+  it("refreshes visible files without traversing hidden development worktrees", async () => {
+    const root = makeVault();
+    fs.mkdirSync(path.join(root, ".geode", "worktrees", "test"), { recursive: true });
+    fs.symlinkSync("missing-target", path.join(root, ".geode", "worktrees", "test", "node_modules"));
+    fs.writeFileSync(path.join(root, "Note.md"), "hello");
+    expect((await listVaultFiles(root, { strictSync: true, refreshOnly: true } as never)).map(e => e.path)).toEqual(["Note.md"]);
+    await expect(listVaultFiles(root, { strictSync: true })).rejects.toThrow(/symbolic/i);
+  });
+  it("provides a safe structured failure for unsupported visible paths", async () => {
+    const root = makeVault(); fs.symlinkSync("missing-target", path.join(root, "Note.md"));
+    await expect(listVaultFiles(root, { strictSync: true, refreshOnly: true } as never)).rejects.toMatchObject({
+      failure: { operation: "scan", category: "unsupported-link", code: "SYMLINK_UNSUPPORTED", path: "Note.md" },
+    });
+  });
+  it("fails a refresh closed with a structured missing-directory error", async () => {
+    const root = path.join(makeVault(), "missing");
+    await expect(listVaultFiles(root, { strictSync: true, refreshOnly: true })).rejects.toMatchObject({
+      failure: { operation: "read-directory", category: "missing-path", code: "ENOENT" },
+    });
+  });
+  (process.platform === "win32" ? it.skip : it)("fails refresh closed when a visible subtree cannot be read", async () => {
+    const root = makeVault();
+    const blocked = path.join(root, "Blocked");
+    fs.mkdirSync(blocked); fs.writeFileSync(path.join(blocked, "Note.md"), "unchanged");
+    fs.chmodSync(blocked, 0);
+    try {
+      await expect(listVaultFiles(root, { strictSync: true, refreshOnly: true })).rejects.toMatchObject({
+        failure: { operation: "read-directory", category: "permission", code: "EACCES", path: "Blocked" },
+      });
+    } finally { fs.chmodSync(blocked, 0o700); }
+  });
   (process.platform === "win32" ? it.skip : it)("rejects a FIFO replacing a previously ordinary sync path", async () => {
     const root = makeVault(); execFileSync("mkfifo", [path.join(root, "Note.md")]);
     await expect(listVaultFiles(root, { strictSync: true })).rejects.toThrow(/unsupported/i);

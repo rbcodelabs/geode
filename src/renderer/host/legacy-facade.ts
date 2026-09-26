@@ -26,6 +26,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     applySyncMutation: async (token, input) => { if (!host.syncSafety) throw new Error("Guarded sync unavailable"); return host.syncSafety.apply(token, input); },
     onSyncPrepare: handler => host.syncSafety?.onPrepare(handler) ?? (() => {}),
     onSyncRelease: handler => host.syncSafety?.onRelease(handler) ?? (() => {}),
+    scanForRefresh: () => host.vaultFiles.refreshScan?.() ?? host.vaultFiles.reconcileScan(),
     scanForSync: async () => { const scan = await host.vaultFiles.reconcileScan(); if (scan.status !== "complete") throw new Error("Complete sync scan unavailable"); return scan.entries; },
     read: (path) => host.vaultFiles.read(path),
     readPluginFile: (path, sent) => host.plugins.readPluginFile(path, sent),
@@ -37,6 +38,8 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     trash: (path) => host.vaultFiles.trash(path),
     rmdir: (path, recursive) =>
       host.vaultFiles.rmdir?.(path, recursive) ?? unavailable("rmdir")(),
+    listDir: (path) =>
+      host.vaultFiles.listDir?.(path) ?? unavailable("listDir")(),
     rename: (path, newPath) => host.vaultFiles.rename(path, newPath),
     exists: (path) => host.vaultFiles.exists(path),
     reveal: host.desktop?.revealInFileManager ?? unavailable("desktop") as never,

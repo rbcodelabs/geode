@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { VaultRefreshResult } from "../shared/vault-refresh";
 import { pathToFileURL } from "node:url";
 import * as path from "node:path";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
@@ -31,6 +32,12 @@ export interface VaultFileEntry {
   mtime: number;
   ctime: number;
   size: number;
+}
+
+/** Obsidian's `adapter.list()` result: direct children of a folder, split by kind. */
+export interface ListedFiles {
+  files: string[];
+  folders: string[];
 }
 
 export interface VaultEvent {
@@ -112,6 +119,7 @@ const api = {
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
   scanForSync: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-sync-scan"),
+  scanForRefresh: (): Promise<VaultRefreshResult<VaultFileEntry>> => ipcRenderer.invoke("vault-refresh-scan"),
   httpRequest: (id: string, request: HostHttpRequest): Promise<HostHttpResponse> => ipcRenderer.invoke("host-http-request", id, request),
   cancelHttpRequest: (id: string): void => ipcRenderer.send("host-http-cancel", id),
   claimSyncOwner: (): Promise<string | null> => ipcRenderer.invoke("sync-owner-claim"),
@@ -152,6 +160,11 @@ const api = {
   /** Obsidian's `adapter.rmdir`: remove a vault folder outright, no trash. */
   rmdir: (path: string, recursive: boolean): Promise<void> =>
     ipcRenderer.invoke("vault-rmdir", path, recursive),
+  /**
+   * Obsidian's `adapter.list(normalizedPath)`: direct children of `path`
+   * (not a recursive whole-vault walk, unlike `list` above).
+   */
+  listDir: (path: string): Promise<ListedFiles> => ipcRenderer.invoke("vault-list-dir", path),
   rename: (path: string, newPath: string): Promise<void> =>
     ipcRenderer.invoke("vault-rename", path, newPath),
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke("vault-exists", path),

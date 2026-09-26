@@ -152,7 +152,7 @@ test("@phone provides an accessible daily workspace with dismissible drawers", a
   await expect(moreMenu.locator(".menu-item-title"))
     .toHaveText(["Quick switcher", "Commands", "Settings"]);
   await moreMenu.getByText("Quick switcher", { exact: true }).click();
-  await expect(page.getByPlaceholder("Find or create a note…")).toBeVisible();
+  await expect(page.getByPlaceholder("Find a file or website bookmark…")).toBeVisible();
   await page.keyboard.press("Escape");
   await nav.getByRole("button", { name: "More" }).click();
   await page.locator(".menu.mod-mobile-more").getByText("Commands", { exact: true }).click();
@@ -929,7 +929,7 @@ test("@phone partial foreground scan retains the prior manifest and emits no del
     testApi.reconcileStatus = "partial";
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("previous file manifest is still active");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("previous file list is unchanged");
   expect(await page.evaluate(() => (window as any).app.vault.getFileByPath("Notes/Proof.md")?.path)).toBe("Notes/Proof.md");
   const after = await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
@@ -1021,13 +1021,13 @@ test("@phone failed processing or manifest commit retains the prior manifest and
     testApi.externalWrite("Notes/Proof.md", "retry-provider-bytes");
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("temporarily unavailable");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Vault refresh failed.");
   await expect(page.locator(".cm-content")).toContainText("provider-bytes");
   expect(await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
     return stored.config.find(([key]: [string]) => key.startsWith("device-reconcile:"));
   })).toEqual(before);
-  await page.getByRole("button", { name: "Retry refresh" }).click();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.locator(".vault-reconcile-state")).toHaveCount(0);
   await expect(page.locator(".cm-content")).toContainText("retry-provider-bytes");
 });
@@ -1053,13 +1053,13 @@ test("@phone failed provider read does not advance the manifest and retry remain
     testApi.externalWrite("Notes/Proof.md", "read-retry-provider");
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("temporarily unavailable");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Vault refresh failed.");
   await expect(page.locator(".cm-content")).toContainText("provider-bytes");
   expect(await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
     return stored.config.find(([key]: [string]) => key.startsWith("device-reconcile:"));
   })).toEqual(before);
-  await page.getByRole("button", { name: "Retry refresh" }).click();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.locator(".cm-content")).toContainText("read-retry-provider");
 });
 
@@ -1148,13 +1148,28 @@ test("@phone Base apply failure keeps the old manifest and view inert until retr
     testApi.externalWrite("Views/Proof.base", "views:\n  - type: cards\n    name: ProviderRetry\n");
     testApi.foreground();
   });
-  await expect(page.locator(".vault-reconcile-state")).toContainText("temporarily unavailable");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Vault refresh failed.");
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Saving is paused");
+  await page.getByRole("button", { name: "Details…" }).click();
+  const details = page.getByRole("dialog", { name: "Vault refresh couldn’t finish" });
+  await expect(details).toContainText("Saving is paused.");
+  const dialogBox = (await details.boundingBox())!;
+  const viewport = page.viewportSize()!;
+  expect(dialogBox.x).toBeGreaterThanOrEqual(16);
+  expect(dialogBox.x + dialogBox.width).toBeLessThanOrEqual(viewport.width - 16);
+  expect(dialogBox.y).toBeGreaterThanOrEqual(16);
+  expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(viewport.height - 16);
+  expect((await details.getByRole("button", { name: "Close details" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  expect((await details.getByRole("button", { name: "Close", exact: true }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await details.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(details).toHaveCount(0);
+  await expect(page.locator(".vault-reconcile-state")).toContainText("Saving is paused");
   await expect(page.locator(".base-view")).toHaveAttribute("inert", "");
   expect(await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("geode:external-proof:geode:mobile-managed-vault:v1")!);
     return stored.config.find(([key]: [string]) => key.startsWith("device-reconcile:"));
   })).toEqual(before);
-  await page.getByRole("button", { name: "Retry refresh" }).click();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.locator(".base-view")).not.toHaveAttribute("inert", "");
   await expect.poll(() => page.evaluate(() => (window as any).app.workspace.getActiveLeaf().view.lastKnownText))
     .toContain("ProviderRetry");

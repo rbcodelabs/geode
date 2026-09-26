@@ -124,7 +124,10 @@ test("dragging a built-in tab to a center body edge creates a split", async () =
   const box = await target.boundingBox();
   expect(box).not.toBeNull();
   await source.dragTo(target, { targetPosition: { x: box!.width - 2, y: box!.height / 2 } });
-  await expect(window.locator(".workspace-center > .workspace-tabs")).toHaveCount(2);
+  // Descendant, not direct-child: `.workspace-center`'s sole DOM child is now
+  // the center root node's `containerEl` — a `CenterSplit` wrapper once there's
+  // more than one group — so groups are no longer necessarily direct children.
+  await expect(window.locator(".workspace-center .workspace-tabs")).toHaveCount(2);
   await expect(window.locator('.workspace-center .workspace-leaf-content[data-type="file-explorer"]')).toBeVisible();
   if (screenshotDir) {
     await window.screenshot({ path: path.join(screenshotDir, "flexible-workspace-file-explorer-center.png") });
@@ -133,7 +136,7 @@ test("dragging a built-in tab to a center body edge creates a split", async () =
 
 test("dragging an external file over a center body edge does not target or create a split", async () => {
   const target = window.locator(".workspace-center .workspace-tab-container").first();
-  const groupsBefore = await window.locator(".workspace-center > .workspace-tabs").count();
+  const groupsBefore = await window.locator(".workspace-center .workspace-tabs").count();
 
   const result = await target.evaluate((el) => {
     const rect = el.getBoundingClientRect();
@@ -160,5 +163,5 @@ test("dragging an external file over a center body edge does not target or creat
     transfer.items.add(new File(["external"], "external.md", { type: "text/markdown" }));
     el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
   });
-  await expect(window.locator(".workspace-center > .workspace-tabs")).toHaveCount(groupsBefore);
+  await expect(window.locator(".workspace-center .workspace-tabs")).toHaveCount(groupsBefore);
 });
