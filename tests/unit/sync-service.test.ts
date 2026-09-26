@@ -2,6 +2,28 @@ import { expect, it, vi } from "vitest";
 import { SyncService } from "../../src/renderer/sync/sync-service";
 import { APPEND_ONLY_PROTOCOL } from "../../src/renderer/sync/history-types";
 
+/**
+ * ADR-0027: a fake `host.historyLedger` mirroring `electron-host.ts`'s own
+ * no-preload-bridge fallback — merges each save's delta into an in-memory
+ * full-state object rather than emulating real SQLite, since the port
+ * contract (read returns `{ ...small, history }`, write receives a bounded
+ * delta) is all `SyncService`'s callers depend on.
+ */
+function fakeHistoryLedger(stored = new Map<string, unknown>()) {
+  return {
+    read: async (key: string) => structuredClone(stored.get(key) ?? null),
+    write: async (key: string, payload: { small: unknown; delta: { upsertRecords: Record<string, unknown>; upsertQuarantine: Record<string, unknown>; deleteRecordIds: string[] } }) => {
+      const existing = stored.get(key) as { history?: { records?: Record<string, unknown>; quarantined?: Record<string, unknown> } } | undefined;
+      const records = { ...(existing?.history?.records ?? {}) };
+      const quarantined = { ...(existing?.history?.quarantined ?? {}) };
+      for (const id of payload.delta.deleteRecordIds) delete records[id];
+      Object.assign(records, payload.delta.upsertRecords);
+      Object.assign(quarantined, payload.delta.upsertQuarantine);
+      stored.set(key, structuredClone({ ...(payload.small as object), history: { records, quarantined } }));
+    },
+  };
+}
+
 it("never reports idle for unresolved integrity or queued actions", () => {
   const service = new SyncService({} as never, () => "/synthetic/vault");
   (service as any).selected = { id: "history" };
@@ -212,6 +234,7 @@ it("keeps structural parents and trusted renamed identities in Markdown-only sco
   let text = "old";
   const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Shared" };
   const host = { config: { read: async () => null }, deviceState: { read: async (key: string) => structuredClone(stored.get(key) ?? null), write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); } },
+    historyLedger: fakeHistoryLedger(),
     vaultFiles: { onChange: (callback: any) => { changed = callback; return () => {}; }, reconcileScan: async () => ({ status: "complete", entries: files }), readBinary: async () => new TextEncoder().encode(text).buffer },
     syncSafety: { claimOwner: async () => "lease", releaseOwner: async () => {}, storage: async (_token: string, _binding: string, request: any) => { if (request.action === "load-operations") return [...operations.values()]; if (request.action === "save-operation") { operations.set(request.key, structuredClone(request.value)); return; } if (request.action === "stage") { blobs.set(request.key, request.data.slice(0)); return request.key; } return blobs.get(request.key).slice(0); } },
   };

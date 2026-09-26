@@ -14,12 +14,14 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
   "list" | "scanForSync" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "readHistoryLedger" | "writeHistoryLedger" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret"
 >>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
   let openFiles: VaultFileEntry[] = [];
   const fallbackDeviceState = new Map<string, unknown>();
+  const fallbackHistoryLedger = new Map<string, unknown>();
   return {
     syncSafety: preload.claimSyncOwner && preload.releaseSyncOwner && preload.applySyncMutation && preload.onSyncPrepare && preload.onSyncRelease ? {
       storage: (token, binding, request) => { if (!preload.privateSyncStorage) throw new Error("Private sync storage unavailable"); return preload.privateSyncStorage(token, binding, request); },
@@ -108,6 +110,23 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       read: async <T>(key: string) => preload.readDeviceState ? preload.readDeviceState<T>(key) : structuredClone(fallbackDeviceState.get(key) ?? null) as T | null,
       write: async (key, value) => { if (preload.writeDeviceState) await preload.writeDeviceState(key, value); else fallbackDeviceState.set(key, structuredClone(value)); },
       remove: async key => { if (preload.removeDeviceState) await preload.removeDeviceState(key); else fallbackDeviceState.delete(key); },
+    },
+    historyLedger: {
+      read: async (key: string) => preload.readHistoryLedger ? preload.readHistoryLedger(key) : structuredClone(fallbackHistoryLedger.get(key) ?? null),
+      write: async (key, payload) => {
+        if (preload.writeHistoryLedger) { await preload.writeHistoryLedger(key, payload); return; }
+        // No preload bridge (older main-process build during a hot-reload
+        // mismatch, matching deviceState's own fallback above): merge the
+        // delta into an in-memory full-state object so behavior stays
+        // correct even without a real split.
+        const existing = fallbackHistoryLedger.get(key) as { history?: { records?: Record<string, unknown>; quarantined?: Record<string, unknown> } } | undefined;
+        const records = { ...(existing?.history?.records ?? {}) };
+        const quarantined = { ...(existing?.history?.quarantined ?? {}) };
+        for (const id of payload.delta.deleteRecordIds) delete records[id];
+        Object.assign(records, payload.delta.upsertRecords);
+        Object.assign(quarantined, payload.delta.upsertQuarantine);
+        fallbackHistoryLedger.set(key, structuredClone({ ...(payload.small as object), history: { records, quarantined } }));
+      },
     },
     secrets: {
       available: preload.isSecretStorageAvailable?.() ?? false,

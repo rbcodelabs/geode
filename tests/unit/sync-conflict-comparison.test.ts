@@ -10,6 +10,28 @@ const encode = (value: string) => new TextEncoder().encode(value).buffer as Arra
 const hash = (data: ArrayBuffer) => createHash('sha256').update(new Uint8Array(data)).digest('hex');
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
+/**
+ * ADR-0027: a fake `host.historyLedger` mirroring `electron-host.ts`'s own
+ * no-preload-bridge fallback — merges each save's delta into an in-memory
+ * full-state object rather than emulating real SQLite, since the port
+ * contract (read returns `{ ...small, history }`, write receives a bounded
+ * delta) is all `SyncService`'s callers depend on.
+ */
+function fakeHistoryLedger(stored = new Map<string, unknown>()) {
+    return {
+        read: async (key: string) => structuredClone(stored.get(key) ?? null),
+        write: async (key: string, payload: { small: unknown; delta: { upsertRecords: Record<string, unknown>; upsertQuarantine: Record<string, unknown>; deleteRecordIds: string[] } }) => {
+            const existing = stored.get(key) as { history?: { records?: Record<string, unknown>; quarantined?: Record<string, unknown> } } | undefined;
+            const records = { ...(existing?.history?.records ?? {}) };
+            const quarantined = { ...(existing?.history?.quarantined ?? {}) };
+            for (const id of payload.delta.deleteRecordIds) delete records[id];
+            Object.assign(records, payload.delta.upsertRecords);
+            Object.assign(quarantined, payload.delta.upsertQuarantine);
+            stored.set(key, structuredClone({ ...(payload.small as object), history: { records, quarantined } }));
+        },
+    };
+}
+
 /* ------------------------------------------------------------------ *
  * Multi-client harness (mirrors tests/unit/sync-history-controller)    *
  * ------------------------------------------------------------------ */
@@ -93,7 +115,7 @@ function seeded(input: { conflict: HistoryConflict; records: HistoryRecord[]; fi
     const state: HistoryControllerState = {
         schema: 1, bindingKey: `${deviceId}:${vault}`, vaultId: vault, deviceId,
         history: { records: Object.fromEntries(input.records.map(r => [r.recordId, r])), quarantined: {} },
-        baseline: {}, reservedEntities: {}, approved: true, conflicts: [input.conflict], blocked: [], completedOperations: [],
+        baseline: {}, reservedEntities: {}, approved: true, conflicts: [input.conflict], blocked: [],
     };
     const files = new Map<string, ArrayBuffer>(Object.entries(input.files ?? {}));
     const blobs = new Map<string, ArrayBuffer>(Object.entries(input.blobs ?? {}));
@@ -373,6 +395,7 @@ function historyService() {
     const host = {
         config: { read: async () => null },
         deviceState: { read: async (key: string) => structuredClone(stored.get(key) ?? null), write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); }, remove: async (key: string) => { stored.delete(key); } },
+        historyLedger: fakeHistoryLedger(),
         vaultFiles: { onChange: () => () => { }, reconcileScan: async () => ({ status: 'complete', entries: files }), readBinary: async () => encode(text) },
         syncSafety: { claimOwner: async () => 'lease', releaseOwner: async () => { }, storage: async (_t: string, _b: string, request: any) => { if (request.action === 'load-operations') return [...operations.values()]; if (request.action === 'save-operation') { operations.set(request.key, structuredClone(request.value)); return; } if (request.action === 'stage') { blobs.set(request.key, request.data.slice(0)); return request.key; } return blobs.get(request.key)!.slice(0); } },
     };

@@ -29,6 +29,36 @@ export class PrivateKeyStore {
     });
   }
 
+  /**
+   * Read `identity`'s bytes (migrating a stale legacy-path file first, exactly
+   * like `read()`), then give `upgrade` one chance to rewrite them in place —
+   * e.g. ADR-0027's one-time history-ledger migration — inside the *same*
+   * per-identity lock `read()`/`write()` already use, so a concurrent save
+   * against this identity can never interleave with an in-flight upgrade.
+   * `upgrade` returns replacement bytes to persist, or `null` to mean "no
+   * upgrade needed"; either way the bytes now on disk are what's returned.
+   * Returns `null` (without calling `upgrade`) when nothing is persisted for
+   * this identity yet — a brand-new identity has nothing to migrate.
+   */
+  readAndMaybeUpgrade(identity: string, upgrade: (current: Buffer) => Promise<Buffer | null>): Promise<Buffer | null> {
+    const paths = this.paths(identity);
+    return this.lock(paths.target, async () => {
+      let current = await this.readOptional(paths.target);
+      if (current === null) {
+        const legacy = paths.legacy ? await this.readOptional(paths.legacy) : null;
+        if (legacy === null) return null;
+        await this.commit(paths.target, legacy);
+        await this.removeLegacy(paths.legacy);
+        current = legacy;
+      }
+      const upgraded = await upgrade(current);
+      if (upgraded === null) return current;
+      await this.commit(paths.target, upgraded);
+      await this.removeLegacy(paths.legacy);
+      return upgraded;
+    });
+  }
+
   remove(identity: string): Promise<void> {
     const paths = this.paths(identity);
     return this.lock(paths.target, async () => {

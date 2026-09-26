@@ -86,3 +86,64 @@ describe('private key storage', () => {
     expect((await store.read('a\0bc'))?.toString()).toBe('one'); expect((await store.read('ab\0c'))?.toString()).toBe('two');
   });
 });
+
+describe('PrivateKeyStore.readAndMaybeUpgrade (ADR-0027)', () => {
+  it('returns null without calling upgrade when nothing is persisted for this identity', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'private-store-'));
+    const store = new PrivateKeyStore(directory, 'json');
+    const upgrade = vi.fn(async () => null);
+    expect(await store.readAndMaybeUpgrade('key', upgrade)).toBeNull();
+    expect(upgrade).not.toHaveBeenCalled();
+  });
+
+  it('leaves the stored bytes untouched when upgrade declines (returns null)', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'private-store-'));
+    const store = new PrivateKeyStore(directory, 'json');
+    await store.write('key', Buffer.from('{"a":1}'));
+    const upgrade = vi.fn(async () => null);
+    const result = await store.readAndMaybeUpgrade('key', upgrade);
+    expect(result?.toString()).toBe('{"a":1}');
+    expect(upgrade).toHaveBeenCalledWith(Buffer.from('{"a":1}'));
+    expect((await store.read('key'))?.toString()).toBe('{"a":1}');
+  });
+
+  it('commits the replacement bytes to disk and returns them when upgrade provides new bytes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'private-store-'));
+    const store = new PrivateKeyStore(directory, 'json');
+    await store.write('key', Buffer.from('{"a":1}'));
+    const result = await store.readAndMaybeUpgrade('key', async () => Buffer.from('{"a":1,"migrated":true}'));
+    expect(result?.toString()).toBe('{"a":1,"migrated":true}');
+    expect((await store.read('key'))?.toString()).toBe('{"a":1,"migrated":true}');
+  });
+
+  it('migrates a stale legacy-path file before handing bytes to upgrade, exactly like read()', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'private-store-')); const key = 'legacy';
+    const legacy = join(directory, Buffer.from(key).toString('base64url') + '.json');
+    await writeFile(legacy, '{"a":1}');
+    const store = new PrivateKeyStore(directory, 'json');
+    const upgrade = vi.fn(async () => null);
+    const result = await store.readAndMaybeUpgrade(key, upgrade);
+    expect(result?.toString()).toBe('{"a":1}');
+    expect(upgrade).toHaveBeenCalledWith(Buffer.from('{"a":1}'));
+    // The legacy file is folded into the canonical hashed path, same as read().
+    expect(await readdir(directory)).toEqual([`${createHash('sha256').update(key).digest('hex')}.json`]);
+  });
+
+  it('serializes a concurrent write against the same identity behind the upgrade lock', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'private-store-'));
+    const store = new PrivateKeyStore(directory, 'json');
+    await store.write('key', Buffer.from('{"a":1}'));
+    let releaseUpgrade!: () => void;
+    const upgrading = store.readAndMaybeUpgrade('key', () => new Promise<Buffer | null>(resolve => {
+      releaseUpgrade = () => resolve(Buffer.from('{"a":1,"migrated":true}'));
+    }));
+    const writing = store.write('key', Buffer.from('{"a":2}'));
+    let writeSettled = false; void writing.then(() => { writeSettled = true; });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(writeSettled).toBe(false); // the concurrent write must wait for the upgrade to finish first
+    releaseUpgrade();
+    await upgrading; await writing;
+    // The write that was queued behind the upgrade lock lands last, on top of the migrated bytes.
+    expect((await store.read('key'))?.toString()).toBe('{"a":2}');
+  });
+});

@@ -19,6 +19,7 @@ import type { PrivilegedFetchRequest, PrivilegedFetchResponse } from "../shared/
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
 import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
+import type { HistoryLedgerWritePayload } from "../shared/history-ledger";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
   const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
@@ -216,6 +217,9 @@ const api = {
   readDeviceState: <T>(key: string): Promise<T | null> => ipcRenderer.invoke("device-state-read", key),
   writeDeviceState: (key: string, data: unknown): Promise<void> => ipcRenderer.invoke("device-state-write", key, data),
   removeDeviceState: (key: string): Promise<void> => ipcRenderer.invoke("device-state-remove", key),
+  // ADR-0027: the split history ledger, used only for `sync-history/*` keys.
+  readHistoryLedger: (key: string): Promise<unknown | null> => ipcRenderer.invoke("history-state-read", key),
+  writeHistoryLedger: (key: string, payload: HistoryLedgerWritePayload): Promise<void> => ipcRenderer.invoke("history-state-write", key, payload),
   isSecretStorageAvailable: (): boolean => process.platform !== "linux" || Boolean(process.env.DBUS_SESSION_BUS_ADDRESS),
   readSecret: (capability: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", capability, key),
   writeSecret: (capability: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", capability, key, value),
@@ -382,7 +386,8 @@ export type GeodeApi = Omit<
   "audioCaptureWorklet" | "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
-  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead"
+  "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
+  "readHistoryLedger" | "writeHistoryLedger"
 > & {
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
@@ -393,6 +398,15 @@ export type GeodeApi = Omit<
   pruneMetadataCache?: ElectronOnlyGeodeApi["pruneMetadataCache"];
   reportMetadataFallback?: ElectronOnlyGeodeApi["reportMetadataFallback"];
   requestUrl?: ElectronOnlyGeodeApi["requestUrl"];
+  /**
+   * ADR-0027's split history ledger — Electron-desktop only (mirrors
+   * `HostServices["historyLedger"]`'s own optionality). Absent on the
+   * mobile/browser facade, which never registers an append-only sync
+   * provider in the first place (that already requires `syncSafety`, itself
+   * absent there).
+   */
+  readHistoryLedger?: ElectronOnlyGeodeApi["readHistoryLedger"];
+  writeHistoryLedger?: ElectronOnlyGeodeApi["writeHistoryLedger"];
   /** Absent on the mobile/browser facade — see `pluginFetch` in `src/renderer/plugin-fetch.ts` for its native-`fetch` fallback when unset. */
   pluginFetch?: ElectronOnlyGeodeApi["pluginFetch"];
   getSupportedPluginCatalog?: ElectronOnlyGeodeApi["getSupportedPluginCatalog"];
