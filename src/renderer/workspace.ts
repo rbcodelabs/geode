@@ -3166,14 +3166,19 @@ export class Workspace extends Events {
     return match;
   }
 
-  /** Find an open leaf whose view has the given `viewType` (e.g. reusing a singleton view like Graph). */
+  /**
+   * Find an open leaf whose view has the given `viewType` (e.g. reusing a
+   * singleton view like Graph). Must search sidebars too, not just the
+   * center tab groups — Graph docks in the right sidebar (see
+   * `App.openGraphView`), so a center-only search would never find it on a
+   * second invocation and mint a duplicate tab instead of reusing the first.
+   */
   findLeafByViewType(viewType: string): WorkspaceLeaf | null {
-    for (const group of this.groups) {
-      for (const leaf of group.leaves) {
-        if (leaf.view?.viewType === viewType) return leaf;
-      }
-    }
-    return null;
+    let match: WorkspaceLeaf | null = null;
+    this.iterateLeaves((leaf) => {
+      if (!match && leaf.view?.viewType === viewType) match = leaf;
+    });
+    return match;
   }
 
   iterateLeaves(cb: (leaf: WorkspaceLeaf) => void) {
