@@ -3857,15 +3857,27 @@ export class App {
     return view instanceof BaseView ? view : null;
   }
 
-  /** Open the (singleton) global graph view, reusing an already-open graph tab if there is one. */
+  /**
+   * Open the (singleton) global graph view docked in the right sidebar,
+   * reusing an already-open graph tab if there is one.
+   *
+   * Deliberately does NOT use `workspace.getLeaf(false)` (which reuses the
+   * active main-pane leaf, replacing whatever note was open there with no
+   * way back — see Compass feedback 397035c4-3ebd-4422-8148-193721f68df1).
+   * `openWebViewer` below opens a *new* main-pane tab instead for the same
+   * reason. Docking in the sidebar (like Backlinks/Outline/Tag pane/
+   * Comments) never touches the main pane at all, so there's nothing to
+   * strand.
+   */
   async openGraphView(): Promise<void> {
     const existing = this.workspace.findLeafByViewType("graph");
     if (existing) {
       existing.group.setActiveLeaf(existing);
       return;
     }
-    const leaf = this.workspace.getLeaf(false);
+    const leaf = this.workspace.rightSidebar.addLeaf();
     await leaf.setView(new GraphView(this));
+    this.workspace.rightSidebar.setActiveLeaf(leaf);
   }
 
   /** "Open web viewer" (Obsidian compat command `open-web-viewer`): opens a new Web Viewer tab at the given URL, or the configured home URL. */
