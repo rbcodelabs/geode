@@ -1983,6 +1983,14 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   white-space: nowrap;
 }
 
+.nav-item.is-drop-target,
+.nav-vault-name.is-drop-target {
+  background: var(--background-modifier-hover);
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-s);
+}
+
 .nav-item:hover {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
