@@ -1,0 +1,11 @@
+filters:
+  and:
+    - file.hasTag("book")
+views:
+  - type: table
+    name: Reading list
+    order:
+      - file.name
+      - author
+      - status
+      - rating

@@ -21,6 +21,15 @@ test-vault/.geode/plugins/*
 !test-vault/.geode/themes/
 test-vault/.geode/themes/*
 !test-vault/.geode/themes/Ivory/
+# Starter-vault prototype (resources/starter-vault/, see Compass doc
+# bacd8621): only app.json is a deliberate, checked-in seed (theme: light +
+# cssTheme: Ivory, the desired default for a new user's first open). Every
+# other .geode/* entry is per-run indexer/workspace/community state that a
+# live Geode session writes back into this folder the moment it's opened
+# (metadata-cache/, workspace.json, community.json, device-reconcile:*) and
+# must never be committed.
+resources/starter-vault/.geode/*
+!resources/starter-vault/.geode/app.json
 test-results/
 playwright-report/
 .benchmark-vault/
