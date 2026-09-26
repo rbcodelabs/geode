@@ -266,3 +266,56 @@ it("requires explicit create or join and persists creation identity before remot
   expect(service.getStatus().state).toBe("preview");
   await service.cancel();
 });
+
+it("exposes the bound shared vault's own name after createVault, and clears it on disconnect", async () => {
+  const stored = new Map<string, unknown>();
+  const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Rick's Notes" };
+  const host = { deviceState: { read: async (key: string) => stored.get(key) ?? null, write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); }, remove: async (key: string) => { stored.delete(key); } }, vaultFiles: { onChange: () => () => {} }, syncSafety: { claimOwner: async () => "lease", releaseOwner: async () => {} } };
+  const service = new SyncService(host as never, () => "/synthetic/vault");
+  service.register("owner", { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 }, discover: async () => [descriptor], createVault: async () => descriptor, open: vi.fn() } as never);
+  expect(service.getBoundVaultName()).toBeUndefined();
+  await service.activate("history");
+  await service.createVault("Rick's Notes");
+  expect(service.getBoundVaultName()).toBe("Rick's Notes");
+  await service.disconnect();
+  expect(service.getBoundVaultName()).toBeUndefined();
+});
+
+it("exposes the bound shared vault's own name after joinVault", async () => {
+  const stored = new Map<string, unknown>();
+  const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Team Vault" };
+  const host = { deviceState: { read: async (key: string) => stored.get(key) ?? null, write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); }, remove: async () => {} }, vaultFiles: { onChange: () => () => {} }, syncSafety: { claimOwner: async () => "lease", releaseOwner: async () => {} } };
+  const service = new SyncService(host as never, () => "/synthetic/vault");
+  service.register("owner", { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 }, discover: async () => [descriptor], open: vi.fn() } as never);
+  await service.activate("history");
+  await service.joinVault(descriptor as never);
+  expect(service.getBoundVaultName()).toBe("Team Vault");
+});
+
+it("clears stale blocked/excluded details when the append-only provider unloads", async () => {
+  const service = new SyncService({ deviceState: { read: async () => null }, syncSafety: {} } as never, () => "/synthetic/vault");
+  (service as any).restore = async () => {};
+  const provider = { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 } };
+  const unregister = service.register("owner", provider as never);
+  (service as any).selected = provider;
+  const blocked = [{ namespace: "content", path: "Weird<1>.md", reason: "invalid-resource-name" }];
+  (service as any).summarize({ signature: "s", requiresApproval: false, uploads: 0, downloads: 0, deletions: 0, conflicts: [], blocked, excluded: [], pending: 0, upToDate: false });
+  expect(service.getHistoryDetails()?.blocked).toEqual(blocked);
+  await unregister();
+  // Rendering blocked/excluded is unconditional (not gated on isAppendOnly()) so the plain
+  // sync path can show them too — stale details here would keep painting this unloaded
+  // provider's old blocked-file groups on screen indefinitely.
+  expect(service.getHistoryDetails()).toBeUndefined();
+  expect(service.isAppendOnly()).toBe(false);
+});
+
+it("summarizes blocked files into a short status message while keeping the full per-file list on details", () => {
+  const service = new SyncService({} as never, () => "/synthetic/vault");
+  (service as any).selected = { id: "history" };
+  const blocked = Array.from({ length: 23 }, (_, index) => ({ namespace: "content", path: `Weird<${index}>.md`, reason: "invalid-resource-name" }));
+  const result = { signature: "preview", requiresApproval: false, uploads: 0, downloads: 0, deletions: 0, conflicts: [], blocked, excluded: [], pending: 0, upToDate: false };
+  (service as any).summarize(result);
+  expect(service.getStatus().message).toBe("23 file(s) blocked");
+  expect(service.getStatus().message).not.toContain("Weird");
+  expect(service.getHistoryDetails()?.blocked).toEqual(blocked);
+});

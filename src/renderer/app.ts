@@ -50,7 +50,7 @@ import { ConflictCompareModal } from "./modals/conflict-compare-modal";
 import { ErrorDetailsModal } from "./modals/error-details-modal";
 import { SyncConflictBannerController } from "./sync/conflict-banner";
 import { SYNC_CONFLICT_COMPARE_LABEL, SYNC_CONFLICT_COMPARE_ROW_LIMIT, planConflictRow } from "./sync/conflict-presentation";
-import type { HistoryConflictComparison } from "./sync/history-controller";
+import type { HistoryConflictComparison, HistoryPathIssue } from "./sync/history-controller";
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { renderExternalRootsTab } from "./settings/external-roots-tab";
@@ -618,6 +618,8 @@ class VaultSwitchBusyError extends Error {
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
 type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders";
 const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "community-plugins", "sync", "advanced", "performance", "project-folders"];
+/** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
+const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
@@ -1541,7 +1543,7 @@ class SettingsModal extends Modal {
    * throw away scroll position, button focus and any half-finished interaction,
    * and at 17,251 operations it would be unusable.
    */
-  private renderSyncProgress(container: HTMLElement, generation: number): { begin: () => void } {
+  private renderSyncProgress(container: HTMLElement, generation: number, onBusyChange?: (busy: boolean) => void): { begin: () => void } {
     const activity = document.createElement("div");
     activity.className = "sync-progress";
     activity.setAttribute("role", "status");
@@ -1572,6 +1574,7 @@ class SettingsModal extends Modal {
     const live = () => generation === this.syncTabGeneration && container.isConnected;
 
     const paint = (progress: SyncStatusProgress | undefined) => {
+      onBusyChange?.(Boolean(progress));
       if (!progress) {
         activity.hidden = true; stall.hidden = true; activity.classList.remove("is-stalled");
         announced = ""; announce.textContent = ""; container.removeAttribute("aria-busy");
@@ -1625,6 +1628,32 @@ class SettingsModal extends Modal {
     };
   }
 
+  /**
+   * Renders blocked/excluded sync issues grouped by reason (e.g. "invalid-resource-name (23)")
+   * instead of one row per file with the same reason repeated as description text — the flat
+   * form is unreadable once a rename policy or naming rule rejects dozens of files at once.
+   * Each group shows the first SYNC_ISSUE_GROUP_VISIBLE_LIMIT paths and collapses the rest
+   * behind a "Show N more" toggle rather than rendering everything up front.
+   */
+  private renderSyncIssueGroups(container: HTMLElement, label: string, items: HistoryPathIssue[]): void {
+    if (!items.length) return;
+    const byReason = new Map<string, string[]>();
+    for (const item of items) { const paths = byReason.get(item.reason) ?? []; paths.push(item.path); byReason.set(item.reason, paths); }
+    for (const [reason, paths] of byReason) {
+      const heading = document.createElement("h3"); heading.className = "setting-item-group-heading"; heading.textContent = `${label}: ${reason} (${paths.length})`;
+      const group = document.createElement("div"); group.className = "setting-item-group";
+      container.append(heading, group);
+      const visible = paths.slice(0, SYNC_ISSUE_GROUP_VISIBLE_LIMIT), hidden = paths.slice(SYNC_ISSUE_GROUP_VISIBLE_LIMIT);
+      for (const path of visible) this.addRow(group, path);
+      if (hidden.length) {
+        const toggleRow = document.createElement("div"); toggleRow.className = "setting-item-control";
+        const toggle = document.createElement("button"); toggle.type = "button"; toggle.textContent = `Show ${hidden.length} more`;
+        toggle.addEventListener("click", () => { toggleRow.remove(); for (const path of hidden) this.addRow(group, path); });
+        toggleRow.appendChild(toggle); group.appendChild(toggleRow);
+      }
+    }
+  }
+
   private renderSyncTab(container: HTMLElement, summary = ""): void {
     const generation = ++this.syncTabGeneration;
     // innerHTML detaches the previous render's nodes but leaves `container`
@@ -1643,11 +1672,34 @@ class SettingsModal extends Modal {
     select.value = active?.id ?? "";
     select.addEventListener("change", () => { void (select.value ? this.geodeApp.sync.activate(select.value) : this.geodeApp.sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
     control.appendChild(select);
-    this.addRow(container, "Status", status.message ?? status.state).control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
+    // The provider row above names the transport (e.g. "Google Drive (managed vault)"); the
+    // bound shared vault has its own name, only meaningful on the append-only/history path.
+    if (this.geodeApp.sync.isAppendOnly()) { const boundVaultName = this.geodeApp.sync.getBoundVaultName(); if (boundVaultName) this.addRow(container, "Vault", `Bound to shared vault "${boundVaultName}"`); }
+    const statusRow = this.addRow(container, "Status", status.message ?? status.state);
+    statusRow.control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
+    // A long description (still possible via the per-reason groups below) must not sit
+    // beside the short control text at the row's vertical center — that is exactly the
+    // overlap the multi-file blocked-list bug produced. Wrapping lets the control drop
+    // below instead of floating across wrapped lines.
+    statusRow.control.parentElement?.classList.add("sync-wrapped-setting");
     if (summary) renderSyncFeedback(container, summary);
-    const showProgress = this.renderSyncProgress(container, generation);
+    // Two independent things disable these controls: a background sync tick the user
+    // didn't trigger from this panel (backgroundBusy) and an in-flight perform() click
+    // (performBusy). Either can end while the other is still true, so a control is only
+    // re-enabled once both are false — the two mechanisms must never fight each other.
+    const busyControls: Array<{ el: HTMLButtonElement | HTMLInputElement; defaultDisabled: boolean }> = [];
+    let backgroundBusy = false, performBusy = false;
+    const applyBusyState = () => { const busy = backgroundBusy || performBusy; for (const { el, defaultDisabled } of busyControls) el.disabled = busy || defaultDisabled; };
+    // Every control that calls perform() registers here at creation time, including ones
+    // built well after this render pass (discovered "Join" buttons, conflict rows that only
+    // exist once listConflicts() resolves) — applying immediately means a background sync
+    // already in flight lands on a late-created button too, not just the ones present when
+    // this function started.
+    const trackBusy = (el: HTMLButtonElement | HTMLInputElement, defaultDisabled = false) => { busyControls.push({ el, defaultDisabled }); applyBusyState(); };
+    const showProgress = this.renderSyncProgress(container, generation, busy => { backgroundBusy = busy; applyBusyState(); });
     const actions = document.createElement("div"); actions.className = "setting-item-control";
     const perform = (action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => {
+      performBusy = true;
       container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button,input,select").forEach(control => { control.disabled = true; });
       // Disabled buttons alone say nothing about whether work is happening. Paint
       // the activity surface on click, before the first tick can possibly arrive,
@@ -1658,35 +1710,44 @@ class SettingsModal extends Modal {
           summary = formatSyncFeedback(kind, result as SyncPreview, this.geodeApp.sync.isAppendOnly(), this.geodeApp.sync.getHistoryDetails());
         } else summary = "Sync settings updated.";
       }).catch(error => { summary = error instanceof Error ? error.message : String(error); this.geodeApp.notify(summary); })
-        .finally(() => { if (container.isConnected) this.renderSyncTab(container, summary); });
+        .finally(() => { performBusy = false; if (container.isConnected) this.renderSyncTab(container, summary); });
     };
-    const addAction = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); };
+    const addAction = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); trackBusy(button, !active); };
     addAction("Preview", () => this.geodeApp.sync.preview());
     addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
     addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
     container.appendChild(actions);
+    // Blocked/excluded files are structured detail on getHistoryDetails(), which is the only
+    // place any provider reports per-file rejection reasons today — the plain/conditional
+    // sync path (coordinator.ts) has no equivalent list, only an aggregate skipped count.
+    // Rendered unconditionally (not gated on isAppendOnly()) so leftover detail from a sync
+    // that just errored out is never silently dropped from view.
+    const details = this.geodeApp.sync.getHistoryDetails();
+    this.renderSyncIssueGroups(container, "Blocked", details?.blocked ?? []);
+    this.renderSyncIssueGroups(container, "Excluded", details?.excluded ?? []);
     if (this.geodeApp.sync.isAppendOnly()) {
       const setup = this.addRow(container, "Shared vault setup", "Experimental immutable history. Create a new shared vault or explicitly join an existing one. Files over 100 MiB are blocked; secrets and plugin data are excluded.");
       setup.control.parentElement?.classList.add("sync-wrapped-setting");
       const name = document.createElement("input"); name.type = "text"; name.setAttribute("aria-label", "Shared vault name"); name.placeholder = "Shared vault name";
       const create = document.createElement("button"); create.type = "button"; create.textContent = "Create shared vault"; create.addEventListener("click", () => perform(() => this.geodeApp.sync.createVault(name.value)));
       const discover = document.createElement("button"); discover.type = "button"; discover.textContent = "Find shared vaults";
+      trackBusy(name); trackBusy(create); trackBusy(discover);
       const choices = document.createElement("div");
       discover.addEventListener("click", () => {
         discover.disabled = true;
         void this.geodeApp.sync.discoverVaults().then(vaults => {
           choices.replaceChildren();
           if (!vaults.length) choices.textContent = "No accessible shared vaults found.";
-          for (const vault of vaults) { const join = document.createElement("button"); join.type = "button"; join.textContent = `Join ${vault.name}`; join.title = vault.vaultId; join.addEventListener("click", () => perform(() => this.geodeApp.sync.joinVault(vault))); choices.appendChild(join); }
-        }).catch(error => { choices.textContent = error instanceof Error ? error.message : "Discovery unavailable"; }).finally(() => { discover.disabled = false; });
+          for (const vault of vaults) { const join = document.createElement("button"); join.type = "button"; join.textContent = `Join ${vault.name}`; join.title = vault.vaultId; join.addEventListener("click", () => perform(() => this.geodeApp.sync.joinVault(vault))); choices.appendChild(join); trackBusy(join); }
+        // A hard `false` here would re-enable discovery even while a background sync
+        // started mid-discovery — restore the shared busy state instead of a literal value.
+        }).catch(error => { choices.textContent = error instanceof Error ? error.message : "Discovery unavailable"; }).finally(() => applyBusyState());
       });
       setup.control.append(name, create, discover, choices);
-      const details = this.geodeApp.sync.getHistoryDetails();
-      for (const item of [...(details?.blocked ?? []), ...(details?.excluded ?? [])].slice(0, 100)) this.addRow(container, item.path, item.reason);
       if (status.state === "error") {
         const recovery = this.addRow(container, "Pending recovery", "Stopping retries preserves frozen bytes and preimages. This does not undo remote records that may already be published; review the new preview before continuing.");
         recovery.control.parentElement?.classList.add("sync-wrapped-setting");
-        const stop = document.createElement("button"); stop.type = "button"; stop.textContent = "Stop pending retries & preview"; stop.addEventListener("click", () => perform(() => this.geodeApp.sync.abandonPending())); recovery.control.appendChild(stop);
+        const stop = document.createElement("button"); stop.type = "button"; stop.textContent = "Stop pending retries & preview"; stop.addEventListener("click", () => perform(() => this.geodeApp.sync.abandonPending())); recovery.control.appendChild(stop); trackBusy(stop);
       }
       // Rows render with the original keep-local / accept-version workflow, then
       // upgrade to a single Compare & resolve action once the (read-only)
@@ -1700,8 +1761,8 @@ class SettingsModal extends Modal {
       const conflictRows = appendOnlyConflicts.map(conflict => {
         const row = this.addRow(container, conflict.path, planConflictRow(conflict, null).description);
         row.control.parentElement?.classList.add("sync-wrapped-setting");
-        const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep local"; keep.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "current" } }))); row.control.appendChild(keep);
-        for (const recordId of conflict.heads) { const accept = document.createElement("button"); accept.type = "button"; accept.textContent = `Accept version ${recordId.slice(0, 8)}`; accept.title = recordId; accept.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "version", recordId } }))); row.control.appendChild(accept); }
+        const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep local"; keep.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "current" } }))); row.control.appendChild(keep); trackBusy(keep);
+        for (const recordId of conflict.heads) { const accept = document.createElement("button"); accept.type = "button"; accept.textContent = `Accept version ${recordId.slice(0, 8)}`; accept.title = recordId; accept.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "version", recordId } }))); row.control.appendChild(accept); trackBusy(accept); }
         return { conflict, row };
       });
       if (conflictRows.length) void (async () => {
@@ -1731,6 +1792,10 @@ class SettingsModal extends Modal {
         }
       })();
     }
+    // Belt-and-suspenders: trackBusy() already applies busy state to every control the
+    // moment it registers, but a final pass here is cheap and guards against any control
+    // above that was pushed before backgroundBusy's first callback landed.
+    applyBusyState();
     const conflictContainer = document.createElement("div"); container.appendChild(conflictContainer);
     void this.geodeApp.sync.listConflicts().then(conflicts => {
       if (!conflictContainer.isConnected || this.geodeApp.sync.isAppendOnly()) return;
@@ -1738,8 +1803,8 @@ class SettingsModal extends Modal {
         const row = this.addRow(conflictContainer, conflict.path, conflict.conflictPath ? `Remote copy: ${conflict.conflictPath}. Keep local sends your current version; Accept remote restores the remote version. Copies are retained for recovery.` : "Deleted remotely. Keep local uploads this file again; Accept remote moves the local file to trash.");
         row.control.parentElement?.setAttribute("data-sync-conflict", conflict.id);
         for (const [label, resolution] of [["Keep local", "keep-local"], ["Accept remote", "accept-remote"]] as const) {
-          const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active;
-          button.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveConflict(conflict.id, resolution))); row.control.appendChild(button);
+          const button = document.createElement("button"); button.type = "button"; button.textContent = label;
+          button.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveConflict(conflict.id, resolution))); row.control.appendChild(button); trackBusy(button, !active);
         }
       }
     }).catch(error => this.geodeApp.notify(String(error)));
