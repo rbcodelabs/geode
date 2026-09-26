@@ -38,6 +38,8 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     trash: (path) => host.vaultFiles.trash(path),
     rmdir: (path, recursive) =>
       host.vaultFiles.rmdir?.(path, recursive) ?? unavailable("rmdir")(),
+    listDir: (path) =>
+      host.vaultFiles.listDir?.(path) ?? unavailable("listDir")(),
     rename: (path, newPath) => host.vaultFiles.rename(path, newPath),
     exists: (path) => host.vaultFiles.exists(path),
     reveal: host.desktop?.revealInFileManager ?? unavailable("desktop") as never,
