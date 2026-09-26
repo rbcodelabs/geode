@@ -25,6 +25,8 @@ export class SyncService extends Events implements SyncApi {
   private abort?: AbortController;
   private running?: Promise<unknown>;
   private session?: AppendOnlySession;
+  /** The bound shared vault's own name (VaultDescriptor.name), cached from load()/save() so the renderer can read it synchronously — distinct from getActiveProvider().name, which is the transport/provider name. */
+  private boundVaultName?: string;
   private lease?: string;
   private generation = 0;
   private debounce?: ReturnType<typeof setTimeout>;
@@ -73,13 +75,18 @@ export class SyncService extends Events implements SyncApi {
         this.setStatus({ state: "error", providerId: provider.id, conflicts: 0, message: error instanceof Error ? error.message : "Reconnect required" }); this.schedule(this.retryDelay);
       });
     }
-    return async () => { if (this.providers.get(provider.id) !== provider) return; if (this.selected === provider || this.setupTarget === provider) { await this.cancel(); if (this.selected === provider) this.selected = undefined; this.setStatus({ state: "error", conflicts: 0, providerId: provider.id, message: "Sync provider unloaded; reconnect explicitly" }); } this.providers.delete(provider.id); await unregister?.(); };
+    // Clearing details alongside selected matters beyond bookkeeping: getHistoryDetails()
+    // is rendered unconditionally in the Sync tab (not gated on isAppendOnly()) so the
+    // plain/conditional path can show blocked/excluded issues too — leaving stale details
+    // behind here would keep painting this unloaded provider's old blocked-file groups forever.
+    return async () => { if (this.providers.get(provider.id) !== provider) return; if (this.selected === provider || this.setupTarget === provider) { await this.cancel(); if (this.selected === provider) { this.selected = undefined; this.details = undefined; } this.setStatus({ state: "error", conflicts: 0, providerId: provider.id, message: "Sync provider unloaded; reconnect explicitly" }); } this.providers.delete(provider.id); await unregister?.(); };
   }
   listProviders() { return [...this.providers.values()].map(provider => ({ id: provider.id, name: provider.name, ...(isHistory(provider) ? { protocol: provider.protocol } : {}) })); }
   getActiveProvider() { return this.selected ? { id: this.selected.id, name: this.selected.name } : this.conditional.getActiveProvider(); }
   getStatus() { return this.selected || this.status.state === "error" && this.status.providerId && !this.conditional.getActiveProvider() ? { ...this.status } : this.conditional.getStatus(); }
   getHistoryDetails() { return this.details; }
   isAppendOnly() { return Boolean(this.selected); }
+  getBoundVaultName() { return this.boundVaultName; }
   /**
    * Any state change ends the run being reported, so progress is dropped here
    * rather than at each call site. A stale "47%" surviving a failure is its own
@@ -133,9 +140,10 @@ export class SyncService extends Events implements SyncApi {
     const root = this.vaultId(); const value = await this.host.deviceState.read<BindingState>(this.key(root));
     if (this.vaultId() !== root) throw new Error("Vault changed");
     if (value && (value.schema !== 1 || value.localRoot !== root)) throw new Error("Experimental sync state requires reconnect and preview");
-    return value ?? { schema: 1, localRoot: root, deviceId: crypto.randomUUID(), scope: { ...DEFAULT_SYNC_SCOPE, excludedFolders: [] }, paused: false };
+    const state = value ?? { schema: 1, localRoot: root, deviceId: crypto.randomUUID(), scope: { ...DEFAULT_SYNC_SCOPE, excludedFolders: [] }, paused: false };
+    this.boundVaultName = state.binding?.name; return state;
   }
-  private async save(value: BindingState) { const root = value.localRoot; if (this.vaultId() !== root) throw new Error("Vault changed"); await this.host.deviceState.write(this.key(root), value); if (this.vaultId() !== root) throw new Error("Vault changed"); }
+  private async save(value: BindingState) { const root = value.localRoot; if (this.vaultId() !== root) throw new Error("Vault changed"); await this.host.deviceState.write(this.key(root), value); if (this.vaultId() !== root) throw new Error("Vault changed"); this.boundVaultName = value.binding?.name; }
   private async restore(provider: AppendOnlySyncProvider): Promise<void> {
     const root = this.vaultId(); const generation = this.generation; const state = await this.load();
     await this.conditional.waitUntilReady();
@@ -345,7 +353,10 @@ export class SyncService extends Events implements SyncApi {
     this.details = value;
     const outstanding = value.uploads + value.downloads + value.deletions;
     const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length;
-    this.setStatus({ state: value.blocked.length || value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: value.blocked.length ? value.blocked.map(item => `${item.path}: ${item.reason}`).join("; ") : value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
+    // Per-file detail (path + reason for each blocked item) lives on `details.blocked`,
+    // reachable via getHistoryDetails() — the message here stays a short summary so it
+    // never turns into an unreadable semicolon-joined sentence for dozens of files.
+    this.setStatus({ state: value.blocked.length || value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: value.blocked.length ? `${value.blocked.length} file(s) blocked` : value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
     return { uploads: value.uploads, downloads: value.downloads, deletes: value.deletions, conflicts: value.conflicts.length, skipped: value.excluded.length + value.blocked.length, requiresApproval: value.requiresApproval };
   }
   private async withConditional<T>(action: () => Promise<T>): Promise<T> {
@@ -415,7 +426,7 @@ export class SyncService extends Events implements SyncApi {
   async disconnect() {
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;
-    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
+    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
     finally { this.closing = false; }
   }
   async pause() { if (!this.selected) return this.withConditional(() => this.conditional.pause()); const root = this.vaultId(); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); return this.setup(async (_signal, assert) => { const state = await this.load(); assert(); state.paused = true; await this.save(state); assert(); this.setStatus({ ...this.status, state: "paused" }); }); }
