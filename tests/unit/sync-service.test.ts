@@ -327,31 +327,39 @@ it("summarizes blocked files into a short status message while keeping the full 
 // through the real preview() -> plan() -> snapshot() path, stubbing only
 // host.vaultFiles/host.hashCache/host.syncSafety, exactly like the existing
 // "keeps structural parents..." test above.
-function makeHashCacheHarness(files: { path: string; isFolder: boolean; size: number; mtime: number; ctime: number }[], text: Record<string, string>) {
+type TestHashCacheEntry = { mtimeMs: number; size: number; sha256: string; excludeReason: string | null; providerId: string };
+
+function makeHashCacheHarness(
+  files: { path: string; isFolder: boolean; size: number; mtime: number; ctime: number }[],
+  text: Record<string, string>,
+  options: { providerId?: string; excludePath?: (path: string, data?: ArrayBuffer) => string | null } = {},
+) {
   const stored = new Map<string, unknown>();
-  const cacheRows = new Map<string, { mtimeMs: number; size: number; sha256: string }>();
+  const cacheRows = new Map<string, TestHashCacheEntry>();
+  const providerId = options.providerId ?? "history";
   const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Shared" };
   const readBinary = vi.fn(async (path: string) => new TextEncoder().encode(text[path]).buffer);
   const hashCache = {
     readAll: vi.fn(async () => Object.fromEntries(cacheRows)),
-    upsertBatch: vi.fn(async (entries: Record<string, { mtimeMs: number; size: number; sha256: string }>) => { for (const [path, entry] of Object.entries(entries)) cacheRows.set(path, entry); }),
+    upsertBatch: vi.fn(async (entries: Record<string, TestHashCacheEntry>) => { for (const [path, entry] of Object.entries(entries)) cacheRows.set(path, entry); }),
     prune: vi.fn(async (paths: string[]) => { const keep = new Set(paths); for (const path of [...cacheRows.keys()]) if (!keep.has(path)) cacheRows.delete(path); }),
   };
   const host = {
     config: { read: async () => null },
-    deviceState: { read: async (key: string) => structuredClone(stored.get(key) ?? null), write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); } },
+    deviceState: { read: async (key: string) => structuredClone(stored.get(key) ?? null), write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); }, remove: async (key: string) => { stored.delete(key); } },
     vaultFiles: { onChange: () => () => {}, reconcileScan: async () => ({ status: "complete", entries: files }), readBinary },
     hashCache,
     syncSafety: { claimOwner: async () => "lease", releaseOwner: async () => {}, storage: async (_token: string, _binding: string, request: any) => request.action === "load-operations" ? [] : undefined },
   };
   const service = new SyncService(host as never, () => "/synthetic/vault");
   service.register("owner", {
-    id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL,
+    id: providerId, name: providerId, protocol: APPEND_ONLY_PROTOCOL,
     capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 },
     discover: async () => [descriptor], createVault: async () => descriptor,
     open: async () => ({ scan: async () => ({ status: "complete", records: [] }), close: async () => {} }),
+    ...(options.excludePath ? { excludePath: options.excludePath } : {}),
   } as never);
-  return { service, readBinary, hashCache, cacheRows };
+  return { service, readBinary, hashCache, cacheRows, providerId };
 }
 
 it("reuses a cached hash and skips the binary read when a file's mtime and size are unchanged", async () => {
@@ -362,7 +370,7 @@ it("reuses a cached hash and skips the binary read when a file's mtime and size 
     await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
     await service.preview();
     expect(readBinary).toHaveBeenCalledTimes(1);
-    expect(hashCache.upsertBatch).toHaveBeenCalledWith({ "Note.md": { mtimeMs: 1, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+    expect(hashCache.upsertBatch).toHaveBeenCalledWith({ "Note.md": { mtimeMs: 1, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), excludeReason: null, providerId: "history" } });
 
     readBinary.mockClear(); hashCache.upsertBatch.mockClear();
     await service.preview();
@@ -384,7 +392,7 @@ for (const changed of ["mtime", "size"] as const) it(`still re-hashes and update
     if (changed === "mtime") files[0].mtime = 2; else files[0].size = 4;
     await service.preview();
     expect(readBinary).toHaveBeenCalledTimes(1);
-    expect(hashCache.upsertBatch).toHaveBeenCalledWith({ "Note.md": { mtimeMs: files[0].mtime, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+    expect(hashCache.upsertBatch).toHaveBeenCalledWith({ "Note.md": { mtimeMs: files[0].mtime, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), excludeReason: null, providerId: "history" } });
   } finally { await service.cancel(); }
 });
 
@@ -404,5 +412,116 @@ it("prunes a removed file's cached hash on the next authoritative scan", async (
     await service.preview();
     expect(hashCache.prune).toHaveBeenCalledWith(["Kept.md"]);
     expect([...cacheRows.keys()]).toEqual(["Kept.md"]);
+  } finally { await service.cancel(); }
+});
+
+it("does not trust a cache hit whose mtime is still within the racy-write window, even with a matching size", async () => {
+  vi.useFakeTimers();
+  try {
+    const now = Date.now();
+    const files = [{ path: "Note.md", isFolder: false, size: 3, mtime: now, ctime: now }];
+    const { service, readBinary, hashCache } = makeHashCacheHarness(files, { "Note.md": "old" });
+    try {
+      await service.activate("history"); await service.createVault("Shared");
+      await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+      await service.preview(); // cold miss: populates the cache with mtime === now
+      expect(readBinary).toHaveBeenCalledTimes(1);
+
+      // Stat is unchanged and the wall clock hasn't moved, so the cached mtime is
+      // still "now" — under RACY_WRITE_WINDOW_MS, this must be treated exactly like
+      // a cold miss (fresh read + hash), not trusted as a hit.
+      readBinary.mockClear(); hashCache.upsertBatch.mockClear();
+      await service.preview();
+      expect(readBinary).toHaveBeenCalledTimes(1);
+      expect(hashCache.upsertBatch).toHaveBeenCalledWith({ "Note.md": { mtimeMs: now, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), excludeReason: null, providerId: "history" } });
+
+      // Once the cached mtime has aged past the window (same stat, later wall
+      // clock), the hit becomes trusted again — proving this isn't a permanent
+      // "never trust this file" state, just a bounded settling window.
+      vi.advanceTimersByTime(2000);
+      readBinary.mockClear(); hashCache.upsertBatch.mockClear();
+      await service.preview();
+      expect(readBinary).not.toHaveBeenCalled();
+      expect(hashCache.upsertBatch).not.toHaveBeenCalled();
+    } finally { await service.cancel(); }
+  } finally { vi.useRealTimers(); }
+});
+
+it("caches a path-based exclude verdict and never re-tests or re-reads the file while it stays excluded", async () => {
+  const files = [{ path: "Secret.md", isFolder: false, size: 3, mtime: 1, ctime: 1 }];
+  const excludePath = vi.fn((path: string) => path === "Secret.md" ? "matched .gitignore" : null);
+  const { service, readBinary, hashCache, cacheRows } = makeHashCacheHarness(files, { "Secret.md": "old" }, { excludePath });
+  try {
+    await service.activate("history"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    await service.preview();
+    expect(readBinary).not.toHaveBeenCalled(); // path-based exclusion needs no read at all
+    expect(excludePath).toHaveBeenCalledTimes(1);
+    expect(service.getHistoryDetails()?.excluded).toEqual([{ namespace: "content", path: "Secret.md", reason: "matched .gitignore" }]);
+    expect(cacheRows.get("Secret.md")).toEqual({ mtimeMs: 1, size: 3, sha256: "", excludeReason: "matched .gitignore", providerId: "history" });
+
+    excludePath.mockClear(); readBinary.mockClear(); hashCache.upsertBatch.mockClear();
+    await service.preview();
+    expect(readBinary).not.toHaveBeenCalled();
+    expect(excludePath).not.toHaveBeenCalled(); // cache hit skips both exclude checks entirely
+    expect(hashCache.upsertBatch).not.toHaveBeenCalled();
+    expect(service.getHistoryDetails()?.excluded).toEqual([{ namespace: "content", path: "Secret.md", reason: "matched .gitignore" }]);
+  } finally { await service.cancel(); }
+});
+
+it("caches a content-based exclude verdict and never re-reads the file while it stays excluded", async () => {
+  const files = [{ path: "Binary.md", isFolder: false, size: 3, mtime: 1, ctime: 1 }];
+  // Only the content-based hook (path, data) excludes this path — the path-only
+  // hook returns null, so the first pass still has to pay for a read.
+  const excludePath = vi.fn((_path: string, data?: ArrayBuffer) => data ? "binary content sniffed" : null);
+  const { service, readBinary, hashCache, cacheRows } = makeHashCacheHarness(files, { "Binary.md": "old" }, { excludePath });
+  try {
+    await service.activate("history"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    await service.preview();
+    expect(readBinary).toHaveBeenCalledTimes(1); // content-based check needed the bytes once
+    expect(service.getHistoryDetails()?.excluded).toEqual([{ namespace: "content", path: "Binary.md", reason: "binary content sniffed" }]);
+    expect(cacheRows.get("Binary.md")).toEqual({ mtimeMs: 1, size: 3, sha256: "", excludeReason: "binary content sniffed", providerId: "history" });
+
+    excludePath.mockClear(); readBinary.mockClear(); hashCache.upsertBatch.mockClear();
+    await service.preview();
+    expect(readBinary).not.toHaveBeenCalled(); // cached verdict skips the read entirely on the next cycle
+    expect(excludePath).not.toHaveBeenCalled();
+    expect(hashCache.upsertBatch).not.toHaveBeenCalled();
+  } finally { await service.cancel(); }
+});
+
+it("re-evaluates a cached exclude verdict under a newly-connected provider instead of inheriting the stale one", async () => {
+  const files = [{ path: "Secret.md", isFolder: false, size: 3, mtime: 1, ctime: 1 }];
+  const excludeAll = (path: string) => path === "Secret.md" ? "matched provider-a rule" : null;
+  const { service, readBinary, cacheRows } = makeHashCacheHarness(files, { "Secret.md": "old" }, { providerId: "provider-a", excludePath: excludeAll });
+  try {
+    await service.activate("provider-a"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    await service.preview();
+    expect(service.getHistoryDetails()?.excluded).toEqual([{ namespace: "content", path: "Secret.md", reason: "matched provider-a rule" }]);
+    expect(cacheRows.get("Secret.md")).toEqual({ mtimeMs: 1, size: 3, sha256: "", excludeReason: "matched provider-a rule", providerId: "provider-a" });
+
+    // Disconnect and connect a different provider whose excludePath does NOT
+    // exclude this same, unchanged (mtime/size never moved) path. The stale
+    // "provider-a" verdict cached above must not be inherited: the cache row's
+    // providerId no longer matches the active provider, so this is a miss.
+    await service.disconnect();
+    const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Shared" };
+    service.register("owner", {
+      id: "provider-b", name: "Provider B", protocol: APPEND_ONLY_PROTOCOL,
+      capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 },
+      discover: async () => [descriptor], createVault: async () => descriptor,
+      open: async () => ({ scan: async () => ({ status: "complete", records: [] }), close: async () => {} }),
+      excludePath: () => null, // provider-b has no such rule
+    } as never);
+    await service.activate("provider-b"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+
+    readBinary.mockClear();
+    await service.preview();
+    expect(readBinary).toHaveBeenCalledTimes(1); // re-evaluated fresh, not trusted from provider-a's cached verdict
+    expect(service.getHistoryDetails()?.excluded).toEqual([]);
+    expect(cacheRows.get("Secret.md")).toEqual({ mtimeMs: 1, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), excludeReason: null, providerId: "provider-b" });
   } finally { await service.cancel(); }
 });

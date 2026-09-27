@@ -14,6 +14,16 @@ interface BindingState { schema: 1; localRoot: string; providerId?: string; bind
 const hash = async (data: ArrayBuffer) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", data))].map(value => value.toString(16).padStart(2, "0")).join("");
 const encoded = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).buffer;
 const isHistory = (provider: Provider): provider is AppendOnlySyncProvider => "protocol" in provider && provider.protocol === APPEND_ONLY_PROTOCOL;
+// The hash cache is durable (SQLite, survives app restarts), so a stat taken
+// in the same instant as a write can be trusted forever once cached, not just
+// until the next real edit — a much longer-lived hazard than the in-memory
+// caches this pattern is normally borrowed from. Requiring the cached mtime
+// to be at least this old before trusting a hit forces a just-touched file
+// through a fresh read+hash (same as a cold miss) exactly once, after which
+// its mtime has "aged out" and later hits are safe again. 2000ms mirrors
+// schedule()'s own default debounce below — an already-established cadence
+// for "let the filesystem settle" in this file, not a new arbitrary number.
+const RACY_WRITE_WINDOW_MS = 2000;
 
 /** Host-owned lifecycle facade; conditional transports retain their original API. */
 export class SyncService extends Events implements SyncApi {
@@ -268,13 +278,16 @@ export class SyncService extends Events implements SyncApi {
         const folders = new Map<string, HistoryLocalResource>();
         const walked = scan.entries.length;
         let visited = 0;
-        // Every entry pays a full binary read plus a SHA-256 on every preview()/run()
-        // cycle even when its content hasn't changed since the last cycle — this
-        // cache (persisted per vault, keyed by (path, size, mtime), see
+        // Every entry pays a full binary read plus a SHA-256 (and, for content
+        // paths, two provider exclude checks) on every preview()/run() cycle even
+        // when its content hasn't changed since the last cycle — this cache
+        // (persisted per vault, keyed by (path, size, mtime, providerId), see
         // HostServices.hashCache and metadata-cache-store.ts's hash_cache_entries
-        // table) skips both for any entry whose stat still matches. Absent host
-        // support (mobile/browser, where append-only sync never runs anyway) this
-        // degrades to the unconditional behavior that existed before it.
+        // table) skips all of that for any entry whose stat still matches under
+        // the currently-active provider, whether the cached verdict was "hash it"
+        // or "exclude it" (excludeReason). Absent host support (mobile/browser,
+        // where append-only sync never runs anyway) this degrades to the
+        // unconditional behavior that existed before it.
         const hashCache = (await this.host.hashCache?.readAll()) ?? {}; assertContext();
         const hashCacheUpdates: Record<string, HashCacheEntry> = {};
         for (const entry of scan.entries) {
@@ -289,17 +302,40 @@ export class SyncService extends Events implements SyncApi {
           if (!this.included(state.scope, namespace, path) || namespace === "portable-config" && !isPortableAssetPath(path)) continue;
           const resource: HistoryLocalResource = { namespace, path, kind: "file", size: entry.size };
           if (entry.size > SYNC_MAX_FILE_BYTES) { result.blocked.push({ namespace, path, reason: "File exceeds 100 MiB limit" }); continue; }
-          const reason = namespace === "content" ? await provider.excludePath?.(path) : null; assertContext();
-          if (reason) { result.excluded.push({ namespace, path, reason }); continue; }
           const cached = hashCache[entry.path];
-          if (cached && cached.mtimeMs === entry.mtime && cached.size === entry.size) {
-            // Stat unchanged since the last cycle's hash: reuse it, no read, no digest.
+          // A cache row is trusted only when: its stat still matches (as before);
+          // it was written by *this* provider — excludePath()'s verdict is a
+          // property of the active provider, not the file, so a reconnect to a
+          // different provider must always re-evaluate a path rather than
+          // silently inherit a stale include/exclude verdict for an unchanged
+          // file; and its mtime is old enough to rule out a write racing the
+          // stat that produced it (RACY_WRITE_WINDOW_MS above) — this cache is
+          // durable across restarts, so an untrusted racy hit here would
+          // otherwise stick indefinitely rather than self-correct on the next
+          // real edit. Anything else is treated exactly like a cold miss,
+          // including a fresh read+hash for a just-touched file.
+          if (cached && cached.mtimeMs === entry.mtime && cached.size === entry.size && cached.providerId === provider.id
+            && Date.now() - entry.mtime >= RACY_WRITE_WINDOW_MS) {
+            if (cached.excludeReason !== null) { result.excluded.push({ namespace, path, reason: cached.excludeReason }); continue; }
+            // Verdict was "included": reuse the hash, no read, no digest, and no re-running either exclude check.
             resource.sha256 = cached.sha256;
           } else {
+            const reason = namespace === "content" ? await provider.excludePath?.(path) : null; assertContext();
+            if (reason) {
+              // Cache the exclude verdict too — without this, an excluded file (e.g.
+              // matched by a gitignore-style rule) gets fully re-tested, and for a
+              // content-based rule re-read off disk, on every single cycle forever,
+              // since only the hashed/included path ever wrote to the cache before.
+              hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: entry.size, sha256: "", excludeReason: reason, providerId: provider.id };
+              result.excluded.push({ namespace, path, reason }); continue;
+            }
             const data = await read(resource); const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
-            if (contentReason) { result.excluded.push({ namespace, path, reason: contentReason }); continue; }
+            if (contentReason) {
+              hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: data.byteLength, sha256: "", excludeReason: contentReason, providerId: provider.id };
+              result.excluded.push({ namespace, path, reason: contentReason }); continue;
+            }
             resource.sha256 = await hash(data); resource.size = data.byteLength;
-            hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: resource.size, sha256: resource.sha256 };
+            hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: resource.size, sha256: resource.sha256, excludeReason: null, providerId: provider.id };
           }
           if (namespace === "portable-config") resource.entityId = await this.stableId(state.binding!.vaultId, path);
           result.entries.push(resource);

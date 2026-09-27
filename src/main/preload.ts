@@ -184,11 +184,11 @@ const api = {
     ipcRenderer.invoke("metadata-cache-upsert", data),
   /** Delete any persisted row whose path is not in `paths` — call once, after all upsert batches have landed. */
   pruneMetadataCache: (paths: string[]): Promise<void> => ipcRenderer.invoke("metadata-cache-prune", paths),
-  /** Full `(path, size, mtime)` -> sha256 read of the append-only sync engine's local file-hash cache. */
-  readHashCache: (): Promise<Record<string, { mtimeMs: number; size: number; sha256: string }> | null> =>
+  /** Full `(path, size, mtime, providerId)` -> sha256/excludeReason read of the append-only sync engine's local file-hash cache. */
+  readHashCache: (): Promise<Record<string, { mtimeMs: number; size: number; sha256: string; excludeReason: string | null; providerId: string }> | null> =>
     ipcRenderer.invoke("hash-cache-read"),
-  /** Upsert a batch of freshly-computed hashes after a sync cycle's re-hash. */
-  upsertHashCacheEntries: (data: Record<string, { mtimeMs: number; size: number; sha256: string }>): Promise<void> =>
+  /** Upsert a batch of freshly-computed hashes/exclude verdicts after a sync cycle's re-evaluation. */
+  upsertHashCacheEntries: (data: Record<string, { mtimeMs: number; size: number; sha256: string; excludeReason: string | null; providerId: string }>): Promise<void> =>
     ipcRenderer.invoke("hash-cache-upsert", data),
   /** Delete any cached hash whose path is not in `paths` — called once per cycle with that cycle's full local path list. */
   pruneHashCache: (paths: string[]): Promise<void> => ipcRenderer.invoke("hash-cache-prune", paths),

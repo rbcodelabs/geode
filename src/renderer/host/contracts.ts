@@ -116,11 +116,30 @@ export interface VaultFilesService {
   refreshScan?(): Promise<import("../../shared/vault-refresh").VaultRefreshResult<VaultFileEntry>>;
 }
 
-/** A file's last-known content hash, keyed by `(path, size, mtime)` — see `HashCacheService`. */
+/**
+ * A file's last-known content hash (or exclude verdict), keyed by `(path,
+ * size, mtime, providerId)` — see `HashCacheService`.
+ *
+ * `excludeReason` and `providerId` exist for two related reasons:
+ *  - `excludeReason` lets an excluded path (a gitignore-style rule, a binary
+ *    sniff, whatever the active provider's `excludePath()` implements) be
+ *    cached too, not just a hashed one — `null` means "not excluded, sha256
+ *    is meaningful"; a string means "excluded for this reason, sha256 is a
+ *    meaningless placeholder and must not be trusted".
+ *  - `providerId` scopes every verdict (hash or exclude) to the provider that
+ *    produced it, because `excludePath()`'s answer is a property of the
+ *    *active provider*, not of the file's content. Without this, a user who
+ *    disconnects one provider and connects a different one with different
+ *    exclusion rules would silently inherit the old provider's verdict for
+ *    any file whose mtime/size happen not to have changed — a stale-cache bug
+ *    that a hash-only cache (with no provider identity) can't detect at all.
+ */
 export interface HashCacheEntry {
   mtimeMs: number;
   size: number;
   sha256: string;
+  excludeReason: string | null;
+  providerId: string;
 }
 
 /**
