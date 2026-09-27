@@ -309,6 +309,64 @@ it("clears stale blocked/excluded details when the append-only provider unloads"
   expect(service.isAppendOnly()).toBe(false);
 });
 
+it("skips re-reading and re-hashing an unchanged file on a later snapshot pass", async () => {
+  const stored = new Map(); const operations = new Map(); const blobs = new Map(); const records: any[] = [];
+  const old = Date.now() - 60_000;
+  let files = [{ path: "Note.md", isFolder: false, size: 3, mtime: old, ctime: old }];
+  let text = "old";
+  const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Shared" };
+  const readBinary = vi.fn(async () => new TextEncoder().encode(text).buffer);
+  const host = { config: { read: async () => null }, deviceState: { read: async (key: string) => structuredClone(stored.get(key) ?? null), write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); } },
+    vaultFiles: { onChange: () => () => {}, reconcileScan: async () => ({ status: "complete", entries: files }), readBinary },
+    syncSafety: { claimOwner: async () => "lease", releaseOwner: async () => {}, storage: async (_token: string, _binding: string, request: any) => { if (request.action === "load-operations") return [...operations.values()]; if (request.action === "save-operation") { operations.set(request.key, structuredClone(request.value)); return; } if (request.action === "stage") { blobs.set(request.key, request.data.slice(0)); return request.key; } return blobs.get(request.key).slice(0); } },
+  };
+  const service = new SyncService(host as never, () => "/synthetic/vault");
+  service.register("owner", { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 }, discover: async () => [descriptor], createVault: async () => descriptor,
+    open: async () => ({ scan: async () => ({ status: "complete", records: structuredClone(records) }), putBlob: async (input: any) => { blobs.set(input.operationId, input.data.slice(0)); return { id: input.operationId, sha256: input.sha256, size: input.size }; }, readBlob: async (ref: any) => blobs.get(ref.id).slice(0), appendRecord: async (record: any) => { if (!records.some(item => item.recordId === record.recordId)) records.push(structuredClone(record)); }, close: async () => {} }),
+  } as never);
+  try {
+    await service.activate("history"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    expect((await service.preview()).uploads).toBe(1); await service.run({ approvePreview: true });
+    const callsAfterFirstRun = readBinary.mock.calls.length;
+    // Nothing changed on disk: a fresh preview should hit the cache, not the filesystem.
+    expect((await service.preview()).uploads).toBe(0);
+    expect(readBinary.mock.calls.length).toBe(callsAfterFirstRun);
+  } finally { await service.cancel(); }
+});
+
+it("still detects a genuinely changed file after the cache has seen it once", async () => {
+  const stored = new Map(); const operations = new Map(); const blobs = new Map(); const records: any[] = [];
+  const old = Date.now() - 60_000;
+  let files = [{ path: "Note.md", isFolder: false, size: 3, mtime: old, ctime: old }];
+  let text = "old";
+  const descriptor = { schema: 1, protocol: APPEND_ONLY_PROTOCOL, vaultId: "12345678-1234-4234-8234-123456789012", rootId: "root", descriptorId: "descriptor", name: "Shared" };
+  const readBinary = vi.fn(async () => new TextEncoder().encode(text).buffer);
+  const host = { config: { read: async () => null }, deviceState: { read: async (key: string) => structuredClone(stored.get(key) ?? null), write: async (key: string, value: unknown) => { stored.set(key, structuredClone(value)); } },
+    vaultFiles: { onChange: () => () => {}, reconcileScan: async () => ({ status: "complete", entries: files }), readBinary },
+    syncSafety: { claimOwner: async () => "lease", releaseOwner: async () => {}, storage: async (_token: string, _binding: string, request: any) => { if (request.action === "load-operations") return [...operations.values()]; if (request.action === "save-operation") { operations.set(request.key, structuredClone(request.value)); return; } if (request.action === "stage") { blobs.set(request.key, request.data.slice(0)); return request.key; } return blobs.get(request.key).slice(0); } },
+  };
+  const service = new SyncService(host as never, () => "/synthetic/vault");
+  service.register("owner", { id: "history", name: "History", protocol: APPEND_ONLY_PROTOCOL, capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 }, discover: async () => [descriptor], createVault: async () => descriptor,
+    open: async () => ({ scan: async () => ({ status: "complete", records: structuredClone(records) }), putBlob: async (input: any) => { blobs.set(input.operationId, input.data.slice(0)); return { id: input.operationId, sha256: input.sha256, size: input.size }; }, readBlob: async (ref: any) => blobs.get(ref.id).slice(0), appendRecord: async (record: any) => { if (!records.some(item => item.recordId === record.recordId)) records.push(structuredClone(record)); }, close: async () => {} }),
+  } as never);
+  try {
+    await service.activate("history"); await service.createVault("Shared");
+    await service.updateScope({ other: false, mainSettings: false, appearance: false, themesAndSnippets: false, hotkeys: false, corePlugins: false });
+    expect((await service.preview()).uploads).toBe(1); await service.run({ approvePreview: true });
+    const callsAfterFirstRun = readBinary.mock.calls.length;
+    const firstHash = records.find(record => record.kind === "file").blob.sha256;
+    const changed = Date.now() - 1_000; // inside the 2s racy window, but the mtime also genuinely changed, so the cache misses on mtime alone regardless of the racy guard
+    files = [{ ...files[0], mtime: changed, ctime: changed }]; text = "new";
+    const preview = await service.preview();
+    expect(preview.uploads).toBe(1);
+    expect(readBinary.mock.calls.length).toBeGreaterThan(callsAfterFirstRun);
+    await service.run({ approvePreview: true });
+    const latest = records.filter(record => record.kind === "file").at(-1);
+    expect(latest.blob.sha256).not.toBe(firstHash);
+  } finally { await service.cancel(); }
+});
+
 it("summarizes blocked files into a short status message while keeping the full per-file list on details", () => {
   const service = new SyncService({} as never, () => "/synthetic/vault");
   (service as any).selected = { id: "history" };

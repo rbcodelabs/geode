@@ -13,6 +13,8 @@ type Provider = SyncProvider | AppendOnlySyncProvider;
 interface BindingState { schema: 1; localRoot: string; providerId?: string; binding?: VaultDescriptor; deviceId: string; scope: SyncScope; paused: boolean; createIntent?: { name: string; operationId: string } }
 const hash = async (data: ArrayBuffer) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", data))].map(value => value.toString(16).padStart(2, "0")).join("");
 const encoded = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).buffer;
+/** A cache hit within this window of its own mtime is not trusted: on coarse-resolution filesystems a same-tick edit can collide with a previous stat, so a very fresh mtime is always re-verified by hashing rather than taken from cache. */
+const RACY_WRITE_WINDOW_MS = 2000;
 const isHistory = (provider: Provider): provider is AppendOnlySyncProvider => "protocol" in provider && provider.protocol === APPEND_ONLY_PROTOCOL;
 
 /** Host-owned lifecycle facade; conditional transports retain their original API. */
@@ -43,6 +45,23 @@ export class SyncService extends Events implements SyncApi {
   private stopObserving?: () => void;
   private renameHints = new Map<string, string>();
   private observedRoot?: string;
+  /**
+   * Snapshot's per-entry loop otherwise re-reads and re-hashes every in-scope
+   * file on every planning pass (every debounced edit plus a 30s idle poll),
+   * which is what made "Planning Changes" a continuous full-vault sweep. This
+   * cache is keyed by path and invalidated by (mtime, size) drift, so an
+   * unchanged file skips the read/exclude/hash work entirely. It lives on the
+   * instance — not inside the `run()`-scoped `snapshot` closure — so it
+   * survives across separate `schedule()`-triggered runs; it is cleared on
+   * vault switch but deliberately kept warm across provider reconnects,
+   * because the sha256 is a pure function of on-disk (path, mtime, size,
+   * content). `excludeReason`, however, is NOT content-pure — it comes from
+   * the active provider's own `excludePath()` — so each entry also records
+   * the provider id it was computed under and is treated as a miss on a
+   * provider switch, even when mtime/size didn't change, so a reconnect to a
+   * provider with different exclusion rules can't inherit a stale verdict.
+   */
+  private localHashCache = new Map<string, { mtime: number; size: number; providerId: string; sha256: string; excludeReason: string | null }>();
   private setupTarget?: Provider;
   // Existing conditional hydration settles first; later registrations cannot
   // select a second protocol while the append binding is being persisted.
@@ -54,7 +73,7 @@ export class SyncService extends Events implements SyncApi {
     this.conditional.on("status", status => { if (!this.selected) this.trigger("status", status); });
   }
   private observe() {
-    if (this.observedRoot !== this.vaultId()) { this.renameHints.clear(); this.observedRoot = this.vaultId(); }
+    if (this.observedRoot !== this.vaultId()) { this.renameHints.clear(); this.localHashCache.clear(); this.observedRoot = this.vaultId(); }
     this.stopObserving ??= this.host.vaultFiles.onChange(event => {
       if (event.renamedFrom) { const original = this.renameHints.get(event.renamedFrom) ?? event.renamedFrom; this.renameHints.delete(event.renamedFrom); this.renameHints.set(event.path, original); }
       if (!event.mutationId) this.schedule();
@@ -268,6 +287,7 @@ export class SyncService extends Events implements SyncApi {
         const folders = new Map<string, HistoryLocalResource>();
         const walked = scan.entries.length;
         let visited = 0;
+        const visitedCachePaths = new Set<string>();
         for (const entry of scan.entries) {
           // Before the work, counting entries already finished — the same
           // convention `transferring` uses, so `completed` can never claim an
@@ -280,14 +300,39 @@ export class SyncService extends Events implements SyncApi {
           if (!this.included(state.scope, namespace, path) || namespace === "portable-config" && !isPortableAssetPath(path)) continue;
           const resource: HistoryLocalResource = { namespace, path, kind: "file", size: entry.size };
           if (entry.size > SYNC_MAX_FILE_BYTES) { result.blocked.push({ namespace, path, reason: "File exceeds 100 MiB limit" }); continue; }
-          const reason = namespace === "content" ? await provider.excludePath?.(path) : null; assertContext();
-          if (reason) { result.excluded.push({ namespace, path, reason }); continue; }
-          const data = await read(resource); const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
-          if (contentReason) { result.excluded.push({ namespace, path, reason: contentReason }); continue; }
-          resource.sha256 = await hash(data); resource.size = data.byteLength;
+          visitedCachePaths.add(entry.path);
+          const cached = this.localHashCache.get(entry.path);
+          const trustCache = !!cached && cached.mtime === entry.mtime && cached.size === entry.size && cached.providerId === provider.id && Date.now() - entry.mtime >= RACY_WRITE_WINDOW_MS;
+          let sha256: string; let excludeReason: string | null;
+          if (trustCache) {
+            // Unchanged since the last pass under this same provider — reuse the
+            // recorded verdict instead of paying for another full read + exclusion
+            // test + SHA-256. A provider switch invalidates this even when
+            // mtime/size didn't move, because excludeReason is that provider's
+            // own decision, not a fact about the file's content.
+            sha256 = cached.sha256; excludeReason = cached.excludeReason;
+          } else {
+            const reason = namespace === "content" ? await provider.excludePath?.(path) : null; assertContext();
+            if (reason) {
+              excludeReason = reason; sha256 = "";
+              this.localHashCache.set(entry.path, { mtime: entry.mtime, size: entry.size, providerId: provider.id, sha256, excludeReason });
+            } else {
+              const data = await read(resource); const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
+              if (contentReason) {
+                excludeReason = contentReason; sha256 = "";
+                this.localHashCache.set(entry.path, { mtime: entry.mtime, size: data.byteLength, providerId: provider.id, sha256, excludeReason });
+              } else {
+                sha256 = await hash(data); resource.size = data.byteLength; excludeReason = null;
+                this.localHashCache.set(entry.path, { mtime: entry.mtime, size: data.byteLength, providerId: provider.id, sha256, excludeReason });
+              }
+            }
+          }
+          if (excludeReason) { result.excluded.push({ namespace, path, reason: excludeReason }); continue; }
+          resource.sha256 = sha256;
           if (namespace === "portable-config") resource.entityId = await this.stableId(state.binding!.vaultId, path);
           result.entries.push(resource);
         }
+        for (const key of this.localHashCache.keys()) if (!visitedCachePaths.has(key)) this.localHashCache.delete(key);
         // Terminal tick for the walk, mirroring performAll()'s: the throttle's
         // trailing timer would deliver the last held-back tick anyway, but a run
         // that ends one entry short on screen is the exact frozen-at-96% bug the
