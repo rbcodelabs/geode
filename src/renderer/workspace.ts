@@ -827,7 +827,17 @@ export class TabGroup implements LeafContainer {
       newTab.hidden = true;
     }
     this.containerEl.addEventListener("mousedown", () => {
-      this.workspace.setActiveGroup(this);
+      // `activeGroup` must only ever be a main-area group (see the invariant
+      // documented on `resolveSourceLeaf`/`getMostRecentLeaf`) — a sidebar
+      // group must never be assigned to it. `TabGroup.setActiveLeaf` already
+      // guards its two `setActiveGroup` calls with this same check; this one
+      // didn't, so a plain mousedown anywhere inside a sidebar-docked split
+      // pane (e.g. the Calendar plugin docked via `getRightLeaf(true)`)
+      // corrupted `activeGroup` to point at the sidebar, after which any
+      // `getLeaf(false)`/`getUnpinnedLeaf()` call (including Calendar's own
+      // day-click handler) resolved to that sidebar leaf instead of the main
+      // area.
+      if (!this.sidebar) this.workspace.setActiveGroup(this);
     });
     this.installDropTarget();
   }

@@ -165,3 +165,95 @@ test("dragging an external file over a center body edge does not target or creat
   });
   await expect(window.locator(".workspace-center .workspace-tabs")).toHaveCount(groupsBefore);
 });
+
+/**
+ * Regression coverage: `TabGroup`'s constructor wires a `mousedown` listener
+ * on `containerEl` (`this.workspace.setActiveGroup(this)`) to keep
+ * `Workspace.activeGroup` in sync with whatever pane the user last clicked
+ * in. `Workspace.activeGroup` must only ever be a *main-area* group — see the
+ * invariant documented on `resolveSourceLeaf`/`getMostRecentLeaf` in
+ * workspace.ts — and `TabGroup.setActiveLeaf`'s own two call sites already
+ * guard this with `if (!this.sidebar)`. The constructor's listener lacked
+ * that guard, so a plain mousedown anywhere inside a *split* sidebar pane
+ * (docked via `getRightLeaf(true)`/`getLeftLeaf(true)`, e.g. two Calendar-like
+ * panes stacked in the right sidebar) corrupted `activeGroup` to point at the
+ * sidebar. After that, any plugin's `workspace.getLeaf(false)` /
+ * `workspace.getUnpinnedLeaf()` call — including the real Calendar plugin's
+ * day-click handler (`openOrCreateDailyNote`), exercised directly here via
+ * `getUnpinnedLeaf()` — resolved to that sidebar leaf and opened content
+ * there instead of the main workspace area.
+ *
+ * A single non-split sidebar dock (`getRightLeaf(false)`, going through
+ * `Sidebar.addLeaf()`) does not exercise this: only a *split* sidebar group
+ * goes through the vulnerable `TabGroup` constructor path, which is why this
+ * test specifically adds a second, split group before clicking in it.
+ *
+ * Launches its own dedicated Electron instance (rather than reusing this
+ * file's shared, sequential `app`) so it neither depends on nor perturbs the
+ * group-count/DOM-order assumptions baked into the other tests here (several
+ * of which move/split the right sidebar's built-in views across the file's
+ * shared session).
+ */
+test("mousedown inside a split sidebar pane does not corrupt the main-area active group", async () => {
+  const mainFileName = "SidebarMousedownRegressionMain.md";
+  const isolatedVault = fs.mkdtempSync(path.join(os.tmpdir(), "geode-sidebar-mousedown-"));
+  const isolatedUserData = fs.mkdtempSync(path.join(os.tmpdir(), "geode-sidebar-mousedown-ud-"));
+  fs.writeFileSync(
+    path.join(isolatedUserData, "geode.json"),
+    JSON.stringify({ recentVaults: [isolatedVault], lastVault: isolatedVault })
+  );
+  const isolatedApp = await electron.launch({
+    args: [path.resolve("."), `--user-data-dir=${isolatedUserData}`],
+    cwd: path.resolve("."),
+  });
+  try {
+    const isolatedWindow = await isolatedApp.firstWindow();
+    await isolatedWindow.waitForSelector(".workspace");
+
+    await isolatedWindow.evaluate(async (fileName) => {
+      const app = (window as any).app;
+      const file = await app.vault.create(fileName, "# Main");
+      await app.openFile(file, false);
+    }, mainFileName);
+
+    // Dock a *split* sidebar pane (two stacked TabGroups in the right
+    // sidebar) — the shape that actually exercises the vulnerable
+    // `TabGroup` constructor path, matching how the Calendar plugin's issue
+    // was reported (see calendar-plugin.spec.ts for the non-split dock,
+    // which does NOT reproduce this).
+    //
+    // The sidebar's own default (unsplit) group is `Sidebar` itself, whose
+    // `containerEl` carries `.workspace-sidebar`, not `.workspace-tabs` (see
+    // `Sidebar.defaultGroup`) — so `.workspace-tabs` under the right sidebar
+    // only ever matches genuine *split* `TabGroup`s, counted here before
+    // adding one via `getRightLeaf(true)`.
+    const sidebarGroups = isolatedWindow.locator(".workspace-sidebar.mod-right .workspace-tabs");
+    const splitGroupsBefore = await sidebarGroups.count();
+    await isolatedWindow.evaluate(() => void (window as any).app.workspace.getRightLeaf(true));
+    await expect(sidebarGroups).toHaveCount(splitGroupsBefore + 1);
+    // The newly added split group is the last one. Dispatched directly on
+    // its container (not a tab header, button, or other control) — a bare
+    // click on blank pane background is exactly what corrupted `activeGroup`
+    // before the fix, since the listener is unconditional and not scoped to
+    // any particular descendant.
+    await sidebarGroups.nth(splitGroupsBefore).dispatchEvent("mousedown");
+
+    const result = await isolatedWindow.evaluate((fileName) => {
+      const workspace = (window as any).app.workspace;
+      // The exact call the vendored Calendar plugin's day-click handler
+      // makes (see calendar-plugin.spec.ts / tests/fixtures/plugins/calendar).
+      const unpinned = workspace.getUnpinnedLeaf();
+      return {
+        activeGroupIsSidebar: workspace.activeGroup.isSidebar,
+        unpinnedLeafIsSidebar: unpinned.group.isSidebar,
+        unpinnedLeafFile: unpinned.view?.getFile?.()?.path ?? null,
+      };
+    }, mainFileName);
+
+    expect(result).toEqual({ activeGroupIsSidebar: false, unpinnedLeafIsSidebar: false, unpinnedLeafFile: mainFileName });
+  } finally {
+    await isolatedApp.close();
+    fs.rmSync(isolatedVault, { recursive: true, force: true });
+    fs.rmSync(isolatedUserData, { recursive: true, force: true });
+  }
+});
