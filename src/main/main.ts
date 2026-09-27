@@ -40,10 +40,14 @@ import { PowerSaveBlockerRegistry } from "./power-save-blocker";
 import { MetadataCacheReaders } from "./metadata-cache-reader";
 import {
   bootstrapMetadataDb,
+  isHashCacheEntries,
   openMetadataDb,
+  pruneHashCacheEntries,
   pruneMetadataEntries,
   readAllMetadataEntries,
+  readHashCacheEntries,
   replaceAllMetadataEntries,
+  upsertHashCacheEntries,
   upsertMetadataEntries,
 } from "./metadata-cache-store";
 import { parseLocalFileHref } from "../renderer/external-links";
@@ -1043,6 +1047,48 @@ function registerIpc() {
       pruneMetadataEntries(session.metadataDb, paths);
     } catch (error) {
       console.error("Failed to prune metadata cache", error);
+    }
+  });
+
+  // Local file-hash cache for the append-only sync engine's per-cycle reuse
+  // check (see sync-service.ts's `snapshot` closure): a `(path, size, mtime)`
+  // -> sha256 table sharing the same per-vault sqlite handle/session as the
+  // metadata cache above, so a vault re-hash is skipped whenever a file's
+  // stat hasn't changed since the last sync cycle.
+  ipcMain.handle("hash-cache-read", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) return null;
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      return readHashCacheEntries(session.metadataDb);
+    } catch (error) {
+      console.error("Failed to read hash cache", error);
+      return null;
+    }
+  });
+
+  ipcMain.handle("hash-cache-upsert", async (e, data: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session || !isHashCacheEntries(data)) return;
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      upsertHashCacheEntries(session.metadataDb, data);
+    } catch (error) {
+      console.error("Failed to upsert hash cache batch", error);
+    }
+  });
+
+  ipcMain.handle("hash-cache-prune", async (e, paths: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session || !Array.isArray(paths) || !paths.every((p) => typeof p === "string")) return;
+    try {
+      session.metadataDb ??= openMetadataDb(session.root);
+      pruneHashCacheEntries(session.metadataDb, paths);
+    } catch (error) {
+      console.error("Failed to prune hash cache", error);
     }
   });
 

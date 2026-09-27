@@ -5,14 +5,19 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   METADATA_DB_RELATIVE_PATH,
+  deleteHashCacheEntries,
   deleteMetadataEntries,
   deleteMetadataEntry,
+  isHashCacheEntries,
   openMetadataDb,
+  pruneHashCacheEntries,
   pruneMetadataEntries,
   readAllMetadataEntries,
+  readHashCacheEntries,
   readMetadataStats,
   replaceAllMetadataEntries,
   safeStringify,
+  upsertHashCacheEntries,
   upsertMetadataEntries,
 } from "../../src/main/metadata-cache-store";
 import {
@@ -271,6 +276,125 @@ describe("metadata cache store", () => {
     } finally {
       writer.close();
     }
+  });
+});
+
+describe("hash cache store", () => {
+  it("round-trips an upserted entry through readHashCacheEntries, sharing the same db handle/file as metadata_entries", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertMetadataEntries(db, { "A.md": entry() }); // proves the two tables coexist on one handle
+      // Also covers both excludeReason shapes in one round trip: null (included,
+      // sha256 meaningful) and a real reason string (excluded, sha256 a placeholder).
+      upsertHashCacheEntries(db, {
+        "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: null, providerId: "history" },
+        "B.env": { mtimeMs: 1, size: 4, sha256: "", excludeReason: "gitignored", providerId: "history" },
+      });
+      expect(readHashCacheEntries(db)).toEqual({
+        "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: null, providerId: "history" },
+        "B.env": { mtimeMs: 1, size: 4, sha256: "", excludeReason: "gitignored", providerId: "history" },
+      });
+      expect(Object.keys(readAllMetadataEntries(db).entries)).toEqual(["A.md"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("upsertHashCacheEntries overwrites an existing row for the same path (ON CONFLICT update, not a duplicate row)", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, { "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: null, providerId: "history" } });
+      // The conflict update must also carry excludeReason/providerId, not just mtime/size/sha256 —
+      // otherwise a path that flips from included to excluded (or between providers) would keep
+      // stale values in those two columns after an "overwrite".
+      upsertHashCacheEntries(db, { "A.md": { mtimeMs: 2, size: 5, sha256: "b".repeat(64), excludeReason: "gitignored", providerId: "other-provider" } });
+      expect(readHashCacheEntries(db)).toEqual({ "A.md": { mtimeMs: 2, size: 5, sha256: "b".repeat(64), excludeReason: "gitignored", providerId: "other-provider" } });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("deleteHashCacheEntries removes multiple rows in one transaction and is a no-op for an empty list", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, {
+        "A.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64), excludeReason: null, providerId: "history" },
+        "B.md": { mtimeMs: 1, size: 1, sha256: "b".repeat(64), excludeReason: null, providerId: "history" },
+        "C.md": { mtimeMs: 1, size: 1, sha256: "c".repeat(64), excludeReason: null, providerId: "history" },
+      });
+      deleteHashCacheEntries(db, ["A.md", "C.md"]);
+      expect(Object.keys(readHashCacheEntries(db))).toEqual(["B.md"]);
+      expect(() => deleteHashCacheEntries(db, [])).not.toThrow();
+      expect(Object.keys(readHashCacheEntries(db))).toEqual(["B.md"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("pruneHashCacheEntries deletes rows absent from keepPaths and leaves the rest untouched", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, {
+        "Kept.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64), excludeReason: null, providerId: "history" },
+        "Stale.md": { mtimeMs: 1, size: 1, sha256: "b".repeat(64), excludeReason: null, providerId: "history" },
+      });
+      pruneHashCacheEntries(db, ["Kept.md"]);
+      expect(readHashCacheEntries(db)).toEqual({ "Kept.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64), excludeReason: null, providerId: "history" } });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("pruneHashCacheEntries with an empty keep list deletes every row, mirroring an empty vault", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      upsertHashCacheEntries(db, { "A.md": { mtimeMs: 1, size: 1, sha256: "a".repeat(64), excludeReason: null, providerId: "history" } });
+      pruneHashCacheEntries(db, []);
+      expect(readHashCacheEntries(db)).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+
+  it("treats a missing/never-created database file as a cache miss (empty entries, not an error)", async () => {
+    const root = await tmpRoot();
+    const db = openMetadataDb(root);
+    try {
+      expect(readHashCacheEntries(db)).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("isHashCacheEntries", () => {
+  it("accepts an empty object and a well-formed batch, including a null excludeReason and a real reason string", () => {
+    expect(isHashCacheEntries({})).toBe(true);
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: null, providerId: "history" } })).toBe(true);
+    expect(isHashCacheEntries({ "B.env": { mtimeMs: 1, size: 4, sha256: "", excludeReason: "gitignored", providerId: "history" } })).toBe(true);
+  });
+
+  it("rejects an array, null, and an entry missing a required field", () => {
+    expect(isHashCacheEntries([])).toBe(false);
+    expect(isHashCacheEntries(null)).toBe(false);
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, excludeReason: null, providerId: "history" } })).toBe(false); // missing sha256
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: "1", size: 4, sha256: "a".repeat(64), excludeReason: null, providerId: "history" } })).toBe(false);
+  });
+
+  it("rejects an entry missing providerId or with a non-empty-string providerId requirement violated", () => {
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: null } })).toBe(false);
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: null, providerId: "" } })).toBe(false);
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: null, providerId: 42 } })).toBe(false);
+  });
+
+  it("rejects an entry with a non-string, non-null excludeReason", () => {
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), providerId: "history" } })).toBe(false); // missing excludeReason
+    expect(isHashCacheEntries({ "A.md": { mtimeMs: 1, size: 4, sha256: "a".repeat(64), excludeReason: 42, providerId: "history" } })).toBe(false);
   });
 });
 

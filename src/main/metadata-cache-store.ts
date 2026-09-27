@@ -31,6 +31,61 @@ export function initializeMetadataSchema(db: DatabaseSync): void {
       mention_keys_json TEXT
     )
   `);
+  // Same vault, same file, same session lifecycle as metadata_entries above —
+  // a second table on the shared per-vault handle rather than a second sqlite
+  // file, so main.ts's session bookkeeping (open/close/generation) doesn't
+  // have to be duplicated for a cache that is operationally identical, just
+  // logically distinct (a file's content hash rather than its parsed
+  // frontmatter/links). See HashCacheEntry's doc comment for what this backs.
+  // exclude_reason/provider_id back HashCacheEntry's exclude-verdict caching and
+  // provider scoping (see its doc comment below for why both exist) — this
+  // table has never shipped in a release, so these are plain columns on the
+  // initial CREATE TABLE, not an ALTER TABLE migration.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hash_cache_entries (
+      path          TEXT PRIMARY KEY,
+      mtime_ms      REAL    NOT NULL,
+      size          INTEGER NOT NULL,
+      sha256        TEXT    NOT NULL,
+      exclude_reason TEXT,
+      provider_id   TEXT    NOT NULL
+    )
+  `);
+}
+
+/**
+ * A file's last-known content hash (or exclude verdict), keyed by `(path,
+ * size, mtime, providerId)` — the append-only sync engine's per-cycle reuse
+ * check (see `src/renderer/sync/sync-service.ts`'s `snapshot` closure): the
+ * file is re-evaluated only when its size, mtime, or active provider no
+ * longer match the cached values, mirroring `MetadataFileStat`'s reuse check
+ * in `src/indexer/metadata-indexer.ts`.
+ *
+ * `excludeReason` (`null` when the verdict was "included", a reason string
+ * when the active provider's `excludePath()` excluded it) lets an excluded
+ * path skip its (possibly content-reading) exclude checks on every later
+ * cycle too, not just a hashed one. `providerId` scopes every row to the
+ * provider that produced it, since `excludePath()`'s answer belongs to the
+ * *provider*, not the file — without it, reconnecting to a different
+ * provider with different exclusion rules would silently inherit a stale
+ * verdict for any file whose size/mtime happen not to have changed.
+ */
+export interface HashCacheEntry {
+  mtimeMs: number;
+  size: number;
+  sha256: string;
+  excludeReason: string | null;
+  providerId: string;
+}
+
+/** IPC payload validator for a hash-cache upsert batch — mirrors `isPersistedMetadataIndexSnapshot`'s shape-check convention. */
+export function isHashCacheEntries(value: unknown): value is Record<string, HashCacheEntry> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every((entry) => {
+    const item = entry as Partial<HashCacheEntry> | null;
+    return !!item && typeof item.mtimeMs === "number" && typeof item.size === "number" && typeof item.sha256 === "string"
+      && (item.excludeReason === null || typeof item.excludeReason === "string") && typeof item.providerId === "string" && item.providerId.length > 0;
+  });
 }
 
 /**
@@ -219,6 +274,69 @@ export function pruneMetadataEntries(db: DatabaseSync, keepPaths: readonly strin
     .map((stat) => stat.path)
     .filter((path) => !keep.has(path));
   deleteMetadataEntries(db, stale);
+}
+
+/** Full (path, mtimeMs, size, sha256, excludeReason, providerId) read of every cached row — the sync engine's per-cycle reuse-check load. */
+export function readHashCacheEntries(db: DatabaseSync): Record<string, HashCacheEntry> {
+  const rows = db
+    .prepare("SELECT path, mtime_ms AS mtimeMs, size, sha256, exclude_reason AS excludeReason, provider_id AS providerId FROM hash_cache_entries")
+    .all() as unknown as { path: string; mtimeMs: number; size: number; sha256: string; excludeReason: string | null; providerId: string }[];
+  const entries: Record<string, HashCacheEntry> = {};
+  for (const row of rows) entries[row.path] = { mtimeMs: row.mtimeMs, size: row.size, sha256: row.sha256, excludeReason: row.excludeReason, providerId: row.providerId };
+  return entries;
+}
+
+function hashCacheUpsertStatement(db: DatabaseSync) {
+  return db.prepare(`
+    INSERT INTO hash_cache_entries (path, mtime_ms, size, sha256, exclude_reason, provider_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(path) DO UPDATE SET
+      mtime_ms = excluded.mtime_ms,
+      size = excluded.size,
+      sha256 = excluded.sha256,
+      exclude_reason = excluded.exclude_reason,
+      provider_id = excluded.provider_id
+  `);
+}
+
+/** Upsert a batch of hash cache entries in one transaction — same rationale as `upsertMetadataEntries`. */
+export function upsertHashCacheEntries(db: DatabaseSync, entries: Record<string, HashCacheEntry>): void {
+  const paths = Object.keys(entries);
+  if (!paths.length) return;
+  const stmt = hashCacheUpsertStatement(db);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const path of paths) {
+      const entry = entries[path];
+      stmt.run(path, entry.mtimeMs, entry.size, entry.sha256, entry.excludeReason, entry.providerId);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Delete multiple hash cache rows in one transaction (e.g. a since-deleted or renamed-away path). */
+export function deleteHashCacheEntries(db: DatabaseSync, paths: string[]): void {
+  if (!paths.length) return;
+  const stmt = db.prepare("DELETE FROM hash_cache_entries WHERE path = ?");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const path of paths) stmt.run(path);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Delete hash cache rows whose path is NOT in `keepPaths` — same pattern as `pruneMetadataEntries`, called once per sync cycle with the cycle's full local path list. */
+export function pruneHashCacheEntries(db: DatabaseSync, keepPaths: readonly string[]): void {
+  const keep = new Set(keepPaths);
+  const rows = db.prepare("SELECT path FROM hash_cache_entries").all() as unknown as { path: string }[];
+  const stale = rows.map((row) => row.path).filter((path) => !keep.has(path));
+  deleteHashCacheEntries(db, stale);
 }
 
 /**

@@ -116,6 +116,49 @@ export interface VaultFilesService {
   refreshScan?(): Promise<import("../../shared/vault-refresh").VaultRefreshResult<VaultFileEntry>>;
 }
 
+/**
+ * A file's last-known content hash (or exclude verdict), keyed by `(path,
+ * size, mtime, providerId)` — see `HashCacheService`.
+ *
+ * `excludeReason` and `providerId` exist for two related reasons:
+ *  - `excludeReason` lets an excluded path (a gitignore-style rule, a binary
+ *    sniff, whatever the active provider's `excludePath()` implements) be
+ *    cached too, not just a hashed one — `null` means "not excluded, sha256
+ *    is meaningful"; a string means "excluded for this reason, sha256 is a
+ *    meaningless placeholder and must not be trusted".
+ *  - `providerId` scopes every verdict (hash or exclude) to the provider that
+ *    produced it, because `excludePath()`'s answer is a property of the
+ *    *active provider*, not of the file's content. Without this, a user who
+ *    disconnects one provider and connects a different one with different
+ *    exclusion rules would silently inherit the old provider's verdict for
+ *    any file whose mtime/size happen not to have changed — a stale-cache bug
+ *    that a hash-only cache (with no provider identity) can't detect at all.
+ */
+export interface HashCacheEntry {
+  mtimeMs: number;
+  size: number;
+  sha256: string;
+  excludeReason: string | null;
+  providerId: string;
+}
+
+/**
+ * Vault-local file-hash cache backing the append-only sync engine's per-cycle
+ * reuse check: a file whose size/mtime still match its cached entry can reuse
+ * `sha256` instead of paying a full binary read + SHA-256 digest again. Only
+ * ever populated when append-only sync (which itself requires `syncSafety`)
+ * is in use, so it is optional here and every caller must treat its absence
+ * as "no cache, always re-hash" rather than an error.
+ */
+export interface HashCacheService {
+  /** Every currently-cached entry, keyed by path. `null` means the cache could not be read (treat as empty). */
+  readAll(): Promise<Record<string, HashCacheEntry> | null>;
+  /** Upsert freshly-computed hashes after a cycle's re-hash. */
+  upsertBatch(entries: Record<string, HashCacheEntry>): Promise<void>;
+  /** Delete any cached entry whose path is not in `keepPaths` — call once per cycle with that cycle's full local path list. */
+  prune(keepPaths: string[]): Promise<void>;
+}
+
 /** Device-local structured state. Implementations must keep this outside the active vault. */
 export interface DeviceStateService {
   read<T>(key: string): Promise<T | null>;
@@ -223,6 +266,7 @@ export interface HostServices {
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;
   readonly vaultFiles: VaultFilesService;
+  readonly hashCache?: HashCacheService;
   readonly deviceState: DeviceStateService;
   readonly secrets: SecureSecretService;
   readonly config: ConfigService;
