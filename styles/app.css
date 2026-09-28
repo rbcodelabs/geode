@@ -1739,6 +1739,47 @@ body.is-macos:not(.is-native-fullscreen) .mod-left .workspace-tab-header-contain
   padding-left: 38px;
 }
 
+/* Screenshot mode (`GEODE_SCREENSHOT_MODE=1`, non-macOS only — see main.ts's
+   `macChromeMode`) launches the window frameless and has the renderer draw
+   these fake traffic lights instead, so a single Playwright capture looks
+   mac-like regardless of host OS (e.g. the Linux devbox used for headless
+   E2E/QA capture). `is-mac-chrome-drawn` is a strict subset of `is-macos`
+   (see window-chrome.ts), so this sits on top of the same traffic-light
+   clearance CSS above without duplicating it. Never present on real macOS,
+   where the OS already draws real traffic lights. */
+body.is-mac-chrome-drawn .mac-chrome-drawn-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 78px;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  box-sizing: border-box;
+  z-index: 1000;
+  -webkit-app-region: drag;
+}
+body.is-mac-chrome-drawn .mac-chrome-drawn-dot {
+  -webkit-app-region: no-drag;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+body.is-mac-chrome-drawn .mac-chrome-drawn-dot.mod-close {
+  background: #ff5f57;
+}
+body.is-mac-chrome-drawn .mac-chrome-drawn-dot.mod-minimize {
+  background: #febc2e;
+}
+body.is-mac-chrome-drawn .mac-chrome-drawn-dot.mod-maximize {
+  background: #28c840;
+}
+
 /* When the left sidebar is collapsed, it no longer occupies the top-left
    corner, so the FIRST (leftmost) main-pane tab group's own tab bar — which
    now hosts the left sidebar's toggle button — needs the same clearance

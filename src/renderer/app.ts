@@ -1931,6 +1931,8 @@ class StatusBar {
 export class App {
   private protocolHandlers = new Map<string, (params: Record<string, string>) => unknown>();
   private pendingProtocolLinks = new Map<string, Record<string, string>[]>();
+  /** Screenshot mode's fake macOS titlebar overlay, created once — see `ensureDrawnMacTitlebar`. */
+  private drawnTitlebarEl: HTMLElement | null = null;
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
   readonly templates: TemplatesService;
@@ -2278,8 +2280,10 @@ export class App {
       // code reading `app.plugins` at module-eval time, would otherwise see
       // an undefined/empty registry if this only ran from that constructor.
       installObsidianAppCompat(this);
-      const updateWindowChrome = (state: Awaited<ReturnType<HostServices["runtime"]["getWindowChromeState"]>>) =>
+      const updateWindowChrome = (state: Awaited<ReturnType<HostServices["runtime"]["getWindowChromeState"]>>) => {
         applyWindowChromeState(document.body.classList, state);
+        if (state.macChrome === "drawn") this.ensureDrawnMacTitlebar();
+      };
       this.hostDisposers.add(this.host.runtime.onWindowChromeState(updateWindowChrome));
       updateWindowChrome(await this.host.runtime.getWindowChromeState());
       this.hostDisposers.add(this.host.runtime.onDeepLink(({ action, params }) => this.dispatchProtocolLink(action, params)));
@@ -2296,6 +2300,38 @@ export class App {
         this.showVaultPicker(rootEl, []);
       }
     });
+  }
+
+  /**
+   * Screenshot mode launches the window frameless on non-macOS (see main.ts's
+   * `macChromeMode`/`frame: macChromeMode !== "drawn"`), so there are no
+   * native window controls at all. Draw three fake macOS-style traffic-light
+   * dots into the top-left gutter that `is-macos` CSS already reserves for
+   * real traffic lights (see the `is-macos`/`is-mac-chrome-drawn` rules in
+   * styles/app.css), and wire them to the real window-control IPC
+   * (main.ts's `window-close`/`window-minimize`/`window-toggle-maximize`
+   * handlers) so the frameless window stays closable, minimizable, and
+   * movable. Appended to `document.body` (not `#app`) so it survives vault
+   * switches. Idempotent: only ever creates the overlay once.
+   */
+  private ensureDrawnMacTitlebar(): void {
+    if (this.drawnTitlebarEl) return;
+    const desktop = this.host.desktop;
+    const bar = document.createElement("div");
+    bar.className = "mac-chrome-drawn-titlebar";
+    const addDot = (modifier: string, label: string, onClick: () => void) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `mac-chrome-drawn-dot ${modifier}`;
+      button.setAttribute("aria-label", label);
+      button.addEventListener("click", onClick);
+      bar.appendChild(button);
+    };
+    addDot("mod-close", "Close window", () => { void desktop?.closeWindow(); });
+    addDot("mod-minimize", "Minimize window", () => { void desktop?.minimizeWindow(); });
+    addDot("mod-maximize", "Maximize window", () => { void desktop?.toggleMaximizeWindow(); });
+    document.body.appendChild(bar);
+    this.drawnTitlebarEl = bar;
   }
 
   private showVaultPicker(rootEl: HTMLElement, recents: string[]) {

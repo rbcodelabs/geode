@@ -6,16 +6,30 @@ import { applyWindowChromeState } from "../../src/renderer/window-chrome";
 describe("window chrome layout state", () => {
   it("marks a normal macOS window for traffic-light clearance", () => {
     const toggle = vi.fn();
-    applyWindowChromeState({ toggle }, { platform: "darwin", isFullScreen: false });
+    applyWindowChromeState({ toggle }, { platform: "darwin", isFullScreen: false, macChrome: "native" });
     expect(toggle).toHaveBeenCalledWith("is-macos", true);
+    expect(toggle).toHaveBeenCalledWith("is-mac-chrome-drawn", false);
     expect(toggle).toHaveBeenCalledWith("is-native-fullscreen", false);
   });
 
   it("reacts to fullscreen and leaves non-mac platforms unscoped", () => {
     const toggle = vi.fn();
-    applyWindowChromeState({ toggle }, { platform: "linux", isFullScreen: true });
+    applyWindowChromeState({ toggle }, { platform: "linux", isFullScreen: true, macChrome: "none" });
     expect(toggle).toHaveBeenCalledWith("is-macos", false);
+    expect(toggle).toHaveBeenCalledWith("is-mac-chrome-drawn", false);
     expect(toggle).toHaveBeenCalledWith("is-native-fullscreen", true);
+  });
+
+  it("draws fake mac-style chrome only in screenshot mode, never doubling up on real macOS", () => {
+    const drawnToggle = vi.fn();
+    applyWindowChromeState({ toggle: drawnToggle }, { platform: "linux", isFullScreen: false, macChrome: "drawn" });
+    expect(drawnToggle).toHaveBeenCalledWith("is-macos", true);
+    expect(drawnToggle).toHaveBeenCalledWith("is-mac-chrome-drawn", true);
+
+    const nativeToggle = vi.fn();
+    applyWindowChromeState({ toggle: nativeToggle }, { platform: "darwin", isFullScreen: false, macChrome: "native" });
+    expect(nativeToggle).toHaveBeenCalledWith("is-macos", true);
+    expect(nativeToggle).toHaveBeenCalledWith("is-mac-chrome-drawn", false);
   });
 
   it("scopes the reduced inset and structural ribbon clearance to windowed macOS", () => {

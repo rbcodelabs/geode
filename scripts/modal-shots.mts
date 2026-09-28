@@ -43,7 +43,16 @@ fs.writeFileSync(
   JSON.stringify({ recentVaults: vaults, lastVault: vaultDir })
 );
 
-const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+// GEODE_SCREENSHOT_MODE=1 requests the drawn mac-style titlebar (see main.ts's
+// macChromeMode) so these design-parity shots look mac-like regardless of
+// host OS — a no-op on real macOS (still resolves to "native"), activates
+// drawn chrome on Linux. `env` must be spread explicitly: Playwright's
+// `_electron.launch` does not inherit `process.env` when `env` is omitted.
+const app = await electron.launch({
+  args: [repoRoot, `--user-data-dir=${userDataDir}`],
+  cwd: repoRoot,
+  env: { ...process.env, GEODE_SCREENSHOT_MODE: "1" },
+});
 const win = await app.firstWindow();
 await win.waitForFunction(() => !!(globalThis as any).app?.workspace);
 await win.setViewportSize({ width: 1100, height: 700 });

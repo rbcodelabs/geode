@@ -81,6 +81,9 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     onDeepLink: ((cb: Parameters<HostServices["runtime"]["onDeepLink"]>[0]) => host.runtime.onDeepLink(cb)) as never,
     getWindowChromeState: (() => host.runtime.getWindowChromeState()) as never,
     setWindowBackgroundColor: host.desktop?.setWindowBackgroundColor ?? (async () => {}),
+    closeWindow: host.desktop?.closeWindow ?? (async () => {}),
+    minimizeWindow: host.desktop?.minimizeWindow ?? (async () => {}),
+    toggleMaximizeWindow: host.desktop?.toggleMaximizeWindow ?? (async () => {}),
     onWindowChromeState: ((cb: Parameters<HostServices["runtime"]["onWindowChromeState"]>[0]) =>
       host.runtime.onWindowChromeState(cb)) as never,
     publishHotkeys: host.desktop?.publishHotkeys ?? (async () => {}),

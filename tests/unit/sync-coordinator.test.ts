@@ -9,7 +9,7 @@ function memoryHost(files: Record<string, string> = {}, sharedState = new Map<st
   const state = sharedState;
   const host = {
     capabilities: {} as HostServices["capabilities"],
-    runtime: { runtime: "browser", platform: "test", formFactor: "desktop", getWindowChromeState: async () => ({ platform: "test", isFullScreen: false }), onWindowChromeState: () => () => {}, onDeepLink: () => () => {}, onForeground: () => () => {} },
+    runtime: { runtime: "browser", platform: "test", formFactor: "desktop", getWindowChromeState: async () => ({ platform: "test", isFullScreen: false, macChrome: "none" }), onWindowChromeState: () => () => {}, onDeepLink: () => () => {}, onForeground: () => () => {} },
     vaultRegistry: {} as HostServices["vaultRegistry"],
     vaultFiles: {
       list: async () => [...data].map(([path, bytes]) => ({ path, isFolder: false, ctime: 1, mtime: mtimes.get(path) ?? 1, size: bytes.byteLength })),
