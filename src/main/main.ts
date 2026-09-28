@@ -173,6 +173,20 @@ const isHeadless =
   process.env.GEODE_HEADLESS === "1" ||
   process.argv.includes("--headless");
 
+// Opt-in "screenshot mode": on non-macOS hosts (e.g. the Linux devbox used for
+// headless E2E/QA capture), draw a fake macOS-style titlebar in the renderer
+// instead of the native GTK one, so a single Playwright capture looks
+// mac-like regardless of host OS. Never applies on real macOS, and never
+// applies without the env var — purely additive/opt-in.
+const screenshotMode = process.env.GEODE_SCREENSHOT_MODE === "1";
+// "native" = real macOS traffic lights (unchanged); "drawn" = frameless
+// window with a renderer-drawn fake titlebar (screenshot mode, non-darwin
+// only); "none" = today's plain native OS titlebar on non-darwin. Neither
+// platform nor the env var changes at runtime, so this is the same for every
+// window created during this process's lifetime — module scope, computed once.
+const macChromeMode: "native" | "drawn" | "none" =
+  process.platform === "darwin" ? "native" : screenshotMode ? "drawn" : "none";
+
 const deepLinks = new DeepLinkDispatcher();
 deepLinks.acceptArgv(process.argv);
 app.on("open-url", (event, url) => {
@@ -504,12 +518,28 @@ function registerIpc() {
   );
   ipcMain.handle("window-chrome-state", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
-    return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false };
+    return { platform: process.platform, isFullScreen: win?.isFullScreen() ?? false, macChrome: macChromeMode };
   });
   ipcMain.handle("window-background-color", (e, color: string) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || typeof color !== "string") return;
     win.setBackgroundColor(color);
+  });
+  // Window controls for frameless windows (screenshot-mode's drawn titlebar
+  // has no native close/minimize/zoom buttons to fall back on). Exposed
+  // unconditionally rather than gated on screenshot mode: real users on
+  // native chrome have no UI wired to invoke these, so they're inert.
+  ipcMain.handle("window-close", (e) => {
+    BrowserWindow.fromWebContents(e.sender)?.close();
+  });
+  ipcMain.handle("window-minimize", (e) => {
+    BrowserWindow.fromWebContents(e.sender)?.minimize();
+  });
+  ipcMain.handle("window-toggle-maximize", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return;
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
   });
   ipcMain.handle("power-save-blocker-acquire", (e) => {
     const ownerId = e.sender.id;
@@ -1764,6 +1794,10 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     title: "Geode",
     icon: path.join(__dirname, "..", "resources", "icon.png"),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    // `titleBarStyle` is macOS-only; on non-darwin, `frame: false` is what
+    // actually removes the native titlebar/controls so the renderer's drawn
+    // chrome (see window-chrome.ts / app.ts) is what the user sees instead.
+    frame: macChromeMode !== "drawn",
     backgroundColor: "#1e1e1e",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -1792,6 +1826,7 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   const windowChromeState = () => ({
     platform: process.platform,
     isFullScreen: win.isFullScreen(),
+    macChrome: macChromeMode,
   });
   const sendWindowChromeState = () => {
     if (!win.isDestroyed()) win.webContents.send("window-chrome-state", windowChromeState());

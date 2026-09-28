@@ -85,7 +85,7 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       runtime: "ios",
       platform: "ios",
       formFactor,
-      getWindowChromeState: async () => ({ platform: "ios", isFullScreen: true }),
+      getWindowChromeState: async () => ({ platform: "ios", isFullScreen: true, macChrome: "none" }),
       onWindowChromeState: () => () => {},
       onDeepLink: portable.runtime.onDeepLink,
       onForeground: portable.runtime.onForeground,

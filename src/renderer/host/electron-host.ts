@@ -10,6 +10,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "listPluginIds" | "listThemes" | "readThemeCss" | "readPluginFile" | "replacePluginFiles" | "getPluginPolicy"
   | "getCrashRecoveryState" | "leaveCrashRecovery" | "reportCrashDiagnostic" | "reportActivePlugins"
   | "getWindowChromeState" | "onWindowChromeState" | "onDeepLink" | "setWindowBackgroundColor"
+  | "closeWindow" | "minimizeWindow" | "toggleMaximizeWindow"
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent" | "onAgentBrowserWindowOpen"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
@@ -156,6 +157,9 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
     desktop: {
       openVaultWindow: (path) => preload.openVaultWindow(path),
       setWindowBackgroundColor: (color) => preload.setWindowBackgroundColor(color),
+      closeWindow: () => preload.closeWindow(),
+      minimizeWindow: () => preload.minimizeWindow(),
+      toggleMaximizeWindow: () => preload.toggleMaximizeWindow(),
       publishHotkeys: (combos) => preload.publishHotkeys(combos),
       onGuestHotkey: (cb) => preload.onGuestHotkey(cb),
       onGuestWindowOpen: (cb) => preload.onGuestWindowOpen(cb),

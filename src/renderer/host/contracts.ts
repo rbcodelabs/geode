@@ -36,8 +36,8 @@ export interface RuntimeService {
   readonly runtime: "electron" | "browser" | "ios" | "android";
   readonly platform: string;
   readonly formFactor: "desktop" | "phone" | "tablet";
-  getWindowChromeState(): Promise<{ platform: string; isFullScreen: boolean }>;
-  onWindowChromeState(cb: (state: { platform: string; isFullScreen: boolean }) => void): () => void;
+  getWindowChromeState(): Promise<{ platform: string; isFullScreen: boolean; macChrome: "native" | "drawn" | "none" }>;
+  onWindowChromeState(cb: (state: { platform: string; isFullScreen: boolean; macChrome: "native" | "drawn" | "none" }) => void): () => void;
   onDeepLink(cb: (link: { action: string; params: Record<string, string> }) => void): () => void;
   /** Fires after the app becomes foreground-active; desktop hosts may return an inert disposer. */
   onForeground(cb: () => void): () => void;
@@ -230,6 +230,10 @@ export interface PluginFileSet {
 export interface DesktopHostService {
   openVaultWindow(path: string): Promise<{ action: "current" | "focused" | "created" }>;
   setWindowBackgroundColor(color: string): Promise<void>;
+  /** Window controls for frameless windows (screenshot mode's drawn titlebar). */
+  closeWindow(): Promise<void>;
+  minimizeWindow(): Promise<void>;
+  toggleMaximizeWindow(): Promise<void>;
   publishHotkeys(combos: string[]): Promise<void>;
   onGuestHotkey(cb: (combo: string, guestId: number) => void): () => void;
   onGuestWindowOpen(cb: (request: {

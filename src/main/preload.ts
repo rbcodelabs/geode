@@ -278,20 +278,27 @@ const api = {
     ipcRenderer.on("geode-deep-link", listener);
     return () => { ipcRenderer.removeListener("geode-deep-link", listener); };
   },
-  getWindowChromeState: (): Promise<{ platform: NodeJS.Platform; isFullScreen: boolean }> =>
-    ipcRenderer.invoke("window-chrome-state"),
+  getWindowChromeState: (): Promise<{
+    platform: NodeJS.Platform;
+    isFullScreen: boolean;
+    macChrome: "native" | "drawn" | "none";
+  }> => ipcRenderer.invoke("window-chrome-state"),
   setWindowBackgroundColor: (color: string): Promise<void> =>
     ipcRenderer.invoke("window-background-color", color),
   onWindowChromeState: (
-    cb: (state: { platform: NodeJS.Platform; isFullScreen: boolean }) => void,
+    cb: (state: { platform: NodeJS.Platform; isFullScreen: boolean; macChrome: "native" | "drawn" | "none" }) => void,
   ) => {
     const listener = (
       _e: Electron.IpcRendererEvent,
-      state: { platform: NodeJS.Platform; isFullScreen: boolean },
+      state: { platform: NodeJS.Platform; isFullScreen: boolean; macChrome: "native" | "drawn" | "none" },
     ) => cb(state);
     ipcRenderer.on("window-chrome-state", listener);
     return () => { ipcRenderer.removeListener("window-chrome-state", listener); };
   },
+  /** Window controls for frameless windows (screenshot mode's drawn titlebar). */
+  closeWindow: (): Promise<void> => ipcRenderer.invoke("window-close"),
+  minimizeWindow: (): Promise<void> => ipcRenderer.invoke("window-minimize"),
+  toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke("window-toggle-maximize"),
   /**
    * Tell main which combos the CommandRegistry currently has bound. Main's
    * `before-input-event` handler for `<webview>` guests is synchronous and

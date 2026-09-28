@@ -55,7 +55,7 @@ function createElectronPreloadFixture(): ElectronPreloadApi {
     leaveCrashRecovery: vi.fn(async () => {}),
     reportCrashDiagnostic: vi.fn(async () => {}),
     reportActivePlugins: vi.fn(async () => {}),
-    getWindowChromeState: vi.fn(async () => ({ platform: "darwin", isFullScreen: false })),
+    getWindowChromeState: vi.fn(async () => ({ platform: "darwin", isFullScreen: false, macChrome: "native" })),
     onWindowChromeState: vi.fn(() => () => {}),
     onDeepLink: vi.fn(() => () => {}),
     setWindowBackgroundColor: vi.fn(async () => {}),

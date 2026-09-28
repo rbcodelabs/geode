@@ -164,7 +164,7 @@ export function createBrowserHost(
       runtime: "browser",
       platform: "browser",
       formFactor: "phone",
-      getWindowChromeState: async () => ({ platform: "darwin", isFullScreen: false }),
+      getWindowChromeState: async () => ({ platform: "darwin", isFullScreen: false, macChrome: "native" }),
       onWindowChromeState: () => () => {},
       onDeepLink: () => () => {},
       onForeground: (callback) => {
