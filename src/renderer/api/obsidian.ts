@@ -25,6 +25,8 @@ import { createDismissibleNotice } from "../notice";
 import { createSecretStorage } from "../secret-storage";
 import moment from "moment";
 import { getHostServices } from "../host/registry";
+import { renderMathHtml } from "../markdown/math";
+import { ensureMathStyles } from "../markdown/math-style";
 
 // Ensure the DOM helpers exist the moment the compat module is first
 // evaluated (i.e. when a plugin requires 'obsidian'), even if the host
@@ -161,6 +163,26 @@ export { addIcon, setIcon };
  * than bundling its own.
  */
 export { loadMermaid } from "../internal-plugins/mermaid/load-mermaid";
+
+/**
+ * Obsidian's `renderMath(source, display)`: renders LaTeX to a detached
+ * element the caller inserts wherever it likes. Backed by the same KaTeX
+ * renderer as `$...$` in notes, so a plugin's formulas match the document's.
+ * Invalid LaTeX yields an error-styled element rather than throwing.
+ */
+export function renderMath(source: string, display: boolean): HTMLElement {
+  ensureMathStyles();
+  const holder = document.createElement("div");
+  holder.innerHTML = renderMathHtml(source, display);
+  return holder.firstElementChild as HTMLElement;
+}
+
+/**
+ * Obsidian's `finishRenderMath()`: resolves once queued MathJax typesetting
+ * has flushed. KaTeX renders synchronously inside `renderMath`, so there is
+ * never anything queued; it exists so plugins that await it keep working.
+ */
+export async function finishRenderMath(): Promise<void> {}
 export { moment };
 export type TooltipPlacement = "bottom" | "right" | "left" | "top";
 
