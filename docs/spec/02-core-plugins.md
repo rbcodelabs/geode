@@ -429,6 +429,7 @@ Left-sidebar tree view. Header buttons:
 - **Rename**: right-click → Rename, type, Enter.
 - **Delete**: right-click → Delete (confirmation prompt may appear; deletion target — system trash / `.trash` / permanent — is a vault-wide "Files and links" setting).
 - **Move by drag**: drag file/folder onto destination folder.
+  - In Geode, the destination highlights during a drag. Drop a single file or folder on the vault name in the explorer header to move it back to the root. A successful move expands the destination folder; an existing name is reported without replacing the destination. Dropping into the current folder, the folder itself, or one of its descendants does nothing.
 - **Move by menu**: right-click → **Move file to…** → search destination folder.
 - **Multi-select**: Alt/Opt+click individual files; Shift+click contiguous range; operations apply to the selection (e.g. Bookmark all, move).
 - **Drag into a note** creates a link to the dragged file.

@@ -137,7 +137,7 @@ test("recursively drops a File Explorer folder as one deterministic Canvas card 
     }
     await bundleRow.dragTo(view.locator('.canvas-node[data-node-id="file-1"]'));
     expect(await window.evaluate(() => (window as any).__canvasFolderDrag)).toEqual({
-      path: "Bundle", types: [vaultPathMime], effectAllowed: "copy",
+      path: "Bundle", types: [vaultPathMime], effectAllowed: "copyMove",
     });
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(initialText);
     expect(await window.evaluate(() => (window as any).__canvasFolderWrites)).toBe(0);

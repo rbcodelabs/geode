@@ -2,7 +2,7 @@ import type { App } from "../app";
 import type { View } from "../workspace";
 import { TFile, TFolder, TAbstractFile } from "../types";
 import { setIcon } from "../api/icons";
-import { VAULT_FILE_DRAG_MIME } from "../file-drag";
+import { isValidVaultFileDragPath, VAULT_FILE_DRAG_MIME } from "../file-drag";
 import { ProjectsSection } from "./projects-section";
 import { threadsProjectSource } from "../integrations/threads-projects";
 
@@ -37,6 +37,8 @@ export class FileExplorerView implements View {
   /** Anchor for Shift-range selection: the last row clicked without Shift. */
   private lastClicked: string | null = null;
   private readonly projects: ProjectsSection;
+  private draggingPath: string | null = null;
+  private dropTarget: HTMLElement | null = null;
 
   constructor(private app: App) {
     this.containerEl = document.createElement("div");
@@ -47,6 +49,8 @@ export class FileExplorerView implements View {
     const title = document.createElement("span");
     title.textContent = app.vault.name;
     title.className = "sidebar-view-title nav-vault-name";
+    title.title = "Drop here to move to the vault root";
+    this.acceptMoves(title, "");
     const actions = document.createElement("span");
     actions.className = "sidebar-view-actions";
     const newNote = document.createElement("button");
@@ -189,11 +193,8 @@ export class FileExplorerView implements View {
         else this.expanded.add(folder.path);
         this.render();
       });
-      row.addEventListener("dragstart", (e) => {
-        if (!e.dataTransfer) return;
-        e.dataTransfer.effectAllowed = "copy";
-        e.dataTransfer.setData(VAULT_FILE_DRAG_MIME, folder.path);
-      });
+      this.makeDraggable(row, folder);
+      this.acceptMoves(row, folder.path);
       row.addEventListener("contextmenu", (e) => this.folderMenu(e, folder));
       wrapper.appendChild(row);
       if (isOpen) {
@@ -255,15 +256,88 @@ export class FileExplorerView implements View {
         }
         this.app.openFile(file, e.metaKey || e.ctrlKey);
       });
-      row.addEventListener("dragstart", (e) => {
-        if (!e.dataTransfer) return;
-        e.dataTransfer.effectAllowed = "copy";
-        e.dataTransfer.setData(VAULT_FILE_DRAG_MIME, file.path);
-      });
+      this.makeDraggable(row, file);
       row.addEventListener("contextmenu", (e) => this.fileMenu(e, file));
       wrapper.appendChild(row);
     }
     return wrapper;
+  }
+
+  private clearDropTarget(): void {
+    this.dropTarget?.classList.remove("is-drop-target");
+    this.dropTarget = null;
+  }
+
+  private makeDraggable(row: HTMLElement, item: TFile | TFolder): void {
+    row.addEventListener("dragstart", (event) => {
+      if (!event.dataTransfer) return;
+      this.draggingPath = item.path;
+      event.dataTransfer.effectAllowed = "copyMove";
+      event.dataTransfer.setData(VAULT_FILE_DRAG_MIME, item.path);
+    });
+    row.addEventListener("dragend", () => {
+      this.draggingPath = null;
+      this.clearDropTarget();
+    });
+  }
+
+  private moveDestination(source: string, folder: string): string | null {
+    if (!isValidVaultFileDragPath(source) || (folder && !isValidVaultFileDragPath(folder))) return null;
+    const item = this.app.vault.getAbstractFileByPath(source);
+    if (!item || (folder && this.app.vault.getAbstractFileByPath(folder)?.kind !== "folder")) return null;
+    if (folder === source || folder.startsWith(source + "/")) return null;
+    const destination = folder ? `${folder}/${item.name}` : item.name;
+    return destination === source ? null : destination;
+  }
+
+  private acceptMoves(target: HTMLElement, folder: string): void {
+    target.addEventListener("dragover", (event) => {
+      // Drag data is protected until drop; track our own source during the drag.
+      if (!event.dataTransfer || !this.draggingPath || !this.moveDestination(this.draggingPath, folder)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      this.clearDropTarget();
+      this.dropTarget = target;
+      target.classList.add("is-drop-target");
+    });
+    target.addEventListener("dragleave", (event) => {
+      if (!(event.relatedTarget instanceof Node) || !target.contains(event.relatedTarget)) this.clearDropTarget();
+    });
+    target.addEventListener("drop", (event) => {
+      const source = event.dataTransfer?.getData(VAULT_FILE_DRAG_MIME);
+      this.clearDropTarget();
+      if (!source || source !== this.draggingPath) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.draggingPath = null;
+      void this.moveItem(source, folder);
+    });
+  }
+
+  private async moveItem(source: string, folder: string): Promise<void> {
+    const destination = this.moveDestination(source, folder);
+    if (!destination) return;
+    const item = this.app.vault.getAbstractFileByPath(source) as TFile | TFolder;
+    try {
+      // Check disk too: the index can lag behind filesystem changes, and the
+      // underlying filesystem may match names case-insensitively.
+      if (this.app.vault.getAbstractFileByPath(destination) || await this.app.vault.adapter.exists(destination)) {
+        this.app.notify(`"${item.name}" already exists in this folder`);
+        return;
+      }
+      if (item.kind === "file") await this.app.renameFileWithLinkUpdate(item, destination);
+      else await this.app.vault.rename(item, destination);
+      if (folder) this.expanded.add(folder);
+      if (this.activePath === source || this.activePath?.startsWith(source + "/")) {
+        this.activePath = destination + this.activePath.slice(source.length);
+      }
+      this.selected = new Set([destination]);
+      this.lastClicked = destination;
+      this.render();
+    } catch (error) {
+      this.app.notify(`Could not move "${item.name}": ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private highlightActive() {

@@ -120,7 +120,7 @@ test("drags one vault file from File Explorer onto empty transformed Canvas spac
     expect(await window.evaluate(() => (window as any).__canvasExplorerDrag)).toEqual({
       path: "Dragged note.md",
       types: [vaultPathMime],
-      effectAllowed: "copy",
+      effectAllowed: "copyMove",
     });
     expect(await window.evaluate(() => (window as any).app.workspace.getActiveFile()?.path)).toBe("Drop.canvas");
     await expect(view.locator(".canvas-node.is-selected, .canvas-edge.is-selected")).toHaveCount(0);
