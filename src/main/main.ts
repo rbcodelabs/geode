@@ -98,11 +98,14 @@ import {
 } from "./supported-plugin-catalog";
 import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
 import {
-  attachGuestClientHints,
+  attachClientHintNegotiatorListener,
+  createClientHintNegotiator,
+  createClientHintStage,
   guestClientHints,
   guestHighEntropyHints,
   normalizeGuestUserAgent,
 } from "./guest-fingerprint";
+import { attachGuestRequestPipeline, type HeaderStage } from "./guest-request-pipeline";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -152,16 +155,36 @@ app.userAgentFallback = normalizeGuestUserAgent(app.userAgentFallback, app.getNa
 // `platformVersion`, while the latter returns the Darwin kernel version
 // ("25.4.0"), which would contradict the JS surface.
 //
-// Both the fill and the negotiation share ONE `onBeforeSendHeaders` listener
-// inside attachGuestClientHints, because Electron silently replaces a session's
-// existing listener when a second is registered.
+// Both the fill and the negotiation are composed as HeaderStages onto ONE
+// `onBeforeSendHeaders` listener via `guest-request-pipeline.ts`'s
+// `attachGuestRequestPipeline`, because Electron silently replaces a
+// session's existing listener when a second is registered directly. That
+// module is the only legal place in Geode to call
+// `session.webRequest`'s `onBeforeSendHeaders` event — a future concern that needs
+// to touch outgoing request headers (e.g. secret-backed header rules for the
+// agent browser) becomes another HeaderStage appended to `stages` below, not
+// a second registration anywhere else.
 const guestHints = guestClientHints(process.versions.chrome, process.platform);
 const guestHighEntropy = guestHighEntropyHints({
   chromeVersion: process.versions.chrome,
   arch: process.arch,
   systemVersion: process.getSystemVersion(),
 });
-app.on("session-created", (created) => attachGuestClientHints(created, guestHints, guestHighEntropy));
+app.on("session-created", (created) => {
+  // A fresh negotiator per session: separate partitions are separate
+  // profiles, and real Chrome keeps client-hint preferences per profile.
+  const negotiator = createClientHintNegotiator(guestHighEntropy);
+  // `onHeadersReceived` is a different Electron event from
+  // `onBeforeSendHeaders`; it doesn't go through the header pipeline, but the
+  // same one-registration-per-session rule applies, so it is registered here,
+  // once, alongside the pipeline.
+  if (negotiator) attachClientHintNegotiatorListener(created, negotiator);
+
+  const stages: HeaderStage[] = [];
+  const clientHintStage = createClientHintStage(guestHints, negotiator);
+  if (clientHintStage) stages.push(clientHintStage);
+  attachGuestRequestPipeline(created, stages);
+});
 
 protocol.registerSchemesAsPrivileged([{
   scheme: ARTIFACT_SCHEME,
