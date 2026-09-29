@@ -21,6 +21,7 @@ import { isMermaidInfoString, parseFencedBlock } from "../internal-plugins/merma
 import { onThemeChange, renderMermaid } from "../internal-plugins/mermaid/render-mermaid";
 import { parseTable, serializeTable, type Align, type ParsedTable } from "./table";
 import { FRONTMATTER_BLOCK_RE } from "../../wiki/constants";
+import { footnoteField } from "./footnote-live";
 import { mathField } from "./math-live";
 
 const FM_RE = FRONTMATTER_BLOCK_RE;
@@ -1794,6 +1795,7 @@ export function livePreview(
     frontmatterField,
     tableField,
     mermaidField,
+    footnoteField,
     mathField,
     EditorView.atomicRanges.of(
       (view) => view.state.field(frontmatterField, false) ?? RangeSet.empty

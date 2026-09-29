@@ -2532,6 +2532,64 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   border-radius: 2px;
 }
 
+/* --- Footnotes (src/renderer/markdown/footnotes.ts, footnote-live.ts) ----- */
+
+/* Reading view: superscript reference and the section at the bottom. */
+sup.footnote-ref {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+sup.footnote-ref > a.footnote-link {
+  color: var(--text-accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+section.footnotes {
+  margin-top: 2em;
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+section.footnotes > hr {
+  margin: 0 0 0.75em;
+}
+
+section.footnotes ol.footnote-list {
+  padding-left: 1.5em;
+}
+
+section.footnotes li.footnote-item > :first-child {
+  margin-top: 0;
+}
+
+a.footnote-backref {
+  color: var(--text-accent);
+  text-decoration: none;
+  cursor: pointer;
+  margin-left: 0.25em;
+}
+
+/* Live Preview: superscript reference, definition lines and their number. */
+sup.cm-footnote-ref {
+  color: var(--text-accent);
+  font-size: 0.75em;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.cm-footnote-definition {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.cm-footnote-label {
+  color: var(--text-accent);
+  cursor: pointer;
+  margin-right: 0.25em;
+}
+
 .cm-live-quote {
   border-left: 3px solid var(--interactive-accent);
   padding-left: 14px !important;
