@@ -79,13 +79,14 @@ describe("Obsidian app config compatibility", () => {
       ["showLineNumber", true, true],
       ["readableLineLength", false, false],
       ["theme", "moonstone", "moonstone"],
+      ["theme", "system", "system"],
     ] as const) {
       await (app.vault as any).setConfig(key, value);
       expect(app.vault.getConfig(key)).toBe(expected);
     }
     const writes = write.mock.calls.length;
     await (app.vault as any).setConfig("foldHeading", "yes");
-    await (app.vault as any).setConfig("theme", "system");
+    await (app.vault as any).setConfig("theme", "bogus");
     await (app.vault as any).setConfig("showLineNumber", true);
     expect(write).toHaveBeenCalledTimes(writes);
   });
