@@ -530,7 +530,7 @@ Settings dialog is divided into **Options**, **Core plugins**, and **Community p
 - Excluded files (filters); Override config folder; URI callbacks; rebuild vault cache.
 
 ### Appearance
-- Base color scheme: adapt to system / light / dark. Geode stores this as `theme: "dark" | "light" | "auto"` (Obsidian's `"system"` is read as `"auto"`); Auto resolves from `prefers-color-scheme` and cross-fades live when the OS appearance changes (skipped under reduced motion).
+- Base color scheme: adapt to system / light / dark. Geode stores this as `theme: "dark" | "light" | "auto"` (Obsidian's `"system"` is read as `"auto"`); Auto is the default for new vaults and resolves from `prefers-color-scheme` and cross-fades live when the OS appearance changes (skipped under reduced motion).
 - Accent color picker.
 - Themes: current theme, Manage (browse/install/update community themes).
 - Fonts: interface font, text font (editor/reading), monospace font; font size slider + quick adjust (keyboard/trackpad).

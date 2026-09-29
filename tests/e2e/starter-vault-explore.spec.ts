@@ -24,6 +24,7 @@ test("Try the sample vault opens the bundled starter vault with its theme and fi
   const app = await electron.launch({
     args: [repoRoot, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
+    colorScheme: "light", // starter vault is theme: auto, so pin the OS appearance
     env: { ...process.env, GEODE_DOCUMENTS_DIR: documentsDir },
   });
 
@@ -38,7 +39,7 @@ test("Try the sample vault opens the bundled starter vault with its theme and fi
     await exploreButton.click();
 
     // The starter vault's Start here.md becomes the active file, and its
-    // pre-seeded .geode/app.json (theme: light, cssTheme: Ivory) takes visual
+    // pre-seeded .geode/app.json (theme: auto, cssTheme: Ivory) takes visual
     // effect immediately.
     await expect.poll(() =>
       window.evaluate(() => (window as any).app.workspace?.getActiveFile()?.path ?? null),
@@ -48,14 +49,14 @@ test("Try the sample vault opens the bundled starter vault with its theme and fi
 
     const destVault = path.join(documentsDir, "Geode Starter Vault");
     expect(fs.existsSync(path.join(destVault, "Start here.md"))).toBe(true);
-    // The copied app.json (theme: light, cssTheme: Ivory) is what made the
+    // The copied app.json (theme: auto, cssTheme: Ivory) is what made the
     // theme assertions above pass. (copyStarterVault's unit tests separately
     // cover that only app.json is copied out of .geode/ — by the time the
     // live app has opened this vault, it has already written back its own
     // full settings object, plus runtime state like metadata-cache/, same as
     // any vault, so this only checks the two seeded fields survived.)
     expect(JSON.parse(fs.readFileSync(path.join(destVault, ".geode", "app.json"), "utf8"))).toMatchObject({
-      theme: "light",
+      theme: "auto",
       cssTheme: "Ivory",
     });
 

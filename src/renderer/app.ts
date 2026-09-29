@@ -2009,7 +2009,7 @@ export class App {
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
-    theme: "dark",
+    theme: "auto",
     readableLineLength: true,
     baseFontSize: 16,
     foldHeading: false,

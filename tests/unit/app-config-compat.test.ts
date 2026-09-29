@@ -50,7 +50,7 @@ describe("Obsidian app config compatibility", () => {
     app.vault.on("config-changed", () => order.push("event:config-changed"));
     app.workspace.on("css-change", () => order.push("event:css-change"));
 
-    expect(app.vault.getConfig("theme")).toBe("obsidian");
+    expect(app.vault.getConfig("theme")).toBe("system") // default theme is now Auto (Obsidian "system");
     await (app.vault as any).setConfig("baseFontSize", 18);
     expect(app.settings.baseFontSize).toBe(18);
     expect(order).toEqual([

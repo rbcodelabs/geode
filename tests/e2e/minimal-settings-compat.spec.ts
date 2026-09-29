@@ -30,7 +30,7 @@ test("certified Minimal Settings slice renders, persists, and drives theme/font 
   ]));
   fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
 
-  let app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  let app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot, colorScheme: "dark" });
   const consoleErrors: string[] = [];
   try {
     const window = await app.firstWindow();
@@ -71,7 +71,7 @@ test("certified Minimal Settings slice renders, persists, and drives theme/font 
       app.commands.execute("obsidian-minimal-settings:toggle-minimal-light-white");
     });
     await expect(window.locator("body.theme-light.minimal-light-white")).toHaveCount(1);
-    await expect.poll(() => window.evaluate(() => (window as any).app.vault.getConfig("theme"))).toBe("moonstone");
+    await expect.poll(() => window.evaluate(() => (window as any).app.vault.getConfig("theme"))).toBe("system") // Minimal leaves Obsidian "system" (Auto) untouched;
 
     await window.evaluate(() => {
       const app = (window as any).app;
@@ -79,7 +79,7 @@ test("certified Minimal Settings slice renders, persists, and drives theme/font 
       app.commands.execute("obsidian-minimal-settings:increase-body-font-size");
     });
     await expect(window.locator("body.theme-dark.minimal-dark-black")).toHaveCount(1);
-    await expect.poll(() => window.evaluate(() => (window as any).app.vault.getConfig("theme"))).toBe("obsidian");
+    await expect.poll(() => window.evaluate(() => (window as any).app.vault.getConfig("theme"))).toBe("system");
     await expect.poll(() => window.evaluate(() => getComputedStyle(document.body).getPropertyValue("--font-text-size").trim())).toBe("16.5px");
     await expect.poll(() => window.evaluate(() => (window as any).app.vault.getConfig("baseFontSize"))).toBe(16.5);
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "plugins", "obsidian-minimal-settings", "data.json"), "utf8")).textSmall).toBe(17);
@@ -96,11 +96,11 @@ test("certified Minimal Settings slice renders, persists, and drives theme/font 
       labeledNav: true, lightStyle: "minimal-light-tonal", darkStyle: "minimal-dark-black", textSmall: 17, textNormal: 16.5,
     });
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "app.json"), "utf8"))).toMatchObject({
-      theme: "light", baseFontSize: 16.5,
+      theme: "auto", baseFontSize: 16.5,
     });
 
     await app.close();
-    app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+    app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot, colorScheme: "light" });
     const restoredWindow = await app.firstWindow();
     restoredWindow.on("console", (msg) => { if (msg.type() === "error" && !msg.text().includes("untested-modern")) consoleErrors.push(msg.text()); });
     restoredWindow.on("pageerror", (error) => consoleErrors.push(String(error)));
@@ -114,7 +114,7 @@ test("certified Minimal Settings slice renders, persists, and drives theme/font 
         fontSize: getComputedStyle(document.body).getPropertyValue("--font-text-size").trim(),
         smallFontSize: getComputedStyle(document.body).getPropertyValue("--font-ui-small").trim(),
       };
-    })).toEqual({ enabled: true, theme: "moonstone", baseFontSize: 16.5, fontSize: "16.5px", smallFontSize: "17px" });
+    })).toEqual({ enabled: true, theme: "system", baseFontSize: 16.5, fontSize: "16.5px", smallFontSize: "17px" });
 
     await restoredWindow.evaluate(() => (window as any).app.commands.execute("open-settings"));
     await restoredWindow.locator(".vertical-tab-nav-item", { hasText: "Minimal Theme Settings" }).click();
