@@ -61,6 +61,16 @@ export interface VaultRegistryService {
    * precedent that bundled-theme behavior is desktop-only).
    */
   exploreSampleVault(): Promise<{ path: string; created: boolean } | null>;
+  /**
+   * Picker-level "Create new vault" support (desktop-Electron only; other
+   * hosts omit it, and the picker hides the button). `getDefaultVaultLocation`
+   * supplies the default parent folder and the home dir for `~` display.
+   */
+  createVaultSupport?: {
+    getDefaultLocation(): Promise<{ path: string; home: string }>;
+    chooseParentFolder(defaultPath?: string): Promise<string | null>;
+    createVault(request: { parent: string; name: string }): Promise<string>;
+  };
 }
 
 export type VaultAccessState = "unavailable" | "permission-revoked" | "missing";

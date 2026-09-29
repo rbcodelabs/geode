@@ -108,6 +108,9 @@ const api = {
     ipcRenderer.invoke("power-save-blocker-release", token),
   chooseVault: (): Promise<string | null> => ipcRenderer.invoke("choose-vault"),
   exploreSampleVault: (): Promise<{ path: string; created: boolean }> => ipcRenderer.invoke("explore-sample-vault"),
+  getDefaultVaultLocation: (): Promise<{ path: string; home: string }> => ipcRenderer.invoke("get-default-vault-location"),
+  chooseParentFolder: (defaultPath?: string): Promise<string | null> => ipcRenderer.invoke("choose-parent-folder", defaultPath),
+  createVault: (request: { parent: string; name: string }): Promise<string> => ipcRenderer.invoke("create-vault", request),
   openVault: (
     path: string
   ): Promise<{ root: string; name: string; files: VaultFileEntry[] }> =>

@@ -4542,33 +4542,220 @@ body.is-mobile .page-preview {
 
 .vault-picker {
   height: 100%;
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 16px;
+  padding: 48px 24px 40px; /* keeps the top ~40px (titlebar drag area) clear */
   -webkit-app-region: drag;
+  /* Faint brand vignette; subtle enough not to fight dark themes. */
+  background:
+    radial-gradient(circle at 15% 10%, rgba(219, 234, 157, 0.35), transparent 45%),
+    radial-gradient(circle at 88% 92%, rgba(120, 147, 72, 0.16), transparent 50%);
+}
+
+.theme-dark .vault-picker {
+  background:
+    radial-gradient(circle at 15% 10%, rgba(219, 234, 157, 0.08), transparent 45%),
+    radial-gradient(circle at 88% 92%, rgba(120, 147, 72, 0.08), transparent 50%);
 }
 
 .vault-picker button,
-.vault-picker-recent {
+.vault-picker input,
+.vault-picker-recent,
+.vault-create-overlay {
   -webkit-app-region: no-drag;
 }
 
+.vault-picker-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.vault-picker-chip {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: #294835;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
 .vault-picker h1 {
-  font-size: 42px;
+  font-size: 38px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
   margin: 0;
+  color: var(--text-normal);
 }
 
 .vault-picker p {
   color: var(--text-muted);
-  margin: 0 0 16px;
+  margin: 0 0 4px;
+}
+
+.vault-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.vault-picker button.vault-picker-create {
+  background: #294835;
+  color: #fff;
+  font-weight: 600;
+  border: 1px solid #294835;
+}
+
+.vault-picker button.vault-picker-create:hover:not(:disabled) {
+  background: #1f3828;
+}
+
+.vault-picker button.vault-picker-create:disabled {
+  opacity: 0.5;
+}
+
+.vault-picker button:focus-visible,
+.vault-picker input:focus-visible,
+.vault-picker-recent:focus-visible {
+  outline: 2px solid #789348;
+  outline-offset: 2px;
 }
 
 .vault-picker-recent {
-  color: var(--text-accent);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 13.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vault-picker-recent:hover {
+  color: var(--text-normal);
+}
+
+.vault-picker-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #789348;
+  flex: none;
+}
+
+.vault-picker-error {
+  color: var(--text-error, #c0392b);
+  font-size: 13px;
+  text-align: center;
+  max-width: 420px;
+}
+
+.vault-create-overlay {
+  position: absolute;
+  inset: 40px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 10;
+}
+
+.vault-create-modal {
+  position: relative;
+  overflow: hidden;
+  width: min(380px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 20px 20px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  text-align: left;
+}
+
+.vault-create-accent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: #294835;
+}
+
+.vault-create-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.vault-create-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vault-create-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.vault-create-row {
+  display: flex;
+  gap: 8px;
+}
+
+.vault-create-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.vault-create-input[aria-invalid="true"] {
+  border-color: var(--text-error, #c0392b);
+}
+
+.vault-create-path {
+  color: var(--text-muted);
+}
+
+.vault-create-preview {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-height: 1.2em;
+  overflow-wrap: anywhere;
+}
+
+.vault-create-error {
+  font-size: 12px;
+  color: var(--text-error, #c0392b);
+}
+
+.vault-create-error[hidden] {
+  display: none;
+}
+
+.vault-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .empty-state {

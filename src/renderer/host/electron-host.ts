@@ -14,7 +14,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent" | "onAgentBrowserWindowOpen"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "list" | "scanForSync" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 >>;
@@ -65,6 +65,11 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       chooseVault: () => preload.chooseVault(),
       chooseExternalVault: () => preload.chooseVault(),
       exploreSampleVault: () => preload.exploreSampleVault(),
+      createVaultSupport: preload.getDefaultVaultLocation && preload.chooseParentFolder && preload.createVault ? {
+        getDefaultLocation: () => preload.getDefaultVaultLocation!(),
+        chooseParentFolder: (defaultPath) => preload.chooseParentFolder!(defaultPath),
+        createVault: (request) => preload.createVault!(request),
+      } : undefined,
       reconnectVault: async () => false,
       checkVault: async () => {},
       describeVault: async (id) => ({ id, name: id.split(/[\\/]/).filter(Boolean).pop() ?? id, kind: "external" }),

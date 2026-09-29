@@ -1,5 +1,6 @@
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, session, shell, utilityProcess } from "electron";
 import * as path from "node:path";
+import { createVaultFolder } from "./create-vault";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -668,6 +669,27 @@ function registerIpc() {
     }
     return { path: dest, created: true };
   });
+
+  ipcMain.handle("get-default-vault-location", () => ({
+    // Same GEODE_DOCUMENTS_DIR override as explore-sample-vault (e2e only).
+    path: process.env.GEODE_DOCUMENTS_DIR || app.getPath("documents"),
+    home: app.getPath("home"),
+  }));
+
+  ipcMain.handle("choose-parent-folder", async (e, defaultPath: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const result = await dialog.showOpenDialog(win, {
+      title: "Choose vault location",
+      defaultPath: typeof defaultPath === "string" ? defaultPath : undefined,
+      // No createDirectory: the app creates the named vault folder itself.
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || !result.filePaths.length) return null;
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle("create-vault", async (_e, request: { parent?: unknown; name?: unknown } | null) =>
+    createVaultFolder(request?.parent, request?.name));
 
   ipcMain.handle("get-recent-vaults", () => {
     const cfg = loadConfig();
