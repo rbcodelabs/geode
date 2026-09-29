@@ -54,6 +54,23 @@ export interface VaultRegistryService {
   getRecentVaults(): Promise<string[]>;
   getLaunchVault(): Promise<string | null>;
   closeVault(): Promise<void>;
+  /**
+   * Copies the bundled starter/sample vault to a well-known location and
+   * returns its path, or `null` on hosts that don't support this (the
+   * feature is desktop-Electron-only by design, mirroring ADR-0026's
+   * precedent that bundled-theme behavior is desktop-only).
+   */
+  exploreSampleVault(): Promise<{ path: string; created: boolean } | null>;
+  /**
+   * Picker-level "Create new vault" support (desktop-Electron only; other
+   * hosts omit it, and the picker hides the button). `getDefaultVaultLocation`
+   * supplies the default parent folder and the home dir for `~` display.
+   */
+  createVaultSupport?: {
+    getDefaultLocation(): Promise<{ path: string; home: string }>;
+    chooseParentFolder(defaultPath?: string): Promise<string | null>;
+    createVault(request: { parent: string; name: string }): Promise<string>;
+  };
 }
 
 export type VaultAccessState = "unavailable" | "permission-revoked" | "missing";

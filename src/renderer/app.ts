@@ -100,6 +100,7 @@ import { measureOperation } from "./perf-instrumentation";
 import { applyWindowChromeState } from "./window-chrome";
 import { getHostServices } from "./host/registry";
 import type { HostServices } from "./host/contracts";
+import { vaultNameMessage, vaultNameProblem } from "../shared/vault-name";
 import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
@@ -2339,7 +2340,9 @@ export class App {
     rootEl.innerHTML = "";
     const picker = document.createElement("div");
     picker.className = "vault-picker";
-    picker.innerHTML = `<h1>Geode</h1><p>Your knowledge base, on local Markdown files.</p>`;
+    picker.innerHTML = `<div class="vault-picker-lockup">${this.brandChipHtml()}<h1>Geode</h1></div><p>Your knowledge base, on local Markdown files.</p>`;
+    const actions = document.createElement("div");
+    actions.className = "vault-picker-actions";
     if (this.host.runtime.runtime === "ios") {
       for (const action of mobileVaultActions(this.host.capabilities.externalVaultFolder)) {
         const button = document.createElement("button");
@@ -2358,11 +2361,19 @@ export class App {
             button.disabled = false;
           }
         });
-        picker.appendChild(button);
+        actions.appendChild(button);
       }
     } else {
+      const createSupport = this.host.runtime.runtime === "electron" ? this.host.vaultRegistry.createVaultSupport : undefined;
+      if (createSupport) {
+        const createBtn = document.createElement("button");
+        createBtn.className = "mod-cta vault-picker-create";
+        createBtn.textContent = "Create new vault";
+        createBtn.addEventListener("click", () => this.showCreateVaultModal(picker, rootEl, createSupport, createBtn));
+        actions.appendChild(createBtn);
+      }
       const openBtn = document.createElement("button");
-      openBtn.className = "mod-cta";
+      openBtn.className = createSupport ? "vault-picker-external" : "mod-cta vault-picker-create";
       openBtn.textContent = "Open folder as vault";
       openBtn.addEventListener("click", async () => {
         openBtn.disabled = true;
@@ -2375,8 +2386,31 @@ export class App {
           openBtn.disabled = false;
         }
       });
-      picker.appendChild(openBtn);
+      actions.appendChild(openBtn);
+      if (this.host.runtime.runtime === "electron") {
+        const exploreBtn = document.createElement("button");
+        exploreBtn.className = "vault-picker-external";
+        exploreBtn.textContent = "Try the sample vault";
+        exploreBtn.addEventListener("click", async () => {
+          exploreBtn.disabled = true;
+          try {
+            const result = await this.host.vaultRegistry.exploreSampleVault();
+            if (!result) return;
+            await this.openVault(result.path, rootEl);
+            if (result.created) {
+              const startHere = this.vault.getFileByPath("Start here.md");
+              if (startHere) await this.openFile(startHere, false);
+            }
+          } catch (error) {
+            this.showInlineVaultError(picker, error);
+          } finally {
+            exploreBtn.disabled = false;
+          }
+        });
+        actions.appendChild(exploreBtn);
+      }
     }
+    picker.appendChild(actions);
     if (recents.length) {
       const h = document.createElement("h3");
       h.textContent = "Recent vaults";
@@ -2384,16 +2418,149 @@ export class App {
       for (const path of recents) {
         const row = document.createElement("div");
         row.className = "vault-picker-recent";
-        row.textContent = path;
+        const dot = document.createElement("span");
+        dot.className = "vault-picker-dot";
+        dot.setAttribute("aria-hidden", "true");
+        const label = document.createElement("span");
+        label.textContent = path;
+        row.append(dot, label);
         void this.host.vaultRegistry.describeVault(path).then(
-          (descriptor) => { row.textContent = descriptor.name; },
-          () => { row.textContent = "Unavailable vault"; },
+          (descriptor) => { label.textContent = descriptor.name; },
+          () => { label.textContent = "Unavailable vault"; },
         );
         row.addEventListener("click", () => this.openVault(path, rootEl));
         picker.appendChild(row);
       }
     }
     rootEl.appendChild(picker);
+  }
+
+  private brandChipHtml(): string {
+    const id = `geode-gem-${Math.random().toString(36).slice(2, 8)}`;
+    return `<span class="vault-picker-chip" aria-hidden="true"><svg width="26" height="32" viewBox="0 0 412 515" xmlns="http://www.w3.org/2000/svg" focusable="false"><defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="412" y2="515"><stop offset="0" stop-color="#DBEA9D"/><stop offset="1" stop-color="#789348"/></linearGradient></defs><path d="M206,0 L412,154.5 L334.75,515 L77.25,515 L0,154.5 Z" fill="url(#${id})"/><path d="M206,0 L412,154.5 L334.75,515 L206,257.5 Z" fill="#294835" opacity=".24"/><path d="M206,0 L206,257.5 L77.25,515 L0,154.5 Z" fill="#294835" opacity=".08"/></svg></span>`;
+  }
+
+  private showCreateVaultModal(
+    picker: HTMLElement,
+    rootEl: HTMLElement,
+    support: NonNullable<HostServices["vaultRegistry"]["createVaultSupport"]>,
+    opener: HTMLElement,
+  ): void {
+    if (picker.querySelector(".vault-create-overlay")) return;
+    const overlay = document.createElement("div");
+    overlay.className = "vault-create-overlay";
+    const dialog = document.createElement("div");
+    dialog.className = "vault-create-modal";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "vault-create-title");
+    dialog.innerHTML = `
+      <div class="vault-create-accent"></div>
+      <h2 id="vault-create-title" class="vault-create-title">Create new vault</h2>
+      <div class="vault-create-field">
+        <label class="vault-create-label" for="vault-create-name">Vault name</label>
+        <input id="vault-create-name" class="vault-create-input" type="text" spellcheck="false" autocomplete="off" value="My vault">
+      </div>
+      <div class="vault-create-field">
+        <label class="vault-create-label" for="vault-create-location">Location</label>
+        <div class="vault-create-row">
+          <input id="vault-create-location" class="vault-create-input vault-create-path" type="text" readonly>
+          <button type="button" class="vault-create-browse">Browse\u2026</button>
+        </div>
+      </div>
+      <div class="vault-create-preview"></div>
+      <div class="vault-create-error" role="alert"></div>
+      <div class="vault-create-actions">
+        <button type="button" class="vault-create-cancel">Cancel</button>
+        <button type="button" class="mod-cta vault-picker-create vault-create-submit">Create</button>
+      </div>`;
+    overlay.appendChild(dialog);
+    picker.appendChild(overlay);
+
+    const nameInput = dialog.querySelector<HTMLInputElement>("#vault-create-name")!;
+    const locationInput = dialog.querySelector<HTMLInputElement>("#vault-create-location")!;
+    const browseBtn = dialog.querySelector<HTMLButtonElement>(".vault-create-browse")!;
+    const cancelBtn = dialog.querySelector<HTMLButtonElement>(".vault-create-cancel")!;
+    const submitBtn = dialog.querySelector<HTMLButtonElement>(".vault-create-submit")!;
+    const preview = dialog.querySelector<HTMLElement>(".vault-create-preview")!;
+    const errorEl = dialog.querySelector<HTMLElement>(".vault-create-error")!;
+    let parent = "";
+    let home = "";
+    let busy = false;
+    let serverError = "";
+    const shorten = (p: string) => (home && (p === home || p.startsWith(home + "/")) ? "~" + p.slice(home.length) : p);
+
+    const refresh = () => {
+      const problem = vaultNameProblem(nameInput.value);
+      const shownParent = shorten(parent);
+      preview.textContent = parent && !problem ? `Will create: ${shownParent.replace(/\/$/, "")}/${nameInput.value.trim()}` : "";
+      const message = problem ? vaultNameMessage(problem) : serverError;
+      errorEl.textContent = message;
+      errorEl.hidden = !message;
+      nameInput.setAttribute("aria-invalid", problem || serverError ? "true" : "false");
+      submitBtn.disabled = busy || !!problem || !parent;
+    };
+    const close = () => {
+      overlay.remove();
+      opener.focus();
+    };
+    const submit = async () => {
+      if (submitBtn.disabled) return;
+      busy = true;
+      serverError = "";
+      refresh();
+      try {
+        const created = await support.createVault({ parent, name: nameInput.value.trim() });
+        overlay.remove();
+        await this.openVault(created, rootEl);
+      } catch (error) {
+        busy = false;
+        serverError = (error instanceof Error ? error.message : "Unable to create the vault").replace(/^Error invoking remote method '[^']*': (Error: )?/, "");
+        refresh();
+        nameInput.focus();
+      }
+    };
+
+    nameInput.addEventListener("input", () => { serverError = ""; refresh(); });
+    browseBtn.addEventListener("click", async () => {
+      try {
+        const chosen = await support.chooseParentFolder(parent || undefined);
+        if (chosen) { parent = chosen; serverError = ""; locationInput.value = shorten(parent); locationInput.title = parent; refresh(); }
+      } catch (error) {
+        serverError = error instanceof Error ? error.message : "Unable to choose a folder";
+        refresh();
+      }
+    });
+    cancelBtn.addEventListener("click", close);
+    submitBtn.addEventListener("click", () => { void submit(); });
+    overlay.addEventListener("mousedown", (event) => { if (event.target === overlay) close(); });
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
+      if (event.key === "Enter" && event.target === nameInput) { event.preventDefault(); void submit(); return; }
+      if (event.key === "Tab") {
+        const focusables = [nameInput, browseBtn, cancelBtn, submitBtn].filter((el) => !el.disabled);
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey && (active === first || !dialog.contains(active))) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && (active === last || !dialog.contains(active))) { event.preventDefault(); first.focus(); }
+      }
+    });
+
+    refresh();
+    nameInput.focus();
+    nameInput.select();
+    void support.getDefaultLocation().then((location) => {
+      if (!overlay.isConnected) return;
+      parent = location.path;
+      home = location.home;
+      locationInput.value = shorten(parent);
+      locationInput.title = parent;
+      refresh();
+    }, (error) => {
+      serverError = error instanceof Error ? error.message : "Unable to find a default location";
+      refresh();
+    });
   }
 
   private async openVault(path: string, rootEl: HTMLElement) {

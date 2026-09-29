@@ -178,6 +178,7 @@ export function createBrowserHost(
     vaultRegistry: {
       chooseVault: async () => "managed://default",
       chooseExternalVault: async () => external?.id ?? null,
+      exploreSampleVault: async () => null,
       reconnectVault: async (id) => options.reconnectVault?.(id) ?? false,
       describeVault: async (id) => externalVaults.has(id)
         ? { id, name: externalVaults.get(id)!.vaultName, kind: "external" }
