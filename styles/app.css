@@ -6425,3 +6425,11 @@ body.is-mobile .page-preview {
 .comment-message { padding: 7px 0; border-top: 1px solid var(--background-modifier-border); }
 .comment-message-body { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .comment-thread button { margin: 3px 5px 3px 0; }
+
+/* Picker light/dark cross-fade (View Transitions API; see the OS-appearance
+   listener in app.ts). Slower than the default so the gradient swap reads as a fade. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 550ms;
+  animation-timing-function: ease-in-out;
+}

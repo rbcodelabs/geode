@@ -2300,10 +2300,23 @@ export class App {
       } else {
         // No vault yet, so no per-vault theme to apply: follow the OS appearance
         // (the picker used to always be dark: settings.theme defaults to "dark").
-        const dark = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
-        document.body.classList.toggle("theme-dark", dark);
-        document.body.classList.toggle("theme-light", !dark);
+        const scheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+        const setPickerTheme = () => {
+          const dark = scheme?.matches ?? true;
+          document.body.classList.toggle("theme-dark", dark);
+          document.body.classList.toggle("theme-light", !dark);
+        };
+        setPickerTheme();
         this.showVaultPicker(rootEl, []);
+        // Follow live OS appearance changes, cross-fading when supported. Stops
+        // applying once a vault replaces the picker (its own saved theme wins).
+        scheme?.addEventListener("change", () => {
+          if (!document.querySelector(".vault-picker")) return;
+          const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          const withTransition = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+          if (withTransition.startViewTransition && !reduceMotion) withTransition.startViewTransition(setPickerTheme);
+          else setPickerTheme();
+        });
       }
     });
   }
