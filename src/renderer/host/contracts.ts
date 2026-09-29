@@ -54,6 +54,13 @@ export interface VaultRegistryService {
   getRecentVaults(): Promise<string[]>;
   getLaunchVault(): Promise<string | null>;
   closeVault(): Promise<void>;
+  /**
+   * Copies the bundled starter/sample vault to a well-known location and
+   * returns its path, or `null` on hosts that don't support this (the
+   * feature is desktop-Electron-only by design, mirroring ADR-0026's
+   * precedent that bundled-theme behavior is desktop-only).
+   */
+  exploreSampleVault(): Promise<{ path: string; created: boolean } | null>;
 }
 
 export type VaultAccessState = "unavailable" | "permission-revoked" | "missing";

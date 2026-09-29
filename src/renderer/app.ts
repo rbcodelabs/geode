@@ -2376,6 +2376,28 @@ export class App {
         }
       });
       picker.appendChild(openBtn);
+      if (this.host.runtime.runtime === "electron") {
+        const exploreBtn = document.createElement("button");
+        exploreBtn.className = "vault-picker-external";
+        exploreBtn.textContent = "Try the sample vault";
+        exploreBtn.addEventListener("click", async () => {
+          exploreBtn.disabled = true;
+          try {
+            const result = await this.host.vaultRegistry.exploreSampleVault();
+            if (!result) return;
+            await this.openVault(result.path, rootEl);
+            if (result.created) {
+              const startHere = this.vault.getFileByPath("Start here.md");
+              if (startHere) await this.openFile(startHere, false);
+            }
+          } catch (error) {
+            this.showInlineVaultError(picker, error);
+          } finally {
+            exploreBtn.disabled = false;
+          }
+        });
+        picker.appendChild(exploreBtn);
+      }
     }
     if (recents.length) {
       const h = document.createElement("h3");

@@ -107,6 +107,7 @@ const api = {
   releasePowerSaveBlocker: (token: string): Promise<boolean> =>
     ipcRenderer.invoke("power-save-blocker-release", token),
   chooseVault: (): Promise<string | null> => ipcRenderer.invoke("choose-vault"),
+  exploreSampleVault: (): Promise<{ path: string; created: boolean }> => ipcRenderer.invoke("explore-sample-vault"),
   openVault: (
     path: string
   ): Promise<{ root: string; name: string; files: VaultFileEntry[] }> =>

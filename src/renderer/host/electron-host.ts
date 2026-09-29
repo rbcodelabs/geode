@@ -3,7 +3,7 @@ import { vaultRefreshFailure } from "../../shared/vault-refresh";
 import type { HostServices, VaultFileEntry } from "./contracts";
 
 export type ElectronPreloadApi = Pick<GeodeApi,
-  | "chooseVault" | "openVault" | "getRecentVaults" | "getLaunchVault" | "openVaultWindow"
+  | "chooseVault" | "exploreSampleVault" | "openVault" | "getRecentVaults" | "getLaunchVault" | "openVaultWindow"
   | "read" | "readBinary" | "write" | "mkdir" | "trash" | "rmdir" | "listDir" | "rename" | "exists" | "reveal" | "onVaultEvent"
   | "readConfig" | "writeConfig" | "readMetadataCache" | "writeMetadataCache"
   | "startMetadataIndexer" | "onMetadataIndexerMessage" | "openExternal" | "openLocalFile"
@@ -64,6 +64,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
     vaultRegistry: {
       chooseVault: () => preload.chooseVault(),
       chooseExternalVault: () => preload.chooseVault(),
+      exploreSampleVault: () => preload.exploreSampleVault(),
       reconnectVault: async () => false,
       checkVault: async () => {},
       describeVault: async (id) => ({ id, name: id.split(/[\\/]/).filter(Boolean).pop() ?? id, kind: "external" }),
