@@ -154,123 +154,79 @@ portfolio_policy:
 If a required limit or capacity signal is unknown, scheduled stewards may prepare
 validation work in `LATER` but must not infer permission to add work to `NEXT` or `NOW`.
 
-## Build Authorization Policy (opt-in)
+## Approved Build Policy (opt-in)
 
 ```yaml
-build_authorization_policy:
+approved_build_policy:
   enabled: true
-  version: build-authorization-v1
-  project_id: c57cbe59-7ec5-405e-befd-adf1c3a14596      # Geode Project "Geode"
-  workspace_id: 2014ad67-8d4f-4db9-8eb5-5f3958c3ebbb    # Compass workspace rbcodelabs/geode
-  repository: github.com/rbcodelabs/geode
-  default_branch: main
-  activated_at: 2026-09-15T12:15:06Z
   activation_authority:
     type: synchronous_user_instruction
-    date: 2026-09-15
-    thread_id: 99596049-28f5-4f96-bea6-c98e36f43861
-    instruction: "lets enable build_authorization_policy"
-    context: >
-      The first scheduled Geode Product Operations run reported Authorized delivery as
-      BLOCKED, with the named blocker "no build-authorization runtime set up". Rick
-      reviewed that checklist and explicitly instructed enabling the policy. He then
-      stated the priority it is being enabled to serve: "headless is a key priority, we
-      need this done, because i want this headless wiki with sync working and powering
-      Compass's document store". That priority statement is direction, not a build
-      package, and does not itself approve any scope.
-  serialized_executor: "geode-cron:f1c20f33-0caf-4ee1-85f4-30491bbfee16"  # "Geode Product Operations", daily 14:20
+    date: 2026-09-20
+    thread_id: 53f7e5e6-b062-4193-8003-78a5ee73fb6e
+    instruction: "fix 3"
+    context: >-
+      Authorizes migration of the reported build-authorization contract mismatch
+      to the installed Approved Build contract, including the existing operations
+      prompt. This repairs configuration; it approves no additional product scope.
+  workspace_id: 2014ad67-8d4f-4db9-8eb5-5f3958c3ebbb
+  repository: github.com/rbcodelabs/geode
+  decision_provider: compass_decisions
+  completion_boundary: tested_pr
+  excluded_actions: [merge, production_deploy, production_data_changes, external_messages, destructive_actions, additional_paid_resources]
 ```
 
-**Contract note (2026-09-17): the `receipt_store` key was removed, not lost.** The
-`build-authorization` contract this policy implements was simplified upstream
-(`agent-pm-playbook` PR #26, merged 2026-09-17): the SHA-256 package digest, the durable
-execution-receipt store, and the `workerId` / `leaseExpiresAt` lease fields no longer
-exist in either the skill or its evaluator. `receipt_store` therefore points at nothing
-the contract reads, and keeping it would misdescribe how execution is actually gated. The
-store's contents are **retained as a historical record** of the one execution performed
-under the previous contract, at the vault path
-`Products/Geode/Operations/build-receipts/` (alongside the package it executed, in
-`Products/Geode/Operations/build-packages/`). Nothing there is authoritative for any
-future build; see that folder's README for what it is and is not.
+The installed `build-authorization` skill is the execution contract. This explicitly
+authorized migration replaces the legacy `build_authorization_policy`, first enabled
+on 2026-09-15. It removes the obsolete evaluator, package digest, receipt-store and
+exclusive-executor prerequisites. Do not enable both policies.
 
-One human build decision covers investment, approach, capacity commitment, and execution
-through a tested PR, for the exact approved package only. It grants **no** merge, no
-production deployment, no production data change, and no external message. Existing
-decisions, Solution Plan approvals, and roadmap position are **not** grandfathered into
-this policy and never satisfy it on their own.
+Authority requires a current exact synchronous instruction or a verified immutable
+human build Decision and its approved scope/plan version. Verify author, outcome,
+repository/workspace, scope, exclusions, expiry, supersession and revocation.
+A generic concept approval, Solution Plan approval alone, roadmap horizon or lifecycle
+status never grants build authority. Compass Decisions remain tracking-only with
+`NO_ACTION`; their application receipts are bookkeeping, not proof of implementation.
 
-**Specifically not grandfathered:** decision `c2344f49-24dd-49b5-8a35-8404121d57a0`
-(Geode Headless, APPROVE 2026-09-11) predates activation, and its approved scope was a
-bounded Phase 0 feasibility spike with "no paid infrastructure provisioning". Phase 0 has
-since been delivered (PRs #190/#195/#196, released in v0.18.0). Continuing past Phase 0 --
-in particular synchronization and the Compass document-store integration, both of which
-were explicitly *deferred* in the approved proposal -- requires a **new** build package
-and a new decision. Do not read the September 11 approval as covering it.
+Existing exact build approvals retain their original scope, exclusions, expiry and
+any explicit admission or executor conditions. Retired package IDs remain correlation
+identifiers. Preserve historical packages and receipts under
+`Products/Geode/Operations/build-packages/` and
+`Products/Geode/Operations/build-receipts/`; never use them as current authority,
+create new legacy receipts, or require a retired evaluator.
 
-**What binds a package to its approved scope.** The plan is written as a versioned Compass
-doc, and the package records its `planDocId` plus the exact `planDocVersionId` that was
-approved. Because a doc version is immutable once created, drift is detected by re-reading
-the doc and comparing version IDs -- there is no package hash, canonicalization step or
-digest field. Editing the plan after approval creates a new version ID, which the
-evaluator treats as a changed package requiring a revised package and a new decision.
-Never edit an approved plan version in place.
+**Specifically not grandfathered:** decision
+`c2344f49-24dd-49b5-8a35-8404121d57a0` (2026-09-11) approved only bounded
+Headless Phase 0 with no paid infrastructure. Phase 0 shipped in v0.18.0
+(PRs #190/#195/#196). Sync and Compass document-store integration were explicitly
+deferred and require new exact human build approval; this migration grants neither.
 
-`roadmapItemId` is a **required** package field, so the roadmap item must already exist
-when the package is prepared. Preparation therefore includes creating (or identifying) the
-roadmap item up front; it is no longer created at execution time. The roadmap item itself
-is the durable record of admission.
+**Dispatch and ownership.** Geode Product Operations remains the one existing
+scheduled discovery backstop. It may dispatch at most one dedicated worker per run
+and then continue every independent checklist area. Do not create another resolver
+or decision-router schedule. Direct authorized threads may use the same worker
+procedure; the scheduler is not an exclusive executor or atomic lock.
 
-**Executor and serialization.** Delivery is dispatched only from the single scheduled
-`Geode Product Operations` run (the `serialized_executor` above) via its authorized
-delivery checklist row, which invokes `compass-resolver`. Do not create a separate
-resolver or decision-router cron for this workspace -- a second dispatcher applying the
-same package is exactly what the contract forbids; the contract still states this rule
-explicitly. Geode run history is run-state context, not an atomic lock.
+Before code, create or reuse one Compass delivery Task with authority/plan references,
+stable item ID, repository, intended branch, worker thread/run and timestamp. Inspect
+the existing owner/runtime, open and closed linked PRs, exact branches and unlinked
+PRs with overlapping behavior. Record IN_PROGRESS and re-read Tasks/PRs for collisions.
+Repeat before code and publishing. These are best-effort collision checks, not
+exactly-once guarantees. Never take over running or uncertain ownership. Resume the
+recorded idle owner when supported; reconcile missing owners before documented takeover.
+Checkpoint worktree, commits, tests and PR links on the same Task.
 
-The evaluator has **no** opinion on whether work is already claimed or mid-flight -- it
-answers only whether a current, verified human approval covers this exact scope and
-whether a delivery slot exists. Not-running-twice rests on that one scheduled dispatcher
-plus `compass-resolver`'s ordinary claim step, which opted-in packages share with every
-other delivery item and which gets no separate lease, worker ID or receipt object: first
-cross-check GitHub for an existing PR referencing the roadmap item's short UUID (this is
-what catches a prior run's in-flight or completed work), then, if linked, set the
-Opportunity `ACTIVE`. Both must succeed before any code is written.
+Roadmap titles describe work; never encode claims or blocked state in them.
+Opportunity ACTIVE and Solution IN_DELIVERY describe lifecycle, never ownership.
+Capacity controls roadmap admission; unknown capacity leaves horizons unchanged but
+does not independently block an exact approved build, unless its human approval
+explicitly conditions building on admission. Existing portfolio limits still govern
+every admission/displacement operation.
 
-**Claim markers: never encode claim or execution state in a roadmap item's title.**
-Settled by Rick on 2026-09-18, resolving the open question this file previously carried.
-Roadmap titles describe the work and nothing else: no claim, execution or blocked state is
-ever encoded in a title, and an emoji claim prefix must not be applied or reintroduced. The
-shared playbook contract is being brought into line by `agent-pm-playbook` PR #27, which
-removes the prescribed prefix from `compass-resolver` and `build-authorization`; this rule
-holds for this workspace regardless of that PR's status.
-
-Claiming therefore rests on three things that already exist and carry no title mutation:
-
-1. The GitHub PR cross-check above, which is the mechanism that actually detects a prior
-   run's in-flight or completed work.
-2. The linked Opportunity moving to `ACTIVE`.
-3. Reciprocal linking of package, decision, branch, commit and PR in the Compass Task and
-   PR body, so a later run recognizes this exact execution.
-
-A matching PR plus those links is what establishes ownership here. Lifecycle states
-(Opportunity `ACTIVE`, Solution `IN_DELIVERY`) communicate product status and never by
-themselves prove ownership.
-
-Geode's roadmap was audited on 2026-09-18 and contains **no** emoji-prefixed titles: the
-two historical items carrying residue (`32a66d8e`, `87c6f0de`, both `SHIPPED`) were
-renamed, and all 34 items were confirmed clean. If one ever reappears, treat it the way the
-shared contract does -- as deprecated residue that may still be *honored* as a skip signal
-so no genuinely in-flight work is re-picked, never as positive proof of an active claim,
-and never as something to newly write.
-
-**Relationship to the legacy gate.** The repo's `CLAUDE.md` workflow (isolated worktree,
-delegated engineering, verified tests, human PR review) still governs *how* work is done.
-This policy governs *whether* an unattended scheduled run may start it. Neither widens the
-other, and a failed package validation must never fall back to approval inference.
-
-Missing or `unresolved` fields block execution. Package-specific limits and scope stay in
-the decision provider (`compass_decisions`), which remains tracking-only: a decision
-records human judgment and never itself dispatches work.
+Use isolated worktrees, delegated engineering where supported, repository checks and
+reciprocal Task/authority/branch/PR links. An exact approved implementation plan
+satisfies design-before-code; routine tests and review fixes remain covered.
+Material scope changes require delta approval. Stop at a tested PR in IN_REVIEW.
+Merge, release, production changes and external messages need separate authority.
 
 ## Delivery Completion Policy
 
