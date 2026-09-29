@@ -2601,6 +2601,61 @@ body.is-macos:not(.is-native-fullscreen) .workspace.mod-left-collapsed .workspac
   display: block;
 }
 
+/*
+ * Math ($...$ and $$...$$). KaTeX's own stylesheet is injected at runtime
+ * (src/renderer/markdown/math-style.ts); these rules are only Geode's frame
+ * around it, shared by Reading view and Live Preview so both lay out alike.
+ */
+.math.math-block {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+
+.math.math-inline {
+  display: inline-block;
+}
+
+/* Live Preview inline widget: sits in the text line like any inline element. */
+.cm-math-inline {
+  display: inline-block;
+  vertical-align: baseline;
+  cursor: text;
+}
+
+/*
+ * Live Preview block widget. CodeMirror measures block widgets with
+ * getBoundingClientRect(), which excludes margins, so all spacing is padding
+ * inside the box (see PropertiesWidget) and KaTeX's own display margin is
+ * zeroed to keep it from collapsing out of it.
+ */
+.cm-math-block {
+  display: block;
+  padding: 0.5em 0;
+  cursor: text;
+}
+
+.cm-math-block .katex-display {
+  margin: 0;
+}
+
+/* Invalid LaTeX: keep the author's source visible, flagged as an error. */
+.math.math-error {
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  color: var(--text-error, #e05252);
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+.math.math-error.math-block {
+  padding: 0.25em 0.5em;
+  border-left: 3px solid var(--text-error, #e05252);
+  background: var(--background-secondary);
+  border-radius: 4px;
+}
+
 .cm-task-checkbox {
   vertical-align: middle;
   margin: 0 6px 2px 0;
