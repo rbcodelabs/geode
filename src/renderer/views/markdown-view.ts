@@ -26,6 +26,7 @@ import { PagePreviewController } from "../page-preview";
 import { commentDecorations, commentInteractions } from "../comments/editor-extension";
 import { CommentFormatError, narrowCommentRange, parseCommentThreads, validateCommentRange } from "../comments/model";
 import { geodeCommentMarkerSyntax } from "../comments/marker-syntax";
+import { imageAttachmentHandlers } from "../markdown/attachment-handlers";
 import { SyncConflictBannerSlot, type SyncConflictBannerInfo } from "../sync/conflict-banner";
 
 const mdHighlight = HighlightStyle.define([
@@ -301,6 +302,13 @@ export class MarkdownView implements View {
         EditorView.updateListener.of((update) => {
           if (update.docChanged) this.scheduleSave();
           if (update.docChanged || update.selectionSet) this.updateCommentButton();
+        }),
+        imageAttachmentHandlers({
+          vault: this.app.vault,
+          linktext: (file, sourcePath) => this.app.metadataCache.fileToLinktext(file, sourcePath),
+          sourcePath: () => this.file?.path ?? "",
+          canEdit: () => !this.vaultSwitching && !this.conflictReadOnly,
+          notify: (message) => this.app.notify(message),
         }),
         EditorView.domEventHandlers({
           mousedown(e, v) {

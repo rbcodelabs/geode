@@ -606,6 +606,24 @@ export class Vault extends Events {
     return file;
   }
 
+  /**
+   * Obsidian's `Vault.createBinary`: create a new binary file (an image
+   * attachment, say). Like `create`, it refuses to overwrite; missing parent
+   * folders are created on disk by the host and indexed here.
+   */
+  async createBinary(path: string, data: ArrayBuffer, options?: DataWriteOptions): Promise<TFile> {
+    if (this.files.has(path)) throw new Error(`File already exists: ${path}`);
+    const { mtime, ctime, size } = await this.withHostMutation((id) =>
+      this.host.vaultFiles.writeBinary(path, data, options, id)
+    );
+    this.indexEntry({ path, isFolder: false, mtime, ctime, size });
+    this.acknowledgedPathsSinceManifest.add(path);
+    this.rebuildChildren();
+    const file = this.files.get(path)!;
+    this.trigger("create", file);
+    return file;
+  }
+
   async createFolder(path: string): Promise<TFolder> {
     if (this.files.has(path) || this.folders.has(path)) {
       throw new Error(`Folder already exists: ${path}`);
