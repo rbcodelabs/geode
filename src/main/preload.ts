@@ -19,6 +19,7 @@ import type { PrivilegedFetchRequest, PrivilegedFetchResponse } from "../shared/
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
 import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
+import type { HeaderRuleAddResult, HeaderRuleSummary } from "./browser-header-rules";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
   const reply: ExternalRootReply<T> = await ipcRenderer.invoke(channel, ...args);
@@ -218,6 +219,19 @@ const api = {
   deleteSecret: (id: string): Promise<void> => ipcRenderer.invoke("secrets-delete", id),
   isSecretEncryptionAvailable: (): Promise<boolean> =>
     ipcRenderer.invoke("secrets-encryption-available"),
+  /**
+   * Secret-backed request-header rules for the agent browser (P1, see
+   * `browser-header-rules.ts`). A nested object rather than this file's usual
+   * flat methods, deliberately: the plugin (P2, a separate repo) needs to
+   * feature-detect the whole group at once via `window.geode?.browserHeaderRules`,
+   * the same single-property-probe precedent as `getFdPressure` above, just
+   * extended here to a sub-object instead of one method.
+   */
+  browserHeaderRules: {
+    list: (): Promise<HeaderRuleSummary[]> => ipcRenderer.invoke("browser-header-rules-list"),
+    add: (input: unknown): Promise<HeaderRuleAddResult> => ipcRenderer.invoke("browser-header-rules-add", input),
+    remove: (id: string): Promise<boolean> => ipcRenderer.invoke("browser-header-rules-remove", id),
+  },
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),
@@ -398,7 +412,7 @@ export type GeodeApi = Omit<
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules"
 > & {
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
@@ -437,6 +451,14 @@ export type GeodeApi = Omit<
   setSecret?: ElectronOnlyGeodeApi["setSecret"];
   deleteSecret?: ElectronOnlyGeodeApi["deleteSecret"];
   isSecretEncryptionAvailable?: ElectronOnlyGeodeApi["isSecretEncryptionAvailable"];
+  /**
+   * Secret-backed request-header rules for the agent browser (P1). Electron
+   * desktop-only, like the secret-storage bridge above — absent on the
+   * mobile/browser facade, which has no agent browser and no
+   * `HeaderRuleStore`/native-dialog approval surface to back it with. The
+   * plugin (P2) feature-detects this whole group via `window.geode?.browserHeaderRules`.
+   */
+  browserHeaderRules?: ElectronOnlyGeodeApi["browserHeaderRules"];
 };
 
 // The renderer runs with contextIsolation disabled (see main.ts's

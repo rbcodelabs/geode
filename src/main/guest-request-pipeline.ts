@@ -49,9 +49,13 @@ const GUEST_REQUEST_URL_FILTER: Electron.WebRequestFilter = { urls: ["http://*/*
  * `stages` in order over a header set shared by reference across all of them.
  *
  * Registers nothing when `stages` is empty — the same "nothing to do, don't
- * even attach" behavior the pre-pipeline `attachGuestClientHints` had, so a
- * session with no active header concerns (no client hints derivable, no
- * bound header rules) pays no per-request cost at all.
+ * even attach" behavior the pre-pipeline `attachGuestClientHints` had. As of
+ * P1 (`browser-header-rules.ts`'s rule and scrub stages), `main.ts` pushes
+ * those two stages onto every session's `stages` array unconditionally — each
+ * is a cheap no-op unless its session is bound to the agent browser — so in
+ * practice `stages` is never empty and this check no longer skips
+ * registration for any real session. It remains as the correct default for a
+ * caller that passes no stages at all (e.g. a unit test).
  */
 export function attachGuestRequestPipeline(target: Electron.Session, stages: readonly HeaderStage[]): void {
   if (stages.length === 0) return;
