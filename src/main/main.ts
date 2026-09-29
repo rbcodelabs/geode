@@ -100,11 +100,28 @@ import {
 } from "./supported-plugin-catalog";
 import { normalizeWebViewerEvent, WEBVIEWER_BRIDGE_CHANNEL, type WebViewerBridgeMessage } from "../shared/web-viewer-connectors";
 import {
-  attachGuestClientHints,
+  attachClientHintNegotiatorListener,
+  createClientHintNegotiator,
+  createClientHintStage,
   guestClientHints,
   guestHighEntropyHints,
   normalizeGuestUserAgent,
 } from "./guest-fingerprint";
+import { attachGuestRequestPipeline, type HeaderStage } from "./guest-request-pipeline";
+import {
+  applyRuleHeader,
+  createHeaderRule,
+  HeaderRuleStore,
+  HeaderRuleValidationError,
+  matchRule,
+  requiresStrongWarning,
+  scrubMatchedSecretValue,
+  type CreateHeaderRuleInput,
+  type HeaderRule,
+  type HeaderRuleAddResult,
+  type HeaderRuleSummary,
+  type MatchableRequest,
+} from "./browser-header-rules";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -154,16 +171,80 @@ app.userAgentFallback = normalizeGuestUserAgent(app.userAgentFallback, app.getNa
 // `platformVersion`, while the latter returns the Darwin kernel version
 // ("25.4.0"), which would contradict the JS surface.
 //
-// Both the fill and the negotiation share ONE `onBeforeSendHeaders` listener
-// inside attachGuestClientHints, because Electron silently replaces a session's
-// existing listener when a second is registered.
+// Both the fill and the negotiation are composed as HeaderStages onto ONE
+// `onBeforeSendHeaders` listener via `guest-request-pipeline.ts`'s
+// `attachGuestRequestPipeline`, because Electron silently replaces a
+// session's existing listener when a second is registered directly. That
+// module is the only legal place in Geode to call
+// `session.webRequest`'s `onBeforeSendHeaders` event — a future concern that needs
+// to touch outgoing request headers (e.g. secret-backed header rules for the
+// agent browser) becomes another HeaderStage appended to `stages` below, not
+// a second registration anywhere else.
 const guestHints = guestClientHints(process.versions.chrome, process.platform);
 const guestHighEntropy = guestHighEntropyHints({
   chromeVersion: process.versions.chrome,
   arch: process.arch,
   systemVersion: process.getSystemVersion(),
 });
-app.on("session-created", (created) => attachGuestClientHints(created, guestHints, guestHighEntropy));
+app.on("session-created", (created) => {
+  // A fresh negotiator per session: separate partitions are separate
+  // profiles, and real Chrome keeps client-hint preferences per profile.
+  const negotiator = createClientHintNegotiator(guestHighEntropy);
+  // `onHeadersReceived` is a different Electron event from
+  // `onBeforeSendHeaders`; it doesn't go through the header pipeline, but the
+  // same one-registration-per-session rule applies, so it is registered here,
+  // once, alongside the pipeline.
+  if (negotiator) attachClientHintNegotiatorListener(created, negotiator);
+
+  const stages: HeaderStage[] = [];
+  const clientHintStage = createClientHintStage(guestHints, negotiator);
+  if (clientHintStage) stages.push(clientHintStage);
+
+  // Header rules (design §5.2 step 5 / §5.4). Inert unless `created` is a
+  // bound agent-browser session — see `boundHeaderRuleSessions` below — so
+  // every other session pays only the one `has()` check per request.
+  stages.push((ctx) => {
+    if (!boundHeaderRuleSessions.has(created)) return false;
+    const req: MatchableRequest = {
+      url: ctx.details.url,
+      resourceType: ctx.details.resourceType,
+      initiatorUrl: ctx.details.frame?.url ?? null,
+    };
+    let changed = false;
+    for (const rule of getHeaderRuleStore().list()) {
+      if (!matchRule(rule, req)) continue;
+      const value = getSecretStore().get(rule.secretId);
+      if (value == null) continue; // A missing secret means the rule is inert.
+      applyRuleHeader(rule, value, ctx.headers);
+      changed = true;
+    }
+    return changed;
+  });
+
+  // Scrub stage (design §5.2 final paragraph / §5.3): defence in depth for a
+  // request leg that did NOT match a rule, in case a prior leg's rule-added
+  // header value got carried along (e.g. across a redirect) to a host the
+  // rule never intended it for. Runs after the rule stage above so it never
+  // scrubs the header the rule stage just legitimately set on this same leg.
+  stages.push((ctx) => {
+    if (!boundHeaderRuleSessions.has(created)) return false;
+    const req: MatchableRequest = {
+      url: ctx.details.url,
+      resourceType: ctx.details.resourceType,
+      initiatorUrl: ctx.details.frame?.url ?? null,
+    };
+    let changed = false;
+    for (const rule of getHeaderRuleStore().list()) {
+      if (matchRule(rule, req)) continue; // Matched legs are the rule stage's job, not the scrub's.
+      const value = getSecretStore().get(rule.secretId);
+      if (value == null) continue;
+      if (scrubMatchedSecretValue(rule.header, ctx.headers, [value])) changed = true;
+    }
+    return changed;
+  });
+
+  attachGuestRequestPipeline(created, stages);
+});
 
 protocol.registerSchemesAsPrivileged([{
   scheme: ARTIFACT_SCHEME,
@@ -415,6 +496,93 @@ let secretStore: SecretStore | undefined;
 function getSecretStore(): SecretStore {
   secretStore ??= new SecretStore(path.join(app.getPath("userData"), "secrets.json"), safeStorage);
   return secretStore;
+}
+
+/**
+ * On-disk secret-backed request-header rules for the agent browser (P1). See
+ * `browser-header-rules.ts`'s module doc for the full design. Lazily built
+ * for the same `app.getPath("userData")`-timing reason as `getSecretStore`.
+ */
+let headerRuleStore: HeaderRuleStore | undefined;
+function getHeaderRuleStore(): HeaderRuleStore {
+  headerRuleStore ??= new HeaderRuleStore(path.join(app.getPath("userData"), "browser-header-rules.json"));
+  return headerRuleStore;
+}
+
+/**
+ * Sessions the header-rule pipeline stages (registered per-session in
+ * `app.on("session-created")` above) are allowed to act on. The ONLY place
+ * anything is added to this set is `did-attach-webview`'s
+ * `isAgentBrowserGuest(guest)` check below — never a partition-string
+ * comparison anywhere else — so a rule can only ever apply to the shared
+ * `persist:agent-browser` session, matching design §5.4.
+ */
+const boundHeaderRuleSessions = new WeakSet<Electron.Session>();
+
+/**
+ * Validates the untyped IPC argument to `browser-header-rules-add` into a
+ * `CreateHeaderRuleInput`, throwing a plain `Error` (which `ipcMain.handle`
+ * turns into a rejected promise — the existing convention for malformed IPC
+ * input here, see `secrets-set` above) for anything structurally wrong.
+ * Deliberately stricter than `createHeaderRule`'s own validation: that
+ * function trusts its input's *shape* and only rejects unsafe *values*
+ * (bad host, forbidden header, etc.), so `createdBy` in particular must be
+ * checked here first — an arbitrary string would silently take the
+ * `!== "agent"` branch of `isHeaderAllowedForCreator` and be treated as a
+ * fully trusted user rule.
+ */
+function parseCreateHeaderRuleInput(input: unknown): CreateHeaderRuleInput {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Header rule input must be an object");
+  }
+  const candidate = input as Record<string, unknown>;
+  if (typeof candidate.host !== "string" || candidate.host.length === 0) {
+    throw new Error("Header rule input: host is required");
+  }
+  if (typeof candidate.header !== "string" || candidate.header.length === 0) {
+    throw new Error("Header rule input: header is required");
+  }
+  if (typeof candidate.secretId !== "string" || candidate.secretId.length === 0) {
+    throw new Error("Header rule input: secretId is required");
+  }
+  if (candidate.createdBy !== "user" && candidate.createdBy !== "agent") {
+    throw new Error('Header rule input: createdBy must be "user" or "agent"');
+  }
+  if (candidate.port !== undefined && typeof candidate.port !== "number") {
+    throw new Error("Header rule input: port must be a number");
+  }
+  if (candidate.valuePrefix !== undefined && typeof candidate.valuePrefix !== "string") {
+    throw new Error("Header rule input: valuePrefix must be a string");
+  }
+  if (candidate.requester !== undefined && typeof candidate.requester !== "string") {
+    throw new Error("Header rule input: requester must be a string");
+  }
+  if (candidate.allowLoopbackHttp !== undefined && typeof candidate.allowLoopbackHttp !== "boolean") {
+    throw new Error("Header rule input: allowLoopbackHttp must be a boolean");
+  }
+  if (candidate.ttlMs !== undefined && typeof candidate.ttlMs !== "number") {
+    throw new Error("Header rule input: ttlMs must be a number");
+  }
+  if (candidate.expiresAt !== undefined && typeof candidate.expiresAt !== "string") {
+    throw new Error("Header rule input: expiresAt must be a string");
+  }
+  return {
+    host: candidate.host,
+    port: candidate.port as number | undefined,
+    header: candidate.header,
+    secretId: candidate.secretId,
+    valuePrefix: candidate.valuePrefix as string | undefined,
+    createdBy: candidate.createdBy,
+    requester: candidate.requester as string | undefined,
+    allowLoopbackHttp: candidate.allowLoopbackHttp as boolean | undefined,
+    ttlMs: candidate.ttlMs as number | undefined,
+    expiresAt: candidate.expiresAt as string | undefined,
+  };
+}
+
+/** Minutes from `now` until `iso`, floored at 0 so an already-past instant never prints negative. */
+function minutesUntil(iso: string, now: Date): number {
+  return Math.max(0, Math.round((new Date(iso).getTime() - now.getTime()) / 60_000));
 }
 
 /** The open vault root for a window, or throw if there isn't one. */
@@ -1267,6 +1435,89 @@ function registerIpc() {
 
   ipcMain.handle("secrets-encryption-available", () => getSecretStore().isEncryptionAvailable());
 
+  // Secret-backed request-header rules for the agent browser (P1, see
+  // browser-header-rules.ts). Never returns a secret value — only whether
+  // one is currently present for a rule's `secretId`.
+  ipcMain.handle("browser-header-rules-list", (): HeaderRuleSummary[] =>
+    getHeaderRuleStore().list().map((rule) => ({
+      id: rule.id,
+      host: rule.host,
+      header: rule.header,
+      secretId: rule.secretId,
+      secretPresent: getSecretStore().get(rule.secretId) != null,
+      createdBy: rule.createdBy,
+      expiresAt: rule.expiresAt,
+    })));
+
+  ipcMain.handle("browser-header-rules-add", async (e, input: unknown): Promise<HeaderRuleAddResult> => {
+    const parsed = parseCreateHeaderRuleInput(input);
+    const store = getHeaderRuleStore();
+    const now = new Date();
+
+    let candidate: HeaderRule;
+    try {
+      candidate = createHeaderRule(parsed, now);
+    } catch (error) {
+      if (error instanceof HeaderRuleValidationError) {
+        return { success: false, status: "invalid", message: error.message };
+      }
+      throw error;
+    }
+
+    // Identical-unexpired-rule refresh, no re-prompt (design §5.6). `list()`
+    // already drops expired rules on load, so anything it returns here is by
+    // definition unexpired. Compared on the same fields `createHeaderRule`
+    // itself normalizes (lowercased host/header, port defaulted to 443).
+    const normalizedPort = parsed.port ?? 443;
+    const existing = store.list().find((rule) =>
+      rule.host === candidate.host &&
+      (rule.port ?? 443) === normalizedPort &&
+      rule.header === candidate.header &&
+      rule.secretId === candidate.secretId &&
+      rule.valuePrefix === candidate.valuePrefix &&
+      !!rule.allowLoopbackHttp === !!candidate.allowLoopbackHttp);
+
+    if (existing) {
+      store.remove(existing.id, now);
+      const refreshed: HeaderRule = { ...existing, expiresAt: candidate.expiresAt, approvedAt: candidate.approvedAt };
+      store.add(refreshed, now);
+      await store.flush();
+      return { success: true, ruleId: refreshed.id, host: refreshed.host, header: refreshed.header, expiresAt: refreshed.expiresAt };
+    }
+
+    // Always shown before persisting — no trusted-caller bypass, ever (design
+    // §5.6), mirroring the `confirmDetach`/`confirmManagement` native-dialog
+    // style at `externalRootSession` above.
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const expiryLabel = candidate.expiresAt
+      ? `agent browser only, expires in ${minutesUntil(candidate.expiresAt, now)} min`
+      : "permanent";
+    const requesterLine = candidate.requester ? ` Requested by thread '${candidate.requester}'.` : "";
+    const dialogOptions: Electron.MessageBoxOptions = {
+      type: "question",
+      title: "Send secret as a request header?",
+      message: `Send secret "${candidate.secretId}" as header "${candidate.header}" to ${candidate.host} (${expiryLabel}).${requesterLine}`,
+      buttons: ["Cancel", "Send to this host"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    };
+    if (requiresStrongWarning(candidate.header)) {
+      dialogOptions.detail =
+        `Warning: the "${candidate.header}" header can carry a full login session or credential to this host, not just a bypass token.`;
+    }
+    const result = await dialog.showMessageBox(win, dialogOptions);
+    if (result.response !== 1) return { success: false, status: "declined" };
+
+    store.add(candidate, now);
+    await store.flush();
+    return { success: true, ruleId: candidate.id, host: candidate.host, header: candidate.header, expiresAt: candidate.expiresAt };
+  });
+
+  // No dialog: removal only reduces egress (design §5.6).
+  ipcMain.handle("browser-header-rules-remove", (_e, id: unknown) =>
+    typeof id === "string" ? getHeaderRuleStore().remove(id) : false);
+
   // Plugin discovery: list subfolders of <vault>/.geode/plugins/ that look
   // like a plugin (contain a manifest.json). Reading/writing manifest.json,
   // main.js, and data.json themselves goes through the generic vault-read/
@@ -1953,6 +2204,11 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     trackWebViewerBridgeGuest(win, guest);
     trackWebViewerPopupGuest(win, guest);
     trackAgentBrowserPopupGuest(win, guest);
+    // Binds this guest's session so the header-rule pipeline stages (see
+    // `boundHeaderRuleSessions` above) stop being no-ops for it. `WeakSet.add`
+    // is already idempotent, so re-attachment (guest recycling, a new thread's
+    // guest on the same shared partition) is safe to call unconditionally.
+    if (isAgentBrowserGuest(guest)) boundHeaderRuleSessions.add(guest.session);
     guest.setWindowOpenHandler(({ url, disposition }) => {
       let protocol = "";
       try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }

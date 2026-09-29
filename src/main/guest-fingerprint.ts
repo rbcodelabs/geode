@@ -57,6 +57,8 @@
  *    deliberate limits.
  */
 
+import type { HeaderStage } from "./guest-request-pipeline";
+
 /**
  * Tokens that name the embedder rather than the engine. Chromium's own tokens
  * (`Chrome/`, `AppleWebKit/`, `Safari/`) are deliberately left in place: they
@@ -244,8 +246,8 @@ export function addMissingClientHints(
  * title-cased.
  *
  * `Sec-CH-UA`, `-Mobile` and `-Platform` are absent by design: they are
- * low-entropy, sent on every request by `attachGuestClientHints`, and must not
- * be made conditional on negotiation.
+ * low-entropy, sent on every request by `createClientHintStage`'s
+ * unconditional fill, and must not be made conditional on negotiation.
  */
 const HIGH_ENTROPY_HEADERS = [
   "Sec-CH-UA-Arch",
@@ -651,70 +653,77 @@ function initiatorUrl(details: { frame?: Electron.WebFrameMain | null }): string
 }
 
 /**
- * Register the client-hint handling on one session: the unconditional
- * low-entropy fill from PR #248, plus per-origin high-entropy negotiation.
+ * Build a fresh per-origin negotiator for one session's high-entropy hints, or
+ * `null` when there is nothing derivable to negotiate.
  *
- * Called from `app.on("session-created")` in src/main/main.ts so it reaches
- * every partition, including ones created later by a plugin — the Agent
- * Browser's `persist:agent-browser` does not exist at startup.
- * `session.fromPartition(p).setUserAgent(...)` is *not* used as the UA lever
- * here: it was measured to silently do nothing. The UA is handled process-wide
- * by `app.userAgentFallback`.
- *
- * ## One listener per event, deliberately
- *
- * Electron allows only ONE `onBeforeSendHeaders` listener per session and one
- * `onHeadersReceived`, and registering a second SILENTLY REPLACES the first.
- * Negotiation therefore extends the existing `onBeforeSendHeaders` callback
- * rather than adding another — a second registration here would disable the
- * low-entropy hints this is built on, with no error to show for it. The same
- * applies to the single `onHeadersReceived` that reads `Accept-CH`.
- *
- * Nothing else in Geode registers either event (the only other webRequest use is
- * artifact-runtime's `onBeforeRequest`, a different event), but a plugin that
- * did would replace these.
+ * A new instance per session, not a shared one: separate partitions are
+ * separate profiles, and real Chrome keeps client-hint preferences per profile.
  */
-export function attachGuestClientHints(
-  target: Electron.Session,
-  hints: GuestClientHints | null,
-  highEntropy?: GuestClientHints,
-): void {
+export function createClientHintNegotiator(highEntropy: GuestClientHints | undefined): ClientHintNegotiator | null {
   const negotiable = highEntropy && Object.keys(highEntropy).length > 0 ? highEntropy : null;
-  if (!hints && !negotiable) return;
+  return negotiable ? new ClientHintNegotiator(negotiable) : null;
+}
 
-  // Per session, not shared: separate partitions are separate profiles.
-  const negotiator = negotiable ? new ClientHintNegotiator(negotiable) : null;
+/**
+ * Register the session's `onHeadersReceived` listener that lets `negotiator`
+ * learn each origin's `Accept-CH` / `Permissions-Policy`.
+ *
+ * This is a *different* Electron event from `onBeforeSendHeaders` (the one
+ * `guest-request-pipeline.ts` composes), so it does not need to go through
+ * the pipeline — but the same "only one registration per session" rule
+ * applies to it too, so it must only ever be called once per session, from
+ * `main.ts`'s single `session-created` handler.
+ */
+export function attachClientHintNegotiatorListener(target: Electron.Session, negotiator: ClientHintNegotiator): void {
+  target.webRequest.onHeadersReceived({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
+    negotiator.learnFromResponse(details.url, details.resourceType, details.responseHeaders);
+    // Omitting responseHeaders leaves the response exactly as it arrived.
+    callback({});
+  });
+}
 
-  if (negotiator) {
-    target.webRequest.onHeadersReceived({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
-      negotiator.learnFromResponse(details.url, details.resourceType, details.responseHeaders);
-      // Omitting responseHeaders leaves the response exactly as it arrived.
-      callback({});
-    });
-  }
+/**
+ * The client-hint contribution to outgoing request headers, as a
+ * `HeaderStage` for `guest-request-pipeline.ts`'s `attachGuestRequestPipeline`:
+ * the unconditional low-entropy fill from PR #248, plus per-origin
+ * high-entropy negotiation via `negotiator` (see `createClientHintNegotiator`
+ * / `attachClientHintNegotiatorListener` above).
+ *
+ * Returns `null` when there is nothing to contribute (no low-entropy hints
+ * derivable and no negotiator), so a caller with nothing to do can skip
+ * appending a stage at all — the same "don't even attach" behavior the
+ * pre-pipeline code had.
+ *
+ * `session.fromPartition(p).setUserAgent(...)` is *not* used as the UA lever
+ * anywhere in this file: it was measured to silently do nothing. The UA is
+ * handled process-wide by `app.userAgentFallback` in `main.ts`.
+ */
+export function createClientHintStage(
+  hints: GuestClientHints | null,
+  negotiator: ClientHintNegotiator | null,
+): HeaderStage | null {
+  if (!hints && !negotiator) return null;
 
-  target.webRequest.onBeforeSendHeaders({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
-    let requestHeaders = details.requestHeaders;
+  return ({ details, headers }) => {
     let changed = false;
 
     if (hints) {
-      const merged = addMissingClientHints(requestHeaders, hints);
+      const merged = addMissingClientHints(headers, hints);
       if (merged) {
-        requestHeaders = merged;
+        Object.assign(headers, merged);
         changed = true;
       }
     }
 
     if (negotiator) {
       const negotiated = negotiator.hintsForRequest(details.url, details.resourceType, initiatorUrl(details));
-      const merged = addMissingClientHints(requestHeaders, negotiated);
+      const merged = addMissingClientHints(headers, negotiated);
       if (merged) {
-        requestHeaders = merged;
+        Object.assign(headers, merged);
         changed = true;
       }
     }
 
-    // Omitting requestHeaders leaves the original headers in place.
-    callback(changed ? { requestHeaders } : {});
-  });
+    return changed;
+  };
 }

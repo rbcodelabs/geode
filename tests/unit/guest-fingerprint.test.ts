@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   addMissingClientHints,
+  attachClientHintNegotiatorListener,
   chromiumMajor,
   classifyHintRequest,
   ClientHintNegotiator,
   clientHintsDisabledByPolicy,
+  createClientHintNegotiator,
+  createClientHintStage,
   guestClientHints,
   guestHighEntropyHints,
   normalizeGuestUserAgent,
@@ -430,7 +433,7 @@ describe("clientHintsDisabledByPolicy", () => {
   });
 
   it("never reports a low-entropy hint as disabled", () => {
-    // Those three are sent unconditionally by design (see attachGuestClientHints),
+    // Those three are sent unconditionally by design (see createClientHintStage),
     // so surfacing them here could only mislead a future caller into stripping
     // the headers PR #248 exists to add.
     expect(clientHintsDisabledByPolicy("ch-ua=(), ch-ua-mobile=(), ch-ua-platform=()")).toEqual([]);
@@ -669,5 +672,124 @@ describe("ClientHintNegotiator", () => {
     const negotiator = new ClientHintNegotiator({});
     negotiator.learnFromResponse("https://a.example/p", "mainFrame", documentResponse(UNITED_ACCEPT_CH));
     expect(negotiator.hintsForRequest("https://a.example/p", "mainFrame", null)).toEqual({});
+  });
+});
+
+describe("createClientHintNegotiator", () => {
+  it("builds a negotiator when at least one high-entropy hint is derivable", () => {
+    const negotiator = createClientHintNegotiator(guestHighEntropyHints(THIS_MACHINE));
+    expect(negotiator).not.toBeNull();
+  });
+
+  it("returns null when there is nothing to negotiate", () => {
+    expect(createClientHintNegotiator({})).toBeNull();
+    expect(createClientHintNegotiator(undefined)).toBeNull();
+  });
+});
+
+describe("attachClientHintNegotiatorListener", () => {
+  it("registers exactly one onHeadersReceived listener, which feeds the negotiator and leaves the response untouched", () => {
+    const onHeadersReceived = vi.fn();
+    const session = { webRequest: { onHeadersReceived } } as unknown as Electron.Session;
+    const negotiator = new ClientHintNegotiator(guestHighEntropyHints(THIS_MACHINE));
+    const learnSpy = vi.spyOn(negotiator, "learnFromResponse");
+
+    attachClientHintNegotiatorListener(session, negotiator);
+    expect(onHeadersReceived).toHaveBeenCalledTimes(1);
+    expect(onHeadersReceived.mock.calls[0][0]).toEqual({ urls: ["http://*/*", "https://*/*"] });
+
+    const listener = onHeadersReceived.mock.calls[0][1];
+    const callback = vi.fn();
+    const responseHeaders = { "accept-ch": ["Sec-CH-UA-Arch"] };
+    listener({ url: "https://a.example/p", resourceType: "mainFrame", responseHeaders }, callback);
+
+    expect(learnSpy).toHaveBeenCalledWith("https://a.example/p", "mainFrame", responseHeaders);
+    // Omitting responseHeaders in the callback leaves the response exactly as it arrived.
+    expect(callback).toHaveBeenCalledWith({});
+  });
+});
+
+describe("createClientHintStage", () => {
+  const hints = guestClientHints("148.0.7778.254", "darwin")!;
+
+  it("returns null when there is nothing to contribute", () => {
+    expect(createClientHintStage(null, null)).toBeNull();
+  });
+
+  it("adds the low-entropy hints and reports a change when hints are missing", () => {
+    const stage = createClientHintStage(hints, null)!;
+    const headers: Record<string, string> = { "user-agent": "ua" };
+    const details = { url: "https://a.example/", resourceType: "mainFrame" } as Electron.OnBeforeSendHeadersListenerDetails;
+
+    const changed = stage({ details, headers });
+
+    expect(changed).toBe(true);
+    expect(headers["Sec-CH-UA"]).toBe(hints["Sec-CH-UA"]);
+    expect(headers["Sec-CH-UA-Mobile"]).toBe("?0");
+    expect(headers["user-agent"]).toBe("ua");
+  });
+
+  it("reports no change and leaves headers alone when every hint is already present", () => {
+    const stage = createClientHintStage(hints, null)!;
+    const headers: Record<string, string> = { ...hints };
+    const details = { url: "https://a.example/", resourceType: "mainFrame" } as Electron.OnBeforeSendHeadersListenerDetails;
+
+    const changed = stage({ details, headers });
+
+    expect(changed).toBe(false);
+    expect(headers).toEqual(hints);
+  });
+
+  it("never overwrites a hint a page (or earlier stage) already set", () => {
+    const stage = createClientHintStage(hints, null)!;
+    const headers: Record<string, string> = { "sec-ch-ua-mobile": "?1" };
+    const details = { url: "https://a.example/", resourceType: "mainFrame" } as Electron.OnBeforeSendHeadersListenerDetails;
+
+    stage({ details, headers });
+
+    expect(headers["sec-ch-ua-mobile"]).toBe("?1");
+  });
+
+  it("also adds negotiated high-entropy hints for an origin that asked", () => {
+    const negotiator = new ClientHintNegotiator(guestHighEntropyHints(THIS_MACHINE));
+    negotiator.learnFromResponse("https://a.example/p", "mainFrame", {
+      "accept-ch": ["Sec-CH-UA-Arch"],
+    });
+    const stage = createClientHintStage(hints, negotiator)!;
+    const headers: Record<string, string> = {};
+    const details = { url: "https://a.example/p", resourceType: "mainFrame" } as Electron.OnBeforeSendHeadersListenerDetails;
+
+    const changed = stage({ details, headers });
+
+    expect(changed).toBe(true);
+    expect(headers["Sec-CH-UA-Arch"]).toBe('"arm"');
+    // Low-entropy hints are still present alongside the negotiated one.
+    expect(headers["Sec-CH-UA"]).toBe(hints["Sec-CH-UA"]);
+  });
+
+  it("sends no negotiated hints to an origin that never asked", () => {
+    const negotiator = new ClientHintNegotiator(guestHighEntropyHints(THIS_MACHINE));
+    const stage = createClientHintStage(hints, negotiator)!;
+    const headers: Record<string, string> = {};
+    const details = { url: "https://b.example/p", resourceType: "mainFrame" } as Electron.OnBeforeSendHeadersListenerDetails;
+
+    stage({ details, headers });
+
+    for (const name of ["Sec-CH-UA-Arch", "Sec-CH-UA-Bitness", "Sec-CH-UA-Model"]) {
+      expect(headers[name]).toBeUndefined();
+    }
+  });
+
+  it("can report a change from negotiation alone, with no low-entropy hints supplied", () => {
+    const negotiator = new ClientHintNegotiator(guestHighEntropyHints(THIS_MACHINE));
+    negotiator.learnFromResponse("https://a.example/p", "mainFrame", {
+      "accept-ch": ["Sec-CH-UA-Arch"],
+    });
+    const stage = createClientHintStage(null, negotiator)!;
+    const headers: Record<string, string> = {};
+    const details = { url: "https://a.example/p", resourceType: "mainFrame" } as Electron.OnBeforeSendHeadersListenerDetails;
+
+    expect(stage({ details, headers })).toBe(true);
+    expect(headers["Sec-CH-UA-Arch"]).toBe('"arm"');
   });
 });
