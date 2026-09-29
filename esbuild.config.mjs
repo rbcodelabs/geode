@@ -1,5 +1,8 @@
 import esbuild from "esbuild";
 import { copyFile, mkdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
 
 const watch = process.argv.includes("--watch");
 
@@ -9,6 +12,36 @@ const common = {
   logLevel: "info",
   target: "es2022",
 };
+
+/**
+ * KaTeX's stylesheet with its fonts inlined, injected at runtime by
+ * src/renderer/markdown/math-style.ts the first time math renders.
+ *
+ * Only the `woff2` faces are kept, as `data:` URIs: every Chromium/WebKit
+ * engine Geode runs on reads woff2, the renderer CSP allows `font-src data:`,
+ * and a data URI needs no asset tree that both the desktop app and the iOS
+ * bundle (which resolve resources from different base directories) would have
+ * to agree on. The `woff`/`ttf` fallbacks would triple the payload for no
+ * reader. Throws if any font reference survives, so a KaTeX upgrade that
+ * changes the stylesheet's shape fails the build rather than silently
+ * shipping math with missing glyphs.
+ */
+function buildKatexCss() {
+  const katexDist = path.dirname(createRequire(import.meta.url).resolve("katex/package.json")) + "/dist";
+  const css = readFileSync(katexDist + "/katex.min.css", "utf8")
+    .replace(/,url\(fonts\/[^)]+\.woff\) format\("woff"\)/g, "")
+    .replace(/,url\(fonts\/[^)]+\.ttf\) format\("truetype"\)/g, "")
+    .replace(/url\(fonts\/([^)]+\.woff2)\)/g, (_m, file) => {
+      const font = readFileSync(katexDist + "/fonts/" + file);
+      return `url(data:font/woff2;base64,${font.toString("base64")})`;
+    });
+  if (/url\(fonts\//.test(css)) {
+    throw new Error("katex.min.css still references an unbundled font file");
+  }
+  return css;
+}
+
+const katexCssDefine = { __GEODE_KATEX_CSS__: JSON.stringify(buildKatexCss()) };
 
 const mobileBoundaryPlugin = {
   name: "mobile-platform-boundary",
@@ -89,6 +122,7 @@ const builds = [
     outfile: "dist/renderer.js",
     platform: "browser",
     format: "iife",
+    define: katexCssDefine,
   },
   {
     ...common,
@@ -96,6 +130,7 @@ const builds = [
     outfile: "dist/mobile/mobile-renderer.js",
     platform: "browser",
     format: "iife",
+    define: katexCssDefine,
     metafile: true,
     plugins: [mobileBoundaryPlugin],
   },
