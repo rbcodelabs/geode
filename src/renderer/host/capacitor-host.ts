@@ -93,6 +93,7 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     vaultRegistry: {
       chooseVault: async () => "managed://default",
       chooseExternalVault: async () => (await plugin.chooseExternalVault()).id,
+      exploreSampleVault: async () => null,
       reconnectVault: async (id) => (await plugin.reconnectVault({ id })).reconnected,
       describeVault: (id) => plugin.describeVault({ id }),
       checkVault: async (id) => {

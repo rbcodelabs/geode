@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { installCommunity, resolveCommunity } from "./community";
 import { bootstrapFreshVault } from "./default-vault-bootstrap";
+import { copyStarterVault } from "./starter-vault";
 import { importFromObsidianVault } from "./obsidian-import";
 import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
@@ -643,6 +644,29 @@ function registerIpc() {
     saveConfig(cfg);
     win.setTitle(`${path.basename(root)} — Geode`);
     return { root, name: path.basename(root), files };
+  });
+
+  ipcMain.handle("explore-sample-vault", async () => {
+    // `app.getPath("documents")` follows the real OS Documents folder, unlike
+    // `getPath("userData")` which `--user-data-dir` already redirects for
+    // e2e — so this needs its own override, narrowly scoped to this one
+    // handler, to keep e2e runs from writing into a developer's real
+    // Documents folder. Never set in production.
+    const documentsDir = process.env.GEODE_DOCUMENTS_DIR || app.getPath("documents");
+    const dest = path.join(documentsDir, "Geode Starter Vault");
+    const st = await fsp.stat(dest).catch(() => null);
+    if (st) {
+      if (!st.isDirectory()) throw new Error(`"${dest}" already exists and is not a folder`);
+      return { path: dest, created: false };
+    }
+    await fsp.mkdir(dest, { recursive: true });
+    try {
+      await copyStarterVault(dest);
+    } catch (error) {
+      await fsp.rm(dest, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+    return { path: dest, created: true };
   });
 
   ipcMain.handle("get-recent-vaults", () => {
