@@ -4556,6 +4556,18 @@ body.is-mobile .page-preview {
     radial-gradient(circle at 88% 92%, rgba(120, 147, 72, 0.16), transparent 50%);
 }
 
+/* Light picker: Ivory light palette (see resources/builtin-themes/Ivory). */
+.theme-light .vault-picker {
+  --background-primary: #ffffff;
+  --background-primary-alt: #f7f7f2;
+  --background-secondary: #f7f7f2;
+  --text-normal: #232921;
+  --text-muted: #677360;
+  --text-faint: #93a184;
+  --text-accent: #365a3f;
+  background-color: #fbfbf7;
+}
+
 /* The picker shows before any vault (and its cssTheme, e.g. Ivory) loads, so in
    dark mode it carries Ivory's green dark palette itself instead of the base gray. */
 .theme-dark .vault-picker {

@@ -2298,6 +2298,11 @@ export class App {
       if (launchTarget || recents.length) {
         await this.openVault(launchTarget ?? recents[0], rootEl);
       } else {
+        // No vault yet, so no per-vault theme to apply: follow the OS appearance
+        // (the picker used to always be dark: settings.theme defaults to "dark").
+        const dark = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
+        document.body.classList.toggle("theme-dark", dark);
+        document.body.classList.toggle("theme-light", !dark);
         this.showVaultPicker(rootEl, []);
       }
     });
