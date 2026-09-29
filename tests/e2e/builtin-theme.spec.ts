@@ -15,7 +15,7 @@ test("an existing vault discovers, applies, and restores the built-in Ivory them
     JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }),
   );
 
-  let app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  let app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot, colorScheme: "dark" });
   try {
     let window = await app.firstWindow();
     await expect(window.locator(".workspace")).toBeVisible();
@@ -40,7 +40,7 @@ test("an existing vault discovers, applies, and restores the built-in Ivory them
     await window.waitForTimeout(300);
     await app.close();
 
-    app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+    app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot, colorScheme: "dark" });
     window = await app.firstWindow();
     await expect(window.locator(".workspace")).toBeVisible();
     await expect(window.locator('style#geode-active-theme[data-theme="Ivory"]')).toHaveCount(1);

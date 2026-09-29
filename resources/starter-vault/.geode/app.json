@@ -1,5 +1,5 @@
 {
-  "theme": "light",
+  "theme": "auto",
   "readableLineLength": true,
   "baseFontSize": 16,
   "foldHeading": false,

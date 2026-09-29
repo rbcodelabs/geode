@@ -38,7 +38,7 @@ test("discovers, applies, persists, and clears a community theme", async () => {
     JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
   );
 
-  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot, colorScheme: "dark" });
   try {
     let window = await app.firstWindow();
     await expect(window.locator(".workspace")).toBeVisible();
@@ -95,7 +95,7 @@ test("discovers, applies, persists, and clears a community theme", async () => {
     await window.waitForTimeout(300); // let settings save flush
     await app.close();
 
-    const app2 = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+    const app2 = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot, colorScheme: "dark" });
     const win2 = await app2.firstWindow();
     await expect(win2.locator(".workspace")).toBeVisible();
     await expect(win2.locator("style#geode-active-theme")).toHaveCount(1);

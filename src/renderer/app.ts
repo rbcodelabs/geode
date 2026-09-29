@@ -110,6 +110,7 @@ import { describeSyncProgress } from "./sync/progress";
 import type { SyncPreview, SyncStatusProgress } from "./sync/types";
 import { stripCommentMetadata } from "./comments/model";
 import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
+import { applyThemeWithFade, normalizeThemeSetting, osPrefersDark, resolveTheme, watchOsAppearance, type ThemeSetting } from "./color-scheme";
 
 /**
  * How a clicked local-file link was resolved. "rejected" means nothing was
@@ -119,7 +120,8 @@ export type LocalFileLinkOutcome = "vault" | "external-resource" | "external" | 
 
 /** Web Viewer settings (Settings → Web Viewer). Matches Obsidian's Web Viewer core plugin surface, plus Geode's Chrome cookie import. */
 interface AppSettings {
-  theme: "dark" | "light";
+  /** Base color scheme; "auto" follows the OS (Obsidian's "system"). */
+  theme: ThemeSetting;
   readableLineLength: boolean;
   baseFontSize: number;
   foldHeading: boolean;
@@ -818,10 +820,23 @@ class SettingsModal extends Modal {
   private renderAppearanceTab(container: HTMLElement): void {
     const s = this.geodeApp.settings;
     container.innerHTML = `<h2>Appearance</h2>`;
-    this.addToggle(container, "Dark mode", s.theme === "dark", (v) => {
-      s.theme = v ? "dark" : "light";
+    const { control: schemeControl } = this.addRow(container, "Base color scheme");
+    const schemeSelect = document.createElement("select");
+    schemeSelect.className = "dropdown";
+    schemeSelect.setAttribute("aria-label", "Base color scheme");
+    for (const [value, text] of [["dark", "Dark"], ["light", "Light"], ["auto", "Auto (follow system)"]]) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = text;
+      schemeSelect.appendChild(opt);
+    }
+    schemeSelect.value = s.theme;
+    schemeSelect.addEventListener("change", () => {
+      s.theme = normalizeThemeSetting(schemeSelect.value, s.theme);
       this.geodeApp.applySettings();
+      this.geodeApp.saveSettings();
     });
+    schemeControl.appendChild(schemeSelect);
     this.addToggle(container, "Readable line length", s.readableLineLength, (v) => {
       s.readableLineLength = v;
       this.geodeApp.applySettings();
@@ -1994,7 +2009,7 @@ export class App {
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
-    theme: "dark",
+    theme: "auto",
     readableLineLength: true,
     baseFontSize: 16,
     foldHeading: false,
@@ -2298,9 +2313,43 @@ export class App {
       if (launchTarget || recents.length) {
         await this.openVault(launchTarget ?? recents[0], rootEl);
       } else {
+        // No vault yet, so no per-vault theme to apply: follow the OS appearance
+        // (the picker used to always be dark: settings.theme defaults to "dark").
+        this.applyPickerTheme();
         this.showVaultPicker(rootEl, []);
+        // Follow live OS appearance changes (shared watcher; stops applying to
+        // the picker once a vault replaces it and its own saved theme wins).
+        this.syncOsAppearanceWatcher();
       }
     });
+  }
+
+  private osAppearanceStop: (() => void) | null = null;
+
+  private applyPickerTheme(): void {
+    const dark = osPrefersDark();
+    document.body.classList.toggle("theme-dark", dark);
+    document.body.classList.toggle("theme-light", !dark);
+  }
+
+  /**
+   * Keep exactly one OS-appearance listener registered while something needs it
+   * (the vault picker, or an open vault whose base color scheme is Auto), and
+   * none otherwise. Idempotent, so it is safe to call from applySettings().
+   */
+  private syncOsAppearanceWatcher(): void {
+    const needed = this.settings.theme === "auto" || !!document.querySelector?.(".vault-picker");
+    if (needed && !this.osAppearanceStop) {
+      this.osAppearanceStop = watchOsAppearance(() => {
+        applyThemeWithFade(() => {
+          if (document.querySelector(".vault-picker")) this.applyPickerTheme();
+          else if (this.settings.theme === "auto") this.applySettings();
+        });
+      });
+    } else if (!needed && this.osAppearanceStop) {
+      this.osAppearanceStop();
+      this.osAppearanceStop = null;
+    }
   }
 
   /**
@@ -2587,7 +2636,7 @@ export class App {
       this.settings = {
         ...this.settings,
         ...saved,
-        theme: saved.theme === "light" || saved.theme === "dark" ? saved.theme : this.settings.theme,
+        theme: normalizeThemeSetting(saved.theme, this.settings.theme),
         readableLineLength: typeof saved.readableLineLength === "boolean" ? saved.readableLineLength : this.settings.readableLineLength,
         baseFontSize: typeof saved.baseFontSize === "number" && Number.isFinite(saved.baseFontSize) && saved.baseFontSize > 0
           ? saved.baseFontSize
@@ -3825,7 +3874,9 @@ export class App {
       );
     }
     c("toggle-theme", "Toggle dark/light theme", undefined, () => {
-      this.settings.theme = this.settings.theme === "dark" ? "light" : "dark";
+      // With Auto active this is a deliberate override: switch to the explicit
+      // opposite of the currently resolved scheme.
+      this.settings.theme = resolveTheme(this.settings.theme, osPrefersDark()) === "dark" ? "light" : "dark";
       this.applySettings();
       this.saveSettings();
     });
@@ -5184,8 +5235,10 @@ export class App {
   }
 
   applySettings(emitCssChange = true) {
-    document.body.classList.toggle("theme-dark", this.settings.theme === "dark");
-    document.body.classList.toggle("theme-light", this.settings.theme === "light");
+    const resolvedTheme = resolveTheme(this.settings.theme, osPrefersDark());
+    document.body.classList.toggle("theme-dark", resolvedTheme === "dark");
+    document.body.classList.toggle("theme-light", resolvedTheme === "light");
+    this.syncOsAppearanceWatcher();
     document.body.classList.toggle("is-readable-line-length", this.settings.readableLineLength);
     document.body.classList.toggle("show-ribbon", this.settings.showRibbon);
     document.body.classList.toggle("show-status-bar", this.settings.showStatusBar);
@@ -5209,7 +5262,9 @@ export class App {
       case "foldHeading": return this.settings.foldHeading;
       case "showLineNumber": return this.settings.showLineNumber;
       case "readableLineLength": return this.settings.readableLineLength;
-      case "theme": return this.settings.theme === "dark" ? "obsidian" : "moonstone";
+      case "theme":
+        if (this.settings.theme === "auto") return "system";
+        return this.settings.theme === "dark" ? "obsidian" : "moonstone";
       default: return undefined;
     }
   }
@@ -5233,7 +5288,8 @@ export class App {
         }
         break;
       case "theme": {
-        const mapped = value === "obsidian" ? "dark" : value === "moonstone" ? "light" : null;
+        const mapped: ThemeSetting | null =
+          value === "obsidian" ? "dark" : value === "moonstone" ? "light" : value === "system" ? "auto" : null;
         if (mapped && mapped !== this.settings.theme) {
           this.settings.theme = mapped;
           changed = true;
@@ -5266,7 +5322,11 @@ export class App {
   private async reloadPortableSettings(): Promise<void> {
     const root = this.vault.root; const saved = await this.host.config.read("app");
     if (this.vault.root !== root) throw new Error("Vault changed during settings refresh");
-    if (saved && typeof saved === "object") Object.assign(this.settings, saved);
+    if (saved && typeof saved === "object") {
+      const previousTheme = this.settings.theme;
+      Object.assign(this.settings, saved);
+      this.settings.theme = normalizeThemeSetting((saved as { theme?: unknown }).theme, previousTheme);
+    }
     this.applySettings(false); await this.commands.loadHotkeys(); await this.dailyNotes.load();
     if (this.vault.root !== root) throw new Error("Vault changed during settings refresh");
     await this.themeManager.apply(this.settings.cssTheme);
