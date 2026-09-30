@@ -411,6 +411,8 @@ export class GraphView implements View {
     close.type = "button";
     close.textContent = "Close search";
     close.addEventListener("click", () => this.closeSearch(opener));
+    // Tells the mobile drawer that Escape here dismisses the search, not the drawer.
+    panel.dataset.handlesEscape = "true";
     panel.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
