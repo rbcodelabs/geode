@@ -139,6 +139,11 @@ export class ExternalRootDesktopBoundary {
     return relative;
   }
 
+  /** Freshly proven canonical path of a connected root, for the privileged mount-roots method only. */
+  async provenCanonicalPath(rootId: string): Promise<string> {
+    return (await this.getUsableRoot(rootId)).locator.canonicalPath;
+  }
+
   /** Refresh display availability without discarding the persisted grant or its identity. */
   async probeRoot(rootId: string): Promise<RootDescriptor> {
     this.assertCurrentSession();

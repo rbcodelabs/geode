@@ -82,6 +82,7 @@ const api = {
     listDirectory: (ref, options) => invokeExternalRoot("external-roots-list", ref, options),
     readText: (ref) => invokeExternalRoot("external-roots-read", ref),
     listGrants: () => invokeExternalRoot("external-roots-grants"),
+    listMountRoots: () => invokeExternalRoot("external-roots-mount-roots"),
     removeStaleAssociation: (projectId) => invokeExternalRoot("external-roots-remove-association", projectId),
     removeOrphanGrant: (rootId) => invokeExternalRoot("external-roots-remove-orphan", rootId),
     onChange: (callback) => {

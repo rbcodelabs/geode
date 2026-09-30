@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import type { ExternalProjectContribution, ExternalProjectDescriptor, ExternalRootsHost, ExternalRootReply, ExternalGrantDescriptor, ExternalProjectContributionOptions } from "../shared/external-roots";
+import type { ExternalProjectContribution, ExternalProjectDescriptor, ExternalRootsHost, ExternalRootReply, ExternalGrantDescriptor, ExternalProjectContributionOptions, ExternalMountRoot } from "../shared/external-roots";
 import type { ResourceRef, RootDirectoryRef, RootIntegrationBinding } from "../shared/root-registry";
 import { ExternalRootAccessError, ExternalRootDesktopBoundary, type ExternalRootSessionOptions } from "./external-root-boundary";
 import { RootRegistry } from "./root-registry";
@@ -152,6 +152,33 @@ export class ExternalRootServiceSession implements ExternalRootsHost {
         sharedBindingCount: references.length - own.length, removable: references.length === 0 });
     }
     this.assertManagementCurrent(revision);
+    return result;
+  }
+
+  /**
+   * Privileged, internal (non-Obsidian) list of mountable roots for the sandbox VM.
+   * Only roots bound to a Project contributed in this window with a matching
+   * fingerprint are considered; each is re-proven (realpath + device/inode) like a
+   * read. Missing, revoked, replaced or unbound roots are skipped, never thrown.
+   */
+  async listMountRoots(): Promise<ExternalMountRoot[]> {
+    this.assertCurrent();
+    const seen = new Set<string>();
+    const result: ExternalMountRoot[] = [];
+    for (const project of [...this.projects.values()]) {
+      const binding = this.binding(project.projectId);
+      if (!binding || binding.sourceFingerprint !== fingerprint(project) || seen.has(binding.rootId)) continue;
+      seen.add(binding.rootId);
+      try {
+        const canonicalPath = await this.boundary.provenCanonicalPath(binding.rootId);
+        this.assertCurrent();
+        if (this.projects.get(project.projectId) !== project) continue;
+        result.push({ rootId: binding.rootId, label: project.label, path: canonicalPath, projectId: project.projectId });
+      } catch (error) {
+        if (error instanceof ExternalRootAccessError) continue;
+        throw error;
+      }
+    }
     return result;
   }
 

@@ -24,6 +24,17 @@ export interface ExternalGrantDescriptor {
   sharedBindingCount: number;
   removable: boolean;
 }
+/**
+ * Privileged host-mediated mount descriptor for the Threads sandbox VM. It is the
+ * single, deliberate exception to "no absolute paths to plugins" (ADR-0015 addendum).
+ */
+export interface ExternalMountRoot {
+  rootId: string;
+  label: string;
+  /** Canonical absolute path, freshly revalidated. Never persist it. */
+  path: string;
+  projectId?: string;
+}
 export interface ExternalRootsHost {
   readonly version: 1;
   contribute(projects: ExternalProjectContribution[], options?: ExternalProjectContributionOptions): Promise<ExternalProjectDescriptor[]>;
@@ -38,4 +49,6 @@ export interface ExternalRootsHost {
   listGrants?(): Promise<ExternalGrantDescriptor[]>;
   removeStaleAssociation?(projectId: string): Promise<boolean>;
   removeOrphanGrant?(rootId: string): Promise<boolean>;
+  /** Connected, freshly revalidated roots bound in the calling window's vault; read-only mount use. */
+  listMountRoots?(): Promise<ExternalMountRoot[]>;
 }
