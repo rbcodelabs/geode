@@ -276,6 +276,29 @@ export class PluginManager {
       if (!present.has(id) && !this.loaded.has(id)) this.manifests.delete(id);
     }
     if (!present.has("claude-threads")) this.clearPortableThreads();
+    this.emitChange();
+  }
+
+  private changeListeners = new Set<() => void>();
+
+  /**
+   * Subscribe to plugin-set changes (enable, disable, rescan). Used by the
+   * onboarding internal plugin to refresh static steps and drop steps of
+   * plugins that just unloaded. Returns an unsubscribe function.
+   */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private emitChange(): void {
+    for (const listener of [...this.changeListeners]) {
+      try {
+        listener();
+      } catch (err) {
+        console.error("Plugin change listener failed", err);
+      }
+    }
   }
 
   /**
@@ -491,6 +514,7 @@ export class PluginManager {
 
     if (persist) await this.persistEnabled();
     await this.reportActivePlugins();
+    this.emitChange();
   }
 
   /**
@@ -557,6 +581,7 @@ export class PluginManager {
     this.loaded.delete(id);
     if (persist) await this.persistEnabled();
     await this.reportActivePlugins();
+    this.emitChange();
   }
 
   async dispose(): Promise<void> {

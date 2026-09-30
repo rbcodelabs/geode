@@ -26,6 +26,7 @@ import {
 } from "./community/community-list-view";
 import { MarkdownRenderer } from "./markdown/render";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
+import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
 import {
   MarkdownProcessorRegistry,
   type MarkdownCodeBlockProcessor,
@@ -2017,6 +2018,18 @@ export class App {
    * community plugin would. Created per vault open (see openVaultMeasured).
    */
   private mermaidPlugin?: MermaidPlugin;
+  /**
+   * Onboarding checklist + completeness score, an internal plugin. Loaded
+   * before PluginManager.initialize() so vault plugins can register steps via
+   * `app.onboarding.registerStep` or `app.plugins.getPlugin("onboarding")`.
+   * Undefined until a vault is open and after it closes.
+   */
+  onboarding?: OnboardingPlugin;
+
+  /** Internal plugins resolvable through `app.plugins.getPlugin(id)` (Obsidian-style lookup). */
+  getInternalPlugin(id: string): unknown {
+    return id === "onboarding" ? this.onboarding : undefined;
+  }
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2852,6 +2865,14 @@ export class App {
     this.mermaidPlugin = new MermaidPlugin(this);
     this.mermaidPlugin.load();
 
+    // Onboarding checklist (see internal-plugins/onboarding). Awaited so that
+    // persisted state is loaded and `app.onboarding` is live before any vault
+    // plugin's onload() runs in PluginManager.initialize() below.
+    this.onboarding?.unload();
+    this.onboarding = new OnboardingPlugin(this);
+    this.onboarding.load();
+    await this.onboarding.ready;
+
     this.registerActions();
     this.registerCommands();
     this.hostDisposers.add(this.commands.attach(document));
@@ -2861,6 +2882,7 @@ export class App {
     this.themeManager.apply(this.settings.cssTheme);
 
     this.pluginManager = new PluginManager(this);
+    this.onboarding.attachPluginManager(this.pluginManager);
     await measureOperation("startup-plugins", () => this.pluginManager.initialize());
     if (this.pluginManager.isRecoveryMode()) this.showCrashRecoveryBanner(shell);
 
@@ -3545,6 +3567,8 @@ export class App {
     await this.workspace?.closeAllLeaves();
     await this.pluginManager?.dispose();
     this.mermaidPlugin?.unload();
+    this.onboarding?.unload();
+    this.onboarding = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
     await this.vault.close();
