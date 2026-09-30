@@ -19,6 +19,8 @@ import type { PrivilegedFetchRequest, PrivilegedFetchResponse } from "../shared/
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
 import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
+type GithubIpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
+import type { GithubAuthStatus, GithubInstallation, RepoCoverage } from "./github-auth";
 import type { HeaderRuleAddResult, HeaderRuleSummary } from "./browser-header-rules";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -236,6 +238,20 @@ const api = {
     add: (input: unknown): Promise<HeaderRuleAddResult> => ipcRenderer.invoke("browser-header-rules-add", input),
     remove: (id: string): Promise<boolean> => ipcRenderer.invoke("browser-header-rules-remove", id),
   },
+  /**
+   * GitHub App sign-in (device flow, see `github-auth/` and
+   * docs/design/github-app-auth.md). `getToken` is the on-demand hook for
+   * handing a thread/terminal `GH_TOKEN`; nothing injects it globally.
+   */
+  githubAuth: {
+    status: (): Promise<GithubAuthStatus> => ipcRenderer.invoke("github-auth-status"),
+    start: (): Promise<GithubIpcResult<{ userCode: string; verificationUri: string }>> => ipcRenderer.invoke("github-auth-start"),
+    listAccess: (): Promise<GithubIpcResult<GithubInstallation[]>> => ipcRenderer.invoke("github-auth-list-access"),
+    checkRepo: (repo: string): Promise<GithubIpcResult<RepoCoverage>> => ipcRenderer.invoke("github-auth-check-repo", repo),
+    getToken: (): Promise<GithubIpcResult<string>> => ipcRenderer.invoke("github-auth-get-token"),
+    disconnect: (): Promise<GithubIpcResult<{ revokeUrl: string }>> => ipcRenderer.invoke("github-auth-disconnect"),
+    openUrl: (url: string): Promise<void> => ipcRenderer.invoke("github-auth-open-url", url),
+  },
   readConfig: (name: string): Promise<unknown> => ipcRenderer.invoke("config-read", name),
   writeConfig: (name: string, data: unknown): Promise<void> =>
     ipcRenderer.invoke("config-write", name, data),
@@ -416,7 +432,7 @@ export type GeodeApi = Omit<
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth"
 > & {
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
@@ -463,6 +479,8 @@ export type GeodeApi = Omit<
    * plugin (P2) feature-detects this whole group via `window.geode?.browserHeaderRules`.
    */
   browserHeaderRules?: ElectronOnlyGeodeApi["browserHeaderRules"];
+  /** GitHub App sign-in; Electron desktop-only. */
+  githubAuth?: ElectronOnlyGeodeApi["githubAuth"];
 };
 
 // The renderer runs with contextIsolation disabled (see main.ts's
