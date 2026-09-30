@@ -8,7 +8,7 @@ Geode signs a user in to GitHub with the OAuth **device flow** of a GitHub App. 
 - Expiring user access tokens: **on** (8h access token, rotating refresh token)
 - Webhook: **off**
 - Repository permissions: Contents read/write, Pull requests read/write, Actions read, Metadata read
-- The install page slug is read from `GEODE_GITHUB_APP_SLUG` (default `geode`); set it to the App's real slug.
+- The install page slug is read from `GEODE_GITHUB_APP_SLUG` (default `geode-rb-code-labs`).
 
 ## Flow
 
