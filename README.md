@@ -5,7 +5,7 @@ with plugin and partial theme compatibility. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.23.1). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.25.0). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
@@ -17,6 +17,15 @@ release history, or [GitHub Releases](https://github.com/rbcodelabs/geode/releas
 for the latest published notes.
 
 ## Features
+
+- **GitHub connection** — Settings → GitHub signs in through GitHub's device
+  flow and lists repositories granted to the Geode GitHub App. Tokens are
+  encrypted through the OS keychain and refreshed automatically when requested;
+  sign-in is disabled when secure storage is unavailable. Disconnect deletes
+  local tokens and links to GitHub to revoke access. Agent Threads credential
+  handoff is not included yet. See [GitHub authentication](docs/design/github-app-auth.md)
+  for GitHub App setup, the on-demand token API, and optional
+  `GEODE_GITHUB_CLIENT_ID` / `GEODE_GITHUB_APP_SLUG` overrides.
 
 - **Keychain-backed plugin secrets** — `app.secretStorage` encrypts through the
   OS keychain via Electron `safeStorage`, migrating any previously stored
