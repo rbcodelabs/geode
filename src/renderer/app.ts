@@ -54,6 +54,7 @@ import type { HistoryConflictComparison, HistoryPathIssue } from "./sync/history
 import { ChromeCookieImportModal } from "./modals/chrome-cookie-modal";
 import { renderPerformanceTab } from "./settings/performance-tab";
 import { renderExternalRootsTab } from "./settings/external-roots-tab";
+import { renderGithubTab } from "./settings/github-tab";
 import { FileSystemAdapter, IMAGE_EXTENSIONS, TFile, TFolder, isTFile, pathName, type HeadingCache } from "./types";
 import { RenderContext } from "./api/bases-values";
 import { registerBasesViewIn, unregisterBasesViewIn, type BasesViewRegistration } from "./api/bases-view";
@@ -620,8 +621,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
 /** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
 const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
@@ -644,6 +645,7 @@ class SettingsModal extends Modal {
    */
   private stopSyncProgress: (() => void) | null = null;
   private stopExternalRootsTab: (() => void) | null = null;
+  private stopGithubTab: (() => void) | null = null;
 
   constructor(private geodeApp: App) {
     super(geodeApp);
@@ -717,6 +719,8 @@ class SettingsModal extends Modal {
     this.unsubscribeHotkeys?.();
     this.stopExternalRootsTab?.();
     this.stopExternalRootsTab = null;
+    this.stopGithubTab?.();
+    this.stopGithubTab = null;
     this.unsubscribeHotkeys = null;
     this.stopHotkeyRecorder?.();
     this.stopHotkeyRecorder = null;
@@ -745,6 +749,10 @@ class SettingsModal extends Modal {
       const roots = this.geodeApp.host.externalRoots;
       if (!roots?.listGrants || !roots.removeStaleAssociation || !roots.removeOrphanGrant) { this.activateTab("appearance"); return; }
       this.stopExternalRootsTab = renderExternalRootsTab(this.contentContainerEl, roots);
+    } else if (id === "github") {
+      const githubAuth = window.geode.githubAuth;
+      if (!githubAuth) { this.activateTab("appearance"); return; }
+      this.stopGithubTab = renderGithubTab(this.contentContainerEl, githubAuth);
     } else if (id === "performance") {
       if (!this.geodeApp.host.capabilities.processDiagnostics) {
         this.activateTab("appearance");
@@ -797,6 +805,7 @@ class SettingsModal extends Modal {
     addNavItem("sync", "Sync", this.navEl);
     addNavItem("advanced", "Advanced", this.navEl);
     if (this.geodeApp.host.externalRoots?.listGrants) addNavItem("project-folders", "Project folders", this.navEl);
+    if (window.geode.githubAuth) addNavItem("github", "GitHub", this.navEl);
     if (this.geodeApp.host.capabilities.processDiagnostics) {
       addNavItem("performance", "Performance", this.navEl);
     }
@@ -1894,6 +1903,8 @@ class SettingsModal extends Modal {
     this.unsubscribeSettingTabs?.();
     this.stopExternalRootsTab?.();
     this.stopExternalRootsTab = null;
+    this.stopGithubTab?.();
+    this.stopGithubTab = null;
     this.unsubscribeSettingTabs = null;
     this.unsubscribeHotkeys?.();
     this.unsubscribeHotkeys = null;

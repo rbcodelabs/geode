@@ -122,6 +122,14 @@ import {
   type HeaderRuleSummary,
   type MatchableRequest,
 } from "./browser-header-rules";
+import {
+  fetchGithubHttp,
+  GithubAuthError,
+  GithubAuthService,
+  GithubTokenStore,
+  resolveGithubAppSlug,
+  resolveGithubClientId,
+} from "./github-auth";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
 // Obsidian enables it so plugins (and the libraries they bundle, e.g. the
@@ -496,6 +504,35 @@ let secretStore: SecretStore | undefined;
 function getSecretStore(): SecretStore {
   secretStore ??= new SecretStore(path.join(app.getPath("userData"), "secrets.json"), safeStorage);
   return secretStore;
+}
+
+/**
+ * GitHub App sign-in (device flow). Tokens live in their own keychain-backed
+ * file, separate from the plugin-visible `secrets.json`. Lazily built for the
+ * same `app.getPath("userData")`-timing reason as `getSecretStore`.
+ */
+let githubAuth: GithubAuthService | undefined;
+function getGithubAuth(): GithubAuthService {
+  githubAuth ??= new GithubAuthService({
+    http: fetchGithubHttp,
+    store: new GithubTokenStore(new SecretStore(path.join(app.getPath("userData"), "github-auth.json"), safeStorage)),
+    clientId: resolveGithubClientId(),
+    appSlug: resolveGithubAppSlug(),
+  });
+  return githubAuth;
+}
+
+/** Errors cross IPC as plain data so the renderer can render them without a stack trace. */
+async function githubIpc<T>(run: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; code: string; message: string }> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (error) {
+    return {
+      ok: false,
+      code: error instanceof GithubAuthError ? error.code : "unexpected",
+      message: (error as Error).message,
+    };
+  }
 }
 
 /**
@@ -1517,6 +1554,25 @@ function registerIpc() {
   // No dialog: removal only reduces egress (design §5.6).
   ipcMain.handle("browser-header-rules-remove", (_e, id: unknown) =>
     typeof id === "string" ? getHeaderRuleStore().remove(id) : false);
+
+  // GitHub App auth (see github-auth/). Opening the verification URL is a
+  // browser launch, not a window, but is still skipped under GEODE_HEADLESS.
+  ipcMain.handle("github-auth-status", () => getGithubAuth().getStatus());
+  ipcMain.handle("github-auth-start", () => githubIpc(async () => {
+    const device = await getGithubAuth().startSignIn();
+    if (!isHeadless) void shell.openExternal(device.verificationUri);
+    return { userCode: device.userCode, verificationUri: device.verificationUri };
+  }));
+  ipcMain.handle("github-auth-list-access", () => githubIpc(() => getGithubAuth().listAccess()));
+  ipcMain.handle("github-auth-check-repo", (_e, repo: unknown) => githubIpc(() => {
+    if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("Expected owner/name");
+    return getGithubAuth().checkRepo(repo);
+  }));
+  ipcMain.handle("github-auth-get-token", () => githubIpc(() => getGithubAuth().getAccessToken()));
+  ipcMain.handle("github-auth-disconnect", () => githubIpc(() => getGithubAuth().disconnect()));
+  ipcMain.handle("github-auth-open-url", (_e, url: unknown) => {
+    if (typeof url === "string" && /^https:\/\/github\.com\//.test(url) && !isHeadless) void shell.openExternal(url);
+  });
 
   // Plugin discovery: list subfolders of <vault>/.geode/plugins/ that look
   // like a plugin (contain a manifest.json). Reading/writing manifest.json,
