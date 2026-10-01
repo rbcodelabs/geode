@@ -380,7 +380,7 @@ test("web tab menus lead with Reload and share one Bookmark implementation", asy
     // would have buried it at the bottom.
     await window.locator(".workspace-split.mod-root .workspace-tab-header.is-active").click({ button: "right" });
     await expect(window.locator(".menu-item-title")).toHaveText([
-      "Reload page", "Add tab to new collection", "Move tab left",
+      "Reload page", "Add tab to new collection", "Move tab left", "Focus this pane",
       "Pin", "Close", "Close others", "Close tabs to the right",
     ]);
   } finally {
@@ -449,7 +449,7 @@ test("an artifact tab reloads from its toolbar button and from Mod+R", async () 
     // "Reload page" on a web tab. Bookmark is web-only, so it is absent.
     await window.locator(".workspace-split.mod-root .workspace-tab-header.is-active").click({ button: "right" });
     await expect(window.locator(".menu-item-title")).toHaveText([
-      "Reload artifact", "Add tab to new collection", "Move tab left",
+      "Reload artifact", "Add tab to new collection", "Move tab left", "Focus this pane",
       "Pin", "Close", "Close others", "Close tabs to the right",
     ]);
   } finally {
