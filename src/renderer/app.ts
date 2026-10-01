@@ -3773,6 +3773,13 @@ export class App {
       });
     }
     this.actions.register({
+      id: "pane.focus",
+      label: (context) => context.leaf?.group instanceof TabGroup && this.workspace.isFocusedPane(context.leaf.group) ? "Exit focus" : "Focus this pane",
+      icon: "maximize-2",
+      isAvailable: (context) => !!context.leaf && context.leaf.group instanceof TabGroup && !context.leaf.group.sidebar,
+      run: (context) => this.workspace.toggleFocusPane(context.leaf!.group as TabGroup),
+    });
+    this.actions.register({
       id: "view.toggle-reading",
       label: "Toggle reading view",
       isAvailable: (context) => !!context.view,
@@ -3858,10 +3865,13 @@ export class App {
     });
     c("search", "Search in all files", "Mod+Shift+F", () => this.openSearch(""));
     c("toggle-left-sidebar", "Toggle left sidebar", "Mod+Shift+L", () =>
-      this.workspace.leftSidebar.toggle()
+      this.workspace.exitFocusPane() || this.workspace.leftSidebar.toggle()
     );
     c("toggle-right-sidebar", "Toggle right sidebar", "Mod+Shift+R", () =>
-      this.workspace.rightSidebar.toggle()
+      this.workspace.exitFocusPane() || this.workspace.rightSidebar.toggle()
+    );
+    c("workspace:toggle-focus-pane", "Toggle focus on active pane", "Mod+Shift+Enter", () =>
+      this.workspace.toggleFocusPane()
     );
     c("add-comment", "Comments: Add comment to selection", "Mod+Shift+M", () => {
       const view = this.getActiveMarkdownView();

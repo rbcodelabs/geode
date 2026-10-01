@@ -296,7 +296,7 @@ test("new note selects Untitled for immediate rename and exposes shared document
     const tab = win.locator(".workspace-split.mod-root .workspace-tab-header", { hasText: "Named from title" });
     await tab.click({ button: "right" });
     await expect(win.locator(".menu-item-title")).toHaveText([
-      "Open in new tab", "Bookmark", "Rename…", "Reveal in Finder", "Delete", "Add tab to new collection", "Pin", "Close", "Close others", "Close tabs to the right",
+      "Open in new tab", "Bookmark", "Rename…", "Reveal in Finder", "Delete", "Add tab to new collection", "Focus this pane", "Pin", "Close", "Close others", "Close tabs to the right",
     ]);
     if (screenshotDir) await win.screenshot({ path: path.join(screenshotDir, "document-actions-tab-context-menu.png") });
   } finally {

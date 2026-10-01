@@ -686,6 +686,8 @@ export class TabGroup implements LeafContainer {
   leftToggleEl: HTMLButtonElement;
   /** Right-sidebar toggle button, last child of `tabBarEl` (only meaningful/visible on the rightmost group). */
   rightToggleEl: HTMLButtonElement;
+  /** "Exit focus" button, shown only while this group is the focused pane. */
+  focusExitEl: HTMLButtonElement;
   private bodyDropEdge: "left" | "right" | "top" | "bottom" | null = null;
   private collectionCounter = 0;
   private dropMarkerEl: HTMLElement | null = null;
@@ -815,6 +817,19 @@ export class TabGroup implements LeafContainer {
     setIcon(this.rightToggleEl, "panel-right");
     this.rightToggleEl.addEventListener("click", () => this.workspace.toggleSidebar("right", this.rightToggleEl));
     this.tabBarEl.appendChild(this.rightToggleEl);
+
+    // Visible only while this group is the focused pane (see styles/app.css).
+    this.focusExitEl = document.createElement("button");
+    this.focusExitEl.type = "button";
+    this.focusExitEl.className = "clickable-icon focus-pane-exit-button";
+    this.focusExitEl.title = "Exit focus";
+    this.focusExitEl.setAttribute("aria-label", "Exit focus");
+    setIcon(this.focusExitEl, "minimize-2");
+    this.focusExitEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.workspace.exitFocusPane();
+    });
+    this.tabBarEl.appendChild(this.focusExitEl);
 
     this.contentHostEl = document.createElement("div");
     this.contentHostEl.className = "workspace-tab-container";
@@ -2052,6 +2067,8 @@ export class Sidebar implements LeafContainer {
     void resolved.ensureOpen();
     resolved.view?.onReveal?.();
     this.renderIcons();
+    // Revealing a docked leaf must never land in a sidebar hidden by focus.
+    this.app.workspace.exitFocusPane();
     if (this.collapsed) this.toggle();
     this.app.workspace.trigger("layout-change");
   }
@@ -2117,6 +2134,10 @@ export class Sidebar implements LeafContainer {
 
   toggle() {
     if (this.dragging) this.endDrag();
+    // A programmatic collapse/expand while a pane is focused would otherwise
+    // change state the user cannot see; end focus first (non-destructive, so
+    // this costs nothing) and then apply the requested change.
+    this.app.workspace.exitFocusPane();
     this.collapsed = !this.collapsed;
     this.containerEl.classList.toggle("is-collapsed", this.collapsed);
     // Mirrored onto the workspace root so the main pane's toggle button
@@ -2455,6 +2476,15 @@ export class Workspace extends Events {
   /** Source of truth for the center region's layout — a single leaf or a recursive split tree. */
   centerRoot!: CenterNode;
   activeGroup: TabGroup;
+  /**
+   * The center tab group currently taking over the whole window ("focus
+   * pane"), or `null`. Purely presentational: it is expressed as CSS classes
+   * (`is-focus-pane` on the root, `is-focused-pane` on the group,
+   * `has-focused-pane` on its split ancestors), never by mutating the split
+   * tree, sizes, or sidebar `collapsed` state — so exiting restores the exact
+   * prior layout and `serialize()` always yields the normal layout.
+   */
+  focusedGroup: TabGroup | null = null;
   /** viewType -> factory, populated by `Plugin.registerView` (see plugin.ts). */
   private viewFactories = new Map<string, (leaf: WorkspaceLeaf) => View>();
   /** Built-in sidebar view types, recorded by `Sidebar.addView`. Never deferred. */
@@ -2640,8 +2670,70 @@ export class Workspace extends Events {
     this.rootEl.scrollLeft = 0;
   }
 
+  /** Whether `group` is the pane currently focused full-window. */
+  isFocusedPane(group: TabGroup): boolean {
+    return this.focusedGroup === group;
+  }
+
+  /**
+   * Focus `group` (default: the active group) so it takes over the window.
+   * Returns false when focus is not possible (sidebar group, compact mobile
+   * layout, or a group no longer in the center tree).
+   */
+  enterFocusPane(group: TabGroup = this.activeGroup): boolean {
+    if (group.sidebar || this.isCompactMobile() || !this.groups.includes(group)) return false;
+    if (this.focusedGroup === group) return true;
+    if (this.focusedGroup) {
+      this.clearFocusClasses();
+      this.focusedGroup = null;
+    }
+    // Activate first: `setActiveGroup` ends any focus, so it must precede the
+    // assignment below.
+    if (this.activeGroup !== group) this.setActiveGroup(group);
+    this.focusedGroup = group;
+    this.rootEl.classList.add("is-focus-pane");
+    group.containerEl.classList.add("is-focused-pane");
+    for (let node: CenterSplit | null = group.parent; node; node = node.parent) {
+      node.containerEl.classList.add("has-focused-pane");
+    }
+    this.trigger("focus-pane-change", group);
+    return true;
+  }
+
+  /** End focus mode. Returns true if a pane was focused. */
+  exitFocusPane(): boolean {
+    const group = this.focusedGroup;
+    if (!group) return false;
+    this.clearFocusClasses();
+    this.focusedGroup = null;
+    this.trigger("focus-pane-change", null);
+    return true;
+  }
+
+  /** Toggle focus on `group` (default: the active group). */
+  toggleFocusPane(group: TabGroup = this.activeGroup): void {
+    if (this.focusedGroup && (this.focusedGroup === group || group === this.activeGroup)) {
+      this.exitFocusPane();
+    } else {
+      this.enterFocusPane(group);
+    }
+  }
+
+  private clearFocusClasses(): void {
+    const group = this.focusedGroup;
+    this.rootEl.classList.remove("is-focus-pane");
+    if (!group) return;
+    group.containerEl.classList.remove("is-focused-pane");
+    for (let node: CenterSplit | null = group.parent; node; node = node.parent) {
+      node.containerEl.classList.remove("has-focused-pane");
+    }
+  }
+
   toggleSidebar(side: "left" | "right", opener?: HTMLElement): void {
     const sidebar = side === "left" ? this.leftSidebar : this.rightSidebar;
+    // While a pane is focused the sidebar is hidden by focus, not collapsed:
+    // the toggle ends focus and brings it back as it was.
+    if (this.exitFocusPane()) return;
     if (!this.usesDrawer(side)) {
       sidebar.toggle();
       return;
@@ -2780,6 +2872,8 @@ export class Workspace extends Events {
     // observe the new group without it.
     companionOwner?: string
   ): TabGroup {
+    // A new pane would be created invisible (and reshape the focused ancestors).
+    this.exitFocusPane();
     const direction: "horizontal" | "vertical" = edge === "left" || edge === "right" ? "horizontal" : "vertical";
     const before = edge === "left" || edge === "top";
     const group = new TabGroup(this, this.app);
@@ -2886,6 +2980,8 @@ export class Workspace extends Events {
 
   /** Splice `group` out of the center split tree, collapsing redundant single-child splits, then activate its nearest neighbor. */
   private closeGroup(group: TabGroup): void {
+    // Must precede the splice: the ancestor chain is read from the tree.
+    if (this.focusedGroup === group) this.exitFocusPane();
     const flatBefore = this.groups;
     const flatIndex = flatBefore.indexOf(group);
     const parent = group.parent!; // non-null: groupEmptied only calls this when groups.length > 1
@@ -2925,6 +3021,8 @@ export class Workspace extends Events {
   }
 
   setActiveGroup(group: TabGroup) {
+    // Activating any other group would put the active leaf in a hidden pane.
+    if (this.focusedGroup && this.focusedGroup !== group) this.exitFocusPane();
     const previousLeaf = this.getActiveLeaf();
     this.activeGroup = group;
     this.syncAdaptivePresentation();
@@ -3395,6 +3493,9 @@ export class Workspace extends Events {
 
   /** Focus/activate a leaf (Obsidian `revealLeaf`); expands its sidebar if collapsed. */
   revealLeaf(leaf: WorkspaceLeaf): void {
+    // A sidebar-docked leaf or a leaf in another center group is hidden while
+    // focused; end focus rather than reveal something invisible.
+    if (this.focusedGroup && leaf.group !== this.focusedGroup) this.exitFocusPane();
     leaf.group.setActiveLeaf(leaf);
   }
 
