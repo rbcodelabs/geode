@@ -26,6 +26,7 @@ describe("shouldRecommendAgentThreads", () => {
 describe("computeThreadsCard", () => {
   const input = {
     installed: false,
+    enabled: false,
     installApiAvailable: true,
     headless: false,
     dismissed: false,
@@ -36,17 +37,23 @@ describe("computeThreadsCard", () => {
   const kind = (over: Partial<typeof input>) => computeThreadsCard({ ...input, ...over });
 
   it("idle by default", () => expect(kind({})).toBe("idle"));
-  it("hidden when headless, without install API, or already installed", () => {
+  it("hidden when headless, when not installed without install API, or installed AND enabled", () => {
     expect(kind({ headless: true })).toBe("hidden");
     expect(kind({ installApiAvailable: false })).toBe("hidden");
-    expect(kind({ installed: true })).toBe("hidden");
+    expect(kind({ installed: true, enabled: true })).toBe("hidden");
   });
-  it("shows installed only for an install done by the card this session", () => {
-    expect(kind({ installed: true, installedThisSession: true })).toBe("installed");
+  it("installed but disabled offers Enable (even without the install API)", () => {
+    expect(kind({ installed: true })).toBe("enable");
+    expect(kind({ installed: true, installApiAvailable: false })).toBe("enable");
   });
-  it("installing and failed phases take priority over dismissal", () => {
+  it("shows installed only for a setup done by the card this session", () => {
+    expect(kind({ installed: true, enabled: true, installedThisSession: true })).toBe("installed");
+  });
+  it("in-flight and failed phases take priority over dismissal", () => {
     expect(kind({ phase: "installing" })).toBe("installing");
+    expect(kind({ phase: "enabling", installed: true })).toBe("enabling");
     expect(kind({ phase: "failed", dismissed: true })).toBe("failed");
+    expect(kind({ phase: "enable-failed", installed: true, dismissed: true })).toBe("enable-failed");
   });
   it("dismissed shows Undo note this session, hidden in later sessions", () => {
     expect(kind({ dismissed: true, dismissedThisSession: true })).toBe("dismissed");
@@ -92,10 +99,10 @@ describe("Install Agent Threads onboarding step", () => {
     expect(step.commandId).toBe("onboarding:install-agent-threads");
   });
 
-  it("auto-completes once the plugin is installed (manifest present) or enabled", async () => {
+  it("auto-completes only when installed AND enabled", async () => {
     expect(await find(host())!.check!()).toBe(false);
-    expect(await find(host({}, [AGENT_THREADS_ID]))!.check!()).toBe(true);
-    expect(await find(host({}, [], [AGENT_THREADS_ID]))!.check!()).toBe(true);
+    expect(await find(host({}, [AGENT_THREADS_ID]))!.check!()).toBe(false); // installed, disabled
+    expect(await find(host({}, [AGENT_THREADS_ID], [AGENT_THREADS_ID]))!.check!()).toBe(true);
   });
 
   it("is not offered when headless or when the install API is unavailable", () => {

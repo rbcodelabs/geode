@@ -223,97 +223,132 @@ describe("OnboardingPlugin", () => {
   });
 });
 
-describe("OnboardingPlugin Agent Threads step", () => {
-  async function boot(h: ReturnType<typeof makeHarness>, installed: boolean) {
+describe("OnboardingPlugin Agent Threads install + enable", () => {
+  const ID = "claude-threads"; // the real plugin id (display name: Agent Threads)
+
+  /** Fake PluginManager slice with mutable installed/enabled flags. */
+  async function boot(
+    h: ReturnType<typeof makeHarness>,
+    init: { installed?: boolean; enabled?: boolean; headless?: boolean } = {}
+  ) {
     (globalThis as any).window.geode.installSupportedPlugin = vi.fn();
-    const plugin = new OnboardingPlugin(h.app, () => false);
-    plugin.load();
-    await plugin.ready;
-    plugin.attachPluginManager({ ...h.host, getManifest: (id: string) => (installed && id === "claude-threads" ? ({} as any) : undefined) });
-    return plugin;
-  }
-  const stepDone = (p: OnboardingPlugin) =>
-    p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-agent-threads");
-
-  it("registers the optional step and its command; install failure notifies and does not throw", async () => {
-    const h = makeHarness();
-    h.app.communityManager = { installSupported: vi.fn().mockRejectedValue(new Error("offline")) };
-    const plugin = await boot(h, false);
-    expect(h.commands.has("onboarding:install-agent-threads")).toBe(true);
-    expect(stepDone(plugin)).toMatchObject({ done: false, step: { optional: true } });
-    await expect(plugin.installAgentThreads()).resolves.toBe(false);
-    expect(h.app.notify).toHaveBeenCalledWith(expect.stringContaining("offline"), 8000);
-    expect(stepDone(plugin)!.done).toBe(false);
-  });
-
-  it("shows complete when the plugin is already installed, and install success reports true", async () => {
-    const h = makeHarness();
-    h.app.communityManager = { installSupported: vi.fn().mockResolvedValue({}) };
-    const plugin = await boot(h, true);
-    await plugin.refresh();
-    expect(stepDone(plugin)!.done).toBe(true);
-    await expect(plugin.installAgentThreads()).resolves.toBe(true);
-    expect(h.app.communityManager.installSupported).toHaveBeenCalledWith("claude-threads", "tested");
-  });
-});
-
-describe("OnboardingPlugin Agent Threads card", () => {
-  async function boot(h: ReturnType<typeof makeHarness>, headless = false) {
-    (globalThis as any).window.geode.installSupportedPlugin = vi.fn();
-    const state = { installed: false };
-    const plugin = new OnboardingPlugin(h.app, () => headless);
+    const s = { installed: !!init.installed || !!init.enabled, enabled: !!init.enabled };
+    const enable = vi.fn(async () => {
+      s.enabled = true;
+    });
+    const plugin = new OnboardingPlugin(h.app, () => !!init.headless);
     plugin.load();
     await plugin.ready;
     plugin.attachPluginManager({
       ...h.host,
-      getManifest: (id: string) => (state.installed && id === "claude-threads" ? ({} as any) : undefined),
+      getManifest: (id: string) => (s.installed && id === ID ? ({} as any) : undefined),
+      enabledIds: () => (s.enabled ? [ID] : []),
+      isEnabled: (id: string) => s.enabled && id === ID,
+      enable,
     });
-    return { plugin, state };
+    return { plugin, s, enable };
   }
   const step = (p: OnboardingPlugin) =>
     p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-agent-threads")!;
+  const installOk = (s: { installed: boolean }) =>
+    vi.fn(async () => {
+      s.installed = true;
+    });
 
-  it("idle -> installing -> installed, and the checklist step completes in sync", async () => {
+  it("registers the optional step and command; install failure notifies, never throws", async () => {
     const h = makeHarness();
-    const { plugin, state } = await boot(h);
-    let release!: () => void;
-    h.app.communityManager = {
-      installSupported: vi.fn(
-        () => new Promise((resolve) => (release = () => ((state.installed = true), resolve({}))))
-      ),
-    };
+    h.app.communityManager = { installSupported: vi.fn().mockRejectedValue(new Error("offline")) };
+    const { plugin } = await boot(h);
+    expect(h.commands.has("onboarding:install-agent-threads")).toBe(true);
+    expect(step(plugin)).toMatchObject({ done: false, step: { optional: true } });
+    await expect(plugin.installAgentThreads()).resolves.toBe(false);
+    expect(h.app.notify).toHaveBeenCalledWith(expect.stringContaining("offline"), 8000);
+  });
+
+  it("one click installs then enables: installing -> enabling -> installed, step completes", async () => {
+    const h = makeHarness();
+    const { plugin, s, enable } = await boot(h);
+    const seen: string[] = [];
+    plugin.onChange(() => seen.push(plugin.getThreadsCard().kind));
+    h.app.communityManager = { installSupported: installOk(s) };
     expect(plugin.getThreadsCard().kind).toBe("idle");
-    const run = plugin.startThreadsInstall();
-    expect(plugin.getThreadsCard().kind).toBe("installing");
-    release();
-    await run;
+    await plugin.startThreadsInstall();
+    expect(h.app.communityManager.installSupported).toHaveBeenCalledWith(ID, "tested");
+    expect(enable).toHaveBeenCalledWith(ID);
+    expect(seen.indexOf("installing")).toBeGreaterThanOrEqual(0);
+    expect(seen.indexOf("enabling")).toBeGreaterThan(seen.indexOf("installing"));
     expect(plugin.getThreadsCard().kind).toBe("installed");
     expect(step(plugin).done).toBe(true);
   });
 
-  it("failure shows the error without throwing; Retry can then succeed", async () => {
+  it("enable failure after a good install is a distinct state; Enable retry succeeds without reinstalling", async () => {
     const h = makeHarness();
-    const { plugin, state } = await boot(h);
+    const { plugin, s, enable } = await boot(h);
+    h.app.communityManager = { installSupported: installOk(s) };
+    enable.mockRejectedValueOnce(new Error("onload crashed"));
+    await expect(plugin.startThreadsInstall()).resolves.toBeUndefined();
+    expect(plugin.getThreadsCard()).toEqual({ kind: "enable-failed", error: "onload crashed" });
+    expect(step(plugin).done).toBe(false);
+    await plugin.startThreadsInstall();
+    expect(h.app.communityManager.installSupported).toHaveBeenCalledTimes(1);
+    expect(plugin.getThreadsCard().kind).toBe("installed");
+    expect(step(plugin).done).toBe(true);
+  });
+
+  it("an enable() that returns without the plugin loading is not silent", async () => {
+    const h = makeHarness();
+    const { plugin, s, enable } = await boot(h);
+    h.app.communityManager = { installSupported: installOk(s) };
+    enable.mockImplementationOnce(async () => {}); // contained error: nothing loaded
+    await plugin.startThreadsInstall();
+    expect(plugin.getThreadsCard()).toEqual({ kind: "enable-failed", error: "The plugin did not start" });
+  });
+
+  it("install failure then Retry installs and enables", async () => {
+    const h = makeHarness();
+    const { plugin, s } = await boot(h);
     const install = vi.fn().mockRejectedValueOnce(new Error("offline")).mockImplementationOnce(async () => {
-      state.installed = true;
+      s.installed = true;
     });
     h.app.communityManager = { installSupported: install };
-    await expect(plugin.startThreadsInstall()).resolves.toBeUndefined();
+    await plugin.startThreadsInstall();
     expect(plugin.getThreadsCard()).toEqual({ kind: "failed", error: "offline" });
-    expect(step(plugin).done).toBe(false);
     await plugin.startThreadsInstall();
     expect(plugin.getThreadsCard().kind).toBe("installed");
   });
 
-  it("Not now persists across instances and leaves the optional step; Undo restores the card", async () => {
+  it("installed-but-disabled shows Enable (no install); enabling completes the step", async () => {
+    const h = makeHarness();
+    h.app.communityManager = { installSupported: vi.fn() };
+    const { plugin, enable } = await boot(h, { installed: true });
+    expect(plugin.getThreadsCard().kind).toBe("enable");
+    expect(step(plugin).done).toBe(false);
+    await plugin.startThreadsInstall();
+    expect(h.app.communityManager.installSupported).not.toHaveBeenCalled();
+    expect(enable).toHaveBeenCalledTimes(1);
+    expect(plugin.getThreadsCard().kind).toBe("installed");
+    expect(step(plugin).done).toBe(true);
+  });
+
+  it("is hidden when installed AND enabled, or headless; the step check needs enabled", async () => {
+    const a = await boot(makeHarness(), { enabled: true });
+    expect(a.plugin.getThreadsCard().kind).toBe("hidden");
+    await a.plugin.refresh();
+    expect(step(a.plugin).done).toBe(true);
+    const b = await boot(makeHarness(), { headless: true });
+    expect(b.plugin.getThreadsCard().kind).toBe("hidden");
+    const c = await boot(makeHarness(), { installed: true });
+    await c.plugin.refresh();
+    expect(step(c.plugin).done).toBe(false);
+  });
+
+  it("Not now persists across instances, leaves the optional step; Undo restores the card", async () => {
     const h = makeHarness();
     const a = await boot(h);
     await a.plugin.dismissThreadsCard();
     expect(a.plugin.getThreadsCard().kind).toBe("dismissed");
-    expect(h.saved().dismissedRecommendations).toEqual(["claude-threads"]);
-    expect(step(a.plugin).done).toBe(false);
+    expect(h.saved().dismissedRecommendations).toEqual([ID]);
     a.plugin.unload();
-
     const b = await boot(h);
     expect(b.plugin.getThreadsCard().kind).toBe("hidden");
     expect(step(b.plugin)).toBeDefined();
@@ -325,22 +360,13 @@ describe("OnboardingPlugin Agent Threads card", () => {
     const h = makeHarness();
     const { plugin } = await boot(h);
     let fail!: () => void;
-    h.app.communityManager = { installSupported: vi.fn(() => new Promise((_r, rej) => (fail = () => rej(new Error("late")))) ) };
+    h.app.communityManager = { installSupported: vi.fn(() => new Promise((_r, rej) => (fail = () => rej(new Error("late"))))) };
     const run = plugin.startThreadsInstall();
     plugin.cancelThreadsInstall();
     expect(plugin.getThreadsCard().kind).toBe("idle");
     fail();
     await run;
     expect(plugin.getThreadsCard().kind).toBe("idle");
-  });
-
-  it("is hidden when already installed or headless", async () => {
-    const h = makeHarness();
-    const a = await boot(h);
-    a.state.installed = true;
-    expect(a.plugin.getThreadsCard().kind).toBe("hidden");
-    const b = await boot(makeHarness(), true);
-    expect(b.plugin.getThreadsCard().kind).toBe("hidden");
   });
 });
 

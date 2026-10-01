@@ -80,19 +80,22 @@ export default class MyPlugin extends Plugin {
   Optional steps never trigger it. It stays closed if the user dismissed
   onboarding or the pane is already open, and under `GEODE_HEADLESS` (e2e).
   Register steps from `onload()` so they exist when the check runs.
-- The checklist includes an optional first-party step, "Install Agent Threads"
-  (supported-catalog id `claude-threads`). Its `check()` passes once the plugin
-  directory exists or the plugin is enabled, and its "Do it" action installs the
-  tested release through `CommunityManager.installSupported`. Failures show a
-  notice and never throw. It is not offered on hosts without the install API
-  (mobile) or when headless.
-- The same install is offered as a "Recommended: Agent Threads" card at the top
-  of the checklist pane (so it appears with the launch auto-open on a new
-  vault): Install, Not now, and Cancel / Retry / Skip / Undo as it progresses.
-  The card is hidden when the plugin is installed, headless, or the host has no
-  install API; "Not now" is saved in the onboarding state
-  (`dismissedRecommendations`) and the optional checklist step remains.
-  Progress is indeterminate (the install API reports none) and Cancel only
-  ignores the in-flight result.
+- The checklist includes an optional first-party step, "Install and enable Agent
+  Threads" (supported-catalog id `claude-threads`, which is the plugin's real id).
+  Its `check()` passes only when the plugin is installed and enabled. Its "Do it"
+  action (same `onboarding:install-agent-threads` command) installs the tested
+  release through `CommunityManager.installSupported` if needed, then enables it
+  through `PluginManager.enable`. Failures show a notice and never throw. It is
+  not offered on hosts without the install API (mobile) or when headless.
+- The same flow is offered as a "Recommended: Agent Threads" card at the top of
+  the checklist pane (so it appears with the launch auto-open on a new vault).
+  One Install click goes Installing, Enabling, "Installed and enabled". If the
+  install works but enabling fails, the card shows "Installed, but couldn't
+  enable" with an Enable retry (no reinstall). If the plugin is installed but
+  disabled, the card shows Enable instead of Install. It is hidden when the
+  plugin is installed and enabled, when headless, or when it is not installed
+  and the host has no install API. "Not now" is saved in the onboarding state
+  (`dismissedRecommendations`) and the optional step remains. Progress is
+  indeterminate and Cancel only ignores the in-flight install result.
 - Completion is stored per vault in `.geode/plugins/onboarding/data.json`. Users
   can skip a step, dismiss the whole checklist, or reset progress.

@@ -166,19 +166,28 @@ export class OnboardingView extends ItemView {
         this.el("li", undefined, "Installs into this vault only", facts);
         this.el("li", undefined, "Optional. Remove anytime", facts);
         const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
-        button("Install", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Install Agent Threads");
+        button("Install", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Install and enable Agent Threads");
         button("Not now", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Not now: skip installing Agent Threads");
         break;
       }
-      case "installing": {
+      case "enable": {
+        this.el("p", "onboarding-rec-desc", "Agent Threads is installed in this vault but turned off.", sec);
+        const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
+        button("Enable", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Enable Agent Threads");
+        button("Not now", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Not now: skip enabling Agent Threads");
+        break;
+      }
+      case "installing":
+      case "enabling": {
+        const label = card.kind === "installing" ? "Installing" : "Enabling";
         const status = this.el("div", undefined, undefined, sec);
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
-        this.el("p", "onboarding-rec-desc", "Installing Agent Threads into this vault…", status);
+        this.el("p", "onboarding-rec-desc", `${label} Agent Threads…`, status);
         const bar = this.el("div", "onboarding-rec-bar", undefined, status);
         bar.setAttribute("role", "progressbar");
-        bar.setAttribute("aria-label", "Installing Agent Threads");
-        bar.setAttribute("aria-valuetext", "Installing");
+        bar.setAttribute("aria-label", `${label} Agent Threads`);
+        bar.setAttribute("aria-valuetext", label);
         this.el("i", undefined, undefined, bar);
         const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
         button("Cancel", "onboarding-link", () => p.cancelThreadsInstall(), actions);
@@ -190,8 +199,20 @@ export class OnboardingView extends ItemView {
         status.setAttribute("aria-live", "polite");
         const ok = this.el("p", "onboarding-rec-ok", undefined, status);
         this.el("span", "onboarding-rec-tick", "✓", ok).setAttribute("aria-hidden", "true");
-        ok.append("Installed");
-        this.el("p", "onboarding-rec-meta", "Enable it in Settings > Community plugins.", status);
+        ok.append("Installed and enabled");
+        this.el("p", "onboarding-rec-meta", "Find it in the sidebar.", status);
+        break;
+      }
+      case "enable-failed": {
+        const alert = this.el("div", undefined, undefined, sec);
+        alert.setAttribute("role", "alert");
+        const err = this.el("p", "onboarding-rec-err", undefined, alert);
+        this.el("span", "onboarding-rec-warn", "!", err).setAttribute("aria-hidden", "true");
+        err.append("Installed, but couldn't enable");
+        this.el("p", "onboarding-rec-meta", card.error ?? "The plugin did not start.", alert);
+        const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
+        button("Enable", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Retry enabling Agent Threads");
+        button("Not now", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Not now: skip enabling Agent Threads");
         break;
       }
       case "failed": {

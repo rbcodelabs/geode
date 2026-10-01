@@ -27,12 +27,23 @@ export function shouldRecommendAgentThreads(s: ThreadsRecommendationState): bool
   return !s.installed && s.installApiAvailable && !s.headless && !s.declined;
 }
 
-export type ThreadsInstallPhase = "idle" | "installing" | "failed";
+export type ThreadsInstallPhase = "idle" | "installing" | "enabling" | "failed" | "enable-failed";
 
-export type ThreadsCardKind = "hidden" | "idle" | "installing" | "installed" | "failed" | "dismissed";
+export type ThreadsCardKind =
+  | "hidden"
+  | "idle" // not installed: Install
+  | "enable" // installed but disabled: Enable
+  | "installing"
+  | "enabling"
+  | "installed" // installed and enabled by this card this session
+  | "failed" // install failed: Retry / Skip
+  | "enable-failed" // installed, but enabling failed: Enable (retry)
+  | "dismissed";
 
 export interface ThreadsCardInput {
   installed: boolean;
+  /** Enabled (loaded). Implies installed. */
+  enabled: boolean;
   installApiAvailable: boolean;
   headless: boolean;
   /** "Not now" persisted in onboarding state. */
@@ -46,24 +57,28 @@ export interface ThreadsCardInput {
 }
 
 /**
- * Card state machine. Hidden when the host can't install, when headless, when
- * the plugin was already installed before this session's card did it, or when
- * dismissed in an earlier session. Installation is the source of truth:
- * once the plugin exists the card is "installed" (this session) or hidden,
- * never "idle", which keeps it in sync with the checklist step's check().
+ * Card state machine. Hidden when headless, or when the plugin is installed
+ * AND enabled (shown as "installed" only if this session's card did it), or
+ * dismissed in an earlier session. Installed-but-disabled shows "enable".
+ * Installed/enabled state is the source of truth, which keeps the card in sync
+ * with the checklist step's check() (installed and enabled).
  */
 export function computeThreadsCard(i: ThreadsCardInput): ThreadsCardKind {
-  if (i.headless || !i.installApiAvailable) return "hidden";
-  if (i.installed) return i.installedThisSession ? "installed" : "hidden";
+  if (i.headless) return "hidden";
   if (i.phase === "installing") return "installing";
+  if (i.phase === "enabling") return "enabling";
   if (i.phase === "failed") return "failed";
+  if (i.phase === "enable-failed") return "enable-failed";
+  if (i.installed && i.enabled) return i.installedThisSession ? "installed" : "hidden";
+  // Installing needs the catalog API; enabling an existing install does not.
+  if (!i.installed && !i.installApiAvailable) return "hidden";
   if (i.dismissed) return i.dismissedThisSession ? "dismissed" : "hidden";
-  return "idle";
+  return i.installed ? "enable" : "idle";
 }
 
 export interface ThreadsCardView {
   kind: ThreadsCardKind;
-  /** Present when kind === "failed". */
+  /** Present when kind is "failed" or "enable-failed". */
   error?: string;
 }
 

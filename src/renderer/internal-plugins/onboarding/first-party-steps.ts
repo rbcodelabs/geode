@@ -25,9 +25,8 @@ export interface OnboardingHost {
  */
 export function firstPartySteps(host: OnboardingHost): OnboardingStep[] {
   const id = (s: string) => `${ONBOARDING_PLUGIN_ID}:${s}`;
-  const agentThreadsInstalled = () =>
-    !!host.pluginManager?.getManifest?.(AGENT_THREADS_ID) ||
-    (host.pluginManager?.enabledIds() ?? []).includes(AGENT_THREADS_ID);
+  // Installed AND enabled: a plugin only appears in enabledIds() once loaded.
+  const agentThreadsReady = () => (host.pluginManager?.enabledIds() ?? []).includes(AGENT_THREADS_ID);
   const steps: OnboardingStep[] = [
     {
       id: id("create-note"),
@@ -88,10 +87,10 @@ export function firstPartySteps(host: OnboardingHost): OnboardingStep[] {
       group: "Explore",
       order: 60,
       optional: true,
-      title: "Install Agent Threads",
-      description: "Chat with AI agents about your notes, and run several at once inside your vault. Installs the tested release from the supported-plugin catalog.",
+      title: "Install and enable Agent Threads",
+      description: "Chat with AI agents about your notes, and run several at once inside your vault. Installs the tested release from the supported-plugin catalog if needed, then turns it on.",
       commandId: `${ONBOARDING_PLUGIN_ID}:${AGENT_THREADS_STEP_NAME}`,
-      check: agentThreadsInstalled,
+      check: agentThreadsReady,
     });
   }
   return steps;

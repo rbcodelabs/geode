@@ -57,6 +57,7 @@ export interface OnboardingPluginHost {
   isEnabled(id: string): boolean;
   enabledIds(): string[];
   enable?(id: string): Promise<void>;
+  getLoadError?(id: string): string | undefined;
   onChange?(listener: () => void): () => void;
 }
 
@@ -305,14 +306,13 @@ export class OnboardingPlugin extends GeodePlugin {
    * reported with a notice and never throws.
    */
   async installAgentThreads(): Promise<boolean> {
-    this.app.notify("Installing Agent Threads…");
-    const ok = await this.runThreadsInstall();
-    this.app.notify(
-      ok
-        ? "Agent Threads installed. Enable it in Settings > Community plugins."
-        : `Couldn't install Agent Threads: ${this.threadsError ?? "cancelled"}`,
-      ok ? undefined : 8000
-    );
+    this.app.notify(this.isThreadsInstalled() ? "Enabling Agent Threads…" : "Installing Agent Threads…");
+    const ok = await this.runThreadsSetup();
+    const failure =
+      this.threadsPhase === "enable-failed"
+        ? `Agent Threads is installed, but couldn't be enabled: ${this.threadsError}`
+        : `Couldn't install Agent Threads: ${this.threadsError ?? "cancelled"}`;
+    this.app.notify(ok ? "Agent Threads is installed and enabled." : failure, ok ? undefined : 8000);
     return ok;
   }
 
@@ -329,9 +329,14 @@ export class OnboardingPlugin extends GeodePlugin {
     return !!host && (!!host.getManifest(AGENT_THREADS_ID) || host.enabledIds().includes(AGENT_THREADS_ID));
   }
 
+  private isThreadsEnabled(): boolean {
+    return !!this.host && this.host.enabledIds().includes(AGENT_THREADS_ID);
+  }
+
   getThreadsCard(): ThreadsCardView {
     const kind = computeThreadsCard({
       installed: this.isThreadsInstalled(),
+      enabled: this.isThreadsEnabled(),
       installApiAvailable: typeof (globalThis as any).window?.geode?.installSupportedPlugin === "function",
       headless: this.headlessProbe(),
       dismissed: this.state.dismissedRecommendations.includes(AGENT_THREADS_ID),
@@ -339,31 +344,57 @@ export class OnboardingPlugin extends GeodePlugin {
       installedThisSession: this.threadsInstalledThisSession,
       dismissedThisSession: this.threadsDismissedThisSession,
     });
-    return kind === "failed" ? { kind, error: this.threadsError } : { kind };
+    return kind === "failed" || kind === "enable-failed" ? { kind, error: this.threadsError } : { kind };
   }
 
-  /** Shared install runner. Never throws; a cancelled run's late result is ignored. */
-  private async runThreadsInstall(): Promise<boolean> {
+  /**
+   * Install (if not installed) then enable, in one action, via the existing
+   * `CommunityManager.installSupported` and `PluginManager.enable` paths.
+   * Never throws and never leaves a silent half-done state: an install failure
+   * ends in "failed", an enable failure in "enable-failed" (the plugin stays
+   * installed). A cancelled run's late result is ignored.
+   */
+  private async runThreadsSetup(): Promise<boolean> {
     const run = ++this.threadsRun;
-    this.threadsPhase = "installing";
     this.threadsError = undefined;
-    this.emit();
-    const outcome = await installAgentThreads((id, release) => this.app.communityManager.installSupported(id, release));
-    if (run !== this.threadsRun) return false; // cancelled; a late success still shows via refresh()
-    if (outcome.ok) {
-      this.threadsPhase = "idle";
-      this.threadsInstalledThisSession = true;
-    } else {
-      this.threadsPhase = "failed";
-      this.threadsError = outcome.error;
+    if (!this.isThreadsInstalled()) {
+      this.threadsPhase = "installing";
+      this.emit();
+      const outcome = await installAgentThreads((id, release) => this.app.communityManager.installSupported(id, release));
+      if (run !== this.threadsRun) return false; // cancelled; a late success still shows via refresh()
+      if (!outcome.ok) {
+        this.threadsPhase = "failed";
+        this.threadsError = outcome.error;
+        this.emit();
+        return false;
+      }
     }
+    this.threadsPhase = "enabling";
+    this.emit();
+    try {
+      if (!this.host?.enable) throw new Error("Plugin manager unavailable");
+      await this.host.enable(AGENT_THREADS_ID);
+      // enable() can contain a plugin error instead of throwing; verify it really loaded.
+      if (!this.isThreadsEnabled()) {
+        throw new Error(this.host.getLoadError?.(AGENT_THREADS_ID) ?? "The plugin did not start");
+      }
+    } catch (err) {
+      if (run !== this.threadsRun) return false;
+      this.threadsPhase = "enable-failed";
+      this.threadsError = err instanceof Error ? err.message : String(err);
+      await this.refresh();
+      return false;
+    }
+    if (run !== this.threadsRun) return false;
+    this.threadsPhase = "idle";
+    this.threadsInstalledThisSession = true;
     await this.refresh();
-    return outcome.ok;
+    return true;
   }
 
-  /** Card "Install" / "Retry". */
+  /** Card "Install" / "Enable" / "Retry": installs and/or enables as needed. */
   async startThreadsInstall(): Promise<void> {
-    await this.runThreadsInstall();
+    await this.runThreadsSetup();
   }
 
   /** Card "Cancel": returns to idle. The in-flight download cannot be aborted, only ignored. */
