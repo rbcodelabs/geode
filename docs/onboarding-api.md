@@ -80,13 +80,13 @@ export default class MyPlugin extends Plugin {
   Optional steps never trigger it. It stays closed if the user dismissed
   onboarding or the pane is already open, and under `GEODE_HEADLESS` (e2e).
   Register steps from `onload()` so they exist when the check runs.
-- The checklist includes an optional first-party step, "Install Claude Threads"
+- The checklist includes an optional first-party step, "Install Agent Threads"
   (supported-catalog id `claude-threads`). Its `check()` passes once the plugin
   directory exists or the plugin is enabled, and its "Do it" action installs the
   tested release through `CommunityManager.installSupported`. Failures show a
   notice and never throw. It is not offered on hosts without the install API
   (mobile) or when headless.
-- The same install is offered as a "Recommended: Claude Threads" card at the top
+- The same install is offered as a "Recommended: Agent Threads" card at the top
   of the checklist pane (so it appears with the launch auto-open on a new
   vault): Install, Not now, and Cancel / Retry / Skip / Undo as it progresses.
   The card is hidden when the plugin is installed, headless, or the host has no

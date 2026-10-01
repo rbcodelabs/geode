@@ -90,7 +90,7 @@ describe("OnboardingPlugin", () => {
     const plugin = new OnboardingPlugin(h.app);
     plugin.load();
     await plugin.ready;
-    expect([...h.commands.keys()].sort()).toEqual(["onboarding:install-claude-threads", "onboarding:open", "onboarding:rerun-checks", "onboarding:reset"]);
+    expect([...h.commands.keys()].sort()).toEqual(["onboarding:install-agent-threads", "onboarding:open", "onboarding:rerun-checks", "onboarding:reset"]);
     expect(plugin.getSnapshot().items.length).toBeGreaterThan(0);
     plugin.unload();
     expect(h.commands.size).toBe(0);
@@ -223,7 +223,7 @@ describe("OnboardingPlugin", () => {
   });
 });
 
-describe("OnboardingPlugin Claude Threads step", () => {
+describe("OnboardingPlugin Agent Threads step", () => {
   async function boot(h: ReturnType<typeof makeHarness>, installed: boolean) {
     (globalThis as any).window.geode.installSupportedPlugin = vi.fn();
     const plugin = new OnboardingPlugin(h.app, () => false);
@@ -233,15 +233,15 @@ describe("OnboardingPlugin Claude Threads step", () => {
     return plugin;
   }
   const stepDone = (p: OnboardingPlugin) =>
-    p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-claude-threads");
+    p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-agent-threads");
 
   it("registers the optional step and its command; install failure notifies and does not throw", async () => {
     const h = makeHarness();
     h.app.communityManager = { installSupported: vi.fn().mockRejectedValue(new Error("offline")) };
     const plugin = await boot(h, false);
-    expect(h.commands.has("onboarding:install-claude-threads")).toBe(true);
+    expect(h.commands.has("onboarding:install-agent-threads")).toBe(true);
     expect(stepDone(plugin)).toMatchObject({ done: false, step: { optional: true } });
-    await expect(plugin.installClaudeThreads()).resolves.toBe(false);
+    await expect(plugin.installAgentThreads()).resolves.toBe(false);
     expect(h.app.notify).toHaveBeenCalledWith(expect.stringContaining("offline"), 8000);
     expect(stepDone(plugin)!.done).toBe(false);
   });
@@ -252,12 +252,12 @@ describe("OnboardingPlugin Claude Threads step", () => {
     const plugin = await boot(h, true);
     await plugin.refresh();
     expect(stepDone(plugin)!.done).toBe(true);
-    await expect(plugin.installClaudeThreads()).resolves.toBe(true);
+    await expect(plugin.installAgentThreads()).resolves.toBe(true);
     expect(h.app.communityManager.installSupported).toHaveBeenCalledWith("claude-threads", "tested");
   });
 });
 
-describe("OnboardingPlugin Claude Threads card", () => {
+describe("OnboardingPlugin Agent Threads card", () => {
   async function boot(h: ReturnType<typeof makeHarness>, headless = false) {
     (globalThis as any).window.geode.installSupportedPlugin = vi.fn();
     const state = { installed: false };
@@ -271,7 +271,7 @@ describe("OnboardingPlugin Claude Threads card", () => {
     return { plugin, state };
   }
   const step = (p: OnboardingPlugin) =>
-    p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-claude-threads")!;
+    p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-agent-threads")!;
 
   it("idle -> installing -> installed, and the checklist step completes in sync", async () => {
     const h = makeHarness();

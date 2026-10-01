@@ -1,6 +1,6 @@
 import { ItemView } from "../../api/obsidian";
 import type { WorkspaceLeaf } from "../../workspace";
-import type { ThreadsCardView } from "./claude-threads-recommendation";
+import type { ThreadsCardView } from "./agent-threads-recommendation";
 import { DEFAULT_GROUP } from "./completeness";
 import { ONBOARDING_VIEW_TYPE, type OnboardingItem, type OnboardingPlugin } from "./onboarding-plugin";
 
@@ -125,7 +125,7 @@ export class OnboardingView extends ItemView {
   }
 
   /**
-   * "Recommended: Claude Threads" card (Direction A, quiet note): dashed,
+   * "Recommended: Agent Threads" card (Direction A, quiet note): dashed,
    * visually secondary block above the checklist. State comes from the plugin.
    */
   private renderThreadsCard(root: HTMLElement, card: ThreadsCardView): void {
@@ -142,7 +142,7 @@ export class OnboardingView extends ItemView {
       '<svg viewBox="0 0 24 24" width="28" height="28"><rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" opacity=".16"/><path d="M7 8h10M7 12h7M7 16h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>';
     const titles = this.el("div", undefined, undefined, head);
     this.el("p", "onboarding-rec-eyebrow", "Recommended", titles);
-    const h = this.el("h3", "onboarding-rec-title", "Claude Threads", titles);
+    const h = this.el("h3", "onboarding-rec-title", "Agent Threads", titles);
     h.id = "onboarding-rec-title";
 
     const button = (label: string, cls: string, onClick: () => void, parent: HTMLElement, aria?: string) => {
@@ -159,25 +159,25 @@ export class OnboardingView extends ItemView {
         this.el(
           "p",
           "onboarding-rec-desc",
-          "Chat with Claude about your notes, run agents against your vault, and keep every conversation as a Markdown note you own.",
+          "Chat with AI agents about your notes, run several at once against your vault, and keep every conversation as a Markdown note you own.",
           sec
         );
         const facts = this.el("ul", "onboarding-rec-facts", undefined, sec);
         this.el("li", undefined, "Installs into this vault only", facts);
         this.el("li", undefined, "Optional. Remove anytime", facts);
         const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
-        button("Install", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Install Claude Threads");
-        button("Not now", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Not now: skip installing Claude Threads");
+        button("Install", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Install Agent Threads");
+        button("Not now", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Not now: skip installing Agent Threads");
         break;
       }
       case "installing": {
         const status = this.el("div", undefined, undefined, sec);
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
-        this.el("p", "onboarding-rec-desc", "Installing Claude Threads into this vault…", status);
+        this.el("p", "onboarding-rec-desc", "Installing Agent Threads into this vault…", status);
         const bar = this.el("div", "onboarding-rec-bar", undefined, status);
         bar.setAttribute("role", "progressbar");
-        bar.setAttribute("aria-label", "Installing Claude Threads");
+        bar.setAttribute("aria-label", "Installing Agent Threads");
         bar.setAttribute("aria-valuetext", "Installing");
         this.el("i", undefined, undefined, bar);
         const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
@@ -202,8 +202,8 @@ export class OnboardingView extends ItemView {
         err.append(`Couldn't install${card.error ? `: ${card.error}` : ""}`);
         this.el("p", "onboarding-rec-meta", "Nothing was changed. You can keep going and add it later from Community plugins.", alert);
         const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
-        button("Retry", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Retry installing Claude Threads");
-        button("Skip", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Skip installing Claude Threads");
+        button("Retry", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Retry installing Agent Threads");
+        button("Skip", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Skip installing Agent Threads");
         break;
       }
       case "dismissed": {

@@ -6543,7 +6543,7 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
 .onboarding-empty-title { font-weight: 600; color: var(--text-normal); margin: 0 0 4px; }
 .onboarding-empty-hint { margin: 0 0 8px; font-size: 0.85em; }
 
-/* Onboarding: "Recommended: Claude Threads" card (quiet, dashed, secondary) */
+/* Onboarding: "Recommended: Agent Threads" card (quiet, dashed, secondary) */
 .onboarding-rec {
   margin: 0 0 16px;
   padding: 12px 14px;

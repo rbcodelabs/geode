@@ -1,13 +1,15 @@
 /**
- * Claude Threads is published in the supported-plugin catalog
+ * Agent Threads is published in the supported-plugin catalog
  * (https://geode.rbcodelabs.com/supported-plugins/v1.json) as id
  * `claude-threads` (display name "Agent Threads", repo rbcodelabs/agent-threads).
+ * The id is the plugin's real, historical id and must not be renamed with the
+ * product name; only user-facing copy says "Agent Threads".
  * Installation reuses `CommunityManager.installSupported`, which goes through
  * the main-process-admitted `installSupportedPlugin` IPC. Nothing new is
  * downloaded or admitted here.
  */
-export const CLAUDE_THREADS_ID = "claude-threads";
-export const CLAUDE_THREADS_STEP_NAME = "install-claude-threads";
+export const AGENT_THREADS_ID = "claude-threads";
+export const AGENT_THREADS_STEP_NAME = "install-agent-threads";
 
 export interface ThreadsRecommendationState {
   /** The plugin directory exists in the vault (installed, enabled or not). */
@@ -21,7 +23,7 @@ export interface ThreadsRecommendationState {
 }
 
 /** Whether to offer the recommendation card/step: not installed, installable, not declined, not headless. */
-export function shouldRecommendClaudeThreads(s: ThreadsRecommendationState): boolean {
+export function shouldRecommendAgentThreads(s: ThreadsRecommendationState): boolean {
   return !s.installed && s.installApiAvailable && !s.headless && !s.declined;
 }
 
@@ -68,17 +70,17 @@ export interface ThreadsCardView {
 export type InstallOutcome = { ok: true } | { ok: false; error: string };
 
 /**
- * Install Claude Threads via the existing supported-catalog path. Never
+ * Install Agent Threads via the existing supported-catalog path. Never
  * throws: offline, catalog-unavailable and admission failures come back as
  * `{ ok: false, error }` so callers can show an error without blocking setup.
  */
-export async function installClaudeThreads(
+export async function installAgentThreads(
   install: (pluginId: string, release: "tested" | "latest") => Promise<unknown>,
   onProgress?: (phase: "installing" | "done" | "failed") => void
 ): Promise<InstallOutcome> {
   onProgress?.("installing");
   try {
-    await install(CLAUDE_THREADS_ID, "tested");
+    await install(AGENT_THREADS_ID, "tested");
     onProgress?.("done");
     return { ok: true };
   } catch (err) {

@@ -1,8 +1,8 @@
 import {
-  CLAUDE_THREADS_ID,
-  CLAUDE_THREADS_STEP_NAME,
-  shouldRecommendClaudeThreads,
-} from "./claude-threads-recommendation";
+  AGENT_THREADS_ID,
+  AGENT_THREADS_STEP_NAME,
+  shouldRecommendAgentThreads,
+} from "./agent-threads-recommendation";
 import type { OnboardingStep } from "./registry";
 
 export const ONBOARDING_PLUGIN_ID = "onboarding";
@@ -11,9 +11,9 @@ export const ONBOARDING_PLUGIN_ID = "onboarding";
 export interface OnboardingHost {
   metadataCache: { resolvedLinks: Record<string, Record<string, number>> };
   pluginManager?: { enabledIds(): string[]; getManifest?(id: string): unknown } | undefined;
-  /** True when the supported-catalog install API exists (desktop). Gates the Claude Threads step. */
+  /** True when the supported-catalog install API exists (desktop). Gates the Agent Threads step. */
   supportedInstallAvailable?: boolean;
-  /** True under GEODE_HEADLESS / e2e: the Claude Threads step is not offered. */
+  /** True under GEODE_HEADLESS / e2e: the Agent Threads step is not offered. */
   headless?: boolean;
 }
 
@@ -25,9 +25,9 @@ export interface OnboardingHost {
  */
 export function firstPartySteps(host: OnboardingHost): OnboardingStep[] {
   const id = (s: string) => `${ONBOARDING_PLUGIN_ID}:${s}`;
-  const claudeThreadsInstalled = () =>
-    !!host.pluginManager?.getManifest?.(CLAUDE_THREADS_ID) ||
-    (host.pluginManager?.enabledIds() ?? []).includes(CLAUDE_THREADS_ID);
+  const agentThreadsInstalled = () =>
+    !!host.pluginManager?.getManifest?.(AGENT_THREADS_ID) ||
+    (host.pluginManager?.enabledIds() ?? []).includes(AGENT_THREADS_ID);
   const steps: OnboardingStep[] = [
     {
       id: id("create-note"),
@@ -77,21 +77,21 @@ export function firstPartySteps(host: OnboardingHost): OnboardingStep[] {
       check: () => (host.pluginManager?.enabledIds().length ?? 0) > 0,
     },
   ];
-  if (shouldRecommendClaudeThreads({
+  if (shouldRecommendAgentThreads({
     installed: false, // the step stays listed once installed so it can show as complete
     installApiAvailable: host.supportedInstallAvailable === true,
     headless: host.headless === true,
   })) {
     steps.push({
-      id: id(CLAUDE_THREADS_STEP_NAME),
+      id: id(AGENT_THREADS_STEP_NAME),
       ownerId: ONBOARDING_PLUGIN_ID,
       group: "Explore",
       order: 60,
       optional: true,
-      title: "Install Claude Threads",
-      description: "Run multi-agent Claude Code sessions inside your vault. Installs the tested release from the supported-plugin catalog.",
-      commandId: `${ONBOARDING_PLUGIN_ID}:${CLAUDE_THREADS_STEP_NAME}`,
-      check: claudeThreadsInstalled,
+      title: "Install Agent Threads",
+      description: "Chat with AI agents about your notes, and run several at once inside your vault. Installs the tested release from the supported-plugin catalog.",
+      commandId: `${ONBOARDING_PLUGIN_ID}:${AGENT_THREADS_STEP_NAME}`,
+      check: agentThreadsInstalled,
     });
   }
   return steps;

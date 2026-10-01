@@ -4,13 +4,13 @@ import type { PluginManifest } from "../../plugin-manifest";
 import type { OnboardingManifestStep } from "../../plugin-manifest";
 import { computeCompleteness, type Completeness } from "./completeness";
 import {
-  CLAUDE_THREADS_ID,
-  CLAUDE_THREADS_STEP_NAME,
+  AGENT_THREADS_ID,
+  AGENT_THREADS_STEP_NAME,
   computeThreadsCard,
-  installClaudeThreads,
+  installAgentThreads,
   type ThreadsCardView,
   type ThreadsInstallPhase,
-} from "./claude-threads-recommendation";
+} from "./agent-threads-recommendation";
 import { firstPartySteps, ONBOARDING_PLUGIN_ID, type OnboardingHost } from "./first-party-steps";
 import { OnboardingRegistry, type OnboardingStep, type ResolvedStep } from "./registry";
 import {
@@ -133,9 +133,9 @@ export class OnboardingPlugin extends GeodePlugin {
     };
     for (const step of firstPartySteps(stepHost)) this.register(this.registry.registerStep(step));
     this.addCommand({
-      id: CLAUDE_THREADS_STEP_NAME,
-      name: "Install Claude Threads",
-      callback: () => this.installClaudeThreads(),
+      id: AGENT_THREADS_STEP_NAME,
+      name: "Install Agent Threads",
+      callback: () => this.installAgentThreads(),
     });
 
     this.addCommand({ id: "open", name: "Open checklist", callback: () => this.openChecklist() });
@@ -300,23 +300,23 @@ export class OnboardingPlugin extends GeodePlugin {
   }
 
   /**
-   * Install Claude Threads through the existing supported-catalog path
+   * Install Agent Threads through the existing supported-catalog path
    * (`CommunityManager.installSupported`). Failure (offline, catalog down) is
    * reported with a notice and never throws.
    */
-  async installClaudeThreads(): Promise<boolean> {
-    this.app.notify("Installing Claude Threads…");
+  async installAgentThreads(): Promise<boolean> {
+    this.app.notify("Installing Agent Threads…");
     const ok = await this.runThreadsInstall();
     this.app.notify(
       ok
-        ? "Claude Threads installed. Enable it in Settings > Community plugins."
-        : `Couldn't install Claude Threads: ${this.threadsError ?? "cancelled"}`,
+        ? "Agent Threads installed. Enable it in Settings > Community plugins."
+        : `Couldn't install Agent Threads: ${this.threadsError ?? "cancelled"}`,
       ok ? undefined : 8000
     );
     return ok;
   }
 
-  // ----- "Recommended: Claude Threads" card -----
+  // ----- "Recommended: Agent Threads" card -----
 
   private threadsPhase: ThreadsInstallPhase = "idle";
   private threadsError?: string;
@@ -326,7 +326,7 @@ export class OnboardingPlugin extends GeodePlugin {
 
   private isThreadsInstalled(): boolean {
     const host = this.host;
-    return !!host && (!!host.getManifest(CLAUDE_THREADS_ID) || host.enabledIds().includes(CLAUDE_THREADS_ID));
+    return !!host && (!!host.getManifest(AGENT_THREADS_ID) || host.enabledIds().includes(AGENT_THREADS_ID));
   }
 
   getThreadsCard(): ThreadsCardView {
@@ -334,7 +334,7 @@ export class OnboardingPlugin extends GeodePlugin {
       installed: this.isThreadsInstalled(),
       installApiAvailable: typeof (globalThis as any).window?.geode?.installSupportedPlugin === "function",
       headless: this.headlessProbe(),
-      dismissed: this.state.dismissedRecommendations.includes(CLAUDE_THREADS_ID),
+      dismissed: this.state.dismissedRecommendations.includes(AGENT_THREADS_ID),
       phase: this.threadsPhase,
       installedThisSession: this.threadsInstalledThisSession,
       dismissedThisSession: this.threadsDismissedThisSession,
@@ -348,7 +348,7 @@ export class OnboardingPlugin extends GeodePlugin {
     this.threadsPhase = "installing";
     this.threadsError = undefined;
     this.emit();
-    const outcome = await installClaudeThreads((id, release) => this.app.communityManager.installSupported(id, release));
+    const outcome = await installAgentThreads((id, release) => this.app.communityManager.installSupported(id, release));
     if (run !== this.threadsRun) return false; // cancelled; a late success still shows via refresh()
     if (outcome.ok) {
       this.threadsPhase = "idle";
@@ -379,14 +379,14 @@ export class OnboardingPlugin extends GeodePlugin {
     this.threadsPhase = "idle";
     this.threadsDismissedThisSession = true;
     const s = this.state;
-    if (s.dismissedRecommendations.includes(CLAUDE_THREADS_ID)) this.emit();
-    else await this.update({ ...s, dismissedRecommendations: [...s.dismissedRecommendations, CLAUDE_THREADS_ID] });
+    if (s.dismissedRecommendations.includes(AGENT_THREADS_ID)) this.emit();
+    else await this.update({ ...s, dismissedRecommendations: [...s.dismissedRecommendations, AGENT_THREADS_ID] });
   }
 
   async undoDismissThreadsCard(): Promise<void> {
     this.threadsDismissedThisSession = false;
     const s = this.state;
-    await this.update({ ...s, dismissedRecommendations: s.dismissedRecommendations.filter((x) => x !== CLAUDE_THREADS_ID) });
+    await this.update({ ...s, dismissedRecommendations: s.dismissedRecommendations.filter((x) => x !== AGENT_THREADS_ID) });
     this.emit();
   }
 
