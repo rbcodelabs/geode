@@ -1744,7 +1744,7 @@ export function installObsidianAppCompat(app: App): void {
       get enabledPlugins(): Set<string> {
         return syncEnabledSet();
       },
-      getPlugin: (id: string) => a.pluginManager?.getPlugin?.(id) ?? null,
+      getPlugin: (id: string) => a.pluginManager?.getPlugin?.(id) ?? a.getInternalPlugin?.(id) ?? null,
       enablePlugin: (id: string) => a.pluginManager?.enable?.(id),
       disablePlugin: (id: string) => a.pluginManager?.disable?.(id),
     };

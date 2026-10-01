@@ -22,6 +22,27 @@ export interface PluginManifest {
    * `path.join(vaultRoot, manifest.dir, "skill-sources")`).
    */
   dir?: string;
+  /**
+   * Optional static onboarding steps the plugin recommends (see the
+   * `onboarding` internal plugin, docs/plugin-authors/onboarding.md). Parsed
+   * leniently: malformed entries are dropped with a console warning and never
+   * make the manifest invalid.
+   */
+  onboarding?: OnboardingManifestSection;
+}
+
+/** One manifest-declared onboarding step. `id` is bare; the host namespaces it as `<pluginId>:<id>`. */
+export interface OnboardingManifestStep {
+  id: string;
+  title: string;
+  description?: string;
+  group?: string;
+  commandId?: string;
+  optional?: boolean;
+}
+
+export interface OnboardingManifestSection {
+  steps: OnboardingManifestStep[];
 }
 
 /**
@@ -125,7 +146,59 @@ export function parseManifest(raw: string, expectedId?: string): PluginManifest 
   const manifest: PluginManifest = { id, name, version, minAppVersion, description, author };
   if (typeof obj.authorUrl === "string") manifest.authorUrl = obj.authorUrl;
   if (typeof obj.isDesktopOnly === "boolean") manifest.isDesktopOnly = obj.isDesktopOnly;
+  const onboarding = parseOnboardingSection(obj.onboarding, id);
+  if (onboarding) manifest.onboarding = onboarding;
   return manifest;
+}
+
+const STEP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Leniently parse the optional `onboarding` manifest field. Never throws: an
+ * invalid section or entry is skipped with a `console.warn` so a typo in a
+ * plugin's onboarding hints can never stop the plugin from loading.
+ */
+export function parseOnboardingSection(value: unknown, pluginId: string): OnboardingManifestSection | undefined {
+  if (value === undefined) return undefined;
+  const warn = (msg: string) => console.warn(`Plugin "${pluginId}" manifest onboarding: ${msg}`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    warn("`onboarding` must be an object; ignored");
+    return undefined;
+  }
+  const rawSteps = (value as Record<string, unknown>).steps;
+  if (!Array.isArray(rawSteps)) {
+    warn("`onboarding.steps` must be an array; ignored");
+    return undefined;
+  }
+  const steps: OnboardingManifestStep[] = [];
+  const seen = new Set<string>();
+  rawSteps.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      warn(`steps[${index}] is not an object; ignored`);
+      return;
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e.id !== "string" || !STEP_ID_RE.test(e.id)) {
+      warn(`steps[${index}] has a missing or invalid "id"; ignored`);
+      return;
+    }
+    if (typeof e.title !== "string" || !e.title.trim()) {
+      warn(`steps[${index}] ("${e.id}") has a missing "title"; ignored`);
+      return;
+    }
+    if (seen.has(e.id)) {
+      warn(`steps[${index}] duplicates id "${e.id}"; ignored`);
+      return;
+    }
+    seen.add(e.id);
+    const step: OnboardingManifestStep = { id: e.id, title: e.title.trim() };
+    if (typeof e.description === "string") step.description = e.description;
+    if (typeof e.group === "string" && e.group.trim()) step.group = e.group.trim();
+    if (typeof e.commandId === "string" && e.commandId.trim()) step.commandId = e.commandId.trim();
+    if (typeof e.optional === "boolean") step.optional = e.optional;
+    steps.push(step);
+  });
+  return { steps };
 }
 
 /** Compare two dotted version strings numerically (e.g. "1.2" < "1.10"). Returns <0, 0, or >0. */
