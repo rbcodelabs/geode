@@ -259,6 +259,8 @@ const api = {
   readDeviceState: <T>(key: string): Promise<T | null> => ipcRenderer.invoke("device-state-read", key),
   writeDeviceState: (key: string, data: unknown): Promise<void> => ipcRenderer.invoke("device-state-write", key, data),
   removeDeviceState: (key: string): Promise<void> => ipcRenderer.invoke("device-state-remove", key),
+  /** True under GEODE_HEADLESS=1 / --headless (e2e): renderer must not auto-open UI. */
+  isHeadless: process.env.GEODE_HEADLESS === "1" || process.argv.includes("--headless"),
   isSecretStorageAvailable: (): boolean => process.platform !== "linux" || Boolean(process.env.DBUS_SESSION_BUS_ADDRESS),
   readSecret: (capability: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", capability, key),
   writeSecret: (capability: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", capability, key, value),
@@ -433,8 +435,10 @@ export type GeodeApi = Omit<
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless"
 > & {
+  /** Desktop-only: true under GEODE_HEADLESS / --headless (e2e). Absent (falsy) on mobile/browser. */
+  isHeadless?: boolean;
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
   readMetadataCachePage?: ElectronOnlyGeodeApi["readMetadataCachePage"];

@@ -65,6 +65,16 @@ An empty total is 100%.
 avoid the `api/obsidian` init cycle noted in `app.ts`), commands
 `onboarding:open`, `onboarding:rerun-checks`, `onboarding:reset`. No ribbon icon.
 
+**Auto-open on launch.** `App` queues `autoOpenIfOutstanding()` via
+`workspace.onLayoutReady`, so it runs after layout restore. It runs the checks
+first, then docks the pane in the right sidebar (`active: false`, sidebar reveal
+only, so the editor keeps focus) if a required step is incomplete and not
+skipped. It does nothing if onboarding is dismissed, the pane is already open
+(restored layout), or the app is headless. Headless is read from
+`window.geode.isHeadless`, which the preload derives from `GEODE_HEADLESS=1` /
+`--headless` (the same test `main.ts` uses), so existing e2e specs are
+unaffected.
+
 ## Consequences
 
 - `PluginManifest` gains an optional `onboarding` field; `PluginManager` gains

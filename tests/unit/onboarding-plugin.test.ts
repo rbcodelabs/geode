@@ -30,6 +30,7 @@ function makeHarness(initialData: unknown = null) {
       write: async (p: string, c: string) => void files.set(p, c),
     },
   });
+  const openLeaves: { type: string; setViewState: ReturnType<typeof vi.fn> }[] = [];
   const commands = new Map<string, unknown>();
   const executed: string[] = [];
   const app: any = {
@@ -39,7 +40,23 @@ function makeHarness(initialData: unknown = null) {
       has: (id: string) => commands.has(id) || id === "new-note",
       execute: (id: string) => (executed.push(id), true),
     },
-    workspace: { isDeferrableViewType: () => true, registerViewFactory: vi.fn(), unregisterViewFactory: vi.fn() },
+    workspace: {
+      isDeferrableViewType: () => true,
+      registerViewFactory: vi.fn(),
+      unregisterViewFactory: vi.fn(),
+      getLeavesOfType: (type: string) => openLeaves.filter((l) => l.type === type),
+      getRightLeaf: () => {
+        const leaf = {
+          type: "",
+          setViewState: vi.fn(async (s: { type: string; active?: boolean }) => {
+            leaf.type = s.type;
+            openLeaves.push(leaf);
+          }),
+        };
+        return leaf;
+      },
+      revealLeaf: vi.fn(),
+    },
     metadataCache: { resolvedLinks: {} },
     notify: vi.fn(),
   };
@@ -55,7 +72,7 @@ function makeHarness(initialData: unknown = null) {
   };
   const fire = () => listeners.forEach((l) => l());
   const saved = () => JSON.parse(files.get(".geode/plugins/onboarding/data.json") ?? "null");
-  return { app, commands, executed, host, manifests, enabled, fire, saved, files };
+  return { app, commands, executed, host, manifests, enabled, fire, saved, files, openLeaves };
 }
 
 let warn: ReturnType<typeof vi.spyOn>;
@@ -203,5 +220,66 @@ describe("OnboardingPlugin", () => {
     expect(plugin.runStep("onboarding:create-note")).toBe(true);
     expect(h.executed).toEqual(["new-note"]);
     expect(plugin.runStep("onboarding:link-notes")).toBe(false);
+  });
+});
+
+describe("OnboardingPlugin.autoOpenIfOutstanding", () => {
+  const MANUAL_FIRST_PARTY = ["onboarding:create-note", "onboarding:command-palette", "onboarding:open-graph"];
+
+  async function boot(h: ReturnType<typeof makeHarness>, headless = false) {
+    const plugin = new OnboardingPlugin(h.app, () => headless);
+    plugin.load();
+    await plugin.ready;
+    return plugin;
+  }
+
+  it("opens in the sidebar without activating when required steps are outstanding", async () => {
+    const h = makeHarness();
+    const plugin = await boot(h);
+    expect(await plugin.autoOpenIfOutstanding()).toBe(true);
+    expect(h.openLeaves).toHaveLength(1);
+    expect(h.openLeaves[0].setViewState).toHaveBeenCalledWith({ type: "onboarding-checklist", active: false });
+    expect(h.app.workspace.revealLeaf).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs checks first: auto-detected completion prevents a spurious open", async () => {
+    const h = makeHarness();
+    const plugin = await boot(h);
+    for (const id of MANUAL_FIRST_PARTY) await plugin.toggleStep(id);
+    expect(plugin.hasOutstandingSteps()).toBe(true); // link-notes not yet detected
+    h.app.metadataCache.resolvedLinks = { "a.md": { "b.md": 1 } };
+    expect(await plugin.autoOpenIfOutstanding()).toBe(false);
+    expect(h.openLeaves).toHaveLength(0);
+  });
+
+  it("does not open when only skipped or optional steps remain", async () => {
+    const h = makeHarness();
+    const plugin = await boot(h);
+    for (const id of [...MANUAL_FIRST_PARTY, "onboarding:link-notes"]) await plugin.skipStep(id);
+    // community-plugin is optional and still incomplete
+    expect(await plugin.autoOpenIfOutstanding()).toBe(false);
+  });
+
+  it("does not open when onboarding was dismissed", async () => {
+    const h = makeHarness();
+    const plugin = await boot(h);
+    await plugin.setOnboardingDismissed(true);
+    expect(await plugin.autoOpenIfOutstanding()).toBe(false);
+    expect(h.openLeaves).toHaveLength(0);
+  });
+
+  it("does not open when the pane is already open (restored layout)", async () => {
+    const h = makeHarness();
+    const plugin = await boot(h);
+    h.openLeaves.push({ type: "onboarding-checklist", setViewState: vi.fn() });
+    expect(await plugin.autoOpenIfOutstanding()).toBe(false);
+    expect(h.openLeaves).toHaveLength(1);
+  });
+
+  it("does not open when headless (GEODE_HEADLESS / e2e)", async () => {
+    const h = makeHarness();
+    const plugin = await boot(h, true);
+    expect(await plugin.autoOpenIfOutstanding()).toBe(false);
+    expect(h.openLeaves).toHaveLength(0);
   });
 });

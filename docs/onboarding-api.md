@@ -75,5 +75,10 @@ export default class MyPlugin extends Plugin {
 - A runtime step with the same id as a manifest step overrides it field by
   field, so you can declare the step statically and add the `check` at runtime.
 - Steps vanish when your plugin is disabled.
+- On launch the checklist opens by itself (in the right sidebar, without taking
+  focus from the editor) while any required step is incomplete and not skipped.
+  Optional steps never trigger it. It stays closed if the user dismissed
+  onboarding or the pane is already open, and under `GEODE_HEADLESS` (e2e).
+  Register steps from `onload()` so they exist when the check runs.
 - Completion is stored per vault in `.geode/plugins/onboarding/data.json`. Users
   can skip a step, dismiss the whole checklist, or reset progress.

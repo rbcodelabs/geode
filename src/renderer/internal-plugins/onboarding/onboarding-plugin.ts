@@ -72,7 +72,14 @@ export class OnboardingPlugin extends GeodePlugin {
   private refreshChain: Promise<void> = Promise.resolve();
   private listeners = new Set<() => void>();
 
-  constructor(app: App) {
+  /**
+   * @param headlessProbe true under GEODE_HEADLESS / e2e; the preload exposes
+   *   it as `window.geode.isHeadless`. Injectable for tests.
+   */
+  constructor(
+    app: App,
+    private readonly headlessProbe: () => boolean = () => (globalThis as any).window?.geode?.isHeadless === true
+  ) {
     super(app, ONBOARDING_MANIFEST);
     this.registry = new OnboardingRegistry((ownerId) => this.isOwnerEnabled(ownerId));
   }
@@ -283,5 +290,41 @@ export class OnboardingPlugin extends GeodePlugin {
     const leaf = workspace.getRightLeaf(false);
     await leaf.setViewState({ type: ONBOARDING_VIEW_TYPE, active: true });
     workspace.revealLeaf(leaf);
+  }
+
+  /** True when a required (non-optional), incomplete, non-skipped step remains. */
+  hasOutstandingSteps(): boolean {
+    return this.getSnapshot().items.some((i) => !i.step.optional && !i.done && !i.skipped);
+  }
+
+  /**
+   * Launch-time auto-open, called once the workspace layout is ready. Runs the
+   * checks first so auto-detected steps do not cause a spurious open. Does
+   * nothing when headless (e2e), when onboarding was dismissed, when the pane
+   * is already open (restored layout), or when nothing required is outstanding.
+   * Docks the pane in the right sidebar and shows it there without activating
+   * it as the workspace's active leaf, so the editor keeps focus.
+   * Returns whether it opened the pane.
+   */
+  async autoOpenIfOutstanding(): Promise<boolean> {
+    if (this.isHeadless()) return false;
+    await this.ready;
+    if (this.disposed || this.state.dismissedOnboarding) return false;
+    const workspace = this.app.workspace;
+    if (workspace.getLeavesOfType(ONBOARDING_VIEW_TYPE).length > 0) return false;
+    await this.refresh();
+    if (this.disposed || !this.hasOutstandingSteps()) return false;
+    // Re-check: the user (or a restore) may have opened it while checks ran.
+    if (workspace.getLeavesOfType(ONBOARDING_VIEW_TYPE).length > 0) return false;
+    const leaf = workspace.getRightLeaf(false);
+    await leaf.setViewState({ type: ONBOARDING_VIEW_TYPE, active: false });
+    // Sidebar reveal only: a docked group's activation never changes the
+    // workspace's active (editor) group.
+    workspace.revealLeaf(leaf);
+    return true;
+  }
+
+  private isHeadless(): boolean {
+    return this.headlessProbe();
   }
 }

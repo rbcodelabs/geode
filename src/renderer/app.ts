@@ -2883,6 +2883,10 @@ export class App {
 
     this.pluginManager = new PluginManager(this);
     this.onboarding.attachPluginManager(this.pluginManager);
+    // Queued until flushLayoutReady() (after layout restore), so a restored
+    // checklist pane is seen and not duplicated. No-op under GEODE_HEADLESS.
+    const onboardingForLaunch = this.onboarding;
+    this.workspace.onLayoutReady(() => void onboardingForLaunch.autoOpenIfOutstanding());
     await measureOperation("startup-plugins", () => this.pluginManager.initialize());
     if (this.pluginManager.isRecoveryMode()) this.showCrashRecoveryBanner(shell);
 
