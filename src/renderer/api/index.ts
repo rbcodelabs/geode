@@ -44,6 +44,7 @@ export type { View } from "../workspace";
 export type { Command } from "../commands";
 export type { EventRef, EventCallback } from "../events";
 export type { PluginManifest } from "../plugin-manifest";
+export type { QuickSwitcherPluginItem, QuickSwitcherProvider } from "../quick-switcher-providers";
 export type { PluginCommand } from "../plugin";
 export type { CommentAuthor, CommentMessage, CommentThread, OpenCommentEditor } from "../comments/service";
 export type {

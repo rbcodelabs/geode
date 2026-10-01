@@ -157,7 +157,7 @@ test("@phone provides an accessible daily workspace with dismissible drawers", a
   await expect(moreMenu.locator(".menu-item-title"))
     .toHaveText(["Quick switcher", "Commands", "Settings"]);
   await moreMenu.getByText("Quick switcher", { exact: true }).click();
-  await expect(page.getByPlaceholder("Find a file or website bookmark…")).toBeVisible();
+  await expect(page.getByPlaceholder("Find a file or bookmark, or type a URL or search…")).toBeVisible();
   await page.keyboard.press("Escape");
   await nav.getByRole("button", { name: "More" }).click();
   await page.locator(".menu.mod-mobile-more").getByText("Commands", { exact: true }).click();

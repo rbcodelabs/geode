@@ -98,6 +98,7 @@ import { TemplatesService, renderTemplate, templateFiles, templatePath, template
 import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
 import { setIcon } from "./api/icons";
+import { collectQuickSwitcherItems, type QuickSwitcherPluginItem, type QuickSwitcherProvider } from "./quick-switcher-providers";
 import { FileManager } from "./file-manager";
 import { measureOperation } from "./perf-instrumentation";
 import { applyWindowChromeState } from "./window-chrome";
@@ -153,7 +154,11 @@ export type PickerItem =
   | { kind: "bookmark"; bookmark: BookmarkLink }
   | { kind: "open-url"; url: string }
   | { kind: "new-note"; title: string }
-  | { kind: "search-web"; query: string };
+  | { kind: "search-web"; query: string }
+  | { kind: "plugin"; item: QuickSwitcherPluginItem };
+
+/** Most plugin-provided rows a single query may add to the quick switcher. */
+const MAX_PLUGIN_ROWS = 20;
 
 /**
  * Builds the New Tab picker's result list for one query: vault files and saved
@@ -165,8 +170,12 @@ export type PickerItem =
  * matched. This never silently guesses one fallback action; both are always
  * offered, selectable like any other result.
  *
+ * `pluginItems` (quick switcher only) are rows contributed by plugins via
+ * `Plugin.registerQuickSwitcherProvider`; they are placed after the ranked
+ * matches and before "New note", and only for a non-empty query.
+ *
  * Ranked matches are capped below `SuggestList`'s own 80-item cap by however
- * many fixed items (0-3) are present, so a very large match count can never
+ * many fixed items (0-3, plus any plugin rows) are present, so a very large match count can never
  * push "New note" / "Search the web" out of the rendered list.
  */
 export function buildPickerItems(
@@ -174,13 +183,15 @@ export function buildPickerItems(
   files: TFile[],
   bookmarks: BookmarkLink[],
   searchEngine: string,
+  pluginItems: QuickSwitcherPluginItem[] = [],
 ): PickerItem[] {
   const items: PickerItem[] = [];
+  const pluginRows = query.length > 0 ? pluginItems.slice(0, MAX_PLUGIN_ROWS) : [];
   const urlShaped = isUrlShaped(query);
   const nonEmpty = query.length > 0;
   if (urlShaped) items.push({ kind: "open-url", url: resolveWebInput(query, searchEngine) });
 
-  const reserved = (urlShaped ? 1 : 0) + (nonEmpty ? 2 : 0);
+  const reserved = (urlShaped ? 1 : 0) + (nonEmpty ? 2 : 0) + pluginRows.length;
   const scored: FuzzyMatch<PickerItem>[] = [];
   for (const file of files) {
     const score = fuzzyMatch(query, file.path);
@@ -197,6 +208,9 @@ export function buildPickerItems(
   for (const { item } of scored.slice(0, Math.max(0, 80 - reserved))) {
     items.push(item);
   }
+
+  // Plugin rows sit after file/bookmark matches and before the fixed actions.
+  for (const item of pluginRows) items.push({ kind: "plugin", item });
 
   if (nonEmpty) {
     items.push({ kind: "new-note", title: query });
@@ -282,11 +296,17 @@ class NewTabPickerList extends SuggestList<PickerItem> {
       case "search-web":
         el.textContent = `Search the web for "${item.query}"`;
         break;
+      case "plugin":
+        el.textContent = item.item.title;
+        break;
     }
   }
 
   onChooseItem(item: PickerItem, evt: KeyboardEvent | MouseEvent): void {
     switch (item.kind) {
+      case "plugin":
+        item.item.onChoose(evt);
+        break;
       case "file":
         this.geodeApp.openFile(item.file, evt.metaKey || evt.ctrlKey);
         break;
@@ -386,56 +406,106 @@ export interface AppActionContext {
   reloadable?: ReloadableView | null;
 }
 
-type QuickSwitcherItem =
-  | { kind: "file"; file: TFile }
-  | { kind: "bookmark"; bookmark: BookmarkLink };
-
-class QuickSwitcherModal extends SuggestModal<QuickSwitcherItem> {
+/**
+ * Global quick switcher (Cmd/Ctrl+O). Shares its row model and ordering with
+ * the New Tab picker (`buildPickerItems`): ranked files/bookmarks, then plugin
+ * rows, then "New note" / "Search the web" (plus a pinned "Open <url>" for
+ * URL-shaped input). As in `NewTabPickerList`, `getItemText` returns the raw
+ * query so `SuggestList`'s re-fuzzy-match and re-sort leave that order intact.
+ */
+class QuickSwitcherModal extends SuggestModal<PickerItem> {
   constructor(private geodeApp: App) {
     super(geodeApp);
-    this.inputEl.placeholder = "Find a file or website bookmark…";
-    this.emptyStateText = "No matching files or bookmarks. Press Enter to create a note.";
+    this.inputEl.placeholder = "Find a file or bookmark, or type a URL or search…";
+    this.emptyStateText = "No files or bookmarks yet.";
   }
 
-  getItems(): QuickSwitcherItem[] {
+  getItems(): PickerItem[] {
+    const query = this.inputEl.value;
     // Not getMarkdownFiles(): the quick switcher should match any existing
     // vault file (.base, .canvas, images, ...), not just Markdown notes.
-    // onNoMatch() still only offers to create a new Markdown note.
-    return [
-      ...this.geodeApp.vault.getFiles().map((file): QuickSwitcherItem => ({ kind: "file", file })),
-      ...collectLinkBookmarks(this.geodeApp.bookmarksRoot).map(
-        (bookmark): QuickSwitcherItem => ({ kind: "bookmark", bookmark }),
-      ),
-    ];
+    return buildPickerItems(
+      query,
+      this.geodeApp.vault.getFiles(),
+      collectLinkBookmarks(this.geodeApp.bookmarksRoot),
+      this.geodeApp.settings.webViewer.searchEngine,
+      this.geodeApp.collectQuickSwitcherItems(query),
+    );
   }
 
-  getItemText(item: QuickSwitcherItem): string {
-    if (item.kind === "file") return item.file.path;
-    const title = item.bookmark.title?.trim();
-    return title ? `${title} ${item.bookmark.url}` : item.bookmark.url;
+  getItemText(): string {
+    return this.inputEl.value;
   }
 
-  renderItem(item: QuickSwitcherItem, el: HTMLElement): void {
+  renderItem(item: PickerItem, el: HTMLElement): void {
     const title = document.createElement("div");
     title.className = "prompt-result-title";
     const path = document.createElement("div");
     path.className = "prompt-result-path";
-    if (item.kind === "file") {
-      title.textContent = item.file.basename;
-      path.textContent = item.file.parent || "";
-    } else {
-      const displayTitle = item.bookmark.title?.trim() || item.bookmark.url;
-      title.textContent = displayTitle;
-      path.textContent = displayTitle === item.bookmark.url ? "" : item.bookmark.url;
+    switch (item.kind) {
+      case "file":
+        title.textContent = item.file.basename;
+        path.textContent = item.file.parent || "";
+        break;
+      case "bookmark": {
+        const displayTitle = item.bookmark.title?.trim() || item.bookmark.url;
+        title.textContent = displayTitle;
+        path.textContent = displayTitle === item.bookmark.url ? "" : item.bookmark.url;
+        break;
+      }
+      case "open-url":
+        title.textContent = `Open ${item.url}`;
+        break;
+      case "new-note":
+        title.textContent = `New note "${item.title}"`;
+        break;
+      case "search-web":
+        title.textContent = `Search the web for "${item.query}"`;
+        break;
+      case "plugin":
+        title.textContent = item.item.title;
+        path.textContent = item.item.subtitle ?? "";
+        if (item.item.icon) {
+          const icon = document.createElement("span");
+          icon.className = "prompt-result-icon";
+          setIcon(icon, item.item.icon);
+          el.append(icon);
+        }
+        break;
     }
     el.append(title, path);
   }
 
-  onChooseItem(item: QuickSwitcherItem, evt: KeyboardEvent | MouseEvent): void {
-    if (item.kind === "file") this.geodeApp.openFile(item.file, evt.metaKey || evt.ctrlKey);
-    else void this.geodeApp.openBookmark(item.bookmark, evt.metaKey || evt.ctrlKey);
+  onChooseItem(item: PickerItem, evt: KeyboardEvent | MouseEvent): void {
+    const newTab = evt.metaKey || evt.ctrlKey;
+    switch (item.kind) {
+      case "file":
+        this.geodeApp.openFile(item.file, newTab);
+        break;
+      case "bookmark":
+        void this.geodeApp.openBookmark(item.bookmark, newTab);
+        break;
+      case "open-url":
+        this.geodeApp.openWebViewer(item.url);
+        break;
+      case "new-note":
+        this.geodeApp.createNewNote(undefined, item.title);
+        break;
+      case "search-web":
+        this.geodeApp.openWebViewer(resolveWebInput(item.query, this.geodeApp.settings.webViewer.searchEngine));
+        break;
+      case "plugin":
+        try {
+          item.item.onChoose(evt);
+        } catch (error) {
+          console.error("Quick switcher plugin row failed", error);
+        }
+        break;
+    }
   }
 
+  // A non-empty query always yields "New note"/"Search the web" rows, so
+  // Enter only reaches here when the query is empty (nothing to create).
   onNoMatch(query: string): void {
     if (!query.trim()) return;
     this.close();
@@ -2016,6 +2086,8 @@ export class App {
    * hands rendering to the registered layout.
    */
   basesViews = new Map<string, BasesViewRegistration>();
+  /** Quick switcher row providers registered by plugins; see `registerQuickSwitcherProvider`. */
+  quickSwitcherProviders = new Set<QuickSwitcherProvider>();
   workspace!: Workspace;
   statusBar!: StatusBar;
   private ribbonActionsEl!: HTMLElement;
@@ -2172,6 +2244,20 @@ export class App {
   /** Remove a Bases view layout, if `registration` is still the one registered. */
   unregisterBasesView(viewType: string, registration: BasesViewRegistration): void {
     unregisterBasesViewIn(this.basesViews, viewType, registration);
+  }
+
+  /**
+   * Register a provider of extra quick switcher rows (`Plugin.registerQuickSwitcherProvider`).
+   * @returns a function that unregisters the provider.
+   */
+  registerQuickSwitcherProvider(provider: QuickSwitcherProvider): () => void {
+    this.quickSwitcherProviders.add(provider);
+    return () => { this.quickSwitcherProviders.delete(provider); };
+  }
+
+  /** Rows from every registered provider for `query`; a throwing or malformed provider is skipped. */
+  collectQuickSwitcherItems(query: string): QuickSwitcherPluginItem[] {
+    return collectQuickSwitcherItems(this.quickSwitcherProviders, query);
   }
 
   registerProtocolHandler(action: string, handler: (params: Record<string, string>) => unknown): void {
