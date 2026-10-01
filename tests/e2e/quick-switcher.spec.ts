@@ -121,7 +121,7 @@ test("quick switcher finds a nested website bookmark by title and opens it", asy
 
     await window.keyboard.press("ControlOrMeta+o");
     const promptInput = window.locator(".modal .prompt-input");
-    await expect(promptInput).toHaveAttribute("placeholder", "Find a file or website bookmark…");
+    await expect(promptInput).toHaveAttribute("placeholder", "Find a file or bookmark, or type a URL or search…");
     await promptInput.fill("Saved Web Guide");
 
     const result = window.locator(".prompt-result", { hasText: "Saved Web Guide" });

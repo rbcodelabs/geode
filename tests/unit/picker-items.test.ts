@@ -149,3 +149,31 @@ describe("buildPickerItems", () => {
     expect(items[79]).toEqual<PickerItem>({ kind: "search-web", query: "match" });
   });
 });
+
+describe("buildPickerItems with quick switcher plugin rows", () => {
+  const row = (title: string) => ({ title, onChoose: () => {} });
+
+  it("places plugin rows after matches and before New note / Search the web", () => {
+    const plan = file("Daily Plan.md");
+    const p = row("From plugin");
+    const items = buildPickerItems("plan", [plan], [], searchEngine, [p]);
+    expect(items).toEqual<PickerItem[]>([
+      { kind: "file", file: plan },
+      { kind: "plugin", item: p },
+      { kind: "new-note", title: "plan" },
+      { kind: "search-web", query: "plan" },
+    ]);
+  });
+
+  it("ignores plugin rows for an empty query", () => {
+    const items = buildPickerItems("", [file("A.md")], [], searchEngine, [row("x")]);
+    expect(items.map((i) => i.kind)).toEqual(["file"]);
+  });
+
+  it("keeps the fixed rows inside the 80-item cap when plugin rows are present", () => {
+    const files = Array.from({ length: 100 }, (_, i) => file(`Match ${i}.md`));
+    const items = buildPickerItems("match", files, [], searchEngine, [row("p1"), row("p2")]);
+    expect(items).toHaveLength(80);
+    expect(items.slice(-4).map((i) => i.kind)).toEqual(["plugin", "plugin", "new-note", "search-web"]);
+  });
+});

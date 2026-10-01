@@ -6,10 +6,12 @@ import type { PluginManifest } from "./plugin-manifest";
 import type { EventRef } from "./events";
 import type { EditorView } from "@codemirror/view";
 import type { MarkdownView } from "./views/markdown-view";
+import type { QuickSwitcherProvider } from "./quick-switcher-providers";
 import type { SyncProvider } from "./sync/types";
 import { notifyThreadsDataSaved } from "./integrations/threads-projects";
 
 export type { PluginManifest } from "./plugin-manifest";
+export type { QuickSwitcherPluginItem, QuickSwitcherProvider } from "./quick-switcher-providers";
 
 /** Command spec passed to `Plugin.addCommand` — same shape as `Command` minus the plugin-id prefix, which is applied automatically. */
 export interface PluginCommand {
@@ -146,6 +148,30 @@ export abstract class Plugin extends Component {
   /** Unregister a command added via `addCommand` (pass the unprefixed id). */
   removeCommand(id: string): void {
     this.app.commands.remove(this.prefixed(id));
+  }
+
+  /**
+   * Geode-only. Add rows to the global quick switcher (Cmd/Ctrl+O) for the
+   * typed query. Rows appear only for a non-empty query, after file/bookmark
+   * matches and before "New note" / "Search the web". The provider is removed
+   * automatically on unload; a throwing provider is ignored. Obsidian lacks
+   * this method, so feature-detect it before calling.
+   */
+  registerQuickSwitcherProvider(provider: QuickSwitcherProvider): void {
+    this.assertHostGeneration();
+    const guarded: QuickSwitcherProvider = {
+      id: provider.id,
+      getItems: (query) => {
+        try {
+          const rows = provider.getItems(query);
+          return Array.isArray(rows) ? rows : [];
+        } catch (error) {
+          void this.errorHandler?.(`quick-switcher:${provider.id ?? "provider"}`, error);
+          return [];
+        }
+      },
+    };
+    this.register(this.app.registerQuickSwitcherProvider(guarded));
   }
 
   /** Register a full-vault remote transport owned by this plugin. */
