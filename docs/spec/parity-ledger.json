@@ -1500,8 +1500,11 @@
       "title": "Audio recorder",
       "sourcePath": "obsidian-help/en/Plugins/Audio recorder.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Audio%20recorder.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/audio-recorder.test.ts"
+      ],
+      "notes": "Unit-tested: Recording YYYYMMDDHHmmss.webm naming, attachment-folder placement and collision handling, end-of-note embed append, start/stop state machine, microphone release, and permission/no-device classification. Ribbon mic icon, single toggle command and a Core plugins toggle (off by default) are wired; recordings embed as an audio player. Real microphone capture and the macOS permission prompt were not observed headlessly, so the row remains partial."
     },
     {
       "id": "HELP-d6b3f1f19c87",

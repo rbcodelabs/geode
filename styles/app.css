@@ -6611,4 +6611,8 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
   background: var(--color-red);
   color: #fff;
   font-size: 11px;
+/* Audio recorder: ribbon mic turns red while recording. */
+.side-dock-ribbon-action.audio-recorder-ribbon.is-recording,
+.side-dock-ribbon-action.audio-recorder-ribbon.is-recording svg {
+  color: var(--text-error, #e5484d);
 }
