@@ -223,3 +223,24 @@ Revisit this decision if validation shows that users primarily need:
 
 Any such expansion requires a follow-up ADR; it does not widen this decision
 implicitly.
+
+## Addendum: privileged mount roots for the Threads sandbox VM
+
+The Claude Threads sandbox VM must bind-mount every connected external root,
+which requires absolute paths. This is the **single, deliberate exception** to
+"never expose absolute paths to plugins". It is an optional internal method,
+`ExternalRootsHost.listMountRoots?()`, outside the Obsidian plugin API. It is
+acceptable only because the consumer is a same-world trusted plugin and the
+method stays host-mediated:
+
+- Main computes the result through the sender-scoped session facade; the
+  renderer supplies no paths or window authority.
+- Only roots bound to Projects contributed in the calling window's vault are
+  returned, and each is re-proven (realpath plus device/inode) as a read is.
+  Missing, revoked, replaced, unbound, or other-vault roots are skipped, not
+  thrown.
+- Consumers must treat paths as ephemeral: never persist them in plugin state,
+  re-query on each VM entry, and mount read-only to match the read-only grant.
+
+No other path-bearing method is added; this does not widen browse permission
+into write or execution authority.

@@ -156,3 +156,44 @@ it("does not resolve once the vault session is stale", async () => {
   s.stale();
   await expect(s.session.resolveOpenableFile(path.join(s.repo, "a.txt"))).rejects.toThrow();
 });
+
+it("listMountRoots returns only fresh, bound roots with canonical absolute paths", async () => {
+  const s = await setup();
+  await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }, { projectId: "u", label: "Unbound" }]);
+  expect(await s.session.listMountRoots()).toEqual([]);
+  const attached = await s.session.attach("p");
+  if (attached?.state !== "bound") throw new Error("Expected bound project");
+  expect(await s.session.listMountRoots()).toEqual([
+    { rootId: attached.root.rootId, label: "Project", path: await fs.realpath(s.repo), projectId: "p" },
+  ]);
+});
+
+it("listMountRoots skips stale roots without throwing", async () => {
+  const s = await setup();
+  await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }]);
+  await s.session.attach("p");
+  await fs.rename(s.repo, s.repo + "-moved");
+  expect(await s.session.listMountRoots()).toEqual([]);
+  // Replaced at the same path: device/inode differ, so still excluded.
+  await fs.mkdir(s.repo);
+  expect(await s.session.listMountRoots()).toEqual([]);
+});
+
+it("listMountRoots excludes changed/removed contributions and other-vault associations", async () => {
+  const s = await setup();
+  await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }]);
+  await s.session.attach("p");
+  const otherVault = path.join(path.dirname(s.vault), "vault2"); await fs.mkdir(otherVault);
+  const other = await s.service.createSession({ activeVaultPath: otherVault, isSessionCurrent: () => true, pickDirectory: async () => null });
+  await other.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo }]);
+  expect(await other.listMountRoots()).toEqual([]);
+  await s.session.contribute([{ projectId: "p", label: "Project", suggestedPath: s.repo + "-changed" }]);
+  expect(await s.session.listMountRoots()).toEqual([]);
+  await s.session.contribute([]);
+  expect(await s.session.listMountRoots()).toEqual([]);
+});
+
+it("listMountRoots rejects for a stale session", async () => {
+  const s = await setup(); s.stale();
+  await expect(s.session.listMountRoots()).rejects.toThrow();
+});

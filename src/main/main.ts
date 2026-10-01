@@ -685,6 +685,7 @@ function registerIpc() {
   }));
   ipcMain.handle("external-roots-projects", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listProjects()));
   ipcMain.handle("external-roots-grants", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listGrants()));
+  ipcMain.handle("external-roots-mount-roots", (e) => externalRootReply(async () => (await externalRootSession(e.sender)).listMountRoots()));
   for (const [channel, action] of [["remove-association", "removeStaleAssociation"], ["remove-orphan", "removeOrphanGrant"]] as const) {
     ipcMain.handle(`external-roots-${channel}`, (e, id: string) => externalRootReply(async () => {
       const removed = await (await externalRootSession(e.sender))[action](id);
