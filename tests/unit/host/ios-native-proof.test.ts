@@ -13,7 +13,9 @@ describe("iOS native smoke proof", () => {
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.readFileSync(sourcePath, "utf8").trim()).toBe("public let isCapacitorApp = true");
     expect(fs.existsSync(debugConfigPath)).toBe(true);
-    expect(fs.readFileSync(debugConfigPath, "utf8").trim()).toBe("CAPACITOR_DEBUG = true");
+    const debugConfig = fs.readFileSync(debugConfigPath, "utf8");
+    expect(debugConfig).toContain("CAPACITOR_DEBUG = true");
+    expect(debugConfig).toContain("#include \"version.xcconfig\"");
     expect(fs.existsSync(appDelegatePath)).toBe(true);
     const appDelegate = fs.readFileSync(appDelegatePath, "utf8");
     expect(appDelegate).toContain("@UIApplicationMain");
