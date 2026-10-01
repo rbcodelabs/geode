@@ -52,11 +52,12 @@ describe("macOS release trust configuration", () => {
   });
 
   it.each(["build/entitlements.mac.plist", "build/entitlements.mac.inherit.plist"])(
-    "%s grants only JIT",
+    "%s grants only JIT and microphone input (Audio recorder)",
     (path) => {
       const plist = readFileSync(path, "utf8");
       expect([...plist.matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1])).toEqual([
         "com.apple.security.cs.allow-jit",
+        "com.apple.security.device.audio-input",
       ]);
     },
   );

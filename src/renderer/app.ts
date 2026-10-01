@@ -25,6 +25,7 @@ import {
   type CommunityListViewDeps,
 } from "./community/community-list-view";
 import { MarkdownRenderer } from "./markdown/render";
+import { AudioRecorderPlugin } from "./internal-plugins/audio-recorder/audio-recorder-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
 import {
@@ -133,6 +134,8 @@ interface AppSettings {
   /** Selected built-in or vault theme name ("" = default Geode palette). */
   cssTheme: string;
   webViewer: WebViewerOptions;
+  /** Audio recorder core plugin; off by default, as in Obsidian. */
+  audioRecorderEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -1028,7 +1031,13 @@ class SettingsModal extends Modal {
 
   private renderCorePluginsTab(container: HTMLElement): void {
     const webViewer = this.geodeApp.webViewer;
-    container.innerHTML = `<h2>Core plugins</h2><h3>Web Viewer</h3>`;
+    container.innerHTML = `<h2>Core plugins</h2><h3>Audio recorder</h3>`;
+    this.addToggle(container, "Enable Audio recorder", this.geodeApp.settings.audioRecorderEnabled, (enabled) => {
+      this.geodeApp.settings.audioRecorderEnabled = enabled;
+      this.geodeApp.syncAudioRecorderPlugin();
+      this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Web Viewer</h3>`);
     this.addToggle(container, "Enable Web Viewer", webViewer.enabled, (enabled) => {
       void this.updateWebViewer({ enabled });
     });
@@ -2030,6 +2039,7 @@ export class App {
   getInternalPlugin(id: string): unknown {
     return id === "onboarding" ? this.onboarding : undefined;
   }
+  private audioRecorderPlugin?: AudioRecorderPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2042,6 +2052,7 @@ export class App {
     showStatusBar: true,
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_OPTIONS },
+    audioRecorderEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -2668,6 +2679,7 @@ export class App {
         foldHeading: typeof saved.foldHeading === "boolean" ? saved.foldHeading : this.settings.foldHeading,
         showLineNumber: typeof saved.showLineNumber === "boolean" ? saved.showLineNumber : this.settings.showLineNumber,
         webViewer: this.webViewer.options,
+        audioRecorderEnabled: saved.audioRecorderEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -2873,6 +2885,7 @@ export class App {
     this.onboarding.load();
     await this.onboarding.ready;
 
+    this.syncAudioRecorderPlugin();
     this.registerActions();
     this.registerCommands();
     this.hostDisposers.add(this.commands.attach(document));
@@ -3578,6 +3591,8 @@ export class App {
     this.mermaidPlugin?.unload();
     this.onboarding?.unload();
     this.onboarding = undefined;
+    this.audioRecorderPlugin?.unload();
+    this.audioRecorderPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
     await this.vault.close();
@@ -5410,6 +5425,15 @@ export class App {
     if (this.host.capabilities.multipleWindows) {
       void this.host.desktop?.setWindowBackgroundColor(color);
     }
+  }
+
+  /** Load or unload the Audio recorder core plugin to match `settings.audioRecorderEnabled`. */
+  syncAudioRecorderPlugin(): void {
+    this.audioRecorderPlugin?.unload();
+    this.audioRecorderPlugin = undefined;
+    if (!this.settings.audioRecorderEnabled) return;
+    this.audioRecorderPlugin = new AudioRecorderPlugin(this);
+    this.audioRecorderPlugin.load();
   }
 
   saveSettings() {

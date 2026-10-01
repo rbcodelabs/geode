@@ -150,6 +150,9 @@
           ]
         }
       ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Geode uses the microphone for the Audio recorder plugin, to record audio into your notes."
+      },
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "notarize": true,

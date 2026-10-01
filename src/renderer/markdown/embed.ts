@@ -1,5 +1,6 @@
 import type { App } from "../app";
 import { stripCommentMarkerSyntax } from "../comments/model";
+import { isAudioRecording } from "../audio-recorder";
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, TFile, VIDEO_EXTENSIONS } from "../types";
 
 /**
@@ -24,7 +25,7 @@ export function resolveEmbed(target: string, sourcePath: string, app: App): Reso
   const subpath = hashIdx === -1 ? "" : target.slice(hashIdx);
   if (!file) return { kind: "unresolved", file: null, subpath };
   if (IMAGE_EXTENSIONS.has(file.extension)) return { kind: "image", file, subpath };
-  if (AUDIO_EXTENSIONS.has(file.extension)) return { kind: "audio", file, subpath };
+  if (AUDIO_EXTENSIONS.has(file.extension) || isAudioRecording(file.name, file.extension)) return { kind: "audio", file, subpath };
   if (VIDEO_EXTENSIONS.has(file.extension)) return { kind: "video", file, subpath };
   if (file.extension === "md") return { kind: "note", file, subpath };
   if (file.extension === "canvas") return { kind: "canvas", file, subpath };
