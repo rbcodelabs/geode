@@ -23,3 +23,26 @@ describe("collectQuickSwitcherItems", () => {
     expect(collectQuickSwitcherItems([bad, notArray, malformed], "q").map((i) => i.title)).toEqual(["ok"]);
   });
 });
+
+describe("Plugin.registerQuickSwitcherProvider", () => {
+  it("skips a throwing provider without reporting to the error boundary, and sibling providers still yield rows", async () => {
+    const { Plugin } = await import("../../src/renderer/plugin");
+    const registered = new Set<QuickSwitcherProvider>();
+    const app = {
+      registerQuickSwitcherProvider: (p: QuickSwitcherProvider) => { registered.add(p); return () => registered.delete(p); },
+    };
+    class TestPlugin extends Plugin { onload() {} }
+    const plugin = new TestPlugin(app as never, { id: "qa-test", name: "QA", version: "1", minAppVersion: "0" } as never);
+    const errorHandler = vi.fn();
+    plugin.setErrorHandler(errorHandler);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    plugin.registerQuickSwitcherProvider({ id: "boom", getItems: () => { throw new Error("boom"); } });
+    plugin.registerQuickSwitcherProvider({ id: "ok", getItems: (q) => [item(`ok:${q}`)] });
+
+    expect(collectQuickSwitcherItems(registered, "q").map((i) => i.title)).toEqual(["ok:q"]);
+    expect(errorHandler).not.toHaveBeenCalled(); // would quarantine the whole plugin
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

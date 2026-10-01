@@ -154,7 +154,7 @@ export abstract class Plugin extends Component {
    * Geode-only. Add rows to the global quick switcher (Cmd/Ctrl+O) for the
    * typed query. Rows appear only for a non-empty query, after file/bookmark
    * matches and before "New note" / "Search the web". The provider is removed
-   * automatically on unload; a throwing provider is ignored. Obsidian lacks
+   * automatically on unload; a throwing provider is skipped and logged without quarantining the plugin. Obsidian lacks
    * this method, so feature-detect it before calling.
    */
   registerQuickSwitcherProvider(provider: QuickSwitcherProvider): void {
@@ -166,7 +166,9 @@ export abstract class Plugin extends Component {
           const rows = provider.getItems(query);
           return Array.isArray(rows) ? rows : [];
         } catch (error) {
-          void this.errorHandler?.(`quick-switcher:${provider.id ?? "provider"}`, error);
+          // Deliberately NOT routed through errorHandler: that boundary quarantines the
+          // whole plugin, which would also drop its healthy providers. Skip and log.
+          console.warn(`[${this.manifest.id}] quick switcher provider "${provider.id ?? "(unnamed)"}" threw; skipping`, error);
           return [];
         }
       },
