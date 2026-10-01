@@ -13,7 +13,8 @@ const host = (links: Links, enabled: string[] = []) => ({
 describe("first-party onboarding steps", () => {
   it("every commandId is a command registered in app.ts", () => {
     for (const step of firstPartySteps(host({}))) {
-      if (!step.commandId) continue;
+      // `onboarding:*` commands are registered by the plugin itself (see onboarding-plugin.test.ts).
+      if (!step.commandId || step.commandId.startsWith("onboarding:")) continue;
       expect(appSource, `${step.id} -> ${step.commandId}`).toMatch(
         new RegExp(`\\bc\\("${step.commandId}",|id: "${step.commandId}"`)
       );

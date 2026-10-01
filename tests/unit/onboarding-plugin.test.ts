@@ -90,7 +90,7 @@ describe("OnboardingPlugin", () => {
     const plugin = new OnboardingPlugin(h.app);
     plugin.load();
     await plugin.ready;
-    expect([...h.commands.keys()].sort()).toEqual(["onboarding:open", "onboarding:rerun-checks", "onboarding:reset"]);
+    expect([...h.commands.keys()].sort()).toEqual(["onboarding:install-claude-threads", "onboarding:open", "onboarding:rerun-checks", "onboarding:reset"]);
     expect(plugin.getSnapshot().items.length).toBeGreaterThan(0);
     plugin.unload();
     expect(h.commands.size).toBe(0);
@@ -220,6 +220,40 @@ describe("OnboardingPlugin", () => {
     expect(plugin.runStep("onboarding:create-note")).toBe(true);
     expect(h.executed).toEqual(["new-note"]);
     expect(plugin.runStep("onboarding:link-notes")).toBe(false);
+  });
+});
+
+describe("OnboardingPlugin Claude Threads step", () => {
+  async function boot(h: ReturnType<typeof makeHarness>, installed: boolean) {
+    (globalThis as any).window.geode.installSupportedPlugin = vi.fn();
+    const plugin = new OnboardingPlugin(h.app, () => false);
+    plugin.load();
+    await plugin.ready;
+    plugin.attachPluginManager({ ...h.host, getManifest: (id: string) => (installed && id === "claude-threads" ? ({} as any) : undefined) });
+    return plugin;
+  }
+  const stepDone = (p: OnboardingPlugin) =>
+    p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-claude-threads");
+
+  it("registers the optional step and its command; install failure notifies and does not throw", async () => {
+    const h = makeHarness();
+    h.app.communityManager = { installSupported: vi.fn().mockRejectedValue(new Error("offline")) };
+    const plugin = await boot(h, false);
+    expect(h.commands.has("onboarding:install-claude-threads")).toBe(true);
+    expect(stepDone(plugin)).toMatchObject({ done: false, step: { optional: true } });
+    await expect(plugin.installClaudeThreads()).resolves.toBe(false);
+    expect(h.app.notify).toHaveBeenCalledWith(expect.stringContaining("offline"), 8000);
+    expect(stepDone(plugin)!.done).toBe(false);
+  });
+
+  it("shows complete when the plugin is already installed, and install success reports true", async () => {
+    const h = makeHarness();
+    h.app.communityManager = { installSupported: vi.fn().mockResolvedValue({}) };
+    const plugin = await boot(h, true);
+    await plugin.refresh();
+    expect(stepDone(plugin)!.done).toBe(true);
+    await expect(plugin.installClaudeThreads()).resolves.toBe(true);
+    expect(h.app.communityManager.installSupported).toHaveBeenCalledWith("claude-threads", "tested");
   });
 });
 

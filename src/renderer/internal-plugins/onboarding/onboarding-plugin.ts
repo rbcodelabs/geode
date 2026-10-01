@@ -3,7 +3,11 @@ import { Plugin as GeodePlugin } from "../../plugin";
 import type { PluginManifest } from "../../plugin-manifest";
 import type { OnboardingManifestStep } from "../../plugin-manifest";
 import { computeCompleteness, type Completeness } from "./completeness";
-import { firstPartySteps, ONBOARDING_PLUGIN_ID } from "./first-party-steps";
+import {
+  CLAUDE_THREADS_STEP_NAME,
+  installClaudeThreads,
+} from "./claude-threads-recommendation";
+import { firstPartySteps, ONBOARDING_PLUGIN_ID, type OnboardingHost } from "./first-party-steps";
 import { OnboardingRegistry, type OnboardingStep, type ResolvedStep } from "./registry";
 import {
   applyChecks,
@@ -110,7 +114,24 @@ export class OnboardingPlugin extends GeodePlugin {
       this.listeners.clear();
     });
 
-    for (const step of firstPartySteps(this.app)) this.register(this.registry.registerStep(step));
+    // Getters, not snapshots: the plugin manager is attached after onload.
+    const self = this;
+    const stepHost: OnboardingHost = {
+      get metadataCache() {
+        return self.app.metadataCache;
+      },
+      get pluginManager() {
+        return self.host;
+      },
+      supportedInstallAvailable: typeof (globalThis as any).window?.geode?.installSupportedPlugin === "function",
+      headless: this.headlessProbe(),
+    };
+    for (const step of firstPartySteps(stepHost)) this.register(this.registry.registerStep(step));
+    this.addCommand({
+      id: CLAUDE_THREADS_STEP_NAME,
+      name: "Install Claude Threads",
+      callback: () => this.installClaudeThreads(),
+    });
 
     this.addCommand({ id: "open", name: "Open checklist", callback: () => this.openChecklist() });
     this.addCommand({ id: "rerun-checks", name: "Re-run checks", callback: () => this.refresh() });
@@ -266,6 +287,24 @@ export class OnboardingPlugin extends GeodePlugin {
     // Commands often complete asynchronously (opening a pane, creating a file).
     setTimeout(() => void this.refresh(), 750);
     return true;
+  }
+
+  /**
+   * Install Claude Threads through the existing supported-catalog path
+   * (`CommunityManager.installSupported`). Failure (offline, catalog down) is
+   * reported with a notice and never throws.
+   */
+  async installClaudeThreads(): Promise<boolean> {
+    this.app.notify("Installing Claude Threads…");
+    const outcome = await installClaudeThreads((id, release) => this.app.communityManager.installSupported(id, release));
+    this.app.notify(
+      outcome.ok
+        ? "Claude Threads installed. Enable it in Settings > Community plugins."
+        : `Couldn't install Claude Threads: ${outcome.error}`,
+      outcome.ok ? undefined : 8000
+    );
+    await this.refresh();
+    return outcome.ok;
   }
 
   /** Enable the plugin that owns a static step (used by the "plugin disabled" affordance). */

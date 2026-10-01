@@ -80,5 +80,11 @@ export default class MyPlugin extends Plugin {
   Optional steps never trigger it. It stays closed if the user dismissed
   onboarding or the pane is already open, and under `GEODE_HEADLESS` (e2e).
   Register steps from `onload()` so they exist when the check runs.
+- The checklist includes an optional first-party step, "Install Claude Threads"
+  (supported-catalog id `claude-threads`). Its `check()` passes once the plugin
+  directory exists or the plugin is enabled, and its "Do it" action installs the
+  tested release through `CommunityManager.installSupported`. Failures show a
+  notice and never throw. It is not offered on hosts without the install API
+  (mobile) or when headless.
 - Completion is stored per vault in `.geode/plugins/onboarding/data.json`. Users
   can skip a step, dismiss the whole checklist, or reset progress.
