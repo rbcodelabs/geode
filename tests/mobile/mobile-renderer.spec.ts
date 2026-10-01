@@ -70,6 +70,11 @@ async function touchTap(target: Locator, pointerId: number): Promise<void> {
   await target.dispatchEvent("pointerup", { pointerId, pointerType: "touch", isPrimary: true, ...point });
 }
 
+/** Graph docks in the right sidebar, which is an off-canvas drawer on phones and tablets; a reload closes it. */
+async function reopenGraphDrawer(page: Page): Promise<void> {
+  await page.evaluate(() => (window as any).app.openGraphView());
+}
+
 async function graphNodePoint(graph: Locator, id: string, offsetX = 0): Promise<{ clientX: number; clientY: number }> {
   return graph.evaluate((element, { nodeId, offset }) => {
     const positions = JSON.parse((element as HTMLElement).dataset.graphNodePositions!) as Record<string, [number, number]>;
@@ -393,19 +398,19 @@ test("@phone projects one active center group and preserves exact serialization 
   });
   await page.reload();
 
-  const groups = page.locator(".workspace-center > .workspace-tabs");
+  const groups = page.locator(".workspace-center .workspace-tabs");
   await expect(groups).toHaveCount(2);
   await expect.poll(() => groups.evaluateAll((elements) =>
     elements.filter((element) => getComputedStyle(element).display !== "none").length
   )).toBe(1);
-  await expect(page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active")).toHaveCount(1);
-  await expect(page.locator(".workspace-center > .workspace-center-resize-handle")).toBeHidden();
+  await expect(page.locator(".workspace-center .workspace-tabs.is-mobile-center-active")).toHaveCount(1);
+  await expect(page.locator(".workspace-center .workspace-center-resize-handle")).toBeHidden();
   expect(await page.evaluate(() => (window as any).app.workspace.serialize())).toEqual(saved);
 
   const nav = page.getByRole("navigation", { name: "Mobile navigation" });
   await nav.getByRole("button", { name: "Files" }).click();
   await page.locator('.nav-file-title[data-path="Welcome.md"]').click();
-  await page.locator(".workspace-center > .workspace-tabs.is-mobile-center-active .cm-content").click();
+  await page.locator(".workspace-center .workspace-tabs.is-mobile-center-active .cm-content").click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type("# Breakpoint continuity\n\nPreserve this text");
   const beforeResize = await page.evaluate(() => (window as any).app.workspace.serialize());
@@ -1237,7 +1242,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   await canvas.dispatchEvent("pointerdown", { pointerId: 1, pointerType: "touch", isPrimary: true, ...nodePoint });
   await canvas.dispatchEvent("pointerup", { pointerId: 1, pointerType: "touch", isPrimary: true, ...nodePoint });
   await expect(graph).toHaveAttribute("data-graph-selected", "Notes/Proof.md");
-  await expect(page.locator(".workspace-center .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText("Graph view");
+  await expect(graph).toBeVisible(); // a tap selects only; opening a note would close the drawer
 
   await graph.getByRole("button", { name: "Open selected note" }).click();
   await expect(page.locator(".workspace-center .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText("Proof");
@@ -1248,7 +1253,8 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
     await page.getByPlaceholder("Type a command…").fill("Graph view");
     await page.getByText("Graph view: Open graph view", { exact: true }).click();
   } else {
-    await page.locator('.workspace-tab-header-inner-title:text-is("Graph view")').click();
+    // Graph docks in the right sidebar, which is a drawer at tablet widths too.
+    await page.evaluate(() => (window as any).app.openGraphView());
   }
   await expect(graph).toBeVisible();
 
@@ -1270,14 +1276,14 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   await canvas.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: centerX - 60, clientY: centerY + 10 });
   await canvas.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: false, clientX: centerX + 60, clientY: centerY + 10 });
   expect(Number(await graph.getAttribute("data-graph-scale"))).toBeGreaterThan(beforeScale);
-  await expect(page.locator(".workspace-center .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText("Graph view");
+  await expect(graph).toBeVisible(); // a tap selects only; opening a note would close the drawer
 
   // A pinch invalidates the first tap's double-tap candidate. The next tap
   // selects only even when it lands within the normal 500ms window.
   const nodeAfterPinch = await graphNodePoint(graph, "Notes/Proof.md");
   await canvas.dispatchEvent("pointerdown", { pointerId: 5, pointerType: "touch", isPrimary: true, ...nodeAfterPinch });
   await canvas.dispatchEvent("pointerup", { pointerId: 5, pointerType: "touch", isPrimary: true, ...nodeAfterPinch });
-  await expect(page.locator(".workspace-center .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText("Graph view");
+  await expect(graph).toBeVisible(); // a tap selects only; opening a note would close the drawer
   await canvas.dispatchEvent("pointerdown", { pointerId: 6, pointerType: "touch", isPrimary: true, clientX: centerX - 25, clientY: centerY });
   await canvas.dispatchEvent("pointerdown", { pointerId: 7, pointerType: "touch", isPrimary: false, clientX: centerX + 25, clientY: centerY });
   await canvas.dispatchEvent("pointerup", { pointerId: 6, pointerType: "touch", isPrimary: true, clientX: centerX - 25, clientY: centerY });
@@ -1285,7 +1291,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   const nodeAfterSecondPinch = await graphNodePoint(graph, "Notes/Proof.md");
   await canvas.dispatchEvent("pointerdown", { pointerId: 8, pointerType: "touch", isPrimary: true, ...nodeAfterSecondPinch });
   await canvas.dispatchEvent("pointerup", { pointerId: 8, pointerType: "touch", isPrimary: true, ...nodeAfterSecondPinch });
-  await expect(page.locator(".workspace-center .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText("Graph view");
+  await expect(graph).toBeVisible(); // a tap selects only; opening a note would close the drawer
 
   const searchButton = graph.getByRole("button", { name: "Search graph" });
   await searchButton.click();
@@ -1323,7 +1329,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   const nodeAfterCancel = await graphNodePoint(graph, "Notes/Proof.md");
   await canvas.dispatchEvent("pointerdown", { pointerId: 11, pointerType: "touch", isPrimary: true, ...nodeAfterCancel });
   await canvas.dispatchEvent("pointerup", { pointerId: 11, pointerType: "touch", isPrimary: true, ...nodeAfterCancel });
-  await expect(page.locator(".workspace-center .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText("Graph view");
+  await expect(graph).toBeVisible(); // a tap selects only; opening a note would close the drawer
   await canvas.dispatchEvent("pointerdown", { pointerId: 10, pointerType: "touch", isPrimary: true, ...empty });
   await page.evaluate(() => (window as any).__geodeMobileTest.background());
   await expect(graph).toHaveAttribute("data-graph-gesture", "idle");
@@ -1333,7 +1339,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   const nodeAfterBackground = await graphNodePoint(graph, "Notes/Proof.md");
   await canvas.dispatchEvent("pointerdown", { pointerId: 12, pointerType: "touch", isPrimary: true, ...nodeAfterBackground });
   await canvas.dispatchEvent("pointerup", { pointerId: 12, pointerType: "touch", isPrimary: true, ...nodeAfterBackground });
-  await expect(page.locator(".workspace-center .workspace-tab-header.is-active .workspace-tab-header-inner-title")).toHaveText("Graph view");
+  await expect(graph).toBeVisible(); // a tap selects only; opening a note would close the drawer
 
   // At minimum zoom the touch-only target remains 44px wide. An offset just
   // outside it becomes an empty-space pan; desktop mouse hit testing is not used.
@@ -1348,6 +1354,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
     localStorage.setItem(key, JSON.stringify(state));
   });
   await page.reload();
+  await reopenGraphDrawer(page);
   await expect.poll(async () => graph.getAttribute("data-graph-node-positions")).not.toBeNull();
   const minInside = await graphNodePoint(graph, "Notes/Proof.md", 21.9);
   await canvas.dispatchEvent("pointerdown", { pointerId: 20, pointerType: "touch", isPrimary: true, ...minInside });
@@ -1375,6 +1382,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
     localStorage.setItem(key, JSON.stringify(state));
   });
   await page.reload();
+  await reopenGraphDrawer(page);
   await expect.poll(async () => graph.getAttribute("data-graph-node-positions")).not.toBeNull();
   const maxInside = await graphNodePoint(graph, "Notes/Proof.md", 40);
   await canvas.dispatchEvent("pointerdown", { pointerId: 22, pointerType: "touch", isPrimary: true, ...maxInside });
@@ -1409,6 +1417,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   expect(await page.evaluate(() => ({ scrollY, visualScale: visualViewport?.scale }))).toEqual({ scrollY: 0, visualScale: 1 });
   await page.waitForTimeout(400);
   await page.reload();
+  await reopenGraphDrawer(page);
   await expect(graph).toBeVisible();
   await expect(graph).toHaveAttribute("data-graph-selected", saved.selected);
   await expect(graph).toHaveAttribute("data-graph-pan-x", saved.panX!);

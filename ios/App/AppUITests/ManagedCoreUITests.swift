@@ -283,8 +283,13 @@ final class ManagedCoreUITests: XCTestCase {
         let appearanceTab = app.buttons["Appearance"]
         tapUntilExists(settings, target: appearanceTab, description: "Settings did not open")
         XCTAssertTrue(appearanceTab.isHittable)
-        let darkMode = app.switches["Dark mode"]
-        XCTAssertTrue(darkMode.isHittable)
+        // Desktop PR #305 replaced the "Dark mode" switch with a "Base color scheme" select.
+        // WebKit exposes a <select> as a button or picker depending on the OS, so match any element type.
+        let colorScheme = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Base color scheme"))
+            .firstMatch
+        XCTAssertTrue(colorScheme.waitForExistence(timeout: 5), "Base color scheme control missing")
+        XCTAssertTrue(colorScheme.isHittable)
         let settingsSnapshot = try readSnapshot(from: relaunchedVerifier)
         let settingsRect = try XCTUnwrap(
             (settingsSnapshot["javascript"] as? [String: Any])?["settingsRect"] as? [String: Any]

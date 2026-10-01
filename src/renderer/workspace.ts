@@ -2548,7 +2548,7 @@ export class Workspace extends Events {
     return document.body.classList.contains("is-mobile") && this.compactQuery.matches;
   }
 
-  private usesDrawer(side: "left" | "right"): boolean {
+  usesDrawer(side: "left" | "right"): boolean {
     if (!document.body.classList.contains("is-mobile")) return false;
     return this.compactQuery.matches || (side === "right" && this.tabletQuery.matches);
   }
@@ -2564,6 +2564,8 @@ export class Workspace extends Events {
   private handleDrawerKeydown(event: KeyboardEvent): void {
     if (!this.drawerSide) return;
     if (event.key === "Escape") {
+      // A nested widget (e.g. Graph search) may own Escape; let it dismiss itself first.
+      if (event.target instanceof Element && event.target.closest("[data-handles-escape]")) return;
       event.preventDefault();
       event.stopPropagation();
       this.closeMobileDrawers();

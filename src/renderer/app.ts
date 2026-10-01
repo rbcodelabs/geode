@@ -4178,11 +4178,23 @@ export class App {
     const existing = this.workspace.findLeafByViewType("graph");
     if (existing) {
       existing.group.setActiveLeaf(existing);
+      this.presentGraphInMobileDrawer(existing);
       return;
     }
     const leaf = this.workspace.rightSidebar.addLeaf();
     await leaf.setView(new GraphView(this));
     this.workspace.rightSidebar.setActiveLeaf(leaf);
+    this.presentGraphInMobileDrawer(leaf);
+  }
+
+  /**
+   * The right sidebar is an off-canvas drawer on phones and narrow tablets, so
+   * docking Graph there is invisible unless the drawer is opened too.
+   */
+  private presentGraphInMobileDrawer(leaf: WorkspaceLeaf): void {
+    if (!this.workspace.usesDrawer("right")) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+    this.workspace.presentMobileSidebarLeaf("right", leaf, opener);
   }
 
   /** "Open web viewer" (Obsidian compat command `open-web-viewer`): opens a new Web Viewer tab at the given URL, or the configured home URL. */

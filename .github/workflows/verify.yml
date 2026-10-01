@@ -34,3 +34,35 @@ jobs:
         run: npm run proof:local-wiki
       - name: Unit, build and Electron regression gate
         run: npm test
+
+  mobile:
+    # Keeps the mobile renderer suite (tests/mobile) from drifting away from the
+    # desktop renderer it shares code with. The native iOS simulator gate
+    # (scripts/ios-mvp-acceptance.sh) needs Xcode and stays a local release check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "25"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build mobile renderer
+        run: npm run build:mobile
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Mobile Playwright suite
+        run: npx playwright test --config playwright.mobile.config.ts --workers=2
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-playwright-results
+          path: test-results/
+          retention-days: 7
