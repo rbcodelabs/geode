@@ -6433,3 +6433,50 @@ body.is-mobile .page-preview {
   animation-duration: 550ms;
   animation-timing-function: ease-in-out;
 }
+
+/* ---- Focus pane ----------------------------------------------------------
+   `Workspace.enterFocusPane()` marks the root `is-focus-pane`, the target tab
+   group `is-focused-pane`, and its split ancestors `has-focused-pane`. Every
+   other pane is only hidden here — the split tree, sizes and sidebar
+   collapsed state are untouched, so exiting restores the layout exactly. */
+.workspace.is-focus-pane > .workspace-sidebar,
+.workspace.is-focus-pane > .sidebar-resize-handle,
+.workspace.is-focus-pane .workspace-center-resize-handle {
+  display: none !important;
+}
+.workspace.is-focus-pane :is(.workspace-center, .workspace-split.has-focused-pane) > .workspace-tabs:not(.is-focused-pane),
+.workspace.is-focus-pane :is(.workspace-center, .workspace-split.has-focused-pane) > .workspace-split:not(.has-focused-pane) {
+  display: none !important;
+}
+.workspace.is-focus-pane .is-focused-pane,
+.workspace.is-focus-pane .has-focused-pane {
+  flex: 1 1 100% !important;
+}
+.focus-pane-exit-button {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 28px;
+  margin-top: 6px;
+  padding: 5px 6px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  color: var(--text-accent);
+  -webkit-app-region: no-drag;
+}
+.focus-pane-exit-button svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+.focus-pane-exit-button:hover {
+  background: var(--background-modifier-hover);
+}
+.workspace-tabs.is-focused-pane > .workspace-tab-header-container > .focus-pane-exit-button {
+  display: flex;
+}
+/* The left sidebar is hidden, so the focused pane owns the window's top-left corner. */
+body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tabs.is-focused-pane > .workspace-tab-header-container {
+  padding-left: 38px;
+}
