@@ -22,6 +22,9 @@ concurrency:
 
 jobs:
   testflight:
+    # Signing secrets live in this environment (shared with the desktop release);
+    # its required-reviewer rule is the approval gate for every run.
+    environment: macos-release
     runs-on: macos-latest
     timeout-minutes: 45
     env:
