@@ -1,5 +1,6 @@
 import { ItemView } from "../../api/obsidian";
 import type { WorkspaceLeaf } from "../../workspace";
+import type { ThreadsCardView } from "./claude-threads-recommendation";
 import { DEFAULT_GROUP } from "./completeness";
 import { ONBOARDING_VIEW_TYPE, type OnboardingItem, type OnboardingPlugin } from "./onboarding-plugin";
 
@@ -75,6 +76,8 @@ export class OnboardingView extends ItemView {
       return;
     }
 
+    this.renderThreadsCard(root, snap.threadsCard);
+
     const { completeness } = snap;
     const summary = this.el("div", "onboarding-summary", undefined, root);
     const label = `${completeness.completed} of ${completeness.total} steps complete`;
@@ -119,6 +122,97 @@ export class OnboardingView extends ItemView {
     const footer = this.el("div", "onboarding-footer", undefined, root);
     const hide = this.el("button", "onboarding-button", "Dismiss onboarding", footer);
     hide.addEventListener("click", () => void this.plugin.setOnboardingDismissed(true));
+  }
+
+  /**
+   * "Recommended: Claude Threads" card (Direction A, quiet note): dashed,
+   * visually secondary block above the checklist. State comes from the plugin.
+   */
+  private renderThreadsCard(root: HTMLElement, card: ThreadsCardView): void {
+    if (card.kind === "hidden") return;
+    const sec = this.el("section", "onboarding-rec", undefined, root);
+    sec.dataset.state = card.kind;
+    sec.setAttribute("aria-labelledby", "onboarding-rec-title");
+
+    const head = this.el("div", "onboarding-rec-head", undefined, sec);
+    const icon = this.el("span", "onboarding-rec-icon", undefined, head);
+    icon.setAttribute("aria-hidden", "true");
+    // Static, trusted markup (no plugin-supplied content).
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" width="28" height="28"><rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" opacity=".16"/><path d="M7 8h10M7 12h7M7 16h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>';
+    const titles = this.el("div", undefined, undefined, head);
+    this.el("p", "onboarding-rec-eyebrow", "Recommended", titles);
+    const h = this.el("h3", "onboarding-rec-title", "Claude Threads", titles);
+    h.id = "onboarding-rec-title";
+
+    const button = (label: string, cls: string, onClick: () => void, parent: HTMLElement, aria?: string) => {
+      const b = this.el("button", cls, label, parent);
+      b.type = "button";
+      if (aria) b.setAttribute("aria-label", aria);
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    const p = this.plugin;
+
+    switch (card.kind) {
+      case "idle": {
+        this.el(
+          "p",
+          "onboarding-rec-desc",
+          "Chat with Claude about your notes, run agents against your vault, and keep every conversation as a Markdown note you own.",
+          sec
+        );
+        const facts = this.el("ul", "onboarding-rec-facts", undefined, sec);
+        this.el("li", undefined, "Installs into this vault only", facts);
+        this.el("li", undefined, "Optional. Remove anytime", facts);
+        const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
+        button("Install", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Install Claude Threads");
+        button("Not now", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Not now: skip installing Claude Threads");
+        break;
+      }
+      case "installing": {
+        const status = this.el("div", undefined, undefined, sec);
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        this.el("p", "onboarding-rec-desc", "Installing Claude Threads into this vault…", status);
+        const bar = this.el("div", "onboarding-rec-bar", undefined, status);
+        bar.setAttribute("role", "progressbar");
+        bar.setAttribute("aria-label", "Installing Claude Threads");
+        bar.setAttribute("aria-valuetext", "Installing");
+        this.el("i", undefined, undefined, bar);
+        const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
+        button("Cancel", "onboarding-link", () => p.cancelThreadsInstall(), actions);
+        break;
+      }
+      case "installed": {
+        const status = this.el("div", undefined, undefined, sec);
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        const ok = this.el("p", "onboarding-rec-ok", undefined, status);
+        this.el("span", "onboarding-rec-tick", "✓", ok).setAttribute("aria-hidden", "true");
+        ok.append("Installed");
+        this.el("p", "onboarding-rec-meta", "Enable it in Settings > Community plugins.", status);
+        break;
+      }
+      case "failed": {
+        const alert = this.el("div", undefined, undefined, sec);
+        alert.setAttribute("role", "alert");
+        const err = this.el("p", "onboarding-rec-err", undefined, alert);
+        this.el("span", "onboarding-rec-warn", "!", err).setAttribute("aria-hidden", "true");
+        err.append(`Couldn't install${card.error ? `: ${card.error}` : ""}`);
+        this.el("p", "onboarding-rec-meta", "Nothing was changed. You can keep going and add it later from Community plugins.", alert);
+        const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
+        button("Retry", "onboarding-button mod-cta", () => void p.startThreadsInstall(), actions, "Retry installing Claude Threads");
+        button("Skip", "onboarding-link", () => void p.dismissThreadsCard(), actions, "Skip installing Claude Threads");
+        break;
+      }
+      case "dismissed": {
+        this.el("p", "onboarding-rec-meta", "No problem. It stays on your checklist as an optional step.", sec);
+        const actions = this.el("div", "onboarding-rec-actions", undefined, sec);
+        button("Undo", "onboarding-link", () => void p.undoDismissThreadsCard(), actions);
+        break;
+      }
+    }
   }
 
   private renderStep(list: HTMLElement, item: OnboardingItem): void {

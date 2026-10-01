@@ -5,12 +5,14 @@ export interface OnboardingState {
   completed: Record<string, { completedAt: string; source: CompletionSource }>;
   dismissedSteps: string[];
   dismissedOnboarding: boolean;
+  /** Ids of "Recommended" cards the user chose "Not now" on (e.g. "claude-threads"). */
+  dismissedRecommendations: string[];
 }
 
 export const CHECK_TIMEOUT_MS = 5000;
 
 export function emptyState(): OnboardingState {
-  return { version: 1, completed: {}, dismissedSteps: [], dismissedOnboarding: false };
+  return { version: 1, completed: {}, dismissedSteps: [], dismissedOnboarding: false, dismissedRecommendations: [] };
 }
 
 /** Tolerant loader for persisted `data.json`: anything malformed falls back to defaults, never throws. */
@@ -30,6 +32,11 @@ export function normalizeState(raw: unknown): OnboardingState {
     state.dismissedSteps = [...new Set(r.dismissedSteps.filter((x): x is string => typeof x === "string"))];
   }
   state.dismissedOnboarding = r.dismissedOnboarding === true;
+  if (Array.isArray(r.dismissedRecommendations)) {
+    state.dismissedRecommendations = [
+      ...new Set(r.dismissedRecommendations.filter((x): x is string => typeof x === "string")),
+    ];
+  }
   return state;
 }
 

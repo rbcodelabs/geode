@@ -4,8 +4,12 @@ import type { PluginManifest } from "../../plugin-manifest";
 import type { OnboardingManifestStep } from "../../plugin-manifest";
 import { computeCompleteness, type Completeness } from "./completeness";
 import {
+  CLAUDE_THREADS_ID,
   CLAUDE_THREADS_STEP_NAME,
+  computeThreadsCard,
   installClaudeThreads,
+  type ThreadsCardView,
+  type ThreadsInstallPhase,
 } from "./claude-threads-recommendation";
 import { firstPartySteps, ONBOARDING_PLUGIN_ID, type OnboardingHost } from "./first-party-steps";
 import { OnboardingRegistry, type OnboardingStep, type ResolvedStep } from "./registry";
@@ -43,6 +47,7 @@ export interface OnboardingSnapshot {
   items: OnboardingItem[];
   completeness: Completeness;
   dismissedOnboarding: boolean;
+  threadsCard: ThreadsCardView;
 }
 
 /** The slice of PluginManager the onboarding plugin needs (kept narrow for tests). */
@@ -246,7 +251,12 @@ export class OnboardingPlugin extends GeodePlugin {
       (id) => byId.get(id)?.done ?? false,
       (id) => byId.get(id)?.skipped ?? false
     );
-    return { items, completeness, dismissedOnboarding: this.state.dismissedOnboarding };
+    return {
+      items,
+      completeness,
+      dismissedOnboarding: this.state.dismissedOnboarding,
+      threadsCard: this.getThreadsCard(),
+    };
   }
 
   /** Manual toggle. Ignored for steps with a dynamic `check` (those complete themselves). */
@@ -296,15 +306,88 @@ export class OnboardingPlugin extends GeodePlugin {
    */
   async installClaudeThreads(): Promise<boolean> {
     this.app.notify("Installing Claude Threads…");
-    const outcome = await installClaudeThreads((id, release) => this.app.communityManager.installSupported(id, release));
+    const ok = await this.runThreadsInstall();
     this.app.notify(
-      outcome.ok
+      ok
         ? "Claude Threads installed. Enable it in Settings > Community plugins."
-        : `Couldn't install Claude Threads: ${outcome.error}`,
-      outcome.ok ? undefined : 8000
+        : `Couldn't install Claude Threads: ${this.threadsError ?? "cancelled"}`,
+      ok ? undefined : 8000
     );
+    return ok;
+  }
+
+  // ----- "Recommended: Claude Threads" card -----
+
+  private threadsPhase: ThreadsInstallPhase = "idle";
+  private threadsError?: string;
+  private threadsRun = 0;
+  private threadsInstalledThisSession = false;
+  private threadsDismissedThisSession = false;
+
+  private isThreadsInstalled(): boolean {
+    const host = this.host;
+    return !!host && (!!host.getManifest(CLAUDE_THREADS_ID) || host.enabledIds().includes(CLAUDE_THREADS_ID));
+  }
+
+  getThreadsCard(): ThreadsCardView {
+    const kind = computeThreadsCard({
+      installed: this.isThreadsInstalled(),
+      installApiAvailable: typeof (globalThis as any).window?.geode?.installSupportedPlugin === "function",
+      headless: this.headlessProbe(),
+      dismissed: this.state.dismissedRecommendations.includes(CLAUDE_THREADS_ID),
+      phase: this.threadsPhase,
+      installedThisSession: this.threadsInstalledThisSession,
+      dismissedThisSession: this.threadsDismissedThisSession,
+    });
+    return kind === "failed" ? { kind, error: this.threadsError } : { kind };
+  }
+
+  /** Shared install runner. Never throws; a cancelled run's late result is ignored. */
+  private async runThreadsInstall(): Promise<boolean> {
+    const run = ++this.threadsRun;
+    this.threadsPhase = "installing";
+    this.threadsError = undefined;
+    this.emit();
+    const outcome = await installClaudeThreads((id, release) => this.app.communityManager.installSupported(id, release));
+    if (run !== this.threadsRun) return false; // cancelled; a late success still shows via refresh()
+    if (outcome.ok) {
+      this.threadsPhase = "idle";
+      this.threadsInstalledThisSession = true;
+    } else {
+      this.threadsPhase = "failed";
+      this.threadsError = outcome.error;
+    }
     await this.refresh();
     return outcome.ok;
+  }
+
+  /** Card "Install" / "Retry". */
+  async startThreadsInstall(): Promise<void> {
+    await this.runThreadsInstall();
+  }
+
+  /** Card "Cancel": returns to idle. The in-flight download cannot be aborted, only ignored. */
+  cancelThreadsInstall(): void {
+    this.threadsRun++;
+    this.threadsPhase = "idle";
+    this.emit();
+  }
+
+  /** Card "Not now" / "Skip": persisted; the optional checklist step remains. */
+  async dismissThreadsCard(): Promise<void> {
+    this.threadsRun++;
+    this.threadsPhase = "idle";
+    this.threadsDismissedThisSession = true;
+    const s = this.state;
+    if (s.dismissedRecommendations.includes(CLAUDE_THREADS_ID)) this.emit();
+    else await this.update({ ...s, dismissedRecommendations: [...s.dismissedRecommendations, CLAUDE_THREADS_ID] });
+  }
+
+  async undoDismissThreadsCard(): Promise<void> {
+    this.threadsDismissedThisSession = false;
+    const s = this.state;
+    await this.update({ ...s, dismissedRecommendations: s.dismissedRecommendations.filter((x) => x !== CLAUDE_THREADS_ID) });
+    this.emit();
   }
 
   /** Enable the plugin that owns a static step (used by the "plugin disabled" affordance). */

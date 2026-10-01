@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_THREADS_ID,
+  computeThreadsCard,
   installClaudeThreads,
   shouldRecommendClaudeThreads,
 } from "../../src/renderer/internal-plugins/onboarding/claude-threads-recommendation";
@@ -19,6 +20,37 @@ describe("shouldRecommendClaudeThreads", () => {
     ["declined", { declined: true }],
   ])("does not recommend: %s", (_name, over) => {
     expect(shouldRecommendClaudeThreads({ ...base, ...over })).toBe(false);
+  });
+});
+
+describe("computeThreadsCard", () => {
+  const input = {
+    installed: false,
+    installApiAvailable: true,
+    headless: false,
+    dismissed: false,
+    phase: "idle" as const,
+    installedThisSession: false,
+    dismissedThisSession: false,
+  };
+  const kind = (over: Partial<typeof input>) => computeThreadsCard({ ...input, ...over });
+
+  it("idle by default", () => expect(kind({})).toBe("idle"));
+  it("hidden when headless, without install API, or already installed", () => {
+    expect(kind({ headless: true })).toBe("hidden");
+    expect(kind({ installApiAvailable: false })).toBe("hidden");
+    expect(kind({ installed: true })).toBe("hidden");
+  });
+  it("shows installed only for an install done by the card this session", () => {
+    expect(kind({ installed: true, installedThisSession: true })).toBe("installed");
+  });
+  it("installing and failed phases take priority over dismissal", () => {
+    expect(kind({ phase: "installing" })).toBe("installing");
+    expect(kind({ phase: "failed", dismissed: true })).toBe("failed");
+  });
+  it("dismissed shows Undo note this session, hidden in later sessions", () => {
+    expect(kind({ dismissed: true, dismissedThisSession: true })).toBe("dismissed");
+    expect(kind({ dismissed: true })).toBe("hidden");
   });
 });
 

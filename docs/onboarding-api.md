@@ -86,5 +86,13 @@ export default class MyPlugin extends Plugin {
   tested release through `CommunityManager.installSupported`. Failures show a
   notice and never throw. It is not offered on hosts without the install API
   (mobile) or when headless.
+- The same install is offered as a "Recommended: Claude Threads" card at the top
+  of the checklist pane (so it appears with the launch auto-open on a new
+  vault): Install, Not now, and Cancel / Retry / Skip / Undo as it progresses.
+  The card is hidden when the plugin is installed, headless, or the host has no
+  install API; "Not now" is saved in the onboarding state
+  (`dismissedRecommendations`) and the optional checklist step remains.
+  Progress is indeterminate (the install API reports none) and Cancel only
+  ignores the in-flight result.
 - Completion is stored per vault in `.geode/plugins/onboarding/data.json`. Users
   can skip a step, dismiss the whole checklist, or reset progress.

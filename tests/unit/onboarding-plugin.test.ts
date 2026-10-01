@@ -257,6 +257,93 @@ describe("OnboardingPlugin Claude Threads step", () => {
   });
 });
 
+describe("OnboardingPlugin Claude Threads card", () => {
+  async function boot(h: ReturnType<typeof makeHarness>, headless = false) {
+    (globalThis as any).window.geode.installSupportedPlugin = vi.fn();
+    const state = { installed: false };
+    const plugin = new OnboardingPlugin(h.app, () => headless);
+    plugin.load();
+    await plugin.ready;
+    plugin.attachPluginManager({
+      ...h.host,
+      getManifest: (id: string) => (state.installed && id === "claude-threads" ? ({} as any) : undefined),
+    });
+    return { plugin, state };
+  }
+  const step = (p: OnboardingPlugin) =>
+    p.getSnapshot().items.find((i) => i.step.id === "onboarding:install-claude-threads")!;
+
+  it("idle -> installing -> installed, and the checklist step completes in sync", async () => {
+    const h = makeHarness();
+    const { plugin, state } = await boot(h);
+    let release!: () => void;
+    h.app.communityManager = {
+      installSupported: vi.fn(
+        () => new Promise((resolve) => (release = () => ((state.installed = true), resolve({}))))
+      ),
+    };
+    expect(plugin.getThreadsCard().kind).toBe("idle");
+    const run = plugin.startThreadsInstall();
+    expect(plugin.getThreadsCard().kind).toBe("installing");
+    release();
+    await run;
+    expect(plugin.getThreadsCard().kind).toBe("installed");
+    expect(step(plugin).done).toBe(true);
+  });
+
+  it("failure shows the error without throwing; Retry can then succeed", async () => {
+    const h = makeHarness();
+    const { plugin, state } = await boot(h);
+    const install = vi.fn().mockRejectedValueOnce(new Error("offline")).mockImplementationOnce(async () => {
+      state.installed = true;
+    });
+    h.app.communityManager = { installSupported: install };
+    await expect(plugin.startThreadsInstall()).resolves.toBeUndefined();
+    expect(plugin.getThreadsCard()).toEqual({ kind: "failed", error: "offline" });
+    expect(step(plugin).done).toBe(false);
+    await plugin.startThreadsInstall();
+    expect(plugin.getThreadsCard().kind).toBe("installed");
+  });
+
+  it("Not now persists across instances and leaves the optional step; Undo restores the card", async () => {
+    const h = makeHarness();
+    const a = await boot(h);
+    await a.plugin.dismissThreadsCard();
+    expect(a.plugin.getThreadsCard().kind).toBe("dismissed");
+    expect(h.saved().dismissedRecommendations).toEqual(["claude-threads"]);
+    expect(step(a.plugin).done).toBe(false);
+    a.plugin.unload();
+
+    const b = await boot(h);
+    expect(b.plugin.getThreadsCard().kind).toBe("hidden");
+    expect(step(b.plugin)).toBeDefined();
+    await b.plugin.undoDismissThreadsCard();
+    expect(b.plugin.getThreadsCard().kind).toBe("idle");
+  });
+
+  it("Cancel returns to idle and ignores the late result", async () => {
+    const h = makeHarness();
+    const { plugin } = await boot(h);
+    let fail!: () => void;
+    h.app.communityManager = { installSupported: vi.fn(() => new Promise((_r, rej) => (fail = () => rej(new Error("late")))) ) };
+    const run = plugin.startThreadsInstall();
+    plugin.cancelThreadsInstall();
+    expect(plugin.getThreadsCard().kind).toBe("idle");
+    fail();
+    await run;
+    expect(plugin.getThreadsCard().kind).toBe("idle");
+  });
+
+  it("is hidden when already installed or headless", async () => {
+    const h = makeHarness();
+    const a = await boot(h);
+    a.state.installed = true;
+    expect(a.plugin.getThreadsCard().kind).toBe("hidden");
+    const b = await boot(makeHarness(), true);
+    expect(b.plugin.getThreadsCard().kind).toBe("hidden");
+  });
+});
+
 describe("OnboardingPlugin.autoOpenIfOutstanding", () => {
   const MANUAL_FIRST_PARTY = ["onboarding:create-note", "onboarding:command-palette", "onboarding:open-graph"];
 

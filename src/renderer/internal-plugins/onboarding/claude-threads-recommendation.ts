@@ -25,6 +25,46 @@ export function shouldRecommendClaudeThreads(s: ThreadsRecommendationState): boo
   return !s.installed && s.installApiAvailable && !s.headless && !s.declined;
 }
 
+export type ThreadsInstallPhase = "idle" | "installing" | "failed";
+
+export type ThreadsCardKind = "hidden" | "idle" | "installing" | "installed" | "failed" | "dismissed";
+
+export interface ThreadsCardInput {
+  installed: boolean;
+  installApiAvailable: boolean;
+  headless: boolean;
+  /** "Not now" persisted in onboarding state. */
+  dismissed: boolean;
+  /** Transient install phase for this session. */
+  phase: ThreadsInstallPhase;
+  /** This session's card installed the plugin: keep showing the success note. */
+  installedThisSession: boolean;
+  /** "Not now" was pressed this session: keep showing the Undo note. */
+  dismissedThisSession: boolean;
+}
+
+/**
+ * Card state machine. Hidden when the host can't install, when headless, when
+ * the plugin was already installed before this session's card did it, or when
+ * dismissed in an earlier session. Installation is the source of truth:
+ * once the plugin exists the card is "installed" (this session) or hidden,
+ * never "idle", which keeps it in sync with the checklist step's check().
+ */
+export function computeThreadsCard(i: ThreadsCardInput): ThreadsCardKind {
+  if (i.headless || !i.installApiAvailable) return "hidden";
+  if (i.installed) return i.installedThisSession ? "installed" : "hidden";
+  if (i.phase === "installing") return "installing";
+  if (i.phase === "failed") return "failed";
+  if (i.dismissed) return i.dismissedThisSession ? "dismissed" : "hidden";
+  return "idle";
+}
+
+export interface ThreadsCardView {
+  kind: ThreadsCardKind;
+  /** Present when kind === "failed". */
+  error?: string;
+}
+
 export type InstallOutcome = { ok: true } | { ok: false; error: string };
 
 /**
