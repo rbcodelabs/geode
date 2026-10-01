@@ -80,6 +80,10 @@ export default class MyPlugin extends Plugin {
   Optional steps never trigger it. It stays closed if the user dismissed
   onboarding or the pane is already open, and under `GEODE_HEADLESS` (e2e).
   Register steps from `onload()` so they exist when the check runs.
+- The launch auto-open is desktop only. The plugin writes `data.json` only when
+  state genuinely differs from what is on disk: never on load, never to create
+  defaults, and auto-detected completions are held in memory until the checklist
+  is open (or a user action saves).
 - The checklist includes an optional first-party step, "Install and enable Agent
   Threads" (supported-catalog id `claude-threads`, which is the plugin's real id).
   Its `check()` passes only when the plugin is installed and enabled. Its "Do it"

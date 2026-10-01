@@ -147,6 +147,7 @@ describe("OnboardingPlugin", () => {
         throw new Error("boom");
       },
     });
+    h.openLeaves.push({ type: "onboarding-checklist", setViewState: vi.fn() }); // checklist visible: auto results persist
     await expect(plugin.refresh()).resolves.toBeUndefined();
     const done = Object.fromEntries(plugin.getSnapshot().items.map((i) => [i.step.id, i.done]));
     expect(done["p:ok"]).toBe(true);
@@ -220,6 +221,67 @@ describe("OnboardingPlugin", () => {
     expect(plugin.runStep("onboarding:create-note")).toBe(true);
     expect(h.executed).toEqual(["new-note"]);
     expect(plugin.runStep("onboarding:link-notes")).toBe(false);
+  });
+});
+
+describe("OnboardingPlugin vault writes", () => {
+  const writes = (h: ReturnType<typeof makeHarness>) => {
+    const write = vi.fn(async (p: string, c: string) => void h.files.set(p, c));
+    (globalThis as any).window.geode.write = write;
+    return write;
+  };
+
+  it("performs no write on a clean load, refresh or reset-to-defaults", async () => {
+    const h = makeHarness();
+    const write = writes(h);
+    const plugin = new OnboardingPlugin(h.app);
+    plugin.load();
+    await plugin.ready;
+    await plugin.refresh();
+    await plugin.refresh();
+    plugin.attachPluginManager(h.host);
+    await plugin.refresh();
+    await plugin.resetProgress(); // already defaults
+    expect(write).not.toHaveBeenCalled();
+    expect(h.files.size).toBe(0);
+  });
+
+  it("does not write auto-completions found in the background (no checklist open)", async () => {
+    const h = makeHarness();
+    h.app.metadataCache.resolvedLinks = { "a.md": { "b.md": 1 } }; // link-notes auto-completes
+    const write = writes(h);
+    const plugin = new OnboardingPlugin(h.app);
+    plugin.load();
+    await plugin.ready;
+    await plugin.refresh();
+    expect(plugin.getSnapshot().items.find((i) => i.step.id === "onboarding:link-notes")!.done).toBe(true);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("writes auto-completions once the checklist is open, and only once", async () => {
+    const h = makeHarness();
+    h.app.metadataCache.resolvedLinks = { "a.md": { "b.md": 1 } };
+    const write = writes(h);
+    const plugin = new OnboardingPlugin(h.app);
+    plugin.load();
+    await plugin.ready;
+    await plugin.refresh();
+    h.openLeaves.push({ type: "onboarding-checklist", setViewState: vi.fn() });
+    await plugin.refresh();
+    await plugin.refresh();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rewrite when a user action leaves state unchanged", async () => {
+    const h = makeHarness();
+    const plugin = new OnboardingPlugin(h.app);
+    plugin.load();
+    await plugin.ready;
+    await plugin.toggleStep("onboarding:create-note");
+    const write = writes(h);
+    await plugin.unskipStep("onboarding:create-note"); // nothing to restore
+    await plugin.setOnboardingDismissed(false); // already false
+    expect(write).not.toHaveBeenCalled();
   });
 });
 

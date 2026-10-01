@@ -148,6 +148,9 @@ export class OnboardingPlugin extends GeodePlugin {
 
   private async initialize(): Promise<void> {
     this.state = normalizeState(await this.loadData());
+    // Baseline for "did anything genuinely change?": a vault with no data.json
+    // is equivalent to the defaults, so a clean load never creates the file.
+    this.persistedJson = JSON.stringify(this.state);
     if (this.disposed) return;
     // Imported lazily: the view extends ItemView from api/obsidian.ts, which
     // re-exports App, so a static import here would recreate the init-time
@@ -199,10 +202,11 @@ export class OnboardingPlugin extends GeodePlugin {
       if (this.disposed) return;
       try {
         const next = await applyChecks(this.state, this.registry.list(), new Date());
-        if (next !== this.state) {
-          this.state = next;
-          await this.persist();
-        }
+        // Auto-detected completions are kept in memory. They are written only
+        // once the checklist is actually open (or with the next user-driven
+        // change), so background startup/refresh never touches the vault.
+        this.state = next;
+        if (this.isChecklistOpen()) await this.persist();
       } catch (err) {
         console.warn("Onboarding refresh failed", err);
       }
@@ -211,9 +215,19 @@ export class OnboardingPlugin extends GeodePlugin {
     return this.refreshChain;
   }
 
+  private isChecklistOpen(): boolean {
+    return this.app.workspace.getLeavesOfType(ONBOARDING_VIEW_TYPE).length > 0;
+  }
+
+  /** Last JSON written to (or read from) disk; writes happen only when state differs from it. */
+  private persistedJson = JSON.stringify(emptyState());
+
   private async persist(): Promise<void> {
+    const json = JSON.stringify(this.state);
+    if (json === this.persistedJson) return;
     try {
       await this.saveData(this.state);
+      this.persistedJson = json;
     } catch (err) {
       console.warn("Onboarding state could not be saved", err);
     }

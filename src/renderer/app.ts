@@ -2885,8 +2885,13 @@ export class App {
     this.onboarding.attachPluginManager(this.pluginManager);
     // Queued until flushLayoutReady() (after layout restore), so a restored
     // checklist pane is seen and not duplicated. No-op under GEODE_HEADLESS.
+    // Desktop only: on mobile/browser the sidebar is a drawer and opening the
+    // checklist (which persists state) at launch would be intrusive; users can
+    // still run "Onboarding: Open checklist".
     const onboardingForLaunch = this.onboarding;
-    this.workspace.onLayoutReady(() => void onboardingForLaunch.autoOpenIfOutstanding());
+    if (this.host.runtime.runtime === "electron") {
+      this.workspace.onLayoutReady(() => void onboardingForLaunch.autoOpenIfOutstanding());
+    }
     await measureOperation("startup-plugins", () => this.pluginManager.initialize());
     if (this.pluginManager.isRecoveryMode()) this.showCrashRecoveryBanner(shell);
 
