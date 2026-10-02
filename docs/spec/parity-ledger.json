@@ -38,12 +38,12 @@
       "api-member": 1011
     },
     "byStatus": {
-      "verified": 308,
-      "partial": 66,
+      "verified": 328,
+      "partial": 50,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2481
+      "unknown": 2477
     }
   },
   "requirements": [
@@ -31470,11 +31470,12 @@
       "title": "View.(constructor)",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed construction from a WorkspaceLeaf. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A real CommonJS plugin constructs a require('obsidian').View subclass from a live WorkspaceLeaf."
     },
     {
       "id": "API-MEMBER-d628a3ee3e52",
@@ -31484,11 +31485,12 @@
       "title": "View.app",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed app identity derived from the leaf. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "The plugin-created View exposes the exact live App instance owned by its constructor leaf."
     },
     {
       "id": "API-MEMBER-2b6bbddf3d59",
@@ -31498,11 +31500,12 @@
       "title": "View.containerEl",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed a constructed view container element. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "The plugin-created View exposes a real HTMLElement container which is connected after WorkspaceLeaf.open and hosts plugin DOM."
     },
     {
       "id": "API-MEMBER-cce2661bec62",
@@ -31512,11 +31515,12 @@
       "title": "View.getDisplayText",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed a subclass-provided display text. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A CommonJS plugin's View display text is returned through the public method and rendered in the live tab title and aria-label."
     },
     {
       "id": "API-MEMBER-aa050342fd39",
@@ -31526,11 +31530,12 @@
       "title": "View.getEphemeralState",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed default and updated ephemeral state records. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A real plugin observes an empty default ephemeral state and the state later stored through setEphemeralState."
     },
     {
       "id": "API-MEMBER-200ae2a05b18",
@@ -31540,11 +31545,12 @@
       "title": "View.getIcon",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed icon lookup from the view icon property. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "The plugin reads its assigned icon through getIcon and the live tab header renders the resolved icon SVG."
     },
     {
       "id": "API-MEMBER-c585e7c2f151",
@@ -31554,11 +31560,12 @@
       "title": "View.getState",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed the default serializable state record. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A hosted View returns its current serializable state before and after WorkspaceLeaf.setViewState in real Electron."
     },
     {
       "id": "API-MEMBER-ebf47a19f558",
@@ -31568,11 +31575,12 @@
       "title": "View.getViewType",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed a subclass-provided stable view type. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A CommonJS plugin's View subclass supplies a stable type used by registration, setViewState, and getViewState."
     },
     {
       "id": "API-MEMBER-f6e3e5d0743e",
@@ -31582,11 +31590,12 @@
       "title": "View.icon",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed the mutable icon property and its default. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A plugin assigns the View icon property during construction and the live tab header renders that exact panel-top identity in both its data-icon attribute and Lucide SVG class."
     },
     {
       "id": "API-MEMBER-976149ed0d99",
@@ -31596,11 +31605,12 @@
       "title": "View.leaf",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed retained WorkspaceLeaf identity. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "The plugin-created View retains the exact live WorkspaceLeaf passed to its constructor."
     },
     {
       "id": "API-MEMBER-b319dfc5d21c",
@@ -31612,9 +31622,10 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "partial",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed the mutable navigation property and its default. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A plugin-created base View exposes the implemented false navigation default in the Electron host. Partial because default observation does not prove the documented navigation/history behavior."
     },
     {
       "id": "API-MEMBER-3f58db0a11f1",
@@ -31624,8 +31635,11 @@
       "title": "View.onClose",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
+      ],
+      "notes": "Replacing a hosted CommonJS plugin View invokes its asynchronous onClose hook before the replacement View opens."
     },
     {
       "id": "API-MEMBER-14a9b7e28f14",
@@ -31635,8 +31649,11 @@
       "title": "View.onOpen",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
+      ],
+      "notes": "WorkspaceLeaf.open invokes a CommonJS plugin View's asynchronous onOpen hook and mounts the DOM it creates."
     },
     {
       "id": "API-MEMBER-c2321521fa51",
@@ -31670,9 +31687,10 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "partial",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed the assignable scope property with null default. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A plugin-created base View exposes the implemented null scope default in the Electron host. Partial because default observation does not prove focused hotkey-scope activation."
     },
     {
       "id": "API-MEMBER-d6ca9ac17373",
@@ -31682,11 +31700,12 @@
       "title": "View.setEphemeralState",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed setting an ephemeral state record. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A real plugin stores ephemeral View state; mutating the caller's original object afterward does not change the stored record."
     },
     {
       "id": "API-MEMBER-2f45c261f99b",
@@ -31696,11 +31715,12 @@
       "title": "View.setState",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed the asynchronous base state setter accepting state and result values. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "WorkspaceLeaf.setViewState awaits the hosted View's asynchronous setState with the serialized state and result object."
     },
     {
       "id": "API-MEMBER-550d82f6b7f4",
@@ -32326,8 +32346,11 @@
       "title": "WorkspaceLeaf.getDisplayText",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
+      ],
+      "notes": "A real Electron WorkspaceLeaf forwards its hosted View display text, which also appears in the tab title and aria-label."
     },
     {
       "id": "API-MEMBER-9616fabd5ea7",
@@ -32359,11 +32382,12 @@
       "title": "WorkspaceLeaf.getViewState",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed the mounted view type and current serialized state. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A hosted plugin reads the mounted view type and the live serialized state applied through setViewState in real Electron."
     },
     {
       "id": "API-MEMBER-c4623f4910ac",
@@ -32436,11 +32460,12 @@
       "title": "WorkspaceLeaf.open",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed mounting and returning the supplied View. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A real CommonJS plugin supplies a View to WorkspaceLeaf.open; the promise returns that same instance after its DOM is mounted and onOpen has run."
     },
     {
       "id": "API-MEMBER-cfc7cfda4a05",
@@ -32505,11 +32530,12 @@
       "title": "WorkspaceLeaf.setPinned",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed changing pinned state without recreating the view. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A real Electron leaf becomes pinned through setPinned, renders the pinned tab class, and retains its hosted View identity."
     },
     {
       "id": "API-MEMBER-b4b0b038376e",
@@ -32521,9 +32547,10 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "partial",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed factory mounting and application of a falsey state value. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A hosted plugin applies serialized state to an already-mounted same-type View through setViewState, preserving its identity, avoiding a second onOpen, and awaiting the View's asynchronous setState. Partial because the documented eState argument is not covered and Geode does not currently forward it."
     },
     {
       "id": "API-MEMBER-badda12dab1b",
@@ -32533,11 +32560,12 @@
       "title": "WorkspaceLeaf.togglePinned",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/workspace-public-contracts.test.ts"
+        "tests/unit/workspace-public-contracts.test.ts",
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
       ],
-      "notes": "Observed toggling the leaf's pinned state. Unit-covered via prototype-fixture assertions only; no real-Electron render observed -- see 05-parity-ledger.md DOM-surface policy. Downgraded to partial pending tests/e2e/ coverage."
+      "notes": "A real Electron leaf toggles from pinned to unpinned and back while retaining its hosted View identity."
     },
     {
       "id": "API-MEMBER-a14a60e30669",
@@ -32547,8 +32575,11 @@
       "title": "WorkspaceLeaf.view",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/view-workspaceleaf-contracts.spec.ts"
+      ],
+      "notes": "A real Electron WorkspaceLeaf exposes the exact hosted plugin View instance before and after same-type state and pin operations."
     },
     {
       "id": "API-MEMBER-d9aae653b933",
