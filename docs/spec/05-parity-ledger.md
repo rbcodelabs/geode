@@ -22,8 +22,8 @@ The generator reads these official repositories:
   gap. This explicitly includes image lightbox, navigation, zoom/pan, and Live
   Preview image selection, resizing, editing, and layout refinements.
 
-The checked-in baseline contains 2,850 rows: 173 help pages, 1,319 developer
-pages, 50 changelog deltas, 299 public API declarations, and 1,009 public API
+The checked-in baseline contains 2,856 rows: 176 help pages, 1,319 developer
+pages, 50 changelog deltas, 300 public API declarations, and 1,011 public API
 members. Generated IDs are a kind prefix plus the first 12 hexadecimal digits
 of a SHA-256 hash over the row's canonical source identity. IDs do not depend on
 filesystem location, generation time, or row order.
