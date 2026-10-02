@@ -9,14 +9,12 @@
 // subclassable export — an undefined base throws
 // "Class extends value undefined" before the plugin's onload() ever runs.
 //
-// SCOPE OF THIS MODULE (PR 2a): make these plugins construct without throwing.
-// `Scope` is store-only — it records handlers but does NOT yet dispatch key
-// events (Geode has no global keymap infrastructure), mirroring the
-// store-only `hoverLinkSources` shim. `EditorSuggest` is constructable and
+// `Scope` stores handlers dispatched by `Keymap`; `EditorSuggest` is constructable and
 // subclassable but does NOT yet drive an autocomplete popover. Real keymap
 // dispatch and suggest-popover rendering are follow-up work (PR 2b).
 
 import type { App } from "../app";
+import type { KeymapContext } from "./keymap";
 
 /** A registered keymap handler, as returned by `Scope.register`. */
 export interface KeymapEventHandler {
@@ -27,15 +25,11 @@ export interface KeymapEventHandler {
   scope?: Scope;
 }
 
-export type KeymapEventListener = (evt: KeyboardEvent, ctx: unknown) => boolean | void;
+export type KeymapEventListener = (evt: KeyboardEvent, ctx: KeymapContext) => boolean | void;
 
 /**
- * A keymap scope. In real Obsidian a Scope owns a set of hotkey handlers that
- * are active while the scope is on the keymap stack. Geode has no keymap stack
- * yet, so this is STORE-ONLY: `register`/`unregister` maintain the handler
- * list (so plugin code that registers, inspects, and later unregisters
- * handlers behaves correctly) but no handler is ever invoked. This is a
- * well-behaved no-op, not a working keymap — enough for plugin load.
+ * A keymap scope. `register`/`unregister` maintain its live handler list;
+ * App.keymap walks the active scope's parent chain during key dispatch.
  */
 export class Scope {
   /** Parent scope, if this was created as a child (real Obsidian passes one). */
@@ -95,7 +89,7 @@ export interface EditorSuggestContext {
 /**
  * Base class community plugins subclass to provide in-editor autocomplete.
  *
- * PR 2a scope: constructable and subclassable so a plugin's
+ * Constructable and subclassable so a plugin's
  * `class X extends EditorSuggest { constructor(app){ super(app); ... } }`
  * loads. The constructor mirrors real Obsidian's shape — it stores `app`,
  * creates an owned child `scope`, and initializes `context` to null — so

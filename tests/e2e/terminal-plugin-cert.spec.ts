@@ -56,21 +56,6 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
     });
     window.on("pageerror", (err) => {
       const text = String(err);
-      // `app.keymap.pushScope`/`popScope` (instance-level keyboard-capture
-      // scope stack, used here so the terminal can grab all keystrokes
-      // without Obsidian's own hotkeys intercepting them) is a documented,
-      // deliberate gap — see the doc comment on `Keymap` in
-      // src/renderer/api/keymap.ts: Geode has no real scope stack yet, and a
-      // loud TypeError is intentionally preferred over a silent no-op that
-      // would look like a working keymap. Typing still reaches the pty fine
-      // (xterm's own textarea captures keys directly), confirmed by manual
-      // verification — this is a real, tracked limitation, not a load-
-      // bearing failure of the require()/spawn path this test certifies.
-      // The `.select.root` command below hits the same pair from its own
-      // input's focus/blur handling (confirmed in the plugin's minified
-      // source: matching `g.pushScope(r)`/`g.popScope(r)` call sites), so
-      // both halves of the pair are filtered identically here.
-      if (text.includes("pushScope") || text.includes("popScope")) return;
       // This one reproduces inside the plugin's own bundled event-emitter
       // code (traced to `@polyipseity/obsidian-plugin-library`'s vendored
       // disposable/emitter internals, deep under xterm's own `.write()` ->
@@ -137,10 +122,28 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
     // command runs without tearing down the terminal or raising an error
     // notice, which is exactly how a real spawn failure manifests here.)
     const marker = `GEODE_TERMINAL_CERT_${Date.now()}`;
-    await window.locator(".xterm-helper-textarea").first().click();
+    const terminalInput = window.locator(".xterm-helper-textarea").first();
+    await terminalInput.click();
+    await window.evaluate(() => {
+      (window as any).__terminalScopeHotkeyFired = 0;
+      (window as any).app.commands.add({
+        id: "e2e:terminal-scope-hotkey",
+        name: "Terminal scope certificate",
+        hotkey: "Mod+Shift+X",
+        callback: () => (window as any).__terminalScopeHotkeyFired++,
+      });
+    });
+    await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+X`);
+    expect(await window.evaluate(() => (window as any).__terminalScopeHotkeyFired)).toBe(0);
     await window.keyboard.type(`echo ${marker}`);
     await window.keyboard.press("Enter");
     await window.waitForTimeout(1500); // let the shell round-trip and xterm repaint
+
+    // Moving focus out of the terminal releases its parentless catch-all
+    // scope, so the same app hotkey routes normally again.
+    await terminalInput.evaluate((input) => (input as HTMLElement).blur());
+    await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+X`);
+    expect(await window.evaluate(() => (window as any).__terminalScopeHotkeyFired)).toBe(1);
 
     // Still mounted, still no error notice, after real keystrokes went
     // through the real pty. A spawn/stream failure would either throw
@@ -165,8 +168,24 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
     const suggestInput = window.locator(".prompt-input-container input.prompt-input").first();
     await expect(suggestInput).toBeVisible({ timeout: 5_000 });
     await expect(window.locator(".notice", { hasText: /error|fail/i })).toHaveCount(0);
+    const modalScope = await window.evaluateHandle(() => {
+      const w = window as any;
+      const scopes = w.app.keymap.scopes as unknown[];
+      const active = scopes[scopes.length - 1];
+      w.__terminalModalScope = active;
+      return {
+        isChildOfRoot: (active as any).parent === w.app.scope,
+        occurrences: scopes.filter((scope) => scope === active).length,
+      };
+    });
+    expect(await modalScope.jsonValue()).toEqual({ isChildOfRoot: true, occurrences: 1 });
+    await modalScope.dispose();
     await window.keyboard.press("Escape");
     await expect(suggestInput).toHaveCount(0);
+    expect(await window.evaluate(() => {
+      const w = window as any;
+      return (w.app.keymap.scopes as unknown[]).filter((scope) => scope === w.__terminalModalScope).length;
+    })).toBe(0);
 
     expect(consoleErrors, `Unexpected console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
     expect(pageErrors, `Unexpected page errors:\n${pageErrors.join("\n")}`).toEqual([]);

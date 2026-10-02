@@ -20,6 +20,7 @@ import type {
   MarkdownPostProcessorContext,
 } from "../markdown/processor-registry";
 import { Scope, EditorSuggest } from "./suggest";
+import { Keymap } from "./keymap";
 import type { BasesViewRegistration } from "./bases-view";
 import { createDismissibleNotice } from "../notice";
 import { createSecretStorage } from "../secret-storage";
@@ -65,8 +66,7 @@ export { App } from "../app";
 export type { TAbstractFile, CachedMetadata, FileStats, ListedFiles } from "../types";
 // Keymap + in-editor suggest primitives. `EditorSuggest` must be a real,
 // subclassable export (plugins do `class X extends EditorSuggest` at
-// module-eval time) and `Scope` backs `app.scope` (installed below). See
-// ./suggest for the PR-2a "loads, doesn't yet drive a popover" scope.
+// module-eval time) and `Scope` backs app-level keymap dispatch.
 export { Scope, EditorSuggest } from "./suggest";
 export {
   arrayBufferToBase64,
@@ -106,8 +106,8 @@ export {
   HTMLValue,
   RenderContext,
 } from "./bases-values";
-export { Keymap } from "./keymap";
-export type { PaneType, UserEvent, Modifier } from "./keymap";
+export { Keymap };
+export type { PaneType, UserEvent, Modifier, KeymapContext } from "./keymap";
 export { parsePropertyId } from "./bases-property-id";
 export type { BasesProperty, BasesPropertyId, BasesPropertyType } from "./bases-property-id";
 export { BasesView, QueryController } from "./bases-view";
@@ -334,14 +334,20 @@ export class Modal {
    * Modal-scoped keymap handlers, per Obsidian. Plugin constructors commonly
    * call `this.scope.register(...)` (e.g. SuggestModal/FuzzySuggestModal
    * subclasses binding Enter/Tab) before `onOpen()` ever runs, so this must
-   * exist eagerly rather than being lazily created on first open. Like
-   * `Scope` everywhere else in this shim, it is store-only — see suggest.ts.
+   * exist eagerly rather than being lazily created on first open. It becomes
+   * the active Keymap scope for exactly the modal's open lifetime.
    */
-  scope: Scope = new Scope();
-  private keyHandler: (e: KeyboardEvent) => void;
+  scope: Scope;
+  private opened = false;
+  private lifecycle = 0;
 
   constructor(app: App) {
     this.app = app;
+    this.scope = new Scope(app.scope);
+    this.scope.register([], "Escape", () => {
+      this.close();
+      return false;
+    });
     this.containerEl = document.createElement("div");
     this.containerEl.className = "modal-container mod-dim";
     this.bgEl = document.createElement("div");
@@ -359,28 +365,39 @@ export class Modal {
     this.modalEl.append(this.closeEl, this.titleEl, this.contentEl);
     this.containerEl.append(this.bgEl, this.modalEl);
     this.bgEl.addEventListener("click", () => this.close());
-    // Obsidian dismisses modals on Escape. This class previously did not,
-    // so a plugin modal could only be closed by clicking — the in-app Modal
-    // in `modals/modals.ts` has always had this.
-    this.keyHandler = (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        this.close();
-      }
-    };
   }
 
   open(): void {
-    document.body.appendChild(this.containerEl);
-    document.addEventListener("keydown", this.keyHandler, true);
-    this.onOpen();
+    if (this.opened) return;
+    const lifecycle = ++this.lifecycle;
+    this.app.keymap.pushScope(this.scope);
+    this.opened = true;
+    try {
+      document.body.appendChild(this.containerEl);
+      const opening = this.onOpen();
+      if (opening) {
+        void opening.catch((error) => {
+          if (this.opened && this.lifecycle === lifecycle) this.releaseLifecycle();
+          console.error("Modal onOpen() rejected", error);
+        });
+      }
+    } catch (error) {
+      if (this.opened && this.lifecycle === lifecycle) this.releaseLifecycle();
+      throw error;
+    }
   }
 
   close(): void {
-    document.removeEventListener("keydown", this.keyHandler, true);
+    if (!this.opened) return;
+    this.releaseLifecycle();
     this.onClose();
-    this.containerEl.remove();
     this.closeCallback?.();
+  }
+
+  private releaseLifecycle(): void {
+    this.opened = false;
+    this.app.keymap.popScope(this.scope);
+    this.containerEl.remove();
   }
 
   private closeCallback?: () => unknown;
@@ -407,7 +424,7 @@ export class Modal {
     return this;
   }
 
-  onOpen(): void {}
+  onOpen(): void | Promise<void> {}
   onClose(): void {}
 }
 
@@ -583,6 +600,7 @@ export abstract class SuggestModal<T> extends Modal {
   }
 
   private handleKeydown(e: KeyboardEvent): void {
+    if (e.defaultPrevented) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       this.moveSelection(1);
@@ -1804,11 +1822,11 @@ export function installObsidianAppCompat(app: App): void {
     // Root keymap scope. Plugins that build editor suggests register hotkey
     // handlers against `app.scope` at construction time (e.g. obsidian-tasks
     // does `app.scope.register([], "Tab", …)` inside its EditorSuggest
-    // subclass constructor). STORE-ONLY for now — Geode has no keymap stack,
-    // so handlers are recorded but never dispatched (see ./suggest). This
-    // just has to exist and not throw so those plugins finish loading.
+    // subclass constructor). Lightweight App doubles can reach this installer
+    // without the concrete App fields, so retain the compatibility fallback.
     a.scope = new Scope();
   }
+  a.keymap ??= new Keymap(a.scope);
   if (!a.metadataTypeManager) {
     // Obsidian's property-type registry (the "Properties" core feature).
     // obsidian-tasks reads `getAllProperties()` and calls `setType(name,type)`

@@ -97,6 +97,8 @@ import moment from "moment";
 import { TemplatesService, renderTemplate, templateFiles, templatePath, templateNoteName, type TemplatesConfig } from "./templates";
 import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
+import { Scope } from "./api/suggest";
+import { Keymap } from "./api/keymap";
 import { setIcon } from "./api/icons";
 import { collectQuickSwitcherItems, type QuickSwitcherPluginItem, type QuickSwitcherProvider } from "./quick-switcher-providers";
 import { FileManager } from "./file-manager";
@@ -2050,6 +2052,9 @@ export class App {
   metadataCache: MetadataCache;
   fileManager = new FileManager(this);
   commands: CommandRegistry;
+  /** Root plugin keyboard scope and its identity-based activation stack. */
+  readonly scope = new Scope();
+  readonly keymap = new Keymap(this.scope);
   /** Internal Geode actions. Kept separate from the public Obsidian-compatible CommandRegistry. */
   actions = new ActionRegistry<AppActionContext>();
   markdownRenderer = new MarkdownRenderer(this);
@@ -2974,7 +2979,7 @@ export class App {
     this.syncAudioRecorderPlugin();
     this.registerActions();
     this.registerCommands();
-    this.hostDisposers.add(this.commands.attach(document));
+    this.hostDisposers.add(this.commands.attach(document, (event) => this.keymap.handleKeydown(event)));
     this.attachGuestHotkeyBridge();
     this.applySettings();
     // Apply the selected built-in or vault-owned theme.

@@ -29,21 +29,21 @@
     "unknown"
   ],
   "summary": {
-    "total": 2853,
+    "total": 2856,
     "byKind": {
       "help-page": 176,
       "developer-page": 1319,
       "changelog-delta": 50,
-      "api-declaration": 299,
-      "api-member": 1009
+      "api-declaration": 300,
+      "api-member": 1011
     },
     "byStatus": {
-      "verified": 292,
-      "partial": 65,
+      "verified": 308,
+      "partial": 66,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2495
+      "unknown": 2481
     }
   },
   "requirements": [
@@ -3588,8 +3588,12 @@
       "title": "keymap",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/App/keymap.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/App/keymap.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/app-public-contracts.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "App owns a live Keymap before startup, and the real terminal plugin uses it to activate and release focused scopes."
     },
     {
       "id": "DEV-57a8e5072b10",
@@ -3663,8 +3667,12 @@
       "title": "scope",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/App/scope.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/App/scope.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/app-public-contracts.test.ts",
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "App owns a stable root Scope used as the parent for inheriting plugin scopes."
     },
     {
       "id": "DEV-0ed1d157a5c2",
@@ -9304,11 +9312,13 @@
       "title": "Keymap",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Keymap.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Keymap.md",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/bases-property-id.test.ts"
+        "tests/unit/bases-property-id.test.ts",
+        "tests/unit/keymap-scope.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
       ],
-      "notes": "isModEvent and isModifier are implemented; pushScope/popScope are absent rather than stubbed."
+      "notes": "The documented static helpers and scope-stack methods are implemented and exercised at unit and real-plugin Electron levels."
     },
     {
       "id": "DEV-22bec1688869",
@@ -9343,8 +9353,12 @@
       "title": "popScope",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Keymap/popScope.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Keymap/popScope.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "popScope removes the most recent identity match and safely ignores absent and root scopes."
     },
     {
       "id": "DEV-9c0f16a6594f",
@@ -9354,8 +9368,12 @@
       "title": "pushScope",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Keymap/pushScope.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Keymap/pushScope.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "pushScope activates the supplied Scope at the top of the identity stack."
     },
     {
       "id": "DEV-eed114bd1e05",
@@ -9365,8 +9383,11 @@
       "title": "KeymapContext",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/KeymapContext.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/KeymapContext.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Scope callbacks receive the documented KeymapContext shape: runtime logical key, exact held platform modifiers, and a populated vkey field. Full virtual-key interpretation remains partial."
     },
     {
       "id": "DEV-a50e3f9dc317",
@@ -9376,8 +9397,11 @@
       "title": "vkey",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/KeymapContext/vkey.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/KeymapContext/vkey.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Callback tests prove the vkey field is populated for covered logical-key events. Full host virtual-key interpretation across legacy keyCode, layouts, and special keys is not clean-room certified."
     },
     {
       "id": "DEV-0437e365a9d2",
@@ -11100,8 +11124,11 @@
       "title": "scope",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/Modal/scope.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/Modal/scope.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "A real FuzzySuggestModal subclass constructs an inheriting scope, activates it while open, and releases it on Escape."
     },
     {
       "id": "DEV-7b6003e4d3a9",
@@ -19077,11 +19104,13 @@
       "title": "Keymap",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/unit/bases-property-id.test.ts"
+        "tests/unit/bases-property-id.test.ts",
+        "tests/unit/keymap-scope.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
       ],
-      "notes": "The two documented static helpers (isModEvent, isModifier) are implemented. The instance scope-stack methods pushScope/popScope need scope infrastructure Geode does not have and are deliberately absent rather than stubbed, so calling them raises a TypeError instead of silently pretending to bind a keymap."
+      "notes": "Static modifier helpers and the identity-based pushScope/popScope stack are implemented. Unit tests cover stack and dispatch semantics; the real terminal plugin proves focused scope capture in Electron."
     },
     {
       "id": "API-e4f90bcb7908",
@@ -19091,8 +19120,11 @@
       "title": "KeymapContext",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "The public KeymapContext includes key, modifiers, and vkey. Callback-level tests cover runtime key and exact modifiers for plain, modified, wildcard, and platform-aware Mod dispatch; virtual-key interpretation remains partial."
     },
     {
       "id": "API-195a1be3c149",
@@ -20712,6 +20744,17 @@
       "evidence": []
     },
     {
+      "id": "API-4fad246372bb",
+      "kind": "api-declaration",
+      "surface": "logic",
+      "category": "Plugin API",
+      "title": "TExternalFile",
+      "sourcePath": "obsidian-api/obsidian.d.ts",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
       "id": "API-608dcb61eb12",
       "kind": "api-declaration",
       "surface": "logic",
@@ -21271,8 +21314,12 @@
       "title": "App.keymap",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/app-public-contracts.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "App.keymap is a live Keymap instance used by a real hosted plugin."
     },
     {
       "id": "API-MEMBER-1782a1e565e6",
@@ -21346,8 +21393,12 @@
       "title": "App.scope",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/app-public-contracts.test.ts",
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "App.scope is the stable root Scope for application and child-scope handlers."
     },
     {
       "id": "API-MEMBER-acfe45ef5843",
@@ -21502,6 +21553,17 @@
       "surface": "logic",
       "category": "Plugin API member",
       "title": "BasesConfigFileView.groupBy",
+      "sourcePath": "obsidian-api/obsidian.d.ts",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "API-MEMBER-d5e0d9d80921",
+      "kind": "api-member",
+      "surface": "logic",
+      "category": "Plugin API member",
+      "title": "BasesConfigFileView.groupOrder",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "unknown",
@@ -25935,8 +25997,12 @@
       "title": "Keymap.popScope",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "Identity-based popScope behavior is observed, including non-top, absent, and root cases."
     },
     {
       "id": "API-MEMBER-539426d29b8a",
@@ -25946,8 +26012,12 @@
       "title": "Keymap.pushScope",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts",
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "pushScope activates plugin keyboard capture in unit tests and the real terminal plugin."
     },
     {
       "id": "API-MEMBER-30a598b959a6",
@@ -25957,8 +26027,11 @@
       "title": "KeymapContext.vkey",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Callback tests prove the vkey field is populated for covered logical-key events. Full host virtual-key interpretation across legacy keyCode, layouts, and special keys is not clean-room certified."
     },
     {
       "id": "API-MEMBER-fcbc4f2b8d3c",
@@ -25979,8 +26052,11 @@
       "title": "KeymapInfo.key",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Callback contexts expose the runtime logical key even when the matching handler uses a wildcard registration."
     },
     {
       "id": "API-MEMBER-606f0efca4d3",
@@ -25990,8 +26066,11 @@
       "title": "KeymapInfo.modifiers",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Callback contexts expose the exact held platform modifiers; tests cover wildcard, empty no-modifier, and Mod resolving to Ctrl or Meta."
     },
     {
       "id": "API-MEMBER-0f55f7976d06",
@@ -27279,8 +27358,11 @@
       "title": "Modal.scope",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/terminal-plugin-cert.spec.ts"
+      ],
+      "notes": "A real terminal plugin FuzzySuggestModal owns and registers against its public modal Scope."
     },
     {
       "id": "API-MEMBER-1077cb9a3906",
@@ -30589,6 +30671,17 @@
       "surface": "dom",
       "category": "Plugin API member",
       "title": "TextComponent.(constructor)",
+      "sourcePath": "obsidian-api/obsidian.d.ts",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "API-MEMBER-0c15092edb0b",
+      "kind": "api-member",
+      "surface": "logic",
+      "category": "Plugin API member",
+      "title": "TExternalFile.getRealPath",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "unknown",
