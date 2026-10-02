@@ -26,18 +26,36 @@ export type GithubAuthErrorCode =
   | "access_denied"
   | "reauth_required"
   | "network"
+  | "device_flow_disabled"
+  | "app_not_found"
+  | "app_mismatch"
+  | "confirmation_required"
+  | "not_allowed"
   | "unexpected";
 
 export class GithubAuthError extends Error {
-  constructor(readonly code: GithubAuthErrorCode, message: string) {
+  /** A page the user can open to fix the problem (e.g. the App settings). */
+  constructor(readonly code: GithubAuthErrorCode, message: string, readonly url?: string) {
     super(message);
     this.name = "GithubAuthError";
   }
 }
 
-export async function requestDeviceCode(http: GithubHttp, clientId: string): Promise<DeviceCodeInfo> {
+export async function requestDeviceCode(
+  http: GithubHttp,
+  clientId: string,
+  /** Where to send the user if the App has Device Flow off. */
+  settingsUrl?: string,
+): Promise<DeviceCodeInfo> {
   const res = await http({ method: "POST", url: GITHUB_DEVICE_CODE_URL, form: { client_id: clientId } });
   const body = asRecord(res.json);
+  if (body.error === "device_flow_disabled") {
+    throw new GithubAuthError(
+      "device_flow_disabled",
+      "Device Flow is turned off for this GitHub App. Ask the App owner to enable it under \"Optional features\" / \"Enable Device Flow\" in the App settings.",
+      settingsUrl,
+    );
+  }
   if (res.status !== 200 || typeof body.device_code !== "string" || typeof body.user_code !== "string") {
     const detail = typeof body.error_description === "string" ? body.error_description : `HTTP ${res.status}`;
     throw new GithubAuthError("unexpected", `GitHub device code request failed: ${detail}`);
