@@ -2561,18 +2561,22 @@
     "notes": "RegExpValue wraps the engine's regexp arm. Capitalisation matters here for the same instanceof reason as HTMLValue."
   },
   "API-6244c4a8a4b8": {
-    "status": "partial",
+    "status": "verified",
     "evidence": [
-      "tests/unit/bases-property-id.test.ts"
+      "tests/unit/bases-property-id.test.ts",
+      "tests/unit/keymap-scope.test.ts",
+      "tests/e2e/terminal-plugin-cert.spec.ts"
     ],
-    "notes": "The two documented static helpers (isModEvent, isModifier) are implemented. The instance scope-stack methods pushScope/popScope need scope infrastructure Geode does not have and are deliberately absent rather than stubbed, so calling them raises a TypeError instead of silently pretending to bind a keymap."
+    "notes": "Static modifier helpers and the identity-based pushScope/popScope stack are implemented. Unit tests cover stack and dispatch semantics; the real terminal plugin proves focused scope capture in Electron."
   },
   "DEV-3c09e9409b53": {
-    "status": "partial",
+    "status": "verified",
     "evidence": [
-      "tests/unit/bases-property-id.test.ts"
+      "tests/unit/bases-property-id.test.ts",
+      "tests/unit/keymap-scope.test.ts",
+      "tests/e2e/terminal-plugin-cert.spec.ts"
     ],
-    "notes": "isModEvent and isModifier are implemented; pushScope/popScope are absent rather than stubbed."
+    "notes": "The documented static helpers and scope-stack methods are implemented and exercised at unit and real-plugin Electron levels."
   },
   "API-MEMBER-bae88d974fd9": {
     "status": "verified",
@@ -2664,5 +2668,60 @@
       "tests/e2e/modal-parity.spec.ts"
     ],
     "notes": "All three documented --dialog-* variables are defined and drive .modal's computed box: modal-parity.spec.ts asserts --dialog-width is 560px and is the rendered width, and that max-width/max-height compute to 80vw/85vh of the viewport."
+  },
+  "DEV-468e4f2fd7cf": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts", "tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "App owns a live Keymap before startup, and the real terminal plugin uses it to activate and release focused scopes."
+  },
+  "DEV-7cda049b8bc2": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts", "tests/unit/keymap-scope.test.ts"],
+    "notes": "App owns a stable root Scope used as the parent for inheriting plugin scopes."
+  },
+  "DEV-2f18be613fc4": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts", "tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "popScope removes the most recent identity match and safely ignores absent and root scopes."
+  },
+  "DEV-9c0f16a6594f": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts", "tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "pushScope activates the supplied Scope at the top of the identity stack."
+  },
+  "DEV-842c698204c4": {
+    "status": "verified",
+    "evidence": ["tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "A real FuzzySuggestModal subclass constructs an inheriting scope, activates it while open, and releases it on Escape."
+  },
+  "API-MEMBER-6165a9aeebab": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts", "tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "App.keymap is a live Keymap instance used by a real hosted plugin."
+  },
+  "API-MEMBER-78d797c07d21": {
+    "status": "verified",
+    "evidence": ["tests/unit/app-public-contracts.test.ts", "tests/unit/keymap-scope.test.ts"],
+    "notes": "App.scope is the stable root Scope for application and child-scope handlers."
+  },
+  "API-MEMBER-4eeedc27f571": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts", "tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "Identity-based popScope behavior is observed, including non-top, absent, and root cases."
+  },
+  "API-MEMBER-539426d29b8a": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts", "tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "pushScope activates plugin keyboard capture in unit tests and the real terminal plugin."
+  },
+  "API-MEMBER-30a598b959a6": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts"],
+    "notes": "Scope listeners receive a KeymapContext whose vkey is the logical KeyboardEvent.key."
+  },
+  "API-MEMBER-6245daeb9953": {
+    "status": "verified",
+    "evidence": ["tests/e2e/terminal-plugin-cert.spec.ts"],
+    "notes": "A real terminal plugin FuzzySuggestModal owns and registers against its public modal Scope."
   }
 }

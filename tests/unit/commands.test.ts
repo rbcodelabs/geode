@@ -5,10 +5,44 @@ function cmd(id: string, extra: Partial<Command> = {}): Command {
   return { id, name: id, ...extra };
 }
 
+function keyEvent(key: string, extra: Partial<KeyboardEvent> = {}): KeyboardEvent {
+  return {
+    key,
+    code: `Key${key.toUpperCase()}`,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+    ...extra,
+  } as unknown as KeyboardEvent;
+}
+
 describe("CommandRegistry", () => {
   const editor = { state: { doc: "live" }, dispatch: vi.fn() };
   const view = { viewType: "markdown", mode: "live", editor };
   const withEditor = () => ({ editor, context: view });
+
+  it("runs the optional synchronous pre-dispatch hook before physical command routing", () => {
+    let listener!: (event: KeyboardEvent) => void;
+    const target = {
+      addEventListener: (_type: string, callback: EventListenerOrEventListenerObject) => {
+        listener = callback as (event: KeyboardEvent) => void;
+      },
+      removeEventListener: vi.fn(),
+    } as unknown as Document;
+    const gate = vi.fn(() => false);
+    const callback = vi.fn();
+    const registry = new CommandRegistry();
+    registry.add(cmd("blocked", { hotkey: "Mod+X", callback }));
+    registry.attach(target, gate);
+    const event = keyEvent("x", { code: "KeyX", ctrlKey: true });
+
+    listener(event);
+    expect(gate).toHaveBeenCalledWith(event);
+    expect(callback).not.toHaveBeenCalled();
+  });
 
   it("backs `commands` with a plain Record, not a Map (Obsidian's app.commands.commands shape)", () => {
     const registry = new CommandRegistry();

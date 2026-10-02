@@ -170,8 +170,12 @@ export class CommandRegistry {
   executeCommandById(id: string): boolean { return this.execute(id); }
   list(): Command[] { return Object.values(this.commands).filter(command => this.isAvailable(command)).sort((a, b) => a.name.localeCompare(b.name)); }
   listCommands(): Command[] { return Object.values(this.commands); }
-  attach(target: Document): () => void {
-    const listener = (event: KeyboardEvent) => { const combo = eventToHotkey(event); if (combo && this.dispatchHotkey(combo)) { event.preventDefault(); event.stopPropagation(); } };
+  attach(target: Document, preDispatch?: (event: KeyboardEvent) => boolean): () => void {
+    const listener = (event: KeyboardEvent) => {
+      if (preDispatch?.(event) === false) return;
+      const combo = eventToHotkey(event);
+      if (combo && this.dispatchHotkey(combo)) { event.preventDefault(); event.stopPropagation(); }
+    };
     target.addEventListener("keydown", listener, true); return () => target.removeEventListener("keydown", listener, true);
   }
 }

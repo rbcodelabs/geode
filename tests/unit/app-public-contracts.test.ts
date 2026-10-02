@@ -3,6 +3,8 @@ import { App } from "../../src/renderer/app";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 import { MarkdownView } from "../../src/renderer/views/markdown-view";
 import { DEFAULT_METADATA_SCAN_CAP_BYTES } from "../../src/indexer/metadata-indexer";
+import { Keymap } from "../../src/renderer/api/keymap";
+import { Scope } from "../../src/renderer/api/suggest";
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -27,6 +29,14 @@ function installBrowser(theme: "dark" | "light" = "dark"): MemoryStorage {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("App public foundation", () => {
+  it("owns a root Scope and Keymap before startup installs plugin compatibility", () => {
+    installBrowser();
+    const app = new App();
+
+    expect(app.scope).toBeInstanceOf(Scope);
+    expect(app.scope.parent).toBeNull();
+    expect(app.keymap).toBeInstanceOf(Keymap);
+  });
   it("exposes the vault and metadata cache identities", () => {
     installBrowser();
     const app = new App();
