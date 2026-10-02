@@ -284,7 +284,9 @@ activates a scope until the matching `popScope(scope)`; dispatch walks its paren
 chain and a handler returning `false` prevents the browser default and blocks the
 app command layer. Scope handlers match `KeyboardEvent.key`, while configurable
 app commands intentionally continue to match physical `KeyboardEvent.code` (see
-ADR-0011 and ADR-0028).
+ADR-0011 and ADR-0028). Each handler receives a `KeymapContext` containing the
+event's logical `key`, an exact comma-joined string of held platform modifiers,
+and the interpreted logical key as `vkey`.
 
 Undocumented-but-universally-used internals a compatible clone must consider: `app.plugins` (community plugin registry: `enabledPlugins`, `getPlugin(id)`), `app.internalPlugins`, `app.commands.executeCommandById(id)`, `app.setting.open()`. These are not in `obsidian.d.ts` but a large share of real plugins touch them.
 

@@ -2723,5 +2723,35 @@
     "status": "verified",
     "evidence": ["tests/e2e/terminal-plugin-cert.spec.ts"],
     "notes": "A real terminal plugin FuzzySuggestModal owns and registers against its public modal Scope."
+  },
+  "HELP-eab17f7eff0f": {
+    "status": "partial",
+    "evidence": ["tests/unit/audio-recorder.test.ts"],
+    "notes": "Unit-tested: Recording YYYYMMDDHHmmss.webm naming, attachment-folder placement and collision handling, end-of-note embed append, start/stop state machine, microphone release, and permission/no-device classification. Ribbon mic icon, single toggle command and a Core plugins toggle (off by default) are wired; recordings embed as an audio player. Real microphone capture and the macOS permission prompt were not observed headlessly, so the row remains partial."
+  },
+  "DEV-eed114bd1e05": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts"],
+    "notes": "Scope callbacks receive the documented KeymapContext shape: runtime logical key, exact held platform modifiers, and interpreted virtual key."
+  },
+  "DEV-a50e3f9dc317": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts"],
+    "notes": "Scope callbacks receive the logical KeyboardEvent.key as KeymapContext.vkey."
+  },
+  "API-e4f90bcb7908": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts"],
+    "notes": "The public KeymapContext includes key, modifiers, and vkey, and callback-level tests cover plain, modified, wildcard, and platform-aware Mod dispatch."
+  },
+  "API-MEMBER-f6a164b750fb": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts"],
+    "notes": "Callback contexts expose the runtime logical key even when the matching handler uses a wildcard registration."
+  },
+  "API-MEMBER-606f0efca4d3": {
+    "status": "verified",
+    "evidence": ["tests/unit/keymap-scope.test.ts"],
+    "notes": "Callback contexts expose the exact held platform modifiers; tests cover wildcard, empty no-modifier, and Mod resolving to Ctrl or Meta."
   }
 }

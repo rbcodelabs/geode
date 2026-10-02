@@ -139,6 +139,12 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
     await window.keyboard.press("Enter");
     await window.waitForTimeout(1500); // let the shell round-trip and xterm repaint
 
+    // Moving focus out of the terminal releases its parentless catch-all
+    // scope, so the same app hotkey routes normally again.
+    await terminalInput.evaluate((input) => (input as HTMLElement).blur());
+    await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+X`);
+    expect(await window.evaluate(() => (window as any).__terminalScopeHotkeyFired)).toBe(1);
+
     // Still mounted, still no error notice, after real keystrokes went
     // through the real pty. A spawn/stream failure would either throw
     // (already asserted below) or surface as a notice/closed pane.

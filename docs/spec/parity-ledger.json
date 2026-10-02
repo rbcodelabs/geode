@@ -38,12 +38,12 @@
       "api-member": 1011
     },
     "byStatus": {
-      "verified": 305,
-      "partial": 63,
+      "verified": 310,
+      "partial": 64,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2487
+      "unknown": 2481
     }
   },
   "requirements": [
@@ -1500,8 +1500,11 @@
       "title": "Audio recorder",
       "sourcePath": "obsidian-help/en/Plugins/Audio recorder.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Audio%20recorder.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/audio-recorder.test.ts"
+      ],
+      "notes": "Unit-tested: Recording YYYYMMDDHHmmss.webm naming, attachment-folder placement and collision handling, end-of-note embed append, start/stop state machine, microphone release, and permission/no-device classification. Ribbon mic icon, single toggle command and a Core plugins toggle (off by default) are wired; recordings embed as an audio player. Real microphone capture and the macOS permission prompt were not observed headlessly, so the row remains partial."
     },
     {
       "id": "HELP-d6b3f1f19c87",
@@ -9380,8 +9383,11 @@
       "title": "KeymapContext",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/KeymapContext.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/KeymapContext.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Scope callbacks receive the documented KeymapContext shape: runtime logical key, exact held platform modifiers, and interpreted virtual key."
     },
     {
       "id": "DEV-a50e3f9dc317",
@@ -9391,8 +9397,11 @@
       "title": "vkey",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/KeymapContext/vkey.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/KeymapContext/vkey.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Scope callbacks receive the logical KeyboardEvent.key as KeymapContext.vkey."
     },
     {
       "id": "DEV-0437e365a9d2",
@@ -19111,8 +19120,11 @@
       "title": "KeymapContext",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "The public KeymapContext includes key, modifiers, and vkey, and callback-level tests cover plain, modified, wildcard, and platform-aware Mod dispatch."
     },
     {
       "id": "API-195a1be3c149",
@@ -26040,8 +26052,11 @@
       "title": "KeymapInfo.key",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Callback contexts expose the runtime logical key even when the matching handler uses a wildcard registration."
     },
     {
       "id": "API-MEMBER-606f0efca4d3",
@@ -26051,8 +26066,11 @@
       "title": "KeymapInfo.modifiers",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/keymap-scope.test.ts"
+      ],
+      "notes": "Callback contexts expose the exact held platform modifiers; tests cover wildcard, empty no-modifier, and Mod resolving to Ctrl or Meta."
     },
     {
       "id": "API-MEMBER-0f55f7976d06",

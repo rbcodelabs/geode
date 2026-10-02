@@ -22,6 +22,13 @@ function keyEvent(key: string, extra: Partial<KeyboardEvent> = {}): KeyboardEven
 }
 
 describe("Keymap scope stack", () => {
+  it("constructs safely without an explicit root scope", () => {
+    const keymap = new Keymap();
+
+    expect(keymap.rootScope).toBeInstanceOf(Scope);
+    expect(keymap.handleKeydown(keyEvent("x"))).toBe(true);
+  });
+
   it("dispatches the most recently pushed scope and pops by most recent identity match", () => {
     const root = new Scope();
     const first = new Scope();
@@ -82,31 +89,38 @@ describe("Keymap scope stack", () => {
     expect(event.stopPropagation).not.toHaveBeenCalled();
   });
 
-  it("treats null key/modifiers as wildcards and [] as exactly no modifiers", () => {
+  it("passes public key, modifiers, and vkey context for wildcard and plain handlers", () => {
     const root = new Scope();
-    const calls: string[] = [];
-    root.register(null, null, (_event, context) => { calls.push(`wild:${(context as any).vkey}`); });
-    root.register([], "k", () => { calls.push("plain-k"); });
+    const contexts: unknown[] = [];
+    root.register(null, null, (_event, context) => { contexts.push(context); });
+    root.register([], "k", (_event, context) => { contexts.push(context); });
     const keymap = new Keymap(root);
 
     expect(keymap.handleKeydown(keyEvent("k"))).toBe(true);
-    expect(calls).toEqual(["wild:k", "plain-k"]);
-    calls.length = 0;
+    expect(contexts).toEqual([
+      { key: "k", modifiers: "", vkey: "k" },
+      { key: "k", modifiers: "", vkey: "k" },
+    ]);
+    contexts.length = 0;
     expect(keymap.handleKeydown(keyEvent("k", { shiftKey: true }))).toBe(true);
-    expect(calls).toEqual(["wild:k"]);
+    expect(contexts).toEqual([{ key: "k", modifiers: "Shift", vkey: "k" }]);
   });
 
-  it("matches non-null modifiers exactly with platform-aware Mod semantics", () => {
+  it("matches modifiers exactly and passes platform-aware Mod context to callbacks", () => {
     const root = new Scope();
     const handler = vi.fn();
     root.register(["Mod", "Shift"], "k", handler);
     const keymap = new Keymap(root);
 
-    keymap.handleKeydown(keyEvent("k", { ctrlKey: true, shiftKey: true }), undefined, false);
-    keymap.handleKeydown(keyEvent("k", { ctrlKey: true, shiftKey: true, altKey: true }), undefined, false);
-    keymap.handleKeydown(keyEvent("k", { metaKey: true, shiftKey: true }), undefined, false);
-    keymap.handleKeydown(keyEvent("k", { metaKey: true, shiftKey: true }), undefined, true);
+    keymap.handleKeydown(keyEvent("k", { ctrlKey: true, shiftKey: true }), false);
+    keymap.handleKeydown(keyEvent("k", { ctrlKey: true, shiftKey: true, altKey: true }), false);
+    keymap.handleKeydown(keyEvent("k", { metaKey: true, shiftKey: true }), false);
+    keymap.handleKeydown(keyEvent("k", { metaKey: true, shiftKey: true }), true);
     expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map(([, context]) => context)).toEqual([
+      { key: "k", modifiers: "Ctrl,Shift", vkey: "k" },
+      { key: "k", modifiers: "Meta,Shift", vkey: "k" },
+    ]);
   });
 
   it("keeps logical key matching distinct from the physical KeyboardEvent.code", () => {

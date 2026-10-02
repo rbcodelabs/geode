@@ -7,12 +7,16 @@
  * take keyboard control (modals and terminal panes are common consumers).
  */
 
-import type { Scope, KeymapEventHandler } from "./suggest";
+import { Scope, type KeymapEventHandler } from "./suggest";
 
 export type PaneType = "tab" | "split" | "window";
 export type UserEvent = MouseEvent | KeyboardEvent | TouchEvent | PointerEvent;
 export type Modifier = "Mod" | "Ctrl" | "Meta" | "Shift" | "Alt";
-export interface KeymapContext { vkey: string }
+export interface KeymapContext {
+  key: string | null;
+  modifiers: string | null;
+  vkey: string;
+}
 
 /**
  * Detected once, from the same `navigator.userAgent` signal `Platform.isMacOS`
@@ -36,7 +40,7 @@ export function isModHeld(evt: { ctrlKey: boolean; metaKey: boolean }, isMac: bo
 export class Keymap {
   private scopes: Scope[];
 
-  constructor(readonly rootScope: Scope) {
+  constructor(readonly rootScope: Scope = new Scope()) {
     this.scopes = [rootScope];
   }
 
@@ -59,11 +63,11 @@ export class Keymap {
    */
   handleKeydown(
     event: KeyboardEvent,
-    context: KeymapContext = { vkey: event.key },
     isMac: boolean = IS_MAC,
   ): boolean {
     const active = this.scopes[this.scopes.length - 1] ?? this.rootScope;
     if (event.isComposing || event.keyCode === 229) return reachesRoot(active, this.rootScope);
+    const context = keymapContext(event);
 
     const visited = new Set<Scope>();
     let scope: Scope | null = active;
@@ -129,6 +133,19 @@ export class Keymap {
     if (e.button === 1) return "tab";
     return false;
   }
+}
+
+function keymapContext(event: KeyboardEvent): KeymapContext {
+  const modifiers: string[] = [];
+  if (event.ctrlKey) modifiers.push("Ctrl");
+  if (event.metaKey) modifiers.push("Meta");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+  return {
+    key: event.key || null,
+    modifiers: modifiers.sort().join(","),
+    vkey: event.key,
+  };
 }
 
 function reachesRoot(scope: Scope, root: Scope): boolean {

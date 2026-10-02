@@ -339,6 +339,7 @@ export class Modal {
    */
   scope: Scope;
   private opened = false;
+  private lifecycle = 0;
 
   constructor(app: App) {
     this.app = app;
@@ -368,29 +369,29 @@ export class Modal {
 
   open(): void {
     if (this.opened) return;
+    const lifecycle = ++this.lifecycle;
     this.app.keymap.pushScope(this.scope);
     this.opened = true;
     try {
       document.body.appendChild(this.containerEl);
       this.onOpen();
     } catch (error) {
-      this.opened = false;
-      this.app.keymap.popScope(this.scope);
-      this.containerEl.remove();
+      if (this.opened && this.lifecycle === lifecycle) this.releaseLifecycle();
       throw error;
     }
   }
 
   close(): void {
     if (!this.opened) return;
+    this.releaseLifecycle();
+    this.onClose();
+    this.closeCallback?.();
+  }
+
+  private releaseLifecycle(): void {
     this.opened = false;
-    try {
-      this.onClose();
-      this.closeCallback?.();
-    } finally {
-      this.app.keymap.popScope(this.scope);
-      this.containerEl.remove();
-    }
+    this.app.keymap.popScope(this.scope);
+    this.containerEl.remove();
   }
 
   private closeCallback?: () => unknown;
