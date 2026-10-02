@@ -38,8 +38,8 @@
       "api-member": 1011
     },
     "byStatus": {
-      "verified": 310,
-      "partial": 64,
+      "verified": 308,
+      "partial": 66,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
@@ -9387,7 +9387,7 @@
       "evidence": [
         "tests/unit/keymap-scope.test.ts"
       ],
-      "notes": "Scope callbacks receive the documented KeymapContext shape: runtime logical key, exact held platform modifiers, and interpreted virtual key."
+      "notes": "Scope callbacks receive the documented KeymapContext shape: runtime logical key, exact held platform modifiers, and a populated vkey field. Full virtual-key interpretation remains partial."
     },
     {
       "id": "DEV-a50e3f9dc317",
@@ -9397,11 +9397,11 @@
       "title": "vkey",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/KeymapContext/vkey.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/KeymapContext/vkey.md",
-      "status": "verified",
+      "status": "partial",
       "evidence": [
         "tests/unit/keymap-scope.test.ts"
       ],
-      "notes": "Scope callbacks receive the logical KeyboardEvent.key as KeymapContext.vkey."
+      "notes": "Callback tests prove the vkey field is populated for covered logical-key events. Full host virtual-key interpretation across legacy keyCode, layouts, and special keys is not clean-room certified."
     },
     {
       "id": "DEV-0437e365a9d2",
@@ -19124,7 +19124,7 @@
       "evidence": [
         "tests/unit/keymap-scope.test.ts"
       ],
-      "notes": "The public KeymapContext includes key, modifiers, and vkey, and callback-level tests cover plain, modified, wildcard, and platform-aware Mod dispatch."
+      "notes": "The public KeymapContext includes key, modifiers, and vkey. Callback-level tests cover runtime key and exact modifiers for plain, modified, wildcard, and platform-aware Mod dispatch; virtual-key interpretation remains partial."
     },
     {
       "id": "API-195a1be3c149",
@@ -26027,11 +26027,11 @@
       "title": "KeymapContext.vkey",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "verified",
+      "status": "partial",
       "evidence": [
         "tests/unit/keymap-scope.test.ts"
       ],
-      "notes": "Scope listeners receive a KeymapContext whose vkey is the logical KeyboardEvent.key."
+      "notes": "Callback tests prove the vkey field is populated for covered logical-key events. Full host virtual-key interpretation across legacy keyCode, layouts, and special keys is not clean-room certified."
     },
     {
       "id": "API-MEMBER-fcbc4f2b8d3c",

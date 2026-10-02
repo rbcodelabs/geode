@@ -2715,9 +2715,9 @@
     "notes": "pushScope activates plugin keyboard capture in unit tests and the real terminal plugin."
   },
   "API-MEMBER-30a598b959a6": {
-    "status": "verified",
+    "status": "partial",
     "evidence": ["tests/unit/keymap-scope.test.ts"],
-    "notes": "Scope listeners receive a KeymapContext whose vkey is the logical KeyboardEvent.key."
+    "notes": "Callback tests prove the vkey field is populated for covered logical-key events. Full host virtual-key interpretation across legacy keyCode, layouts, and special keys is not clean-room certified."
   },
   "API-MEMBER-6245daeb9953": {
     "status": "verified",
@@ -2732,17 +2732,17 @@
   "DEV-eed114bd1e05": {
     "status": "verified",
     "evidence": ["tests/unit/keymap-scope.test.ts"],
-    "notes": "Scope callbacks receive the documented KeymapContext shape: runtime logical key, exact held platform modifiers, and interpreted virtual key."
+    "notes": "Scope callbacks receive the documented KeymapContext shape: runtime logical key, exact held platform modifiers, and a populated vkey field. Full virtual-key interpretation remains partial."
   },
   "DEV-a50e3f9dc317": {
-    "status": "verified",
+    "status": "partial",
     "evidence": ["tests/unit/keymap-scope.test.ts"],
-    "notes": "Scope callbacks receive the logical KeyboardEvent.key as KeymapContext.vkey."
+    "notes": "Callback tests prove the vkey field is populated for covered logical-key events. Full host virtual-key interpretation across legacy keyCode, layouts, and special keys is not clean-room certified."
   },
   "API-e4f90bcb7908": {
     "status": "verified",
     "evidence": ["tests/unit/keymap-scope.test.ts"],
-    "notes": "The public KeymapContext includes key, modifiers, and vkey, and callback-level tests cover plain, modified, wildcard, and platform-aware Mod dispatch."
+    "notes": "The public KeymapContext includes key, modifiers, and vkey. Callback-level tests cover runtime key and exact modifiers for plain, modified, wildcard, and platform-aware Mod dispatch; virtual-key interpretation remains partial."
   },
   "API-MEMBER-f6a164b750fb": {
     "status": "verified",

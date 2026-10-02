@@ -374,7 +374,13 @@ export class Modal {
     this.opened = true;
     try {
       document.body.appendChild(this.containerEl);
-      this.onOpen();
+      const opening = this.onOpen();
+      if (opening) {
+        void opening.catch((error) => {
+          if (this.opened && this.lifecycle === lifecycle) this.releaseLifecycle();
+          console.error("Modal onOpen() rejected", error);
+        });
+      }
     } catch (error) {
       if (this.opened && this.lifecycle === lifecycle) this.releaseLifecycle();
       throw error;
@@ -418,7 +424,7 @@ export class Modal {
     return this;
   }
 
-  onOpen(): void {}
+  onOpen(): void | Promise<void> {}
   onClose(): void {}
 }
 

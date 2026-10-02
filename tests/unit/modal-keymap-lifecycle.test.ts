@@ -9,12 +9,19 @@ function makeApp() {
   return { scope, keymap: new Keymap(scope) } as any;
 }
 
+function deferred() {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<void>((_resolve, rejectPromise) => { reject = rejectPromise; });
+  return { promise, reject };
+}
+
 describe("Modal keymap lifecycle", () => {
   beforeEach(() => {
     vi.stubGlobal("document", new FakeDocument() as unknown as Document);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -137,5 +144,78 @@ describe("Modal keymap lifecycle", () => {
     modal.close();
     expect(pop).toHaveBeenCalledTimes(2);
     expect(modal.containerEl.isConnected).toBe(false);
+  });
+
+  it("releases the initiating lifecycle when async onOpen rejects", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = makeApp();
+    const pop = vi.spyOn(app.keymap, "popScope");
+    const opening = deferred();
+    class RejectingOpenModal extends Modal {
+      override onOpen(): Promise<void> { return opening.promise; }
+    }
+    const modal = new RejectingOpenModal(app);
+    const rejection = opening.promise.catch(() => undefined);
+
+    modal.open();
+    opening.reject(new Error("async open failed"));
+    await rejection;
+    await Promise.resolve();
+
+    expect(pop).toHaveBeenCalledOnce();
+    expect(modal.containerEl.isConnected).toBe(false);
+    expect(errorLog).toHaveBeenCalledWith("Modal onOpen() rejected", expect.any(Error));
+  });
+
+  it("does not clean up twice when async onOpen rejects after close", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = makeApp();
+    const pop = vi.spyOn(app.keymap, "popScope");
+    const opening = deferred();
+    class RejectingAfterCloseModal extends Modal {
+      override onOpen(): Promise<void> { return opening.promise; }
+    }
+    const modal = new RejectingAfterCloseModal(app);
+    const rejection = opening.promise.catch(() => undefined);
+
+    modal.open();
+    modal.close();
+    opening.reject(new Error("late open failure"));
+    await rejection;
+    await Promise.resolve();
+
+    expect(pop).toHaveBeenCalledOnce();
+    expect(modal.containerEl.isConnected).toBe(false);
+  });
+
+  it("does not remove a newer lifecycle when an earlier async onOpen rejects", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = makeApp();
+    const push = vi.spyOn(app.keymap, "pushScope");
+    const pop = vi.spyOn(app.keymap, "popScope");
+    const firstOpening = deferred();
+    class ReopenedModal extends Modal {
+      calls = 0;
+      override onOpen(): Promise<void> | void {
+        this.calls++;
+        if (this.calls === 1) return firstOpening.promise;
+      }
+    }
+    const modal = new ReopenedModal(app);
+    const rejection = firstOpening.promise.catch(() => undefined);
+
+    modal.open();
+    modal.close();
+    modal.open();
+    firstOpening.reject(new Error("stale open failure"));
+    await rejection;
+    await Promise.resolve();
+
+    expect(push).toHaveBeenCalledTimes(2);
+    expect(pop).toHaveBeenCalledOnce();
+    expect(modal.containerEl.isConnected).toBe(true);
+
+    modal.close();
+    expect(pop).toHaveBeenCalledTimes(2);
   });
 });
