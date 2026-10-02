@@ -126,7 +126,9 @@ for the latest published notes.
   the full `Editor` adapter plugins expect. `FileManager.processFrontMatter` safely
   serializes same-file calls within one renderer runtime; it does not lock out
   direct vault/external writes, and forwarded timestamp options are not yet
-  applied by the host. **Minimal Theme Settings 9.0.0** is certified on desktop,
+  applied by the host. Plugin keymaps dispatch through the active `Scope` parent
+  chain before app commands, and modal scopes are active only for the modal's
+  open lifetime. **Minimal Theme Settings 9.0.0** is certified on desktop,
   including its settings controls and theme/font preferences. This exact-version
   exception preserves the global Obsidian API baseline at 1.8.0; newer Minimal
   Settings versions and other plugins requiring 1.13 remain unverified.
