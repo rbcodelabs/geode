@@ -330,19 +330,12 @@ function externalRootSession(sender: Electron.WebContents): Promise<ExternalRoot
     pickDirectory: async (purpose, details) => {
       const result = await dialog.showOpenDialog(win, {
         title: purpose === "attach" ? "Attach Project folder read-only" : "Reconnect Project folder",
+        message: `${purpose === "attach" ? "Choose the folder for" : "Choose the new location of"} ${details.label}. Geode can browse and open its files read-only; agent execution permission is separate.`,
+        buttonLabel: purpose === "attach" ? "Attach read-only" : "Reconnect read-only",
         properties: ["openDirectory"],
         ...(details.suggestedPath ? { defaultPath: details.suggestedPath } : {}),
       });
       return result.canceled ? null : result.filePaths[0] ?? null;
-    },
-    confirmDirectory: async ({ purpose, label, selectedPath }) => {
-      const result = await dialog.showMessageBox(win, {
-        type: "question", title: purpose === "attach" ? "Attach Project folder?" : "Replace Project folder?",
-        message: `${purpose === "attach" ? "Attach" : "Reconnect"} ${label}`,
-        detail: `${selectedPath}\n\nGeode may browse and open files read-only. Agent execution permission is separate. This does not change the Project working directory.${purpose === "reconnect" ? " This folder replaces the previous location for the existing root and its tabs." : ""}`,
-        buttons: ["Cancel", purpose === "attach" ? "Attach read-only" : "Reconnect read-only"], defaultId: 0, cancelId: 0, noLink: true,
-      });
-      return result.response === 1;
     },
     confirmDetach: async (label) => (await dialog.showMessageBox(win, {
       type: "question", title: "Detach from Geode?", message: `Detach ${label}?`,

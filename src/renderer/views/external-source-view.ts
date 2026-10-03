@@ -113,6 +113,7 @@ export class ExternalSourceView implements View {
         "root-not-found": "Project root unavailable. Attach or reconnect the Project folder in Projects, then Refresh.",
         "root-missing": "Project folder is missing. Reconnect it in Projects, then Refresh.",
         "root-unavailable": "Project root unavailable. Reconnect it in Projects, then Refresh.",
+        "session-changed": "Vault changed while loading. Refresh to try again.",
         "permission-denied": "Permission denied. Reconnect the Project folder in Projects, then Refresh.",
         "too-large": "Unsupported file: source view accepts UTF-8 text up to 2 MiB.",
         "invalid-utf8": "Unsupported file: content is not valid UTF-8 text.",

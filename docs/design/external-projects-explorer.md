@@ -90,3 +90,13 @@ Native picker/confirmation behavior is covered through dialog stubs in Electron
 tests. Explorer/source-view screenshots verify renderer UI, not native dialogs.
 No external editing, indexing, search, execution, remote access, mobile attachment,
 or broader vault semantics are added by this slice.
+
+## Update: single-step consent and quieter rows
+
+The system folder picker is the user's consent for attach and reconnect (its
+message states the read-only scope); Geode no longer shows a second native
+confirmation. `confirmDirectory` remains an optional host hook in the boundary
+and, when supplied, still gates the grant. Detach keeps its confirmation.
+Transient session or grant races surface as `session-changed` and are never
+reported as a root availability verdict. Each Project is one nav-folder row;
+status text appears only for broken roots, and Reconnect/Detach are row actions.

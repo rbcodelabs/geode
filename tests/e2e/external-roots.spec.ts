@@ -83,7 +83,7 @@ test("a native attachment picker cannot commit after the originating vault switc
         .resolveRootPicker({ canceled: false, filePaths: [selectedPath] });
     }, s.project);
     const outcome = await s.window.evaluate(() => (window as unknown as { pendingAttachment: Promise<string> }).pendingAttachment);
-    expect(outcome).toContain("root-unavailable");
+    expect(outcome).toContain("session-changed");
     expect(await fs.readFile(path.join(s.userData, "external-roots.json"), "utf8").catch(() => null)).toBeNull();
     expect(await s.window.evaluate(() => window.geode.externalRoots!.listProjects())).toEqual([]);
   } finally {

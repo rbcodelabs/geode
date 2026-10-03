@@ -153,7 +153,8 @@ export class ExternalRootDesktopBoundary {
     try {
       await this.getUsableRoot(rootId);
     } catch (error) {
-      if (!(error instanceof ExternalRootAccessError)) throw error;
+      // Transient session/grant races are not a verdict on the folder: let them propagate.
+      if (!(error instanceof ExternalRootAccessError) || error.code === "session-changed") throw error;
       descriptor.availability = error.code === "root-missing" ? "missing"
         : error.code === "permission-denied" ? "permission-revoked" : "unavailable";
     }
@@ -193,8 +194,9 @@ export class ExternalRootDesktopBoundary {
         throw new ExternalRootAccessError("outside-root", "Selected path escapes an existing root through a symbolic link");
       }
     }
-    if (!this.options.confirmDirectory
-      || !await this.options.confirmDirectory({ purpose: "attach", label: request.label, selectedPath: selectedAbsolute })) return null;
+    // The system folder picker is the user's consent; a host may still add a second confirmation.
+    if (this.options.confirmDirectory
+      && !await this.options.confirmDirectory({ purpose: "attach", label: request.label, selectedPath: selectedAbsolute })) return null;
     this.assertCurrentSession(request.isCurrent);
     const confirmedProof = await realCanonicalDirectory(selectedPath);
     if (!samePhysicalProof(proof, confirmedProof)) {
@@ -239,8 +241,8 @@ export class ExternalRootDesktopBoundary {
       || isWithinOrEqual(proof.canonicalPath, this.activeVaultPath)) {
       throw new ExternalRootAccessError("outside-root", "Reconnected root cannot overlap the active vault");
     }
-    if (!this.options.confirmDirectory
-      || !await this.options.confirmDirectory({ purpose: "reconnect", label: root.label, selectedPath: path.resolve(selectedPath) })) return null;
+    if (this.options.confirmDirectory
+      && !await this.options.confirmDirectory({ purpose: "reconnect", label: root.label, selectedPath: path.resolve(selectedPath) })) return null;
     this.assertCurrentSession(isCurrent);
     const confirmedProof = await realCanonicalDirectory(selectedPath);
     if (!samePhysicalProof(proof, confirmedProof)) {
@@ -494,14 +496,14 @@ export class ExternalRootDesktopBoundary {
       || current.physicalIdentity.dev !== root.physicalIdentity.dev
       || current.physicalIdentity.ino !== root.physicalIdentity.ino
       || current.availability !== root.availability) {
-      throw new ExternalRootAccessError("root-unavailable", "External root grant changed during the operation");
+      throw new ExternalRootAccessError("session-changed", "External root grant changed during the operation");
     }
   }
 
   private assertCurrentSession(isCurrent?: () => boolean): void {
     if (this.disposed || (this.options.isSessionCurrent && !this.options.isSessionCurrent())
       || (isCurrent && !isCurrent())) {
-      throw new ExternalRootAccessError("root-unavailable", "Vault session changed before the operation completed");
+      throw new ExternalRootAccessError("session-changed", "Vault session changed before the operation completed");
     }
   }
 

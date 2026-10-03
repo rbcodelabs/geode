@@ -100,6 +100,21 @@ describe("Projects section lifecycle and lazy browsing", () => {
     expect(h.button("file-symlink ↗").disabled).toBe(false);
     expect(h.host.listDirectory).toHaveBeenCalledTimes(1);
   });
+  it("renders a disconnected project as one muted row with a status and no permanent read-only line", async () => {
+    const h = setup();
+    const broken = project("Gone", "root"); broken.root.availability = "missing";
+    h.host.listProjects.mockResolvedValue([broken]);
+    await h.section.refresh();
+    expect(h.text()).toContain("Folder missing");
+    expect(h.text()).not.toContain("Read-only");
+    expect(h.button("Reconnect…")).toBeDefined();
+    expect(h.button("Detach from Geode")).toBeDefined();
+  });
+  it("shows no status text for a healthy project", async () => {
+    const h = setup();
+    await h.section.refresh();
+    expect(h.text()).not.toMatch(/Unavailable|Disconnected|Folder missing|External/);
+  });
   it("preserves an unbound Project after native attachment cancellation", async () => {
     const h = setup();
     h.host.listProjects.mockResolvedValue([{ projectId: "unbound", label: "Unbound", state: "unbound" }]);
@@ -107,7 +122,7 @@ describe("Projects section lifecycle and lazy browsing", () => {
     await h.section.refresh();
     h.button("Attach folder…").click(); await settle();
     expect(h.host.attach).toHaveBeenCalledWith("unbound");
-    expect(h.text()).toContain("Attach folder…");
+    expect(h.button("Attach folder…")).toBeDefined();
     expect(h.host.listDirectory).not.toHaveBeenCalled();
   });
   it("offers recovery for a first project-list failure", async () => {

@@ -6365,27 +6365,58 @@ body.is-mobile .page-preview {
   border: 0;
   box-shadow: none;
 }
-.projects-root { margin-bottom: 6px; }
-.projects-root-alias, .projects-status { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 3px 8px 3px 26px; overflow-wrap: anywhere; }
-.projects-root-alias button, .projects-section-header button { font-size: var(--font-ui-smaller); }
+.projects-root { position: relative; margin-bottom: 2px; }
+.projects-status { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 3px 8px 3px 26px; overflow-wrap: anywhere; }
+.projects-section-header button { font-size: var(--font-ui-smaller); }
 .projects-directory-toggle, .projects-file {
   width: 100%;
   background: transparent;
 }
+.projects-directory-toggle, .projects-broken-row { display: flex; align-items: center; gap: 4px; }
+.projects-folder-icon { display: inline-flex; color: var(--text-muted); }
+.projects-folder-icon svg { width: 14px; height: 14px; }
+.projects-broken-row { padding: 4px 8px; color: var(--text-muted); }
+.projects-broken-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects-status-label { font-size: var(--font-ui-smaller); color: var(--text-warning, var(--text-muted)); }
+/* Row actions overlay the right edge of the project row; shown on hover/focus,
+   or always on a broken row where Reconnect is the way forward. */
+.projects-root-actions {
+  position: absolute;
+  top: 0;
+  right: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  opacity: 0;
+  background: var(--background-secondary);
+  border-radius: 4px;
+}
+.projects-root:hover > .projects-root-actions,
+.projects-root:focus-within > .projects-root-actions,
+.projects-root.is-broken > .projects-root-actions { opacity: 1; }
+.projects-root.is-broken { display: flex; align-items: center; padding-right: 4px; }
+.projects-root.is-broken > .projects-broken-row { flex: 1 1 auto; min-width: 0; }
+.projects-root.is-broken > .projects-root-actions { position: static; flex: 0 0 auto; flex-direction: row; background: transparent; }
+.projects-root.is-broken .projects-root-alias > span { display: none; }
+.projects-root-alias { display: flex; align-items: center; gap: 2px; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.projects-icon-action { background: transparent; color: var(--text-muted); padding: 2px; border-radius: 4px; display: inline-flex; }
+.projects-icon-action svg { width: 14px; height: 14px; }
+.projects-icon-action:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.projects-unbound { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 8px; color: var(--text-faint, var(--text-muted)); font-size: var(--font-ui-smaller); }
+.projects-unbound-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .projects-directory-children { margin-left: 12px; }
 .projects-directory-children[hidden] { display: none; }
 .projects-file:disabled { opacity: .6; cursor: not-allowed; }
 .projects-inline-action,
-.projects-root-alias button,
 .projects-unbound button {
   background: transparent;
-  color: var(--text-accent);
-  padding: 2px 4px;
+  color: var(--text-muted);
+  padding: 1px 6px;
   border-radius: 4px;
+  font-size: var(--font-ui-smaller);
 }
 .projects-inline-action:hover,
-.projects-root-alias button:hover,
-.projects-unbound button:hover { background: var(--background-modifier-hover); }
+.projects-unbound button:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 .projects-directory-toggle:focus-visible,
 .projects-file:focus-visible,
 .projects-inline-action:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }

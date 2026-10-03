@@ -76,7 +76,7 @@ describe("ExternalRootDesktopBoundary grants", () => {
       await writeFile(...args);
       current = false;
     });
-    await expect(boundary.attach(attachment())).rejects.toMatchObject({ code: "root-unavailable" });
+    await expect(boundary.attach(attachment())).rejects.toMatchObject({ code: "session-changed" });
     expect(registry.listRoots()).toEqual([]);
     await expect(fs.stat(path.join(base, "external-roots.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -90,6 +90,54 @@ describe("ExternalRootDesktopBoundary grants", () => {
     expect(JSON.stringify(descriptor)).not.toContain(repo);
   });
 
+  it("attaches on the system picker choice alone when the host adds no second confirmation", async () => {
+    const { repo, vault } = await fixture();
+    const registry = await RootRegistry.open({ store: new MemoryStore() });
+    const boundary = await ExternalRootDesktopBoundary.create(registry, { activeVaultPath: vault, pickDirectory: async () => repo });
+    boundaries.push(boundary);
+    const result = await boundary.attach(attachment());
+    expect(result).toMatchObject({ kind: expect.not.stringMatching(/inside-vault/) });
+    expect(registry.listRoots()).toHaveLength(1);
+    const reconnected = await boundary.reconnect(registry.listRoots()[0]!.rootId);
+    expect(reconnected).not.toBeNull();
+  });
+
+  it("never turns a mid-probe session change into an 'unavailable' verdict for a healthy root", async () => {
+    const { repo, vault } = await fixture();
+    const registry = await RootRegistry.open({ store: new MemoryStore() });
+    let current = true;
+    const boundary = await ExternalRootDesktopBoundary.create(registry, {
+      activeVaultPath: vault, pickDirectory: async () => repo, confirmDirectory: async () => true,
+      isSessionCurrent: () => current,
+    });
+    boundaries.push(boundary);
+    const attached = await attachRepo(boundary);
+    // The session flips right as the probe starts proving the root.
+    const realpath = fs.realpath;
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+      current = false;
+      return realpath(...args);
+    });
+    await expect(boundary.probeRoot(attached.root.rootId)).rejects.toMatchObject({ code: "session-changed" });
+    expect(registry.getRootDescriptor(attached.root.rootId)?.availability).toBe("connected");
+  });
+
+  it("does not report a healthy root as unavailable when its grant is mutated during the probe", async () => {
+    const { repo, vault } = await fixture();
+    const registry = await RootRegistry.open({ store: new MemoryStore() });
+    const boundary = await ExternalRootDesktopBoundary.create(registry, {
+      activeVaultPath: vault, pickDirectory: async () => repo, confirmDirectory: async () => true,
+    });
+    boundaries.push(boundary);
+    const attached = await attachRepo(boundary);
+    const realpath = fs.realpath;
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+      vi.spyOn(registry, "getRoot").mockReturnValue(undefined);
+      return realpath(...args);
+    });
+    await expect(boundary.probeRoot(attached.root.rootId)).rejects.toMatchObject({ code: "session-changed" });
+  });
+
   it("does not grant access after its project contribution is removed during confirmation", async () => {
     const { repo, vault, registry } = await fixture();
     let contributed = true;
@@ -99,7 +147,7 @@ describe("ExternalRootDesktopBoundary grants", () => {
       confirmDirectory: async () => { contributed = false; return true; },
     });
     await expect(boundary.attach({ ...attachment(), isCurrent: () => contributed }))
-      .rejects.toMatchObject({ code: "root-unavailable" });
+      .rejects.toMatchObject({ code: "session-changed" });
     expect(registry.listRoots()).toEqual([]);
   });
 
@@ -114,7 +162,7 @@ describe("ExternalRootDesktopBoundary grants", () => {
       confirmDirectory: async () => { contributed = false; return true; },
     });
     await expect(second.reconnect(attached.root.rootId, () => contributed))
-      .rejects.toMatchObject({ code: "root-unavailable" });
+      .rejects.toMatchObject({ code: "session-changed" });
     expect(registry.getRoot(attached.root.rootId)?.availability).toBe("missing");
   });
 
@@ -128,7 +176,7 @@ describe("ExternalRootDesktopBoundary grants", () => {
       return remove(...args);
     });
     await expect(boundary.detachIntegration(attachment(), () => current))
-      .rejects.toMatchObject({ code: "root-unavailable" });
+      .rejects.toMatchObject({ code: "session-changed" });
     expect(registry.listBindings()).toHaveLength(1);
   });
 
@@ -152,7 +200,7 @@ describe("ExternalRootDesktopBoundary grants", () => {
       pickDirectory: async () => { current = false; return vault; },
       isSessionCurrent: () => current,
     });
-    await expect(boundary.attach(attachment())).rejects.toMatchObject({ code: "root-unavailable" });
+    await expect(boundary.attach(attachment())).rejects.toMatchObject({ code: "session-changed" });
   });
 
   it("rechecks the session when a reconnect reaches the registry mutation queue", async () => {
@@ -171,7 +219,7 @@ describe("ExternalRootDesktopBoundary grants", () => {
       current = false;
       return reconnect(...args);
     });
-    await expect(boundary.reconnect(attached.root.rootId)).rejects.toMatchObject({ code: "root-unavailable" });
+    await expect(boundary.reconnect(attached.root.rootId)).rejects.toMatchObject({ code: "session-changed" });
     expect(registry.getRoot(attached.root.rootId)?.availability).toBe("missing");
   });
 
@@ -189,15 +237,16 @@ describe("ExternalRootDesktopBoundary grants", () => {
       current = false;
       return attach(request);
     });
-    await expect(boundary.attach(attachment())).rejects.toMatchObject({ code: "root-unavailable" });
+    await expect(boundary.attach(attachment())).rejects.toMatchObject({ code: "session-changed" });
     expect(registry.listRoots()).toEqual([]);
   });
 
-  it("does not grant access without explicit confirmation", async () => {
+  it("does not grant access when an optional host confirmation is declined", async () => {
     const { repo, vault, registry } = await fixture();
     const boundary = await ExternalRootDesktopBoundary.create(registry, {
       activeVaultPath: vault,
       pickDirectory: async () => repo,
+      confirmDirectory: async () => false,
     });
     expect(await boundary.attach(attachment())).toBeNull();
     expect(registry.listRoots()).toEqual([]);
@@ -327,9 +376,9 @@ describe("ExternalRootDesktopBoundary listing", () => {
     const attached = await attachRepo(boundary);
     current = false;
     await expect(boundary.listDirectory({ rootId: attached.root.rootId, relativePath: "" }))
-      .rejects.toMatchObject({ code: "root-unavailable" });
+      .rejects.toMatchObject({ code: "session-changed" });
     await expect(boundary.readText({ rootId: attached.root.rootId, relativePath: "note.txt" }))
-      .rejects.toMatchObject({ code: "root-unavailable" });
+      .rejects.toMatchObject({ code: "session-changed" });
   });
 
   it("rejects a continuation when its directory has been replaced", async () => {
@@ -438,7 +487,7 @@ describe("ExternalRootDesktopBoundary text reads", () => {
       return handle;
     });
     await expect(boundary.readText({ rootId: attached.root.rootId, relativePath: "note.txt" }))
-      .rejects.toMatchObject({ code: "root-unavailable" });
+      .rejects.toMatchObject({ code: "session-changed" });
   });
 
   it("discards an in-flight read if another operation reconnects its root ID", async () => {
@@ -461,7 +510,7 @@ describe("ExternalRootDesktopBoundary text reads", () => {
       return handle;
     });
     await expect(boundary.readText({ rootId: attached.root.rootId, relativePath: "note.txt" }))
-      .rejects.toMatchObject({ code: "root-unavailable" });
+      .rejects.toMatchObject({ code: "session-changed" });
   });
 
   it("opens nonblocking so a last-moment FIFO substitution cannot hang the host", async () => {

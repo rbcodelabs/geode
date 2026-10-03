@@ -63,21 +63,25 @@ export class ProjectsSection {
       wrapper.className = "projects-root";
       const first = group.projects[0];
       const label = group.projects.map(project => project.label).join(" · ");
-      if (first.root.availability === "connected") {
-        wrapper.append(this.directory({ rootId: group.rootId, relativePath: group.relativeBase }, label, label));
+      const connected = first.root.availability === "connected";
+      if (connected) {
+        wrapper.append(this.directory({ rootId: group.rootId, relativePath: group.relativeBase }, label, label, "Read-only external folder"));
       } else {
-        wrapper.append(this.message(`${label} · ${first.root.availability === "permission-revoked" ? "Permission revoked" : first.root.availability === "missing" ? "Folder missing" : "Unavailable"}`));
+        wrapper.classList.add("is-broken");
+        wrapper.append(this.brokenRow(label, first.root.availability));
       }
       const actions = document.createElement("div");
       actions.className = "projects-root-actions";
       for (const project of group.projects) {
         const alias = document.createElement("div");
         alias.className = "projects-root-alias";
-        const aliasLabel = document.createElement("span");
-        aliasLabel.textContent = group.projects.length > 1 ? `${project.label}${project.relativeBase ? ` · ${project.relativeBase}` : ""}` : "External · Read-only";
-        alias.append(aliasLabel);
-        if (project.root.availability !== "connected") alias.append(this.actionButton("Reconnect…", "reconnect", project.projectId));
-        alias.append(this.actionButton("Detach from Geode", "detach", project.projectId));
+        if (group.projects.length > 1) {
+          const aliasLabel = document.createElement("span");
+          aliasLabel.textContent = `${project.label}${project.relativeBase ? ` · ${project.relativeBase}` : ""}`;
+          alias.append(aliasLabel);
+        }
+        if (project.root.availability !== "connected") alias.append(this.iconAction("Reconnect…", "refresh-cw", "reconnect", project.projectId));
+        alias.append(this.iconAction("Detach from Geode", "unlink", "detach", project.projectId));
         actions.append(alias);
       }
       wrapper.append(actions);
@@ -88,15 +92,46 @@ export class ProjectsSection {
       const row = document.createElement("div");
       row.className = "projects-unbound";
       const label = document.createElement("span");
+      label.className = "projects-unbound-label";
       label.textContent = project.label;
       row.append(label);
       if (project.state === "inside-vault") {
         row.append(this.button("Show in vault", () => this.options.revealVaultFolder(project.relativeBase)));
       } else if (project.needsDetach) {
         row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", project.projectId));
-      } else row.append(this.actionButton("Attach folder…", "attach", project.projectId));
+      } else {
+        const attach = this.actionButton("Attach", "attach", project.projectId);
+        attach.setAttribute("aria-label", "Attach folder…");
+        attach.title = "Attach a folder to browse this Project read-only";
+        row.append(attach);
+      }
       this.containerEl.append(row);
     }
+  }
+  /** A single muted row, styled like a nav folder, naming only what is wrong. */
+  private brokenRow(label: string, availability: string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "projects-broken-row nav-folder-title nav-item";
+    const icon = document.createElement("span");
+    icon.className = "projects-folder-icon";
+    setIcon(icon, "folder");
+    const name = document.createElement("span");
+    name.className = "projects-broken-name";
+    name.textContent = label;
+    const status = document.createElement("span");
+    status.className = "projects-status-label";
+    status.setAttribute("role", "status");
+    status.textContent = availability === "permission-revoked" ? "No permission" : availability === "missing" ? "Folder missing" : "Disconnected";
+    row.append(icon, name, status);
+    return row;
+  }
+  private iconAction(label: string, icon: string, action: "reconnect" | "detach", projectId: string): HTMLButtonElement {
+    const button = this.actionButton("", action, projectId);
+    button.className = "projects-icon-action clickable-icon";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    setIcon(button, icon);
+    return button;
   }
   private renderMobile(): void {
     if (this.disposed) return;
@@ -123,7 +158,7 @@ export class ProjectsSection {
     if (this.disposed || this.actionPending || !this.options.host) return;
     this.actionPending = true;
     this.render();
-    const status = this.message("Waiting for folder confirmation…");
+    const status = this.message(action === "detach" ? "Waiting for confirmation…" : "Waiting for folder selection…");
     this.containerEl.append(status);
     let failed = false;
     try { await this.options.host[action](projectId); }
@@ -133,7 +168,7 @@ export class ProjectsSection {
     await this.refresh();
     if (failed && !this.disposed) this.containerEl.append(this.message("Project action unavailable. Check the folder, permissions, and overlapping attachments, then try again."));
   }
-  private directory(ref: RootDirectoryRef, label: string, rootLabel: string): HTMLElement {
+  private directory(ref: RootDirectoryRef, label: string, rootLabel: string, tooltip?: string): HTMLElement {
     const generation = this.generation;
     const wrapper = document.createElement("div");
     wrapper.className = "projects-directory";
@@ -204,6 +239,13 @@ export class ProjectsSection {
     const arrow = document.createElement("span");
     arrow.className = "nav-folder-arrow";
     setIcon(arrow, "chevron-right");
+    if (tooltip) {
+      toggle.title = tooltip;
+      const icon = document.createElement("span");
+      icon.className = "projects-folder-icon";
+      setIcon(icon, "folder");
+      toggle.prepend(icon);
+    }
     toggle.prepend(arrow);
     wrapper.append(toggle, contents);
     return wrapper;
