@@ -99,4 +99,4 @@ confirmation. `confirmDirectory` remains an optional host hook in the boundary
 and, when supplied, still gates the grant. Detach keeps its confirmation.
 Transient session or grant races surface as `session-changed` and are never
 reported as a root availability verdict. Each Project is one nav-folder row;
-status text appears only for broken roots, and Reconnect/Detach are row actions.
+status text appears only for broken roots (its tooltip reads "Right-click to Reconnect or Detach"). Rows carry no action icons: Refresh folder, Reconnect… (broken roots only) and Detach from Geode live in Geode's shared context menu, opened by right-click, the context-menu key or Shift+F10 on a focused row. The unattached-Project `Attach` button is the only inline action.

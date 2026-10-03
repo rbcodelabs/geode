@@ -5,7 +5,10 @@ import type { PortableProjectSource } from "../integrations/threads-projects";
 import { setIcon } from "../api/icons";
 export type BoundProject = Extract<ExternalProjectDescriptor, { state: "bound" }>;
 export interface ProjectRootGroup { rootId: string; projects: BoundProject[]; relativeBase: string }
+export interface ProjectMenuItem { title: string; icon?: string; action: () => void; warning?: boolean; disabled?: boolean; section?: string }
 export interface ProjectsSectionOptions {
+  /** Opens Geode's shared context menu at the pointer, or anchored to a focused row for keyboard invocation. */
+  showMenu?(target: MouseEvent | HTMLElement, items: ProjectMenuItem[]): void;
   host?: ExternalRootsHost;
   mobileProjects?: PortableProjectSource;
   openResource(ref: ResourceRef, rootLabel: string, newTab: boolean): Promise<void>;
@@ -64,19 +67,17 @@ export class ProjectsSection {
       const first = group.projects[0];
       const label = group.projects.map(project => project.label).join(" · ");
       const connected = first.root.availability === "connected";
+      const ids = group.projects.map(project => project.projectId);
+      const rootItems = (): ProjectMenuItem[] => [
+        ...(connected ? [] : [{ title: "Reconnect…", icon: "refresh-cw", disabled: this.actionPending, action: () => { void this.runAction("reconnect", ids); } }]),
+        { title: "Detach from Geode", icon: "unlink", warning: true, section: "danger", disabled: this.actionPending, action: () => { void this.runAction("detach", ids); } },
+      ];
       if (connected) {
-        wrapper.append(this.directory({ rootId: group.rootId, relativePath: group.relativeBase }, label, label, "Read-only external folder"));
+        wrapper.append(this.directory({ rootId: group.rootId, relativePath: group.relativeBase }, label, label, "Read-only external folder", rootItems));
       } else {
         wrapper.classList.add("is-broken");
-        wrapper.append(this.brokenRow(label, first.root.availability));
+        wrapper.append(this.brokenRow(label, first.root.availability, rootItems));
       }
-      const actions = document.createElement("div");
-      actions.className = "projects-root-actions";
-      const names = group.projects.map(project => `${project.label}${project.relativeBase ? ` · ${project.relativeBase}` : ""}`).join(", ");
-      const ids = group.projects.map(project => project.projectId);
-      if (!connected) actions.append(this.iconAction("Reconnect…", "refresh-cw", "reconnect", ids, `Reconnect folder for ${names}`));
-      actions.append(this.iconAction("Detach from Geode", "unlink", "detach", ids, group.projects.length > 1 ? `Detach ${names} from Geode` : "Detach from Geode"));
-      wrapper.append(actions);
       this.containerEl.append(wrapper);
     }
     for (const project of this.projects) {
@@ -101,9 +102,11 @@ export class ProjectsSection {
     }
   }
   /** A single muted row, styled like a nav folder, naming only what is wrong. */
-  private brokenRow(label: string, availability: string): HTMLElement {
+  private brokenRow(label: string, availability: string, items: () => ProjectMenuItem[]): HTMLElement {
     const row = document.createElement("div");
     row.className = "projects-broken-row nav-folder-title nav-item";
+    row.tabIndex = 0;
+    this.bindMenu(row, items);
     const icon = document.createElement("span");
     icon.className = "projects-folder-icon";
     setIcon(icon, "folder");
@@ -113,17 +116,23 @@ export class ProjectsSection {
     const status = document.createElement("span");
     status.className = "projects-status-label";
     status.setAttribute("role", "status");
+    status.title = "Right-click to Reconnect or Detach";
     status.textContent = availability === "permission-revoked" ? "No permission" : availability === "missing" ? "Folder missing" : "Disconnected";
     row.append(icon, name, status);
     return row;
   }
-  private iconAction(label: string, icon: string, action: "reconnect" | "detach", projectIds: string[], title = label): HTMLButtonElement {
-    const button = this.actionButton("", action, projectIds);
-    button.className = "projects-icon-action clickable-icon";
-    button.title = title;
-    button.setAttribute("aria-label", label);
-    setIcon(button, icon);
-    return button;
+  /** Right-click, the context-menu key and Shift+F10 all open the same menu (keyboard anchors to the row). */
+  private bindMenu(row: HTMLElement, items: () => ProjectMenuItem[]): void {
+    row.addEventListener("contextmenu", (event) => {
+      if (!this.options.showMenu) return;
+      event.preventDefault();
+      this.options.showMenu(event, items());
+    });
+    row.addEventListener("keydown", (event) => {
+      if (!this.options.showMenu || !(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
+      event.preventDefault();
+      this.options.showMenu(row, items());
+    });
   }
   private renderMobile(): void {
     if (this.disposed) return;
@@ -165,7 +174,7 @@ export class ProjectsSection {
     await this.refresh();
     if (failed && !this.disposed) this.containerEl.append(this.message("Project action unavailable. Check the folder, permissions, and overlapping attachments, then try again."));
   }
-  private directory(ref: RootDirectoryRef, label: string, rootLabel: string, tooltip?: string): HTMLElement {
+  private directory(ref: RootDirectoryRef, label: string, rootLabel: string, tooltip?: string, extraItems?: () => ProjectMenuItem[]): HTMLElement {
     const generation = this.generation;
     const wrapper = document.createElement("div");
     wrapper.className = "projects-directory";
@@ -242,15 +251,11 @@ export class ProjectsSection {
       toggle.prepend(icon);
     }
     toggle.prepend(arrow);
-    const refresh = this.button("", () => { void load(); });
-    refresh.className = "projects-folder-refresh clickable-icon";
-    refresh.title = "Refresh folder";
-    refresh.setAttribute("aria-label", "Refresh folder");
-    setIcon(refresh, "refresh-cw");
-    const row = document.createElement("div");
-    row.className = "projects-directory-row";
-    row.append(toggle, refresh);
-    wrapper.append(row, contents);
+    this.bindMenu(toggle, () => [
+      { title: "Refresh folder", icon: "refresh-cw", action: () => { if (expanded) void load(); else toggle.click(); } },
+      ...(extraItems?.() ?? []),
+    ]);
+    wrapper.append(toggle, contents);
     return wrapper;
   }
   private header(): HTMLElement {

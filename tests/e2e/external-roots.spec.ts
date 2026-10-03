@@ -149,9 +149,15 @@ test("shared Project roots reconnect one tree and invalidate removed contributio
     await s.window.evaluate(() => window.geode.externalRoots!.attach("b"));
     const section = s.window.locator(".projects-section");
     await expect(section.locator(".projects-root")).toHaveCount(1);
-    await expect(section.locator(".projects-root-actions")).toHaveCount(1);
-    await expect(section.getByRole("button", { name: "Detach from Geode", exact: true })).toHaveCount(1);
-    await expect(section.getByRole("button", { name: "Detach from Geode", exact: true })).toHaveAttribute("title", "Detach Main, Child · child from Geode");
+    // Rows carry no action icons; Refresh/Detach live in the row's context menu.
+    await expect(section.getByRole("button", { name: "Detach from Geode", exact: true })).toHaveCount(0);
+    await section.getByRole("button", { name: "Main · Child", exact: true }).click({ button: "right" });
+    const menu = s.window.locator(".menu");
+    await expect(menu.getByRole("button", { name: "Refresh folder", exact: true })).toBeVisible();
+    await expect(menu.getByRole("button", { name: "Detach from Geode", exact: true })).toBeVisible();
+    await expect(menu.getByRole("button", { name: "Reconnect…", exact: true })).toHaveCount(0);
+    await s.window.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
     await section.getByRole("button", { name: "Main · Child", exact: true }).click();
     await section.getByRole("button", { name: "external-only.md", exact: true }).click();
     const source = s.window.locator(".external-source-view");
@@ -164,7 +170,9 @@ test("shared Project roots reconnect one tree and invalidate removed contributio
     await s.app.evaluate(({ dialog }, selectedPath) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
     }, moved);
-    await section.getByRole("button", { name: "Reconnect…", exact: true }).first().click();
+    await expect(section.locator(".projects-status-label")).toHaveAttribute("title", "Right-click to Reconnect or Detach");
+    await section.locator(".projects-broken-row").click({ button: "right" });
+    await s.window.locator(".menu").getByRole("button", { name: "Reconnect…", exact: true }).click();
     await expect(source.locator("code")).toHaveText("Reconnected source");
     expect(await s.window.evaluate(() => window.app.workspace.getLeavesOfType("geode-external-source")[0].view?.getState?.())).toMatchObject({ ref: { rootId, relativePath: "external-only.md" } });
     await s.window.evaluate(() => window.geode.externalRoots!.contribute([]));
