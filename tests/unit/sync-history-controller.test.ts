@@ -409,3 +409,41 @@ describe('append-only history controller', () => {
         expect([...r.records.values()].some(record => record.location.name === 'a.md')).toBe(true);
     });
 });
+describe('staged byte lifetime', () => {
+    type Client = ReturnType<typeof client>;
+    // Mirrors the real host: release removes the blob and the journal together.
+    const withRelease = (c: Client, order: string[] = []) => {
+        c.ports.release = async (id) => { order.push(JSON.stringify(c.state()?.pendingBatch ?? null)); c.staged.delete(id); c.operations.delete(id); };
+        return c;
+    };
+    it('does not keep uploaded bytes or journals once the operation is committed and state is saved', async () => {
+        const r = remote(), order: string[] = [], a = withRelease(client(r, { 'a.md': 'one', 'b.md': 'two' }), order);
+        await start(a);
+        expect(a.staged.size).toBe(0);
+        expect(a.operations.size).toBe(0);
+        expect(order.length).toBeGreaterThan(0);
+        // Crash safety: every release happened after the state naming no pending batch was saved.
+        expect(order.every(entry => entry === 'null')).toBe(true);
+    });
+    it('does not keep downloaded bytes after they are applied', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one' }); await start(a);
+        const b = withRelease(client(r)); await start(b);
+        expect(b.text('a.md')).toBe('one');
+        expect(b.staged.size).toBe(0);
+        expect(b.operations.size).toBe(0);
+    });
+    it('retains staged bytes while an operation is interrupted and reclaims them after recovery', async () => {
+        const r = remote(), a = withRelease(client(r, { 'a.md': 'one' }));
+        await a.controller.preview(signal()); r.failPut();
+        await expect(a.controller.run({ approvePreview: true }, signal())).rejects.toThrow('lost upload response');
+        expect(a.staged.size).toBe(1);
+        expect([...a.operations.values()].every(op => op.phase === 'prepared')).toBe(true);
+        a.restart(); await a.controller.run({}, signal());
+        expect(a.staged.size).toBe(0);
+        expect(a.operations.size).toBe(0);
+    });
+    it('is optional for a host: without release nothing is deleted', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one' }); await start(a);
+        expect(a.staged.size).toBe(1);
+    });
+});

@@ -257,6 +257,14 @@ export class SyncService extends Events implements SyncApi {
       const lease = this.lease; const bindingKey = await hash(encoded([provider.id, state.binding])); assertContext();
       const stateKey = `sync-history/${root}/${bindingKey}`;
       const storage = async (request: Parameters<NonNullable<HostServices["syncSafety"]>["storage"]>[2]) => { assertContext(); const value = await this.host.syncSafety!.storage(lease, bindingKey, request); assertContext(); return value; };
+      // Reclaim staged bytes no live 'prepared' operation or durable pendingBatch can need
+      // (crash orphans, pre-release leftovers) and stale sibling bindings. Housekeeping
+      // only: a failure here must never block a sync, but a lost context must still abort.
+      try {
+        const pending = (await this.host.deviceState.read<{ pendingBatch?: string[] }>(stateKey))?.pendingBatch ?? []; assertContext();
+        await storage({ action: "gc", retain: Array.isArray(pending) ? pending : [] });
+        await storage({ action: "sweep", keep: [bindingKey], force: false });
+      } catch { assertContext(); }
       const read = async (resource: HistoryLocalResource): Promise<ArrayBuffer> => {
         assertContext();
         if (resource.namespace === "portable-config" && !isPortableAssetPath(resource.path)) {
@@ -386,6 +394,7 @@ export class SyncService extends Events implements SyncApi {
         saveOperation: async value => { await storage({ action: "save-operation", key: value.id, value }); },
         stage: async (key, data) => await storage({ action: "stage", key, data }) as string,
         readStage: async key => await storage({ action: "read-stage", key }) as ArrayBuffer,
+        release: async key => { await storage({ action: "release", key }); },
         snapshot, read, isIncluded: (namespace, path) => includedAncestors.has(`${namespace}:${path}`) || this.included(state.scope, namespace, path),
         exclude: async (resource, data) => { const reason = resource.namespace === "content" ? await provider.excludePath?.(resource.path, data) : null; assertContext(); return reason ?? null; },
         apply: async input => { assertContext(); await this.host.syncSafety!.apply(lease, { namespace: input.namespace, operationId: input.operationId, path: input.path, expectedHash: input.expectedHash, kind: input.deleted ? "trash" : input.kind === "folder" ? "mkdir" : "write", data: input.data }); assertContext(); if (input.namespace === "portable-config") await this.portableChanged(); assertContext(); },
@@ -483,8 +492,17 @@ export class SyncService extends Events implements SyncApi {
   async disconnect() {
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;
-    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
+    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
     finally { this.closing = false; }
+  }
+  /** Best-effort: disconnect has already removed the device state that could resume these operations. */
+  private async purgePrivateStorage(root: string) {
+    const safety = this.host.syncSafety; if (!safety) return;
+    try {
+      const lease = await safety.claimOwner(); if (!lease) return;
+      try { await safety.storage(lease, "0".repeat(64), { action: "sweep", keep: [], force: true }); } finally { await safety.releaseOwner(lease); }
+    } catch { /* leftover bytes are reclaimed by the next sync's sweep */ }
+    if (root !== this.vaultId()) throw new Error("Vault changed");
   }
   async pause() { if (!this.selected) return this.withConditional(() => this.conditional.pause()); const root = this.vaultId(); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); return this.setup(async (_signal, assert) => { const state = await this.load(); assert(); state.paused = true; await this.save(state); assert(); this.setStatus({ ...this.status, state: "paused" }); }); }
   async resume() { if (!this.selected) return this.withConditional(() => this.conditional.resume()); return this.setup(async (_signal, assert) => { const state = await this.load(); assert(); state.paused = false; await this.save(state); assert(); this.observe(); this.setStatus({ ...this.status, state: "preview", message: "Preview before resuming" }); }); }
