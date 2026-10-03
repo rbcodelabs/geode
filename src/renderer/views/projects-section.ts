@@ -72,18 +72,10 @@ export class ProjectsSection {
       }
       const actions = document.createElement("div");
       actions.className = "projects-root-actions";
-      for (const project of group.projects) {
-        const alias = document.createElement("div");
-        alias.className = "projects-root-alias";
-        if (group.projects.length > 1) {
-          const aliasLabel = document.createElement("span");
-          aliasLabel.textContent = `${project.label}${project.relativeBase ? ` · ${project.relativeBase}` : ""}`;
-          alias.append(aliasLabel);
-        }
-        if (project.root.availability !== "connected") alias.append(this.iconAction("Reconnect…", "refresh-cw", "reconnect", project.projectId));
-        alias.append(this.iconAction("Detach from Geode", "unlink", "detach", project.projectId));
-        actions.append(alias);
-      }
+      const names = group.projects.map(project => `${project.label}${project.relativeBase ? ` · ${project.relativeBase}` : ""}`).join(", ");
+      const ids = group.projects.map(project => project.projectId);
+      if (!connected) actions.append(this.iconAction("Reconnect…", "refresh-cw", "reconnect", ids, `Reconnect folder for ${names}`));
+      actions.append(this.iconAction("Detach from Geode", "unlink", "detach", ids, group.projects.length > 1 ? `Detach ${names} from Geode` : "Detach from Geode"));
       wrapper.append(actions);
       this.containerEl.append(wrapper);
     }
@@ -98,9 +90,9 @@ export class ProjectsSection {
       if (project.state === "inside-vault") {
         row.append(this.button("Show in vault", () => this.options.revealVaultFolder(project.relativeBase)));
       } else if (project.needsDetach) {
-        row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", project.projectId));
+        row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", [project.projectId]));
       } else {
-        const attach = this.actionButton("Attach", "attach", project.projectId);
+        const attach = this.actionButton("Attach", "attach", [project.projectId]);
         attach.setAttribute("aria-label", "Attach folder…");
         attach.title = "Attach a folder to browse this Project read-only";
         row.append(attach);
@@ -125,10 +117,10 @@ export class ProjectsSection {
     row.append(icon, name, status);
     return row;
   }
-  private iconAction(label: string, icon: string, action: "reconnect" | "detach", projectId: string): HTMLButtonElement {
-    const button = this.actionButton("", action, projectId);
+  private iconAction(label: string, icon: string, action: "reconnect" | "detach", projectIds: string[], title = label): HTMLButtonElement {
+    const button = this.actionButton("", action, projectIds);
     button.className = "projects-icon-action clickable-icon";
-    button.title = label;
+    button.title = title;
     button.setAttribute("aria-label", label);
     setIcon(button, icon);
     return button;
@@ -149,19 +141,24 @@ export class ProjectsSection {
       this.containerEl.append(row);
     }
   }
-  private actionButton(label: string, action: "attach" | "reconnect" | "detach", projectId: string): HTMLButtonElement {
-    const button = this.button(label, () => { void this.runAction(action, projectId); });
+  private actionButton(label: string, action: "attach" | "reconnect" | "detach", projectIds: string[]): HTMLButtonElement {
+    const button = this.button(label, () => { void this.runAction(action, projectIds); });
     button.disabled = this.actionPending;
     return button;
   }
-  private async runAction(action: "attach" | "reconnect" | "detach", projectId: string): Promise<void> {
+  /** Aliases of one root share a folder: reconnect once, but detach every alias (each still confirms). */
+  private async runAction(action: "attach" | "reconnect" | "detach", projectIds: string[]): Promise<void> {
     if (this.disposed || this.actionPending || !this.options.host) return;
     this.actionPending = true;
     this.render();
     const status = this.message(action === "detach" ? "Waiting for confirmation…" : "Waiting for folder selection…");
     this.containerEl.append(status);
     let failed = false;
-    try { await this.options.host[action](projectId); }
+    try {
+      for (const projectId of action === "detach" ? projectIds : projectIds.slice(0, 1)) {
+        if (await this.options.host[action](projectId) === false) break;
+      }
+    }
     catch { failed = true; }
     finally { this.actionPending = false; }
     if (this.disposed) return;
@@ -191,9 +188,7 @@ export class ProjectsSection {
         if (!current(id)) return;
         entries = [...new Map([...entries, ...page.entries].map(entry => [entry.ref.relativePath, entry])).values()];
         cursor = page.nextCursor;
-        const refresh = this.button("Refresh folder", () => { void load(); });
-        refresh.className = "projects-inline-action";
-        contents.replaceChildren(refresh);
+        contents.replaceChildren();
         const sorted = [...entries].sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         for (const entry of sorted) {
           if (entry.kind === "directory") {
@@ -247,7 +242,15 @@ export class ProjectsSection {
       toggle.prepend(icon);
     }
     toggle.prepend(arrow);
-    wrapper.append(toggle, contents);
+    const refresh = this.button("", () => { void load(); });
+    refresh.className = "projects-folder-refresh clickable-icon";
+    refresh.title = "Refresh folder";
+    refresh.setAttribute("aria-label", "Refresh folder");
+    setIcon(refresh, "refresh-cw");
+    const row = document.createElement("div");
+    row.className = "projects-directory-row";
+    row.append(toggle, refresh);
+    wrapper.append(row, contents);
     return wrapper;
   }
   private header(): HTMLElement {

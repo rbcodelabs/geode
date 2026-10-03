@@ -110,6 +110,33 @@ describe("Projects section lifecycle and lazy browsing", () => {
     expect(h.button("Reconnect…")).toBeDefined();
     expect(h.button("Detach from Geode")).toBeDefined();
   });
+  it("collapses multiple aliases of one root into a single Reconnect/Detach group with names in the tooltip", async () => {
+    const h = setup();
+    const a = project("Main", "root"), b = project("Child", "root", "child");
+    a.root.availability = b.root.availability = "missing";
+    h.host.listProjects.mockResolvedValue([a, b]);
+    h.host.detach.mockResolvedValue(true);
+    await h.section.refresh();
+    const reconnect = h.all().filter(node => node.attributes["aria-label"] === "Reconnect…");
+    const detach = h.all().filter(node => node.attributes["aria-label"] === "Detach from Geode");
+    expect(reconnect).toHaveLength(1);
+    expect(detach).toHaveLength(1);
+    expect(detach[0].title).toBe("Detach Main, Child · child from Geode");
+    detach[0].click(); await settle();
+    expect(h.host.detach.mock.calls.map(call => call[0])).toEqual(["Main", "Child"]);
+  });
+  it("offers an icon-only folder refresh on the directory row instead of an extra list row", async () => {
+    const h = setup();
+    await h.section.refresh();
+    h.button("Main").click(); await settle();
+    const refresh = h.all().find(node => node.attributes["aria-label"] === "Refresh folder")!;
+    expect(refresh.textContent).toBe("");
+    expect(refresh.title).toBe("Refresh folder");
+    expect(h.all().filter(node => node.textContent === "Refresh folder")).toHaveLength(0);
+    h.host.listDirectory.mockClear();
+    refresh.click(); await settle();
+    expect(h.host.listDirectory).toHaveBeenCalledTimes(1);
+  });
   it("shows no status text for a healthy project", async () => {
     const h = setup();
     await h.section.refresh();

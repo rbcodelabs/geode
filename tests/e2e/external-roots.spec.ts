@@ -149,7 +149,9 @@ test("shared Project roots reconnect one tree and invalidate removed contributio
     await s.window.evaluate(() => window.geode.externalRoots!.attach("b"));
     const section = s.window.locator(".projects-section");
     await expect(section.locator(".projects-root")).toHaveCount(1);
-    await expect(section.locator(".projects-root-alias")).toContainText(["Main", "Child"]);
+    await expect(section.locator(".projects-root-actions")).toHaveCount(1);
+    await expect(section.getByRole("button", { name: "Detach from Geode", exact: true })).toHaveCount(1);
+    await expect(section.getByRole("button", { name: "Detach from Geode", exact: true })).toHaveAttribute("title", "Detach Main, Child · child from Geode");
     await section.getByRole("button", { name: "Main · Child", exact: true }).click();
     await section.getByRole("button", { name: "external-only.md", exact: true }).click();
     const source = s.window.locator(".external-source-view");
