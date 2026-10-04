@@ -6377,7 +6377,8 @@ body.is-mobile .page-preview {
 .projects-folder-icon svg { width: 14px; height: 14px; }
 .projects-broken-row { padding: 4px 8px; color: var(--text-muted); width: 100%; box-sizing: border-box; }
 .projects-broken-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.projects-status-label { font-size: var(--font-ui-smaller); color: var(--text-warning, var(--text-muted)); }
+.projects-status-icon { display: inline-flex; flex: none; color: var(--text-warning, var(--text-muted)); opacity: .85; }
+.projects-status-icon svg { width: 14px; height: 14px; }
 .projects-unbound { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 8px; color: var(--text-faint, var(--text-muted)); font-size: var(--font-ui-smaller); }
 .projects-unbound-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .projects-attach-row { display: flex; align-items: center; gap: 4px; padding: 4px 8px; box-sizing: border-box; color: var(--text-muted); cursor: pointer; }

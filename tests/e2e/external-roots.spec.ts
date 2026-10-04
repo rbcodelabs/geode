@@ -166,11 +166,11 @@ test("shared Project roots reconnect one tree and invalidate removed contributio
     await fs.rename(s.project, moved);
     await fs.writeFile(path.join(moved, "external-only.md"), "Reconnected source");
     await section.getByRole("button", { name: "Refresh Projects", exact: true }).click();
-    await expect(section).toContainText("Folder missing");
+    await expect(section.locator(".projects-status-icon")).toHaveAttribute("aria-label", "Folder missing");
     await s.app.evaluate(({ dialog }, selectedPath) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
     }, moved);
-    await expect(section.locator(".projects-status-label")).toHaveAttribute("title", "Right-click to Reconnect or Detach");
+    await expect(section.locator(".projects-status-icon")).toHaveAttribute("title", "Folder missing \u2014 right-click to Reconnect or Detach");
     await section.locator(".projects-broken-row").click({ button: "right" });
     await s.window.locator(".menu").getByRole("button", { name: "Reconnect…", exact: true }).click();
     await expect(source.locator("code")).toHaveText("Reconnected source");

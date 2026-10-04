@@ -119,12 +119,15 @@ describe("Projects section lifecycle and lazy browsing", () => {
     const broken = project("Gone", "root"); broken.root.availability = "missing";
     h.host.listProjects.mockResolvedValue([broken]);
     await h.section.refresh();
-    expect(h.text()).toContain("Folder missing");
+    expect(h.text()).not.toContain("Folder missing");
     expect(h.text()).not.toContain("Read-only");
     expect(h.all().filter(node => node.attributes["aria-label"] === "Reconnect…" || node.attributes["aria-label"] === "Detach from Geode")).toHaveLength(0);
     const row = h.all().find(node => node.className.includes("projects-broken-row"))!;
     expect(row.tabIndex).toBe(0);
-    expect(h.all().find(node => node.className.includes("projects-status-label"))!.title).toBe("Right-click to Reconnect or Detach");
+    const status = h.all().find(node => node.className.includes("projects-status-icon"))!;
+    expect(status.title).toBe("Folder missing \u2014 right-click to Reconnect or Detach");
+    expect(status.attributes["aria-label"]).toBe("Folder missing");
+    expect(status.attributes.role).toBe("img");
     expect(h.menuOn(row).titles).toEqual(["Reconnect…", "Detach from Geode"]);
   });
   it("keeps the rows free of action icon buttons and offers Refresh + Detach only on a healthy root", async () => {
@@ -155,7 +158,7 @@ describe("Projects section lifecycle and lazy browsing", () => {
     h.host.listProjects.mockResolvedValue([broken]);
     h.host.reconnect.mockResolvedValue(true);
     await h.section.refresh();
-    expect(h.text()).toContain("No permission");
+    expect(h.all().find(node => node.className.includes("projects-status-icon"))!.attributes["aria-label"]).toBe("No permission");
     h.menuOn(h.all().find(node => node.className.includes("projects-broken-row"))!).choose("Reconnect…");
     await settle();
     expect(h.host.reconnect).toHaveBeenCalledWith("Gone");

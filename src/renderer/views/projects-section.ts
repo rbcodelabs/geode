@@ -136,11 +136,16 @@ export class ProjectsSection {
     const name = document.createElement("span");
     name.className = "projects-broken-name";
     name.textContent = label;
+    const kind = availability === "permission-revoked"
+      ? { text: "No permission", icon: "folder-lock" }
+      : availability === "missing" ? { text: "Folder missing", icon: "folder-x" } : { text: "Disconnected", icon: "unlink" };
+    // The status is an icon, not text; its words live in the tooltip and accessible name.
     const status = document.createElement("span");
-    status.className = "projects-status-label";
-    status.setAttribute("role", "status");
-    status.title = "Right-click to Reconnect or Detach";
-    status.textContent = availability === "permission-revoked" ? "No permission" : availability === "missing" ? "Folder missing" : "Disconnected";
+    status.className = "projects-status-icon";
+    status.setAttribute("role", "img");
+    status.setAttribute("aria-label", kind.text);
+    status.title = `${kind.text} \u2014 right-click to Reconnect or Detach`;
+    setIcon(status, kind.icon);
     row.append(this.chevronSpacer(), icon, name, status);
     return row;
   }
