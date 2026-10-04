@@ -127,8 +127,8 @@ import {
   GithubAuthError,
   GithubAuthService,
   GithubTokenStore,
-  resolveGithubAppSlug,
-  resolveGithubClientId,
+  resolveGithubAppSettings,
+  type GithubAppSettings,
 } from "./github-auth";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
@@ -427,6 +427,8 @@ function appConfigPath(): string {
 interface GlobalConfig {
   recentVaults: string[];
   lastVault?: string;
+  /** GitHub App overrides (see github-auth/config.ts): clientId, appSlug, allowedOwners, allowedRepos. */
+  github?: unknown;
 }
 
 function loadConfig(): GlobalConfig {
@@ -505,18 +507,37 @@ function getSecretStore(): SecretStore {
  * same `app.getPath("userData")`-timing reason as `getSecretStore`.
  */
 let githubAuth: GithubAuthService | undefined;
-function getGithubAuth(): GithubAuthService {
+/** Vault whose `.geode/app.json` is layered over geode.json: the window that made the current call. */
+let githubVaultRoot: string | undefined;
+
+function readVaultAppConfig(root: string | undefined): unknown {
+  if (!root) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, ".geode", "app.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function currentGithubSettings(): GithubAppSettings {
+  return resolveGithubAppSettings({ global: loadConfig().github, vault: readVaultAppConfig(githubVaultRoot) });
+}
+
+function getGithubAuth(sender?: Electron.WebContents): GithubAuthService {
+  if (sender) {
+    const win = BrowserWindow.fromWebContents(sender);
+    githubVaultRoot = win ? sessions.get(win.id)?.root : undefined;
+  }
   githubAuth ??= new GithubAuthService({
     http: fetchGithubHttp,
     store: new GithubTokenStore(new SecretStore(path.join(app.getPath("userData"), "github-auth.json"), safeStorage)),
-    clientId: resolveGithubClientId(),
-    appSlug: resolveGithubAppSlug(),
+    settings: currentGithubSettings,
   });
   return githubAuth;
 }
 
 /** Errors cross IPC as plain data so the renderer can render them without a stack trace. */
-async function githubIpc<T>(run: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; code: string; message: string }> {
+async function githubIpc<T>(run: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; code: string; message: string; url?: string }> {
   try {
     return { ok: true, value: await run() };
   } catch (error) {
@@ -524,6 +545,7 @@ async function githubIpc<T>(run: () => Promise<T>): Promise<{ ok: true; value: T
       ok: false,
       code: error instanceof GithubAuthError ? error.code : "unexpected",
       message: (error as Error).message,
+      url: error instanceof GithubAuthError ? error.url : undefined,
     };
   }
 }
@@ -1555,19 +1577,24 @@ function registerIpc() {
 
   // GitHub App auth (see github-auth/). Opening the verification URL is a
   // browser launch, not a window, but is still skipped under GEODE_HEADLESS.
-  ipcMain.handle("github-auth-status", () => getGithubAuth().getStatus());
-  ipcMain.handle("github-auth-start", () => githubIpc(async () => {
-    const device = await getGithubAuth().startSignIn();
+  ipcMain.handle("github-auth-status", (e) => getGithubAuth(e.sender).getStatus());
+  ipcMain.handle("github-auth-app-info", (e) => githubIpc(() => getGithubAuth(e.sender).getAppReport()));
+  ipcMain.handle("github-auth-start", (e, opts: unknown) => githubIpc(async () => {
+    const confirmExtraPermissions = (opts as { confirmExtraPermissions?: unknown } | null)?.confirmExtraPermissions === true;
+    const device = await getGithubAuth(e.sender).startSignIn({ confirmExtraPermissions });
     if (!isHeadless) void shell.openExternal(device.verificationUri);
     return { userCode: device.userCode, verificationUri: device.verificationUri };
   }));
-  ipcMain.handle("github-auth-list-access", () => githubIpc(() => getGithubAuth().listAccess()));
-  ipcMain.handle("github-auth-check-repo", (_e, repo: unknown) => githubIpc(() => {
+  ipcMain.handle("github-auth-list-access", (e) => githubIpc(() => getGithubAuth(e.sender).listAccess()));
+  ipcMain.handle("github-auth-check-repo", (e, repo: unknown) => githubIpc(() => {
     if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("Expected owner/name");
-    return getGithubAuth().checkRepo(repo);
+    return getGithubAuth(e.sender).checkRepo(repo);
   }));
-  ipcMain.handle("github-auth-get-token", () => githubIpc(() => getGithubAuth().getAccessToken()));
-  ipcMain.handle("github-auth-disconnect", () => githubIpc(() => getGithubAuth().disconnect()));
+  ipcMain.handle("github-auth-get-token", (e, repo: unknown) => githubIpc(() => {
+    if (repo !== undefined && (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo))) throw new Error("Expected owner/name");
+    return getGithubAuth(e.sender).getAccessToken(repo);
+  }));
+  ipcMain.handle("github-auth-disconnect", (e) => githubIpc(() => getGithubAuth(e.sender).disconnect()));
   ipcMain.handle("github-auth-open-url", (_e, url: unknown) => {
     if (typeof url === "string" && /^https:\/\/github\.com\//.test(url) && !isHeadless) void shell.openExternal(url);
   });
