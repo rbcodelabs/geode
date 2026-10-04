@@ -5,7 +5,10 @@ import type { PortableProjectSource } from "../integrations/threads-projects";
 import { setIcon } from "../api/icons";
 export type BoundProject = Extract<ExternalProjectDescriptor, { state: "bound" }>;
 export interface ProjectRootGroup { rootId: string; projects: BoundProject[]; relativeBase: string }
+export interface ProjectMenuItem { title: string; icon?: string; action: () => void; warning?: boolean; disabled?: boolean; section?: string }
 export interface ProjectsSectionOptions {
+  /** Opens Geode's shared context menu at the pointer, or anchored to a focused row for keyboard invocation. */
+  showMenu?(target: MouseEvent | HTMLElement, items: ProjectMenuItem[]): void;
   host?: ExternalRootsHost;
   mobileProjects?: PortableProjectSource;
   openResource(ref: ResourceRef, rootLabel: string, newTab: boolean): Promise<void>;
@@ -63,40 +66,108 @@ export class ProjectsSection {
       wrapper.className = "projects-root";
       const first = group.projects[0];
       const label = group.projects.map(project => project.label).join(" · ");
-      if (first.root.availability === "connected") {
-        wrapper.append(this.directory({ rootId: group.rootId, relativePath: group.relativeBase }, label, label));
+      const connected = first.root.availability === "connected";
+      const ids = group.projects.map(project => project.projectId);
+      const rootItems = (): ProjectMenuItem[] => [
+        ...(connected ? [] : [{ title: "Reconnect…", icon: "refresh-cw", disabled: this.actionPending, action: () => { void this.runAction("reconnect", ids); } }]),
+        { title: "Detach from Geode", icon: "unlink", warning: true, section: "danger", disabled: this.actionPending, action: () => { void this.runAction("detach", ids); } },
+      ];
+      if (connected) {
+        wrapper.append(this.directory({ rootId: group.rootId, relativePath: group.relativeBase }, label, label, "Read-only external folder", rootItems));
       } else {
-        wrapper.append(this.message(`${label} · ${first.root.availability === "permission-revoked" ? "Permission revoked" : first.root.availability === "missing" ? "Folder missing" : "Unavailable"}`));
+        wrapper.classList.add("is-broken");
+        wrapper.append(this.brokenRow(label, first.root.availability, rootItems));
       }
-      const actions = document.createElement("div");
-      actions.className = "projects-root-actions";
-      for (const project of group.projects) {
-        const alias = document.createElement("div");
-        alias.className = "projects-root-alias";
-        const aliasLabel = document.createElement("span");
-        aliasLabel.textContent = group.projects.length > 1 ? `${project.label}${project.relativeBase ? ` · ${project.relativeBase}` : ""}` : "External · Read-only";
-        alias.append(aliasLabel);
-        if (project.root.availability !== "connected") alias.append(this.actionButton("Reconnect…", "reconnect", project.projectId));
-        alias.append(this.actionButton("Detach from Geode", "detach", project.projectId));
-        actions.append(alias);
-      }
-      wrapper.append(actions);
       this.containerEl.append(wrapper);
     }
     for (const project of this.projects) {
       if (project.state === "bound") continue;
+      if (project.state !== "inside-vault" && !project.needsDetach) {
+        this.containerEl.append(this.attachRow(project.label, project.projectId));
+        continue;
+      }
       const row = document.createElement("div");
       row.className = "projects-unbound";
       const label = document.createElement("span");
+      label.className = "projects-unbound-label";
       label.textContent = project.label;
       row.append(label);
       if (project.state === "inside-vault") {
         row.append(this.button("Show in vault", () => this.options.revealVaultFolder(project.relativeBase)));
-      } else if (project.needsDetach) {
-        row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", project.projectId));
-      } else row.append(this.actionButton("Attach folder…", "attach", project.projectId));
+      } else {
+        row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", [project.projectId]));
+      }
       this.containerEl.append(row);
     }
+  }
+  /** One focusable nav-style row: muted folder + name, with a quiet folder-plus affordance. */
+  private attachRow(label: string, projectId: string): HTMLButtonElement {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "projects-attach-row projects-directory-toggle nav-folder-title nav-item";
+    row.setAttribute("aria-label", "Attach folder…");
+    row.title = "Attach a read-only folder";
+    row.disabled = this.actionPending;
+    const icon = document.createElement("span");
+    icon.className = "projects-folder-icon";
+    setIcon(icon, "folder");
+    const name = document.createElement("span");
+    name.className = "projects-attach-name";
+    name.textContent = label;
+    const affordance = document.createElement("span");
+    affordance.className = "projects-attach-affordance";
+    affordance.setAttribute("aria-hidden", "true");
+    setIcon(affordance, "folder-plus");
+    row.append(this.chevronSpacer(), icon, name, affordance);
+    const attach = (): void => { void this.runAction("attach", [projectId]); };
+    row.addEventListener("click", attach);
+    this.bindMenu(row, () => [{ title: "Attach folder…", icon: "folder-plus", disabled: this.actionPending, action: attach }]);
+    return row;
+  }
+  /** A single muted row, styled like a nav folder, naming only what is wrong. */
+  private brokenRow(label: string, availability: string, items: () => ProjectMenuItem[]): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "projects-broken-row nav-folder-title nav-item";
+    row.tabIndex = 0;
+    this.bindMenu(row, items);
+    const icon = document.createElement("span");
+    icon.className = "projects-folder-icon";
+    setIcon(icon, "folder");
+    const name = document.createElement("span");
+    name.className = "projects-broken-name";
+    name.textContent = label;
+    const kind = availability === "permission-revoked"
+      ? { text: "No permission", icon: "folder-lock" }
+      : availability === "missing" ? { text: "Folder missing", icon: "folder-x" } : { text: "Disconnected", icon: "unlink" };
+    // The status is an icon, not text; its words live in the tooltip and accessible name.
+    const status = document.createElement("span");
+    status.className = "projects-status-icon";
+    status.setAttribute("role", "img");
+    status.setAttribute("aria-label", kind.text);
+    status.title = `${kind.text} \u2014 right-click to Reconnect or Detach`;
+    setIcon(status, kind.icon);
+    row.append(this.chevronSpacer(), icon, name, status);
+    return row;
+  }
+  /** Empty stand-in for the collapse chevron so non-expandable rows align with expandable root rows. */
+  private chevronSpacer(): HTMLElement {
+    const spacer = document.createElement("span");
+    spacer.className = "nav-folder-arrow projects-chevron-spacer";
+    spacer.setAttribute("aria-hidden", "true");
+    return spacer;
+  }
+  /** Right-click, the context-menu key and Shift+F10 all open the same menu (keyboard anchors to the row). */
+  private bindMenu(row: HTMLElement, items: () => ProjectMenuItem[]): void {
+    row.addEventListener("contextmenu", (event) => {
+      if (!this.options.showMenu) return;
+      event.preventDefault();
+      this.options.showMenu(event, items());
+    });
+    row.addEventListener("keydown", (event) => {
+      if (!this.options.showMenu || !(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
+      event.preventDefault();
+      this.options.showMenu(row, items());
+    });
   }
   private renderMobile(): void {
     if (this.disposed) return;
@@ -114,26 +185,31 @@ export class ProjectsSection {
       this.containerEl.append(row);
     }
   }
-  private actionButton(label: string, action: "attach" | "reconnect" | "detach", projectId: string): HTMLButtonElement {
-    const button = this.button(label, () => { void this.runAction(action, projectId); });
+  private actionButton(label: string, action: "attach" | "reconnect" | "detach", projectIds: string[]): HTMLButtonElement {
+    const button = this.button(label, () => { void this.runAction(action, projectIds); });
     button.disabled = this.actionPending;
     return button;
   }
-  private async runAction(action: "attach" | "reconnect" | "detach", projectId: string): Promise<void> {
+  /** Aliases of one root share a folder: reconnect once, but detach every alias (each still confirms). */
+  private async runAction(action: "attach" | "reconnect" | "detach", projectIds: string[]): Promise<void> {
     if (this.disposed || this.actionPending || !this.options.host) return;
     this.actionPending = true;
     this.render();
-    const status = this.message("Waiting for folder confirmation…");
+    const status = this.message(action === "detach" ? "Waiting for confirmation…" : "Waiting for folder selection…");
     this.containerEl.append(status);
     let failed = false;
-    try { await this.options.host[action](projectId); }
+    try {
+      for (const projectId of action === "detach" ? projectIds : projectIds.slice(0, 1)) {
+        if (await this.options.host[action](projectId) === false) break;
+      }
+    }
     catch { failed = true; }
     finally { this.actionPending = false; }
     if (this.disposed) return;
     await this.refresh();
     if (failed && !this.disposed) this.containerEl.append(this.message("Project action unavailable. Check the folder, permissions, and overlapping attachments, then try again."));
   }
-  private directory(ref: RootDirectoryRef, label: string, rootLabel: string): HTMLElement {
+  private directory(ref: RootDirectoryRef, label: string, rootLabel: string, tooltip?: string, extraItems?: () => ProjectMenuItem[]): HTMLElement {
     const generation = this.generation;
     const wrapper = document.createElement("div");
     wrapper.className = "projects-directory";
@@ -156,9 +232,7 @@ export class ProjectsSection {
         if (!current(id)) return;
         entries = [...new Map([...entries, ...page.entries].map(entry => [entry.ref.relativePath, entry])).values()];
         cursor = page.nextCursor;
-        const refresh = this.button("Refresh folder", () => { void load(); });
-        refresh.className = "projects-inline-action";
-        contents.replaceChildren(refresh);
+        contents.replaceChildren();
         const sorted = [...entries].sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         for (const entry of sorted) {
           if (entry.kind === "directory") {
@@ -204,7 +278,18 @@ export class ProjectsSection {
     const arrow = document.createElement("span");
     arrow.className = "nav-folder-arrow";
     setIcon(arrow, "chevron-right");
+    if (tooltip) {
+      toggle.title = tooltip;
+      const icon = document.createElement("span");
+      icon.className = "projects-folder-icon";
+      setIcon(icon, "folder");
+      toggle.prepend(icon);
+    }
     toggle.prepend(arrow);
+    this.bindMenu(toggle, () => [
+      { title: "Refresh folder", icon: "refresh-cw", action: () => { if (expanded) void load(); else toggle.click(); } },
+      ...(extraItems?.() ?? []),
+    ]);
     wrapper.append(toggle, contents);
     return wrapper;
   }

@@ -112,6 +112,11 @@ export class FileExplorerView implements View {
       host: app.host.externalRoots,
       ...(app.host.runtime.runtime !== "electron" ? { mobileProjects: threadsProjectSource(app.vault) } : {}),
       openResource: (ref, label, newTab) => app.openExternalResource(ref, label, newTab),
+      showMenu: (target, items) => {
+        const specs = items.map((item) => ({ ...item, section: item.section ?? "default" }));
+        if (target instanceof HTMLElement) app.showMenu(new MouseEvent("contextmenu"), specs, { anchor: target });
+        else app.showMenu(target, specs);
+      },
       revealVaultFolder: (relativePath) => {
         const parts = relativePath.split("/");
         for (let length = 1; length <= parts.length; length++) this.expanded.add(parts.slice(0, length).join("/"));

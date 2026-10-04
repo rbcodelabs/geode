@@ -90,3 +90,13 @@ Native picker/confirmation behavior is covered through dialog stubs in Electron
 tests. Explorer/source-view screenshots verify renderer UI, not native dialogs.
 No external editing, indexing, search, execution, remote access, mobile attachment,
 or broader vault semantics are added by this slice.
+
+## Update: single-step consent and quieter rows
+
+The system folder picker is the user's consent for attach and reconnect (its
+message states the read-only scope); Geode no longer shows a second native
+confirmation. `confirmDirectory` remains an optional host hook in the boundary
+and, when supplied, still gates the grant. Detach keeps its confirmation.
+Transient session or grant races surface as `session-changed` and are never
+reported as a root availability verdict. Each Project is one nav-folder row;
+broken roots show a status icon at the right of the row instead of text (folder-x for a missing folder, folder-lock for no permission, unlink for disconnected). The words ("Folder missing", "No permission", "Disconnected") live in the icon's `aria-label` and its tooltip, which reads e.g. "Folder missing — right-click to Reconnect or Detach". Rows carry no action icons: Refresh folder, Reconnect… (broken roots only) and Detach from Geode live in Geode's shared context menu, opened by right-click, the context-menu key or Shift+F10 on a focused row. The unattached-Project `Attach` button is the only inline action.

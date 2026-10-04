@@ -59,6 +59,7 @@ export type ExternalRootAccessErrorCode =
   | "root-not-found"
   | "root-missing"
   | "root-unavailable"
+  | "session-changed"
   | "permission-denied"
   | "not-found"
   | "invalid-path"

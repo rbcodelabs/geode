@@ -83,7 +83,7 @@ test("a native attachment picker cannot commit after the originating vault switc
         .resolveRootPicker({ canceled: false, filePaths: [selectedPath] });
     }, s.project);
     const outcome = await s.window.evaluate(() => (window as unknown as { pendingAttachment: Promise<string> }).pendingAttachment);
-    expect(outcome).toContain("root-unavailable");
+    expect(outcome).toContain("session-changed");
     expect(await fs.readFile(path.join(s.userData, "external-roots.json"), "utf8").catch(() => null)).toBeNull();
     expect(await s.window.evaluate(() => window.geode.externalRoots!.listProjects())).toEqual([]);
   } finally {
@@ -149,7 +149,15 @@ test("shared Project roots reconnect one tree and invalidate removed contributio
     await s.window.evaluate(() => window.geode.externalRoots!.attach("b"));
     const section = s.window.locator(".projects-section");
     await expect(section.locator(".projects-root")).toHaveCount(1);
-    await expect(section.locator(".projects-root-alias")).toContainText(["Main", "Child"]);
+    // Rows carry no action icons; Refresh/Detach live in the row's context menu.
+    await expect(section.getByRole("button", { name: "Detach from Geode", exact: true })).toHaveCount(0);
+    await section.getByRole("button", { name: "Main · Child", exact: true }).click({ button: "right" });
+    const menu = s.window.locator(".menu");
+    await expect(menu.getByRole("button", { name: "Refresh folder", exact: true })).toBeVisible();
+    await expect(menu.getByRole("button", { name: "Detach from Geode", exact: true })).toBeVisible();
+    await expect(menu.getByRole("button", { name: "Reconnect…", exact: true })).toHaveCount(0);
+    await s.window.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
     await section.getByRole("button", { name: "Main · Child", exact: true }).click();
     await section.getByRole("button", { name: "external-only.md", exact: true }).click();
     const source = s.window.locator(".external-source-view");
@@ -158,11 +166,13 @@ test("shared Project roots reconnect one tree and invalidate removed contributio
     await fs.rename(s.project, moved);
     await fs.writeFile(path.join(moved, "external-only.md"), "Reconnected source");
     await section.getByRole("button", { name: "Refresh Projects", exact: true }).click();
-    await expect(section).toContainText("Folder missing");
+    await expect(section.locator(".projects-status-icon")).toHaveAttribute("aria-label", "Folder missing");
     await s.app.evaluate(({ dialog }, selectedPath) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
     }, moved);
-    await section.getByRole("button", { name: "Reconnect…", exact: true }).first().click();
+    await expect(section.locator(".projects-status-icon")).toHaveAttribute("title", "Folder missing \u2014 right-click to Reconnect or Detach");
+    await section.locator(".projects-broken-row").click({ button: "right" });
+    await s.window.locator(".menu").getByRole("button", { name: "Reconnect…", exact: true }).click();
     await expect(source.locator("code")).toHaveText("Reconnected source");
     expect(await s.window.evaluate(() => window.app.workspace.getLeavesOfType("geode-external-source")[0].view?.getState?.())).toMatchObject({ ref: { rootId, relativePath: "external-only.md" } });
     await s.window.evaluate(() => window.geode.externalRoots!.contribute([]));

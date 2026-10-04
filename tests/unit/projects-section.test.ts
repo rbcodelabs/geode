@@ -32,14 +32,19 @@ describe("Project root grouping", () => {
 class Element {
   className = ""; textContent = ""; innerHTML = ""; hidden = false; disabled = false; type = ""; title = ""; tabIndex = -1;
   children: Element[] = []; attributes: Record<string, string> = {}; dataset: Record<string, string> = {};
-  listeners = new Map<string, (event: { metaKey: boolean; ctrlKey: boolean }) => void>();
+  listeners = new Map<string, (event: any) => void>();
   append(...children: Element[]): void { this.children.push(...children); }
   prepend(...children: Element[]): void { this.children.unshift(...children); }
   replaceChildren(...children: Element[]): void { this.children = children; }
   setAttribute(name: string, value: string): void { this.attributes[name] = value; }
   querySelector(): Element | null { return null; }
   classList = { add: (...names: string[]) => { this.className = [...new Set([...this.className.split(" ").filter(Boolean), ...names])].join(" "); } };
-  addEventListener(name: string, action: (event: { metaKey: boolean; ctrlKey: boolean }) => void): void { this.listeners.set(name, action); }
+  addEventListener(name: string, action: (event: any) => void): void { this.listeners.set(name, action); }
+  fire(name: string, event: Record<string, unknown> = {}): { prevented: boolean } {
+    const state = { prevented: false };
+    this.listeners.get(name)?.({ key: "", shiftKey: false, preventDefault: () => { state.prevented = true; }, ...event });
+    return state;
+  }
   click(): void { this.listeners.get("click")?.({ metaKey: false, ctrlKey: false }); }
 }
 function nodes(node: Element): Element[] { return [node, ...node.children.flatMap(nodes)]; }
@@ -52,9 +57,18 @@ function setup() {
     attach: vi.fn(), reconnect: vi.fn(), detach: vi.fn(),
     onChange: (callback: () => void) => { change = callback; return unsubscribe; } };
   const openResource = vi.fn(async () => {});
-  const section = new ProjectsSection({ host: host as unknown as ExternalRootsHost, openResource, revealVaultFolder: vi.fn() });
+  const showMenu = vi.fn();
+  const section = new ProjectsSection({ host: host as unknown as ExternalRootsHost, openResource, revealVaultFolder: vi.fn(), showMenu });
   const all = () => nodes(section.containerEl as unknown as Element);
-  return { host, section, all, unsubscribe, openResource, change: () => change(), text: () => all().map(node => node.textContent).join("\n"), button: (text: string) => all().find(node => node.textContent === text || node.attributes["aria-label"] === text)! };
+  /** Titles of the items offered by the menu opened on `row`, plus a way to invoke one. */
+  const menuOn = (row: Element, how: "contextmenu" | "keyboard" = "contextmenu") => {
+    showMenu.mockClear();
+    if (how === "contextmenu") row.fire("contextmenu", { clientX: 1, clientY: 2 }); else row.fire("keydown", { key: "ContextMenu" });
+    const call = showMenu.mock.calls[0];
+    const items = (call?.[1] ?? []) as Array<{ title: string; action: () => void; warning?: boolean }>;
+    return { target: call?.[0], items, titles: items.map(item => item.title), choose: (title: string) => items.find(item => item.title === title)!.action() };
+  };
+  return { host, section, all, showMenu, menuOn, unsubscribe, openResource, change: () => change(), text: () => all().map(node => node.textContent).join("\n"), button: (text: string) => all().find(node => node.textContent === text || node.attributes["aria-label"] === text)! };
 }
 beforeEach(() => vi.stubGlobal("document", { createElement: () => new Element() }));
 afterEach(() => vi.unstubAllGlobals());
@@ -100,6 +114,89 @@ describe("Projects section lifecycle and lazy browsing", () => {
     expect(h.button("file-symlink ↗").disabled).toBe(false);
     expect(h.host.listDirectory).toHaveBeenCalledTimes(1);
   });
+  it("renders a disconnected project as one muted row with a status and no permanent read-only line", async () => {
+    const h = setup();
+    const broken = project("Gone", "root"); broken.root.availability = "missing";
+    h.host.listProjects.mockResolvedValue([broken]);
+    await h.section.refresh();
+    expect(h.text()).not.toContain("Folder missing");
+    expect(h.text()).not.toContain("Read-only");
+    expect(h.all().filter(node => node.attributes["aria-label"] === "Reconnect…" || node.attributes["aria-label"] === "Detach from Geode")).toHaveLength(0);
+    const row = h.all().find(node => node.className.includes("projects-broken-row"))!;
+    expect(row.tabIndex).toBe(0);
+    const status = h.all().find(node => node.className.includes("projects-status-icon"))!;
+    expect(status.title).toBe("Folder missing \u2014 right-click to Reconnect or Detach");
+    expect(status.attributes["aria-label"]).toBe("Folder missing");
+    expect(status.attributes.role).toBe("img");
+    expect(h.menuOn(row).titles).toEqual(["Reconnect…", "Detach from Geode"]);
+  });
+  it("keeps the rows free of action icon buttons and offers Refresh + Detach only on a healthy root", async () => {
+    const h = setup();
+    await h.section.refresh();
+    expect(h.all().filter(node => /icon-action|folder-refresh|root-actions/.test(node.className))).toHaveLength(0);
+    expect(h.menuOn(h.button("Main")).titles).toEqual(["Refresh folder", "Detach from Geode"]);
+  });
+  it("opens the same menu from the context-menu key and Shift+F10, anchored to the row", async () => {
+    const h = setup();
+    await h.section.refresh();
+    const root = h.button("Main");
+    const viaKey = h.menuOn(root, "keyboard");
+    expect(viaKey.target).toBe(root);
+    expect(viaKey.titles).toEqual(["Refresh folder", "Detach from Geode"]);
+    h.showMenu.mockClear();
+    const f10 = root.fire("keydown", { key: "F10", shiftKey: true });
+    expect(f10.prevented).toBe(true);
+    expect(h.showMenu).toHaveBeenCalledTimes(1);
+    h.showMenu.mockClear();
+    expect(root.fire("keydown", { key: "F10" }).prevented).toBe(false);
+    expect(root.fire("keydown", { key: "Enter" }).prevented).toBe(false);
+    expect(h.showMenu).not.toHaveBeenCalled();
+  });
+  it("runs Reconnect on the first alias from the broken-root menu", async () => {
+    const h = setup();
+    const broken = project("Gone", "root"); broken.root.availability = "permission-revoked";
+    h.host.listProjects.mockResolvedValue([broken]);
+    h.host.reconnect.mockResolvedValue(true);
+    await h.section.refresh();
+    expect(h.all().find(node => node.className.includes("projects-status-icon"))!.attributes["aria-label"]).toBe("No permission");
+    h.menuOn(h.all().find(node => node.className.includes("projects-broken-row"))!).choose("Reconnect…");
+    await settle();
+    expect(h.host.reconnect).toHaveBeenCalledWith("Gone");
+  });
+  it("collapses multiple aliases of one root into a single Reconnect/Detach menu that detaches every alias", async () => {
+    const h = setup();
+    const a = project("Main", "root"), b = project("Child", "root", "child");
+    a.root.availability = b.root.availability = "missing";
+    h.host.listProjects.mockResolvedValue([a, b]);
+    h.host.detach.mockResolvedValue(true);
+    await h.section.refresh();
+    const menu = h.menuOn(h.all().find(node => node.className.includes("projects-broken-row"))!);
+    expect(menu.titles).toEqual(["Reconnect…", "Detach from Geode"]);
+    expect(menu.items.find(item => item.title === "Detach from Geode")!.warning).toBe(true);
+    menu.choose("Detach from Geode"); await settle();
+    expect(h.host.detach.mock.calls.map(call => call[0])).toEqual(["Main", "Child"]);
+  });
+  it("offers Refresh folder in the context menu of nested directory rows", async () => {
+    const h = setup();
+    h.host.listDirectory.mockImplementation(async (ref: { relativePath: string }) => ({ entries: ref.relativePath ? [] : [{ name: "src", kind: "directory" as const, ref: { rootId: "root", relativePath: "src" }, size: 0, modifiedAt: 0 }], omittedCount: 0 }));
+    await h.section.refresh();
+    h.button("Main").click(); await settle();
+    const nested = h.button("src");
+    expect(h.all().filter(node => node.textContent === "Refresh folder")).toHaveLength(0);
+    const menu = h.menuOn(nested);
+    expect(menu.titles).toEqual(["Refresh folder"]);
+    h.host.listDirectory.mockClear();
+    menu.choose("Refresh folder"); await settle();
+    expect(h.host.listDirectory).toHaveBeenCalledTimes(1);
+    h.host.listDirectory.mockClear();
+    h.menuOn(h.button("Main")).choose("Refresh folder"); await settle();
+    expect(h.host.listDirectory).toHaveBeenCalledTimes(1);
+  });
+  it("shows no status text for a healthy project", async () => {
+    const h = setup();
+    await h.section.refresh();
+    expect(h.text()).not.toMatch(/Unavailable|Disconnected|Folder missing|External/);
+  });
   it("preserves an unbound Project after native attachment cancellation", async () => {
     const h = setup();
     h.host.listProjects.mockResolvedValue([{ projectId: "unbound", label: "Unbound", state: "unbound" }]);
@@ -107,8 +204,22 @@ describe("Projects section lifecycle and lazy browsing", () => {
     await h.section.refresh();
     h.button("Attach folder…").click(); await settle();
     expect(h.host.attach).toHaveBeenCalledWith("unbound");
-    expect(h.text()).toContain("Attach folder…");
+    expect(h.button("Attach folder…")).toBeDefined();
     expect(h.host.listDirectory).not.toHaveBeenCalled();
+  });
+  it("renders an unattached Project as one nav-style row button with a context menu", async () => {
+    const h = setup();
+    h.host.listProjects.mockResolvedValue([{ projectId: "unbound", label: "Unbound", state: "unbound" }]);
+    h.host.attach.mockResolvedValue(null);
+    await h.section.refresh();
+    const row = h.button("Attach folder…");
+    expect(row.className).toContain("nav-item");
+    expect(row.title).toBe("Attach a read-only folder");
+    expect(h.text()).toContain("Unbound");
+    expect(h.text()).not.toContain("Attach folder…");
+    expect(h.menuOn(row).titles).toEqual(["Attach folder…"]);
+    h.menuOn(row).choose("Attach folder…"); await settle();
+    expect(h.host.attach).toHaveBeenCalledWith("unbound");
   });
   it("offers recovery for a first project-list failure", async () => {
     const h = setup();
