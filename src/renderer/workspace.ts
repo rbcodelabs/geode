@@ -1073,7 +1073,13 @@ export class TabGroup implements LeafContainer {
     this.leaves.splice(i, 1);
     // Unconditional: a closed background tab is still mounted here.
     this.unmountLeaf(leaf);
-    if (this.active === leaf) {
+    // A stacked sidebar section can be left holding only blank (view-less)
+    // placeholder leaves, shown as a bare dot with no icon or title. They must
+    // not keep the section alive once its last real leaf is gone.
+    const onlyBlankLeft =
+      !!this.sidebar && this.sidebar.groups.includes(this) && this.leaves.length > 0 && this.leaves.every((l) => !l.view);
+    if (onlyBlankLeft) this.leaves.length = 0;
+    if (this.active === leaf || onlyBlankLeft) {
       const next = this.leaves[Math.min(i, this.leaves.length - 1)] ?? null;
       if (next) this.setActiveLeaf(next);
       else {
