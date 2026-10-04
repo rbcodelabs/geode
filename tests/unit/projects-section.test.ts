@@ -204,6 +204,20 @@ describe("Projects section lifecycle and lazy browsing", () => {
     expect(h.button("Attach folder…")).toBeDefined();
     expect(h.host.listDirectory).not.toHaveBeenCalled();
   });
+  it("renders an unattached Project as one nav-style row button with a context menu", async () => {
+    const h = setup();
+    h.host.listProjects.mockResolvedValue([{ projectId: "unbound", label: "Unbound", state: "unbound" }]);
+    h.host.attach.mockResolvedValue(null);
+    await h.section.refresh();
+    const row = h.button("Attach folder…");
+    expect(row.className).toContain("nav-item");
+    expect(row.title).toBe("Attach a read-only folder");
+    expect(h.text()).toContain("Unbound");
+    expect(h.text()).not.toContain("Attach folder…");
+    expect(h.menuOn(row).titles).toEqual(["Attach folder…"]);
+    h.menuOn(row).choose("Attach folder…"); await settle();
+    expect(h.host.attach).toHaveBeenCalledWith("unbound");
+  });
   it("offers recovery for a first project-list failure", async () => {
     const h = setup();
     h.host.listProjects.mockRejectedValueOnce(new Error("corrupt private path"));

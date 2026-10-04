@@ -82,6 +82,10 @@ export class ProjectsSection {
     }
     for (const project of this.projects) {
       if (project.state === "bound") continue;
+      if (project.state !== "inside-vault" && !project.needsDetach) {
+        this.containerEl.append(this.attachRow(project.label, project.projectId));
+        continue;
+      }
       const row = document.createElement("div");
       row.className = "projects-unbound";
       const label = document.createElement("span");
@@ -90,16 +94,35 @@ export class ProjectsSection {
       row.append(label);
       if (project.state === "inside-vault") {
         row.append(this.button("Show in vault", () => this.options.revealVaultFolder(project.relativeBase)));
-      } else if (project.needsDetach) {
-        row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", [project.projectId]));
       } else {
-        const attach = this.actionButton("Attach", "attach", [project.projectId]);
-        attach.setAttribute("aria-label", "Attach folder…");
-        attach.title = "Attach a folder to browse this Project read-only";
-        row.append(attach);
+        row.append(this.message("Working directory changed. Detach before attaching the new folder."), this.actionButton("Detach from Geode", "detach", [project.projectId]));
       }
       this.containerEl.append(row);
     }
+  }
+  /** One focusable nav-style row: muted folder + name, with a quiet folder-plus affordance. */
+  private attachRow(label: string, projectId: string): HTMLButtonElement {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "projects-attach-row projects-directory-toggle nav-folder-title nav-item";
+    row.setAttribute("aria-label", "Attach folder…");
+    row.title = "Attach a read-only folder";
+    row.disabled = this.actionPending;
+    const icon = document.createElement("span");
+    icon.className = "projects-folder-icon";
+    setIcon(icon, "folder");
+    const name = document.createElement("span");
+    name.className = "projects-attach-name";
+    name.textContent = label;
+    const affordance = document.createElement("span");
+    affordance.className = "projects-attach-affordance";
+    affordance.setAttribute("aria-hidden", "true");
+    setIcon(affordance, "folder-plus");
+    row.append(icon, name, affordance);
+    const attach = (): void => { void this.runAction("attach", [projectId]); };
+    row.addEventListener("click", attach);
+    this.bindMenu(row, () => [{ title: "Attach folder…", icon: "folder-plus", disabled: this.actionPending, action: attach }]);
+    return row;
   }
   /** A single muted row, styled like a nav folder, naming only what is wrong. */
   private brokenRow(label: string, availability: string, items: () => ProjectMenuItem[]): HTMLElement {
