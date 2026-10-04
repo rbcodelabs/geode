@@ -979,13 +979,17 @@ function registerIpc() {
     if (!session || typeof binding !== "string" || !/^[a-f0-9]{64}$/.test(binding)) throw new Error("Invalid sync storage binding");
     const root = await fsp.realpath(session.root); const owner = syncOwners.get(root);
     if (sessions.get(win.id) !== session || owner?.senderId !== e.sender.id || owner.token !== token) throw new Error("Sync ownership changed");
-    const storage = new SyncPrivateStorage(path.join(app.getPath("userData"), "sync-private", createHash("sha256").update(root).digest("hex"), binding));
+    const vaultPrivateRoot = path.join(app.getPath("userData"), "sync-private", createHash("sha256").update(root).digest("hex"));
+    const storage = new SyncPrivateStorage(path.join(vaultPrivateRoot, binding));
     let result: unknown;
     switch (request.action) {
       case "stage": result = await storage.stage(request.key, request.data); break;
       case "read-stage": result = await storage.readStage(request.key); break;
       case "save-operation": result = await storage.saveOperation(request.key, request.value); break;
       case "load-operations": result = await storage.loadOperations(); break;
+      case "release": result = await storage.release(request.key); break;
+      case "gc": if (!Array.isArray(request.retain) || request.retain.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await storage.gc(request.retain); break;
+      case "sweep": if (!Array.isArray(request.keep) || request.keep.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await SyncPrivateStorage.sweepBindings(vaultPrivateRoot, request.keep, request.force === true); break;
       default: throw new Error("Invalid sync storage request");
     }
     if (sessions.get(win.id) !== session || syncOwners.get(root) !== owner) throw new Error("Sync ownership changed");

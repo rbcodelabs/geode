@@ -101,6 +101,13 @@ export interface HistoryControllerPorts {
     read(resource: HistoryLocalResource): Promise<ArrayBuffer>;
     stage(operationId: string, bytes: ArrayBuffer): Promise<string>;
     readStage(key: string): Promise<ArrayBuffer>;
+    /**
+     * Deletes the staged bytes and journal for an operation. Idempotent, and
+     * optional so a host that cannot reclaim storage stays conformant. The
+     * controller calls it only for committed/abandoned operations, and only after
+     * the state that stops naming them in pendingBatch has been durably saved.
+     */
+    release?(operationId: string): Promise<void>;
     /** Idempotent by operationId; preserve durable preimages and validate expectedHash before mutation. Folder trash MUST refuse nonempty directories. */
     apply(input: HistoryApply): Promise<void>;
     isIncluded(namespace: HistoryNamespace, path: string): boolean;
@@ -725,8 +732,11 @@ export class HistoryController {
             const reason = await this.checked(signal, () => this.ports.exclude!(resource, data));
             // Also resource-local: the host reclassified this one path mid-batch. The
             // exclude() call itself is still uncaught -- a broken port is systemic.
-            if (reason)
+            if (reason) {
+                // No journal was written, so nothing can ever reference this blob.
+                await this.ports.release?.(id).catch(() => { });
                 return { ok: false, issue: { namespace: record.namespace, path: action.path, reason: 'resource-ownership-changed' }, cause: new Error(OWNERSHIP_CHANGED) };
+            }
         }
         const operation: HistoryOperation = { id, type: action.type, phase: 'prepared', record, entityId: record.entityId, path: action.path, ...(payload ? { payload } : {}),
             ...(action.type === 'publish' ? { baseline: { namespace: record.namespace, path: action.path, kind: record.kind, present: !record.deleted, heads: [record.recordId], ...(payload ? { sha256: payload.sha256 } : {}) } } : { ...(action.baseline ? { baseline: action.baseline } : {}), apply: { operationId: id, namespace: record.namespace, path: action.path, kind: record.kind, deleted: action.deleted, expectedHash: action.expected } }) };
@@ -770,6 +780,7 @@ export class HistoryController {
         this.finish(state, operations);
         Object.assign(state.baseline, plan.adoptions);
         await this.save(state, signal);
+        await this.releaseTerminal(operations, signal);
         return demoted;
     }
     /**
@@ -821,6 +832,26 @@ export class HistoryController {
         operation.phase = 'committed';
         await this.checked(signal, () => this.ports.saveOperation(operation));
     }
+    /**
+     * Best-effort reclamation: a failure must not fail a sync whose work is
+     * already durable, and startup GC reclaims anything missed here.
+     */
+    private async releaseTerminal(operations: HistoryOperation[], signal: AbortSignal) {
+        const release = this.ports.release;
+        if (!release)
+            return;
+        for (const operation of operations) {
+            if (operation.phase !== 'committed' && operation.phase !== 'abandoned')
+                continue;
+            this.assert(signal);
+            try {
+                await release.call(this.ports, operation.id);
+            }
+            catch {
+                this.assert(signal);
+            }
+        }
+    }
     private finish(state: HistoryControllerState, operations: HistoryOperation[]) {
         state.history = mergeHistory(state.history, operations.filter(o => o.type === 'publish' && o.phase === 'committed').map(o => o.record), this.options.vaultId);
         for (const operation of operations)
@@ -845,6 +876,7 @@ export class HistoryController {
         await this.performAll(operations, snapshot, signal);
         this.finish(state, operations);
         await this.save(state, signal);
+        await this.releaseTerminal(operations, signal);
     }
     private async abandon(state: HistoryControllerState, signal: AbortSignal) {
         const all = new Map((await this.checked(signal, () => this.ports.loadOperations())).map(o => [o.id, o]));
@@ -864,6 +896,7 @@ export class HistoryController {
         delete state.previewSignature;
         delete state.abandonRequested;
         await this.save(state, signal);
+        await this.releaseTerminal(operations, signal);
     }
     private async localMove(resource: HistoryLocalResource, entityId: string, destination: string, baseline: HistoryBaseline | undefined, state: HistoryControllerState, signal: AbortSignal): Promise<HistoryOperation> {
         const id = this.ports.newId();
@@ -1059,6 +1092,7 @@ export class HistoryController {
             this.finish(state, operations);
             const after = await this.plan(state, signal, 'finalizing');
             await this.save(state, signal);
+            await this.releaseTerminal(operations, signal);
             return after.preview;
         });
     }

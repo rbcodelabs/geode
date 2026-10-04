@@ -7,7 +7,7 @@ export interface GuardedMutation {
   data?: ArrayBuffer;
 }
 export interface GuardedMutationResult { status: "applied" | "already-applied"; hash: string | null; recoveryPath: string; }
-export type SyncStorageRequest = { action: "stage"; key: string; data: ArrayBuffer } | { action: "read-stage"; key: string } | { action: "save-operation"; key: string; value: unknown } | { action: "load-operations" };
+export type SyncStorageRequest = { action: "stage"; key: string; data: ArrayBuffer } | { action: "read-stage"; key: string } | { action: "save-operation"; key: string; value: unknown } | { action: "load-operations" } | { action: "release"; key: string } | { action: "gc"; retain: string[] } | { action: "sweep"; keep: string[]; force: boolean };
 export interface SyncSafetyService {
   storage(token: string, binding: string, request: SyncStorageRequest): Promise<unknown>;
   claimOwner(): Promise<string | null>;
