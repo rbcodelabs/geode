@@ -118,7 +118,7 @@ export class ProjectsSection {
     affordance.className = "projects-attach-affordance";
     affordance.setAttribute("aria-hidden", "true");
     setIcon(affordance, "folder-plus");
-    row.append(icon, name, affordance);
+    row.append(this.chevronSpacer(), icon, name, affordance);
     const attach = (): void => { void this.runAction("attach", [projectId]); };
     row.addEventListener("click", attach);
     this.bindMenu(row, () => [{ title: "Attach folder…", icon: "folder-plus", disabled: this.actionPending, action: attach }]);
@@ -141,8 +141,15 @@ export class ProjectsSection {
     status.setAttribute("role", "status");
     status.title = "Right-click to Reconnect or Detach";
     status.textContent = availability === "permission-revoked" ? "No permission" : availability === "missing" ? "Folder missing" : "Disconnected";
-    row.append(icon, name, status);
+    row.append(this.chevronSpacer(), icon, name, status);
     return row;
+  }
+  /** Empty stand-in for the collapse chevron so non-expandable rows align with expandable root rows. */
+  private chevronSpacer(): HTMLElement {
+    const spacer = document.createElement("span");
+    spacer.className = "nav-folder-arrow projects-chevron-spacer";
+    spacer.setAttribute("aria-hidden", "true");
+    return spacer;
   }
   /** Right-click, the context-menu key and Shift+F10 all open the same menu (keyboard anchors to the row). */
   private bindMenu(row: HTMLElement, items: () => ProjectMenuItem[]): void {
