@@ -5,7 +5,7 @@ with plugin and partial theme compatibility. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.27.1). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.27.2). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
