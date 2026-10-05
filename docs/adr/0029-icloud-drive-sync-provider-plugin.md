@@ -9,9 +9,11 @@
 
 ## Decision
 
-Ship a separate plugin, `packages/geode-icloud-sync`, not core code. It registers `{ id: "icloud", protocol: "conditional-mutation-v1" }` with `binary`, `conditionalWrites`, `completeSnapshots`, `atomicMoves` and `trash` true and `delta` false. The remote root is `~/Library/Mobile Documents/com~apple~CloudDocs/Geode/<vault id>`. macOS only; Geode's host engine is unchanged.
+Ship a separate plugin, `packages/geode-icloud-sync`, not core code. It registers `{ id: "icloud", protocol: "conditional-mutation-v1" }` with `binary`, `conditionalWrites`, `completeSnapshots`, `atomicMoves` and `trash` true and `delta` false. The remote root is `~/Library/Mobile Documents/com~apple~CloudDocs/Geode/<remote folder name>`. macOS only; Geode's host engine is unchanged.
 
 Key choices:
+
+- **Remote folder is a user choice, not path-derived.** The first version derived the folder from the local vault path, so a second Mac with a different path never reached the same remote (found in a live test). A settings tab now sets a per-vault "Remote folder name" (default: the vault folder's basename) and lists existing marker-bearing folders to pick. `open()` resolves: chosen name, else the old path-derived name only if that folder already exists (back-compat), else the default. Changing it while the provider is active is refused (disconnect first, per ADR-0015); binding a non-empty folder without `.geode-sync/marker.json` is refused. Names are NFC-normalised with separators, control characters and leading dots removed; derived defaults get a hash suffix when altered so they stay collision-safe, while user-typed names intentionally collide (that is how two devices share one).
 
 - **Revision** = `mtime:size:sha256`. Write-side checks re-hash from disk and compare immediately before temp-file write + atomic rename. Mismatch throws `SyncPreconditionError`.
 - **Create idempotency** via a durable op record under `.geode-sync/ops/` (written pending, committed after the file lands); creates publish with a hard link so they never overwrite.

@@ -13,7 +13,6 @@ import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import type {
   SyncProvider,
@@ -24,14 +23,12 @@ import type {
   SyncWriteInput,
 } from "../../../src/renderer/sync/types";
 
-export const ICLOUD_DRIVE_DIR = path.join(os.homedir(), "Library", "Mobile Documents", "com~apple~CloudDocs");
+import { ICLOUD_DRIVE_DIR, DEFAULT_APP_FOLDER, TRASH_DIR, STATE_DIR, MARKER_FILE, TMP_PREFIX, isJunkName, resolveFolderName } from "./folders";
+
+export { ICLOUD_DRIVE_DIR, TRASH_DIR, STATE_DIR, vaultFolderName } from "./folders";
 export const DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024;
 
-export const TRASH_DIR = ".geode-trash";
-export const STATE_DIR = ".geode-sync";
 const OPS_DIR = `${STATE_DIR}/ops`;
-const MARKER_FILE = `${STATE_DIR}/marker.json`;
-const TMP_PREFIX = ".geode-tmp-";
 
 /** Errors scans report through `SyncScanResult.errorCode`. */
 export const ErrorCodes = {
@@ -66,6 +63,8 @@ export interface IcloudProviderOptions {
   /** Host `SyncPreconditionError`; defaults to a local class with the same `name` (the host matches by name). */
   PreconditionError?: new (message?: string) => Error;
   onDiagnostics?: (vaultId: string, diagnostics: IcloudDiagnostics) => void;
+  /** The remote folder the user chose for this vault, if any. See `resolveFolderName` for the fallbacks. */
+  chosenFolder?: (vaultId: string) => string | undefined | Promise<string | undefined>;
 }
 
 class LocalPreconditionError extends Error {
@@ -100,17 +99,14 @@ export function createIcloudProvider(options: IcloudProviderOptions = {}): SyncP
     name: "iCloud Drive",
     capabilities,
     async open({ vaultId }) {
-      return new IcloudSession(vaultId, options, maxFileSize);
+      const folder = await resolveFolderName(
+        { icloudDrive: options.icloudDrive, appFolder: options.appFolder },
+        vaultId,
+        await options.chosenFolder?.(vaultId),
+      );
+      return new IcloudSession(vaultId, folder, options, maxFileSize);
     },
   };
-}
-
-/** A vault id becomes a folder name. Anything not trivially safe is sanitised and suffixed with a hash so two ids never collide. */
-export function vaultFolderName(vaultId: string): string {
-  const nfc = vaultId.normalize("NFC");
-  const safe = nfc.replace(/[^\p{L}\p{N}._ -]/gu, "_").replace(/^\.+/, "_").trim().slice(0, 80);
-  if (safe && safe === nfc) return safe;
-  return `${safe || "vault"}-${createHash("sha256").update(nfc).digest("hex").slice(0, 8)}`;
 }
 
 /** Name of the evicted placeholder iCloud leaves for `name`. */
@@ -122,12 +118,6 @@ export function placeholderNameFor(name: string): string {
 export function realNameOfPlaceholder(name: string): string | null {
   if (name.length > ".x.icloud".length - 1 && name.startsWith(".") && name.endsWith(".icloud")) return name.slice(1, -".icloud".length);
   return null;
-}
-
-const JUNK_NAMES = new Set([".DS_Store", ".localized", "Icon\r", ".Trash", ".fseventsd", ".Spotlight-V100", ".TemporaryItems", ".DocumentRevisions-V100", ".VolumeIcon.icns"]);
-
-function isJunkName(name: string): boolean {
-  return JUNK_NAMES.has(name) || name.startsWith("._") || name.startsWith(".com.apple.") || name.startsWith(TMP_PREFIX);
 }
 
 const CONFLICT_NAME = /^(.*\S) (\d+)(\.[^./]+)?$/;
@@ -146,9 +136,9 @@ class IcloudSession implements SyncSession {
   private readonly active = new Set<AbortController>();
   private readonly PreconditionError: new (message?: string) => Error;
 
-  constructor(private readonly vaultId: string, private readonly options: IcloudProviderOptions, private readonly maxFileSize: number) {
+  constructor(private readonly vaultId: string, folder: string, private readonly options: IcloudProviderOptions, private readonly maxFileSize: number) {
     this.base = options.icloudDrive ?? ICLOUD_DRIVE_DIR;
-    this.root = path.join(this.base, options.appFolder ?? "Geode", vaultFolderName(vaultId));
+    this.root = path.join(this.base, options.appFolder ?? DEFAULT_APP_FOLDER, folder);
     this.PreconditionError = options.PreconditionError ?? LocalPreconditionError;
   }
 
