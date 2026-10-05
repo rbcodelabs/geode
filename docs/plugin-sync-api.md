@@ -32,6 +32,8 @@ Creates receive a durable `operationKey` and must be idempotent for it. Updates,
 
 For this contract, Geode rejects providers lacking binary payloads, conditional writes, an authoritative snapshot/delta mechanism, or recoverable trash. `maxFileSize`, when present, is checked before bytes are read. The optional discriminator is `protocol: "conditional-mutation-v1"`; omitting it preserves existing provider compatibility.
 
+A filesystem-backed reference implementation of this contract is the iCloud Drive plugin in `packages/geode-icloud-sync` ([ADR 0029](adr/0029-icloud-drive-sync-provider-plugin.md)).
+
 ## Append-only history provider contract
 
 Providers without atomic conditional mutation may implement `protocol: "append-only-history-v1"` instead. This is a different storage protocol, not permission to perform unsafe mutable writes. See [ADR 0016](adr/0016-causal-append-only-vault-history.md) and the exact TypeScript contract in `src/renderer/sync/history-types.ts`.
