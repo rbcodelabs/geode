@@ -10,7 +10,31 @@ import type { GuardedMutation, GuardedMutationResult, SyncStorageRequest } from 
  */
 export interface SyncHashCacheEntry { mtimeMs: number; size: number; sha256: string; excludeReason: string | null; providerId: string; }
 export interface SyncVaultEntry { path: string; isFolder: boolean; mtime: number; size: number; }
-export interface SyncVaultScan { status: "complete" | "partial" | "cancelled" | "unavailable"; entries: SyncVaultEntry[]; }
+export interface SyncVaultPathIssue { path: string; reason: string; }
+/**
+ * `blocked` paths exist (or may exist) locally but cannot be read right now
+ * (iCloud placeholder, unsettled write, symlink...). The engine treats a blocked
+ * path and everything beneath it as untouchable: never published, never deleted,
+ * never overwritten. `excluded` paths are deliberately not synchronised.
+ * Both are content-namespace paths and are optional (hosts that cannot tell omit them).
+ */
+export interface SyncVaultScan { status: "complete" | "partial" | "cancelled" | "unavailable"; entries: SyncVaultEntry[]; blocked?: SyncVaultPathIssue[]; excluded?: SyncVaultPathIssue[]; }
+/**
+ * Thrown by a host's readBinary when a file cannot be read *right now* for a
+ * reason that is not an error in the file (e.g. iCloud evicted it mid-run).
+ * The snapshot demotes just that resource to `blocked` instead of failing the run.
+ * The reason is also embedded in the message as `[blocked:<reason>]`, which is
+ * what survives an RPC boundary and lets later reads be labelled.
+ */
+export class SyncBlockedError extends Error {
+  readonly syncBlockedReason: string;
+  constructor(reason: string, detail?: string) { super(`[blocked:${reason}] ${detail ?? reason}`); this.name = "SyncBlockedError"; this.syncBlockedReason = reason; }
+}
+const blockedReasonOf = (error: unknown): string | null => {
+  const direct = (error as { syncBlockedReason?: unknown } | null)?.syncBlockedReason;
+  if (typeof direct === "string") return direct;
+  return /\[blocked:([a-z0-9-]+)\]/.exec(error instanceof Error ? error.message : String(error))?.[1] ?? null;
+};
 export interface SyncPortableDocument {
   name: string;
   /** Serialized bytes of the document, exactly as they travel through history. */
@@ -143,6 +167,8 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
     // or "exclude it" (excludeReason). Absent host support (mobile/browser,
     // where append-only sync never runs anyway) this degrades to the
     // unconditional behavior that existed before it.
+    for (const issue of scan.blocked ?? []) result.blocked.push({ namespace: "content", path: issue.path, reason: issue.reason });
+    for (const issue of scan.excluded ?? []) result.excluded.push({ namespace: "content", path: issue.path, reason: issue.reason });
     const hashCache = (await host.hashCache?.readAll()) ?? {}; assertContext();
     const hashCacheUpdates: Record<string, SyncHashCacheEntry> = {};
     for (const entry of scan.entries) {
@@ -184,7 +210,13 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
           hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: entry.size, sha256: "", excludeReason: reason, providerId: provider.id };
           result.excluded.push({ namespace, path, reason }); continue;
         }
-        const data = await read(resource); const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
+        let data: ArrayBuffer;
+        try { data = await read(resource); } catch (error) {
+          const blockedReason = blockedReasonOf(error);
+          if (blockedReason === null) throw error;
+          assertContext(); result.blocked.push({ namespace, path, reason: blockedReason }); continue;
+        }
+        const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
         if (contentReason) {
           hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: data.byteLength, sha256: "", excludeReason: contentReason, providerId: provider.id };
           result.excluded.push({ namespace, path, reason: contentReason }); continue;

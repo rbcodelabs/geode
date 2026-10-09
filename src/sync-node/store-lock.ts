@@ -67,8 +67,8 @@ async function isStale(lockPath: string, owner: LockOwner | null): Promise<boole
   return !pidAlive(owner.pid);
 }
 
-async function breakStale(root: string, seen: LockOwner | null): Promise<void> {
-  const breakPath = join(root, BREAK_DIR), lockPath = join(root, LOCK_DIR);
+async function breakStale(root: string, seen: LockOwner | null, name: string): Promise<void> {
+  const breakPath = join(root, name === LOCK_DIR ? BREAK_DIR : `${name}.break`), lockPath = join(root, name);
   try { await mkdir(breakPath); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     try { if (Date.now() - (await stat(breakPath)).mtimeMs > BREAK_LOCK_MAX_AGE_MS) await rm(breakPath, { recursive: true, force: true }); } catch { /* raced */ }
@@ -82,19 +82,23 @@ async function breakStale(root: string, seen: LockOwner | null): Promise<void> {
 
 const inProcess = new Map<string, Promise<unknown>>();
 
-/** Runs `fn` while holding the store's single-writer lock (in-process queue + cross-process mkdir lock). */
-export async function withStoreLock<T>(root: string, signal: AbortSignal, fn: () => Promise<T>, timeoutMs = 30_000): Promise<T> {
-  const prior = inProcess.get(root) ?? Promise.resolve();
+/**
+ * Runs `fn` while holding the store's single-writer lock (in-process queue + cross-process mkdir lock).
+ * `lockName` selects a different lock directory under `root` (the device-side sync lock uses `lock`).
+ */
+export async function withStoreLock<T>(root: string, signal: AbortSignal, fn: () => Promise<T>, timeoutMs = 30_000, lockName: string = LOCK_DIR): Promise<T> {
+  const queueKey = lockName === LOCK_DIR ? root : join(root, lockName);
+  const prior = inProcess.get(queueKey) ?? Promise.resolve();
   const run = prior.catch(() => {}).then(async () => {
-    const release = await acquire(root, signal, timeoutMs);
+    const release = await acquire(root, signal, timeoutMs, lockName);
     try { return await fn(); } finally { await release(); }
   });
-  inProcess.set(root, run);
-  try { return await run; } finally { if (inProcess.get(root) === run) inProcess.delete(root); }
+  inProcess.set(queueKey, run);
+  try { return await run; } finally { if (inProcess.get(queueKey) === run) inProcess.delete(queueKey); }
 }
 
-async function acquire(root: string, signal: AbortSignal, timeoutMs: number): Promise<() => Promise<void>> {
-  const lockPath = join(root, LOCK_DIR), deadline = Date.now() + timeoutMs;
+async function acquire(root: string, signal: AbortSignal, timeoutMs: number, lockName: string): Promise<() => Promise<void>> {
+  const lockPath = join(root, lockName), deadline = Date.now() + timeoutMs;
   const owner: LockOwner = { pid: process.pid, bootId: currentBootId(), token: randomBytes(12).toString("hex"), startedAt: Date.now() };
   for (;;) {
     if (signal.aborted) throw abortError(signal);
@@ -109,7 +113,7 @@ async function acquire(root: string, signal: AbortSignal, timeoutMs: number): Pr
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
     const seen = await readOwner(lockPath);
-    if (await isStale(lockPath, seen)) { await breakStale(root, seen); continue; }
+    if (await isStale(lockPath, seen)) { await breakStale(root, seen, lockName); continue; }
     if (Date.now() >= deadline) throw new SyncStoreError("lock-timeout", "Timed out waiting for the store writer lock");
     await sleep(5 + Math.random() * 20, signal);
   }

@@ -11,7 +11,8 @@ export const DEFAULT_SYNC_SCOPE: Readonly<SyncScope> = Object.freeze({
   corePlugins: true, communityPlugins: false, communityPluginData: false, excludedFolders: [],
 });
 
-const RESERVED = [".geode/sync", ".geode-trash", ".trash"];
+// `.geode-sync-tmp` is the headless host's same-volume apply staging directory.
+const RESERVED = [".geode/sync", ".geode-trash", ".trash", ".geode-sync-tmp"];
 const CONFIG_RULES: Array<[RegExp, keyof SyncScope]> = [
   [/^\.geode\/app\.json$/i, "mainSettings"], [/^\.geode\/appearance\.json$/i, "appearance"],
   [/^\.geode\/(themes|snippets)\//i, "themesAndSnippets"], [/^\.geode\/hotkeys\.json$/i, "hotkeys"],

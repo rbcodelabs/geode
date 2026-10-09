@@ -249,6 +249,9 @@ const localReadReason = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes(INTEGRITY_MISMATCH))
         return 'local-content-changed-during-sync';
+    const blocked = /\[blocked:([a-z0-9-]+)\]/.exec(message);
+    if (blocked)
+        return blocked[1];
     if (message.includes('ENOENT'))
         return 'local-file-vanished-during-sync';
     return 'local-read-failed';
