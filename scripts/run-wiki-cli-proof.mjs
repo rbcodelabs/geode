@@ -118,6 +118,7 @@ try {
     "src/cli/geode-wiki.ts",
     "src/cli/main.ts",
     "src/cli/output.ts",
+    "src/cli/sync-schedule.ts",
     "src/cli/sync.ts",
     "src/renderer/api/frontmatter.ts",
     "src/renderer/comments/model.ts",

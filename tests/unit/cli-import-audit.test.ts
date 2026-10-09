@@ -32,7 +32,7 @@ const withEdge = (from: string, to: string): Inputs => {
 describe("the real bundle", () => {
   it("includes the sync files and passes every rule", () => {
     const sources = Object.keys(real).filter(p => p.startsWith("src/"));
-    for (const file of ["src/cli/sync.ts", "src/sync-node/index.ts", "src/sync-node/wiki-sync.ts", "src/sync-core/history-controller.ts"]) expect(sources).toContain(file);
+    for (const file of ["src/cli/sync.ts", "src/cli/sync-schedule.ts", "src/sync-node/index.ts", "src/sync-node/wiki-sync.ts", "src/sync-core/history-controller.ts"]) expect(sources).toContain(file);
     expect(auditCliImports(real)).toEqual([]);
   });
 
@@ -46,6 +46,13 @@ describe("the audit is not vacuous: each rule fails on a broken graph and names 
   it("rule 1: a CLI module reaching past the entry points", () => {
     const v = auditCliImports(withEdge("src/cli/output.ts", "src/wiki/link-resolution.ts"));
     expect(v.join("\n")).toContain('src/cli/output.ts imports src/wiki/link-resolution.ts (as "./src/wiki/link-resolution.ts")');
+  });
+  it("rule 2: the schedule module cannot reach the sync engine (it is handed its one fact by sync.ts)", () => {
+    const v = auditCliImports(withEdge("src/cli/sync-schedule.ts", SYNC_ENTRY));
+    expect(v.join("\n")).toContain("only src/cli/sync.ts may import the sync engine");
+    const w = auditCliImports(withEdge("src/cli/sync-schedule.ts", "src/wiki/index.ts"));
+    expect(w.join("\n")).toContain("src/cli/sync-schedule.ts imports src/wiki/index.ts");
+    expect(w.join("\n")).toContain("may import nothing from src/ outside src/cli/");
   });
   it("rule 1: sync.ts reaching past the sync entry point into the engine internals", () => {
     const v = auditCliImports(withEdge("src/cli/sync.ts", "src/sync-core/history-controller.ts"));

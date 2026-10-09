@@ -12,6 +12,7 @@
  *      src/sync-node/index.ts, and its own siblings.
  *   2. Only src/cli/sync.ts may import src/sync-node/index.ts, and it may import nothing else outside
  *      src/cli/. The vault/catalog commands cannot grow a dependency on the sync engine, nor the reverse.
+ *      src/cli/sync-schedule.ts (unit-file rendering for `sync schedule`) may import nothing outside src/cli/.
  *   3. Inside the sync graph: src/sync-node/ imports only src/sync-node/, src/sync-core/ and src/shared/;
  *      src/sync-core/ imports only src/sync-core/ and src/shared/. (Bundle-level restatement of
  *      tests/unit/sync-node-boundary.test.ts and sync-core-boundary.test.ts.)
@@ -25,6 +26,8 @@ export const WIKI_ENTRY = "src/wiki/index.ts";
 export const CATALOG_ENTRY = "src/catalog/index.ts";
 export const SYNC_ENTRY = "src/sync-node/index.ts";
 export const SYNC_CLI_MODULE = "src/cli/sync.ts";
+/** Pure rendering and unit-file I/O; it is handed its one engine fact by sync.ts and imports nothing from src/ at all. */
+export const SYNC_SCHEDULE_MODULE = "src/cli/sync-schedule.ts";
 export const PERMITTED_RENDERER = ["src/renderer/api/frontmatter.ts", "src/renderer/comments/model.ts"];
 
 const srcEdges = (inputs, module) => (inputs[module]?.imports ?? []).filter((edge) => edge.path.startsWith("src/"));
@@ -43,6 +46,8 @@ export function auditCliImports(inputs) {
         violations.push(`${describe(module, edge)}: the CLI may only reach ${WIKI_ENTRY}, ${CATALOG_ENTRY}, ${SYNC_ENTRY} and its own modules`);
       } else if (edge.path === SYNC_ENTRY && module !== SYNC_CLI_MODULE) {
         violations.push(`${describe(module, edge)}: only ${SYNC_CLI_MODULE} may import the sync engine`);
+      } else if (module === SYNC_SCHEDULE_MODULE && !own) {
+        violations.push(`${describe(module, edge)}: ${SYNC_SCHEDULE_MODULE} may import nothing from src/ outside src/cli/`);
       } else if (module === SYNC_CLI_MODULE && (edge.path === WIKI_ENTRY || edge.path === CATALOG_ENTRY)) {
         violations.push(`${describe(module, edge)}: ${SYNC_CLI_MODULE} may import only ${SYNC_ENTRY} (and src/cli/ siblings)`);
       }
