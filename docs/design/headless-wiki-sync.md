@@ -141,3 +141,7 @@ scan rail still applies.
 | `npm run proof:wiki-sync` | The built binary in real subprocesses: two vaults, a hub over a stand-in `ssh` running the real remote command line; `sync schedule` print/install/uninstall with a recording `launchctl`, including executing the scheduled command; all six exit codes; conflicts; deletes; each refusal; the lock held by one process and refused (exit 5) in another |
 | `npx vitest run tests/unit/sync-schedule.test.ts` | Rendering of both platforms, interval and flag rules, the approval refusal, install/status/uninstall against a stub service manager and temp `--target-dir`s |
 | `npm run proof:wiki-cli` | Unchanged claims, plus the exact input set now including the sync files |
+
+## Live gate (2026-10-09)
+
+Hub on a homelab VM over real ssh; two local folders as two devices, seeded from `test-vault/`. Observed: both devices initialised and approved, the second pulled all 11 files, a concurrent edit exited 4 and listed the conflict, `resolve --keep local` settled it, a delete propagated, and the final `diff -r` was empty. The remote command is a bare `geode-wiki` on the non-login PATH, so the hub host needs `geode-wiki` on that PATH (a wrapper script is enough). Not covered: a genuinely separate second machine, real iCloud placeholders, `launchd` firing.
