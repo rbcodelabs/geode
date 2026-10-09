@@ -2807,5 +2807,10 @@
     "status": "verified",
     "evidence": ["tests/unit/keymap-scope.test.ts"],
     "notes": "Callback contexts expose the exact held platform modifiers; tests cover wildcard, empty no-modifier, and Mod resolving to Ctrl or Meta."
+  },
+  "HELP-63abe8319cd5": {
+    "status": "partial",
+    "evidence": ["tests/unit/unique-notes.test.ts","tests/e2e/unique-note-creator.spec.ts"],
+    "notes": "Observed: the 'Create new unique note' command and ribbon icon create an empty YYYYMMDDHHmm-named note by default (and open it); a configured folder, Moment date format (same tokens as Daily notes) and template (with {{title}}/{{date}} expanded) are applied; a name collision takes the next available timestamp; settings persist per vault with an enable toggle. The ribbon uses Lucide file-stack as the nearest match to the sheets-in-box icon, and a missing template reports an error notice rather than linking to the plugin's settings, so the row remains partial."
   }
 }

@@ -29,21 +29,21 @@
     "unknown"
   ],
   "summary": {
-    "total": 2856,
+    "total": 2863,
     "byKind": {
-      "help-page": 176,
+      "help-page": 179,
       "developer-page": 1319,
       "changelog-delta": 50,
-      "api-declaration": 300,
-      "api-member": 1011
+      "api-declaration": 301,
+      "api-member": 1014
     },
     "byStatus": {
       "verified": 328,
-      "partial": 50,
+      "partial": 51,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2477
+      "unknown": 2483
     }
   },
   "requirements": [
@@ -275,6 +275,17 @@
       "title": "Embed web pages",
       "sourcePath": "obsidian-help/en/Editing and formatting/Embed web pages.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Embed%20web%20pages.md",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "HELP-bae939ca629f",
+      "kind": "help-page",
+      "surface": "logic",
+      "category": "Editing and formatting",
+      "title": "Find and replace",
+      "sourcePath": "obsidian-help/en/Editing and formatting/Find and replace.md",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Find%20and%20replace.md",
       "status": "unknown",
       "evidence": []
     },
@@ -950,6 +961,17 @@
       "title": "Internal links",
       "sourcePath": "obsidian-help/en/Linking notes and files/Internal links.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Linking%20notes%20and%20files/Internal%20links.md",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "HELP-8b73cda39c01",
+      "kind": "help-page",
+      "surface": "logic",
+      "category": "Linking notes and files",
+      "title": "PDFs",
+      "sourcePath": "obsidian-help/en/Linking notes and files/PDFs.md",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Linking%20notes%20and%20files/PDFs.md",
       "status": "unknown",
       "evidence": []
     },
@@ -1824,8 +1846,12 @@
       "title": "Unique note creator",
       "sourcePath": "obsidian-help/en/Plugins/Unique note creator.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Unique%20note%20creator.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/unique-notes.test.ts",
+        "tests/e2e/unique-note-creator.spec.ts"
+      ],
+      "notes": "Observed: the 'Create new unique note' command and ribbon icon create an empty YYYYMMDDHHmm-named note by default (and open it); a configured folder, Moment date format (same tokens as Daily notes) and template (with {{title}}/{{date}} expanded) are applied; a name collision takes the next available timestamp; settings persist per vault with an enable toggle. The ribbon uses Lucide file-stack as the nearest match to the sheets-in-box icon, and a missing template reports an error notice rather than linking to the plugin's settings, so the row remains partial."
     },
     {
       "id": "HELP-140b011d4105",
@@ -1967,6 +1993,17 @@
       "title": "Language settings",
       "sourcePath": "obsidian-help/en/User interface/Language settings.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Language%20settings.md",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "HELP-f31eaed77863",
+      "kind": "help-page",
+      "surface": "logic",
+      "category": "User interface",
+      "title": "More options menu",
+      "sourcePath": "obsidian-help/en/User interface/More options menu.md",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/More%20options%20menu.md",
       "status": "unknown",
       "evidence": []
     },
@@ -18760,6 +18797,17 @@
       "evidence": []
     },
     {
+      "id": "API-d021006729d5",
+      "kind": "api-declaration",
+      "surface": "logic",
+      "category": "Plugin API",
+      "title": "FrontmatterValue",
+      "sourcePath": "obsidian-api/obsidian.d.ts",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
       "id": "API-372a89935d0c",
       "kind": "api-declaration",
       "surface": "logic",
@@ -26953,6 +27001,17 @@
       "evidence": []
     },
     {
+      "id": "API-MEMBER-4b59dce5f905",
+      "kind": "api-member",
+      "surface": "dom",
+      "category": "Plugin API member",
+      "title": "Menu.onHistoryBack",
+      "sourcePath": "obsidian-api/obsidian.d.ts",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
       "id": "API-MEMBER-a4f216e45531",
       "kind": "api-member",
       "surface": "dom",
@@ -27323,6 +27382,17 @@
       "surface": "dom",
       "category": "Plugin API member",
       "title": "Modal.onClose",
+      "sourcePath": "obsidian-api/obsidian.d.ts",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "API-MEMBER-845c2f7b0dbc",
+      "kind": "api-member",
+      "surface": "dom",
+      "category": "Plugin API member",
+      "title": "Modal.onHistoryBack",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "unknown",
@@ -28209,6 +28279,17 @@
       "surface": "logic",
       "category": "Plugin API member",
       "title": "PopoverSuggest.close",
+      "sourcePath": "obsidian-api/obsidian.d.ts",
+      "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
+      "status": "unknown",
+      "evidence": []
+    },
+    {
+      "id": "API-MEMBER-91000d810e13",
+      "kind": "api-member",
+      "surface": "logic",
+      "category": "Plugin API member",
+      "title": "PopoverSuggest.onHistoryBack",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "unknown",
