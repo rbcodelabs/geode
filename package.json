@@ -50,6 +50,7 @@
     "proof:catalog:dsql": "npm run typecheck:headless && node scripts/run-dsql-catalog-publish-proof.mjs",
     "proof:catalog:dsql-restore": "npm run typecheck:headless && node scripts/run-dsql-catalog-restore-proof.mjs",
     "proof:catalog:node-dsql": "node scripts/run-node-dsql-proof.mjs",
+    "proof:wiki-sync": "npm run typecheck:headless && node scripts/run-wiki-sync-proof.mjs",
     "proof:wiki-cli:postgres": "npm run typecheck:headless && node scripts/run-wiki-cli-catalog-proof.mjs",
     "dist": "npm run build && electron-builder --mac",
     "release": "npm run build && electron-builder --mac --publish always"
