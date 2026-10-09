@@ -118,3 +118,16 @@ async function acquire(root: string, signal: AbortSignal, timeoutMs: number, loc
     await sleep(5 + Math.random() * 20, signal);
   }
 }
+
+/**
+ * Read-only: who holds the named lock under `root` right now, or null when it is free or stale.
+ * Never acquires, never breaks. Used by `geode-wiki sync status` so a status call neither
+ * blocks behind nor interferes with a running sync.
+ */
+export async function readLockHolder(root: string, lockName: string = LOCK_DIR): Promise<{ pid: number; startedAt: number } | null> {
+  const lockPath = join(root, lockName);
+  try { await stat(lockPath); } catch { return null; }
+  const owner = await readOwner(lockPath);
+  if (!owner) return null;
+  return await isStale(lockPath, owner) ? null : { pid: owner.pid, startedAt: owner.startedAt };
+}

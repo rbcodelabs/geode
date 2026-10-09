@@ -19,7 +19,8 @@
 /* -------------------------------------------------------------- exit codes */
 
 /**
- * Four outcomes, distinguishable without reading stdout.
+ * Six outcomes, distinguishable without reading stdout. The first four are the
+ * vault/catalog vocabulary; 4 and 5 exist only for `geode-wiki sync` (ADR 0025).
  *
  * The line between `refused` and `usage` is where the failure was decided:
  * `usage` means the CLI could not turn argv into an operation and the engine
@@ -37,6 +38,10 @@ export const EXIT = {
   usage: 2,
   /** The vault folder or the catalog store could not be reached. */
   unavailable: 3,
+  /** `sync` only: the operation completed (or was previewed) and unresolved conflicts remain. */
+  conflicts: 4,
+  /** `sync` only: another sync run holds this vault's lock. Nothing was done. */
+  locked: 5,
 } as const;
 
 export type ExitName = keyof typeof EXIT;
@@ -48,7 +53,7 @@ export type ExitName = keyof typeof EXIT;
  * Kept as an explicit set rather than a heuristic on the status string, so
  * adding a status to the contract cannot silently change an exit code.
  */
-const UNAVAILABLE = new Set(["vault-unavailable", "unavailable", "store-failed"]);
+const UNAVAILABLE = new Set(["vault-unavailable", "unavailable", "store-failed", "store-unavailable"]);
 
 /**
  * The affirmative statuses — the whole vocabulary has exactly two.
@@ -66,6 +71,8 @@ const AFFIRMATIVE = new Set(["ok", "resolved"]);
 
 export function exitNameFor(status: string): ExitName {
   if (AFFIRMATIVE.has(status)) return "ok";
+  if (status === "conflicts") return "conflicts";
+  if (status === "locked") return "locked";
   return UNAVAILABLE.has(status) ? "unavailable" : "refused";
 }
 
@@ -205,4 +212,14 @@ export function refusalLine(status: string, detail: Record<string, unknown>): st
     .filter(([, value]) => value !== undefined && value !== null)
     .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
   return parts.length ? `${status}  ${parts.join(" ")}` : status;
+}
+
+/** A usage failure. Same envelope as everything else, with status `usage`. */
+export function usageOutcome(message: string, command: string | null = null): CliOutcome {
+  return {
+    command,
+    status: "usage",
+    result: { message },
+    lines: [`usage error: ${message}`, "", "Run `geode-wiki --help` for the full surface."],
+  };
 }

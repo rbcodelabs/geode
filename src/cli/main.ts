@@ -20,4 +20,5 @@ process.exitCode = await run(process.argv.slice(2), {
   },
   env: process.env,
   stdin: process.stdin,
+  rawOut: process.stdout,
 });

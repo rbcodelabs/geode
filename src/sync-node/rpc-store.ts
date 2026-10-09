@@ -233,7 +233,7 @@ const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /**
  * Hub over ssh: `ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4
- * <host> geode-wiki sync-serve --store <path>`. A dead link is noticed by ssh within
+ * <host> geode-wiki sync serve --store <path>`. A dead link is noticed by ssh within
  * ~60s (15s x 4) and surfaces as `unavailable`; the next call respawns ssh.
  * `command` replaces the whole invocation (tests run the server directly).
  */
@@ -241,7 +241,7 @@ export function spawnSshStore(options: { host: string; storePath: string; sshOpt
   if (!options.command && !SAFE_HOST.test(options.host)) throw new SyncStoreError("invalid-request", "Invalid ssh host");
   const command: SpawnCommand = options.command ?? {
     file: "ssh",
-    args: ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4", ...(options.sshOptions ?? []), options.host, `geode-wiki sync-serve --store ${shellQuote(options.storePath)}`],
+    args: ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4", ...(options.sshOptions ?? []), options.host, `geode-wiki sync serve --store ${shellQuote(options.storePath)}`],
   };
   return new RpcStoreProvider(() => spawnTransport(command, options.onStderr));
 }
