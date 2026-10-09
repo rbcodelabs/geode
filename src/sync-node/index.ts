@@ -10,3 +10,7 @@ export { FsBlobWriter, FsStoreProvider, FsStoreSession, STORE_CHUNK_BYTES } from
 export { serveStore, type ServeOptions, type ServeStats } from "./serve";
 export { RpcClient, RpcStoreProvider, RpcStoreSession, spawnSshStore, spawnTransport, type SpawnCommand, type StoreTransport } from "./rpc-store";
 export { isStoreError, SyncStoreError, type StoreErrorCode } from "./store-errors";
+export { NodeHost, SyncLockedError, SyncStateDirError, DEFAULT_STAGING_DIRNAME, defaultStateDir, assertStateDirOutsideVault, type NodeHostOptions } from "./node-host";
+export { scanVault, conflictCopyBase, type ScanOptions, type ScanReport, type ScanIo } from "./node-scan";
+export { NodeHashCache } from "./node-hash-cache";
+export { hydrateIcloudPaths, execRunner, type CommandRunner, type HydrateOptions, type HydrateReport } from "./node-icloud";
