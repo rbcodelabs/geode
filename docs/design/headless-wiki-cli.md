@@ -5,7 +5,7 @@ an MCP server, why four exit codes, why `refresh()` has no subcommand — is in
 [ADR 0024](../adr/0024-wiki-cli-over-mcp-server.md). This document is what the
 thing does.
 
-It sits on two curated entry points and nothing else:
+It sits on two curated entry points, plus a third used only by the `sync` subcommands (`src/sync-node/index.ts`, via `src/cli/sync.ts`; see [headless-wiki-sync.md](headless-wiki-sync.md)):
 
 | Entry point | Exports at runtime | Ledger |
 |---|---|---|
@@ -91,6 +91,10 @@ name when it is wrong, instead of clobbering blind.
 | 1 | `refused` | A named non-affirmative status, carried in the payload |
 | 2 | `usage` | argv could not be turned into an operation; nothing ran |
 | 3 | `unavailable` | The vault folder or the catalog store could not be reached |
+| 4 | `conflicts` | `sync` only: unresolved conflicts remain |
+| 5 | `locked` | `sync` only: another sync run holds the lock; nothing was done |
+
+Codes 4 and 5 are produced only by `geode-wiki sync` ([headless-wiki-sync.md](headless-wiki-sync.md), [ADR 0025](../adr/0025-geode-wiki-sync-cli.md)).
 
 Three properties worth stating explicitly, because each is a thing a caller can
 rely on:
@@ -188,8 +192,11 @@ The CLI is an argument-parsing and formatting layer. It contains no engine
 logic, and this is checked rather than asserted:
 
 - **Per-edge.** `scripts/run-wiki-cli-proof.mjs` reads esbuild's per-file import
-  records. A module under `src/cli/` may import `src/wiki/index.ts`,
-  `src/catalog/index.ts` and its own siblings — nothing else in `src/`. A
+  records (the rule set now lives in `scripts/cli-import-audit.mjs`, shared with
+  `run-wiki-sync-proof.mjs` and `tests/unit/cli-import-audit.test.ts`, which breaks it
+  on purpose). A module under `src/cli/` may import `src/wiki/index.ts`,
+  `src/catalog/index.ts` and its own siblings — nothing else in `src/` — and only
+  `src/cli/sync.ts` may also import `src/sync-node/index.ts`. A
   violation fails naming the edge:
   `src/cli/output.ts imports src/wiki/link-resolution.ts (as "../wiki/link-resolution")`.
 - **Exact input set**, not a permitted superset, so a module quietly
