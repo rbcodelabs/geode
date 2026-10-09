@@ -33,6 +33,7 @@ const bin = join(directory, "bin");
 const hub = join(directory, "hub");
 const sshLog = join(directory, "ssh.log");
 const brctlLog = join(directory, "brctl.log");
+const svcLog = join(directory, "svc.log");
 const OLD = () => (Date.now() - 120_000) / 1000;
 
 const children = new Set();
@@ -41,7 +42,7 @@ function exec(args, { env = {}, devEnv = {} } = {}) {
   const done = new Promise((settle, fail) => {
     child = spawn(process.execPath, [binary, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PROOF_SSH_LOG: sshLog, PROOF_BRCTL_LOG: brctlLog, ...devEnv, ...env },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PROOF_SSH_LOG: sshLog, PROOF_BRCTL_LOG: brctlLog, PROOF_SVC_LOG: svcLog, ...devEnv, ...env },
     });
     children.add(child);
     let stdout = "", stderr = "";
@@ -138,7 +139,15 @@ import { appendFileSync } from "node:fs";
 appendFileSync(process.env.PROOF_BRCTL_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
 process.exit(1);
 `);
-  await writeFile(sshLog, ""); await writeFile(brctlLog, "");
+  // launchctl / systemctl that only record. Scheduling must never reach a real service manager from this proof.
+  for (const name of ["launchctl", "systemctl"]) {
+    await installShim(name, `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.PROOF_SVC_LOG, JSON.stringify([${JSON.stringify(name)}, ...process.argv.slice(2)]) + "\\n");
+process.exit(process.env.PROOF_SVC_FAIL ? 1 : 0);
+`);
+  }
+  await writeFile(sshLog, ""); await writeFile(brctlLog, ""); await writeFile(svcLog, "");
 
   const A = new Device("a"), B = new Device("b");
   await mkdir(A.root); await mkdir(B.root);
@@ -338,6 +347,60 @@ process.exit(1);
   const unreachablePayload = JSON.parse(unreachable.stdout);
   assert.deepEqual([unreachablePayload.status, unreachable.code], ["store-unavailable", 3]);
 
+  /* ------------------------------------------------------- scheduling (stub launchctl) */
+
+  const target = join(directory, "launch-agents"), userHome = join(directory, "user-home");
+  await mkdir(userHome);
+  const svcEnv = { HOME: userHome };
+  const sched = (action, ...extra) => exec(["sync", "schedule", action, "--root", A.root, "--target-dir", target, "--platform", "launchd", "--json", ...extra], { devEnv: A.env, env: svcEnv }).done;
+  const svcCalls = async () => (await readFile(svcLog, "utf8")).trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+
+  const printed = await sched("print", "--interval", "600");
+  assert.equal(printed.code, 0, printed.stdout + printed.stderr);
+  const plist = JSON.parse(printed.stdout).result.files[0].content;
+  assert.match(plist, /com\.geode\.wiki-sync\.[0-9a-f]{8}/);
+  assert.match(plist, /<key>StartInterval<\/key>\s*<integer>600<\/integer>/);
+  assert.doesNotMatch(plist, /--override-|--hydrate-icloud/);
+  assert.deepEqual(await readdir(target).catch(() => []), [], "print writes nothing");
+  assert.equal((await sched("print", "--interval", "59")).code, 2, "interval under 60 is a usage error");
+  assert.equal((await sched("install", "--override-delete-limit", "99")).code, 2, "a schedule cannot take an override flag");
+
+  // The first-run rail: a vault with no approved first run cannot be scheduled.
+  const fresh = new Device("fresh");
+  await mkdir(fresh.root); await fresh.write("n.md", "n");
+  assert.equal((await fresh.j("init", "--store", join(directory, "fresh-hub"), "--create")).code, 0);
+  const refusedInstall = await exec(["sync", "schedule", "install", "--root", fresh.root, "--target-dir", target, "--platform", "launchd", "--json"], { devEnv: fresh.env, env: svcEnv }).done;
+  assert.deepEqual([JSON.parse(refusedInstall.stdout).status, refusedInstall.code], ["schedule-not-approved", 1]);
+  assert.deepEqual(await readdir(target).catch(() => []), [], "a refused install writes nothing");
+
+  const installed = await sched("install", "--interval", "600");
+  assert.equal(installed.code, 0, installed.stdout + installed.stderr);
+  const installedResult = JSON.parse(installed.stdout).result;
+  assert.equal(installedResult.activated, false);
+  assert.deepEqual(await svcCalls(), [], "install without --activate never calls launchctl");
+  assert.equal((await readdir(target)).length, 1);
+
+  // The scheduled command, executed exactly as the plist would, is a normal successful run and leaves its envelope in the log.
+  const [bin0, ...scheduledArgs] = installedResult.command;
+  assert.ok(scheduledArgs.includes("run") && !scheduledArgs.some((a) => a.startsWith("--override") || a === "--hydrate-icloud"));
+  const scheduledRun = await new Promise((settle) => {
+    const c = spawn(bin0, scheduledArgs, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...A.env, ...svcEnv, PATH: `${bin}:${process.env.PATH}`, PROOF_SSH_LOG: sshLog } });
+    let out = ""; c.stdout.on("data", (d) => { out += d; }); c.on("close", (code) => settle({ code, out }));
+  });
+  assert.equal(scheduledRun.code, 0, scheduledRun.out);
+  await writeFile(installedResult.logs.out, scheduledRun.out);
+  const stat1 = JSON.parse((await sched("status")).stdout).result;
+  assert.deepEqual([stat1.installed, stat1.activated, stat1.lastRun.status, stat1.lastRun.normal], [true, true, "ok", true]);
+  assert.deepEqual((await svcCalls()).map((c) => c.slice(0, 2)), [["launchctl", "print"]], "status only reads");
+
+  const activated = await sched("install", "--activate");
+  assert.equal(JSON.parse(activated.stdout).result.activated, true);
+  assert.deepEqual((await svcCalls()).at(-1).slice(0, 2), ["launchctl", "bootstrap"]);
+  const removed = await sched("uninstall", "--activate");
+  assert.equal(JSON.parse(removed.stdout).result.deactivated, true);
+  assert.deepEqual((await svcCalls()).at(-1).slice(0, 2), ["launchctl", "bootout"]);
+  assert.deepEqual(await readdir(target), [], "uninstall removes the unit");
+
   /* ------------------------------------------------------------------- gc */
 
   const gc = await A.j("gc", "--trash-days", "0");
@@ -360,6 +423,7 @@ process.exit(1);
     finalNotesEqual: JSON.stringify(await A.notes()) === JSON.stringify(await B.notes()),
     brctlCallsWithoutOptIn: 0,
     brctlCallsWithOptIn: brctlCalls.length,
+    scheduleServiceManagerCalls: (await svcCalls()).map((c) => c.slice(0, 2).join(" ")),
   }));
 } finally {
   for (const child of children) child.kill("SIGKILL");
