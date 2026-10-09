@@ -111,6 +111,34 @@ A held lock is exit 5 and happens *before* the store is contacted. `status` and
 `conflicts` read device state without taking the lock, so they answer while a run
 is in progress (and `status` reports the holder's pid).
 
+### Scheduling (`sync schedule`)
+
+Unattended use is the reason for the rails, so scheduling is part of the same decision rather than a
+recipe left to the reader. `sync schedule print|install|uninstall|status` renders a launchd plist or
+systemd user service+timer around one fixed command, `sync run --root <dir> --json`, with absolute node
+and CLI paths. Decisions:
+
+- **A schedule cannot lift a rail.** The command line is constructed in one function and contains no
+  `--override-*` or `--hydrate-icloud`; `schedule` does not parse them. Lifting a rail stays a person
+  at a terminal.
+- **The first-run rail is not bypassed.** `install` refuses unless the root is bound and its first run
+  has been approved (`not-initialised` / `schedule-not-approved`). A schedule whose every run would be
+  `approval-required` is worse than no schedule.
+- **Nothing activates implicitly.** Files are written to `--target-dir`; `launchctl bootstrap` /
+  `systemctl --user enable --now` run only with `--activate`, as do their inverses on `uninstall`.
+  `status` only reads.
+- **4 and 5 are outcomes, not failures.** systemd units list them in `SuccessExitStatus`. launchd cannot
+  express this, but an interval job without `KeepAlive` is only annotated with its last exit code; the
+  JSON envelope each run appends to the stdout log names the outcome, and `status` reads it back.
+- **No new engine surface.** The schedule module imports nothing from `src/`; `sync.ts` hands it the one
+  engine fact (is this root approved, and where is its state directory) from `syncStatus`. The audit gained
+  a rule pinning that.
+- Alternatives rejected: a long-running `sync watch` daemon (a second lifecycle to supervise, and launchd
+  already supervises); a wrapper command that maps 4 and 5 to 0 (hides the numbers from the supervisor and
+  adds a second entry point for `run`).
+- Not verified: a real `launchctl bootstrap` / `systemctl --user` activation, and a real scheduled firing
+  (the proof and tests use recording stubs and execute the scheduled command once by hand).
+
 ### Import rule
 
 ADR 0024's rule allowed `src/cli/` two entry points. It now allows three, with
@@ -121,6 +149,7 @@ proofs and by a unit test that feeds it broken graphs:
   `src/sync-node/index.ts` and siblings;
 - only `src/cli/sync.ts` may import the sync entry point, and it may import
   nothing else outside `src/cli/`;
+- `src/cli/sync-schedule.ts` imports nothing from `src/` outside `src/cli/`;
 - inside the bundle, `src/sync-node` reaches only `sync-node`/`sync-core`/`shared`
   and `src/sync-core` only `sync-core`/`shared`;
 - nothing from `indexer`, `main`, `preload`, or `renderer` beyond the two helpers
@@ -166,6 +195,6 @@ proofs and by a unit test that feeds it broken graphs:
 
 ## Verification
 
-`tests/unit/sync-cli.test.ts`, `tests/unit/cli-import-audit.test.ts`, and
+`tests/unit/sync-cli.test.ts`, `tests/unit/sync-schedule.test.ts`, `tests/unit/cli-import-audit.test.ts`, and
 `npm run proof:wiki-sync` (real subprocesses, two vaults, ssh stand-in). See
 [headless-wiki-sync.md](../design/headless-wiki-sync.md).

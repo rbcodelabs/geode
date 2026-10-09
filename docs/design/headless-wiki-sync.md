@@ -36,6 +36,7 @@ geode-wiki sync init    --root ~/Notes2 --ssh hub --store /srv/notes-hub        
 | `resolve <path> (--keep local\|remote \| --version <recordId>) [overrides]` | Settle one conflict | yes | yes |
 | `serve --store <dir>` | Serve a store over stdio (binary frames only on stdout; no `--root`) | n/a | is the store |
 | `gc [--trash-days n]` | Reclaim sync-private storage; with `--trash-days`, purge trash older than n days | yes | no |
+| `schedule print\|install\|uninstall\|status [--interval s] [--platform launchd\|systemd] [--target-dir d] [--activate]` | Unit files for an unattended `sync run` (see Scheduling) | no | no |
 
 Common options: `--root <dir>` (required except `serve`), `--state-dir <dir>`,
 `--settle-ms <n>` (defer files modified within n ms; default 5000), `--json`.
@@ -77,6 +78,45 @@ replaces the limit with `n`; the plan still has to fit under it.
 Known gaps (also in the ADR): a resumed interrupted batch skips rail (b); a change
 landing between the rail check and apply is bounded by the lock but not closed.
 
+## Scheduling
+
+`geode-wiki sync schedule print|install|uninstall|status --root <dir>` wraps one fixed
+command, `<node> <geode-wiki.mjs> sync run --root <dir> [--state-dir <dir>] --json`
+(absolute paths; override with `--node-path` / `--cli-path`), in a launchd agent or a systemd
+user service+timer.
+
+| Option | Meaning |
+|---|---|
+| `--interval <s>` | Seconds between runs; default 300, minimum 60 |
+| `--platform launchd\|systemd` | Default launchd on macOS, systemd elsewhere |
+| `--target-dir <dir>` | Where unit files go; default `~/Library/LaunchAgents` or `${XDG_CONFIG_HOME:-~/.config}/systemd/user` |
+| `--activate` | `install`: also `launchctl bootstrap gui/<uid> <plist>` / `systemctl --user daemon-reload` + `enable --now <timer>`. `uninstall`: also `launchctl bootout` / `systemctl --user disable --now`. Without it only files change and the command to run is printed |
+
+- **print** is pure and deterministic and writes nothing. launchd: label
+  `com.geode.wiki-sync.<first 8 hex of sha256(root)>`, `StartInterval`, `RunAtLoad false`,
+  `ThrottleInterval 60`, `ProcessType Background`, an explicit `PATH`/`HOME`, logs under
+  `~/Library/Logs/geode-wiki-sync/<label>.{out,err}.log`. systemd: `geode-wiki-sync-<hash>.service`
+  (`Type=oneshot`, `SuccessExitStatus=4 5`) and `.timer`, logs under
+  `${XDG_STATE_HOME:-~/.local/state}/geode-wiki-sync/`.
+- **install** refuses (`not-initialised`, or `schedule-not-approved`) unless the root is bound and its first
+  run has been approved, so a schedule never bypasses the first-run rail. The scheduled command is built in
+  one place and never contains `--override-*` or `--hydrate-icloud`; `schedule` does not accept those flags.
+  Installing again overwrites the units (idempotent). A failed activation exits 1 as
+  `schedule-activation-failed` and leaves the files.
+- **uninstall** removes the files; it only deactivates with `--activate` (otherwise it prints the command).
+- **status** reports files present, whether the job is loaded/enabled (a read-only `launchctl print` /
+  `systemctl --user is-enabled`), the launchd "last exit code" when it prints one, and the last run read
+  back from the last JSON envelope in the stdout log (status, exit code, and whether it was a normal outcome).
+- **Exit 4 (conflicts) and 5 (locked) are normal outcomes** of a scheduled run. systemd is told via
+  `SuccessExitStatus`. launchd has no equivalent: an interval job with no `KeepAlive` is never restarted and
+  a non-zero status is only recorded, so nothing is "failed" in a way that matters; what is not feasible is
+  hiding the number from `launchctl print`. Each run appends one envelope line to the stdout log, so
+  `status` (and `tail`) show `locked` / `conflicts` by name. Exit 1-3 are the ones to look at.
+- The log is append-only and one short line per run; rotate it with newsyslog/logrotate if it matters.
+- A launchd agent runs without your shell environment: it needs `ssh` to work non-interactively (key in an
+  agent reachable without the login session, or an unencrypted key; `BatchMode` is already on) and on
+  macOS the first scheduled run may be gated by Full Disk Access / Files and Folders prompts for the vault.
+
 ## Conflicts
 
 A conflict is two or more heads for one entity. `run` leaves both sides intact and
@@ -89,7 +129,7 @@ scan rail still applies.
 ## Import rule
 
 `src/cli/sync.ts` is the only CLI module that may import the sync engine
-(`src/sync-node/index.ts`), and may import nothing else outside `src/cli/`. See
+(`src/sync-node/index.ts`), and may import nothing else outside `src/cli/`. `src/cli/sync-schedule.ts` imports nothing from `src/` outside `src/cli/`. See
 `scripts/cli-import-audit.mjs` for the full rule set.
 
 ## Proofs
@@ -98,5 +138,6 @@ scan rail still applies.
 |---|---|
 | `npx vitest run tests/unit/sync-cli.test.ts` | Every status/exit, each rail and override, convergence, conflicts, lock, gc (in-process, real directories and hub) |
 | `npx vitest run tests/unit/cli-import-audit.test.ts` | The real bundle passes the audit, and each rule fails, naming the edge, on a broken graph |
-| `npm run proof:wiki-sync` | The built binary in real subprocesses: two vaults, a hub over a stand-in `ssh` running the real remote command line; all six exit codes; conflicts; deletes; each refusal; the lock held by one process and refused (exit 5) in another |
+| `npm run proof:wiki-sync` | The built binary in real subprocesses: two vaults, a hub over a stand-in `ssh` running the real remote command line; `sync schedule` print/install/uninstall with a recording `launchctl`, including executing the scheduled command; all six exit codes; conflicts; deletes; each refusal; the lock held by one process and refused (exit 5) in another |
+| `npx vitest run tests/unit/sync-schedule.test.ts` | Rendering of both platforms, interval and flag rules, the approval refusal, install/status/uninstall against a stub service manager and temp `--target-dir`s |
 | `npm run proof:wiki-cli` | Unchanged claims, plus the exact input set now including the sync files |
