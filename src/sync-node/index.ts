@@ -6,3 +6,7 @@ export { applyGuardedMutation, durableWrite, ensureDurableDirectory, type ApplyD
 export { moveToTrash, type TrashIo } from "./trash";
 export { withPathLock, withVaultMutation } from "./path-lock";
 export { SyncPrivateStorage } from "./sync-private-storage";
+export { FsBlobWriter, FsStoreProvider, FsStoreSession, STORE_CHUNK_BYTES } from "./fs-store";
+export { serveStore, type ServeOptions, type ServeStats } from "./serve";
+export { RpcClient, RpcStoreProvider, RpcStoreSession, spawnSshStore, spawnTransport, type SpawnCommand, type StoreTransport } from "./rpc-store";
+export { isStoreError, SyncStoreError, type StoreErrorCode } from "./store-errors";

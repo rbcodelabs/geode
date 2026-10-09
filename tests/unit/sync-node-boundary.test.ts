@@ -33,5 +33,5 @@ it("src/sync-node never touches DOM or Electron globals", () => {
 
 it("index.ts exports only the curated surface", () => {
   const names = [...readFileSync(join(root, "index.ts"), "utf8").matchAll(/export\s*\{([^}]*)\}/g)].flatMap(m => m[1].split(",").map(n => n.trim().replace(/^type\s+/, "")).filter(Boolean)).sort();
-  expect(names).toEqual(["ApplyDependencies", "SyncPrivateStorage", "TrashIo", "applyGuardedMutation", "durableWrite", "ensureDurableDirectory", "moveToTrash", "withPathLock", "withVaultMutation"]);
+  expect(names).toEqual(["ApplyDependencies", "FsBlobWriter", "FsStoreProvider", "FsStoreSession", "RpcClient", "RpcStoreProvider", "RpcStoreSession", "STORE_CHUNK_BYTES", "ServeOptions", "ServeStats", "SpawnCommand", "StoreErrorCode", "StoreTransport", "SyncPrivateStorage", "SyncStoreError", "TrashIo", "applyGuardedMutation", "durableWrite", "ensureDurableDirectory", "isStoreError", "moveToTrash", "serveStore", "spawnSshStore", "spawnTransport", "withPathLock", "withVaultMutation"]);
 });
