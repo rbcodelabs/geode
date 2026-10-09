@@ -190,6 +190,8 @@ export interface RunContext {
   readonly stdin: NodeJS.ReadableStream;
   /** Raw stdout, for `sync serve` only (binary frames). Absent in in-process callers. */
   readonly rawOut?: NodeJS.WritableStream;
+  /** Test seam for `sync schedule`: replaces launchctl/systemctl execution. */
+  readonly scheduleRunner?: import("./sync-schedule").ScheduleRunner;
 }
 
 /**

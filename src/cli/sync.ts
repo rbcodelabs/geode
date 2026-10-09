@@ -12,6 +12,7 @@
  * `store-unavailable` / `vault-unavailable` 3; `conflicts` 4; `locked` 5.
  */
 
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import { parseArgs } from "node:util";
 import {
   classifySyncError, describeTarget, serveStore, syncConflicts, syncGc, syncInit, syncPreview, syncResolve,
@@ -19,6 +20,10 @@ import {
   type PreviewSummary, type SyncOverrides, type SyncTarget, type WikiSyncContext,
 } from "../sync-node/index";
 import { emit, usageOutcome, type CliOutcome, type Streams } from "./output";
+import {
+  defaultHome, defaultPlatform, execScheduleRunner, installSchedule, parseInterval, renderSchedule, scheduleStatus,
+  uninstallSchedule, type ScheduleRunner, type SchedulePlatform, type ScheduleSpec,
+} from "./sync-schedule";
 
 export interface SyncCliContext {
   readonly streams: Streams;
@@ -26,6 +31,8 @@ export interface SyncCliContext {
   readonly stdin: NodeJS.ReadableStream;
   /** The raw stdout stream. Only `sync serve` needs it: it speaks binary frames and must not go through text `out()`. */
   readonly rawOut?: NodeJS.WritableStream;
+  /** Test seam for `sync schedule`: replaces launchctl/systemctl execution. */
+  readonly scheduleRunner?: ScheduleRunner;
 }
 
 type Values = Record<string, string | boolean | string[] | undefined>;
@@ -48,6 +55,8 @@ const SUBCOMMANDS: Record<string, { positionals: readonly string[]; options: Opt
   resolve: { positionals: ["path"], options: { ...SHARED, ...VAULT, ...OVERRIDES, keep: { type: "string" }, version: { type: "string" } } },
   serve: { positionals: [], options: { ...SHARED, store: { type: "string" } } },
   gc: { positionals: [], options: { ...SHARED, ...VAULT, "trash-days": { type: "string" } } },
+  // Deliberately no OVERRIDES: a schedule cannot carry a rail override, and parseArgs rejects them as unknown options.
+  schedule: { positionals: ["action"], options: { ...SHARED, root: { type: "string" }, "state-dir": { type: "string" }, interval: { type: "string" }, platform: { type: "string" }, "target-dir": { type: "string" }, activate: { type: "boolean" }, "node-path": { type: "string" }, "cli-path": { type: "string" } } },
 };
 
 export const SYNC_USAGE = `geode-wiki sync — keep a folder in step with a hub store, headlessly
@@ -64,6 +73,7 @@ Commands:
   resolve   settle one conflict                     <path> (--keep local|remote | --version <recordId>)
   serve     serve a store over stdio (what ssh runs on the hub)   --store <path>   (no --root)
   gc        reclaim sync-private storage            [--trash-days <n>]
+  schedule  unattended runs                         print|install|uninstall|status [--interval <s>] [--platform launchd|systemd] [--target-dir <dir>] [--activate]
 
 Options:
   --json                        structured output; named statuses preserved verbatim
@@ -76,6 +86,16 @@ Safety rails (all checked before anything is changed):
   shrunk scan                   refuses a scan finding under 50% of previously known files; --override-shrunk-scan
   iCloud placeholders           never downloaded; --hydrate-icloud opts in. Blocked files are never deleted
   Every override prints a WARNING on stderr and is listed in the JSON result.
+
+Scheduling (sync schedule):
+  print      emit the launchd plist / systemd units (pure; writes nothing)
+  install    write the units into --target-dir (default ~/Library/LaunchAgents or ~/.config/systemd/user); with
+             --activate also run launchctl bootstrap / systemctl --user enable --now. Refused unless this vault
+             has an approved first run. The scheduled command is \`sync run --root <dir> --json\` and can never
+             carry an --override-* or --hydrate-icloud flag.
+  uninstall  remove the units (with --activate: also launchctl bootout / systemctl disable --now)
+  status     files present, activated, and the last run's result from the log
+  --interval defaults to 300 seconds, minimum 60. Exit 4 and 5 from a scheduled run are normal outcomes.
 
 Exit codes (in addition to 0-3 documented at the top level):
   4  conflicts   unresolved conflicts remain
@@ -167,6 +187,7 @@ export async function runSync(argv: readonly string[], ctx: SyncCliContext): Pro
   }
 
   if (sub === "serve") return serve(values, ctx, json);
+  if (sub === "schedule") return emit(await schedule(values, positionals[0], ctx), json, streams);
   if (typeof values.root !== "string" || values.root === "") return emit(usageOutcome("--root <dir> is required", name), json, streams);
   const context = contextFrom(values, ctx);
   if (isOutcome(context)) return emit({ ...context, command: name }, json, streams);
@@ -296,4 +317,96 @@ async function gc(values: Values, context: WikiSyncContext): Promise<CliOutcome>
     const result = await syncGc(context, trashDays === undefined ? {} : { trashDays });
     return { command: name, status: "ok", result, lines: [`ok  trash entries removed: ${result.trashRemoved.length}`] };
   } catch (error) { return failure(name, error); }
+}
+
+/* ---------------------------------------------------------------- schedule */
+
+const SCHEDULE_ACTIONS = ["print", "install", "uninstall", "status"] as const;
+
+async function schedule(values: Values, action: string, ctx: SyncCliContext): Promise<CliOutcome> {
+  const name = "sync schedule";
+  if (!(SCHEDULE_ACTIONS as readonly string[]).includes(action)) return usageOutcome(`sync schedule needs one of ${SCHEDULE_ACTIONS.join(", ")}, got ${JSON.stringify(action)}`, name);
+  if (typeof values.root !== "string" || values.root === "") return usageOutcome("--root <dir> is required", name);
+  const interval = parseInterval(values.interval as string | undefined);
+  if (isError(interval)) return usageOutcome(interval.error, name);
+  const platform = (values.platform ?? defaultPlatform()) as string;
+  if (platform !== "launchd" && platform !== "systemd") return usageOutcome(`--platform must be launchd or systemd, got ${JSON.stringify(platform)}`, name);
+  const nodePath = (values["node-path"] as string | undefined) ?? process.execPath;
+  const cliPath = (values["cli-path"] as string | undefined) ?? process.argv[1] ?? "";
+  for (const [flag, p] of [["--node-path", nodePath], ["--cli-path", cliPath]] as const) {
+    if (!isAbsolute(p)) return usageOutcome(`${flag} must be an absolute path, got ${JSON.stringify(p)}`, name);
+  }
+  const env = ctx.env;
+  const home = defaultHome(env);
+  const spec = (stateDir?: string): ScheduleSpec => ({
+    platform: platform as SchedulePlatform, root: resolvePath(values.root as string), intervalSeconds: interval, nodePath, cliPath, home,
+    uid: typeof process.getuid === "function" ? process.getuid() : 0,
+    ...(stateDir ? { stateDir } : typeof values["state-dir"] === "string" ? { stateDir: values["state-dir"] } : {}),
+    ...(typeof values["target-dir"] === "string" ? { targetDir: values["target-dir"] } : {}),
+    ...(env.XDG_STATE_HOME ? { xdgStateHome: env.XDG_STATE_HOME } : {}), ...(env.XDG_CONFIG_HOME ? { xdgConfigHome: env.XDG_CONFIG_HOME } : {}),
+  });
+  const run = ctx.scheduleRunner ?? execScheduleRunner;
+  const activate = values.activate === true;
+
+  if (action === "print") {
+    const units = renderSchedule(spec());
+    return {
+      command: name, status: "ok", result: { platform: units.platform, label: units.label, command: units.command, files: units.files, logs: units.logs },
+      lines: units.files.flatMap((f) => [`# ${f.path}`, f.content.trimEnd(), ""]).slice(0, -1),
+    };
+  }
+  if (action === "status") {
+    const units = renderSchedule(spec());
+    const r = await scheduleStatus(units, { env, run });
+    const last = r.lastRun;
+    return {
+      command: name, status: "ok", result: r,
+      lines: [
+        `label       ${r.label}  (${r.platform}, every ${r.intervalSeconds}s)`,
+        ...r.files.map((f) => `file        ${f.present ? "present" : "missing"}  ${f.path}`),
+        `activated   ${r.activated ? "yes" : "no"}${r.launchdLastExitCode !== undefined ? `   (launchd last exit code ${r.launchdLastExitCode})` : ""}`,
+        last ? `last run    ${last.status} (exit ${last.exitCode} ${last.exitName}) at ${last.at}${last.normal ? "" : "   <-- a failure, see the logs"}${last.exitCode === 4 || last.exitCode === 5 ? "   (normal outcome, not a launchd failure)" : ""}` : "last run    none recorded",
+        `logs        ${r.logs.out}`,
+      ],
+    };
+  }
+  if (action === "uninstall") {
+    const units = renderSchedule(spec());
+    const r = await uninstallSchedule(units, { activate, env, run });
+    const lines = [`removed ${r.removed.length} file(s)${r.removed.length ? ": " + r.removed.join(", ") : ""}`];
+    if (!activate) lines.push(`if the job is loaded, deactivate it: ${r.deactivateCommands.join(" ; ")}`);
+    else if (r.failures.length) lines.push(...r.failures.map((f) => `warning: ${f}`));
+    else lines.push("deactivated");
+    return { command: name, status: "ok", result: r, lines, ...(r.failures.length ? { warnings: r.failures.map((f) => `warning: ${f}`) } : {}) };
+  }
+
+  // install: the first-run rail must not be bypassed by a schedule.
+  const context = contextFrom(values, ctx);
+  if (isOutcome(context)) return { ...context, command: name };
+  let stateDir: string; let approved: boolean;
+  try {
+    const s = await syncStatus(context);
+    stateDir = s.stateDir; approved = s.approved;
+  } catch (error) { return failure(name, error); }
+  if (!approved) {
+    return {
+      command: name, status: "schedule-not-approved",
+      result: { message: "This vault has no approved first run, so a schedule would only ever be refused. Run `sync preview --approve` and a first `sync run` by hand, then install.", root: resolvePath(values.root as string) },
+      lines: ["schedule-not-approved  run `geode-wiki sync preview --approve` and a first `sync run` by hand before scheduling"],
+    };
+  }
+  const units = renderSchedule(spec(stateDir));
+  const r = await installSchedule(units, { activate, env, run });
+  if ("failed" in r) {
+    return { command: name, status: "schedule-activation-failed", result: { ...r, files: units.files.map((f) => f.path) }, lines: [`schedule-activation-failed  ${r.failed}`, ...(r.stderr ? [r.stderr] : []), "the unit files were written; fix the above and re-run with --activate"] };
+  }
+  return {
+    command: name, status: "ok", result: r,
+    lines: [
+      ...r.files.map((f) => `wrote  ${f}`),
+      `logs   ${r.logs.out}`,
+      activate ? "activated" : `not activated. To activate: ${r.activateCommands.join(" ; ")}`,
+      "exit 4 (conflicts) and 5 (locked) from a scheduled run are normal outcomes; see `sync schedule status`",
+    ],
+  };
 }
