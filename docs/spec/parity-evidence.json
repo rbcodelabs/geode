@@ -2812,5 +2812,13 @@
     "status": "partial",
     "evidence": ["tests/unit/unique-notes.test.ts","tests/e2e/unique-note-creator.spec.ts"],
     "notes": "Observed: the 'Create new unique note' command and ribbon icon create an empty YYYYMMDDHHmm-named note by default (and open it); a configured folder, Moment date format (same tokens as Daily notes) and template (with {{title}}/{{date}} expanded) are applied; a name collision takes the next available timestamp; settings persist per vault with an enable toggle. The ribbon uses Lucide file-stack as the nearest match to the sheets-in-box icon, and a missing template reports an error notice rather than linking to the plugin's settings, so the row remains partial."
+  },
+  "HELP-d5b5268c30ff": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/format-converter.test.ts",
+      "tests/e2e/format-converter.spec.ts"
+    ],
+    "notes": "Unit-tested conversions (Roam tags/highlights/TODOs, Bear highlights, Zettelkasten full/pretty links, alias/tag/cssclass to list properties; code, inline code and frontmatter protected) and driven end to end in Electron: Core plugins toggle (off by default), ribbon binary icon, Open format converter command, modal with per-conversion checkboxes, backup warning and Start conversion rewriting a fixture vault. Partial: the spec does not define how a Zettelkasten UID is recognised, so Geode assumes a 12-14 digit filename prefix; the Help page was not diffed line by line for edge cases."
   }
 }

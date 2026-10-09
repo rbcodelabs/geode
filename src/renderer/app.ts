@@ -26,6 +26,7 @@ import {
 } from "./community/community-list-view";
 import { MarkdownRenderer } from "./markdown/render";
 import { AudioRecorderPlugin } from "./internal-plugins/audio-recorder/audio-recorder-plugin";
+import { FormatConverterPlugin } from "./internal-plugins/format-converter/format-converter-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
 import {
@@ -140,6 +141,8 @@ interface AppSettings {
   webViewer: WebViewerOptions;
   /** Audio recorder core plugin; off by default, as in Obsidian. */
   audioRecorderEnabled: boolean;
+  /** Format converter core plugin; off by default, as in Obsidian. */
+  formatConverterEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -1130,6 +1133,12 @@ class SettingsModal extends Modal {
     this.addToggle(container, "Enable Audio recorder", this.geodeApp.settings.audioRecorderEnabled, (enabled) => {
       this.geodeApp.settings.audioRecorderEnabled = enabled;
       this.geodeApp.syncAudioRecorderPlugin();
+      this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Format converter</h3>`);
+    this.addToggle(container, "Enable Format converter", this.geodeApp.settings.formatConverterEnabled, (enabled) => {
+      this.geodeApp.settings.formatConverterEnabled = enabled;
+      this.geodeApp.syncFormatConverterPlugin();
       this.geodeApp.saveSettings();
     });
     container.insertAdjacentHTML("beforeend", `<h3>Web Viewer</h3>`);
@@ -2142,6 +2151,7 @@ export class App {
     return id === "onboarding" ? this.onboarding : undefined;
   }
   private audioRecorderPlugin?: AudioRecorderPlugin;
+  private formatConverterPlugin?: FormatConverterPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2155,6 +2165,7 @@ export class App {
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_OPTIONS },
     audioRecorderEnabled: false,
+    formatConverterEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -2797,6 +2808,7 @@ export class App {
         showLineNumber: typeof saved.showLineNumber === "boolean" ? saved.showLineNumber : this.settings.showLineNumber,
         webViewer: this.webViewer.options,
         audioRecorderEnabled: saved.audioRecorderEnabled === true,
+        formatConverterEnabled: saved.formatConverterEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -3015,6 +3027,7 @@ export class App {
     await this.onboarding.ready;
 
     this.syncAudioRecorderPlugin();
+    this.syncFormatConverterPlugin();
     this.registerActions();
     this.registerCommands();
     this.hostDisposers.add(this.commands.attach(document, (event) => this.keymap.handleKeydown(event)));
@@ -3722,6 +3735,8 @@ export class App {
     this.onboarding = undefined;
     this.audioRecorderPlugin?.unload();
     this.audioRecorderPlugin = undefined;
+    this.formatConverterPlugin?.unload();
+    this.formatConverterPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
     await this.vault.close();
@@ -5597,6 +5612,15 @@ export class App {
     if (!this.settings.audioRecorderEnabled) return;
     this.audioRecorderPlugin = new AudioRecorderPlugin(this);
     this.audioRecorderPlugin.load();
+  }
+
+  /** Load or unload the Format converter core plugin to match `settings.formatConverterEnabled`. */
+  syncFormatConverterPlugin(): void {
+    this.formatConverterPlugin?.unload();
+    this.formatConverterPlugin = undefined;
+    if (!this.settings.formatConverterEnabled) return;
+    this.formatConverterPlugin = new FormatConverterPlugin(this);
+    this.formatConverterPlugin.load();
   }
 
   saveSettings() {

@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 328,
-      "partial": 51,
+      "partial": 52,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2483
+      "unknown": 2482
     }
   },
   "requirements": [
@@ -1692,8 +1692,12 @@
       "title": "Format converter",
       "sourcePath": "obsidian-help/en/Plugins/Format converter.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Format%20converter.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/format-converter.test.ts",
+        "tests/e2e/format-converter.spec.ts"
+      ],
+      "notes": "Unit-tested conversions (Roam tags/highlights/TODOs, Bear highlights, Zettelkasten full/pretty links, alias/tag/cssclass to list properties; code, inline code and frontmatter protected) and driven end to end in Electron: Core plugins toggle (off by default), ribbon binary icon, Open format converter command, modal with per-conversion checkboxes, backup warning and Start conversion rewriting a fixture vault. Partial: the spec does not define how a Zettelkasten UID is recognised, so Geode assumes a 12-14 digit filename prefix; the Help page was not diffed line by line for edge cases."
     },
     {
       "id": "HELP-b7bcdb79c9d3",

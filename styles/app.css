@@ -6632,3 +6632,21 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
 .side-dock-ribbon-action.audio-recorder-ribbon.is-recording svg {
   color: var(--text-error, #e5484d);
 }
+
+.format-converter-modal .format-converter-warning {
+  color: var(--text-error, #e5484d);
+}
+.format-converter-modal .format-converter-group h3 {
+  margin: 12px 0 4px;
+}
+.format-converter-modal .format-converter-option {
+  display: block;
+  margin: 2px 0;
+}
+.format-converter-modal .format-converter-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
