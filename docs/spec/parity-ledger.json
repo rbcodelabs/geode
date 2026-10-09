@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 328,
-      "partial": 52,
+      "partial": 53,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2482
+      "unknown": 2481
     }
   },
   "requirements": [
@@ -1806,8 +1806,12 @@
       "title": "Slash commands",
       "sourcePath": "obsidian-help/en/Plugins/Slash commands.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Slash%20commands.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/slash-commands.test.ts",
+        "tests/e2e/slash-commands.spec.ts"
+      ],
+      "notes": "Observed in Electron: typing / opens a menu over the Command palette registry, fuzzy filtering uses the palette scorer, Enter removes the typed trigger text and runs the command, a space cancels the menu, and a mid-word slash does not open it. Core plugins toggle (on by default) wired. Arrow-key navigation and Esc cancel rely on CodeMirror's stock completion keymap and were not separately asserted, so the row remains partial."
     },
     {
       "id": "HELP-37f3d8a96fc8",

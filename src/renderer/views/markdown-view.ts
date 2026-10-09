@@ -283,7 +283,7 @@ export class MarkdownView implements View {
             ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
-        autocompletion({ override: [wikilinkCompletion] }),
+        autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
         placeholder("Start writing…"),
         EditorView.lineWrapping,
         Prec.high(

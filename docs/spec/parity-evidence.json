@@ -2686,6 +2686,14 @@
     ],
     "notes": "Added at the Workspace level, where plugins call it: setActiveLeaf previously existed only on TabGroup and Sidebar, and took no options. Both documented forms are accepted, the options object and the deprecated (leaf, pushHistory, focus) triple. focus defaults to false and, when true, moves keyboard focus into the leaf content rather than being accepted and ignored. Observed in Electron restoring the kanban board in front of a note opened behind it."
   },
+  "HELP-229876d87d7b": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/slash-commands.test.ts",
+      "tests/e2e/slash-commands.spec.ts"
+    ],
+    "notes": "Observed in Electron: typing / opens a menu over the Command palette registry, fuzzy filtering uses the palette scorer, Enter removes the typed trigger text and runs the command, a space cancels the menu, and a mid-word slash does not open it. Core plugins toggle (on by default) wired. Arrow-key navigation and Esc cancel rely on CodeMirror's stock completion keymap and were not separately asserted, so the row remains partial."
+  },
   "HELP-eab17f7eff0f": {
     "status": "partial",
     "evidence": [

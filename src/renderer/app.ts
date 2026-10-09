@@ -27,6 +27,7 @@ import {
 import { MarkdownRenderer } from "./markdown/render";
 import { AudioRecorderPlugin } from "./internal-plugins/audio-recorder/audio-recorder-plugin";
 import { FormatConverterPlugin } from "./internal-plugins/format-converter/format-converter-plugin";
+import { SlashCommandsPlugin } from "./internal-plugins/slash-commands/slash-commands-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
 import {
@@ -143,6 +144,8 @@ interface AppSettings {
   audioRecorderEnabled: boolean;
   /** Format converter core plugin; off by default, as in Obsidian. */
   formatConverterEnabled: boolean;
+  /** Slash commands core plugin (enabled by default, as in Obsidian). */
+  slashCommandsEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -1129,7 +1132,13 @@ class SettingsModal extends Modal {
 
   private renderCorePluginsTab(container: HTMLElement): void {
     const webViewer = this.geodeApp.webViewer;
-    container.innerHTML = `<h2>Core plugins</h2><h3>Audio recorder</h3>`;
+    container.innerHTML = `<h2>Core plugins</h2><h3>Slash commands</h3>`;
+    this.addToggle(container, "Enable Slash commands", this.geodeApp.settings.slashCommandsEnabled, (enabled) => {
+      this.geodeApp.settings.slashCommandsEnabled = enabled;
+      this.geodeApp.syncSlashCommandsPlugin();
+      this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
     this.addToggle(container, "Enable Audio recorder", this.geodeApp.settings.audioRecorderEnabled, (enabled) => {
       this.geodeApp.settings.audioRecorderEnabled = enabled;
       this.geodeApp.syncAudioRecorderPlugin();
@@ -2152,6 +2161,8 @@ export class App {
   }
   private audioRecorderPlugin?: AudioRecorderPlugin;
   private formatConverterPlugin?: FormatConverterPlugin;
+  /** Live Slash commands plugin, or undefined while the core plugin is off. */
+  slashCommandsPlugin?: SlashCommandsPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2166,6 +2177,7 @@ export class App {
     webViewer: { ...DEFAULT_WEB_VIEWER_OPTIONS },
     audioRecorderEnabled: false,
     formatConverterEnabled: false,
+    slashCommandsEnabled: true,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -2809,6 +2821,7 @@ export class App {
         webViewer: this.webViewer.options,
         audioRecorderEnabled: saved.audioRecorderEnabled === true,
         formatConverterEnabled: saved.formatConverterEnabled === true,
+        slashCommandsEnabled: saved.slashCommandsEnabled !== false,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -3028,6 +3041,7 @@ export class App {
 
     this.syncAudioRecorderPlugin();
     this.syncFormatConverterPlugin();
+    this.syncSlashCommandsPlugin();
     this.registerActions();
     this.registerCommands();
     this.hostDisposers.add(this.commands.attach(document, (event) => this.keymap.handleKeydown(event)));
@@ -3737,6 +3751,8 @@ export class App {
     this.audioRecorderPlugin = undefined;
     this.formatConverterPlugin?.unload();
     this.formatConverterPlugin = undefined;
+    this.slashCommandsPlugin?.unload();
+    this.slashCommandsPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
     await this.vault.close();
@@ -5603,6 +5619,15 @@ export class App {
     if (this.host.capabilities.multipleWindows) {
       void this.host.desktop?.setWindowBackgroundColor(color);
     }
+  }
+
+  /** Load or unload the Slash commands core plugin to match `settings.slashCommandsEnabled`. */
+  syncSlashCommandsPlugin(): void {
+    this.slashCommandsPlugin?.unload();
+    this.slashCommandsPlugin = undefined;
+    if (!this.settings.slashCommandsEnabled) return;
+    this.slashCommandsPlugin = new SlashCommandsPlugin(this);
+    this.slashCommandsPlugin.load();
   }
 
   /** Load or unload the Audio recorder core plugin to match `settings.audioRecorderEnabled`. */

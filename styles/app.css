@@ -3077,16 +3077,25 @@ sup.cm-footnote-ref {
   border-radius: 8px;
   box-shadow: 0 4px 20px var(--shadow);
   overflow: hidden;
+  font-family: var(--font-interface);
 }
 
-.cm-tooltip-autocomplete ul li {
-  color: var(--text-normal);
-  padding: 4px 10px;
+/* CodeMirror's base theme sets a monospace family on the list with a
+   scoped selector, so this needs !important. */
+.cm-tooltip.cm-tooltip-autocomplete > ul {
+  font-family: var(--font-interface) !important;
+  padding: 6px;
 }
 
-.cm-tooltip-autocomplete ul li[aria-selected] {
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
+.cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  color: var(--text-normal) !important;
+  padding: 7px 12px !important;
+  border-radius: 6px;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--background-modifier-active) !important;
+  color: var(--text-normal) !important;
 }
 
 /* Reading view */
