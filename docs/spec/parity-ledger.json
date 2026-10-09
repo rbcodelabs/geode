@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 328,
-      "partial": 50,
+      "partial": 51,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2477
+      "unknown": 2476
     }
   },
   "requirements": [
@@ -1824,8 +1824,12 @@
       "title": "Unique note creator",
       "sourcePath": "obsidian-help/en/Plugins/Unique note creator.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Unique%20note%20creator.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/unique-notes.test.ts",
+        "tests/e2e/unique-note-creator.spec.ts"
+      ],
+      "notes": "Observed: the 'Create new unique note' command and ribbon icon create an empty YYYYMMDDHHmm-named note by default (and open it); a configured folder, Moment date format (same tokens as Daily notes) and template (with {{title}}/{{date}} expanded) are applied; a name collision takes the next available timestamp; settings persist per vault with an enable toggle. The ribbon uses Lucide file-stack as the nearest match to the sheets-in-box icon, and a missing template reports an error notice rather than linking to the plugin's settings, so the row remains partial."
     },
     {
       "id": "HELP-140b011d4105",

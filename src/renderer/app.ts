@@ -94,6 +94,7 @@ import {
 } from "./daily-notes";
 import type { Command } from "./commands";
 import moment from "moment";
+import { UniqueNotesService, uniqueNotePath } from "./unique-notes";
 import { TemplatesService, renderTemplate, templateFiles, templatePath, templateNoteName, type TemplatesConfig } from "./templates";
 import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
@@ -697,8 +698,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
 /** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
 const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
@@ -811,6 +812,8 @@ class SettingsModal extends Modal {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "daily-notes") {
       this.renderDailyNotesTab(this.contentContainerEl);
+    } else if (id === "unique-notes") {
+      this.renderUniqueNotesTab(this.contentContainerEl);
     } else if (id === "templates") {
       this.renderTemplatesTab(this.contentContainerEl);
     } else if (id === "core-plugins") {
@@ -875,6 +878,7 @@ class SettingsModal extends Modal {
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("hotkeys", "Hotkeys", this.navEl);
     addNavItem("daily-notes", "Daily Notes", this.navEl);
+    addNavItem("unique-notes", "Unique note creator", this.navEl);
     addNavItem("templates", "Templates", this.navEl);
     addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
@@ -1098,6 +1102,25 @@ class SettingsModal extends Modal {
       this.geodeApp.notify("Could not save Daily Notes settings. Your previous settings are still active.");
       if (synchronizeControl) synchronizeControl();
       else if (this.activeTabId === "daily-notes") this.activateTab("daily-notes");
+    }
+  }
+
+  private renderUniqueNotesTab(container: HTMLElement): void {
+    const unique = this.geodeApp.uniqueNotes;
+    container.innerHTML = `<h2>Unique note creator</h2>`;
+    const update = async (patch: Partial<{ enabled: boolean; folder: string; format: string; template: string }>, sync?: () => void) => {
+      try { await unique.update(patch); this.geodeApp.syncUniqueNoteRibbon(); sync?.(); }
+      catch (err) {
+        console.error(err);
+        this.geodeApp.notify("Could not save Unique note creator settings. Your previous settings are still active.");
+        if (sync) sync(); else if (this.activeTabId === "unique-notes") this.activateTab("unique-notes");
+      }
+    };
+    this.addToggle(container, "Enable Unique note creator", unique.enabled, enabled => void update({ enabled }));
+    for (const [key, label] of [["folder", "New file location"], ["format", "Date format"], ["template", "Template file location"]] as const) {
+      const input = this.addTextInput(container, label, unique.options[key], value => {
+        void update({ [key]: value }, () => { input.value = unique.options[key]; });
+      });
     }
   }
 
@@ -2045,6 +2068,8 @@ export class App {
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
   readonly templates: TemplatesService;
+  readonly uniqueNotes: UniqueNotesService;
+  private uniqueNoteRibbonEl: HTMLElement | null = null;
   readonly webViewer: WebViewerService;
   readonly sync: SyncService;
   readonly comments: CommentService;
@@ -2159,6 +2184,7 @@ export class App {
     this.host = host;
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
+    this.uniqueNotes = new UniqueNotesService(host.config);
     this.webViewer = new WebViewerService(host.config, () => this.applyWebViewerLifecycle());
     this.sync = new SyncService(host, () => this.vault.root, () => this.reloadPortableSettings());
     this.settings.webViewer = this.webViewer.options;
@@ -2787,6 +2813,8 @@ export class App {
     // before any hosted plugin (e.g. Calendar) can query "daily-notes".
     await this.dailyNotes.load();
     await this.templates.load();
+    await this.uniqueNotes.load();
+    this.syncUniqueNoteRibbon();
     await this.webViewer.load(saved?.webViewer);
 
     // Same shape as daily-notes above: read the persisted Bookmarks tree
@@ -2820,6 +2848,16 @@ export class App {
       void this.createNewCanvas(activeFile?.parent ?? "");
     });
     this.ribbonActionsEl.appendChild(createCanvasButton);
+    const uniqueNoteButton = document.createElement("button");
+    uniqueNoteButton.type = "button";
+    uniqueNoteButton.className = "side-dock-ribbon-action";
+    uniqueNoteButton.title = "Create new unique note";
+    uniqueNoteButton.setAttribute("aria-label", "Create new unique note");
+    setIcon(uniqueNoteButton, "file-stack");
+    uniqueNoteButton.addEventListener("click", () => void this.createUniqueNote());
+    this.ribbonActionsEl.appendChild(uniqueNoteButton);
+    this.uniqueNoteRibbonEl = uniqueNoteButton;
+    this.syncUniqueNoteRibbon();
     const ribbonBottom = document.createElement("div");
     ribbonBottom.className = "workspace-ribbon-bottom";
     const settingsButton = document.createElement("button");
@@ -4041,6 +4079,15 @@ export class App {
       this.saveSettings();
     });
     this.commands.add({
+      id: "unique-note",
+      name: "Create new unique note",
+      checkCallback: (checking) => {
+        if (!this.uniqueNotes.enabled) return false;
+        if (!checking) void this.createUniqueNote();
+        return true;
+      },
+    });
+    this.commands.add({
       id: "daily-note",
       name: "Open today's daily note",
       hotkey: "Mod+D",
@@ -4668,6 +4715,31 @@ export class App {
       }
     }
     await this.openFile(file, false);
+  }
+
+  /** Show the Unique note creator ribbon icon only while the core plugin is enabled. */
+  syncUniqueNoteRibbon(): void {
+    if (this.uniqueNoteRibbonEl) this.uniqueNoteRibbonEl.hidden = !this.uniqueNotes.enabled;
+  }
+
+  /**
+   * Create a note named by the current time in the configured format/folder
+   * (next free timestamp on collision), seeded from the optional template,
+   * and open it. Shares the Daily notes date-format and Templates rendering.
+   */
+  async createUniqueNote(): Promise<void> {
+    if (!this.uniqueNotes.enabled) return;
+    const settings = this.uniqueNotes.options;
+    try {
+      const { path, name, time } = uniqueNotePath(moment(), settings, p => !!this.vault.getAbstractFileByPath(p));
+      const content = settings.template
+        ? renderTemplate(await this.readTemplate(settings.template), name, time, this.templates.options)
+        : "";
+      const file = await this.vault.create(path, content);
+      await this.openFile(file, false);
+    } catch (err) {
+      this.notify(`Could not create unique note: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // --- Bookmarks -----------------------------------------------------------
