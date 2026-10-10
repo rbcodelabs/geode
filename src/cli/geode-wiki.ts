@@ -44,6 +44,7 @@ import {
   type WikiSession,
 } from "../wiki/index";
 import { publishFolder, restoreFolder } from "../catalog/index";
+import { runSync } from "./sync";
 import {
   coverageWarnings,
   emit,
@@ -78,6 +79,10 @@ Catalog commands (libpq PG* variables select the server):
                   --base-sequence <n> [--schema <name>]
   catalog-restore --into <dir> --vault-id <id> [--schema <name>]
 
+Sync commands (see "geode-wiki sync --help"):
+  sync init | preview | run | status | conflicts | resolve | serve | gc
+                                  keep a folder in step with a hub store, with safety rails
+
 Options:
   --json                  structured output; named statuses preserved verbatim
   --limit <n>             search: maximum hits
@@ -95,6 +100,8 @@ Exit codes:
                   "portability-collision", "oversize", "conflict", and so on
   2  usage        argv could not be turned into an operation; nothing ran
   3  unavailable  the vault folder or the catalog store could not be reached
+  4  conflicts    (sync) unresolved conflicts remain
+  5  locked       (sync) another sync run holds the vault's lock; nothing was done
 
 There is no "refresh" command. Every invocation is a fresh capture, so the
 process is the refresh.`;
@@ -181,6 +188,10 @@ export interface RunContext {
   readonly streams: Streams;
   readonly env: NodeJS.ProcessEnv;
   readonly stdin: NodeJS.ReadableStream;
+  /** Raw stdout, for `sync serve` only (binary frames). Absent in in-process callers. */
+  readonly rawOut?: NodeJS.WritableStream;
+  /** Test seam for `sync schedule`: replaces launchctl/systemctl execution. */
+  readonly scheduleRunner?: import("./sync-schedule").ScheduleRunner;
 }
 
 /**
@@ -201,6 +212,7 @@ export async function run(argv: readonly string[], context: RunContext): Promise
   }
 
   const name = argv[0];
+  if (name === "sync") return runSync(argv.slice(1), context);
   const spec = COMMANDS[name];
   if (!spec) {
     const known = Object.keys(COMMANDS).sort().join(", ");

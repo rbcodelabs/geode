@@ -39,8 +39,8 @@ const EMPTY_COVERAGE = {
 };
 
 describe("exit codes", () => {
-  it("has exactly four, and they are the documented numbers", () => {
-    expect(EXIT).toEqual({ ok: 0, refused: 1, usage: 2, unavailable: 3 });
+  it("has exactly six, and they are the documented numbers (4 and 5 belong to `sync`)", () => {
+    expect(EXIT).toEqual({ ok: 0, refused: 1, usage: 2, unavailable: 3, conflicts: 4, locked: 5 });
   });
 
   it("treats `resolved` as affirmative alongside `ok`", () => {
