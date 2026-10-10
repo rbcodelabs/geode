@@ -278,8 +278,8 @@ export class FsStoreSession implements AppendOnlySession {
     } finally { await handle.close(); }
   }
 
-  async appendRecord(record: HistoryRecord, signal: AbortSignal): Promise<void> {
-    checkSignal(signal);
+  /** Everything appendRecord checks before touching the log; shared with appendRecords. */
+  private async validateRecord(record: HistoryRecord): Promise<{ path: string; bytes: Buffer }> {
     if (!record || typeof record !== "object" || record.schema !== 1) throw new SyncStoreError("invalid-record", "Unsupported record schema");
     if (record.vaultId !== this.descriptor.vaultId) throw new SyncStoreError("invalid-record", "Record belongs to a different vault");
     const path = this.recordPath(record.recordId);
@@ -291,6 +291,12 @@ export class FsStoreSession implements AppendOnlySession {
       try { size = await this.blobSize(record.blob.id); } catch (error) { if (error instanceof SyncStoreError && error.code === "not-found") throw new SyncStoreError("invalid-record", "Record references a blob that is not in the store"); throw error; }
       if (size !== record.blob.size) throw new SyncStoreError("invalid-record", "Record blob size differs from the stored blob");
     }
+    return { path, bytes };
+  }
+
+  async appendRecord(record: HistoryRecord, signal: AbortSignal): Promise<void> {
+    checkSignal(signal);
+    const { path, bytes } = await this.validateRecord(record);
     await withStoreLock(this.root, signal, async () => {
       checkSignal(signal);
       await this.repairIndexTail();
@@ -306,6 +312,53 @@ export class FsStoreSession implements AppendOnlySession {
       try { await writeAll(handle, Buffer.from(`${record.recordId}\n`)); await handle.sync(); } finally { await handle.close(); }
       if (fresh) await fsyncDir(this.root);
     });
+  }
+
+  /**
+   * Appends records in order under ONE writer-lock hold and ONE index append + fsync, which is what
+   * makes a large first upload cheap. The ordering guarantee is unchanged and per record: every record
+   * file (and every blob it references) is durable before any of the batch's index lines is written, so
+   * a record is visible to scan() only once everything it needs is durable. Stops at the first record
+   * that fails and still publishes the records before it; `appended` is that prefix length. A crash
+   * mid-batch leaves orphan record files and at most a torn index tail, both handled exactly as in
+   * appendRecord, and a retry of the same batch is idempotent.
+   */
+  async appendRecords(records: HistoryRecord[], signal: AbortSignal): Promise<{ appended: number; error?: unknown }> {
+    checkSignal(signal);
+    const prepared: Array<{ record: HistoryRecord; path: string; bytes: Buffer }> = [];
+    let failure: unknown;
+    for (const record of records) {
+      try { prepared.push({ record, ...await this.validateRecord(record) }); } catch (error) { if (signal.aborted) throw error; failure = error; break; }
+    }
+    if (!prepared.length) return failure === undefined ? { appended: 0 } : { appended: 0, error: failure };
+    let ok = 0;
+    await withStoreLock(this.root, signal, async () => {
+      checkSignal(signal);
+      await this.repairIndexTail();
+      const lines: string[] = [];
+      let indexText: string | undefined;
+      for (const item of prepared) {
+        try {
+          const created = await linkNew(this.recordsDir, item.path, item.bytes);
+          if (!created) {
+            let existing: unknown;
+            try { existing = JSON.parse(await readFile(item.path, "utf8")); } catch { throw new SyncStoreError("conflict", "An unreadable record already exists under this id"); }
+            if (canonicalJson(existing) !== canonicalJson(item.record)) throw new SyncStoreError("conflict", "A different record already exists under this id");
+            indexText ??= "\n" + await this.readIndexText();
+            if (indexText.includes(`\n${item.record.recordId}\n`) || lines.includes(item.record.recordId)) { ok++; continue; } // fully published already
+          }
+          lines.push(item.record.recordId);
+          ok++;
+        } catch (error) { if (signal.aborted) throw error; failure = error; break; }
+      }
+      if (!lines.length) return;
+      checkSignal(signal);
+      const fresh = await stat(this.indexPath).then(() => false, () => true);
+      const handle = await open(this.indexPath, "a", 0o644);
+      try { await writeAll(handle, Buffer.from(lines.map(id => id + "\n").join(""))); await handle.sync(); } finally { await handle.close(); }
+      if (fresh) await fsyncDir(this.root);
+    });
+    return failure === undefined ? { appended: ok } : { appended: ok, error: failure };
   }
 
   /** One bounded page of the index. Lock-free: index lines only ever grow by whole, fsync'd appends. */

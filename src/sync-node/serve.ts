@@ -13,7 +13,14 @@ import { SyncStoreError } from "./store-errors";
  *            fails with `aborted` if it had not already finished)
  *
  * Methods: hello, discover, createVault, open, scan, putBlobStart, putBlobChunk,
- * putBlobCommit, putBlobAbort, readBlobRange, appendRecord. `hello` must come first.
+ * putBlobCommit, putBlobAbort, readBlobRange, appendRecord, and the optional additions
+ * putBlob (whole blob of at most one frame in a single request) and appendRecords (an
+ * ordered batch, stops at the first failure and reports how many were appended). The
+ * hello reply lists the optional additions under `features` plus `maxUploads`; a client
+ * only uses what it sees, so old clients and old servers keep working unchanged.
+ * Requests take effect in arrival order, so a client may pipeline many requests without
+ * waiting for replies. The one exception is putBlob, which may overlap other putBlobs (it
+ * still waits for every earlier request, and every later non-putBlob request waits for it). `hello` must come first.
  * One connection serves one opened vault session.
  *
  * stdout carries protocol frames ONLY; everything diagnostic goes through `log`
@@ -32,9 +39,14 @@ export interface ServeOptions {
   output: WritableLike;
   log?: (message: string) => void;
   stats?: ServeStats;
+  /** Test seam: behave as a server that predates the optional additions (no `features`, no putBlob/appendRecords, 4 uploads). */
+  legacy?: boolean;
 }
 
-const MAX_UPLOADS = 4;
+const MAX_UPLOADS = 16;
+const MAX_BATCH_RECORDS = 256;
+/** Advertised in the hello reply; a client talking to an older server sees none of these and uses the original methods only. */
+const FEATURES = { putBlob: true, appendRecords: true } as const;
 const SCAN_LIMIT = 200;
 
 export async function serveStore(options: ServeOptions): Promise<void> {
@@ -45,9 +57,10 @@ export async function serveStore(options: ServeOptions): Promise<void> {
   const parser = new FrameParser();
   const inflight = new Map<number, AbortController>();
   const uploads = new Map<string, FsBlobWriter>();
-  // Requests run strictly in arrival order (a pipelined open/putBlobStart/chunk sequence is deterministic);
+  // Requests run in arrival order (a pipelined open/putBlobStart/chunk sequence is deterministic) except that one-shot putBlobs overlap each other;
   // only `abort` is out of band, and it takes effect on queued and running requests alike.
   let queue: Promise<void> = Promise.resolve();
+  const overlapping = new Set<Promise<void>>();
   let session = null as FsStoreSession | null;
   let greeted = false, uploadSeq = 0, fatal = false;
 
@@ -62,11 +75,13 @@ export async function serveStore(options: ServeOptions): Promise<void> {
   const int = (value: unknown, name: string) => { if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new SyncStoreError("invalid-request", `${name} must be an integer`); return value; };
   const upload = (value: unknown) => { const writer = uploads.get(str(value, "upload")); if (!writer) throw new SyncStoreError("not-found", "Unknown upload"); return writer; };
 
+  const maxUploads = options.legacy ? 4 : MAX_UPLOADS;
   async function handle(method: string, params: Record<string, unknown>, body: Buffer | undefined, signal: AbortSignal): Promise<{ result: unknown; body?: Uint8Array }> {
+    if (options.legacy && (method === "putBlob" || method === "appendRecords")) throw new SyncStoreError("invalid-request", `Unknown method ${method}`);
     if (method === "hello") {
       if (params.protocol !== PROTOCOL_NAME || params.version !== PROTOCOL_VERSION) throw new SyncStoreError("protocol", `Unsupported protocol ${String(params.protocol)} v${String(params.version)}; server speaks ${PROTOCOL_NAME} v${PROTOCOL_VERSION}`);
       greeted = true;
-      return { result: { protocol: PROTOCOL_NAME, version: PROTOCOL_VERSION, maxFrameBytes: MAX_FRAME_BYTES, maxFileBytes: SYNC_MAX_FILE_BYTES } };
+      return { result: { protocol: PROTOCOL_NAME, version: PROTOCOL_VERSION, maxFrameBytes: MAX_FRAME_BYTES, maxFileBytes: SYNC_MAX_FILE_BYTES, ...(options.legacy ? {} : { maxUploads, features: FEATURES }) } };
     }
     if (!greeted) throw new SyncStoreError("protocol", "hello must be the first request");
     switch (method) {
@@ -88,11 +103,19 @@ export async function serveStore(options: ServeOptions): Promise<void> {
       }
       case "putBlobStart": {
         needSession();
-        if (uploads.size >= MAX_UPLOADS) throw new SyncStoreError("invalid-request", "Too many concurrent uploads");
+        if (uploads.size >= maxUploads) throw new SyncStoreError("invalid-request", "Too many concurrent uploads");
         const writer = await needSession().beginBlob({ sha256: str(params.sha256, "sha256"), size: int(params.size, "size") });
         const id = `u${++uploadSeq}`;
         uploads.set(id, writer);
         return { result: { upload: id } };
+      }
+      case "putBlob": {
+        // Start, data and commit in one request: the same writer, hashing, fsync and rename as the three-step path.
+        const size = int(params.size, "size");
+        if (size > 0 && (!body || body.length !== size)) throw new SyncStoreError("size-mismatch", "putBlob needs exactly one binary frame holding the whole blob");
+        if (size === 0 && body?.length) throw new SyncStoreError("size-mismatch", "Blob data exceeds the declared size");
+        const writer = await needSession().beginBlob({ sha256: str(params.sha256, "sha256"), size });
+        try { if (body?.length) await writer.write(body); return { result: { ref: await writer.commit() } }; } catch (error) { await writer.abort(); throw error; }
       }
       case "putBlobChunk": {
         const writer = upload(params.upload);
@@ -121,6 +144,12 @@ export async function serveStore(options: ServeOptions): Promise<void> {
         await needSession().appendRecord(params.record as never, signal);
         return { result: {} };
       }
+      case "appendRecords": {
+        const s = needSession();
+        if (!Array.isArray(params.records) || params.records.length > MAX_BATCH_RECORDS) throw new SyncStoreError("invalid-request", `records must be an array of at most ${MAX_BATCH_RECORDS}`);
+        const { appended, error } = await s.appendRecords(params.records as never, signal);
+        return { result: error === undefined ? { appended } : { appended, error: toStoreError(error, log).toWire() } };
+      }
       default: throw new SyncStoreError("invalid-request", `Unknown method ${method}`);
     }
   }
@@ -136,7 +165,10 @@ export async function serveStore(options: ServeOptions): Promise<void> {
     const controller = new AbortController();
     inflight.set(id, controller);
     const params = header.params && typeof header.params === "object" && !Array.isArray(header.params) ? header.params as Record<string, unknown> : {};
-    const task = queue.then(async () => {
+    // A one-shot putBlob touches nothing but its own content-addressed temp file, so it may overlap other
+    // putBlobs; it still waits for everything that arrived before it, and every other request waits for it.
+    const overlap = header.method === "putBlob" && greeted && !options.legacy;
+    const task = (overlap ? queue : Promise.all([queue, ...overlapping]).then(() => {})).then(async () => {
       try {
         if (controller.signal.aborted) throw new SyncStoreError("aborted", "Request aborted");
         const { result, body } = await handle(header.method as string, params, frame.body, controller.signal);
@@ -145,7 +177,8 @@ export async function serveStore(options: ServeOptions): Promise<void> {
       } catch (error) { await respondError(id, controller.signal.aborted ? new SyncStoreError("aborted", "Request aborted") : error); }
       finally { inflight.delete(id); }
     });
-    queue = task;
+    if (overlap) { overlapping.add(task); void task.finally(() => overlapping.delete(task)); }
+    else queue = task;
   }
 
   try {
@@ -157,7 +190,7 @@ export async function serveStore(options: ServeOptions): Promise<void> {
       for (const frame of frames) dispatch(frame);
       if (violation) {
         log(`fatal framing error: ${(violation as Error).message}`);
-        await queue; // earlier requests answer first, then the named framing error
+        await Promise.all([queue, ...overlapping]); // earlier requests answer first, then the named framing error
         await respondError(null, violation);
         fatal = true;
         break;
@@ -169,7 +202,7 @@ export async function serveStore(options: ServeOptions): Promise<void> {
   } finally {
     // EOF (client gone or finished): requests already received still run to completion (an append
     // is never torn by a disconnect); then anything left open — uploads — is discarded.
-    await queue;
+    await Promise.all([queue, ...overlapping]);
     await Promise.allSettled([...uploads.values()].map(writer => writer.abort()));
     uploads.clear();
     await (session as FsStoreSession | null)?.close();

@@ -50,6 +50,19 @@ export interface AppendOnlySession {
   readBlob(ref: BlobRef, signal: AbortSignal): Promise<ArrayBuffer>;
   appendRecord(record: HistoryRecord, signal: AbortSignal): Promise<void>;
   close(): Promise<void>;
+  /*
+   * Optional throughput hints for high-latency stores. A session that omits them is driven exactly
+   * as before: one blob upload at a time, a read-back after each, one record per round trip.
+   */
+  /** How many putBlob calls the engine may keep in flight (bounded again by a byte budget). Default 1. */
+  readonly uploadConcurrency?: number;
+  /** True when the putBlob receipt already proves the store holds the hash-verified bytes durably, making a read-back redundant. */
+  readonly commitVerified?: boolean;
+  /**
+   * Appends records in order in one round trip, stopping at the first failure. Resolves with how many
+   * were appended (a prefix of `records`) and the failure, if any; it rejects only when the outcome is unknown.
+   */
+  appendRecords?(records: HistoryRecord[], signal: AbortSignal): Promise<{ appended: number; error?: unknown }>;
 }
 
 export interface AppendOnlySyncProvider {

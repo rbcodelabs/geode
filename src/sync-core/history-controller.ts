@@ -230,6 +230,8 @@ const sameHeads = (a: string[], b: string[]) => { const left = [...a].sort(), ri
 const fingerprint = (resource: HistoryLocalResource | undefined): string | null => resource ? (resource.kind === 'folder' ? 'folder' : resource.sha256 ?? null) : null;
 const matches = (resource: HistoryLocalResource | undefined, base: HistoryBaseline) => base.present
     ? Boolean(resource && resource.kind === base.kind && resource.path === base.path && (base.kind === 'folder' || resource.sha256 === base.sha256)) : !resource;
+const UPLOAD_BYTE_BUDGET = 64 * 1024 * 1024; // bytes held in memory by in-flight uploads (at least one upload always runs)
+const APPEND_BATCH = 64; // records appended per round trip
 const COMPARE_OVERSIZE = 'Conflict comparison is limited to 1 MiB of text';
 const INTEGRITY_MISMATCH = 'Sync content integrity mismatch';
 const OWNERSHIP_CHANGED = 'Resource ownership changed; preview sync again';
@@ -794,6 +796,12 @@ export class HistoryController {
      */
     private async performAll(operations: HistoryOperation[], snapshot: HistoryLocalSnapshot, signal: AbortSignal): Promise<void> {
         const total = operations.length;
+        const concurrency = Math.max(1, Math.floor(this.options.session.uploadConcurrency ?? 1));
+        if (concurrency > 1 || this.options.session.appendRecords) {
+            await this.performPipelined(operations, snapshot, signal, concurrency);
+            this.report('finalizing', total, total);
+            return;
+        }
         for (const [index, operation] of operations.entries()) {
             // Re-reported per network leg inside perform() as well. A single file
             // at the 100 MiB cap is otherwise one silent tick, and silence is
@@ -804,6 +812,125 @@ export class HistoryController {
         }
         this.report('finalizing', total, total);
     }
+    /**
+     * High-latency variant of the loop above, used only when the session advertises it can overlap
+     * round trips. Blob uploads (the slow, independent part) run up to `concurrency` at a time and
+     * ahead of the commit cursor; records are still appended strictly in operation order, and a record
+     * is only ever appended after the upload that its blob reference came from has completed and
+     * been journalled. Apply operations run in their original position, one at a time. A failure stops
+     * new uploads and surfaces at the failing operation, after every earlier operation has committed.
+     */
+    private async performPipelined(operations: HistoryOperation[], snapshot: HistoryLocalSnapshot, signal: AbortSignal, concurrency: number): Promise<void> {
+        const session = this.options.session, total = operations.length;
+        const inner = new AbortController();
+        const onAbort = () => inner.abort(signal.reason);
+        if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
+        interface Slot { op: HistoryOperation; ok: boolean; upload?: Promise<void> }
+        const slots: Slot[] = operations.map(op => ({ op, ok: false }));
+        let next = 0, inflight = 0, inflightBytes = 0;
+        const startMore = () => {
+            while (next < slots.length && !inner.signal.aborted) {
+                const slot = slots[next], op = slot.op;
+                if (this.needsUpload(op)) {
+                    const size = op.payload!.size;
+                    if (inflight >= concurrency || inflight > 0 && inflightBytes + size > UPLOAD_BYTE_BUDGET)
+                        break;
+                    inflight++;
+                    inflightBytes += size;
+                    slot.upload = this.stageBlob(op, snapshot, inner.signal).then(() => { slot.ok = true; }).finally(() => { inflight--; inflightBytes -= size; startMore(); });
+                    slot.upload.catch(() => { });
+                }
+                else
+                    slot.ok = true;
+                next++;
+            }
+        };
+        try {
+            for (let i = 0; i < slots.length;) {
+                startMore();
+                const slot = slots[i], op = slot.op;
+                this.report('transferring', i, total, op.path);
+                if (slot.upload)
+                    await slot.upload;
+                this.assert(signal);
+                this.validateOperation(op);
+                if (op.phase !== 'prepared') {
+                    i++;
+                    continue;
+                }
+                if (!this.included(snapshot, op.record.namespace, op.path))
+                    throw new Error('Pending sync resource is excluded or blocked');
+                if (op.type !== 'publish') {
+                    await this.perform(op, snapshot, signal);
+                    i++;
+                    continue;
+                }
+                const batch = [op];
+                startMore();
+                for (let j = i + 1; j < slots.length && batch.length < APPEND_BATCH && slots[j].ok; j++) {
+                    const candidate = slots[j].op;
+                    if (candidate.type !== 'publish' || candidate.phase !== 'prepared')
+                        break;
+                    this.validateOperation(candidate);
+                    if (!this.included(snapshot, candidate.record.namespace, candidate.path))
+                        break; // let the sequential step report it at its own position
+                    batch.push(candidate);
+                }
+                let appended = 0, failure: unknown;
+                if (session.appendRecords) {
+                    ({ appended, error: failure } = await this.checked(signal, () => session.appendRecords!(batch.map(b => b.record), signal)));
+                    if (!Number.isInteger(appended) || appended < 0 || appended > batch.length)
+                        throw new Error('Invalid append receipt');
+                }
+                else {
+                    try {
+                        await this.checked(signal, () => session.appendRecord(op.record, signal));
+                        appended = 1;
+                    }
+                    catch (error) {
+                        failure = error;
+                    }
+                    batch.length = 1;
+                }
+                const done = batch.slice(0, appended);
+                for (const committed of done)
+                    committed.phase = 'committed';
+                await this.checked(signal, () => Promise.all(done.map(committed => this.ports.saveOperation(committed))));
+                if (failure !== undefined)
+                    throw failure;
+                i += batch.length;
+            }
+        }
+        finally {
+            inner.abort();
+            signal.removeEventListener('abort', onAbort);
+            await Promise.allSettled(slots.map(slot => slot.upload));
+        }
+    }
+    private needsUpload(operation: HistoryOperation): boolean {
+        return operation.phase === 'prepared' && operation.type === 'publish' && !!operation.payload && !operation.record.blob;
+    }
+    /** Reads the frozen bytes, uploads them, checks the receipt and journals the blob reference. */
+    private async stageBlob(operation: HistoryOperation, snapshot: HistoryLocalSnapshot, signal: AbortSignal): Promise<void> {
+        this.validateOperation(operation);
+        if (!this.included(snapshot, operation.record.namespace, operation.path))
+            throw new Error('Pending sync resource is excluded or blocked');
+        const payload = operation.payload!;
+        const data = await this.verified(await this.checked(signal, () => this.ports.readStage(payload.key)), payload.sha256, payload.size, signal);
+        await this.uploadBlob(operation, data, signal, () => { });
+    }
+    private async uploadBlob(operation: HistoryOperation, data: ArrayBuffer, signal: AbortSignal, tick: () => void): Promise<void> {
+        tick();
+        const ref = await this.checked(signal, () => this.options.session.putBlob({ operationId: operation.id, sha256: operation.payload!.sha256, size: operation.payload!.size, data }, signal));
+        if (ref.sha256 !== operation.payload!.sha256 || ref.size !== operation.payload!.size)
+            throw new Error('Invalid upload receipt');
+        tick();
+        // A store whose receipt already proves durable, verified bytes (and re-checks the blob before it accepts the record) skips the read-back round trip.
+        if (!this.options.session.commitVerified)
+            await this.verified(await this.checked(signal, () => this.options.session.readBlob(ref, signal)), ref.sha256, ref.size, signal);
+        operation.record = { ...operation.record, blob: ref };
+        await this.checked(signal, () => this.ports.saveOperation(operation));
+    }
     private async perform(operation: HistoryOperation, snapshot: HistoryLocalSnapshot, signal: AbortSignal, tick: () => void = () => { }): Promise<void> {
         this.validateOperation(operation);
         if (operation.phase !== 'prepared')
@@ -812,16 +939,8 @@ export class HistoryController {
             throw new Error('Pending sync resource is excluded or blocked');
         const data = operation.payload ? await this.verified(await this.checked(signal, () => this.ports.readStage(operation.payload!.key)), operation.payload.sha256, operation.payload.size, signal) : undefined;
         if (operation.type === 'publish') {
-            if (data && !operation.record.blob) {
-                tick();
-                const ref = await this.checked(signal, () => this.options.session.putBlob({ operationId: operation.id, sha256: operation.payload!.sha256, size: operation.payload!.size, data }, signal));
-                if (ref.sha256 !== operation.payload!.sha256 || ref.size !== operation.payload!.size)
-                    throw new Error('Invalid upload receipt');
-                tick();
-                await this.verified(await this.checked(signal, () => this.options.session.readBlob(ref, signal)), ref.sha256, ref.size, signal);
-                operation.record = { ...operation.record, blob: ref };
-                await this.checked(signal, () => this.ports.saveOperation(operation));
-            }
+            if (data && !operation.record.blob)
+                await this.uploadBlob(operation, data, signal, tick);
             tick();
             await this.checked(signal, () => this.options.session.appendRecord(operation.record, signal));
         }

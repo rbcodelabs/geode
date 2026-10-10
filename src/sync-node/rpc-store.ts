@@ -16,6 +16,24 @@ export interface StoreTransport {
 
 const CHUNK = 4 * 1024 * 1024;
 const SCAN_PAGE = 200;
+/** Records per appendRecords request, and the JSON size past which a batch is split (the header line is capped at 16 MiB). */
+const APPEND_BATCH = 64;
+const APPEND_BATCH_JSON_BYTES = 2 * 1024 * 1024;
+/** Upload concurrency against a server that does not advertise `maxUploads` (it allows 4 open uploads). */
+const LEGACY_UPLOADS = 4;
+const MAX_UPLOAD_CONCURRENCY = 16;
+
+/** What the connected server said it can do in its hello reply. Absent fields mean an older server. */
+export interface ServerFeatures { putBlob: boolean; appendRecords: boolean; maxUploads: number }
+const LEGACY_FEATURES: ServerFeatures = { putBlob: false, appendRecords: false, maxUploads: LEGACY_UPLOADS };
+function parseFeatures(hello: any): ServerFeatures {
+  const f = hello?.features;
+  return {
+    putBlob: f?.putBlob === true,
+    appendRecords: f?.appendRecords === true,
+    maxUploads: typeof hello?.maxUploads === "number" && Number.isSafeInteger(hello.maxUploads) && hello.maxUploads > 0 ? hello.maxUploads : LEGACY_UPLOADS,
+  };
+}
 
 interface Pending { resolve(value: { result: any; body?: Buffer }): void; reject(error: unknown): void }
 
@@ -23,6 +41,7 @@ class Connection {
   readonly pending = new Map<number, Pending>();
   readonly writer: FrameWriter;
   dead: SyncStoreError | null = null;
+  features: ServerFeatures = LEGACY_FEATURES;
   private seq = 0;
   private fatal: SyncStoreError | null = null;
   constructor(readonly transport: StoreTransport, private readonly onDead: () => void) {
@@ -96,6 +115,8 @@ export class RpcClient {
   private connecting: Promise<Connection> | null = null;
   private opened: { binding: VaultDescriptor; deviceId: string } | null = null;
   private closed = false;
+  /** Features of the most recent connection; the legacy set until one has completed its handshake. */
+  lastFeatures: ServerFeatures = LEGACY_FEATURES;
   constructor(private readonly connect: () => Promise<StoreTransport> | StoreTransport) { }
 
   private async establish(signal?: AbortSignal): Promise<Connection> {
@@ -103,7 +124,8 @@ export class RpcClient {
     try { transport = await this.connect(); } catch (error) { throw new SyncStoreError("unavailable", `Cannot reach store: ${(error as Error).message}`, { cause: error }); }
     const conn = new Connection(transport, () => { if (this.conn === conn) this.conn = null; });
     try {
-      await conn.request("hello", { protocol: PROTOCOL_NAME, version: PROTOCOL_VERSION }, signal);
+      conn.features = parseFeatures((await conn.request("hello", { protocol: PROTOCOL_NAME, version: PROTOCOL_VERSION }, signal)).result);
+      this.lastFeatures = conn.features;
       if (this.opened) await conn.request("open", { binding: this.opened.binding, deviceId: this.opened.deviceId }, signal);
     } catch (error) { conn.fail(error instanceof SyncStoreError ? error : new SyncStoreError("unavailable", String((error as Error).message))); throw error; }
     return conn;
@@ -121,6 +143,9 @@ export class RpcClient {
     return (await this.ensure(signal)).request(method, params, signal, body);
   }
 
+  /** Features of the live connection (connecting first if needed). */
+  async features(signal?: AbortSignal): Promise<ServerFeatures> { return (await this.ensure(signal)).features; }
+
   rememberOpen(binding: VaultDescriptor, deviceId: string): void { this.opened = { binding, deviceId }; }
 
   async close(): Promise<void> {
@@ -132,6 +157,15 @@ export class RpcClient {
 
 export class RpcStoreSession implements AppendOnlySession {
   constructor(private readonly client: RpcClient) { }
+
+  /**
+   * Requests are pipelined over one connection and the server runs them in arrival order, so concurrent
+   * uploads overlap their round trips. Bounded by the server's open-upload limit (4 on servers that
+   * predate the field) and by MAX_UPLOAD_CONCURRENCY.
+   */
+  get uploadConcurrency(): number { return Math.max(1, Math.min(MAX_UPLOAD_CONCURRENCY, this.client.lastFeatures.maxUploads)); }
+  /** The commit receipt is issued only after the server hashed, fsynced and renamed the bytes, and appendRecord re-checks the blob under the writer lock. */
+  readonly commitVerified = true;
 
   async scan(cursor: string | undefined, signal: AbortSignal): Promise<HistoryScan> {
     const records: unknown[] = [];
@@ -156,6 +190,13 @@ export class RpcStoreSession implements AppendOnlySession {
     if (signal.aborted) throw abortError(signal);
     if (input.data.byteLength !== input.size) throw new SyncStoreError("size-mismatch", "Blob data length differs from the declared size");
     if (input.size > SYNC_MAX_FILE_BYTES) throw new SyncStoreError("too-large", `Blob exceeds ${SYNC_MAX_FILE_BYTES} bytes`);
+    if (input.size <= CHUNK && (await this.client.features(signal)).putBlob) {
+      // One round trip: the server stages, hashes, fsyncs and publishes in a single request.
+      const { result } = await this.client.call("putBlob", { sha256: input.sha256, size: input.size, operationId: input.operationId }, signal, input.size ? new Uint8Array(input.data) : undefined);
+      const ref = result.ref as BlobRef;
+      if (ref.sha256 !== input.sha256 || ref.size !== input.size) throw new SyncStoreError("hash-mismatch", "Store returned a receipt for different content");
+      return ref;
+    }
     const { result: started } = await this.client.call("putBlobStart", { sha256: input.sha256, size: input.size, operationId: input.operationId }, signal);
     const upload = started.upload as string;
     try {
@@ -187,6 +228,28 @@ export class RpcStoreSession implements AppendOnlySession {
 
   async appendRecord(record: HistoryRecord, signal: AbortSignal): Promise<void> {
     await this.client.call("appendRecord", { record }, signal);
+  }
+
+  async appendRecords(records: HistoryRecord[], signal: AbortSignal): Promise<{ appended: number; error?: unknown }> {
+    if (signal.aborted) throw abortError(signal);
+    let appended = 0;
+    const features = await this.client.features(signal);
+    for (let start = 0; start < records.length;) {
+      // Split by count and by encoded size so one request always fits the header cap.
+      let end = start, bytes = 0;
+      while (end < records.length && end - start < (features.appendRecords ? APPEND_BATCH : 1) && (end === start || bytes + JSON.stringify(records[end]).length < APPEND_BATCH_JSON_BYTES)) bytes += JSON.stringify(records[end++]).length;
+      const batch = records.slice(start, end);
+      if (!features.appendRecords) {
+        try { await this.appendRecord(batch[0], signal); } catch (error) { if (signal.aborted) throw error; return { appended, error }; }
+        appended++; start = end; continue;
+      }
+      const { result } = await this.client.call("appendRecords", { records: batch }, signal);
+      if (typeof result?.appended !== "number" || result.appended < 0 || result.appended > batch.length) throw new SyncStoreError("internal", "Store returned an invalid appendRecords receipt");
+      appended += result.appended;
+      if (result.error) return { appended, error: SyncStoreError.fromWire(result.error) };
+      start = end;
+    }
+    return { appended };
   }
 
   async close(): Promise<void> { }
