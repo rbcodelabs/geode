@@ -231,6 +231,8 @@ const fingerprint = (resource: HistoryLocalResource | undefined): string | null 
 const matches = (resource: HistoryLocalResource | undefined, base: HistoryBaseline) => base.present
     ? Boolean(resource && resource.kind === base.kind && resource.path === base.path && (base.kind === 'folder' || resource.sha256 === base.sha256)) : !resource;
 const UPLOAD_BYTE_BUDGET = 64 * 1024 * 1024; // bytes held in memory by in-flight uploads (at least one upload always runs)
+const DOWNLOAD_BYTE_BUDGET = 64 * 1024 * 1024; // bytes fetched ahead of staging and not yet consumed (the next blob always runs)
+const DOWNLOAD_MAX_AHEAD = 64; // fetched-but-unconsumed blobs
 const APPEND_BATCH = 64; // records appended per round trip
 const COMPARE_OVERSIZE = 'Conflict comparison is limited to 1 MiB of text';
 const INTEGRITY_MISMATCH = 'Sync content integrity mismatch';
@@ -693,7 +695,7 @@ export class HistoryController {
     }
     private async verified(bytes: ArrayBuffer, sha256: string, size: number, signal: AbortSignal): Promise<ArrayBuffer> { if (bytes.byteLength !== size || size > SYNC_MAX_FILE_BYTES || await this.hash(bytes, signal) !== sha256)
         throw new Error(INTEGRITY_MISMATCH); return bytes; }
-    private async prepare(action: Action, signal: AbortSignal): Promise<PrepareOutcome> {
+    private async prepare(action: Action, signal: AbortSignal, fetched?: Promise<ArrayBuffer>): Promise<PrepareOutcome> {
         const id = this.ports.newId();
         let record: HistoryRecord;
         let data: ArrayBuffer | undefined;
@@ -725,7 +727,7 @@ export class HistoryController {
             if (!action.deleted && record.kind === 'file') {
                 if (!record.blob)
                     throw new Error('Missing content reference');
-                data = await this.verified(await this.checked(signal, () => this.options.session.readBlob(record.blob!, signal)), record.blob.sha256, record.blob.size, signal);
+                data = fetched ? await fetched : await this.verified(await this.checked(signal, () => this.options.session.readBlob(record.blob!, signal)), record.blob.sha256, record.blob.size, signal);
             }
         }
         const payload = data ? { key: await this.checked(signal, () => this.ports.stage(id, data!)), sha256: await this.hash(data, signal), size: data.byteLength } : undefined;
@@ -770,13 +772,25 @@ export class HistoryController {
         // flow: each report() is synchronous and returns nothing, so the loop below
         // prepares exactly the same actions in exactly the same order as before.
         const planned = plan.actions.length;
-        for (const [index, action] of plan.actions.entries()) {
-            this.report('staging', index, planned, action.path);
-            const outcome = await this.prepare(action, signal);
-            if (outcome.ok)
-                operations.push(outcome.operation);
-            else
-                demoted.push(outcome.issue);
+        const fetcher = this.prefetcher(plan.actions, signal);
+        try {
+            for (const [index, action] of plan.actions.entries()) {
+                this.report('staging', index, planned, action.path);
+                let outcome: PrepareOutcome;
+                try {
+                    outcome = await this.prepare(action, signal, fetcher?.take(index));
+                }
+                finally {
+                    fetcher?.release(index);
+                }
+                if (outcome.ok)
+                    operations.push(outcome.operation);
+                else
+                    demoted.push(outcome.issue);
+            }
+        }
+        finally {
+            await fetcher?.close();
         }
         this.report('staging', planned, planned);
         state.pendingBatch = operations.map(op => op.id);
@@ -906,6 +920,56 @@ export class HistoryController {
             signal.removeEventListener('abort', onAbort);
             await Promise.allSettled(slots.map(slot => slot.upload));
         }
+    }
+    /**
+     * Overlaps the remote reads of a download batch. Blobs are fetched (and hash-verified) up to
+     * `readConcurrency` at a time, ahead of the sequential staging loop, which still consumes them
+     * strictly in plan order: stage -> saveOperation -> next. Fetched-but-unconsumed bytes are capped
+     * (the next blob in order always runs, so one oversized blob cannot stall). A failed fetch surfaces
+     * where its own action is reached, exactly as a sequential read would, after every earlier action
+     * has been journalled; nothing is read from the store after an abort. Returns undefined (the
+     * original one-at-a-time path) unless the session advertises overlapping reads.
+     */
+    private prefetcher(actions: Action[], signal: AbortSignal): { take(index: number): Promise<ArrayBuffer> | undefined; release(index: number): void; close(): Promise<void> } | undefined {
+        const concurrency = Math.floor(this.options.session.readConcurrency ?? 1);
+        if (!(concurrency > 1))
+            return undefined;
+        const inner = new AbortController();
+        const onAbort = () => inner.abort(signal.reason);
+        if (signal.aborted)
+            onAbort();
+        else
+            signal.addEventListener('abort', onAbort, { once: true });
+        const fetches = new Map<number, { promise: Promise<ArrayBuffer>; size: number }>();
+        let next = 0, running = 0, held = 0;
+        const blobOf = (action: Action) => action.type === 'apply' && !action.deleted && action.record.kind === 'file' ? action.record.blob : undefined;
+        const start = () => {
+            while (next < actions.length && !inner.signal.aborted) {
+                const blob = blobOf(actions[next]);
+                if (!blob) {
+                    next++;
+                    continue;
+                }
+                if (running >= concurrency || fetches.size >= DOWNLOAD_MAX_AHEAD || fetches.size > 0 && held + blob.size > DOWNLOAD_BYTE_BUDGET)
+                    break;
+                running++;
+                held += blob.size;
+                const promise = this.checked(inner.signal, () => this.options.session.readBlob(blob, inner.signal))
+                    .then(bytes => this.verified(bytes, blob.sha256, blob.size, inner.signal))
+                    .finally(() => { running--; start(); });
+                promise.catch(() => { });
+                fetches.set(next++, { promise, size: blob.size });
+            }
+        };
+        return {
+            take: index => { start(); return fetches.get(index)?.promise; },
+            release: index => { const entry = fetches.get(index); if (entry) { fetches.delete(index); held -= entry.size; start(); } },
+            close: async () => {
+                inner.abort();
+                signal.removeEventListener('abort', onAbort);
+                await Promise.allSettled([...fetches.values()].map(entry => entry.promise));
+            },
+        };
     }
     private needsUpload(operation: HistoryOperation): boolean {
         return operation.phase === 'prepared' && operation.type === 'publish' && !!operation.payload && !operation.record.blob;

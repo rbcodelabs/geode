@@ -22,6 +22,9 @@ const APPEND_BATCH_JSON_BYTES = 2 * 1024 * 1024;
 /** Upload concurrency against a server that does not advertise `maxUploads` (it allows 4 open uploads). */
 const LEGACY_UPLOADS = 4;
 const MAX_UPLOAD_CONCURRENCY = 16;
+/** Chunk requests of one blob kept in flight, and how many whole-blob reads the engine may overlap. Reads need no server feature: requests are already served in arrival order. */
+const READ_WINDOW = 4;
+const READ_CONCURRENCY = 12;
 
 /** What the connected server said it can do in its hello reply. Absent fields mean an older server. */
 export interface ServerFeatures { putBlob: boolean; appendRecords: boolean; maxUploads: number }
@@ -166,6 +169,8 @@ export class RpcStoreSession implements AppendOnlySession {
   get uploadConcurrency(): number { return Math.max(1, Math.min(MAX_UPLOAD_CONCURRENCY, this.client.lastFeatures.maxUploads)); }
   /** The commit receipt is issued only after the server hashed, fsynced and renamed the bytes, and appendRecord re-checks the blob under the writer lock. */
   readonly commitVerified = true;
+  /** Whole-blob reads the engine may keep in flight (bounded again by a byte budget). Safe against servers that predate the field: pipelined requests are served in arrival order there too. */
+  readonly readConcurrency = READ_CONCURRENCY;
 
   async scan(cursor: string | undefined, signal: AbortSignal): Promise<HistoryScan> {
     const records: unknown[] = [];
@@ -215,14 +220,33 @@ export class RpcStoreSession implements AppendOnlySession {
   async readBlob(ref: BlobRef, signal: AbortSignal): Promise<ArrayBuffer> {
     if (signal.aborted) throw abortError(signal);
     if (!Number.isSafeInteger(ref.size) || ref.size < 0 || ref.size > SYNC_MAX_FILE_BYTES) throw new SyncStoreError("too-large", "Blob reference exceeds the size limit");
-    const out = new Uint8Array(ref.size), hash = createHash("sha256");
-    for (let offset = 0; offset < ref.size;) {
-      const { body } = await this.client.call("readBlobRange", { id: ref.id, offset, length: Math.min(CHUNK, ref.size - offset) }, signal);
-      if (!body || !body.length) throw new SyncStoreError("size-mismatch", "Store returned a short blob");
-      if (offset + body.length > ref.size) throw new SyncStoreError("size-mismatch", "Store returned too many blob bytes");
-      out.set(body, offset); hash.update(body); offset += body.length;
-    }
-    if (hash.digest("hex") !== ref.sha256) throw new SyncStoreError("hash-mismatch", "Blob bytes do not match the reference");
+    const out = new Uint8Array(ref.size);
+    const chunks = Math.ceil(ref.size / CHUNK);
+    // Chunks of one blob are requested READ_WINDOW at a time over the pipelined connection (the server answers in
+    // arrival order), so a large blob costs ~one round trip per window instead of one per chunk. Memory is the
+    // preallocated output buffer; nothing else is buffered beyond the window.
+    const inner = new AbortController();
+    const onAbort = () => inner.abort(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    let nextChunk = 0;
+    const worker = async () => {
+      while (nextChunk < chunks && !inner.signal.aborted) {
+        const start = nextChunk++ * CHUNK, length = Math.min(CHUNK, ref.size - start);
+        for (let got = 0; got < length;) {
+          const { body } = await this.client.call("readBlobRange", { id: ref.id, offset: start + got, length: length - got }, inner.signal);
+          if (!body || !body.length) throw new SyncStoreError("size-mismatch", "Store returned a short blob");
+          if (got + body.length > length) throw new SyncStoreError("size-mismatch", "Store returned too many blob bytes");
+          out.set(body, start + got); got += body.length;
+        }
+      }
+    };
+    try {
+      const workers = Array.from({ length: Math.min(READ_WINDOW, chunks) }, () => worker().catch(error => { inner.abort(error); throw error; }));
+      const settled = await Promise.allSettled(workers);
+      const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) throw signal.aborted ? abortError(signal) : failed.reason;
+    } finally { signal.removeEventListener("abort", onAbort); inner.abort(); }
+    if (createHash("sha256").update(out).digest("hex") !== ref.sha256) throw new SyncStoreError("hash-mismatch", "Blob bytes do not match the reference");
     return out.buffer;
   }
 

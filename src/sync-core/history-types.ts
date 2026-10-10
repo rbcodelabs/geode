@@ -56,6 +56,8 @@ export interface AppendOnlySession {
    */
   /** How many putBlob calls the engine may keep in flight (bounded again by a byte budget). Default 1. */
   readonly uploadConcurrency?: number;
+  /** How many readBlob calls the engine may keep in flight while staging downloads (bounded again by a byte budget). Default 1. */
+  readonly readConcurrency?: number;
   /** True when the putBlob receipt already proves the store holds the hash-verified bytes durably, making a read-back redundant. */
   readonly commitVerified?: boolean;
   /**

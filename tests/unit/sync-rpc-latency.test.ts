@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { latencyProvider } from "../helpers/latency-transport";
 import { device, never, put, rmrf, tmp } from "../helpers/node-host-harness";
@@ -85,6 +85,143 @@ describe("first upload over a high-latency link", () => {
   }, 60_000);
 });
 
+/** Wraps a provider so every session reads through `readBlob`, with `readConcurrency` forced (undefined = the original one-at-a-time engine path, which also pins each blob to one chunk request at a time only for small blobs). */
+function reading(base: AppendOnlySyncProvider, opts: { readConcurrency?: number | undefined; onRead?: (ref: any, n: number) => Promise<void> | void } = {}): AppendOnlySyncProvider & { peak: () => number; peakBytes: () => number; reads: () => number } {
+  let active = 0, activeBytes = 0, peak = 0, peakBytes = 0, calls = 0;
+  const wrapper: any = Object.create(base, {
+    open: { value: async (ctx: { binding: VaultDescriptor; deviceId: string }, signal: AbortSignal) => {
+      const session = await base.open(ctx, signal);
+      return Object.create(session, {
+        readConcurrency: { value: opts.readConcurrency },
+        readBlob: { value: async (ref: any, s: AbortSignal) => {
+          const n = ++calls; active++; activeBytes += ref.size; peak = Math.max(peak, active); peakBytes = Math.max(peakBytes, activeBytes);
+          try { await opts.onRead?.(ref, n); return await session.readBlob(ref, s); } finally { active--; activeBytes -= ref.size; }
+        } },
+      });
+    } },
+  });
+  wrapper.peak = () => peak; wrapper.peakBytes = () => peakBytes; wrapper.reads = () => calls;
+  return wrapper;
+}
+const treeOf = (root: string) => {
+  const out: Record<string, string> = {};
+  const walk = (dir: string, rel: string) => { for (const e of readdirSync(join(dir), { withFileTypes: true })) { if (e.name.startsWith(".")) continue; const r = rel ? `${rel}/${e.name}` : e.name; if (e.isDirectory()) walk(join(dir, e.name), r); else out[r] = sha(readFileSync(join(dir, e.name))); } };
+  walk(root, ""); return out;
+};
+
+describe("first download over a high-latency link", () => {
+  async function seeded(files: number) {
+    const w = await world(files);
+    await device("seed", w.root, join(w.state, "seed"), new FsStoreProvider(w.store), w.binding).sync(true);
+    const root2 = tmp("lat-root2"), state2 = tmp("lat-state2");
+    return { ...w, root2, state2, done: () => { w.done(); rmrf(root2); rmrf(state2); } };
+  }
+
+  it("overlaps blob reads (one request per small file), applies everything identically, and the engine path stays ordered", async () => {
+    const w = await seeded(60);
+    try {
+      const link = latencyProvider(w.store, 3), reader = reading(link.provider, { readConcurrency: 12 });
+      await device("b", w.root2, join(w.state2, "s"), reader, w.binding).sync(true);
+      expect(treeOf(w.root2)).toEqual(treeOf(w.root));
+      expect(reader.reads()).toBe(60);
+      expect(reader.peak()).toBeGreaterThan(1);
+      expect(reader.peak()).toBeLessThanOrEqual(12);
+      expect(link.counts.readBlobRange).toBe(60);
+      await link.provider.close();
+    } finally { w.done(); }
+  }, 60_000);
+
+  it("a session without readConcurrency downloads one at a time exactly as before", async () => {
+    const w = await seeded(20);
+    try {
+      const link = latencyProvider(w.store, 1), reader = reading(link.provider, { readConcurrency: undefined });
+      await device("b", w.root2, join(w.state2, "s"), reader, w.binding).sync(true);
+      expect(treeOf(w.root2)).toEqual(treeOf(w.root));
+      expect(reader.peak()).toBe(1);
+      await link.provider.close();
+    } finally { w.done(); }
+  }, 60_000);
+
+  it("against an old server the pipelined reads still work (reads need no server feature)", async () => {
+    const w = await seeded(30);
+    try {
+      const link = latencyProvider(w.store, 1, { serve: o => serveStore({ ...o, legacy: true }) }), reader = reading(link.provider, { readConcurrency: 12 });
+      await device("b", w.root2, join(w.state2, "s"), reader, w.binding).sync(true);
+      expect(treeOf(w.root2)).toEqual(treeOf(w.root));
+      expect(reader.peak()).toBeGreaterThan(1);
+      await link.provider.close();
+    } finally { w.done(); }
+  }, 60_000);
+
+  it("a blob larger than one chunk is fetched as pipelined ranges and verified", async () => {
+    const w = await world(0);
+    try {
+      const big = Buffer.alloc(9 * 1024 * 1024 + 123); for (let i = 0; i < big.length; i++) big[i] = (i * 31 + (i >> 12)) & 255;
+      writeFileSync(join(w.root, "big.bin"), big); put(w.root, "small.md", "tiny");
+      await device("seed", w.root, join(w.state, "seed"), new FsStoreProvider(w.store), w.binding).sync(true);
+      const root2 = tmp("lat-root2"), state2 = tmp("lat-state2");
+      try {
+        const link = latencyProvider(w.store, 2);
+        await device("b", root2, join(state2, "s"), reading(link.provider, { readConcurrency: 12 }), w.binding).sync(true);
+        expect(sha(readFileSync(join(root2, "big.bin")))).toBe(sha(big));
+        expect(link.counts.readBlobRange).toBe(3 + 1); // 4 MiB ranges + the small file
+        await link.provider.close();
+      } finally { rmrf(root2); rmrf(state2); }
+    } finally { w.done(); }
+  }, 60_000);
+
+  it("fetched-ahead bytes stay within the budget (the next blob always runs)", async () => {
+    const w = await world(0);
+    try {
+      for (let i = 0; i < 6; i++) { const b = Buffer.alloc(14 * 1024 * 1024, i + 1); b[0] = i; writeFileSync(join(w.root, `blob-${i}.bin`), b); }
+      await device("seed", w.root, join(w.state, "seed"), new FsStoreProvider(w.store), w.binding).sync(true);
+      const root2 = tmp("lat-root2"), state2 = tmp("lat-state2");
+      try {
+        const link = latencyProvider(w.store, 0), reader = reading(link.provider, { readConcurrency: 12 });
+        await device("b", root2, join(state2, "s"), reader, w.binding).sync(true);
+        expect(treeOf(root2)).toEqual(treeOf(w.root));
+        expect(reader.peakBytes()).toBeLessThanOrEqual(64 * 1024 * 1024);
+        expect(reader.peak()).toBeGreaterThan(1);
+        await link.provider.close();
+      } finally { rmrf(root2); rmrf(state2); }
+    } finally { w.done(); }
+  }, 60_000);
+
+  it("a read that fails mid-batch stops cleanly: earlier files are staged, nothing half-applied, and a retry converges", async () => {
+    const w = await seeded(40);
+    try {
+      const link = latencyProvider(w.store, 1);
+      let armed = true;
+      const reader = reading(link.provider, { readConcurrency: 12, onRead: (_ref, n) => { if (armed && n === 23) throw new Error("injected read failure"); } });
+      const dev = device("b", w.root2, join(w.state2, "s"), reader, w.binding);
+      await expect(dev.sync(true)).rejects.toThrow(/injected read failure/);
+      expect(Object.keys(treeOf(w.root2)).length).toBe(0); // apply only starts once the whole batch is staged
+      armed = false;
+      await dev.sync(true);
+      expect(treeOf(w.root2)).toEqual(treeOf(w.root));
+      await link.provider.close();
+    } finally { w.done(); }
+  }, 60_000);
+
+  it("a connection drop while reads are in flight surfaces as an error and a fresh sync resumes to completion", async () => {
+    const w = await seeded(40);
+    try {
+      const link = latencyProvider(w.store, 1);
+      let armed = true;
+      const reader = reading(link.provider, { readConcurrency: 12, onRead: async (_ref, n) => { if (armed && n === 15) { await new Promise(r => setTimeout(r, 20)); throw Object.assign(new Error("link dropped"), { code: "unavailable" }); } } });
+      const dev = device("b", w.root2, join(w.state2, "s"), reader, w.binding);
+      await expect(dev.sync(true)).rejects.toThrow(/link dropped/);
+      armed = false;
+      await dev.sync(true);
+      expect(treeOf(w.root2)).toEqual(treeOf(w.root));
+      const again = await dev.sync(true); // idempotent once converged
+      expect(treeOf(w.root2)).toEqual(treeOf(w.root));
+      void again;
+      await link.provider.close();
+    } finally { w.done(); }
+  }, 60_000);
+});
+
 describe("store protocol additions", () => {
   async function session(legacy = false) {
     const store = tmp("lat-proto"), link = latencyProvider(store, 0, legacy ? { serve: o => serveStore({ ...o, legacy: true }) } : {});
@@ -162,4 +299,23 @@ describe.skipIf(!process.env.GEODE_SYNC_BENCH)("bench: first upload of small fil
       await link.provider.close();
     } finally { w.done(); }
   }, 600_000);
+});
+
+describe.skipIf(!process.env.GEODE_SYNC_BENCH)("bench: first download under simulated latency", () => {
+  const FILES = Number(process.env.GEODE_BENCH_DL_FILES ?? 120), KB = Number(process.env.GEODE_BENCH_DL_KB ?? 64);
+  for (const [label, concurrency] of [["before (sequential reads)", undefined], ["after (pipelined reads)", 12]] as const) {
+    it(label, async () => {
+      const w = await world(0);
+      const root2 = tmp("lat-root2"), state2 = tmp("lat-state2");
+      try {
+        let total = 0;
+        for (let i = 0; i < FILES; i++) { const b = Buffer.alloc(KB * 1024, i % 251); b.writeUInt32LE(i, 0); total += b.length; writeFileSync(join(w.root, `f${i}.bin`), b); }
+        await device("seed", w.root, join(w.state, "seed"), new FsStoreProvider(w.store), w.binding).sync(true);
+        const link = latencyProvider(w.store, ONE_WAY), reader = reading(link.provider, { readConcurrency: concurrency });
+        const t0 = Date.now(); await device("b", root2, join(state2, "s"), reader, w.binding).sync(true); const secs = (Date.now() - t0) / 1000;
+        console.log(`BENCH-DL ${label} rtt=${ONE_WAY * 2}ms files=${FILES} sizeKB=${KB} seconds=${secs.toFixed(2)} files/sec=${(FILES / secs).toFixed(2)} MB/s=${(total / 1048576 / secs).toFixed(2)} peakInflight=${reader.peak()} ${JSON.stringify(link.counts)}`);
+        await link.provider.close();
+      } finally { w.done(); rmrf(root2); rmrf(state2); }
+    }, 900_000);
+  }
 });
