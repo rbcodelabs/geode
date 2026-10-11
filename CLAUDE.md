@@ -6,7 +6,7 @@ An open-source, local-first Markdown knowledge base -- a clean-room clone of Obs
 
 Roadmap, opportunities, solutions, assumptions, and OKRs for Geode live in **Compass**, not in this repo or the Obsidian vault:
 
-- Workspace: https://compass.rbcodelabs.com/rbcodelabs/geode
+- Workspace: https://compass.rbcodelabs.com/rb-code-labs/geode
 - Config/IDs for PM agents: see [`pm-config.md`](pm-config.md)
 
 **Do not use as current planning state** (superseded, historical only):

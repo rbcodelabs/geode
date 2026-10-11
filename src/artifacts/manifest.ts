@@ -1,3 +1,5 @@
+import { validateVaultAllowlistEntry, VAULT_ALLOWLIST_MAX_ENTRIES } from "./vault-access";
+
 export const ARTIFACT_MANIFEST_SCHEMA_VERSION = 1 as const;
 
 export type ArtifactViewportPreset = "desktop" | "tablet" | "mobile" | "custom";
@@ -17,6 +19,10 @@ export interface ArtifactManifest {
   permissions: {
     network: "none";
     clipboard: false;
+    /** Opt-in read access to Bases query results (ADR 0029). Absent means "none". */
+    vault?: "none" | "read";
+    /** Vault-relative .base files / folders / globs the artifact may query. Required when vault is "read". */
+    vaultAllowlist?: string[];
   };
 }
 
@@ -48,7 +54,7 @@ const ROOT_FIELDS = new Set([
   "permissions",
 ]);
 const VIEWPORT_FIELDS = new Set(["preset", "width", "height"]);
-const PERMISSION_FIELDS = new Set(["network", "clipboard"]);
+const PERMISSION_FIELDS = new Set(["network", "clipboard", "vault", "vaultAllowlist"]);
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/;
 const THREAD_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/;
 
@@ -129,6 +135,49 @@ function validateDimension(value: unknown, path: string, issues: ArtifactManifes
   return true;
 }
 
+function validateVaultPermission(permissions: Record<string, unknown>, issues: ArtifactManifestIssue[]): void {
+  const vault = permissions.vault;
+  const hasAllowlist = "vaultAllowlist" in permissions;
+  if (vault !== undefined && vault !== "none" && vault !== "read") {
+    issues.push({ code: "invalid_value", path: "permissions.vault", message: 'Expected "none" or "read".' });
+    return;
+  }
+  if (vault !== "read") {
+    if (hasAllowlist) {
+      issues.push({
+        code: "invalid_value",
+        path: "permissions.vaultAllowlist",
+        message: 'vaultAllowlist is only valid when permissions.vault is "read".',
+      });
+    }
+    return;
+  }
+  const allowlist = permissions.vaultAllowlist;
+  if (!hasAllowlist) {
+    issues.push({ code: "missing_field", path: "permissions.vaultAllowlist", message: 'permissions.vault "read" requires a vaultAllowlist.' });
+    return;
+  }
+  if (!Array.isArray(allowlist)) {
+    issues.push({ code: "invalid_type", path: "permissions.vaultAllowlist", message: "Expected an array of strings." });
+    return;
+  }
+  if (allowlist.length === 0 || allowlist.length > VAULT_ALLOWLIST_MAX_ENTRIES) {
+    issues.push({
+      code: "invalid_value",
+      path: "permissions.vaultAllowlist",
+      message: `Expected 1-${VAULT_ALLOWLIST_MAX_ENTRIES} entries.`,
+    });
+  }
+  allowlist.forEach((entry, index) => {
+    if (typeof entry !== "string") {
+      issues.push({ code: "invalid_type", path: `permissions.vaultAllowlist[${index}]`, message: "Expected a string." });
+      return;
+    }
+    const problem = validateVaultAllowlistEntry(entry);
+    if (problem) issues.push({ code: "invalid_value", path: `permissions.vaultAllowlist[${index}]`, message: problem });
+  });
+}
+
 export function parseArtifactManifest(value: unknown): ArtifactManifestParseResult {
   const issues: ArtifactManifestIssue[] = [];
   if (!isRecord(value)) {
@@ -192,6 +241,7 @@ export function parseArtifactManifest(value: unknown): ArtifactManifestParseResu
     if (permissions.clipboard !== false) {
       issues.push({ code: "invalid_value", path: "permissions.clipboard", message: "Clipboard access must be false." });
     }
+    validateVaultPermission(permissions, issues);
   }
 
   if (issues.length > 0) return { ok: false, issues };
