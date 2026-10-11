@@ -369,8 +369,10 @@ export function guestHighEntropyHints(facts: GuestPlatformFacts): GuestClientHin
   // Measured as a quoted EMPTY string on desktop, not an omitted header.
   hints["Sec-CH-UA-Model"] = '""';
 
+  // An empty string is a real answer, not a missing one: Chromium on Linux reports
+  // platformVersion as "". Only an unreadable (undefined) version is omitted.
   const systemVersion = facts.systemVersion?.trim();
-  if (systemVersion) hints["Sec-CH-UA-Platform-Version"] = `"${systemVersion}"`;
+  if (systemVersion !== undefined) hints["Sec-CH-UA-Platform-Version"] = `"${systemVersion}"`;
 
   // Structured-header boolean, unquoted. Gated on a known architecture: WoW64 is
   // an x86-family concept, so on an arch we cannot even name, asserting ?0 would

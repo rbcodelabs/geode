@@ -192,7 +192,9 @@ const guestHints = guestClientHints(process.versions.chrome, process.platform);
 const guestHighEntropy = guestHighEntropyHints({
   chromeVersion: process.versions.chrome,
   arch: process.arch,
-  systemVersion: process.getSystemVersion(),
+  // Chromium reports an empty platformVersion on Linux; getSystemVersion() there is
+  // the kernel version, which would contradict the JS surface.
+  systemVersion: process.platform === "linux" ? "" : process.getSystemVersion(),
 });
 app.on("session-created", (created) => {
   // A fresh negotiator per session: separate partitions are separate
@@ -2490,6 +2492,14 @@ app.whenReady().then(() => {
     if (shouldClaimObsidianProtocol(app.getApplicationNameForProtocol("obsidian://"), claimObsidian)) {
       app.setAsDefaultProtocolClient("obsidian");
     }
+  }
+  if (isHeadless && process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text") {
+    // Automated runs on a Linux box have no desktop keyring (no libsecret/kwallet),
+    // so safeStorage reports encryption as unavailable and every secret-backed
+    // flow fails for reasons unrelated to what is under test. Opt in to
+    // Chromium's plain-text backend for those runs only; a real session, headless
+    // or not on a machine with a keyring, still uses the real backend.
+    safeStorage.setUsePlainTextEncryption(true);
   }
   if (isHeadless && process.platform === "darwin") {
     // `dock.hide()` removes the Dock tile but leaves the app a "regular"

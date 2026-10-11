@@ -247,6 +247,20 @@ export class CommunityManager {
    * default), delete its files, and untrack it. Files go to the OS trash,
    * matching the vault's delete behavior.
    */
+  /**
+   * Remove an installed plugin/theme folder. Prefers the OS trash so a mistaken
+   * uninstall is recoverable, but a machine with no trash service (headless
+   * Linux, some sandboxes) rejects that call; the folder is a reinstallable
+   * download, so remove it outright rather than leave the uninstall wedged.
+   */
+  private async removeInstalledFolder(path: string): Promise<void> {
+    try {
+      await window.geode.trash(path);
+    } catch {
+      await window.geode.rmdir(path, true);
+    }
+  }
+
   async uninstall(repo: string): Promise<void> {
     const config = await this.load();
     const item = findItem(config, repo);
@@ -256,13 +270,13 @@ export class CommunityManager {
       if (this.app.pluginManager.isEnabled(item.id)) {
         await this.app.pluginManager.disable(item.id);
       }
-      await window.geode.trash(`.geode/plugins/${item.id}`);
+      await this.removeInstalledFolder(`.geode/plugins/${item.id}`);
       await this.app.pluginManager.rescan();
     } else {
       if (this.app.settings.cssTheme === item.id) {
         await this.app.applyCommunityTheme(""); // revert to built-in default
       }
-      await window.geode.trash(`.geode/themes/${item.id}`);
+      await this.removeInstalledFolder(`.geode/themes/${item.id}`);
     }
     await this.save(removeItem(config, repo));
   }
