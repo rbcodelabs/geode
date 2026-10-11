@@ -75,10 +75,10 @@ only human admins decide, and no outcome automatically applies another action.
 
 ### Compass
 
-- **Org slug:** rbcodelabs
+- **Org slug:** rb-code-labs
 - **Workspace slug:** geode
-- **Workspace ID:** `2014ad67-8d4f-4db9-8eb5-5f3958c3ebbb`
-- **Compass URL:** https://compass.rbcodelabs.com/rbcodelabs/geode/discovery
+- **Workspace ID:** `78bfb4cc-aeb3-47a5-baf5-7b7945d4c0c1`
+- **Compass URL:** https://compass.rbcodelabs.com/rb-code-labs/geode/discovery
 - **Credential location:** Not applicable -- this repo does not call Compass
   programmatically. Claude Code sessions read/write Compass via the connected,
   session-authenticated Compass MCP server; no static credential is stored here or
@@ -168,7 +168,7 @@ approved_build_policy:
       Authorizes migration of the reported build-authorization contract mismatch
       to the installed Approved Build contract, including the existing operations
       prompt. This repairs configuration; it approves no additional product scope.
-  workspace_id: 2014ad67-8d4f-4db9-8eb5-5f3958c3ebbb
+  workspace_id: 78bfb4cc-aeb3-47a5-baf5-7b7945d4c0c1
   repository: github.com/rbcodelabs/geode
   decision_provider: compass_decisions
   completion_boundary: tested_pr
@@ -270,7 +270,7 @@ state, and do not edit them to reflect roadmap changes:
 - `docs/spec/00-overview.md` § "Implementation status (v0.1)" -- the numbered roadmap
   items (0-10) there are a point-in-time snapshot from when Geode was created and are
   **not** kept in sync with Compass. For current priority and horizon (NOW/NEXT/LATER/SHIPPED),
-  check the Compass roadmap (`list_roadmap_items`, workspace `2014ad67-8d4f-4db9-8eb5-5f3958c3ebbb`),
+  check the Compass roadmap (`list_roadmap_items`, workspace `78bfb4cc-aeb3-47a5-baf5-7b7945d4c0c1`),
   not this file.
 - Obsidian vault note `Claude/2026-07-21-geode-obsidian-clone-status-review.md` -- a
   one-time status review, labeled `snapshot`; its contents were imported into Compass on
