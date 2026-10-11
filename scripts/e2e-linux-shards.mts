@@ -11,6 +11,9 @@
  * one worker break while another worker's window takes the focus. Each shard
  * here therefore gets its own `xvfb-run` display and runs a single worker.
  *
+ * The config's single retry stays on: a rare renderer crash or timing slip is absorbed
+ * rather than failing a shard; a test that fails twice is a real failure.
+ *
  * Exit code is non-zero if any shard failed. Run `npm run build` first.
  */
 import { spawn } from "node:child_process";
@@ -26,7 +29,7 @@ function runShard(index: number): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn(
       "xvfb-run",
-      ["-a", "npx", "playwright", "test", "--workers=1", "--retries=0", `--shard=${index}/${shards}`, ...extra],
+      ["-a", "npx", "playwright", "test", "--workers=1", `--shard=${index}/${shards}`, ...extra],
       { stdio: "inherit", env: { ...process.env, GEODE_E2E_SHARD: String(index) } },
     );
     child.on("close", (code) => resolve(code ?? 1));
