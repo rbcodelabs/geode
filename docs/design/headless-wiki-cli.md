@@ -81,6 +81,7 @@ name when it is wrong, instead of clobbering blind.
 | `--text-file <p>` | `create`, `update` | Body from a file, or `-` for stdin |
 | `--max-entries <n>` | vault commands | Override the capture entry ceiling |
 | `--max-note-bytes <n>` | vault commands | Override the per-note byte ceiling |
+| `--max-total-note-bytes <n>` | vault commands | Override the total note-text ceiling (default 64 MiB). A vault whose markdown exceeds it is captured partially (`noteContentComplete: false`, `total-byte-limit` diagnostic) and `create`/`update` are refused with `total-note-byte-limit`; raise this above the vault's total markdown size |
 | `--help` | all | The surface |
 
 ## Exit codes

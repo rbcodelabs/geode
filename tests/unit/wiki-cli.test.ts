@@ -274,3 +274,56 @@ describe("run", () => {
     expect(JSON.parse(sink.out())).toMatchObject({ status: "invalid-schema", result: { schema: "public" } });
   });
 });
+
+describe("--max-total-note-bytes", () => {
+  let big: string;
+  const ctx = (sink: ReturnType<typeof capture>) => ({
+    streams: sink.streams, env: {}, stdin: Readable.from([]),
+  }) as unknown as Parameters<typeof run>[1];
+
+  beforeAll(async () => {
+    big = await mkdtemp(join(tmpdir(), "geode-cli-total-"));
+    await writeFile(join(big, "A.md"), "a".repeat(40));
+    await writeFile(join(big, "B.md"), "b".repeat(20));
+  });
+  afterAll(async () => { await rm(big, { recursive: true, force: true }); });
+
+  it("rejects a non-integer value as a usage error before the folder is touched", async () => {
+    const sink = capture();
+    expect(await run(["list", "--root", join(big, "nope"), "--max-total-note-bytes", "lots", "--json"], ctx(sink))).toBe(2);
+    expect(JSON.parse(sink.out()).status).toBe("usage");
+  });
+
+  it("refuses with a distinct status and names the flag when the total ceiling is the cause", async () => {
+    const sink = capture();
+    const code = await run(
+      ["create", "--root", big, "C.md", "--text", "c", "--max-total-note-bytes", "60", "--json"], ctx(sink),
+    );
+    expect(code).toBe(1);
+    const payload = JSON.parse(sink.out());
+    expect(payload.status).toBe("total-note-byte-limit");
+    expect(payload.result.hint).toContain("--max-total-note-bytes");
+  });
+
+  it("keeps note-byte-limit for a single note over the per-note ceiling", async () => {
+    const sink = capture();
+    await run(["create", "--root", big, "D.md", "--text", "x".repeat(9), "--max-note-bytes", "8", "--json"], ctx(sink));
+    expect(JSON.parse(sink.out()).status).toBe("note-byte-limit");
+  });
+
+  it("creates, updates and deletes once the ceiling is raised past what the default would allow", async () => {
+    const flags = ["--root", big, "--max-total-note-bytes", "1024", "--json"];
+    const created = capture();
+    expect(await run(["create", ...flags, "C.md", "--text", "c"], ctx(created))).toBe(0);
+    const updated = capture();
+    expect(await run(["update", ...flags, "A.md", "--text", "a".repeat(45)], ctx(updated))).toBe(0);
+    const deleted = capture();
+    expect(await run(["delete", ...flags, "C.md"], ctx(deleted))).toBe(0);
+  });
+
+  it("warns with the flag name when a read-only command hit the total ceiling", async () => {
+    const sink = capture();
+    expect(await run(["list", "--root", big, "--max-total-note-bytes", "50", "--json"], ctx(sink))).toBe(0);
+    expect(sink.err()).toContain("--max-total-note-bytes");
+  });
+});

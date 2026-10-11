@@ -307,6 +307,18 @@ try {
   assert.equal(cappedWrite.payload.status, "capture-incomplete");
   assert.equal(cappedWrite.code, 1);
 
+  // The total note-text ceiling is its own named refusal, with a hint naming
+  // the flag — and raising the flag is what makes the write go through.
+  const totalRefused = await json(["create", ...V, "--max-total-note-bytes", "1", "Ceiling.md", "--text", "xx"]);
+  assert.equal(totalRefused.payload.status, "total-note-byte-limit");
+  assert.equal(totalRefused.code, 1);
+  assert.ok(totalRefused.payload.result.hint.includes("--max-total-note-bytes"));
+  assert.ok(totalRefused.stdout.includes("--max-total-note-bytes"), "the human line must name the flag too");
+  const totalRaised = await json(["create", ...V, "--max-total-note-bytes", "1073741824", "Ceiling.md", "--text", "xx"]);
+  assert.equal(totalRaised.payload.status, "ok");
+  const totalCleanup = await json(["delete", ...V, "Ceiling.md"]);
+  assert.equal(totalCleanup.payload.status, "ok");
+
   /* ------------------------------- CROSS-PROCESS CONSISTENCY: the whole point */
 
   const body = "# Fresh\n\nMentions ichthyosaur, points at [[Target]].\n";

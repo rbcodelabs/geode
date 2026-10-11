@@ -206,7 +206,18 @@ describe("local wiki provider: refusals", () => {
     const { provider: p } = await provider({ "Note.md": "x".repeat(40) }, { limits: { maxTotalNoteBytes: 50 } });
     // Replacing 40 bytes with 50 fits; the old 40 must not be counted too.
     expect(await p.update("Note.md", "y".repeat(50))).toEqual({ status: "ok", path: "Note.md" });
-    expect(await p.update("Note.md", "y".repeat(51))).toEqual({ status: "note-byte-limit", path: "Note.md" });
+    expect(await p.update("Note.md", "y".repeat(51))).toEqual({ status: "total-note-byte-limit", path: "Note.md" });
+  });
+
+  it("names the total ceiling distinctly from the per-note ceiling, and a raised ceiling admits writes", async () => {
+    const files = { "A.md": "a".repeat(40), "B.md": "b".repeat(20) };
+    const { provider: tight } = await provider(files, { limits: { maxTotalNoteBytes: 60 } });
+    expect(await tight.create("C.md", "c")).toEqual({ status: "total-note-byte-limit", path: "C.md" });
+    expect(await tight.update("A.md", "a".repeat(45))).toEqual({ status: "total-note-byte-limit", path: "A.md" });
+    const { provider: roomy } = await provider(files, { limits: { maxTotalNoteBytes: 1024 } });
+    expect(await roomy.create("C.md", "c")).toEqual({ status: "ok", path: "C.md" });
+    expect(await roomy.update("A.md", "a".repeat(45))).toEqual({ status: "ok", path: "A.md" });
+    expect(await roomy.delete("B.md")).toEqual({ status: "ok", path: "B.md" });
   });
 });
 

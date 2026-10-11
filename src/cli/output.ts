@@ -187,6 +187,9 @@ export function coverageWarnings(coverage: CoverageBlock): string[] {
     const where = diagnostic.path ?? diagnostic.paths?.join(", ");
     lines.push(`diagnostic: ${diagnostic.code}${where ? ` (${where})` : ""}`);
   }
+  if (coverage.diagnostics.some((diagnostic) => diagnostic.code === "total-byte-limit")) {
+    lines.push("hint: the total note-text ceiling was reached; re-run with --max-total-note-bytes <n> to capture the rest");
+  }
   return lines;
 }
 

@@ -104,8 +104,14 @@ export type WriteStatus =
   | "portability-collision"
   /** Containment, symlink or identity re-verification failed at write time. */
   | "path-changed"
-  /** Would exceed the configured per-note or total byte limits. */
+  /** This one note exceeds the per-note ceiling (`maxNoteBytes`). */
   | "note-byte-limit"
+  /**
+   * The note itself fits, but the notes already captured plus this one would
+   * exceed the total ceiling (`maxTotalNoteBytes`). A property of the vault,
+   * not of the note — raise the total ceiling to proceed.
+   */
+  | "total-note-byte-limit"
   /** The folder already holds the configured maximum number of entries. */
   | "entry-limit"
   /**
@@ -170,14 +176,19 @@ export async function openLocalWikiProvider(
   let limits: SnapshotLimits = capture.limits;
   let info: CaptureInfo = capture.info;
   let captured: CapturedFile[] = capture.captured;
-  let view: WikiSnapshot = createWikiSnapshot(captured, info);
+  // Built on first read after each change, not eagerly on every write: indexing a
+  // large vault is the expensive step, and a one-shot caller (the CLI) never
+  // reads the view again after its write. `captured` is replaced immutably, so
+  // a deferred build sees exactly what an eager one would have.
+  let view: WikiSnapshot | null = null;
+  const currentView = (): WikiSnapshot => (view ??= createWikiSnapshot(captured, info));
 
   const index = options.index;
   const events = options.events;
 
   /** Rebuild the frozen view, then tell the adapter what happened. */
   const commit = (event: WikiChangeEvent): void => {
-    view = createWikiSnapshot(captured, info);
+    view = null;
     if (index) {
       if (event.type === "deleted") index.remove(event.path);
       else {
@@ -275,14 +286,14 @@ export async function openLocalWikiProvider(
     return null;
   };
 
-  const withinByteLimits = (text: string, replacingPath?: string): boolean => {
+  const byteLimitRefusal = (text: string, replacingPath?: string): "note-byte-limit" | "total-note-byte-limit" | null => {
     const bytes = Buffer.byteLength(text, "utf8");
-    if (bytes > limits.maxNoteBytes) return false;
+    if (bytes > limits.maxNoteBytes) return "note-byte-limit";
     const existing = captured.reduce(
       (total, file) => total + (file.path === replacingPath ? 0 : Buffer.byteLength(file.text ?? "", "utf8")),
       0,
     );
-    return existing + bytes <= limits.maxTotalNoteBytes;
+    return existing + bytes <= limits.maxTotalNoteBytes ? null : "total-note-byte-limit";
   };
 
   /**
@@ -300,14 +311,15 @@ export async function openLocalWikiProvider(
   return {
     status: "ok",
     provider: {
-      snapshot: () => view,
+      snapshot: currentView,
 
       async create(path, text) {
         const invalid = validate(path);
         if (invalid) return { status: invalid };
         if (find(path)) return { status: "already-exists", path };
         if (collidesWith(path)) return { status: "portability-collision", path };
-        if (!withinByteLimits(text)) return { status: "note-byte-limit", path };
+        const createRefusal = byteLimitRefusal(text);
+        if (createRefusal) return { status: createRefusal, path };
         if (captured.length >= limits.maxEntries) return { status: "entry-limit", path };
         if (!(await ensureParent(path))) return { status: "path-changed", path };
         if (!(await verifyParent(path, false))) return { status: "path-changed", path };
@@ -326,7 +338,8 @@ export async function openLocalWikiProvider(
         if (invalid) return { status: invalid };
         const existing = find(path);
         if (!existing) return { status: "absent", path };
-        if (!withinByteLimits(text, path)) return { status: "note-byte-limit", path };
+        const updateRefusal = byteLimitRefusal(text, path);
+        if (updateRefusal) return { status: updateRefusal, path };
         const updateRoute = await verifyParent(path, true);
         if (updateRoute === "target-missing") return { status: "absent", path };
         if (!updateRoute) return { status: "path-changed", path };
@@ -388,7 +401,7 @@ export async function openLocalWikiProvider(
         limits = next.limits;
         captured = next.captured;
         info = next.info;
-        view = createWikiSnapshot(captured, info);
+        view = null;
         return { status: "ok" as const };
       },
     },

@@ -159,7 +159,7 @@ await provider.refresh();
 
 Every operation returns a `WriteResult` whose `status` is `ok` or one of the
 named refusals — `invalid-path`, `not-a-note`, `already-exists`, `absent`,
-`portability-collision`, `path-changed`, `note-byte-limit`, `entry-limit`,
+`portability-collision`, `path-changed`, `note-byte-limit`, `total-note-byte-limit`, `entry-limit`,
 `capture-incomplete`, `write-failed`. Refusals are values, not exceptions: check
 the status rather than wrapping calls in `try`.
 

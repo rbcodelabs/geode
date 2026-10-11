@@ -90,6 +90,10 @@ Options:
   --text-file <path>      create/update: read the text from a file, or - for stdin
   --max-entries <n>       capture: override the entry ceiling
   --max-note-bytes <n>    capture: override the per-note byte ceiling
+  --max-total-note-bytes <n>
+                          capture: override the total note-text ceiling (default 64 MiB);
+                          raise it for vaults whose markdown exceeds that, or create/update
+                          is refused with "total-note-byte-limit" and reads are partial
   --schema <name>         catalog: schema name; defaults to GEODE_CATALOG_SCHEMA
   --help                  this text
 
@@ -115,6 +119,7 @@ const CAPTURE: OptionSpec = {
   root: { type: "string" },
   "max-entries": { type: "string" },
   "max-note-bytes": { type: "string" },
+  "max-total-note-bytes": { type: "string" },
 };
 const TEXT: OptionSpec = { text: { type: "string" }, "text-file": { type: "string" } };
 
@@ -278,7 +283,7 @@ async function dispatch(
   // `search --root /nowhere q --limit many` has two problems, and the one the
   // caller has to fix first is the one they wrote.
   const limits: Partial<WikiLimits> = {};
-  for (const [flag, key] of [["max-entries", "maxEntries"], ["max-note-bytes", "maxNoteBytes"]] as const) {
+  for (const [flag, key] of [["max-entries", "maxEntries"], ["max-note-bytes", "maxNoteBytes"], ["max-total-note-bytes", "maxTotalNoteBytes"]] as const) {
     const raw = values[flag];
     if (raw === undefined) continue;
     const parsed = integer(raw as string, `--${flag}`);
@@ -470,6 +475,10 @@ async function resolveText(
   return usage(`${name} requires --text <string> or --text-file <path>`, name);
 }
 
+const TOTAL_BYTES_HINT =
+  "hint: the vault's captured note text is at the total ceiling, not this note. " +
+  "Re-run with --max-total-note-bytes <n> set above the vault's total markdown size (default 67108864).";
+
 async function commandWrite(
   name: "create" | "update" | "delete",
   session: WikiSession, path: string, text: string,
@@ -480,8 +489,13 @@ async function commandWrite(
     : await session.deleteNote(path);
 
   return {
-    command: name, status: result.status, result: { path, ...result }, coverage, warnings,
-    lines: [result.status === "ok" ? `ok  ${result.path ?? path}` : refusalLine(result.status, { path })],
+    command: name, status: result.status,
+    result: { path, ...result, ...(result.status === "total-note-byte-limit" ? { hint: TOTAL_BYTES_HINT } : {}) },
+    coverage, warnings,
+    lines: result.status === "ok" ? [`ok  ${result.path ?? path}`]
+      : result.status === "total-note-byte-limit"
+        ? [refusalLine(result.status, { path }), TOTAL_BYTES_HINT]
+        : [refusalLine(result.status, { path })],
   };
 }
 
