@@ -2208,6 +2208,9 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   crashStates.set(win.id, state);
   void listCrashDumps(app.getPath("crashDumps")).then((dumps) => { state.knownDumps = dumps; }).catch(() => {});
   recordDiagnostic(state, { at: Date.now(), category: "lifecycle", message: "window-created", metadata: { suppressPlugins } });
+  // Xvfb has no window manager, so nothing ever gives a mapped window input focus.
+  // Hover cards, focus-dependent menus and modals behave as in an inactive window.
+  if (headlessNeedsMappedWindow) win.once("ready-to-show", () => win.focus());
   win.loadFile(indexPath);
 
   win.webContents.on("will-attach-webview", (event, webPreferences, params) => {
