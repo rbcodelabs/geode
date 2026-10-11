@@ -1428,6 +1428,11 @@ export class TabGroup implements LeafContainer {
       tab.setAttribute("role", "tab");
       tab.setAttribute("aria-selected", String(leaf === this.active));
       tab.draggable = true;
+      // Double-clicking a tab toggles focus mode for its pane.
+      tab.ondblclick = (e) => {
+        if (e.button !== 0 || (e.target as HTMLElement).closest(".workspace-tab-header-inner-close-button")) return;
+        this.workspace.toggleFocusPane(this);
+      };
       tab.onmousedown = (e) => {
         if (e.button === 1) leaf.detach();
         else this.setActiveLeaf(leaf);
