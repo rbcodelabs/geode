@@ -37,6 +37,9 @@ npm run build:cli   # bundle the headless `geode-wiki` command to dist/cli/
 build artifact, so `build:cli` is a prerequisite for invoking it, and an in-repo
 `bin` only: nothing is published to a registry.
 
+`geode-wiki sync` drives the append-only history engine headlessly, with safety rails — see
+[`docs/design/headless-wiki-sync.md`](docs/design/headless-wiki-sync.md); `npm run proof:wiki-sync` exercises the built binary.
+
 A demo vault lives in `test-vault/`.
 
 ## E2E tests are not headless
