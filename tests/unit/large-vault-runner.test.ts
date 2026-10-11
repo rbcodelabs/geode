@@ -142,7 +142,9 @@ describe("external benchmark contracts", () => {
             await mkdir(source);
             await writeFile(join(source, "module.js"), "export const value=1;");
             await symlink("module.js", join(source, "link.js"));
-            const inventory = await stageDependencies(source, target);
+            // The 5 GiB headroom guard is for real benchmark runs; this test is about freezing and link
+            // refusal, so it must not depend on how much disk the machine running it has free.
+            const inventory = await stageDependencies(source, target, { minFreeBytes: 0 });
             expect(inventory.files).toBe(1);
             expect(inventory.sha256).toMatch(/^[a-f0-9]{64}$/);
             await writeFile(join(source, "module.js"), "changed");
