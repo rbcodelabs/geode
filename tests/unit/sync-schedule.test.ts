@@ -40,6 +40,13 @@ describe("renderSchedule (pure)", () => {
     expect(u.deactivate).toEqual([["launchctl", "bootout", `gui/501/${u.label}`]]);
   });
 
+  it("systemd: HOME and PATH values escape backslash, quote and percent in Environment=", () => {
+    const u = renderSchedule(spec({ platform: "systemd", home: "/home/a\\b\"c%d", nodePath: "/opt/n\\x/bin/node" }));
+    const service = u.files.find(f => f.path.endsWith(".service"))!.content;
+    expect(service).toContain('Environment="HOME=/home/a\\\\b\\"c%%d"');
+    expect(service).toMatch(/Environment="PATH=[^"\n]*\/opt\/n\\\\x\/bin/);
+  });
+
   it("systemd: service + timer, SuccessExitStatus 4 5, XDG log dir, enable --now", () => {
     const u = renderSchedule(spec({ platform: "systemd", intervalSeconds: 900, xdgStateHome: "/state", xdgConfigHome: "/cfg" }));
     const [service, timer] = u.files;

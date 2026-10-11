@@ -97,6 +97,11 @@ function systemdWord(word: string): string {
   return /^[A-Za-z0-9_@%:,./=+-]+$/.test(word) ? escaped : `"${escaped}"`;
 }
 
+/** A value inside a quoted systemd `Environment="NAME=value"` assignment: backslash first, then `"` and `%`. */
+function systemdEnvValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%");
+}
+
 function renderLaunchd(spec: ScheduleSpec): ScheduleUnits {
   const hash = scheduleHash(spec.root);
   const label = `com.geode.wiki-sync.${hash}`;
@@ -183,8 +188,8 @@ Description=geode-wiki sync run (${hash})
 Type=oneshot
 ExecStart=${command.map(systemdWord).join(" ")}
 SuccessExitStatus=4 5
-Environment="HOME=${spec.home.replace(/"/g, '\\"').replace(/%/g, "%%")}"
-Environment="PATH=${unitPath(spec.nodePath)}"
+Environment="HOME=${systemdEnvValue(spec.home)}"
+Environment="PATH=${systemdEnvValue(unitPath(spec.nodePath))}"
 StandardOutput=append:${logs.out}
 StandardError=append:${logs.err}
 Nice=10
