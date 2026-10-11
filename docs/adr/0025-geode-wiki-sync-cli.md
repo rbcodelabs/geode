@@ -83,6 +83,36 @@ audit stays small. `HistoryController` is not modified.
    asserted end to end, with the remote having deleted the file). Downloading
    (`brctl download`) requires `--hydrate-icloud`.
 
+### What is scanned: names are not judged, config is
+
+Two decisions about the headless scan, both biased towards doing what the files
+say rather than guessing.
+
+- **No conflict-copy heuristic.** An earlier revision excluded `Note 2.md` when
+  `Note.md` sat beside it, on the theory that it was an iCloud conflict copy. It
+  also hid real notes (`Meeting 2.md`, a second empty `Untitled 2.md`). Removed:
+  every such file syncs. A true divergence is a history conflict, which the engine
+  already detects and which `conflicts`/`resolve` handle; a filename pattern is
+  not evidence of one. The `.name.icloud` placeholder handling is unchanged.
+- **Portable configuration travels.** The scan used to skip every dot name, so
+  `scope.ts`'s portable-config rules were unreachable headlessly. It now enters
+  `.geode/` and `.obsidian/` and emits exactly what `portableConfigCategory`
+  classifies (the same allowlist for both roots: settings, appearance, hotkeys,
+  core/community plugin lists, themes, snippets, plugin folders). The history
+  engine only knew config as projected documents plus theme/snippet assets, so it
+  gained a third form, raw files (`SyncScope.rawConfig`, resource names
+  `raw.geode/...`, `raw.obsidian/...`), used only when the scope sets the flag. The
+  desktop does not, so its scope key, projection and behaviour are unchanged, and it
+  ignores `raw.*` resources. Everything else with a dot stays unsynced, including
+  `.gitignore`, `.gitkeep` and `.linear.json` (a follow-up if wanted).
+
+Consequences: the scope key of a headless device changes once. An unattended
+`run` carries on (the new files are plain uploads, never deletions); the next human
+`preview` records the new key and the following `run` needs one `preview --approve`.
+Community plugin code (`plugins/**/main.js`) now travels between the devices of one
+operator, which is the point and also an execution-trust decision: only bind devices
+you control to the same hub.
+
 ### Overrides are explicit, specific and loud
 
 - `--override-delete-limit <n>` allows up to `n` deletions. It *replaces* the

@@ -61,6 +61,56 @@ otherwise (`state-dir-invalid`).
 (`command` is `"sync run"` etc.); refusal detail is in `result`, including
 `override` — the flag that would lift a rail.
 
+## What is synced
+
+Every ordinary file and folder, **by name only**: the scanner never judges a name
+by its shape. `Meeting 2.md` beside `Meeting.md` (or an empty `Untitled 2.md`
+beside an empty `Untitled.md`) is two notes and both sync. There is no iCloud
+"conflict copy" heuristic; a genuine divergence is a *history* conflict (exit 4),
+not a filename pattern. Evicted and `.name.icloud` placeholder files are still
+blocked, never read as absent (rail d).
+
+Dot paths are not walked, with two exceptions: the configuration roots
+`.geode/` and `.obsidian/`. Inside them the scan descends only into
+`themes/`, `snippets/` and `plugins/` and emits only files that
+`src/sync-core/scope.ts` (`portableConfigCategory`) classifies as portable, the
+same allowlist for both roots:
+
+| File | Scope flag |
+|---|---|
+| `app.json` | mainSettings |
+| `appearance.json` | appearance |
+| `hotkeys.json` | hotkeys |
+| `core-plugins.json`, `daily-notes.json` | corePlugins |
+| `community-plugins.json` | communityPlugins |
+| `themes/**`, `snippets/**` | themesAndSnippets |
+| `plugins/**` (including `data.json`, `main.js`, `manifest.json`) | communityPluginData |
+
+The headless scope turns all of those on (`rawConfig: true`) and carries the files
+byte for byte. Never synced, whatever the scope: `workspace*.json`, `graph.json`
+and any other unlisted file in a config root, any `cache`/`caches`/`node_modules`
+folder or dot name below a config root, `.geode/sync` (reserved), `.git`, `.trash`,
+`.geode-trash`, `.geode-sync-tmp`, `.worktrees`, `.DS_Store`, and every other dot path
+(`.claude`, `.gitignore`, `.gitkeep`, `.linear.json`). Symlinks anywhere, including
+inside a config root, are reported as blocked and never followed; a symlinked
+`.geode` or `.obsidian` is not entered. `--exclude .obsidian` (or
+`--exclude .obsidian/plugins`) keeps a root or part of one out. The device-state
+directory stays outside the vault.
+
+On the wire a config file is a `portable-config` resource named
+`raw.geode/<path>` or `raw.obsidian/<path>` (history names may not be `.geode` or
+`.obsidian`); `.geode/themes` and `.geode/snippets/*.css` keep their existing
+asset names so they stay interchangeable with the desktop app. The desktop app
+ignores `raw.*` resources (its scope does not set `rawConfig`), and a raw-file
+host does not exchange the app's projected documents (`editor.json` ...).
+
+Config files are not content files for the rails: they do not enter rail (c)'s
+"known" or "found" counts, and deleting one counts as a deletion under rail (b)
+like any other. A device that synced before this existed has a recorded scope key
+that no longer matches. If it runs unattended (`run`, no preview first) the config
+files are plain uploads and nothing is deleted; once someone runs `preview`, the
+new key is recorded and the next `run` asks for one `preview --approve`.
+
 ## Safety rails
 
 | Rail | Refusal | Rule | Override |
@@ -138,7 +188,7 @@ scan rail still applies.
 |---|---|
 | `npx vitest run tests/unit/sync-cli.test.ts` | Every status/exit, each rail and override, convergence, conflicts, lock, gc (in-process, real directories and hub) |
 | `npx vitest run tests/unit/cli-import-audit.test.ts` | The real bundle passes the audit, and each rule fails, naming the edge, on a broken graph |
-| `npm run proof:wiki-sync` | The built binary in real subprocesses: two vaults, a hub over a stand-in `ssh` running the real remote command line; `sync schedule` print/install/uninstall with a recording `launchctl`, including executing the scheduled command; all six exit codes; conflicts; deletes; each refusal; the lock held by one process and refused (exit 5) in another |
+| `npm run proof:wiki-sync` | The built binary in real subprocesses (including config files and `Name 2.md` round-tripping between two vaults): two vaults, a hub over a stand-in `ssh` running the real remote command line; `sync schedule` print/install/uninstall with a recording `launchctl`, including executing the scheduled command; all six exit codes; conflicts; deletes; each refusal; the lock held by one process and refused (exit 5) in another |
 | `npx vitest run tests/unit/sync-schedule.test.ts` | Rendering of both platforms, interval and flag rules, the approval refusal, install/status/uninstall against a stub service manager and temp `--target-dir`s |
 | `npm run proof:wiki-cli` | Unchanged claims, plus the exact input set now including the sync files |
 

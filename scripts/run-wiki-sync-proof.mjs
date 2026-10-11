@@ -339,6 +339,48 @@ process.exit(process.env.PROOF_SVC_FAIL ? 1 : 0);
   assert.ok(brctlCalls.length >= 1 && brctlCalls.every((c) => c[0] === "download" && c[1].endsWith("Notes/.Plan.md.icloud")), `opt-in asks brctl for the placeholder only: ${JSON.stringify(brctlCalls)}`);
   assert.equal(B.has("Notes/.Plan.md.icloud"), true, "a failed download leaves the placeholder alone");
 
+  /* ----------------------------- numbered names and portable config round-trip between two vaults */
+
+  // A fresh pair on its own hub, so the counts above stay what they were.
+  const hub2 = join(directory, "hub2");
+  const store2 = ["--ssh", "proof-hub.invalid", "--store", hub2];
+  const C = new Device("c"), D = new Device("d");
+  await mkdir(C.root); await mkdir(D.root);
+  const CONFIG = [
+    ".geode/app.json", ".geode/themes/Dark/theme.css", ".obsidian/app.json", ".obsidian/hotkeys.json", ".obsidian/core-plugins.json",
+    ".obsidian/community-plugins.json", ".obsidian/snippets/tweak.css", ".obsidian/themes/Mine/theme.css", ".obsidian/plugins/calendar/data.json", ".obsidian/plugins/calendar/main.js",
+  ];
+  const NEVER_SYNCED = [
+    ".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/cache/index.bin", ".obsidian/plugins/calendar/node_modules/dep/index.js",
+    ".geode/sync/lock.json", ".gitignore", ".gitkeep", ".linear.json", ".claude/settings.json", ".trash/old.md",
+  ];
+  // "Meeting 2.md" beside "Meeting.md" and an empty "Untitled 2.md" beside an empty "Untitled.md": ordinary files.
+  const NUMBERED = { "Meeting.md": "first\n", "Meeting 2.md": "second\n", "Untitled.md": "", "Untitled 2.md": "" };
+  for (const [rel, text] of Object.entries(NUMBERED)) await C.write(rel, text);
+  for (const rel of [...CONFIG, ...NEVER_SYNCED]) await C.write(rel, `c:${rel}\n`);
+  assert.equal((await C.j("init", ...store2, "--create")).code, 0);
+  const cPreview = await C.j("preview");
+  assert.equal(cPreview.result.preview.excluded, 0, "nothing is excluded by name");
+  assert.deepEqual(cPreview.result.preview.blocked, [], "nothing is blocked");
+  await C.j("preview", "--approve");
+  const cRun = await C.j("run");
+  assert.equal(cRun.code, 0, cRun.stdout + cRun.stderr);
+  assert.equal((await D.j("init", ...store2)).code, 0);
+  await D.bootstrap();
+  for (const [rel, text] of Object.entries(NUMBERED)) assert.equal(await D.read(rel), text, `${rel} must round-trip byte for byte (including the empty ones)`);
+  for (const rel of CONFIG) assert.equal(await D.read(rel), `c:${rel}\n`, `${rel} must round-trip`);
+  for (const rel of NEVER_SYNCED) assert.equal(D.has(rel), false, `${rel} must never leave its device`);
+  // and back the other way, edits and deletions included
+  await D.write(".obsidian/plugins/calendar/data.json", "edited on d\n");
+  await D.write("Meeting 2.md", "second, edited\n");
+  await unlink(join(D.root, ".obsidian/hotkeys.json"));
+  assert.equal((await D.j("run")).code, 0);
+  assert.equal((await C.j("run")).code, 0);
+  assert.equal(await C.read(".obsidian/plugins/calendar/data.json"), "edited on d\n");
+  assert.equal(await C.read("Meeting 2.md"), "second, edited\n");
+  assert.equal(C.has(".obsidian/hotkeys.json"), false, "a deleted config file is an ordinary deletion");
+  assert.equal(await C.read(".obsidian/workspace.json"), "c:.obsidian/workspace.json\n", "the unsynced file is untouched where it lives");
+
   /* ------------------------------------------------------- hub unreachable */
 
   const down = await A.j("run");
@@ -421,6 +463,7 @@ process.exit(process.env.PROOF_SVC_FAIL ? 1 : 0);
     lockHolderPid: during.result.running.pid,
     conflictResolvedTo: await B.read("base.md"),
     finalNotesEqual: JSON.stringify(await A.notes()) === JSON.stringify(await B.notes()),
+    configAndNumberedFilesRoundTripped: CONFIG.length + Object.keys(NUMBERED).length,
     brctlCallsWithoutOptIn: 0,
     brctlCallsWithOptIn: brctlCalls.length,
     scheduleServiceManagerCalls: (await svcCalls()).map((c) => c.slice(0, 2).join(" ")),
