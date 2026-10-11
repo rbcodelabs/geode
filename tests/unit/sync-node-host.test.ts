@@ -3,8 +3,8 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, utimesSync,
 import { join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildHistoryPorts, SyncBlockedError } from "../../src/sync-core/ports";
-import { DEFAULT_SYNC_SCOPE, isPathInSyncScope } from "../../src/sync-core/scope";
-import { NodeHost, SyncLockedError, SyncStateDirError, conflictCopyBase, defaultStateDir, hydrateIcloudPaths, scanVault, type ScanIo } from "../../src/sync-node/index";
+import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, portableConfigCategory } from "../../src/sync-core/scope";
+import { NodeHost, SyncLockedError, SyncStateDirError, defaultStateDir, hydrateIcloudPaths, scanVault, type ScanIo } from "../../src/sync-node/index";
 import { currentBootId } from "../../src/sync-node/store-lock";
 import { noPortable, openHost, put, rmrf, tmp } from "../helpers/node-host-harness";
 
@@ -16,9 +16,9 @@ const reasons = (items: Array<{ path: string; reason: string }> | undefined) => 
 const scan = (root: string, extra = {}) => scanVault({ root, settleMs: 0, detectEvicted: false, ...extra });
 
 describe("vault scan", () => {
-  it("lists files and folders, skips dotted names (.geode, .git, staging) and returns a complete scan", async () => {
+  it("lists files and folders, skips dotted names (.git, .trash, staging) and returns a complete scan", async () => {
     const root = dir("scan");
-    put(root, "a.md"); put(root, "Notes/b.md"); put(root, ".geode/app.json"); put(root, ".git/HEAD"); put(root, ".geode-sync-tmp/.geode-sync-x"); put(root, ".trash/old.md");
+    put(root, "a.md"); put(root, "Notes/b.md"); put(root, ".gitignore"); put(root, ".git/HEAD"); put(root, ".geode-sync-tmp/.geode-sync-x"); put(root, ".trash/old.md");
     const report = await scan(root);
     expect(report.status).toBe("complete");
     expect(paths(report.entries)).toEqual(["Notes", "Notes/b.md", "a.md"]);
@@ -82,33 +82,87 @@ describe("vault scan", () => {
     expect(reasons(report.excluded)).toEqual({ Archive: "excluded-folder" });
   });
 
-  describe("iCloud conflict copies", () => {
-    it("recognises only <stem> <N>.<ext> shapes", () => {
-      expect(conflictCopyBase("Note 2.md")).toBe("Note.md");
-      expect(conflictCopyBase("My Note 12.md")).toBe("My Note.md");
-      expect(conflictCopyBase("Note 1.md")).toBeNull();
-      expect(conflictCopyBase("Note 100.md")).toBeNull();
-      expect(conflictCopyBase("Note 02.md")).toBeNull();
-      expect(conflictCopyBase("Note 2")).toBeNull();
-      expect(conflictCopyBase("Note2.md")).toBeNull();
-      expect(conflictCopyBase("Note (2).md")).toBeNull();
-    });
-    it("excludes the copy only when the un-suffixed sibling also exists", async () => {
-      const root = dir("conflict");
-      put(root, "Note.md"); put(root, "Note 2.md"); put(root, "Note 3.md");
-      put(root, "Chapter 2.md");                     // no "Chapter.md": legitimately named
-      put(root, "Top 10.md"); put(root, "Top.txt");   // different extension: not a sibling
-      put(root, "sub/Plan.md"); put(root, "Plan 2.md"); // sibling in a different folder does not count
+  describe("numbered siblings are ordinary files", () => {
+    it("Note 2.md beside Note.md is listed like any other file (no conflict-copy heuristic)", async () => {
+      const root = dir("numbered");
+      put(root, "Note.md"); put(root, "Note 2.md"); put(root, "Note 3.md"); put(root, "Note 12.md"); put(root, "Chapter 2.md"); put(root, "sub/Plan.md"); put(root, "sub/Plan 2.md");
       const report = await scan(root);
-      expect(reasons(report.excluded)).toEqual({ "Note 2.md": "icloud-conflict-copy", "Note 3.md": "icloud-conflict-copy" });
-      expect(paths(report.entries).filter(p => !p.endsWith("sub"))).toEqual(["Chapter 2.md", "Note.md", "Plan 2.md", "Top 10.md", "Top.txt", "sub/Plan.md"].sort());
+      expect(report.excluded).toEqual([]);
+      expect(paths(report.entries).sort()).toEqual(["Chapter 2.md", "Note 12.md", "Note 2.md", "Note 3.md", "Note.md", "sub", "sub/Plan 2.md", "sub/Plan.md"].sort());
     });
-    it("a placeholder sibling counts as the base", async () => {
-      const root = dir("conflict-stub");
+    it("a placeholder sibling does not exclude a numbered file either", async () => {
+      const root = dir("numbered-stub");
       put(root, ".Note.md.icloud", "stub"); put(root, "Note 2.md");
       const report = await scan(root);
-      expect(reasons(report.excluded)).toEqual({ "Note 2.md": "icloud-conflict-copy" });
+      expect(report.excluded).toEqual([]);
+      expect(paths(report.entries)).toEqual(["Note 2.md"]);
       expect(reasons(report.blocked)).toEqual({ "Note.md": "icloud-not-downloaded" });
+    });
+  });
+
+  describe("portable configuration folders (.geode/, .obsidian/)", () => {
+    const CONFIG = [
+      "app.json", "appearance.json", "hotkeys.json", "core-plugins.json", "daily-notes.json", "community-plugins.json",
+      "themes/Dark/theme.css", "snippets/tweak.css", "plugins/calendar/data.json", "plugins/calendar/main.js", "plugins/calendar/manifest.json",
+    ];
+    const NEVER = [
+      "workspace.json", "workspace-mobile.json", "workspaces.json", "graph.json", "cache/index.bin", "sync/state.json", "sync/lock/owner.json",
+      "plugins/calendar/node_modules/dep/index.js", "plugins/calendar/.cache/x", "plugins/calendar/cache/y.json", "themes/.DS_Store", ".DS_Store", "unknown.json",
+    ];
+    it("walks .geode/ and .obsidian/ and emits exactly the classified portable files", async () => {
+      const root = dir("config");
+      put(root, "note.md");
+      for (const base of [".geode", ".obsidian"]) for (const rel of [...CONFIG, ...NEVER]) put(root, `${base}/${rel}`);
+      const report = await scan(root);
+      const files = report.entries.filter(e => !e.isFolder).map(e => e.path).sort();
+      expect(files).toEqual([...[".geode", ".obsidian"].flatMap(base => CONFIG.map(rel => `${base}/${rel}`)), "note.md"].sort());
+      expect(report.status).toBe("complete");
+      expect(report.blocked).toEqual([]);
+      // every emitted file is one the scope module classifies as portable; the walk never second-guesses it
+      for (const file of files.filter(p => p.startsWith("."))) expect(portableConfigCategory(file), file).not.toBeNull();
+    });
+    it("never walks other dot paths or the reserved/transient ones", async () => {
+      const root = dir("config-never");
+      for (const rel of [".git/config", ".trash/a.md", ".geode-trash/a.md", ".geode-sync-tmp/x", ".worktrees/w/a.md", ".claude/settings.json", ".gitignore", ".gitkeep", ".linear.json", ".DS_Store", "node_modules/x/index.js.md"]) put(root, rel);
+      put(root, "ok.md");
+      const report = await scan(root);
+      expect(paths(report.entries).filter(p => p.startsWith(".") || p.includes("/.")).sort()).toEqual([]);
+      // node_modules at the root is an ordinary folder name to the scanner; the engine's scope decides. Only dot paths are the scanner's concern.
+      expect(paths(report.entries)).toContain("ok.md");
+    });
+    it("a missing or empty config root is simply nothing", async () => {
+      const root = dir("config-empty");
+      mkdirSync(join(root, ".obsidian"), { recursive: true }); mkdirSync(join(root, ".geode/plugins"), { recursive: true }); put(root, "a.md");
+      const report = await scan(root);
+      expect(paths(report.entries).filter(p => !p.endsWith("a.md"))).toEqual([".geode/plugins"]);
+      expect(report.status).toBe("complete");
+    });
+    it("symlinks inside a config root are blocked, never followed (no loops), and a symlinked root is not entered", async () => {
+      const root = dir("config-links"), outside = dir("config-outside");
+      put(outside, "evil.json"); put(root, ".obsidian/app.json");
+      symlinkSync(join(outside, "evil.json"), join(root, ".obsidian/hotkeys.json"));       // file link
+      symlinkSync(root, join(root, ".obsidian/plugins"));                                  // dir link back to the vault: a loop if followed
+      symlinkSync(outside, join(root, ".obsidian/workspaces"));                            // link at an unclassified name: silent
+      const report = await scan(root);
+      expect(report.status).toBe("complete");
+      expect(reasons(report.blocked)).toEqual({ ".obsidian/hotkeys.json": "symlink", ".obsidian/plugins": "symlink" });
+      expect(paths(report.entries).filter(p => !p.endsWith("/"))).toEqual([".obsidian/app.json"]);
+      const root2 = dir("config-rootlink");
+      symlinkSync(outside, join(root2, ".geode")); put(root2, "a.md");
+      expect(paths((await scan(root2)).entries)).toEqual(["a.md"]);
+    });
+    it("--exclude can keep a whole config root (or part of one) out", async () => {
+      const root = dir("config-exclude");
+      put(root, ".obsidian/app.json"); put(root, ".geode/app.json"); put(root, ".geode/plugins/x/data.json");
+      expect(paths((await scan(root, { excludeFolders: [".obsidian"] })).entries).filter(p => !p.endsWith("plugins") && !p.endsWith("/x")).sort()).toEqual([".geode/app.json", ".geode/plugins/x/data.json"]);
+      const report = await scan(root, { excludeFolders: [".geode/plugins"] });
+      expect(reasons(report.excluded)).toEqual({ ".geode/plugins": "excluded-folder" });
+    });
+    it("an iCloud placeholder for a config file is blocked; one for an unclassified name stays silent", async () => {
+      const root = dir("config-stub");
+      put(root, ".obsidian/.app.json.icloud", "stub"); put(root, ".obsidian/.workspace.json.icloud", "stub");
+      const report = await scan(root);
+      expect(reasons(report.blocked)).toEqual({ ".obsidian/app.json": "icloud-not-downloaded" });
     });
   });
 
@@ -141,15 +195,15 @@ describe("vault scan", () => {
 describe("blocked paths reach the engine's snapshot", () => {
   it("scan.blocked / scan.excluded become snapshot.blocked / excluded and their paths are not entries", async () => {
     const root = dir("snap"), state = dir("snap-state");
-    put(root, "Notes/.Plan.md.icloud", "stub"); put(root, "Note.md"); put(root, "Note 2.md"); put(root, "ok.md");
+    put(root, "Notes/.Plan.md.icloud", "stub"); put(root, "Note.md"); put(root, "ok.md"); put(root, "x/y.md");
     const host = await openHost(root, join(state, "s"));
     await host.run(async lease => {
       const { ports } = buildHistoryPorts(host, { provider: { id: "p" }, scope: noPortable, bindingVaultId: "12345678-1234-4234-8234-123456789012", bindingKey: "a".repeat(64), stateKey: "k", lease, assertContext: () => {}, renameHints: new Map(), portableChanged: async () => {} });
       const snap = await ports.snapshot();
       expect(snap.authoritative).toBe(true);
       expect(snap.blocked).toEqual([{ namespace: "content", path: "Notes/Plan.md", reason: "icloud-not-downloaded" }]);
-      expect(snap.excluded).toEqual([{ namespace: "content", path: "Note 2.md", reason: "icloud-conflict-copy" }]);
-      expect(snap.entries.map(e => e.path).sort()).toEqual(["Note.md", "Notes", "ok.md"]);
+      expect(snap.excluded).toEqual([]);
+      expect(snap.entries.map(e => e.path).sort()).toEqual(["Note.md", "Notes", "ok.md", "x", "x/y.md"]);
     });
   });
 

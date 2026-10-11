@@ -395,3 +395,88 @@ describe("gc and status", () => {
     expect(["store-unavailable", "store-failed"]).toContain(r.json.status);
   });
 });
+
+describe("numbered siblings and portable configuration", () => {
+  const CONFIG = [".geode/app.json", ".geode/themes/Dark/theme.css", ".obsidian/app.json", ".obsidian/hotkeys.json", ".obsidian/snippets/tweak.css", ".obsidian/plugins/calendar/data.json", ".obsidian/community-plugins.json"];
+  /** Folder entities the history tree needs for CONFIG: raw.geode, themes, themes/Dark, raw.obsidian, snippets, plugins, plugins/calendar. */
+  const CONFIG_FOLDERS = 7;
+  const NEVER = [".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/cache/x", ".obsidian/plugins/calendar/node_modules/d/i.js", ".geode/sync/lock", ".gitignore", ".gitkeep", ".linear.json", ".claude/settings.json", ".trash/old.md"];
+
+  it("Meeting.md + Meeting 2.md + empty Untitled.md / Untitled 2.md all upload and round-trip", async () => {
+    const hub = hubDir(), a = device("a", hub), b = device("b", hub);
+    a.write("Meeting.md", "first"); a.write("Meeting 2.md", "second"); a.write("Untitled.md", ""); a.write("Untitled 2.md", "");
+    await a.init(true);
+    expect((await a.call("preview")).json.result.preview).toMatchObject({ uploads: 4, excluded: 0 });
+    await a.call("preview", "--approve"); expect((await a.call("run")).code).toBe(0);
+    await b.init(false); await b.bootstrap();
+    expect([b.read("Meeting.md"), b.read("Meeting 2.md"), b.read("Untitled.md"), b.read("Untitled 2.md")]).toEqual(["first", "second", "", ""]);
+    b.write("Meeting 2.md", "second, edited"); await b.call("run"); await a.call("run");
+    expect(a.read("Meeting 2.md")).toBe("second, edited");
+    rmSync(join(a.root, "Untitled 2.md")); await a.call("run"); await b.call("run");
+    expect([b.has("Untitled 2.md"), b.has("Untitled.md")]).toEqual([false, true]);
+  });
+
+  it("config files (.geode/ and .obsidian/) round-trip both ways, edits and deletions included; workspace, caches, dot-files never leave the device", async () => {
+    const hub = hubDir(), a = device("a", hub), b = device("b", hub);
+    a.write("note.md", "n"); for (const rel of [...CONFIG, ...NEVER]) a.write(rel, `a:${rel}`);
+    await a.init(true);
+    expect((await a.call("preview")).json.result.preview.uploads).toBe(1 + CONFIG.length + CONFIG_FOLDERS);
+    await a.call("preview", "--approve"); expect((await a.call("run")).code).toBe(0);
+    await b.init(false); await b.bootstrap();
+    for (const rel of CONFIG) expect(b.read(rel), rel).toBe(`a:${rel}`);
+    for (const rel of NEVER) expect(b.has(rel), rel).toBe(false);
+    // both directions
+    b.write(".obsidian/plugins/calendar/data.json", "b edit"); b.write(".obsidian/plugins/other/data.json", "new on b");
+    expect((await b.call("run")).json.status).toBe("ok"); expect((await a.call("run")).json.status).toBe("ok");
+    expect([a.read(".obsidian/plugins/calendar/data.json"), a.read(".obsidian/plugins/other/data.json")]).toEqual(["b edit", "new on b"]);
+    // deletion of a config file is an ordinary, rail-counted deletion
+    rmSync(join(a.root, ".obsidian/hotkeys.json"));
+    const del = await a.call("run"); expect(del.json.result.planned.deletions).toBe(1);
+    await b.call("run"); expect(b.has(".obsidian/hotkeys.json")).toBe(false);
+    // the unsynced stayed unsynced on both devices
+    expect(a.read(".obsidian/workspace.json")).toBe("a:.obsidian/workspace.json");
+  });
+
+  /** A device that synced under the older scope: approved, two notes, recorded scope key from before raw config. */
+  async function legacyDevice(hub: string) {
+    const a = device("a", hub);
+    a.write("one.md", "1"); a.write("two.md", "2");
+    await a.init(true); await a.bootstrap();
+    const stateDir = (await a.call("status")).json.result.stateDir, file = join(stateDir, "state.json");
+    const state = JSON.parse(readFileSync(file, "utf8"));
+    const key = Object.keys(state.values).find(k => k.startsWith("sync-history/"))!;
+    expect(state.values[key].approved).toBe(true);
+    state.values[key].scopeKey = JSON.stringify({ old: true }); writeFileSync(file, JSON.stringify(state));
+    for (const rel of CONFIG) a.write(rel, `cfg:${rel}`);
+    return a;
+  }
+
+  it("an existing, already-approved device runs unattended: config files are plain uploads, never deletions", async () => {
+    const hub = hubDir(), a = await legacyDevice(hub);
+    const ran = await a.call("run");
+    expect([ran.code, ran.json.status, ran.json.result.planned.uploads, ran.json.result.planned.deletions]).toEqual([0, "ok", CONFIG.length + CONFIG_FOLDERS, 0]);
+    expect(ran.json.result.rails.scan.known).toBe(2);
+    const b = device("b", hub); await b.init(false); await b.bootstrap();
+    for (const rel of CONFIG) expect(b.read(rel)).toBe(`cfg:${rel}`);
+  });
+
+  it("the same device, once a human has previewed (which records the widened scope), shows plain uploads and asks for one approval", async () => {
+    const a = await legacyDevice(hubDir());
+    const preview = (await a.call("preview")).json.result.preview;
+    expect([preview.uploads, preview.deletions, preview.downloads, preview.requiresApproval]).toEqual([CONFIG.length + CONFIG_FOLDERS, 0, 0, true]);
+    expect((await a.call("run")).json.status).toBe("approval-required");
+    await a.call("preview", "--approve");
+    const ran = await a.call("run");
+    expect([ran.json.status, ran.json.result.planned.deletions]).toEqual(["ok", 0]);
+  });
+
+  it("config files do not count toward the scan-shrunk rail or inflate its denominator", async () => {
+    const hub = hubDir(), a = device("a", hub);
+    bulk(a, 4); for (const rel of CONFIG) a.write(rel, "c");
+    await a.init(true); await a.bootstrap();
+    expect((await a.call("status")).json.result.knownFiles).toBe(4);
+    for (let i = 0; i < 3; i++) rmSync(join(a.root, `n00${i}.md`));
+    const refused = await a.call("run");
+    expect([refused.json.status, refused.json.result.found, refused.json.result.known]).toEqual(["scan-shrunk", 1, 4]);
+  });
+});

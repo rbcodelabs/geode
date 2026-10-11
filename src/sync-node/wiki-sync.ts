@@ -154,8 +154,9 @@ const bindingKeyFor = (vaultId: string) => createHash("sha256").update(vaultId).
 const stateKeyFor = (vaultId: string) => `sync-history/${vaultId}/${bindingKeyFor(vaultId)}`;
 
 function scopeFor(config: WikiSyncConfig): SyncScope {
-  // Content only: a headless host has no app configuration to project.
-  return { ...DEFAULT_SYNC_SCOPE, mainSettings: false, appearance: false, hotkeys: false, corePlugins: false, themesAndSnippets: false, excludedFolders: [...config.excludeFolders] };
+  // Content plus portable configuration exchanged as raw FILES (rawConfig): a headless host has no running app to
+  // project documents from, so it carries .geode/ and .obsidian/ config files byte for byte instead.
+  return { ...DEFAULT_SYNC_SCOPE, communityPlugins: true, communityPluginData: true, rawConfig: true, excludedFolders: [...config.excludeFolders] };
 }
 
 export function validateExcludeFolders(folders: readonly string[]): string[] {

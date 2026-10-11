@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { withPathLock } from "./path-lock";
 import { isPortableAssetPath } from "../shared/portable-assets";
+import { portableResourcePhysicalPath, rawConfigCategory } from "../sync-core/scope";
 import { moveToTrash, type TrashIo } from "./trash";
 export interface ApplyDependencies {
   /** Required unless `trashDir` is set (then `trashDir` handles deletions). */
@@ -65,7 +66,7 @@ async function snapshot(target: string): Promise<{ hash: string | null; bytes?: 
 }
 
 async function checkPath(root: string, relative: string, portable = false): Promise<string> {
-  if (!relative || relative.includes("\\") || relative.includes("\0") || relative.normalize("NFC") !== relative || relative.split("/").some((segment, index) => !segment || segment === "." || segment === ".." || segment.startsWith(".") && !(portable && index === 0 && segment === ".geode"))) throw new Error("Unsafe sync path");
+  if (!relative || relative.includes("\\") || relative.includes("\0") || relative.normalize("NFC") !== relative || relative.split("/").some((segment, index) => !segment || segment === "." || segment === ".." || segment.startsWith(".") && !(portable && index === 0 && (segment === ".geode" || segment === ".obsidian")))) throw new Error("Unsafe sync path");
   const target = path.resolve(root, relative);
   if (!target.startsWith(root + path.sep)) throw new Error("Unsafe sync path");
   let current = root;
@@ -89,8 +90,8 @@ export async function applyGuardedMutation(root: string, recoveryRoot: string, i
     if (trash === root || trash.startsWith(root + path.sep) || root.startsWith(trash + path.sep)) throw new Error("trashDir must be outside the vault");
   }
   const portable = input.namespace === "portable-config";
-  if (portable && !isPortableAssetPath(input.path)) throw new Error("Invalid portable asset path");
-  const physicalPath = portable ? ".geode/" + input.path : input.path;
+  if (portable && !isPortableAssetPath(input.path) && rawConfigCategory(input.path) === null) throw new Error("Invalid portable asset path");
+  const physicalPath = portable ? portableResourcePhysicalPath(input.path) : input.path;
   const receiptIdentity = `${input.namespace ?? "content"}:${input.path}`;
   const target = await checkPath(root, physicalPath, portable);
   const desiredHash = input.kind === "write" ? hash(new Uint8Array(input.data!)) : input.kind === "mkdir" ? "folder" : null;

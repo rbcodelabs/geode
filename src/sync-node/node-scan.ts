@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { CONFIG_ROOTS, portableConfigCategory } from "../sync-core/scope";
 import type { SyncVaultEntry, SyncVaultPathIssue, SyncVaultScan } from "../sync-core/ports";
 
 /**
@@ -15,18 +16,24 @@ import type { SyncVaultEntry, SyncVaultPathIssue, SyncVaultScan } from "../sync-
  *    files still being written, symlinks, unsupported file types. The engine
  *    treats a blocked path (and its descendants) as untouchable, so a blocked file
  *    is never read as absent and therefore never deleted remotely.
- *  - Deliberately unsynced items go in `excluded` (--exclude folders, iCloud
- *    conflict copies).
+ *  - Deliberately unsynced items go in `excluded` (--exclude folders).
+ * Names are never judged by their shape: `Note 2.md` beside `Note.md` is an ordinary
+ * file like any other.
  * Dot-prefixed names are skipped (the engine's scope ignores them as well), which
- * keeps `.geode/`, `.git`, `.obsidian`, `.trash` and the `.geode-sync-tmp` staging
- * directory out of the walk entirely. The one dotted shape that matters is the
- * legacy iCloud placeholder `.<name>.icloud`.
+ * keeps `.git`, `.trash`, `.claude`, `.gitignore` and the `.geode-sync-tmp` staging
+ * directory out of the walk entirely. The exceptions are the two configuration roots
+ * `.geode/` and `.obsidian/`: the walk enters them, but descends only into
+ * themes/, snippets/ and plugins/ and emits only files that scope.ts classifies as
+ * portable configuration (portableConfigCategory); everything else in there
+ * (workspace*.json, caches, `.geode/sync`, node_modules) is skipped without a trace,
+ * like any other unsynced dot path. Whether a classified file actually syncs is then
+ * the scope's call. The one other dotted shape that matters is the legacy iCloud
+ * placeholder `.<name>.icloud`.
  */
 
 export const ICLOUD_NOT_DOWNLOADED = "icloud-not-downloaded";
 export const ICLOUD_EVICTED = "icloud-evicted";
 export const UNSETTLED = "unsettled";
-export const ICLOUD_CONFLICT_COPY = "icloud-conflict-copy";
 
 export interface ScanDirent { name: string; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; }
 export interface ScanStat { size: number; mtimeMs: number; blocks: number; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; }
@@ -57,23 +64,6 @@ export interface ScanReport extends SyncVaultScan {
 }
 
 const STUB = /^\.(.+)\.icloud$/;
-/**
- * iCloud (and most sync tools) resolve a same-name collision by suffixing a number
- * before the extension: `Note.md` -> `Note 2.md`. Deliberately conservative: it is
- * a conflict copy ONLY when an extension is present, N is 2..99, AND the un-suffixed
- * sibling `<stem>.<ext>` exists in the same folder. A lone "Chapter 2.md", or
- * "Top 10.md" without a "Top.md" beside it, is ordinary content. The residual false
- * positive (an author who really keeps both "Top.md" and "Top 10.md") only costs a
- * visible `excluded` row, never data.
- */
-const CONFLICT_COPY = /^(.+) ([2-9]|[1-9][0-9])(\.[^./]+)$/;
-
-/** The sibling name a conflict copy shadows, or null when `name` is not shaped like one. */
-export function conflictCopyBase(name: string): string | null {
-  const match = CONFLICT_COPY.exec(name);
-  return match ? match[1] + match[3] : null;
-}
-
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 
 class Gate {
@@ -95,8 +85,7 @@ export async function scanVault(options: ScanOptions): Promise<ScanReport> {
   const started = now();
   let cancelled = false;
 
-  const statFile = async (rel: string, conflictBase: string | null, siblings: ReadonlySet<string>) => {
-    if (conflictBase !== null && siblings.has(conflictBase)) { excluded.push({ path: rel, reason: ICLOUD_CONFLICT_COPY }); return; }
+  const statFile = async (rel: string) => {
     let stat: ScanStat;
     try { stat = await gate.run(() => io.lstat(path.join(options.root, rel))); }
     catch (error) {
@@ -122,27 +111,37 @@ export async function scanVault(options: ScanOptions): Promise<ScanReport> {
       if (code !== "ENOENT") failures.push({ path: dir || ".", code }); // ENOENT: the directory vanished, its contents are genuinely gone
       return;
     }
-    // Logical names present in this folder (placeholders count under their real name).
+    // Placeholders stand in for their real name: a stub with no real file beside it is a blocked (not downloaded) file.
     const siblings = new Set<string>(), stubs = new Map<string, string>();
     for (const child of children) {
       const stub = child.isFile() ? STUB.exec(child.name) : null;
       if (stub) stubs.set(stub[1], child.name); else siblings.add(child.name);
     }
-    // A placeholder stands in for its real name when deciding whether a numbered sibling is a conflict copy.
-    const logical = new Set<string>([...siblings, ...stubs.keys()]);
     const work: Array<Promise<unknown>> = [], subdirs: string[] = [];
-    for (const [logical] of stubs) if (!siblings.has(logical)) blocked.push({ path: join(dir, logical), reason: ICLOUD_NOT_DOWNLOADED });
+    // Inside a configuration root only the allowlisted shapes are walked; at the vault root only the two roots.
+    const inConfig = CONFIG_ROOTS.includes(dir.split("/")[0]);
+    for (const [logical] of stubs) {
+      const rel = join(dir, logical);
+      if (!siblings.has(logical) && (!inConfig || portableConfigCategory(rel) !== null)) blocked.push({ path: rel, reason: ICLOUD_NOT_DOWNLOADED });
+    }
     for (const child of children) {
       const name = child.name;
-      if (name.startsWith(".")) continue;
       const rel = join(dir, name);
+      if (name.startsWith(".")) {
+        // The two config roots are real directories (a symlinked root stays unsynced and silent, as every dot path was).
+        if (!(dir === "" && child.isDirectory() && !child.isSymbolicLink() && CONFIG_ROOTS.includes(name) && !excludeFolders.has(name))) continue;
+        subdirs.push(rel); continue; // the root itself is not an entry: it is not content
+      }
+      // A directory in a config root is entered only if something beneath it could be portable (so not workspaces/, node_modules/, cache/).
+      if (inConfig && child.isDirectory() && portableConfigCategory(`${rel}/x`) === null) continue;
+      if (inConfig && (child.isFile() || child.isSymbolicLink()) && portableConfigCategory(rel) === null && (!child.isSymbolicLink() || portableConfigCategory(`${rel}/x`) === null)) continue;
       if (child.isSymbolicLink()) { blocked.push({ path: rel, reason: "symlink" }); continue; }
       if (child.isDirectory()) {
         if (excludeFolders.has(rel)) { excluded.push({ path: rel, reason: "excluded-folder" }); continue; }
         entries.push({ path: rel, isFolder: true, mtime: 0, size: 0 });
         subdirs.push(rel); continue;
       }
-      if (child.isFile()) { work.push(statFile(rel, conflictCopyBase(name), logical)); continue; }
+      if (child.isFile()) { work.push(statFile(rel)); continue; }
       blocked.push({ path: rel, reason: "unsupported-file-type" });
     }
     await Promise.all([...work, ...subdirs.map(walk)]);

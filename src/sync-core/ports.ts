@@ -1,6 +1,6 @@
 import type { HistoryApply, HistoryControllerPorts, HistoryControllerState, HistoryLocalResource, HistoryLocalSnapshot, HistoryOperation } from "./history-controller";
 import { SYNC_MAX_FILE_BYTES } from "./history-types";
-import { isPathInSyncScope, type SyncScope } from "./scope";
+import { isPathInSyncScope, isRawConfigResourcePath, portableResourcePhysicalPath, rawConfigCategory, rawResourcePath, type SyncScope } from "./scope";
 import { isPortableAssetPath } from "../shared/portable-assets";
 import type { GuardedMutation, GuardedMutationResult, SyncStorageRequest } from "../shared/sync-safety";
 
@@ -110,7 +110,14 @@ export const sha256Hex = async (data: ArrayBuffer): Promise<string> => [...new U
 /** Whether a (namespace, path) pair is synchronised under the given scope. */
 export function isIncludedInScope(scope: SyncScope, namespace: string, path: string): boolean {
   if (namespace === "portable-config") {
+    if (isRawConfigResourcePath(path)) {
+      // A raw-file host only: config files and their folders, named by full path, gated by the same category flags.
+      const category = rawConfigCategory(path);
+      return category !== null && scope.rawConfig === true && (category === "root" || Boolean(scope[category])) && !scope.excludedFolders.some(folder => path === folder || path.startsWith(`${folder}/`));
+    }
     if (isPortableAssetPath(path)) return scope.themesAndSnippets;
+    // A raw-file host exchanges config as files; the app's projected documents (editor.json ...) are not its to apply.
+    if (scope.rawConfig) return false;
     return path === "editor.json" ? scope.mainSettings : path === "appearance.json" ? scope.appearance : path === "hotkeys.json" ? scope.hotkeys : path === "daily-notes.json" && scope.corePlugins;
   }
   return !path.split("/").some(part => part.startsWith(".")) && isPathInSyncScope(path, scope);
@@ -138,10 +145,10 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
   const storage = async (request: SyncStorageRequest) => { assertContext(); const value = await host.safety.storage(lease, bindingKey, request); assertContext(); return value; };
   const read = async (resource: HistoryLocalResource): Promise<ArrayBuffer> => {
     assertContext();
-    if (resource.namespace === "portable-config" && !isPortableAssetPath(resource.path)) {
+    if (resource.namespace === "portable-config" && !isPortableAssetPath(resource.path) && !isRawConfigResourcePath(resource.path)) {
       const documents = await host.portableConfig.project(scope); assertContext(); const doc = documents.find(item => item.name === resource.path); if (!doc) throw new Error("Portable category left scope"); return doc.data;
     }
-    const data = await host.vault.readBinary(resource.namespace === "portable-config" ? ".geode/" + resource.path : resource.path); assertContext(); return data;
+    const data = await host.vault.readBinary(resource.namespace === "portable-config" ? portableResourcePhysicalPath(resource.path) : resource.path); assertContext(); return data;
   };
   let includedAncestors = new Set<string>();
   // `onProgress` is what makes planning countable. reconcileScan() hands back
@@ -177,10 +184,14 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
       // entry that has not been dealt with. Reported ahead of every `continue`
       // path so a vault full of skipped entries still advances.
       onProgress?.(visited++, walked, entry.path);
-      const namespace = entry.path.startsWith(".geode/") ? "portable-config" : "content";
-      const path = namespace === "portable-config" ? entry.path.slice(7) : entry.path;
-      if (entry.isFolder) { if (!entry.path.split("/").some(part => part.startsWith(".")) || namespace === "portable-config" && isPortableAssetPath(path)) folders.set(`${namespace}:${path}`, { namespace, path, kind: "folder" }); continue; }
-      if (!included(namespace, path) || namespace === "portable-config" && !isPortableAssetPath(path)) continue;
+      const geode = entry.path.startsWith(".geode/"), obsidian = entry.path.startsWith(".obsidian/");
+      const namespace = geode || obsidian ? "portable-config" : "content";
+      const inside = geode ? entry.path.slice(7) : entry.path;
+      // Assets keep their .geode-relative name (so the app and a headless host agree on them); every other raw config file is named by its full path.
+      const raw = geode || obsidian ? rawResourcePath(entry.path)! : null;
+      const path = geode && (isPortableAssetPath(inside) || !scope.rawConfig || rawConfigCategory(raw!) === null) ? inside : raw ?? entry.path;
+      if (entry.isFolder) { if (!entry.path.split("/").some(part => part.startsWith(".")) || namespace === "portable-config" && (isPortableAssetPath(path) || isRawConfigResourcePath(path) && included(namespace, path))) folders.set(`${namespace}:${path}`, { namespace, path, kind: "folder" }); continue; }
+      if (!included(namespace, path) || namespace === "portable-config" && !isPortableAssetPath(path) && !isRawConfigResourcePath(path)) continue;
       const resource: HistoryLocalResource = { namespace, path, kind: "file", size: entry.size };
       if (entry.size > SYNC_MAX_FILE_BYTES) { result.blocked.push({ namespace, path, reason: "File exceeds 100 MiB limit" }); continue; }
       const cached = hashCache[entry.path];
@@ -240,6 +251,10 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
     for (const doc of await host.portableConfig.project(scope)) {
       const initialDefault = await doc.isInitialDefault(); assertContext();
       result.entries.push({ namespace: "portable-config", path: doc.name, kind: "file", sha256: await sha256Hex(doc.data), size: doc.data.byteLength, entityId: await stableEntityId(ctx.bindingVaultId, doc.name), ...(initialDefault ? { initialDefault: true as const } : {}) });
+    }
+    // A raw config file's folders (starting at .geode / .obsidian themselves) are entities too: the history tree needs every parent.
+    for (const resource of result.entries) if (resource.namespace === "portable-config" && resource.kind === "file" && isRawConfigResourcePath(resource.path)) {
+      for (let parent = resource.path.slice(0, resource.path.lastIndexOf("/")); parent; parent = parent.includes("/") ? parent.slice(0, parent.lastIndexOf("/")) : "") folders.set(`portable-config:${parent}`, { namespace: "portable-config", path: parent, kind: "folder" });
     }
     const ancestors = new Set<string>();
     for (const resource of result.entries) { const parts = resource.path.split("/"); while (parts.pop() && parts.length) ancestors.add(`${resource.namespace}:${parts.join("/")}`); }

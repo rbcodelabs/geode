@@ -3,6 +3,12 @@ export interface SyncScope {
   mainSettings: boolean; appearance: boolean; themesAndSnippets: boolean; hotkeys: boolean;
   corePlugins: boolean; communityPlugins: boolean; communityPluginData: boolean;
   excludedFolders: string[];
+  /**
+   * The host exchanges configuration as plain FILES under `.geode/` and `.obsidian/` (the headless host)
+   * rather than as projected documents (`editor.json` ...) owned by a running app. Optional and omitted by
+   * the app, so the app's scope key is unchanged.
+   */
+  rawConfig?: boolean;
 }
 
 export const DEFAULT_SYNC_SCOPE: Readonly<SyncScope> = Object.freeze({
@@ -19,6 +25,31 @@ const CONFIG_RULES: Array<[RegExp, keyof SyncScope]> = [
   [/^\.geode\/(core-plugins|daily-notes)\.json$/i, "corePlugins"],
   [/^\.geode\/community-plugins\.json$/i, "communityPlugins"], [/^\.geode\/plugins\//i, "communityPluginData"],
 ];
+/** The same allowlist for an Obsidian-compatible config folder. Used by hosts that sync config as raw files. */
+const OBSIDIAN_CONFIG_RULES: Array<[RegExp, keyof SyncScope]> = [
+  [/^\.obsidian\/app\.json$/i, "mainSettings"], [/^\.obsidian\/appearance\.json$/i, "appearance"],
+  [/^\.obsidian\/(themes|snippets)\//i, "themesAndSnippets"], [/^\.obsidian\/hotkeys\.json$/i, "hotkeys"],
+  [/^\.obsidian\/(core-plugins|daily-notes)\.json$/i, "corePlugins"],
+  [/^\.obsidian\/community-plugins\.json$/i, "communityPlugins"], [/^\.obsidian\/plugins\//i, "communityPluginData"],
+];
+/** Folder names that never travel, however deep (dependency trees and caches). */
+const NEVER_SYNCED_SEGMENTS = new Set(["node_modules", "cache", "caches"]);
+
+/** Config roots a raw-file host may walk. */
+export const CONFIG_ROOTS: readonly string[] = [".geode", ".obsidian"];
+
+/**
+ * Which scope flag governs a vault-relative path under `.geode/` or `.obsidian/`, or null when the path is
+ * not portable configuration (workspace*.json, caches, `.geode/sync`, any other dotted path). Pure path
+ * classification: whether that flag is ON is the caller's scope, not decided here.
+ */
+export function portableConfigCategory(path: string): keyof SyncScope | null {
+  try { validateSyncPath(path); } catch { return null; }
+  const parts = path.split("/");
+  if (parts.slice(1).some(part => part.startsWith(".") || NEVER_SYNCED_SEGMENTS.has(part.toLowerCase()))) return null;
+  const rule = [...CONFIG_RULES, ...OBSIDIAN_CONFIG_RULES].find(([pattern]) => pattern.test(path));
+  return rule ? rule[1] : null;
+}
 
 export function validateSyncPath(path: string): string {
   if (!path || path.includes("\0") || path.includes("\\") || path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.normalize("NFC") !== path) throw new Error(`Unsafe sync path: ${path}`);
@@ -45,3 +76,42 @@ export function isPathInSyncScope(path: string, scope: Readonly<SyncScope>): boo
   if (ext === "pdf") return scope.pdfs;
   return scope.other;
 }
+
+/**
+ * Portable-config resources normally live under `.geode/` and are named relative to it (`themes/x.css`).
+ * A raw-file host also exchanges config files that are not themes/snippets. History record names may not be
+ * `.geode` or `.obsidian`, so those files travel under a first segment that stands in for the config root:
+ *   .geode/app.json                    <->  raw.geode/app.json
+ *   .obsidian/plugins/x/data.json      <->  raw.obsidian/plugins/x/data.json
+ * Neither form can collide with a projected document name (`editor.json`) or an asset path (`themes/...`).
+ */
+const RAW_SEGMENT: Record<string, string> = { ".geode": "raw.geode", ".obsidian": "raw.obsidian" };
+const RAW_ROOT = Object.fromEntries(Object.entries(RAW_SEGMENT).map(([root, segment]) => [segment, root]));
+
+/** `.obsidian/a` -> `raw.obsidian/a`; null when the path is not under a config root. */
+export function rawResourcePath(physical: string): string | null {
+  const [head, ...rest] = physical.split("/");
+  return RAW_SEGMENT[head] ? [RAW_SEGMENT[head], ...rest].join("/") : null;
+}
+/** `raw.obsidian/a` -> `.obsidian/a`; null when the path is not in raw form. */
+export function rawPhysicalPath(resource: string): string | null {
+  const [head, ...rest] = resource.split("/");
+  return RAW_ROOT[head] ? [RAW_ROOT[head], ...rest].join("/") : null;
+}
+/** The naming test only; `rawConfigCategory` is the validity test. */
+export const isRawConfigResourcePath = (path: string): boolean => rawPhysicalPath(path) !== null;
+
+/**
+ * Validity and governing flag of a raw config resource path, file or folder: a file the allowlist classifies,
+ * a folder that can contain such files, or one of the two roots ("root", governed by `rawConfig` alone).
+ * Null when the path may never travel.
+ */
+export function rawConfigCategory(resource: string): keyof SyncScope | "root" | null {
+  const physical = rawPhysicalPath(resource);
+  if (physical === null) return null;
+  if (CONFIG_ROOTS.includes(physical)) return "root";
+  return portableConfigCategory(physical) ?? portableConfigCategory(`${physical}/x`);
+}
+
+/** The vault-relative path a portable-config resource path is stored at. */
+export const portableResourcePhysicalPath = (path: string): string => rawPhysicalPath(path) ?? `.geode/${path}`;
