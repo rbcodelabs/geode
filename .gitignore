@@ -39,3 +39,8 @@ ios-mvp-artifacts/
 qa-artifacts/
 **/xcuserdata/
 ios/App/CapApp-SPM/.swiftpm/
+
+# Demo video pipeline
+demo/out/
+demo/cache/
+demo/engine/node_modules/
