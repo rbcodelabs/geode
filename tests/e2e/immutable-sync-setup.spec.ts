@@ -90,7 +90,7 @@ test("the conflict comparison dialog renders every head and fits a narrow window
       deviceId: `${device}-1111-4111-8111-111111111111`,
       kind: "file" as const, deleted: false, name: "Note.md", parentId: null, size: 12, sha256: `sha-${index}`,
     }));
-    await page.evaluate(heads => {
+    const openComparison = () => page.evaluate(heads => {
       const app = (window as any).app;
       app.sync.describeHistoryConflict = async () => ({
         entityId: "entity-1", namespace: "content", path: "Note.md", reason: "concurrent-heads",
@@ -102,7 +102,14 @@ test("the conflict comparison dialog renders every head and fits a narrow window
     }, heads);
 
     const dialog = page.locator(".modal.sync-conflict-modal");
-    await expect(dialog).toBeVisible();
+    // This comparison is for a synthetic conflict that is not in live sync state, so the app
+    // (correctly) dismisses it on the next layout-change/file-open event. A late layout event
+    // after startup can land between opening and asserting; retry the open until one sticks.
+    await expect(async () => {
+      await openComparison();
+      await expect(dialog).toBeVisible({ timeout: 1500 });
+    }).toPass({ timeout: 15_000 });
+
     await expect(dialog.locator(".sync-conflict-title")).toHaveText(SYNC_CONFLICT_DIALOG_TITLE);
     await expect(dialog.locator(".sync-conflict-subtitle")).toHaveText(SYNC_CONFLICT_DIALOG_SUBTITLE);
     await expect(dialog.locator(".sync-conflict-message")).toBeHidden();
