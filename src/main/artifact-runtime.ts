@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { Session, WebContents, WebPreferences } from "electron";
 import { session } from "electron";
 import chokidar, { type FSWatcher } from "chokidar";
-import { parseArtifactManifestJson, type ArtifactManifestIssue } from "../artifacts/manifest";
+import { parseArtifactManifestJson, type ArtifactManifest, type ArtifactManifestIssue } from "../artifacts/manifest";
 import { ARTIFACT_SCHEME, isArtifactUrlAllowed, STATIC_ARTIFACT_CSP } from "../artifacts/security-policy";
 import { resolveArtifactEntry, resolveArtifactFile } from "./artifact-paths";
 
@@ -17,6 +17,12 @@ export interface ArtifactRegistration {
   entryUrl: string;
   partition: string;
   viewport: { preset: "desktop" | "tablet" | "mobile" | "custom" | "fill"; width: number; height: number };
+  /**
+   * Present only when the validated manifest opted in with
+   * `permissions.vault: "read"`. The renderer bridge enforces this allowlist
+   * on every guest request; main attaches the guest preload only when set.
+   */
+  vault?: { access: "read"; allowlist: string[] };
 }
 
 export interface ArtifactDiagnostic {
@@ -57,6 +63,11 @@ interface ActiveArtifact extends ArtifactRegistration {
   diagnostics: ArtifactDiagnostic[];
   watcher: FSWatcher;
   guest?: WebContents;
+}
+
+function vaultGrant(permissions: ArtifactManifest["permissions"]): Pick<ArtifactRegistration, "vault"> {
+  if (permissions.vault !== "read" || !permissions.vaultAllowlist?.length) return {};
+  return { vault: { access: "read", allowlist: [...permissions.vaultAllowlist] } };
 }
 
 export class ArtifactRegistrationError extends Error {
@@ -116,6 +127,8 @@ function artifactPathname(rawUrl: string): string | null {
 
 /** Owns all privileged state and policy for untrusted static artifacts. */
 export class ArtifactRuntime {
+  constructor(private readonly guestPreloadPath: string = path.join(__dirname, "artifact-guest-preload.js")) {}
+
   private readonly registrations = new Map<string, ActiveArtifact>();
   private readonly registrationsByPartition = new Map<string, ActiveArtifact>();
 
@@ -157,6 +170,7 @@ export class ArtifactRuntime {
       entryUrl: `${ARTIFACT_SCHEME}://${parsed.manifest.id}/${parsed.manifest.entry.split("/").map(encodeURIComponent).join("/")}`,
       partition,
       viewport: parsed.manifest.viewport,
+      ...vaultGrant(parsed.manifest.permissions),
       ownerWebContentsId: owner.id,
       root,
       artifactSession,
@@ -182,6 +196,7 @@ export class ArtifactRuntime {
       entryUrl: active.entryUrl,
       partition: active.partition,
       viewport: active.viewport,
+      ...(active.vault ? { vault: active.vault } : {}),
     };
   }
 
@@ -236,7 +251,10 @@ export class ArtifactRuntime {
     webPreferences.sandbox = true;
     webPreferences.webSecurity = true;
     webPreferences.allowRunningInsecureContent = false;
-    webPreferences.preload = undefined;
+    // The guest preload exists only for artifacts whose validated manifest
+    // opted into vault reads. It is a separate, minimal contextBridge surface
+    // (ADR 0029); every other artifact keeps preload undefined.
+    webPreferences.preload = active.vault ? this.guestPreloadPath : undefined;
     return true;
   }
 

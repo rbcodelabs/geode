@@ -67,3 +67,53 @@ describe("parseArtifactManifest", () => {
     });
   });
 });
+
+describe("parseArtifactManifest vault permission", () => {
+  const withPermissions = (permissions: Record<string, unknown>) => ({
+    ...validManifest,
+    permissions: { network: "none", clipboard: false, ...permissions },
+  });
+  const issuePaths = (value: unknown) => {
+    const result = parseArtifactManifest(value);
+    return result.ok ? [] : result.issues.map((issue) => issue.path);
+  };
+
+  it("keeps legacy manifests without vault fields valid", () => {
+    expect(parseArtifactManifest(validManifest).ok).toBe(true);
+    expect(parseArtifactManifest(withPermissions({ vault: "none" })).ok).toBe(true);
+  });
+
+  it("accepts vault read with an allowlist", () => {
+    const manifest = withPermissions({ vault: "read", vaultAllowlist: ["Tasks.base", "Projects/", "Bases/*.base"] });
+    expect(parseArtifactManifest(manifest)).toEqual({ ok: true, manifest });
+  });
+
+  it("requires a non-empty allowlist when vault is read", () => {
+    expect(issuePaths(withPermissions({ vault: "read" }))).toContain("permissions.vaultAllowlist");
+    expect(issuePaths(withPermissions({ vault: "read", vaultAllowlist: [] }))).toContain("permissions.vaultAllowlist");
+    expect(issuePaths(withPermissions({ vault: "read", vaultAllowlist: "Tasks.base" }))).toContain("permissions.vaultAllowlist");
+  });
+
+  it("rejects an allowlist without vault read", () => {
+    expect(issuePaths(withPermissions({ vaultAllowlist: ["Tasks.base"] }))).toContain("permissions.vaultAllowlist");
+    expect(issuePaths(withPermissions({ vault: "none", vaultAllowlist: ["Tasks.base"] }))).toContain("permissions.vaultAllowlist");
+  });
+
+  it("rejects unknown vault modes, including write", () => {
+    expect(issuePaths(withPermissions({ vault: "write", vaultAllowlist: ["a.base"] }))).toContain("permissions.vault");
+    expect(issuePaths(withPermissions({ vault: true }))).toContain("permissions.vault");
+  });
+
+  it.each(["../x.base", "/etc/x.base", "a/../../x.base", "C:\\x.base", "a\\b.base", "**", "**/*", 5])(
+    "rejects traversal, absolute or over-broad allowlist entry %j",
+    (entry) => {
+      expect(issuePaths(withPermissions({ vault: "read", vaultAllowlist: [entry] })))
+        .toContain("permissions.vaultAllowlist[0]");
+    },
+  );
+
+  it("still rejects unknown permission fields", () => {
+    expect(issuePaths(withPermissions({ vault: "read", vaultAllowlist: ["a.base"], filesystem: "all" })))
+      .toContain("permissions.filesystem");
+  });
+});

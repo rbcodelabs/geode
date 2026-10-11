@@ -96,6 +96,14 @@ const builds = [
   },
   {
     ...common,
+    entryPoints: ["src/main/artifact-guest-preload.ts"],
+    outfile: "dist/artifact-guest-preload.js",
+    platform: "node",
+    format: "cjs",
+    external: ["electron"],
+  },
+  {
+    ...common,
     entryPoints: ["src/main/webviewer-bridge-preload.ts"],
     outfile: "dist/webviewer-bridge-preload.js",
     platform: "node",
