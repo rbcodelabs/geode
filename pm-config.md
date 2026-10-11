@@ -75,7 +75,7 @@ only human admins decide, and no outcome automatically applies another action.
 
 ### Compass
 
-- **Org slug:** rb-code-labs
+- **Org slug:** rbcodelabs
 - **Workspace slug:** geode
 - **Workspace ID:** `78bfb4cc-aeb3-47a5-baf5-7b7945d4c0c1`
 - **Compass URL:** https://compass.rbcodelabs.com/rbcodelabs/geode/discovery
