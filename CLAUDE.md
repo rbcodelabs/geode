@@ -42,6 +42,15 @@ build artifact, so `build:cli` is a prerequisite for invoking it, and an in-repo
 
 A demo vault lives in `test-vault/`.
 
+## Running E2E on Linux (CI, test workers)
+
+Use `npm run build && npm run e2e:linux -- --shards=2` (wraps `xvfb-run`, one Xvfb
+display per shard, one Playwright worker each). Do not pass `--workers=2` to a single
+`xvfb-run`: workers sharing one display fight over input focus. On Linux a headless
+run maps the Electron window (Xvfb is invisible to everyone); an unmapped window gets
+no frames, which hangs screenshots and every requestAnimationFrame-driven view. Specs
+for macOS-only features (external roots) skip themselves on other platforms.
+
 ## E2E tests are not headless
 
 `_electron.launch()` has no headless mode — Playwright's `headless` option

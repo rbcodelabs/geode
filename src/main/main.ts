@@ -192,7 +192,9 @@ const guestHints = guestClientHints(process.versions.chrome, process.platform);
 const guestHighEntropy = guestHighEntropyHints({
   chromeVersion: process.versions.chrome,
   arch: process.arch,
-  systemVersion: process.getSystemVersion(),
+  // Chromium reports an empty platformVersion on Linux; getSystemVersion() there is
+  // the kernel version, which would contradict the JS surface.
+  systemVersion: process.platform === "linux" ? "" : process.getSystemVersion(),
 });
 app.on("session-created", (created) => {
   // A fresh negotiator per session: separate partitions are separate
@@ -263,6 +265,10 @@ crashReporter.start({ uploadToServer: false, companyName: "RBCodelabs", productN
 const isHeadless =
   process.env.GEODE_HEADLESS === "1" ||
   process.argv.includes("--headless");
+
+// Headless on Linux means "no visible desktop" (Xvfb), where mapping a window
+// is invisible to everyone; on macOS and Windows it must stay hidden.
+const headlessNeedsMappedWindow = isHeadless && process.platform === "linux" && !!process.env.DISPLAY;
 
 // Opt-in "screenshot mode": on non-macOS hosts (e.g. the Linux devbox used for
 // headless E2E/QA capture), draw a fake macOS-style titlebar in the renderer
@@ -2164,7 +2170,11 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
   const win = new BrowserWindow({
-    show: !isHeadless,
+    // On Linux/X11 an unmapped window gets no compositor frames, so
+    // requestAnimationFrame never fires and screenshots, scroll-into-view
+    // stability checks and rAF-driven views (Canvas, graph) hang. Headless
+    // Linux runs (Xvfb) therefore map the window, without taking focus.
+    show: !isHeadless || headlessNeedsMappedWindow,
     width: 1280,
     height: 840,
     minWidth: 640,
@@ -2225,6 +2235,9 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   crashStates.set(win.id, state);
   void listCrashDumps(app.getPath("crashDumps")).then((dumps) => { state.knownDumps = dumps; }).catch(() => {});
   recordDiagnostic(state, { at: Date.now(), category: "lifecycle", message: "window-created", metadata: { suppressPlugins } });
+  // Xvfb has no window manager, so nothing ever gives a mapped window input focus.
+  // Hover cards, focus-dependent menus and modals behave as in an inactive window.
+  if (headlessNeedsMappedWindow) win.once("ready-to-show", () => win.focus());
   win.loadFile(indexPath);
 
   win.webContents.on("will-attach-webview", (event, webPreferences, params) => {
@@ -2509,6 +2522,14 @@ app.whenReady().then(() => {
     if (shouldClaimObsidianProtocol(app.getApplicationNameForProtocol("obsidian://"), claimObsidian)) {
       app.setAsDefaultProtocolClient("obsidian");
     }
+  }
+  if (isHeadless && process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text") {
+    // Automated runs on a Linux box have no desktop keyring (no libsecret/kwallet),
+    // so safeStorage reports encryption as unavailable and every secret-backed
+    // flow fails for reasons unrelated to what is under test. Opt in to
+    // Chromium's plain-text backend for those runs only; a real session, headless
+    // or not on a machine with a keyring, still uses the real backend.
+    safeStorage.setUsePlainTextEncryption(true);
   }
   if (isHeadless && process.platform === "darwin") {
     // `dock.hide()` removes the Dock tile but leaves the app a "regular"

@@ -255,6 +255,11 @@ describe("guestHighEntropyHints", () => {
     expect(guestHighEntropyHints(THIS_MACHINE)).toEqual(MEASURED_HIGH_ENTROPY);
   });
 
+  it("states an empty platform version as a quoted empty string, and omits an unreadable one", () => {
+    expect(guestHighEntropyHints({ ...THIS_MACHINE, systemVersion: "" })["Sec-CH-UA-Platform-Version"]).toBe('""');
+    expect(guestHighEntropyHints({ ...THIS_MACHINE, systemVersion: undefined })["Sec-CH-UA-Platform-Version"]).toBeUndefined();
+  });
+
   it("quotes strings but not the WoW64 boolean, as real Chrome does", () => {
     const hints = guestHighEntropyHints(THIS_MACHINE);
     // Measured on the wire: every value above is a quoted string...

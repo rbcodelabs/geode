@@ -76,7 +76,7 @@ test("create a Meeting Notes note from the command palette without changing the 
   });
   try {
     const window = await f.launch();
-    await window.keyboard.press("Meta+p");
+    await window.keyboard.press("ControlOrMeta+p");
     await window.locator(".modal .prompt-input").fill("Templates: Create new note from template");
     await expect(window.locator(".modal .prompt-result")).toHaveCount(1);
     await window.locator(".modal .prompt-input").press("Enter");

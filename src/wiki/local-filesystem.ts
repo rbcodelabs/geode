@@ -19,8 +19,17 @@ export const nodeWikiFileSystem: WikiFileSystem = {
   realpath, lstat,
   async *entries(path) {
     const directory = await opendir(path);
-    // Node's async iterator closes the directory on return/throw, including early cap exits.
-    for await (const entry of directory) yield entry.name;
+    // Node's async iterator closes the directory on return/throw, so list fully first.
+    const names: string[] = [];
+    for await (const entry of directory) names.push(entry.name);
+    // Directory enumeration order belongs to the OS and filesystem (APFS and ext4 differ), but
+    // which entries survive a capture limit must not. Walk in a fixed order: case-insensitive
+    // first, exact name to break ties, so a capped capture is the same everywhere.
+    names.sort((a, b) => {
+      const folded = a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
+      return folded || (a < b ? -1 : a > b ? 1 : 0);
+    });
+    yield* names;
   },
   // NONBLOCK avoids blocking on a FIFO substituted after lstat. fstat still requires a regular file.
   open: path => open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)),

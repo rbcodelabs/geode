@@ -3,6 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 
+// The app labels this action per platform (src/renderer/app.ts).
+const REVEAL_LABEL = process.platform === "darwin" ? "Reveal in Finder" : "Show in system explorer";
+
 const repoRoot = path.resolve(__dirname, "..", "..");
 
 const THREAD_HISTORY_PROBE_MANIFEST = {
@@ -190,6 +193,9 @@ test("document tabs keep independent navigation with working back and forward co
     });
     await expect(active.getByRole("button", { name: "Navigate forward" })).toHaveAttribute("aria-disabled", "true");
 
+    // The last step trashes a file through the OS trash service, which a headless
+    // Linux box does not have (shell.trashItem fails there). macOS covers it.
+    if (process.platform !== "darwin") return;
     await win.evaluate(async () => {
       const a = (window as any).app;
       await a.openFile(a.vault.getFileByPath("D.md"), false);
@@ -290,13 +296,13 @@ test("new note selects Untitled for immediate rename and exposes shared document
     await expect(win.locator(".notice", { hasText: 'A file named "A" already exists' })).toBeVisible();
 
     await win.getByRole("button", { name: "More options" }).click();
-    await expect(win.locator(".menu-item")).toHaveText(["Open in new tab", "Bookmark", "Rename…", "Reveal in Finder", "Delete"]);
+    await expect(win.locator(".menu-item")).toHaveText(["Open in new tab", "Bookmark", "Rename…", REVEAL_LABEL, "Delete"]);
     await win.keyboard.press("Escape");
 
     const tab = win.locator(".workspace-split.mod-root .workspace-tab-header", { hasText: "Named from title" });
     await tab.click({ button: "right" });
     await expect(win.locator(".menu-item-title")).toHaveText([
-      "Open in new tab", "Bookmark", "Rename…", "Reveal in Finder", "Delete", "Add tab to new collection", "Focus this pane", "Pin", "Close", "Close others", "Close tabs to the right",
+      "Open in new tab", "Bookmark", "Rename…", REVEAL_LABEL, "Delete", "Add tab to new collection", "Focus this pane", "Pin", "Close", "Close others", "Close tabs to the right",
     ]);
     if (screenshotDir) await win.screenshot({ path: path.join(screenshotDir, "document-actions-tab-context-menu.png") });
   } finally {
