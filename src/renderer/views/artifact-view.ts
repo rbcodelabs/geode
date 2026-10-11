@@ -2,11 +2,18 @@ import type { App } from "../app";
 import type { ReloadableView, View, WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import type { ArtifactDiagnostic, ArtifactRegistration } from "../../main/artifact-runtime";
+import {
+  ARTIFACT_VAULT_CHANGE_CHANNEL,
+  ARTIFACT_VAULT_QUERY_CHANNEL,
+  ARTIFACT_VAULT_RESPONSE_CHANNEL,
+} from "../../artifacts/guest-protocol";
+import { ArtifactVaultBridge } from "../artifacts/vault-bridge";
 
 type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom";
 interface Viewport { preset: ViewportPreset; width: number; height: number }
 export interface ArtifactViewState { root: string; viewport?: Viewport }
-interface ArtifactWebview extends HTMLElement { src: string; reload(): void }
+interface ArtifactWebview extends HTMLElement { src: string; reload(): void; send(channel: string, ...args: unknown[]): void }
+interface WebviewIpcMessageEvent extends Event { channel: string; args: unknown[] }
 
 const VIEWPORTS: Record<Exclude<ViewportPreset, "custom">, Viewport> = {
   desktop: { preset: "desktop", width: 1440, height: 900 },
@@ -29,6 +36,8 @@ export class ArtifactView implements View, ReloadableView {
   private loadGeneration = 0;
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private revision = 0;
+  private unwatchVault: (() => void) | undefined;
+  private readonly vaultBadgeEl = document.createElement("span");
 
   constructor(private readonly app: App, private readonly leaf: WorkspaceLeaf) {
     this.containerEl.className = "artifact-view";
@@ -62,7 +71,9 @@ export class ArtifactView implements View, ReloadableView {
     toolbar.append(this.diagnosticsButton);
     this.statusEl.className = "artifact-view-status";
     this.statusEl.textContent = "Waiting for artifact…";
-    toolbar.append(this.statusEl);
+    this.vaultBadgeEl.className = "artifact-view-vault-badge";
+    this.vaultBadgeEl.hidden = true;
+    toolbar.append(this.vaultBadgeEl, this.statusEl);
     this.stageEl.className = "artifact-view-stage";
     this.diagnosticsEl.className = "artifact-view-diagnostics";
     this.diagnosticsEl.hidden = true;
@@ -157,6 +168,7 @@ export class ArtifactView implements View, ReloadableView {
           this.statusEl.textContent = `Artifact unavailable: ${this.containerEl.dataset.loadError}`;
         }
       });
+      if (registration.vault) this.attachVaultBridge(frame, registration);
       this.webview = frame;
       this.stageEl.appendChild(frame);
       this.applyViewport(this.viewport);
@@ -164,6 +176,33 @@ export class ArtifactView implements View, ReloadableView {
     } catch (error) {
       if (generation === this.loadGeneration) this.showError((error as Error).message || "Artifact could not be opened.");
     }
+  }
+
+  /**
+   * Serve window.geodeArtifact for an artifact whose manifest opted into vault
+   * reads. The guest preload only ever talks to this embedder (sendToHost);
+   * each request is validated against the manifest allowlist before any vault
+   * access, and the guest is told *that* the vault changed, never what.
+   */
+  private attachVaultBridge(frame: ArtifactWebview, registration: ArtifactRegistration): void {
+    const grant = registration.vault;
+    if (!grant) return;
+    const bridge = new ArtifactVaultBridge(this.app.vault, this.app.metadataCache, grant.allowlist);
+    const safeSend = (channel: string, payload: unknown) => {
+      try { frame.send(channel, payload); } catch { /* guest not ready or already gone */ }
+    };
+    frame.addEventListener("ipc-message", (event) => {
+      const message = event as WebviewIpcMessageEvent;
+      if (message.channel !== ARTIFACT_VAULT_QUERY_CHANNEL) return;
+      const body = message.args[0] as { id?: unknown; request?: unknown } | null;
+      if (!body || typeof body !== "object" || typeof body.id !== "number") return;
+      const id = body.id;
+      void bridge.query(body.request).then((result) => safeSend(ARTIFACT_VAULT_RESPONSE_CHANNEL, { id, result }));
+    });
+    this.unwatchVault = bridge.watch(() => safeSend(ARTIFACT_VAULT_CHANGE_CHANNEL, {}));
+    this.vaultBadgeEl.hidden = false;
+    this.vaultBadgeEl.textContent = "Vault: read";
+    this.vaultBadgeEl.title = `This artifact may read Bases results from:\n${grant.allowlist.join("\n")}`;
   }
 
   private async pollRuntime(): Promise<void> {
@@ -210,6 +249,9 @@ export class ArtifactView implements View, ReloadableView {
   private async release(): Promise<void> {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = undefined;
+    this.unwatchVault?.();
+    this.unwatchVault = undefined;
+    this.vaultBadgeEl.hidden = true;
     this.webview?.remove();
     this.webview = null;
     this.revision = 0;
