@@ -100,7 +100,9 @@ test("the conflict comparison dialog renders every head and fits a narrow window
       });
       app.sync.readHistoryConflictText = async (_entityId: string, choice: any) =>
         choice.kind === "current" ? "local body" : `body of ${choice.recordId.slice(0, 8)}`;
-      app.openConflictComparison({ entityId: "entity-1", path: "Note.md" });
+      try { app.openConflictComparison({ entityId: "entity-1", path: "Note.md" }); console.log("DBG opened ok"); } catch (e) { console.log("DBG open threw " + String(e) + " " + (e as any)?.stack); }
+      console.log("DBG modals=" + document.querySelectorAll(".modal").length + " containers=" + document.querySelectorAll(".modal-container").length + " hasFocus=" + document.hasFocus() + " body=" + document.body.className.slice(0,80));
+      setTimeout(() => console.log("DBG later modals=" + document.querySelectorAll(".modal").length + " conflict=" + document.querySelectorAll(".sync-conflict-modal").length + " html=" + (document.querySelector(".modal-container")?.outerHTML || "none").slice(0, 300)), 1500);
     }, heads);
 
     const dialog = page.locator(".modal.sync-conflict-modal");
