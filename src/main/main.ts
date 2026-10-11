@@ -264,6 +264,10 @@ const isHeadless =
   process.env.GEODE_HEADLESS === "1" ||
   process.argv.includes("--headless");
 
+// Headless on Linux means "no visible desktop" (Xvfb), where mapping a window
+// is invisible to everyone; on macOS and Windows it must stay hidden.
+const headlessNeedsMappedWindow = isHeadless && process.platform === "linux" && !!process.env.DISPLAY;
+
 // Opt-in "screenshot mode": on non-macOS hosts (e.g. the Linux devbox used for
 // headless E2E/QA capture), draw a fake macOS-style titlebar in the renderer
 // instead of the native GTK one, so a single Playwright capture looks
@@ -2137,7 +2141,11 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
   const win = new BrowserWindow({
-    show: !isHeadless,
+    // On Linux/X11 an unmapped window gets no compositor frames, so
+    // requestAnimationFrame never fires and screenshots, scroll-into-view
+    // stability checks and rAF-driven views (Canvas, graph) hang. Headless
+    // Linux runs (Xvfb) therefore map the window, without taking focus.
+    show: !isHeadless || headlessNeedsMappedWindow,
     width: 1280,
     height: 840,
     minWidth: 640,
