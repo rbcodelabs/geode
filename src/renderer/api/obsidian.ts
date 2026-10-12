@@ -1900,6 +1900,20 @@ export abstract class Plugin extends GeodePlugin {
     this.register(() => (this.app as any).unregisterSettingTab?.(this.manifest.id));
   }
 
+  /**
+   * Register an additional settings section that renders as its own entry in
+   * the Settings sidebar, grouped under this plugin's name alongside Geode's
+   * own sections. Use instead of (or together with) a single `addSettingTab`
+   * when a plugin has too many settings for one pane. Returns the tab id, usable
+   * with `app.setting.openTabById`. Geode extension — absent in Obsidian.
+   */
+  addSettingSection(section: { id: string; name: string; tab: PluginSettingTab }): string {
+    const app = this.app as any;
+    const tabId = app.registerSettingSection?.(this.manifest.id, section.id, section.name, section.tab) ?? "";
+    this.register(() => app.unregisterSettingSection?.(this.manifest.id, section.id));
+    return tabId;
+  }
+
   /** Register an Obsidian-compatible protocol handler, dispatched from geode:// links. */
   registerObsidianProtocolHandler(action: string, handler: (params: any) => any): void {
     (this.app as any).registerProtocolHandler?.(action, handler);

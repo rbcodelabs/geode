@@ -819,6 +819,20 @@ desktop-only compatibility certificate admits exactly
 `obsidian-minimal-settings@9.0.0` when its declared `minAppVersion` is no higher
 than `1.13.0`; this does not imply general Obsidian 1.13 compatibility.
 
+#### Geode extension: `Plugin.addSettingSection`
+
+A plugin with many settings can register several sections instead of one
+`addSettingTab` pane. Each section is its own `PluginSettingTab` and appears as
+a separate entry in the Settings sidebar, in a group titled with the plugin's
+manifest name (the plugin's primary `addSettingTab`, if any, is listed first as
+"General"). Plugins using only `addSettingTab` keep their entry under
+"Plugin options". Sections unregister automatically on plugin unload.
+
+```ts
+const tabId = this.addSettingSection({ id: "models", name: "Models", tab: new ModelsTab(this.app, this) });
+this.app.setting.openTabById(tabId); // "<pluginId>:models"
+```
+
 ### 3.3 Notice, Menu, icons
 
 ```ts
