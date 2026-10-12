@@ -40,6 +40,7 @@
     "ios:sync": "npm run ios:version && npm run build:mobile && cap sync ios",
     "dev": "node esbuild.config.mjs --watch",
     "start": "electron .",
+    "fresh": "node scripts/fresh-instance.mts",
     "typecheck": "tsc --noEmit",
     "typecheck:headless": "tsc --noEmit -p tsconfig.headless.json",
     "proof:headless": "npm run typecheck:headless && node scripts/run-headless-node-proof.mjs",

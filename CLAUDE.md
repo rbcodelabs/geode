@@ -27,6 +27,7 @@ npm run build      # bundle main/preload/renderer with esbuild
 npm start           # launch Electron
 npm run dev         # esbuild watch mode
 npm run typecheck   # strict tsc
+npm run fresh       # launch a first-run instance (empty app data + Documents); run build first
 npm run e2e:kill    # reap orphaned e2e Electron processes + temp dirs
 
 npm run build:cli   # bundle the headless `geode-wiki` command to dist/cli/
