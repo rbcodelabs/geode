@@ -127,6 +127,7 @@ try {
     "src/sync-core/history-reducer.ts",
     "src/sync-core/history-types.ts",
     "src/sync-core/ports.ts",
+    "src/sync-core/rails.ts",
     "src/sync-core/scope.ts",
     "src/sync-node/fs-store.ts",
     "src/sync-node/index.ts",
