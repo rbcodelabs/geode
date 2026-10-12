@@ -15,7 +15,7 @@
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { parseArgs } from "node:util";
 import {
-  classifySyncError, describeTarget, serveStore, syncConflicts, syncGc, syncInit, syncPreview, syncResolve,
+  classifySyncError, describeTarget, parseListenAddress, readTokenFile, serveStore, startHttpStoreServer, syncConflicts, syncGc, syncInit, syncPreview, syncResolve,
   syncRun, syncStatus,
   type PreviewSummary, type SyncOverrides, type SyncTarget, type WikiSyncContext,
 } from "../sync-node/index";
@@ -33,6 +33,8 @@ export interface SyncCliContext {
   readonly rawOut?: NodeJS.WritableStream;
   /** Test seam for `sync schedule`: replaces launchctl/systemctl execution. */
   readonly scheduleRunner?: ScheduleRunner;
+  /** Test seam for `sync serve --http`: aborting stops the server (the binary stops it on SIGINT/SIGTERM). */
+  readonly stopSignal?: AbortSignal;
 }
 
 type Values = Record<string, string | boolean | string[] | undefined>;
@@ -53,7 +55,7 @@ const SUBCOMMANDS: Record<string, { positionals: readonly string[]; options: Opt
   status: { positionals: [], options: { ...SHARED, ...VAULT } },
   conflicts: { positionals: [], options: { ...SHARED, ...VAULT } },
   resolve: { positionals: ["path"], options: { ...SHARED, ...VAULT, ...OVERRIDES, keep: { type: "string" }, version: { type: "string" } } },
-  serve: { positionals: [], options: { ...SHARED, store: { type: "string" } } },
+  serve: { positionals: [], options: { ...SHARED, store: { type: "string" }, http: { type: "boolean" }, listen: { type: "string" }, "token-file": { type: "string" } } },
   gc: { positionals: [], options: { ...SHARED, ...VAULT, "trash-days": { type: "string" } } },
   // Deliberately no OVERRIDES: a schedule cannot carry a rail override, and parseArgs rejects them as unknown options.
   schedule: { positionals: ["action"], options: { ...SHARED, root: { type: "string" }, "state-dir": { type: "string" }, interval: { type: "string" }, platform: { type: "string" }, "target-dir": { type: "string" }, activate: { type: "boolean" }, "node-path": { type: "string" }, "cli-path": { type: "string" } } },
@@ -71,7 +73,8 @@ Commands:
   status    state of the binding; never touches the store or waits for the lock
   conflicts list unresolved conflicts               (exit 4 when there are any)
   resolve   settle one conflict                     <path> (--keep local|remote | --version <recordId>)
-  serve     serve a store over stdio (what ssh runs on the hub)   --store <path>   (no --root)
+  serve     serve a store (no --root)               --store <path>  over stdio (what ssh runs on the hub), or
+                                                    --store <path> --http --token-file <file> [--listen host:port]  over WebSocket
   gc        reclaim sync-private storage            [--trash-days <n>]
   schedule  unattended runs                         print|install|uninstall|status [--interval <s>] [--platform launchd|systemd] [--target-dir <dir>] [--activate]
 
@@ -211,6 +214,8 @@ export async function runSync(argv: readonly string[], ctx: SyncCliContext): Pro
 
 async function serve(values: Values, ctx: SyncCliContext, json: boolean): Promise<number> {
   if (typeof values.store !== "string" || values.store === "") return emit(usageOutcome("--store <path> is required", "sync serve"), json, ctx.streams);
+  if (values.http === true) return serveHttp(values, values.store, ctx, json);
+  if (values.listen !== undefined || values["token-file"] !== undefined) return emit(usageOutcome("--listen and --token-file only apply with --http", "sync serve"), json, ctx.streams);
   if (!ctx.rawOut) return emit(usageOutcome("sync serve needs a raw stdout stream and is only available from the binary", "sync serve"), json, ctx.streams);
   // stdout carries protocol frames only. Everything diagnostic goes to stderr.
   await serveStore({
@@ -218,6 +223,36 @@ async function serve(values: Values, ctx: SyncCliContext, json: boolean): Promis
     output: ctx.rawOut as unknown as Parameters<typeof serveStore>[0]["output"],
     log: message => ctx.streams.err(`geode-wiki sync serve: ${message}\n`),
   });
+  return 0;
+}
+
+/**
+ * `sync serve --http`: the same store protocol over WebSocket. TLS is not terminated here; bind to loopback (the default)
+ * and front it with `tailscale serve --https=443 http://127.0.0.1:<port>`. The token comes only from a file, never argv.
+ */
+async function serveHttp(values: Values, store: string, ctx: SyncCliContext, json: boolean): Promise<number> {
+  const log = (message: string) => ctx.streams.err(`geode-wiki sync serve: ${message}\n`);
+  if (typeof values["token-file"] !== "string" || values["token-file"] === "") return emit(usageOutcome("--token-file <file> is required with --http", "sync serve"), json, ctx.streams);
+  let listen: { host: string; port: number }, token: string;
+  try {
+    listen = parseListenAddress(typeof values.listen === "string" ? values.listen : "127.0.0.1:8787");
+    token = readTokenFile(isAbsolute(values["token-file"]) ? values["token-file"] : resolvePath(values["token-file"]), log);
+  } catch (error) { return emit(usageOutcome((error as Error).message, "sync serve"), json, ctx.streams); }
+  const loopback = listen.host === "127.0.0.1" || listen.host === "::1" || listen.host === "localhost";
+  if (!loopback) log(`warning: listening on ${listen.host} without TLS; the token and vault data cross the network in the clear unless a TLS proxy (tailscale serve) is in front`);
+  let server;
+  try { server = await startHttpStoreServer({ store, token, host: listen.host, port: listen.port, log }); }
+  catch (error) { return emit(usageOutcome(`cannot listen on ${listen.host}:${listen.port}: ${(error as Error).message}`, "sync serve"), json, ctx.streams); }
+  log(`serving ${store} on ws://${listen.host.includes(":") ? `[${listen.host}]` : listen.host}:${server.port}`);
+  const stop = new AbortController();
+  const onSignal = () => stop.abort();
+  const external = ctx.stopSignal;
+  if (external) { if (external.aborted) stop.abort(); else external.addEventListener("abort", onSignal, { once: true }); }
+  else { process.once("SIGINT", onSignal); process.once("SIGTERM", onSignal); }
+  await new Promise<void>(done => { if (stop.signal.aborted) done(); else stop.signal.addEventListener("abort", () => done(), { once: true }); });
+  external?.removeEventListener("abort", onSignal); process.off("SIGINT", onSignal); process.off("SIGTERM", onSignal);
+  await server.close();
+  log("stopped");
   return 0;
 }
 

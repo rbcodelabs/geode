@@ -197,6 +197,8 @@ export interface RunContext {
   readonly rawOut?: NodeJS.WritableStream;
   /** Test seam for `sync schedule`: replaces launchctl/systemctl execution. */
   readonly scheduleRunner?: import("./sync-schedule").ScheduleRunner;
+  /** Test seam for `sync serve --http`: aborting stops the server. */
+  readonly stopSignal?: AbortSignal;
 }
 
 /**

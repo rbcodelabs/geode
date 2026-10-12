@@ -8,6 +8,7 @@ export { withPathLock, withVaultMutation } from "./path-lock";
 export { SyncPrivateStorage } from "./sync-private-storage";
 export { FsBlobWriter, FsStoreProvider, FsStoreSession, STORE_CHUNK_BYTES } from "./fs-store";
 export { serveStore, type ServeOptions, type ServeStats } from "./serve";
+export { startHttpStoreServer, readTokenFile, parseListenAddress, MIN_TOKEN_CHARS, type HttpStoreServer, type HttpStoreServerOptions } from "./http-serve";
 export { RpcClient, RpcStoreProvider, RpcStoreSession, spawnSshStore, spawnTransport, type SpawnCommand, type StoreTransport } from "./rpc-store";
 export { isStoreError, SyncStoreError, type StoreErrorCode } from "./store-errors";
 export { NodeHost, SyncLockedError, SyncStateDirError, DEFAULT_STAGING_DIRNAME, defaultStateDir, assertStateDirOutsideVault, type NodeHostOptions } from "./node-host";
