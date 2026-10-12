@@ -6,7 +6,7 @@ import { dispatchHubRequest } from "../../src/main/hub-sync-ipc";
 import { HubStoreManager, type HubStoreManagerOptions } from "../../src/sync-node/app-hub";
 import { SyncPrivateStorage, applyGuardedMutation } from "../../src/sync-node/index";
 import { SyncService } from "../../src/renderer/sync/sync-service";
-import { HUB_PROVIDER_ID, HubSyncProvider } from "../../src/renderer/sync/hub-provider";
+import { HUB_PROVIDER_ID, HubSyncProvider, type HubProviderOptions } from "../../src/renderer/sync/hub-provider";
 import type { HubRequest, HubSyncBridge, HubTarget } from "../../src/shared/hub-sync";
 import type { SyncStorageRequest } from "../../src/shared/sync-safety";
 
@@ -34,7 +34,7 @@ export function inProcessBridge(manager: HubStoreManager, owner = "window-1"): H
   };
 }
 
-export function appDevice(options: { vault: string; userData: string; hub?: HubTarget; create?: boolean; manager?: HubStoreManagerOptions }) {
+export function appDevice(options: { vault: string; userData: string; hub?: HubTarget; create?: boolean; manager?: HubStoreManagerOptions; providerOptions?: HubProviderOptions; /** A host without a main process (the phone): only the HTTPS target is reachable. */ noBridge?: boolean; /** The real app routes portable-config documents through src/main/sync-config-apply.ts; this harness has no such handler, so a test that only cares about content can drop them. */ ignorePortableConfig?: boolean }) {
   const { vault, userData } = options;
   const state = new Map<string, unknown>();
   const manager = new HubStoreManager(options.manager);
@@ -61,7 +61,7 @@ export function appDevice(options: { vault: string; userData: string; hub?: HubT
       claimOwner: async () => "owner-lease",
       releaseOwner: async () => {},
       storage,
-      apply: async (_token: string, input: Parameters<typeof applyGuardedMutation>[2]) => applyGuardedMutation(vault, join(userData, "recovery"), input, { trashDir: join(userData, "trash") }),
+      apply: async (_token: string, input: Parameters<typeof applyGuardedMutation>[2]) => options.ignorePortableConfig && input.namespace === "portable-config" ? { status: "applied" } as never : applyGuardedMutation(vault, join(userData, "recovery"), input, { trashDir: join(userData, "trash") }),
       onPrepare: () => () => {}, onRelease: () => () => {},
     },
     vaultFiles: {
@@ -76,12 +76,14 @@ export function appDevice(options: { vault: string; userData: string; hub?: HubT
     config: { read: async () => null },
   };
   const service = new SyncService(host as never, () => vault);
-  const provider = new HubSyncProvider(bridge, host.deviceState, () => vault);
+  const provider = new HubSyncProvider(options.noBridge ? undefined : bridge, host.deviceState, () => vault, options.providerOptions);
   const device = {
     vault, userData, service, provider, manager, bridge, host,
     /** Stops the poll / debounce timers so a step is exactly one sync. */
     async settle() { await service.cancel(); },
     async configure(hub: HubTarget, create = false) { await provider.setConfig({ schema: 1, target: hub, create }); },
+    /** Writes the config straight into device state, bypassing setConfig's wss/https rule (loopback test servers speak plain ws://). */
+    async configureUnchecked(hub: HubTarget, create = false) { await host.deviceState.write(`sync-hub/config/${vault}`, { schema: 1, target: hub, create }); },
     /** Registers the built-in provider, selects it, joins the hub's one vault (or creates it). */
     async connect(mode: "join" | { create: string }) {
       service.register("geode", provider);

@@ -15,7 +15,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
   "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
-  "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" |
+  "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 >>;
 
@@ -130,6 +130,9 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
     } : {}),
     secrets: {
       available: preload.isSecretStorageAvailable?.() ?? false,
+      ...(preload.readAppSecret && preload.writeAppSecret && preload.removeAppSecret ? {
+        app: { get: key => preload.readAppSecret!(key), set: (key, value) => preload.writeAppSecret!(key, value), remove: key => preload.removeAppSecret!(key) },
+      } : {}),
       fromCapability: (capability) => {
         return {
           get: async key => preload.readSecret ? preload.readSecret(capability, key) : null,

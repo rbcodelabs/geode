@@ -1870,45 +1870,65 @@ class SettingsModal extends Modal {
     }
   }
 
-  /** Location, ssh host and create-if-missing for the built-in "Folder or SSH hub" provider (docs/design/app-hub-sync-provider.md). */
+  /** Location (folder, ssh host or HTTPS URL + token) and create-if-missing for the built-in hub provider (docs/design/app-hub-sync-provider.md). */
   private renderHubConfigRows(container: HTMLElement, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
     const provider = this.geodeApp.hubSyncProvider; if (!provider) return;
-    const row = this.addRow(container, "Hub location", "A folder (local, network or cloud-synced) or an ssh host and path. This is the same store `geode-wiki sync` uses; ssh runs non-interactively with your ~/.ssh/config. Changes save automatically.");
+    const row = this.addRow(container, "Hub location", "A folder (local, network or cloud-synced), an ssh host and path, or the HTTPS URL of a hub started with `geode-wiki sync serve --http`. This is the same store `geode-wiki sync` uses; ssh runs non-interactively with your ~/.ssh/config. The HTTPS token is kept in secure storage on this device only. Changes save automatically.");
     row.control.parentElement?.classList.add("sync-wrapped-setting");
     const field = (label: string, input: HTMLElement) => { const wrap = document.createElement("label"); wrap.className = "sync-hub-field"; const text = document.createElement("span"); text.textContent = label + " "; wrap.append(text, input); return wrap; };
     const kind = document.createElement("select"); kind.setAttribute("aria-label", "Hub type");
-    kind.append(new Option("Folder", "fs"), new Option("SSH host", "ssh"));
+    const kindLabels = { fs: "Folder", ssh: "SSH host", http: "HTTPS hub" } as const;
+    for (const supported of provider.supportedKinds) kind.append(new Option(kindLabels[supported], supported));
     const host = document.createElement("input"); host.type = "text"; host.setAttribute("aria-label", "Hub ssh host"); host.placeholder = "ssh host or ~/.ssh/config alias";
     const path = document.createElement("input"); path.type = "text"; path.setAttribute("aria-label", "Hub store path"); path.placeholder = "/path/to/hub";
-    const hostField = field("SSH host", host), typeField = field("Hub type", kind), pathField = field("Hub path", path);
+    const url = document.createElement("input"); url.type = "url"; url.setAttribute("aria-label", "Hub URL"); url.placeholder = "https://my-box.tailnet-name.ts.net"; url.autocomplete = "off"; url.spellcheck = false;
+    const token = document.createElement("input"); token.type = "password"; token.setAttribute("aria-label", "Hub token"); token.placeholder = "Hub token"; token.autocomplete = "off"; token.spellcheck = false;
+    const hostField = field("SSH host", host), typeField = field("Hub type", kind), pathField = field("Hub path", path), urlField = field("Hub URL", url), tokenField = field("Token", token);
+    const secureNote = document.createElement("div"); secureNote.className = "setting-item-description"; secureNote.setAttribute("data-hub-secure-storage", "");
+    if (!provider.canStoreToken) { token.disabled = true; secureNote.textContent = "Secure storage is unavailable on this device, so an HTTPS hub cannot be used here. The token is never kept in the vault or in app settings."; }
     const createLabel = document.createElement("label"); const create = document.createElement("input"); create.type = "checkbox"; create.setAttribute("aria-label", "Create the hub if it is missing");
     createLabel.append(create, " Create the hub if it is missing");
     const save = document.createElement("button"); save.type = "button"; save.textContent = "Save hub settings";
     const test = document.createElement("button"); test.type = "button"; test.textContent = "Test connection";
     const result = document.createElement("div"); result.className = "setting-item-description"; result.setAttribute("data-hub-result", "");
-    const syncVisibility = () => { hostField.hidden = kind.value !== "ssh"; };
+    const syncVisibility = () => { hostField.hidden = kind.value !== "ssh"; pathField.hidden = kind.value === "http"; urlField.hidden = tokenField.hidden = secureNote.hidden = kind.value !== "http"; };
     kind.addEventListener("change", syncVisibility); syncVisibility();
-    trackBusy(host); trackBusy(path); trackBusy(create); trackBusy(save); trackBusy(test);
-    const read = () => kind.value === "ssh"
+    trackBusy(host); trackBusy(path); trackBusy(url); trackBusy(create); trackBusy(save); trackBusy(test);
+    if (provider.canStoreToken) trackBusy(token);
+    const read = () => kind.value === "http"
+      ? { schema: 1 as const, target: { kind: "http" as const, url: url.value }, create: create.checked }
+      : kind.value === "ssh"
       ? { schema: 1 as const, target: { kind: "ssh" as const, host: host.value, path: path.value }, create: create.checked }
       : { schema: 1 as const, target: { kind: "fs" as const, path: path.value }, create: create.checked };
     // Every edit is saved (debounced); actions that depend on the settings first call settle(), so a ticked box or a
     // typed path is never ignored because the Save button was not pressed.
-    let debounce: ReturnType<typeof setTimeout> | undefined, chain: Promise<void> = Promise.resolve(), saveError: Error | null = null, dirty = false;
+    let debounce: ReturnType<typeof setTimeout> | undefined, chain: Promise<void> = Promise.resolve(), saveError: Error | null = null, dirty = false, tokenDirty = false;
     const saveNow = () => {
       dirty = false; const snapshot = read();
-      chain = chain.then(() => provider.setConfig(snapshot)).then(() => { saveError = null; result.textContent = "Hub settings saved."; }, error => { saveError = error instanceof Error ? error : new Error(String(error)); result.textContent = saveError.message; });
+      const pendingToken = tokenDirty ? token.value : ""; tokenDirty = false;
+      chain = chain.then(async () => {
+        await provider.setConfig(snapshot);
+        if (snapshot.target.kind === "http" && pendingToken) {
+          await provider.setToken(snapshot.target.url, pendingToken);
+          if (document.activeElement !== token) { token.value = ""; token.placeholder = "Token saved on this device"; }
+        }
+      }).then(() => { saveError = null; result.textContent = "Hub settings saved."; }, error => { saveError = error instanceof Error ? error : new Error(String(error)); result.textContent = saveError.message; });
     };
     const queue = () => { dirty = true; clearTimeout(debounce); debounce = setTimeout(saveNow, 300); };
     this.hubConfigSettle = async () => {
       clearTimeout(debounce); if (dirty) saveNow();
       await chain; if (saveError) throw saveError;
     };
-    for (const el of [host, path]) el.addEventListener("input", queue);
+    for (const el of [host, path, url]) el.addEventListener("input", queue);
     for (const el of [kind, create]) el.addEventListener("change", queue);
+    // The token is saved when the field is left (not per keystroke) and never shown again once saved.
+    token.addEventListener("input", () => { tokenDirty = true; });
+    token.addEventListener("change", () => { tokenDirty = true; queue(); });
     void provider.getConfig().then(config => {
       if (!config || !row.control.isConnected || dirty) return;
-      kind.value = config.target.kind; if (config.target.kind === "ssh") host.value = config.target.host; path.value = config.target.path; create.checked = config.create; syncVisibility();
+      kind.value = config.target.kind; if (config.target.kind === "ssh") host.value = config.target.host;
+      if (config.target.kind === "http") { url.value = config.target.url; void provider.hasToken(config.target.url).then(saved => { if (saved && !tokenDirty) token.placeholder = "Token saved on this device"; }); } else path.value = config.target.path;
+      create.checked = config.create; syncVisibility();
       result.textContent = `Hub: ${describeHubTarget(config.target)}`;
     }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
     save.addEventListener("click", () => { void this.hubConfigSettle!().then(() => { result.textContent = "Hub settings saved."; }).catch(() => {}); });
@@ -1918,7 +1938,7 @@ class SettingsModal extends Modal {
         result.textContent = (vaults.length ? `Connected. Hub vault: ${vaults.map(vault => `"${vault.name}"`).join(", ")}. Use Find shared vaults to join it.` : "Connected. The hub holds no vault yet.") + " " + detail;
       }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
     });
-    row.control.append(typeField, hostField, pathField, createLabel, save, test, result);
+    row.control.append(typeField, hostField, pathField, urlField, tokenField, secureNote, createLabel, save, test, result);
   }
 
   /** Explicit first-sync confirmation with the plan counts, and the safety-rail refusal with its one-shot override. */
@@ -2225,7 +2245,7 @@ export class App {
   private uniqueNoteRibbonEl: HTMLElement | null = null;
   readonly webViewer: WebViewerService;
   readonly sync: SyncService;
-  /** Built-in "Folder or SSH hub" sync provider; present on desktop only, re-created per opened vault. */
+  /** Built-in "Folder, SSH or HTTPS hub" sync provider; present where the host has guarded sync (`syncSafety`), re-created per opened vault. */
   hubSyncProvider?: HubSyncProvider;
   private hubSyncUnregister?: () => Promise<void>;
   readonly comments: CommentService;
@@ -3213,8 +3233,12 @@ export class App {
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
     // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
     await this.hubSyncUnregister?.(); this.hubSyncUnregister = undefined; this.hubSyncProvider = undefined;
-    if (this.host.hubSync && this.host.syncSafety) {
-      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root);
+    // Folder and ssh hubs need the desktop main process (`host.hubSync`); the HTTPS hub only needs a WebSocket and secure storage, so
+    // it is what a phone can use once its host provides `syncSafety` (guarded apply) and `secrets.app` (Keychain).
+    if (this.host.syncSafety && (this.host.hubSync || typeof WebSocket === "function")) {
+      const appSecrets = this.host.secrets.app;
+      const secrets = appSecrets ? { available: this.host.secrets.available, get: (key: string) => appSecrets.get(key), set: (key: string, value: string) => appSecrets.set(key, value), remove: (key: string) => appSecrets.remove(key) } : undefined;
+      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root, secrets ? { secrets } : {});
       this.hubSyncProvider = provider; this.hubSyncUnregister = this.sync.register("geode", provider);
     }
     this.registerActions();

@@ -3,7 +3,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsc } from "node:fs";
 import * as path from "node:path";
 import type { AppendOnlySession, AppendOnlySyncProvider, BlobRef, HistoryRecord, HistoryScan, VaultDescriptor } from "../sync-core/history-types";
-import { hubTargetProblem, type HubErrorInfo, type HubOpenReply, type HubProbeResult, type HubTarget } from "../shared/hub-sync";
+import { hubTargetProblem, type HubErrorInfo, type HubOpenReply, type HubProbeResult, type MainHubTarget } from "../shared/hub-sync";
 import { FsStoreProvider } from "./fs-store";
 import { spawnSshStore } from "./rpc-store";
 import { isStoreError } from "./store-errors";
@@ -18,7 +18,7 @@ import { isStoreError } from "./store-errors";
  * `src/main/hub-sync-ipc.ts` only. See docs/design/app-hub-sync-provider.md.
  */
 
-export type { HubErrorInfo, HubOpenReply, HubTarget };
+export type { HubErrorInfo, HubOpenReply, MainHubTarget as HubTarget };
 
 export class HubError extends Error {
   constructor(readonly code: string, message: string, readonly hint?: string) { super(message); this.name = "HubError"; }
@@ -26,10 +26,11 @@ export class HubError extends Error {
 }
 
 /** Validates a renderer-supplied target (strictly: see hubTargetProblem) and normalises a folder path. */
-export function validateHubTarget(value: unknown): HubTarget {
+export function validateHubTarget(value: unknown): MainHubTarget {
+  if ((value as { kind?: unknown } | null)?.kind === "http") throw new HubError("invalid-target", "HTTPS hubs are reached from the app window, not through the main process");
   const problem = hubTargetProblem(value);
   if (problem) throw new HubError("invalid-target", problem);
-  const target = value as HubTarget;
+  const target = value as MainHubTarget;
   return target.kind === "fs" ? { kind: "fs", path: path.resolve(target.path) } : { kind: "ssh", host: target.host, path: target.path };
 }
 
@@ -59,7 +60,7 @@ export function classifySshFailure(stderr: string, host: string): HubErrorInfo |
 type Stderr = string[] & { drained?: Promise<void> };
 const DRAIN_WAIT_MS = 1500;
 
-interface Live { provider: AppendOnlySyncProvider & { close?(): Promise<void> }; session: AppendOnlySession; owner: string; stderr: Stderr; target: HubTarget }
+interface Live { provider: AppendOnlySyncProvider & { close?(): Promise<void> }; session: AppendOnlySession; owner: string; stderr: Stderr; target: MainHubTarget }
 
 export interface HubStoreManagerOptions {
   /** Test seams. */
@@ -78,7 +79,7 @@ export class HubStoreManager {
   private readonly sessions = new Map<string, Live>();
   constructor(private readonly options: HubStoreManagerOptions = {}) {}
 
-  private make(target: HubTarget, stderr: Stderr): AppendOnlySyncProvider & { close?(): Promise<void> } {
+  private make(target: MainHubTarget, stderr: Stderr): AppendOnlySyncProvider & { close?(): Promise<void> } {
     const onStderr = (line: string) => { stderr.push(line); if (stderr.length > STDERR_LINES) stderr.shift(); };
     if (target.kind === "fs") return this.options.fsProvider?.(target.path) ?? new FsStoreProvider(target.path);
     if (this.options.sshProvider) return this.options.sshProvider({ host: target.host, path: target.path }, onStderr);
@@ -87,7 +88,7 @@ export class HubStoreManager {
   }
 
   /** Maps any failure to a HubError, preferring what ssh itself said over the generic "unavailable". */
-  private async fail(error: unknown, target: HubTarget, stderr: Stderr, timedOut: boolean): Promise<HubError> {
+  private async fail(error: unknown, target: MainHubTarget, stderr: Stderr, timedOut: boolean): Promise<HubError> {
     if (error instanceof HubError) return error;
     // The transport can report "closed" before the child's last stderr line has been read; wait (bounded) for the
     // stream to finish so the message is what ssh actually said, not the vague "unavailable".
@@ -118,7 +119,7 @@ export class HubStoreManager {
     return new HubError("hub-failed", message);
   }
 
-  private async withProvider<T>(target: HubTarget, signal: AbortSignal | undefined, work: (provider: AppendOnlySyncProvider, deadline: AbortSignal) => Promise<T>, keep?: (provider: AppendOnlySyncProvider & { close?(): Promise<void> }, stderr: Stderr, result: T) => void): Promise<T> {
+  private async withProvider<T>(target: MainHubTarget, signal: AbortSignal | undefined, work: (provider: AppendOnlySyncProvider, deadline: AbortSignal) => Promise<T>, keep?: (provider: AppendOnlySyncProvider & { close?(): Promise<void> }, stderr: Stderr, result: T) => void): Promise<T> {
     const stderr: Stderr = [];
     const provider = this.make(target, stderr);
     const deadline = new AbortController();
@@ -144,11 +145,11 @@ export class HubStoreManager {
     }
   }
 
-  discover(target: HubTarget, signal?: AbortSignal): Promise<VaultDescriptor[]> {
+  discover(target: MainHubTarget, signal?: AbortSignal): Promise<VaultDescriptor[]> {
     return this.withProvider(target, signal, (provider, deadline) => provider.discover(deadline));
   }
 
-  createVault(target: HubTarget, input: { name: string; operationId: string }, signal?: AbortSignal): Promise<VaultDescriptor> {
+  createVault(target: MainHubTarget, input: { name: string; operationId: string }, signal?: AbortSignal): Promise<VaultDescriptor> {
     return this.withProvider(target, signal, async (provider, deadline) => {
       if (target.kind === "fs") await inspectFsHub(target.path, true); // fail fast and legibly; never mkdir a path that cannot work
       return provider.createVault(input, deadline);
@@ -156,7 +157,7 @@ export class HubStoreManager {
   }
 
   /** "Test connection": reachability plus, when a hub may be created, whether it can be (nothing is created). */
-  probe(target: HubTarget, create: boolean, signal?: AbortSignal): Promise<HubProbeResult> {
+  probe(target: MainHubTarget, create: boolean, signal?: AbortSignal): Promise<HubProbeResult> {
     return this.withProvider(target, signal, async (provider, deadline) => {
       let detail: string;
       if (target.kind === "fs") detail = (await inspectFsHub(target.path, create)).detail;
@@ -165,7 +166,7 @@ export class HubStoreManager {
     });
   }
 
-  open(owner: string, target: HubTarget, binding: VaultDescriptor, deviceId: string, signal?: AbortSignal): Promise<HubOpenReply> {
+  open(owner: string, target: MainHubTarget, binding: VaultDescriptor, deviceId: string, signal?: AbortSignal): Promise<HubOpenReply> {
     let sessionId = "";
     return this.withProvider(target, signal, (provider, deadline) => provider.open({ binding, deviceId }, deadline), (provider, stderr, session) => {
       sessionId = randomUUID();
