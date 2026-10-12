@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F0100000000000000000000E /* SyncNativeProbeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0100000000000000000000D /* SyncNativeProbeUITests.swift */; };
+		F0100000000000000000000C /* GeodeSyncNativeProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0100000000000000000000B /* GeodeSyncNativeProbe.swift */; };
+		F01000000000000000000002 /* GeodeKeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01000000000000000000001 /* GeodeKeychainStore.swift */; };
+		F01000000000000000000003 /* GeodeKeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01000000000000000000001 /* GeodeKeychainStore.swift */; };
+		F01000000000000000000005 /* GeodeSyncPrivateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01000000000000000000004 /* GeodeSyncPrivateStore.swift */; };
+		F01000000000000000000006 /* GeodeSyncPrivateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01000000000000000000004 /* GeodeSyncPrivateStore.swift */; };
+		F01000000000000000000008 /* GeodeKeychainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01000000000000000000007 /* GeodeKeychainStoreTests.swift */; };
+		F0100000000000000000000A /* GeodeSyncPrivateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01000000000000000000009 /* GeodeSyncPrivateStoreTests.swift */; };
 		D01000000000000000000001 /* ManagedCoreUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01000000000000000000002 /* ManagedCoreUITests.swift */; };
 		E01000000000000000000001 /* LegacyManagedVaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01000000000000000000003 /* LegacyManagedVaultMigration.swift */; };
 		E01000000000000000000002 /* LegacyManagedVaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01000000000000000000003 /* LegacyManagedVaultMigration.swift */; };
@@ -36,6 +44,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		F0100000000000000000000D /* SyncNativeProbeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncNativeProbeUITests.swift; sourceTree = "<group>"; };
+		F0100000000000000000000B /* GeodeSyncNativeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeSyncNativeProbe.swift; sourceTree = "<group>"; };
+		F01000000000000000000001 /* GeodeKeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeKeychainStore.swift; sourceTree = "<group>"; };
+		F01000000000000000000004 /* GeodeSyncPrivateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeSyncPrivateStore.swift; sourceTree = "<group>"; };
+		F01000000000000000000007 /* GeodeKeychainStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeKeychainStoreTests.swift; sourceTree = "<group>"; };
+		F01000000000000000000009 /* GeodeSyncPrivateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeSyncPrivateStoreTests.swift; sourceTree = "<group>"; };
 		D01000000000000000000002 /* ManagedCoreUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedCoreUITests.swift; sourceTree = "<group>"; };
 		D01000000000000000000003 /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E01000000000000000000003 /* LegacyManagedVaultMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyManagedVaultMigration.swift; sourceTree = "<group>"; };
@@ -101,6 +115,9 @@
 			children = (
 				A1B2C3D32FE993A70072D4E8 /* GeodeBridgeViewController.swift */,
 				E01000000000000000000003 /* LegacyManagedVaultMigration.swift */,
+				F0100000000000000000000B /* GeodeSyncNativeProbe.swift */,
+				F01000000000000000000001 /* GeodeKeychainStore.swift */,
+				F01000000000000000000004 /* GeodeSyncPrivateStore.swift */,
 				B2C3D4E42FE993A70072D4E8 /* GeodeManagedVaultPlugin.swift */,
 				C3D4E5F52FE993A70072D4E8 /* PrivacyInfo.xcprivacy */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
@@ -121,6 +138,9 @@
 			children = (
 				D01000000000000000000002 /* ManagedCoreUITests.swift */,
 				E01000000000000000000005 /* LegacyManagedVaultMigrationTests.swift */,
+				F0100000000000000000000D /* SyncNativeProbeUITests.swift */,
+				F01000000000000000000007 /* GeodeKeychainStoreTests.swift */,
+				F01000000000000000000009 /* GeodeSyncPrivateStoreTests.swift */,
 			);
 			path = AppUITests;
 			sourceTree = "<group>";
@@ -242,6 +262,11 @@
 				D01000000000000000000001 /* ManagedCoreUITests.swift in Sources */,
 				E01000000000000000000002 /* LegacyManagedVaultMigration.swift in Sources */,
 				E01000000000000000000004 /* LegacyManagedVaultMigrationTests.swift in Sources */,
+				F0100000000000000000000E /* SyncNativeProbeUITests.swift in Sources */,
+				F01000000000000000000003 /* GeodeKeychainStore.swift in Sources */,
+				F01000000000000000000006 /* GeodeSyncPrivateStore.swift in Sources */,
+				F01000000000000000000008 /* GeodeKeychainStoreTests.swift in Sources */,
+				F0100000000000000000000A /* GeodeSyncPrivateStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -251,6 +276,9 @@
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				E01000000000000000000001 /* LegacyManagedVaultMigration.swift in Sources */,
+				F0100000000000000000000C /* GeodeSyncNativeProbe.swift in Sources */,
+				F01000000000000000000002 /* GeodeKeychainStore.swift in Sources */,
+				F01000000000000000000005 /* GeodeSyncPrivateStore.swift in Sources */,
 				B2C3D4E52FE993A70072D4E8 /* GeodeManagedVaultPlugin.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A1B2C3D42FE993A70072D4E8 /* GeodeBridgeViewController.swift in Sources */,

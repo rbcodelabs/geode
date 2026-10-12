@@ -90,7 +90,17 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             CAPPluginMethod(name: "listPluginIds", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "listThemes", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "readPluginFile", returnType: CAPPluginReturnPromise),
-            CAPPluginMethod(name: "replacePluginFiles", returnType: CAPPluginReturnPromise)
+            CAPPluginMethod(name: "replacePluginFiles", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "stat", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "writeBinary", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateWrite", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateRead", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateList", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateRemove", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateAvailableBytes", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "appSecretGet", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "appSecretSet", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "appSecretRemove", returnType: CAPPluginReturnPromise)
         ]
 #if DEBUG
         methods.append(CAPPluginMethod(name: "debugProbe", returnType: CAPPluginReturnPromise))
@@ -405,6 +415,123 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                 main: main,
                 styles: styles
             )
+            return [:]
+        }
+    }
+
+    // MARK: Guarded sync support (binary writes, stat, sync-private storage) and app secrets
+
+    /// Same atomic temp-and-swap with rollback as `write`, for bytes. The renderer's hash guard decides whether to call it.
+    @objc func writeBinary(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            guard let encoded = call.getString("base64"), encoded.utf8.count <= self.binaryBridgeLimit * 4 / 3 + 4,
+                  let data = Data(base64Encoded: encoded) else { throw ManagedVaultFailure.io }
+            guard data.count <= self.binaryBridgeLimit else { throw ManagedVaultFailure.payloadTooLarge }
+            let url = try self.validatedURL(path)
+            let existed = self.fileManager.fileExists(atPath: url.path)
+            try self.atomicWrite(data, to: url)
+            let entry = try self.entry(url, path: path)
+            self.emit(event: existed ? "modify" : "create", path: path, mutationId: call.getString("mutationId"))
+            return ["mtime": entry.mtime, "ctime": entry.ctime, "size": entry.size]
+        }
+    }
+
+    /// What is at a vault path, without following links: a link on any component reports "symlink" so sync fails closed.
+    /// Unlike `validatedURL` this never rejects an escaping link, it reports it.
+    @objc func stat(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            let components = try self.lexicalComponents(path)
+            var current = try self.vaultRoot
+            for component in components {
+                current.appendPathComponent(component, isDirectory: false)
+                guard let attributes = try? self.fileManager.attributesOfItem(atPath: current.path) else {
+                    return ["kind": "none", "size": 0, "children": 0]
+                }
+                let type = attributes[.type] as? FileAttributeType
+                if type == .typeSymbolicLink { return ["kind": "symlink", "size": 0, "children": 0] }
+                if component == components.last {
+                    if type == .typeDirectory {
+                        let children = (try? self.fileManager.contentsOfDirectory(atPath: current.path).count) ?? 0
+                        return ["kind": "folder", "size": 0, "children": children]
+                    }
+                    return ["kind": "file", "size": (attributes[.size] as? NSNumber)?.intValue ?? 0, "children": 0]
+                }
+                if type != .typeDirectory { return ["kind": "none", "size": 0, "children": 0] }
+            }
+            return ["kind": "none", "size": 0, "children": 0]
+        }
+    }
+
+    private func lexicalComponents(_ path: String) throws -> [String] {
+        guard !path.isEmpty, !path.contains("\0"), !path.hasPrefix("/"), !path.contains("\\") else { throw ManagedVaultFailure.invalidPath }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.first != trashName, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { throw ManagedVaultFailure.invalidPath }
+        return parts
+    }
+
+    private func syncPrivateStore() throws -> GeodeSyncPrivateStore {
+        GeodeSyncPrivateStore(root: try GeodeSyncPrivateStore.defaultRoot(), byteLimit: binaryBridgeLimit)
+    }
+
+    @objc func syncPrivateWrite(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path"), let encoded = call.getString("base64"),
+                  let data = Data(base64Encoded: encoded) else { throw ManagedVaultFailure.invalidPath }
+            try self.syncPrivateStore().write(data, to: path)
+            return [:]
+        }
+    }
+
+    @objc func syncPrivateRead(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path") else { throw ManagedVaultFailure.invalidPath }
+            guard let data = try self.syncPrivateStore().read(path) else { return ["found": false] }
+            return ["found": true, "base64": data.base64EncodedString()]
+        }
+    }
+
+    @objc func syncPrivateList(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path") else { throw ManagedVaultFailure.invalidPath }
+            let entries: JSArray = try self.syncPrivateStore().list(path).map { ["name": $0.name, "isFolder": $0.isFolder] as JSObject }
+            return ["entries": entries]
+        }
+    }
+
+    @objc func syncPrivateRemove(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path") else { throw ManagedVaultFailure.invalidPath }
+            try self.syncPrivateStore().remove(path, recursive: call.getBool("recursive") ?? false)
+            return [:]
+        }
+    }
+
+    @objc func syncPrivateAvailableBytes(_ call: CAPPluginCall) {
+        perform(call) { ["bytes": Double(try self.syncPrivateStore().availableBytes())] }
+    }
+
+    @objc func appSecretGet(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let key = call.getString("key") else { throw ManagedVaultFailure.invalidPath }
+            guard let value = try GeodeKeychainStore().get(key) else { return ["found": false] }
+            return ["found": true, "value": value]
+        }
+    }
+
+    @objc func appSecretSet(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let key = call.getString("key"), let value = call.getString("value") else { throw ManagedVaultFailure.invalidPath }
+            try GeodeKeychainStore().set(key, value)
+            return [:]
+        }
+    }
+
+    @objc func appSecretRemove(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let key = call.getString("key") else { throw ManagedVaultFailure.invalidPath }
+            try GeodeKeychainStore().remove(key)
             return [:]
         }
     }
@@ -1147,6 +1274,20 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
 
     private func map(_ error: Error) -> ManagedVaultFailure {
         if let failure = error as? ManagedVaultFailure { return failure }
+        if let store = error as? GeodeSyncPrivateStore.StoreError {
+            switch store {
+            case .invalidPath: return .invalidPath
+            case .tooLarge: return .payloadTooLarge
+            case .io: return .io
+            }
+        }
+        if let keychain = error as? GeodeKeychainStore.KeychainError {
+            switch keychain {
+            case .invalidKey, .invalidData: return .invalidPath
+            // Only the OSStatus is reported, never the key or value.
+            case .status(let status): return ManagedVaultFailure(code: "KEYCHAIN_FAILURE", message: "Secure storage failed (status \(status))")
+            }
+        }
         let cocoa = error as NSError
         if cocoa.domain == NSCocoaErrorDomain {
             if cocoa.code == NSFileNoSuchFileError { return .notFound }
