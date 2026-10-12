@@ -1,3 +1,4 @@
+import { MAX_FRAME_BYTES, MAX_HEADER_BYTES, PROTOCOL_NAME, PROTOCOL_VERSION } from "../shared/store-protocol";
 import { SyncStoreError } from "./store-errors";
 
 /**
@@ -14,10 +15,7 @@ import { SyncStoreError } from "./store-errors";
  * byte stream unrecoverable, so callers treat them as fatal for the connection
  * (and report them by name) — they never throw out of the process.
  */
-export const PROTOCOL_NAME = "geode-store-rpc";
-export const PROTOCOL_VERSION = 1;
-export const MAX_FRAME_BYTES = 4 * 1024 * 1024;
-export const MAX_HEADER_BYTES = 16 * 1024 * 1024;
+export { MAX_FRAME_BYTES, MAX_HEADER_BYTES, PROTOCOL_NAME, PROTOCOL_VERSION };
 
 export interface Frame { header: Record<string, unknown>; body?: Buffer }
 
