@@ -5,7 +5,8 @@ import { base64ToBytes, bytesToBase64 } from "../../src/renderer/host/base64";
  * An in-memory GeodeManagedVault native plugin with the semantics sync relies on: relative-path tree, atomic
  * writes that need an existing parent, mkdir collision, trash into a hidden `.geode-trash` that listings skip,
  * links reported as "symlink", content that can be "evicted" (iCloud) or too large for the bridge, a sandbox
- * private store entirely separate from the vault, and a Keychain. Failures use the native `{ code }` shape.
+ * private store entirely separate from the vault, and a Keychain. Like the real plugin a single call carries at most
+ * `bridgeLimit` bytes (32 MiB); bigger files move through the chunked calls (`chunked = false` models a native build without them). Failures use the native `{ code }` shape.
  */
 export class FakeManagedVault {
   readonly files = new Map<string, Uint8Array>();
@@ -24,6 +25,14 @@ export class FakeManagedVault {
   /** Changes made by "another app" (Files, iCloud) at a chosen moment. */
   beforeStat?: (path: string) => void;
   mtime = 1000;
+  /** The native single-call payload cap, and the cap on a whole chunked file. */
+  bridgeLimit = 32 * 1024 * 1024;
+  readonly syncFileLimit = 100 * 1024 * 1024;
+  /** Half-assembled chunked writes, by "<path>#<mutationId>" (vault) and private path. */
+  readonly chunkTemps = new Map<string, Uint8Array[]>();
+  readonly privateChunkTemps = new Map<string, Uint8Array[]>();
+  /** Called before each chunk lands, with the chunk's offset; throw to simulate a failure or a crash mid-transfer. */
+  beforeChunk?: (offset: number) => void;
   readonly plugin: ManagedVaultPlugin;
 
   constructor(private readonly id = "managed://default") {
@@ -56,9 +65,41 @@ export class FakeManagedVault {
         if (this.evicted.has(path)) fail("CONTENT_UNAVAILABLE");
         if (this.oversize.has(path)) fail("PAYLOAD_TOO_LARGE");
         const bytes = this.files.get(path); if (!bytes) fail("NOT_FOUND");
+        if (bytes!.byteLength > this.bridgeLimit) fail("PAYLOAD_TOO_LARGE");
         return { base64: bytesToBase64(bytes!) };
       },
-      writeBinary: async ({ path, base64 }: { path: string; base64: string }) => { this.calls.push(`writeBinary ${path}`); const bytes = base64ToBytes(base64); writeFile(path, bytes); return { mtime: this.mtime, ctime: 1, size: bytes.byteLength }; },
+      writeBinary: async ({ path, base64 }: { path: string; base64: string }) => { this.calls.push(`writeBinary ${path}`); const bytes = base64ToBytes(base64); if (bytes.byteLength > this.bridgeLimit) fail("PAYLOAD_TOO_LARGE"); writeFile(path, bytes); return { mtime: this.mtime, ctime: 1, size: bytes.byteLength }; },
+      readBinaryRange: async ({ path, offset, length }: { path: string; offset: number; length: number }) => {
+        this.calls.push(`readBinaryRange ${path} ${offset}`);
+        if (this.evicted.has(path)) fail("CONTENT_UNAVAILABLE");
+        const bytes = this.files.get(path); if (!bytes) fail("NOT_FOUND");
+        if (bytes!.byteLength > this.syncFileLimit || this.oversize.has(path)) fail("PAYLOAD_TOO_LARGE"); // `oversize`: bigger than even the chunked cap
+        if (length > 16 * 1024 * 1024) fail("INVALID_PATH");
+        return { base64: bytesToBase64(bytes!.subarray(offset, offset + length)), size: bytes!.byteLength, mtime: this.mtime };
+      },
+      writeBinaryChunk: async ({ path, mutationId, offset, base64 }: { path: string; mutationId: string; offset: number; base64: string }) => {
+        this.calls.push(`writeBinaryChunk ${path} ${offset}`);
+        const bytes = base64ToBytes(base64);
+        if (bytes.byteLength > 16 * 1024 * 1024 || offset + bytes.byteLength > this.syncFileLimit) fail("PAYLOAD_TOO_LARGE");
+        if (!hasFolder(parentOf(path))) fail("NOT_FOUND");
+        this.beforeChunk?.(offset);
+        const key = `${path}#${mutationId}`;
+        if (offset === 0) this.chunkTemps.set(key, []);
+        const parts = this.chunkTemps.get(key); const have = parts?.reduce((sum, part) => sum + part.byteLength, 0);
+        if (!parts || have !== offset) fail("IO_FAILURE");
+        parts!.push(bytes);
+        return { size: offset + bytes.byteLength };
+      },
+      writeBinaryCommit: async ({ path, mutationId, size }: { path: string; mutationId: string; size: number }) => {
+        this.calls.push(`writeBinaryCommit ${path}`);
+        const key = `${path}#${mutationId}`, parts = this.chunkTemps.get(key);
+        const total = parts?.reduce((sum, part) => sum + part.byteLength, 0);
+        if (!parts || total !== size) { this.chunkTemps.delete(key); fail("IO_FAILURE"); }
+        const out = new Uint8Array(size); let at = 0; for (const part of parts!) { out.set(part, at); at += part.byteLength; }
+        writeFile(path, out); this.chunkTemps.delete(key);
+        return { mtime: this.mtime, ctime: 1, size };
+      },
+      writeBinaryAbort: async ({ path, mutationId }: { path: string; mutationId: string }) => { this.calls.push(`writeBinaryAbort ${path}`); this.chunkTemps.delete(`${path}#${mutationId}`); return {}; },
       write: async ({ path, data }: { path: string; data: string }) => { this.calls.push(`write ${path}`); const bytes = new TextEncoder().encode(data); writeFile(path, bytes); return { mtime: this.mtime, ctime: 1, size: bytes.byteLength }; },
       mkdir: async ({ path }: { path: string }) => {
         this.calls.push(`mkdir ${path}`);
@@ -91,8 +132,22 @@ export class FakeManagedVault {
         const bytes = this.files.get(path);
         return bytes ? { kind: "file" as const, size: this.oversize.has(path) ? 40 * 1024 * 1024 : bytes.byteLength, children: 0 } : { kind: "none" as const, size: 0, children: 0 };
       },
-      syncPrivateWrite: async ({ path, base64 }: { path: string; base64: string }) => { privateOk(path); this.privateFiles.set(path, base64ToBytes(base64)); return {}; },
-      syncPrivateRead: async ({ path }: { path: string }) => { privateOk(path); const bytes = this.privateFiles.get(path); return bytes ? { found: true, base64: bytesToBase64(bytes) } : { found: false }; },
+      syncPrivateWrite: async ({ path, base64 }: { path: string; base64: string }) => { privateOk(path); const bytes = base64ToBytes(base64); if (bytes.byteLength > this.bridgeLimit) fail("PAYLOAD_TOO_LARGE"); this.privateFiles.set(path, bytes); return {}; },
+      syncPrivateRead: async ({ path }: { path: string }) => { privateOk(path); const bytes = this.privateFiles.get(path); if (bytes && bytes.byteLength > this.bridgeLimit) fail("PAYLOAD_TOO_LARGE"); return bytes ? { found: true, base64: bytesToBase64(bytes) } : { found: false }; },
+      syncPrivateReadRange: async ({ path, offset, length }: { path: string; offset: number; length: number }) => {
+        privateOk(path); const bytes = this.privateFiles.get(path); if (!bytes) return { found: false };
+        return { found: true, base64: bytesToBase64(bytes.subarray(offset, offset + length)), size: bytes.byteLength };
+      },
+      syncPrivateWriteChunk: async ({ path, offset, base64, final }: { path: string; offset: number; base64: string; final: boolean }) => {
+        privateOk(path); this.beforeChunk?.(offset);
+        const bytes = base64ToBytes(base64);
+        if (bytes.byteLength > 16 * 1024 * 1024 || offset + bytes.byteLength > this.syncFileLimit) fail("PAYLOAD_TOO_LARGE");
+        if (offset === 0) this.privateChunkTemps.set(path, []);
+        const parts = this.privateChunkTemps.get(path); if (!parts || parts.reduce((sum, part) => sum + part.byteLength, 0) !== offset) fail("IO_FAILURE");
+        parts!.push(bytes);
+        if (final) { const out = new Uint8Array(offset + bytes.byteLength); let at = 0; for (const part of parts!) { out.set(part, at); at += part.byteLength; } this.privateFiles.set(path, out); this.privateChunkTemps.delete(path); }
+        return {};
+      },
       syncPrivateList: async ({ path }: { path: string }) => {
         privateOk(path);
         const names = new Map<string, boolean>();
@@ -111,6 +166,15 @@ export class FakeManagedVault {
     };
     this.plugin = plugin as unknown as ManagedVaultPlugin;
   }
+
+  /** Models a native build from before chunked transfer existed: only the single-call methods. */
+  set chunked(value: boolean) {
+    const plugin = this.plugin as unknown as Record<string, unknown>;
+    for (const name of ["readBinaryRange", "writeBinaryChunk", "writeBinaryCommit", "writeBinaryAbort", "syncPrivateReadRange", "syncPrivateWriteChunk"]) {
+      if (value) plugin[name] = this.chunkMethods[name]; else { this.chunkMethods[name] ??= plugin[name]; delete plugin[name]; }
+    }
+  }
+  private readonly chunkMethods: Record<string, unknown> = {};
 
   put(path: string, text: string | Uint8Array): this {
     const parts = path.split("/");

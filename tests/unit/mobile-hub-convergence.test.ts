@@ -112,4 +112,37 @@ describe("a desktop-style device and the phone host converge through a real HTTP
     expect(mobile.native.text(".Away.md.icloud")).toBe("stub");
     await desk.close();
   });
+
+  it("moves files over the 32 MiB bridge limit both ways in chunks; on a native build without chunking only that file is blocked", async () => {
+    const { url, desk } = await setup();
+    const MIB = 1024 * 1024, payload = (size: number, seed: number) => { const data = new Uint8Array(size); for (let index = 0; index < size; index += 4099) data[index] = (index / 4099 + seed) & 255; return data; };
+    const fromDesk = payload(33 * MIB, 1), fromPhone = payload(34 * MIB, 2);
+    desk.write("Home.md", "home"); put(desk.vault, "Media/from-desk.bin", fromDesk as unknown as string);
+    await desk.configureUnchecked({ kind: "http", url }, true);
+    await desk.connect({ create: "Wiki" });
+    await desk.firstSync();
+
+    const mobile = await phone(url);
+    await mobile.configure(); await mobile.connect();
+    mobile.native.put("Media/from-phone.bin", fromPhone);
+    await mobile.firstSync();
+    const received = mobile.native.files.get("Media/from-desk.bin");
+    expect(received && received.byteLength === fromDesk.byteLength && received.every((value, index) => value === fromDesk[index])).toBe(true);
+    expect(mobile.native.calls.some(call => call.startsWith("writeBinaryCommit Media/from-desk.bin"))).toBe(true);
+    await desk.sync();
+    const uploaded = readFileSync(join(desk.vault, "Media/from-phone.bin"));
+    expect(uploaded.byteLength).toBe(fromPhone.byteLength); expect(Buffer.compare(uploaded, fromPhone)).toBe(0);
+    expect(mobile.native.chunkTemps.size).toBe(0); expect(mobile.native.privateChunkTemps.size).toBe(0);
+
+    // An older native build: the oversize remote file is one blocked entry; Home.md and everything else still sync, and the run does not fail.
+    const older = await phone(url);
+    older.native.chunked = false;
+    await older.configure(); await older.connect();
+    await older.service.preview(); await older.service.run({ approvePreview: true }); // the run completes: a blocked file is not a failed run
+    const blocked = older.service.getHistoryDetails()?.blocked; await older.service.cancel();
+    expect(older.native.text("Home.md")).toBe("home");
+    expect(older.native.files.has("Media/from-desk.bin")).toBe(false);
+    expect(blocked).toContainEqual({ namespace: "content", path: "Media/from-desk.bin", reason: "too-large-for-mobile" });
+    await desk.close();
+  });
 });

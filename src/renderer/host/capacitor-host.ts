@@ -4,7 +4,7 @@ import type { PluginFileSet } from "./contracts";
 import { assertValidThemeId } from "../../shared/theme-id";
 import type { SyncVaultPathIssue } from "../../sync-core/ports";
 import { SyncBlockedError } from "../../sync-core/ports";
-import { base64ToBytes, bytesToBase64 } from "./base64";
+import { readPrivateBinary, readVaultBinary, writePrivateBinary, writeVaultBinary } from "./chunked-binary";
 import { createMobileSyncSafety, type MobileSyncPorts, type NativeStat } from "./mobile-sync-safety";
 
 type EmptyResult = Record<string, never>;
@@ -37,6 +37,17 @@ export interface ManagedVaultPlugin extends Plugin {
    * `stat` never follows or resolves links: a link anywhere on the path is reported as "symlink".
    */
   stat?(options: { path: string }): Promise<NativeStat>;
+  /**
+   * Chunked transfer for files over the 32 MiB single-call limit (up to 100 MiB). Optional: a native build without them keeps
+   * the single-call limit, and an oversize remote file is then reported as a blocked path instead of failing the sync run.
+   * Writes append to a temp file named by `mutationId` (a UUID) and `writeBinaryCommit` swaps it in atomically.
+   */
+  readBinaryRange?(options: { path: string; offset: number; length: number }): Promise<{ base64: string; size: number; mtime: number }>;
+  writeBinaryChunk?(options: { path: string; mutationId: string; offset: number; base64: string }): Promise<{ size: number }>;
+  writeBinaryCommit?(options: { path: string; mutationId: string; size: number }): Promise<{ mtime: number; ctime: number; size: number }>;
+  writeBinaryAbort?(options: { path: string; mutationId: string }): Promise<EmptyResult>;
+  syncPrivateReadRange?(options: { path: string; offset: number; length: number }): Promise<{ found: boolean; base64?: string; size?: number }>;
+  syncPrivateWriteChunk?(options: { path: string; offset: number; base64: string; final: boolean }): Promise<EmptyResult>;
   /** App-sandbox storage outside every vault (Application Support, excluded from backup). Relative, `/`-separated paths. */
   syncPrivateWrite?(options: { path: string; base64: string }): Promise<EmptyResult>;
   syncPrivateRead?(options: { path: string }): Promise<{ found: boolean; base64?: string }>;
@@ -51,12 +62,6 @@ export interface ManagedVaultPlugin extends Plugin {
 }
 
 export const GeodeManagedVault = registerPlugin<ManagedVaultPlugin>("GeodeManagedVault");
-
-function decodeBase64(base64: string): ArrayBuffer {
-  const binary = atob(base64);
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  return bytes.buffer;
-}
 
 function managedVaultPath(path: string): string {
   if (path.includes("\0") || path.includes("\\") || /^[A-Za-z]:[\\/]/.test(path)) {
@@ -117,14 +122,14 @@ function createCapacitorSyncSafety(plugin: ManagedVaultPlugin, portable: HostSer
     rootId,
     vault: {
       stat: (path) => stat.call(plugin, { path: managedVaultPath(path) }),
-      readBinary: async (path) => decodeBase64((await plugin.readBinary({ path: managedVaultPath(path) })).base64),
-      writeBinary: async (path, data, mutationId) => { await writeBinary.call(plugin, { path: managedVaultPath(path), base64: bytesToBase64(new Uint8Array(data)), mutationId }); },
+      readBinary: (path) => readVaultBinary(plugin, managedVaultPath(path)),
+      writeBinary: (path, data, mutationId) => writeVaultBinary(plugin, managedVaultPath(path), data, mutationId),
       mkdir: async (path, mutationId) => { await plugin.mkdir({ path: managedVaultPath(path), mutationId }); },
       trash: async (path, mutationId) => { await plugin.trash({ path: managedVaultPath(path), mutationId }); },
     },
     privateStore: {
-      write: async (path, data) => { await syncPrivateWrite.call(plugin, { path, base64: bytesToBase64(data) }); },
-      read: async (path) => { const result = await syncPrivateRead.call(plugin, { path }); return result.found && result.base64 !== undefined ? base64ToBytes(result.base64) : null; },
+      write: (path, data) => writePrivateBinary(plugin as Required<Pick<ManagedVaultPlugin, "syncPrivateWrite" | "syncPrivateRead">> & ManagedVaultPlugin, path, data),
+      read: (path) => readPrivateBinary(plugin as Required<Pick<ManagedVaultPlugin, "syncPrivateWrite" | "syncPrivateRead">> & ManagedVaultPlugin, path),
       list: async (path) => (await syncPrivateList.call(plugin, { path })).entries,
       remove: async (path, recursive) => { await syncPrivateRemove.call(plugin, { path, recursive }); },
       availableBytes: async () => plugin.syncPrivateAvailableBytes ? (await plugin.syncPrivateAvailableBytes()).bytes : null,
@@ -211,12 +216,12 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       },
       readBinary: async (path) => {
         requireOpen();
-        try { return decodeBase64((await plugin.readBinary({ path: managedVaultPath(path) })).base64); }
+        try { return await readVaultBinary(plugin, managedVaultPath(path)); }
         catch (error) {
           // Not errors in the file: sync demotes just this path to "blocked" instead of failing the whole run.
           const code = (error as { code?: string }).code;
           if (code === "CONTENT_UNAVAILABLE") throw new SyncBlockedError("icloud-not-downloaded", "The provider has not downloaded this file to the device");
-          if (code === "PAYLOAD_TOO_LARGE") throw new SyncBlockedError("too-large-for-mobile", "This file is larger than the 32 MiB the iOS bridge can carry");
+          if (code === "PAYLOAD_TOO_LARGE") throw new SyncBlockedError("too-large-for-mobile", "This file is larger than this iOS build can read (100 MiB, or 32 MiB on a build without chunked reads)");
           throw error;
         }
       },

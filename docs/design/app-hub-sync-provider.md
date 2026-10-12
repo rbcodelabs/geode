@@ -252,11 +252,26 @@ ported, not shared:
   by `isLocalOnlyConfigPath` (src/sync-core/scope.ts) at every choke point (desktop, mobile, headless scan; app and
   raw-file scopes), regardless of user scope. Copies already on the hub are skipped by the planner, not downloaded,
   deleted or counted by the rails.
-* **32 MiB bridge limit.** Binary data crosses the Capacitor bridge as base64, and the native plugin rejects a
-  payload over 32 MiB (`PAYLOAD_TOO_LARGE`; the sync-private store has the same cap). The provider advertises
-  100 MiB, so on iOS a local file between 32 and 100 MiB is shown as blocked (`too-large-for-mobile`) and is neither
-  uploaded nor treated as deleted. The same native cap applies to `writeBinary`, so a remote file of that size cannot
-  be written into the phone's vault; that path was not exercised on a device.
+* **32 MiB bridge limit, and chunked transfer above it.** Binary data crosses the Capacitor bridge as base64 and the
+  native plugin rejects a single payload over 32 MiB (`PAYLOAD_TOO_LARGE`). Files from 32 up to the 100 MiB sync cap
+  move in 8 MiB chunks (`src/renderer/host/chunked-binary.ts`, native `readBinaryRange`, `writeBinaryChunk` /
+  `writeBinaryCommit` / `writeBinaryAbort`, `syncPrivateReadRange`, `syncPrivateWriteChunk`). The single call is tried
+  first and is unchanged, so only a file that does not fit pays for chunking.
+  * Reads return the file's total size and mtime with every chunk; a change between chunks fails the read as
+    `changed-during-read` (a blocked path in a scan) instead of returning a torn file.
+  * Vault writes append to a dotted temp (`.geode-write-chunk-<operationId>`) in the target's directory and are
+    published by the same fsync, backup and atomic swap with rollback as a single-call write, so the hash-guarded,
+    receipt-and-preimage design in `mobile-sync-safety.ts` is untouched: the target holds either the old bytes or the new
+    ones, never a partial file. The temp is named by the operation, so a retry after a crash restarts the same file;
+    native also deletes chunk temps untouched for a day. Sync-private files use a `.chunked.tmp` sibling renamed on the
+    last chunk (startup GC already removes `.tmp` names).
+  * Bounds: the native side takes at most 16 MiB per call, 100 MiB per file, requires each chunk to land at exactly the
+    temp's current size, and checks the assembled size at commit. Paths still go through `validatedURL`.
+  * Peak memory is the file plus one chunk (the assembled `ArrayBuffer`); a 100 MiB file therefore needs roughly
+    200 MiB in the web view while it is staged and hashed. Not measured on a device.
+  * A native build without the chunked methods keeps the old limit, but it is now per file: staging a file the host
+    cannot hold throws a `SyncBlockedError` (`too-large-for-mobile`), which the history controller demotes to that one
+    path being blocked, while the rest of the batch applies. Any other staging failure (a full disk) still fails the run.
 * Rails (deletion cap, shrunk-scan guard, first-run approval) are evaluated by `SyncService` exactly as on desktop.
   The phone settings rows are laid out one full-width, touch-sized field per row.
 
@@ -275,7 +290,8 @@ ported, not shared:
   sends the token and vault data in the clear.
 * **Origin is not checked** (above).
 * **Failed auth is indistinguishable from unreachable** on a browser/WKWebView client (above).
-* **Mobile apply window and 32 MiB limit** (above).
+* **Mobile apply window** (above). Chunked transfer of 32-100 MiB files is covered by unit tests against an in-memory
+  native plugin and a compile check of the Swift, not by a run on a device.
 * **Not covered by automated tests:** a real tailnet with `tailscale serve`, a physical iPhone against a remote
   hub, App Transport Security behaviour against a real certificate, and background/suspended-app reconnects. The
   server, client, convergence (a desktop-style device and the mobile host through one hub), mobile safety port and

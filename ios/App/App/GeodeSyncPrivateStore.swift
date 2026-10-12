@@ -82,14 +82,70 @@ final class GeodeSyncPrivateStore {
         }
     }
 
-    func read(_ path: String) throws -> Data? {
+    /// `maxBytes` lets a caller with a smaller transport limit than the store's refuse a large file before loading it.
+    func read(_ path: String, maxBytes: Int? = nil) throws -> Data? {
         let target = try url(path)
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: target.path, isDirectory: &isDirectory) else { return nil }
         guard !isDirectory.boolValue else { throw StoreError.invalidPath }
         let attributes = try fileManager.attributesOfItem(atPath: target.path)
-        guard ((attributes[.size] as? NSNumber)?.intValue ?? 0) <= byteLimit else { throw StoreError.tooLarge }
+        guard ((attributes[.size] as? NSNumber)?.intValue ?? 0) <= min(byteLimit, maxBytes ?? byteLimit) else { throw StoreError.tooLarge }
         return try Data(contentsOf: target)
+    }
+
+    /// Up to `length` bytes at `offset` plus the file's whole size; nil when absent.
+    func readRange(_ path: String, offset: Int, length: Int) throws -> (data: Data, size: Int)? {
+        let target = try url(path)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: target.path, isDirectory: &isDirectory) else { return nil }
+        guard !isDirectory.boolValue else { throw StoreError.invalidPath }
+        let size = ((try fileManager.attributesOfItem(atPath: target.path))[.size] as? NSNumber)?.intValue ?? 0
+        guard size <= byteLimit else { throw StoreError.tooLarge }
+        let handle = try FileHandle(forReadingFrom: target)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(offset))
+        return (try handle.read(upToCount: length) ?? Data(), size)
+    }
+
+    /// Chunked counterpart of `write`: the same durable temp-fsync-rename, assembled over several calls in `<name>.chunked.tmp`
+    /// (a `.tmp` name, so startup GC reclaims an abandoned one). Offset 0 starts afresh; any other offset must equal the temp's size.
+    func writeChunk(_ data: Data, to path: String, offset: Int, final: Bool) throws {
+        guard offset >= 0, offset + data.count <= byteLimit else { throw StoreError.tooLarge }
+        try ensureRoot()
+        let target = try url(path)
+        let parent = target.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: parent.path) {
+            try fileManager.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: target.path, isDirectory: &isDirectory), isDirectory.boolValue { throw StoreError.invalidPath }
+        let temporary = parent.appendingPathComponent("\(target.lastPathComponent).chunked.tmp")
+        do {
+            if offset == 0 {
+                try? fileManager.removeItem(at: temporary)
+                guard fileManager.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw StoreError.io }
+            } else {
+                let size = ((try? fileManager.attributesOfItem(atPath: temporary.path))?[.size] as? NSNumber)?.intValue
+                guard size == offset else { throw StoreError.io }
+            }
+            let handle = try FileHandle(forWritingTo: temporary)
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                if final { try handle.synchronize() }
+                try handle.close()
+            } catch {
+                try? handle.close()
+                throw error
+            }
+            if final {
+                guard rename(temporary.path, target.path) == 0 else { throw StoreError.io }
+                try syncDirectory(parent)
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            throw error
+        }
     }
 
     func list(_ path: String) throws -> [(name: String, isFolder: Bool)] {

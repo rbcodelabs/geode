@@ -441,3 +441,80 @@ describe("Keychain-backed host.secrets.app", () => {
     expect(host.secrets.appAvailable).toBeUndefined();
   });
 });
+
+describe("files over the 32 MiB single-call bridge limit (up to the 100 MiB sync cap)", () => {
+  const MIB = 1024 * 1024;
+  // Real sizes: the fake native plugin enforces the real 32 MiB single-call limit, so a 33 MiB file must travel in chunks.
+  const big = (seed: number, size = 33 * MIB) => { const data = new Uint8Array(size); for (let index = 0; index < size; index += 4099) data[index] = (index / 4099 + seed) & 255; return data; };
+  const arrayBuffer = (data: Uint8Array) => data.buffer as ArrayBuffer;
+  const equal = (a: Uint8Array, b: Uint8Array) => a.byteLength === b.byteLength && a.every((value, index) => value === b[index]);
+
+  it("stages, reads back and releases a 33 MiB frozen blob through the chunked private store", async () => {
+    const { vault, safety, token } = await open();
+    const key = uuid(), data = big(1);
+    await safety.storage(token, BINDING, { action: "stage", key, data: arrayBuffer(data) });
+    expect(vault.calls.some(call => call.startsWith("readBinary"))).toBe(false);
+    const staged = await safety.storage(token, BINDING, { action: "read-stage", key }) as ArrayBuffer;
+    expect(equal(new Uint8Array(staged), data)).toBe(true);
+    await safety.storage(token, BINDING, { action: "release", key });
+    expect([...vault.privateFiles.keys()].filter(path => path.endsWith(".blob"))).toEqual([]);
+  });
+
+  it("applies a 33 MiB write to a new file and over an existing one, hash-guarded, with the recovery preimage kept", async () => {
+    const { vault, safety, token } = await open();
+    const first = big(2), second = big(3);
+    const created = await safety.apply(token, { operationId: uuid(), path: "Big/video.bin", expectedHash: null, kind: "write", data: arrayBuffer(first) });
+    expect(created.status).toBe("applied");
+    expect(equal(vault.files.get("Big/video.bin")!, first)).toBe(true);
+    expect(vault.calls).toContain("writeBinaryCommit Big/video.bin");
+    // Replacing it needs the existing 33 MiB hashed (ranged read) and snapshotted into sync-private recovery (chunked store write).
+    const before = await sha256Hex(first), operationId = uuid();
+    await expect(safety.apply(token, { operationId: uuid(), path: "Big/video.bin", expectedHash: "0".repeat(64), kind: "write", data: arrayBuffer(second) })).rejects.toThrow(/changed before sync application/);
+    expect(equal(vault.files.get("Big/video.bin")!, first)).toBe(true);
+    const replaced = await safety.apply(token, { operationId, path: "Big/video.bin", expectedHash: before, kind: "write", data: arrayBuffer(second) });
+    expect(replaced.status).toBe("applied");
+    expect(equal(vault.files.get("Big/video.bin")!, second)).toBe(true);
+    const recovered = [...vault.privateFiles].find(([path]) => path.endsWith(`recovery/${operationId}/before`));
+    expect(recovered && equal(recovered[1], first)).toBe(true);
+    expect([...vault.files.keys()].some(path => path.includes(".geode-write"))).toBe(false);
+  });
+
+  it("a crash between chunks leaves the target untouched and the same operation completes on retry", async () => {
+    const { vault, safety, token } = await open();
+    const original = big(4, 2 * MIB), next = big(5), operationId = uuid();
+    vault.put("Big/video.bin", original);
+    vault.beforeChunk = offset => { if (offset >= 16 * MIB) throw new Error("app killed mid-transfer"); };
+    // Abort is best effort; a real kill never reaches it.
+    const abort = vault.plugin.writeBinaryAbort!.bind(vault.plugin); vault.plugin.writeBinaryAbort = async () => { throw new Error("app killed mid-transfer"); };
+    const mutation = { operationId, path: "Big/video.bin", expectedHash: await sha256Hex(original), kind: "write" as const, data: arrayBuffer(next) };
+    await expect(safety.apply(token, mutation)).rejects.toThrow("app killed mid-transfer");
+    expect(equal(vault.files.get("Big/video.bin")!, original)).toBe(true);
+    vault.beforeChunk = undefined; vault.plugin.writeBinaryAbort = abort;
+    const retried = await safety.apply(token, mutation);
+    expect(retried.status).toBe("applied");
+    expect(equal(vault.files.get("Big/video.bin")!, next)).toBe(true);
+    expect(vault.chunkTemps.size).toBe(0);
+  });
+
+  it("a native build without chunked transfer blocks just that file at stage; over 100 MiB blocks everywhere", async () => {
+    const { vault, safety, token } = await open();
+    vault.chunked = false;
+    const refused = await safety.storage(token, BINDING, { action: "stage", key: uuid(), data: arrayBuffer(big(6)) }).catch(error => error);
+    expect(refused).toBeInstanceOf(SyncBlockedError); expect(refused.syncBlockedReason).toBe("too-large-for-mobile");
+    vault.chunked = true;
+    const huge = await safety.storage(token, BINDING, { action: "stage", key: uuid(), data: new ArrayBuffer(100 * MIB + 1) }).catch(error => error);
+    expect(huge).toBeInstanceOf(SyncBlockedError); expect(huge.syncBlockedReason).toBe("too-large-for-mobile");
+    // Small files are unaffected either way.
+    await expect(safety.storage(token, BINDING, { action: "stage", key: uuid(), data: bytes("ok") })).resolves.toBeTruthy();
+  });
+
+  it("scan-side reads of a 33 MiB local file succeed in chunks; a changed-in-flight or over-cap file is blocked, not an error", async () => {
+    const { vault, host } = await open();
+    const data = big(7); vault.put("Media/clip.bin", data);
+    expect(equal(new Uint8Array(await host.vaultFiles.readBinary("Media/clip.bin")), data)).toBe(true);
+    vault.put("Media/huge.bin", "x"); vault.oversize.add("Media/huge.bin");
+    await expect(host.vaultFiles.readBinary("Media/huge.bin")).rejects.toBeInstanceOf(SyncBlockedError);
+    vault.chunked = false;
+    await expect(host.vaultFiles.readBinary("Media/clip.bin")).rejects.toMatchObject({ syncBlockedReason: "too-large-for-mobile" });
+  });
+});

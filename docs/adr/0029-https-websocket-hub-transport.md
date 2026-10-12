@@ -46,8 +46,8 @@ unchanged.
   token on a host without secure storage.
 - **Mobile host:** iOS gets `host.syncSafety` as a port of the desktop guarded apply and sync-private storage over
   new native methods, so the same rails and crash recovery apply. Limits that come with the platform are stated, not
-  hidden: iCloud placeholders are blocked paths, the native bridge carries at most 32 MiB so larger files (up to the
-  100 MiB advertised) show as blocked on iOS, and the check-to-write window cannot be closed from JavaScript.
+  hidden: iCloud placeholders are blocked paths, one bridge call carries at most 32 MiB, so files up to the 100 MiB
+  advertised move in chunks (a native build without them shows such files as blocked, per file), and the check-to-write window cannot be closed from JavaScript.
 
 ## Alternatives rejected
 

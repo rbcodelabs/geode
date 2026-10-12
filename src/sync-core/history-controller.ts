@@ -263,6 +263,17 @@ const localReadReason = (error: unknown): string => {
     return 'local-read-failed';
 };
 /**
+ * A host that cannot hold this one file (a phone without room for a 90 MiB blob, a native build with a smaller transport
+ * limit) says so with a SyncBlockedError from stage(), which survives an RPC boundary as `[blocked:<reason>]`. Anything
+ * else thrown by stage() is systemic (ENOSPC, a broken journal) and still fails the run.
+ */
+const stageBlockedReason = (error: unknown): string | null => {
+    const direct = (error as { syncBlockedReason?: unknown } | null)?.syncBlockedReason;
+    if (typeof direct === 'string')
+        return direct;
+    return /\[blocked:([a-z0-9-]+)\]/.exec(error instanceof Error ? error.message : String(error))?.[1] ?? null;
+};
+/**
  * prepare() either produces a durable intent or demotes exactly one resource.
  * `cause` is retained so callers that must not skip work (resolve()) can rethrow
  * the original error unchanged instead of inventing a new one.
@@ -747,7 +758,23 @@ export class HistoryController {
                 data = fetched ? await fetched : await this.verified(await this.checked(signal, () => this.options.session.readBlob(record.blob!, signal)), record.blob.sha256, record.blob.size, signal);
             }
         }
-        const payload = data ? { key: await this.checked(signal, () => this.ports.stage(id, data!)), sha256: await this.hash(data, signal), size: data.byteLength } : undefined;
+        let payload: { key: string; sha256: string; size: number } | undefined;
+        if (data) {
+            let key: string;
+            try {
+                key = await this.checked(signal, () => this.ports.stage(id, data!));
+            }
+            catch (error) {
+                // Resource-local, like a failed local read: demote this one file and let the rest of the batch proceed.
+                this.assert(signal);
+                const reason = stageBlockedReason(error);
+                if (reason === null)
+                    throw error;
+                await this.ports.release?.(id).catch(() => { });
+                return { ok: false, issue: { namespace: record.namespace, path: action.path, reason }, cause: error };
+            }
+            payload = { key, sha256: await this.hash(data, signal), size: data.byteLength };
+        }
         const candidate = { ...record, ...(payload && !record.blob ? { blob: { id: 'pending', sha256: payload.sha256, size: payload.size } } : {}) };
         if (mergeHistory({ records: {}, quarantined: {} }, [candidate], this.options.vaultId).quarantined[record.recordId])
             throw new Error('Invalid local history record');

@@ -2,6 +2,7 @@ import type { GuardedMutation, GuardedMutationResult, SyncSafetyService, SyncSto
 import type { ConfigService } from "./contracts";
 import { isPortableAssetPath } from "../../shared/portable-assets";
 import { parsePortableConfig, projectPortableConfig, serializePortableConfig } from "../../shared/portable-config";
+import { SyncBlockedError } from "../../sync-core/ports";
 import { portableResourcePhysicalPath } from "../../sync-core/scope";
 import { DEFAULT_SYNC_SCOPE } from "../sync/scope";
 
@@ -76,7 +77,8 @@ export class MobilePrivateStorage {
     return `${this.dir}/${key}${suffix}`;
   }
   async stage(key: string, bytes: ArrayBuffer): Promise<string> {
-    if (bytes.byteLength > MAX_BYTES) throw new Error("Sync file exceeds 100 MiB limit");
+    // Resource-local, not systemic: the engine demotes just this file to "blocked" and the rest of the run goes on.
+    if (bytes.byteLength > MAX_BYTES) throw new SyncBlockedError("too-large-for-mobile", "Sync file exceeds the 100 MiB limit");
     const target = this.file(key, ".blob");
     await this.locks.run(target, async () => {
       const prior = await this.store.read(target);
@@ -84,7 +86,12 @@ export class MobilePrivateStorage {
       if (prior) { if (!sameBytes(prior, next)) throw new Error("Frozen sync bytes differ from retry content"); return; }
       const available = await this.store.availableBytes();
       if (available !== null && available < bytes.byteLength * 2 + 4 * 1024 * 1024) throw new Error("Insufficient disk space for frozen sync bytes and recovery headroom");
-      await this.store.write(target, next);
+      try { await this.store.write(target, next); }
+      catch (error) {
+        // A native build without chunked storage cannot hold a file over its single-call limit: that is this file's problem, not the run's.
+        if ((error as { code?: string } | null)?.code === "PAYLOAD_TOO_LARGE") throw new SyncBlockedError("too-large-for-mobile", "This iOS build cannot hold a file this large for sync");
+        throw error;
+      }
     });
     return key;
   }

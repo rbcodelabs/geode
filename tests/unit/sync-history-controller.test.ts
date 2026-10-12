@@ -493,3 +493,32 @@ describe('remote entries that are out of scope on this device', () => {
         expect((await everything.controller.preview(signal())).blocked).toContainEqual({ namespace: 'content', path: 'cache/index.sqlite', reason: 'pending-blob' });
     });
 });
+describe('a host that cannot hold one file', () => {
+    const tooLarge = (message = 'too large for this device') => Object.assign(new Error(`[blocked:too-large-for-mobile] ${message}`), { syncBlockedReason: 'too-large-for-mobile' });
+    it('demotes just that download to blocked: the rest of the batch applies, nothing is left staged, and the run does not fail', async () => {
+        const r = remote(), a = client(r, { 'huge.md': 'x'.repeat(50), 'small.md': 'ok', 'other.md': 'fine' }); await start(a);
+        const b = client(r), stage = b.ports.stage, released: string[] = [];
+        b.ports.stage = async (id, data) => { if (data.byteLength > 10) throw tooLarge(); return stage(id, data); };
+        b.ports.release = async id => { released.push(id); b.staged.delete(id); b.operations.delete(id); };
+        const result = await start(b);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'huge.md', reason: 'too-large-for-mobile' });
+        expect(b.text('small.md')).toBe('ok'); expect(b.text('other.md')).toBe('fine'); expect(b.files.has('huge.md')).toBe(false);
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); expect(b.state()!.pendingBatch).toBeUndefined();
+        expect(released.length).toBeGreaterThan(0);
+        // Not sticky: once the host can hold it (a newer native build), the same file downloads.
+        b.ports.stage = stage; const again = await b.controller.run({}, signal());
+        expect(again.blocked).toEqual([]); expect(b.text('huge.md')).toBe('x'.repeat(50));
+    });
+    it('also recognises the reason when it has crossed an RPC boundary as message text only', async () => {
+        const r = remote(), a = client(r, { 'huge.md': 'x'.repeat(50), 'small.md': 'ok' }); await start(a);
+        const b = client(r), stage = b.ports.stage;
+        b.ports.stage = async (id, data) => { if (data.byteLength > 10) throw new Error('Error invoking remote method: Error: [blocked:too-large-for-mobile] nope'); return stage(id, data); };
+        const result = await start(b);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'huge.md', reason: 'too-large-for-mobile' }); expect(b.text('small.md')).toBe('ok');
+    });
+    it('still fails the run for a systemic stage failure such as a full disk', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one' }); await start(a);
+        const b = client(r); b.ports.stage = async () => { throw new Error('ENOSPC: no space left on device'); };
+        await expect(start(b)).rejects.toThrow('ENOSPC');
+    });
+});
