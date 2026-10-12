@@ -1,4 +1,5 @@
 import { Vault } from "./vault";
+import { PostApplyRefresh } from "./sync/post-apply-refresh";
 import { version as appVersion } from "../../package.json";
 import { vaultRefreshFailure, vaultRefreshPresentation, type VaultRefreshFailure } from "../shared/vault-refresh";
 import { MetadataCache, parseMetadata } from "./metadata-cache";
@@ -84,7 +85,7 @@ import {
   type BookmarksRoot,
 } from "./bookmarks";
 import { renamePathForBasename, rewriteWikilinksForRename } from "./rename";
-import { buildConflictPath, formatConflictTimestamp } from "./reconciliation";
+import { buildConflictPath, formatConflictTimestamp, type ReconcileChange } from "./reconciliation";
 import {
   ActionRegistry,
   DOCUMENT_MENU_SPEC,
@@ -3115,40 +3116,34 @@ export class App {
       for (const leaf of this.workspace.getLeavesOfType("base")) if (leaf.view instanceof BaseView && await leaf.view.getDirtySourceConflict(relative, true)) reason = "Unsaved Base changes block incoming sync";
       return reason;
     });
-    const stopRelease = this.host.syncSafety?.onRelease(async token => {
-      if (!syncGuards.has(token)) return;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const before = this.successfulReconciles;
-      try {
-        await Promise.race([this.reconcileVault("manual"), new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Editor refresh timed out")), 4000);
-        })]);
-        if (this.successfulReconciles === before) throw new Error("Editor refresh incomplete");
-        if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed");
-        await this.reloadPortableSettings();
+    // Stale writers stay read-only until a refresh has REALLY completed: the views are made inert, and the inert state is only
+    // lifted by `recover`, which performReconcile runs after a successful refresh (or the user's Retry). Both a failed and a
+    // merely slow refresh take this path; only a failed one fails the sync.
+    const holdStale = (token: string) => {
+      const elements: HTMLElement[] = [];
+      syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
+        const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
+        held.count++; staleViews.set(element, held); elements.push(element); element.inert = true;
+      } });
+      const recover = () => {
+        this.syncRefreshRecoveries.delete(recover); this.hostDisposers.delete(recover);
+        for (const element of elements) { const held = staleViews.get(element); if (held && --held.count === 0) { element.inert = held.original; staleViews.delete(element); } }
         finishGuard(token);
-      } catch (error) {
-        // Keep stale writers paused/read-only, but restore the surrounding app so
-        // Retry refresh and vault switching remain available after a timeout.
-        if (syncDisposed || this.workspace !== syncWorkspace) throw error;
-        const elements: HTMLElement[] = [];
-        syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
-          const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
-          held.count++; staleViews.set(element, held); elements.push(element); element.inert = true;
-        } });
-        const recover = () => {
-          this.syncRefreshRecoveries.delete(recover); this.hostDisposers.delete(recover);
-          for (const element of elements) { const held = staleViews.get(element); if (held && --held.count === 0) { element.inert = held.original; staleViews.delete(element); } }
-          finishGuard(token);
-        };
-        this.syncRefreshRecoveries.add(recover);
-        this.hostDisposers.add(recover);
-        document.body.inert = previousInert;
-        throw error;
-      } finally {
-        clearTimeout(timeout);
-      }
+      };
+      this.syncRefreshRecoveries.add(recover);
+      this.hostDisposers.add(recover);
+      document.body.inert = previousInert;
+    };
+    const postApply = new PostApplyRefresh({
+      hasFile: path => this.vault.getFileByPath(path) !== null, hasFolder: path => this.vault.getFolderByPath(path) !== null,
+      refreshChanges: changes => this.performReconcile(this.reconcileGeneration, changes),
+      refreshAll: () => this.reconcileVault("manual"),
+      fullInFlight: () => this.reconcileInFlight, successCount: () => this.successfulReconciles,
+      reloadPortableSettings: () => this.reloadPortableSettings(),
+      holdStale, finishGuard,
+      assertLive: () => { if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed"); },
     });
+    const stopRelease = this.host.syncSafety?.onRelease(async (token, outcome) => { if (syncGuards.has(token)) await postApply.release(token, outcome); });
     this.hostDisposers.add(() => { syncDisposed = true; stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
     this.statusBar = new StatusBar(this, shell);
     const mobileNavigation = this.createMobileNavigation();
@@ -3433,7 +3428,7 @@ export class App {
     return tracked;
   }
 
-  private async performReconcile(generation: number): Promise<void> {
+  private async performReconcile(generation: number, scoped?: ReconcileChange[]): Promise<void> {
     let didPause = false;
     let holdViewsForRetry = false;
     let manifestCommitted = false;
@@ -3444,12 +3439,12 @@ export class App {
       await this.workspace.pauseAutosave();
       didPause = true;
       operation = "scan";
-      const result = await this.vault.reconcile();
+      const result: Awaited<ReturnType<Vault["reconcile"]>> = scoped ? { status: "complete", changes: scoped } : await this.vault.reconcile();
       if (result.status !== "complete") {
         if (generation === this.reconcileGeneration) this.showReconcileState(result.status, result.failure ?? vaultRefreshFailure(result.errorCode));
         return;
       }
-      if (!result.manifest || generation !== this.reconcileGeneration) return;
+      if ((!scoped && !result.manifest) || generation !== this.reconcileGeneration) return;
       const publish: Array<() => void> = [];
       const refreshEditors: Array<() => void | Promise<void>> = [];
       for (let index = 0; index < result.changes.length; index += 1) {
@@ -3536,7 +3531,8 @@ export class App {
         for (const refresh of refreshEditors) { await refresh(); if (generation !== this.reconcileGeneration) return; }
       } catch (error) { holdViewsForRetry = true; throw error; }
       operation = "save-manifest";
-      await this.vault.commitReconcileManifest(result.manifest);
+      if (scoped) this.vault.acknowledgePaths(scoped.map(change => change.path));
+      else await this.vault.commitReconcileManifest(result.manifest!);
       manifestCommitted = true;
       operation = "finish-refresh";
       this.clearReconcileState();

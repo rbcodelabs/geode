@@ -90,7 +90,8 @@ export interface HistoryControllerState {
 export interface HistoryControllerPorts {
     load(): Promise<unknown | null>;
     save(state: HistoryControllerState): Promise<void>;
-    loadOperations(): Promise<HistoryOperation[]>;
+    /** `ids` narrows the load to the journals a pending batch names; a host may ignore it and return every journal. */
+    loadOperations(ids?: readonly string[]): Promise<HistoryOperation[]>;
     saveOperation(operation: HistoryOperation): Promise<void>;
     /**
      * @param onProgress observational only, and optional precisely so that a host
@@ -1121,7 +1122,7 @@ export class HistoryController {
             await this.abandon(state, signal);
             return;
         }
-        const all = new Map((await this.checked(signal, () => this.ports.loadOperations())).map(o => [o.id, o]));
+        const all = new Map((await this.checked(signal, () => this.ports.loadOperations(state.pendingBatch))).map(o => [o.id, o]));
         const operations = state.pendingBatch!.map(id => { const op = all.get(id); if (!op)
             throw new Error('Missing durable sync intent'); return op; });
         // Recovery is the path that runs after a restart, i.e. the one a user hits
@@ -1135,7 +1136,7 @@ export class HistoryController {
         await this.releaseTerminal(operations, signal);
     }
     private async abandon(state: HistoryControllerState, signal: AbortSignal) {
-        const all = new Map((await this.checked(signal, () => this.ports.loadOperations())).map(o => [o.id, o]));
+        const all = new Map((await this.checked(signal, () => this.ports.loadOperations(state.pendingBatch))).map(o => [o.id, o]));
         const operations = (state.pendingBatch ?? []).map(id => { const op = all.get(id); if (!op)
             throw new Error('Missing durable sync intent'); return op; });
         for (const op of operations) {

@@ -488,6 +488,24 @@ describe("path checks stat the target, not every segment, and still fail closed"
   });
 });
 
+describe("recovery reads each needed journal once and none it does not need", () => {
+  const countReads = (vault: FakeManagedVault) => { let reads = 0; const read = vault.plugin.syncPrivateRead!.bind(vault.plugin); vault.plugin.syncPrivateRead = async options => { reads++; return read(options); }; return () => reads; };
+  it("gc with every journal retained reads none; loading a pending batch reads exactly its journals", async () => {
+    const { vault, safety, token } = await open();
+    const ids = Array.from({ length: 50 }, () => uuid());
+    for (const id of ids) await safety.storage(token, BINDING, { action: "save-operation", key: id, value: { id, phase: "committed" } });
+    const orphan = uuid(); await safety.storage(token, BINDING, { action: "save-operation", key: orphan, value: { id: orphan, phase: "committed" } });
+    const reads = countReads(vault);
+    await safety.storage(token, BINDING, { action: "gc", retain: ids });
+    expect(reads()).toBe(1);   // only the one journal that is NOT retained is inspected (it was 51)
+    const loaded = await safety.storage(token, BINDING, { action: "load-operations", ids }) as Array<{ id: string }>;
+    expect(loaded.map(op => op.id).sort()).toEqual([...ids].sort());
+    expect(reads()).toBe(51);  // 50 journals, once each
+    const all = await safety.storage(token, BINDING, { action: "load-operations" }) as unknown[];
+    expect(all).toHaveLength(50); // the orphan was collected
+  });
+});
+
 describe("release-bytes (per-operation release of staged bytes)", () => {
   it("drops the blob but keeps the journal; a later full release removes both; bad keys are refused", async () => {
     const { vault, safety, token } = await open();

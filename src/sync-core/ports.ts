@@ -282,7 +282,7 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
   const ports: HistoryControllerPorts = {
     load: async () => { const value = await host.deviceState.read(stateKey); assertContext(); return value; },
     save: async (value: HistoryControllerState) => { assertContext(); await host.deviceState.write(stateKey, value); assertContext(); },
-    loadOperations: async () => await storage({ action: "load-operations" }) as HistoryOperation[],
+    loadOperations: async ids => await storage({ action: "load-operations", ...(ids ? { ids: [...ids] } : {}) }) as HistoryOperation[],
     saveOperation: async value => { await storage({ action: "save-operation", key: value.id, value }); },
     stage: async (key, data) => await storage({ action: "stage", key, data }) as string,
     readStage: async key => await storage({ action: "read-stage", key }) as ArrayBuffer,

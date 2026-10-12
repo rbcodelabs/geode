@@ -1,4 +1,4 @@
-import type { GuardedMutation, GuardedMutationResult, SyncSafetyService, SyncStorageRequest } from "../../shared/sync-safety";
+import type { GuardedMutation, GuardedMutationResult, SyncApplyOutcome, SyncSafetyService, SyncStorageRequest } from "../../shared/sync-safety";
 import type { ConfigService } from "./contracts";
 import { isPortableAssetPath } from "../../shared/portable-assets";
 import { parsePortableConfig, projectPortableConfig, serializePortableConfig } from "../../shared/portable-config";
@@ -126,8 +126,9 @@ export class MobilePrivateStorage {
     if (bytes.length > 1024 * 1024) throw new Error("Sync operation metadata exceeds limit");
     await this.locks.run(target, () => this.store.write(target, bytes));
   }
-  async loadOperations(): Promise<unknown[]> {
-    const names = (await this.store.list(this.dir)).filter(entry => !entry.isFolder && entry.name.endsWith(".json")).map(entry => entry.name).sort();
+  /** `ids`: read only those journals (a recovering batch names exactly the ones it needs); a missing one is simply absent. */
+  async loadOperations(ids?: readonly string[]): Promise<unknown[]> {
+    const names = ids ? ids.map(id => `${id}.json`).sort() : (await this.store.list(this.dir)).filter(entry => !entry.isFolder && entry.name.endsWith(".json")).map(entry => entry.name).sort();
     const values: unknown[] = [];
     for (const name of names) {
       const bytes = await this.store.read(this.file(name.slice(0, -5), ".json"));
@@ -153,6 +154,9 @@ export class MobilePrivateStorage {
     const keep = new Set(retain);
     for (const name of names) if (name.endsWith(".json")) {
       const key = name.slice(0, -5);
+      // A journal the caller says to keep is kept whatever its phase, so reading it would only cost a bridge call
+      // (a recovering batch of thousands retains every one of its journals).
+      if (keep.has(key)) continue;
       try {
         const bytes = await this.store.read(`${this.dir}/${name}`);
         const value = bytes ? JSON.parse(decoder.decode(bytes)) as { phase?: unknown; payload?: { key?: unknown } } : null;
@@ -197,7 +201,7 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
   const capacity = new CapacityTracker(() => ports.privateStore.availableBytes()), bytesReleased = new Set<string>();
   let owner: { root: string; token: string } | null = null;
   const prepareHandlers = new Set<(token: string, path: string) => Promise<string | null>>();
-  const releaseHandlers = new Set<(token: string) => Promise<void>>();
+  const releaseHandlers = new Set<(token: string, outcome?: SyncApplyOutcome) => Promise<void>>();
 
   const currentOwner = (token: string): string => {
     const root = ports.rootId();
@@ -216,7 +220,7 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
       case "stage": result = await bindingStore.stage(request.key, request.data); break;
       case "read-stage": result = await bindingStore.readStage(request.key); break;
       case "save-operation": result = await bindingStore.saveOperation(request.key, request.value); break;
-      case "load-operations": result = await bindingStore.loadOperations(); break;
+      case "load-operations": result = await bindingStore.loadOperations(Array.isArray(request.ids) ? request.ids : undefined); break;
       case "release": result = await bindingStore.release(request.key); break;
       case "release-bytes": result = await bindingStore.releaseBytes(request.key); break;
       case "gc": if (!Array.isArray(request.retain) || request.retain.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await bindingStore.gc(request.retain); break;
@@ -386,7 +390,8 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
         result = await (isDocument ? applyPortableConfig(root, token, input) : applyVaultMutation(root, token, input));
       } catch (error) { failure = error; }
       finally {
-        const releases = await Promise.all([...releaseHandlers].map(handler => handler(guard).then(() => null, (error: unknown) => error)));
+        const outcome: SyncApplyOutcome = { namespace: portable ? "portable-config" : "content", path: input.path, kind: input.kind, ...(input.data ? { size: input.data.byteLength } : {}), changed: result !== undefined };
+        const releases = await Promise.all([...releaseHandlers].map(handler => handler(guard, outcome).then(() => null, (error: unknown) => error)));
         if (!failure && releases.some(reason => reason !== null)) failure = new Error("Editor refresh incomplete; sync can retry safely");
       }
       if (failure) throw failure;

@@ -298,11 +298,23 @@ ported, not shared:
   and re-measured the moment the running estimate would not clear a stage; the terminal release skips a blob already freed.
   Receipts, journals, staged bytes and the hash guard are unchanged. Remaining per file: journal and receipt writes (the
   crash-recovery record), the staged read, and the post-run re-plan's read of each new file (the mobile host has no hash
-  cache). Device state is saved a constant number of times per batch, not per operation. Known and not changed here: after
-  every guarded apply the app's release handler runs a full vault reconcile (a native `list` of the whole vault) and
-  reloads portable settings, and the vault's change listener rebuilds its child index per created file; both are O(vault) per
-  file, so a large first sync is quadratic in them. Deferring them to the end of a batch needs a batch notion in
-  `SyncSafetyService` and an editor-guard design that keeps writers paused for the batch.
+  cache). Device state is saved a constant number of times per batch, not per operation. The per-file full reconcile is fixed, see the next bullet.
+* **Post-apply editor refresh is path-scoped.** After every guarded apply the app used to run a full vault reconcile raced against
+  a 4 s timeout. On a 10,000-file vault that exceeded 4 s, so every apply failed with "Editor refresh incomplete", the run
+  aborted, and the retry hit the same wall. Now the mobile safety service reports what each apply did (`SyncApplyOutcome`:
+  path, kind, size, changed) to the release handlers, and `PostApplyRefresh` (src/renderer/sync/post-apply-refresh.ts) refreshes
+  that path alone: changes queue by path and one drain applies them in batches through the same editor-refresh code as a
+  full reconcile, with no scan and no manifest commit (the paths are acknowledged so a later full reconcile does not re-report
+  them). Settings documents only re-read settings, and a failed apply refreshes nothing. A host that does not report outcomes
+  (desktop) still rescans. **How the safety property is kept:** the guard exists so no editor keeps or overwrites bytes sync
+  just changed, so the hold is only ever lifted by a refresh that really completed. If the refresh finishes in time, the guard
+  is released then. If it is merely slow (over 4 s), the apply now returns normally, every view is made inert (read-only), and
+  the refresh lifts that hold itself when it completes (the same recovery hook a failed refresh uses); later applies join the
+  queue and are refreshed as one batch. If the refresh fails, the apply still fails, the sync retries, and the hold stays until
+  a refresh succeeds. The vault model's child index is likewise updated per created or deleted entry (insert into the sorted
+  children of the parent) instead of rebuilt for the whole vault. Recovery of an interrupted batch reads only the journals the
+  batch names, once each, and startup GC no longer reads journals it was told to keep. Counted in tests: 120 applies cost 120
+  full-vault native list calls before and 0 after. Not verified on a device or in the real editor UI.
 * Rails (deletion cap, shrunk-scan guard, first-run approval) are evaluated by `SyncService` exactly as on desktop.
   The phone settings rows are laid out one full-width, touch-sized field per row.
 

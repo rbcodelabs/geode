@@ -569,6 +569,17 @@ describe('staged bytes are released per operation, journal first', () => {
         expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); expect(b.state()!.pendingBatch).toBeUndefined();
         expect(Object.values(b.state()!.baseline).filter(item => item.present && item.kind === 'file')).toHaveLength(4);
     });
+    it('recovery asks the host for exactly the journals the pending batch names', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = hosted(client(r)), apply = b.ports.apply; let applied = 0;
+        b.ports.apply = async input => { if (applied === 2) throw new Error('process killed'); applied++; return apply(input); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('process killed');
+        const pending = b.state()!.pendingBatch!, asked: Array<readonly string[] | undefined> = [], load = b.ports.loadOperations;
+        b.ports.loadOperations = async ids => { asked.push(ids); return load(ids); };
+        b.ports.apply = apply; b.restart(); await b.controller.run({}, signal());
+        expect(asked).toEqual([pending]);
+    });
     it('a crash between the apply and the committed journal keeps the bytes: the operation is retried, not lost', async () => {
         const r = remote(), a = client(r, { 'a.md': 'aaaa' }); await start(a);
         const b = hosted(client(r)), save = b.ports.saveOperation; let crash = true;
