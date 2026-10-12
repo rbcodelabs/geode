@@ -3,12 +3,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FsStoreProvider } from "../../src/sync-node/index";
 import { SYNC_MAX_FILE_BYTES, type AppendOnlySyncProvider, type VaultDescriptor } from "../../src/sync-core/history-types";
-import { bytes, childProvider, cleanBundle, inProcessProvider, never, randomBytes, record, rm, sha, tmpStore, type Child } from "../helpers/sync-store-harness";
+import { bytes, childProvider, httpFixture, cleanBundle, inProcessProvider, never, randomBytes, record, rm, sha, tmpStore, type Child } from "../helpers/sync-store-harness";
 
 interface Fixture { provider: AppendOnlySyncProvider; store: string; cleanup(): Promise<void> }
 const variants: Array<[string, () => Promise<Fixture>]> = [
   ["FsStoreProvider (direct)", async () => { const store = tmpStore(); return { provider: new FsStoreProvider(store), store, cleanup: async () => rm(store) }; }],
   ["RpcStoreProvider <-> serveStore (in-process pipes)", async () => { const store = tmpStore(), provider = inProcessProvider(store); return { provider, store, cleanup: async () => { await provider.close(); rm(store); } }; }],
+  ["HttpStoreProvider <-> WebSocket server (loopback)", async () => { const store = tmpStore(), fixture = await httpFixture(store); return { provider: fixture.provider, store, cleanup: async () => { await fixture.close(); rm(store); } }; }],
   ["RpcStoreProvider <-> serveStore (child process)", async () => {
     const store = tmpStore(), children: Child[] = [], provider = childProvider(store, children);
     return { provider, store, cleanup: async () => { await provider.close(); await Promise.all(children.map(c => c.exited)); rm(store); } };
