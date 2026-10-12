@@ -333,8 +333,9 @@ describe("bounded memory on large blobs", () => {
     for (const s of [mid, big]) { expect(s.maxFrameIn).toBe(4 * 1024 * 1024); expect(s.peakBuffered).toBeLessThanOrEqual(4 * 1024 * 1024); }
     const mib = (kb: number) => kb / 1024;
     console.log(`child maxRSS MiB: 1MiB blob=${mib(small.maxRssKb).toFixed(0)}, 40MiB=${mib(mid.maxRssKb).toFixed(0)}, 99MiB=${mib(big.maxRssKb).toFixed(0)}`);
-    // A buffering server grows linearly (+59 MiB from 40 to 99 MiB, on top of copies); a chunked one plateaus.
+    // A buffering server grows linearly (+59 MiB from 40 to 99 MiB, on top of copies); a chunked one plateaus (the child runs
+    // --expose-gc with a 1 ms collector, so this measures live memory: ~47/60/61 MiB observed, big-mid ~1, big-small ~13).
     expect(mib(big.maxRssKb) - mib(mid.maxRssKb)).toBeLessThan(20);
-    expect(mib(big.maxRssKb) - mib(small.maxRssKb)).toBeLessThan(70);
+    expect(mib(big.maxRssKb) - mib(small.maxRssKb)).toBeLessThan(40);
   }, 120_000);
 });
