@@ -8,10 +8,18 @@ const never = new AbortController().signal;
 
 async function main() {
   if (mode === "serve") {
-    if (typeof (globalThis as any).gc === "function") setInterval(() => (globalThis as any).gc(), 20).unref(); // measure retention, not allocator laziness
+    // Measure retention, not collector laziness: maxRSS is a high-water mark, so with a lazy GC (20 ms ticks) a fast pipe lets
+    // dead 64 KiB socket chunks and consumed 4 MiB frames pile up (arrayBuffers peaked at 40-60 MiB, scaling with blob size and
+    // varying by 30+ MiB between runs on Node 26). Collecting every ms keeps the high-water mark at what is actually live.
+    if (typeof (globalThis as any).gc === "function") setInterval(() => (globalThis as any).gc(), 1).unref();
+    // Peak RSS of THIS process only. process.resourceUsage().maxRSS is ru_maxrss, which on Linux is inherited across fork/exec,
+    // so a child spawned from a large test worker reports the worker's history (241-274 MiB for a 1 MiB blob). Sample the live RSS instead.
+    let peakRss = process.memoryUsage.rss();
+    const sampleRss = () => { peakRss = Math.max(peakRss, process.memoryUsage.rss()); };
+    setInterval(sampleRss, 2).unref();
     const stats = { peakBuffered: 0, framesIn: 0, maxFrameIn: 0, framesOut: 0 };
     await serveStore({ store, input: process.stdin, output: process.stdout, log: line => process.stderr.write(line + "\n"), stats });
-    process.stderr.write(`STATS ${JSON.stringify({ ...stats, maxRssKb: process.resourceUsage().maxRSS })}\n`);
+    process.stderr.write(`STATS ${JSON.stringify({ ...stats, maxRssKb: (sampleRss(), Math.round(peakRss / 1024)) })}\n`);
     return;
   }
   if (mode === "append") {
