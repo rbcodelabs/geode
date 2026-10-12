@@ -83,12 +83,14 @@ and functions, so there is one definition of the limits). The provider opts in w
 | (a) first run needs approval | The existing controller approval. For this provider the Sync tab replaces the generic "Approve & sync" with an explicit confirm row showing the plan counts ("N uploads, M downloads, K deletions"); the scheduled/auto path never approves, and a status of `preview` is never auto-run. |
 | (b) deletion cap `max(20, 1% of files found)` | Evaluated in `SyncService.run` after a fresh preview and before apply; refusal is an error status naming the counts, and the tab offers "Allow N deletions once". Auto runs never override. |
 | (c) shrunk scan (found < 50% of known) | Wraps the snapshot port; fires in preview and run. Tab offers "Sync despite shrunk scan (once)". |
-| (d) iCloud placeholders | The strict sync scan (`listVaultFiles`, `strictSync`) now refuses to complete when it meets a `.name.icloud` stub with no real sibling, or (darwin) an evicted file (`blocks === 0 && size > 0`). The engine then refuses to plan (`Authoritative local snapshot unavailable`) rather than reading the file as deleted. Nothing is ever hydrated. Difference from the CLI: the CLI blocks only that path; the app stops the whole run until the file is downloaded. Applies to every append-only provider (strictly safer; previously such files read as absent). |
+| (d) iCloud placeholders | The strict sync scan (`listVaultFiles`, `strictSync`, new `vault-sync-scan-blocked` IPC) reports a `.name.icloud` stub with no real sibling as a *blocked* path (`icloud-not-downloaded`): untouchable, never read as deleted, never hydrated. Same per-path behaviour as the CLI. Unlike the CLI the app does not detect evicted-but-named files by `blocks === 0` (APFS-compressed files look the same, and a false positive would stall every sync); only stubs are caught. Applies to every append-only provider. Without a collector the scan fails closed. |
 
 Overrides are one-shot, held in memory, cleared after the next controller attempt, and cannot be set by
 the 30 s poll.
 
 ## Format compatibility with the CLI
+
+The app also publishes its own projected settings documents (`editor.json`, `appearance.json`, `hotkeys.json`, `daily-notes.json`, namespace `portable-config`) on its first sync; the CLI ignores them. Content records are never republished by a join (asserted in the convergence test).
 
 Hub **content** is identical: same `descriptor.json`, `records/`, `blobs/`, the same `HistoryRecord`s and
 vault descriptor discovery. A store created by either side is discoverable and joinable by the other
