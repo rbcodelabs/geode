@@ -272,6 +272,37 @@ ported, not shared:
   * A native build without the chunked methods keeps the old limit, but it is now per file: staging a file the host
     cannot hold throws a `SyncBlockedError` (`too-large-for-mobile`), which the history controller demotes to that one
     path being blocked, while the rest of the batch applies. Any other staging failure (a full disk) still fails the run.
+* **Staged bytes are released per operation.** A batch is prepared whole before anything is applied (that is what makes
+  ordered, multi-step operations such as a rename's write-then-delete recoverable as one unit), so every downloaded file
+  is first frozen in the sync-private store. Previously those copies all stayed until the batch's state was saved, so
+  the phone held the downloaded part of the vault twice at the end of a run (about `vault + 2 x downloaded`). Now each
+  operation's frozen bytes are dropped (`releaseStagedBytes`, storage action `release-bytes`) right after its journal
+  was durably saved as `committed`, which caps the peak at `vault + downloaded`, reached when staging finishes. The
+  ordering that makes this safe: recovery never reads the bytes of a committed operation (it skips it) but does need the
+  journal, which `pendingBatch` still names, so only the blob goes early; blob and journal go together through
+  `release` after the state that stops naming the batch is saved, exactly as before. A crash before the committed
+  journal is durable finds the bytes and retries (apply and upload are idempotent by operation id); a crash after finds a
+  committed journal and needs nothing. A failed or skipped early release only delays reclamation to `release` / startup GC.
+  **Not done, and why:** getting below `vault + downloaded` needs downloads not to be frozen at all, or the batch to be
+  committed in windows. Windowing is unsafe as the controller stands: actions are ordered writes first, deletions last,
+  and a rename is a write (new path) plus a delete (old path) that sort far apart; committing the writes of one window
+  into the baseline before the delete runs, then crashing, makes the next plan see the old file as a brand-new local
+  file and republish it. Not freezing downloads (journal only the remote blob id and refetch on recovery) changes the
+  "frozen bytes differ from retry content" guarantee and makes recovery depend on the hub being reachable, so it needs its
+  own design and decision, not a drive-by change.
+* **Bridge calls per applied file.** Measured with a counting fake of the native plugin (`tests/unit/mobile-transfer-calls.test.ts`,
+  60 downloaded files three folders deep): 23.1 calls per file before, 17.9 after (`stat` 6.6 to 3.5, `syncPrivateAvailableBytes`
+  1.07 to 0.02, `syncPrivateRemove` 3.6 to 2.5). The guarded-apply path check now stats the full target once (the native `stat`
+  reports a link on any component and "none" for a missing or non-directory component) plus the nearest existing ancestor
+  when the target is new, and the re-check before the write stats only the target; free space is measured once per few seconds
+  and re-measured the moment the running estimate would not clear a stage; the terminal release skips a blob already freed.
+  Receipts, journals, staged bytes and the hash guard are unchanged. Remaining per file: journal and receipt writes (the
+  crash-recovery record), the staged read, and the post-run re-plan's read of each new file (the mobile host has no hash
+  cache). Device state is saved a constant number of times per batch, not per operation. Known and not changed here: after
+  every guarded apply the app's release handler runs a full vault reconcile (a native `list` of the whole vault) and
+  reloads portable settings, and the vault's change listener rebuilds its child index per created file; both are O(vault) per
+  file, so a large first sync is quadratic in them. Deferring them to the end of a batch needs a batch notion in
+  `SyncSafetyService` and an editor-guard design that keeps writers paused for the batch.
 * Rails (deletion cap, shrunk-scan guard, first-run approval) are evaluated by `SyncService` exactly as on desktop.
   The phone settings rows are laid out one full-width, touch-sized field per row.
 

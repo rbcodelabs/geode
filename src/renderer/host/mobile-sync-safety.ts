@@ -69,9 +69,30 @@ class KeyedLock {
   }
 }
 
+/**
+ * Free-space bookkeeping shared by every storage request of one safety service. Asking the native side for free space is a
+ * bridge call, and doing it for every staged file of a thousand-file batch is a thousand calls for a number that barely moves.
+ * An estimate (last measurement minus what this service staged since, never credited for what it freed) is trusted for a few
+ * seconds while it still clears the requirement; the moment it would not, the real figure is measured again, so a refusal is
+ * only ever issued on a fresh measurement.
+ */
+class CapacityTracker {
+  private measured: number | null = null; private at = 0; private spent = 0;
+  constructor(private readonly read: () => Promise<number | null>, private readonly maxAgeMs = 5000) {}
+  async has(needed: number): Promise<boolean> {
+    if (this.measured !== null && Date.now() - this.at < this.maxAgeMs && this.measured - this.spent >= needed) return true;
+    const fresh = await this.read();
+    if (fresh === null) return true;
+    this.measured = fresh; this.at = Date.now(); this.spent = 0;
+    return fresh >= needed;
+  }
+  staged(bytes: number): void { this.spent += bytes; }
+}
+
 /** Frozen bytes and one bounded journal per operation, for one binding of one vault. */
 export class MobilePrivateStorage {
-  constructor(private readonly store: MobileSyncPorts["privateStore"], private readonly dir: string, private readonly locks: KeyedLock) {}
+  constructor(private readonly store: MobileSyncPorts["privateStore"], private readonly dir: string, private readonly locks: KeyedLock,
+    private readonly capacity: CapacityTracker = new CapacityTracker(() => store.availableBytes(), 0), private readonly bytesReleased: Set<string> = new Set()) {}
   private file(key: string, suffix: string): string {
     if (!UUID.test(key)) throw new Error("Invalid sync operation identity");
     return `${this.dir}/${key}${suffix}`;
@@ -84,9 +105,8 @@ export class MobilePrivateStorage {
       const prior = await this.store.read(target);
       const next = new Uint8Array(bytes);
       if (prior) { if (!sameBytes(prior, next)) throw new Error("Frozen sync bytes differ from retry content"); return; }
-      const available = await this.store.availableBytes();
-      if (available !== null && available < bytes.byteLength * 2 + 4 * 1024 * 1024) throw new Error("Insufficient disk space for frozen sync bytes and recovery headroom");
-      try { await this.store.write(target, next); }
+      if (!await this.capacity.has(bytes.byteLength * 2 + 4 * 1024 * 1024)) throw new Error("Insufficient disk space for frozen sync bytes and recovery headroom");
+      try { await this.store.write(target, next); this.capacity.staged(next.byteLength); }
       catch (error) {
         // A native build without chunked storage cannot hold a file over its single-call limit: that is this file's problem, not the run's.
         if ((error as { code?: string } | null)?.code === "PAYLOAD_TOO_LARGE") throw new SyncBlockedError("too-large-for-mobile", "This iOS build cannot hold a file this large for sync");
@@ -116,8 +136,16 @@ export class MobilePrivateStorage {
     return values;
   }
   async release(key: string): Promise<void> {
-    const targets = [this.file(key, ".blob"), this.file(key, ".json")];
+    // The blob is already gone if releaseBytes succeeded for this key; the terminal release then only needs the journal.
+    const targets = [...this.bytesReleased.has(key) ? [] : [this.file(key, ".blob")], this.file(key, ".json")];
     for (const target of targets) await this.locks.run(target, () => this.store.remove(target, false));
+    this.bytesReleased.delete(key);
+  }
+  /** Frozen bytes only; see SyncPrivateStorage.releaseBytes. */
+  async releaseBytes(key: string): Promise<void> {
+    const target = this.file(key, ".blob");
+    await this.locks.run(target, () => this.store.remove(target, false));
+    this.bytesReleased.add(key);
   }
   /** Startup GC: keep journals/blobs of 'prepared' operations and everything in `retain`; leave unparseable journals alone. */
   async gc(retain: readonly string[] = []): Promise<{ removed: number }> {
@@ -166,6 +194,7 @@ interface Snapshot { hash: string | null; bytes?: ArrayBuffer; children?: number
 
 export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSyncOptions = {}): SyncSafetyService {
   const locks = new KeyedLock();
+  const capacity = new CapacityTracker(() => ports.privateStore.availableBytes()), bytesReleased = new Set<string>();
   let owner: { root: string; token: string } | null = null;
   const prepareHandlers = new Set<(token: string, path: string) => Promise<string | null>>();
   const releaseHandlers = new Set<(token: string) => Promise<void>>();
@@ -181,7 +210,7 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
     const root = currentOwner(token);
     if (typeof binding !== "string" || !BINDING.test(binding)) throw new Error("Invalid sync storage binding");
     const vaultDir = await vaultDirectory(root);
-    const bindingStore = new MobilePrivateStorage(ports.privateStore, `${vaultDir}/${binding}`, locks);
+    const bindingStore = new MobilePrivateStorage(ports.privateStore, `${vaultDir}/${binding}`, locks, capacity, bytesReleased);
     let result: unknown;
     switch (request.action) {
       case "stage": result = await bindingStore.stage(request.key, request.data); break;
@@ -189,6 +218,7 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
       case "save-operation": result = await bindingStore.saveOperation(request.key, request.value); break;
       case "load-operations": result = await bindingStore.loadOperations(); break;
       case "release": result = await bindingStore.release(request.key); break;
+      case "release-bytes": result = await bindingStore.releaseBytes(request.key); break;
       case "gc": if (!Array.isArray(request.retain) || request.retain.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await bindingStore.gc(request.retain); break;
       case "sweep": if (!Array.isArray(request.keep) || request.keep.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await sweepBindings(ports.privateStore, vaultDir, request.keep, request.force === true); break;
       default: throw new Error("Invalid sync storage request");
@@ -197,18 +227,46 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
     return result;
   }
 
-  /** Same rules as the desktop path check; additionally every existing ancestor must be a real directory, never a link. */
-  async function checkPath(relative: string, portable: boolean): Promise<{ stats: NativeStat[] }> {
+  const checkSegments = (relative: string, portable: boolean): string[] => {
     const segments = relative.split("/");
     if (!relative || relative.includes("\\") || relative.includes("\0") || relative.normalize("NFC") !== relative || segments.some((segment, index) => !segment || segment === "." || segment === ".." || segment.startsWith(".") && !(portable && index === 0 && (segment === ".geode" || segment === ".obsidian")))) throw new Error("Unsafe sync path");
-    const stats: NativeStat[] = [];
-    for (let index = 0; index < segments.length; index++) {
-      const stat = await ports.vault.stat(segments.slice(0, index + 1).join("/"));
+    return segments;
+  };
+  const FOLDER: NativeStat = { kind: "folder", size: 0, children: 0 };
+
+  /**
+   * Same rules as the desktop path check; additionally every existing ancestor must be a real directory, never a link.
+   * The native `stat` already reports "symlink" when a link sits on ANY component of the path, and "none" when a component is
+   * missing or is not a directory. So one stat of the full path answers for every ancestor of an existing target, and for a
+   * missing target only the nearest existing ancestor needs looking up (two stats for a new file in an existing folder,
+   * instead of one per segment).
+   */
+  async function checkPath(relative: string, portable: boolean): Promise<{ stats: NativeStat[] }> {
+    const segments = checkSegments(relative, portable), last = segments.length - 1;
+    const at = (index: number) => ports.vault.stat(segments.slice(0, index + 1).join("/"));
+    const target = await at(last);
+    if (target.kind === "symlink") throw new Error("Sync cannot traverse symbolic links");
+    const stats: NativeStat[] = new Array(segments.length).fill(null).map(() => ({ kind: "none", size: 0, children: 0 }) as NativeStat);
+    stats[last] = target;
+    if (target.kind !== "none") { for (let index = 0; index < last; index++) stats[index] = FOLDER; return { stats }; }
+    for (let index = last - 1; index >= 0; index--) {
+      const stat = await at(index);
       if (stat.kind === "symlink") throw new Error("Sync cannot traverse symbolic links");
-      if (index < segments.length - 1 && stat.kind === "file") throw new Error("Sync parent is not a directory");
-      stats.push(stat);
+      if (stat.kind === "file") throw new Error("Sync parent is not a directory");
+      stats[index] = stat;
+      if (stat.kind === "folder") { for (let above = 0; above < index; above++) stats[above] = FOLDER; break; }
     }
     return { stats };
+  }
+  /**
+   * The re-check immediately before the mutation: only the target, because that single stat is what the hash guard compares and
+   * it already fails closed on a link anywhere on the path. An ancestor that vanished or became a file since checkPath makes the
+   * native write fail (nothing is written), which the engine retries.
+   */
+  async function recheckTarget(relative: string): Promise<NativeStat> {
+    const stat = await ports.vault.stat(relative);
+    if (stat.kind === "symlink") throw new Error("Sync cannot traverse symbolic links");
+    return stat;
   }
 
   async function snapshot(relative: string, stat: NativeStat): Promise<Snapshot> {
@@ -257,8 +315,7 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
       await options.checkpoint?.("prepared"); currentOwner(ownerToken);
       if (input.kind === "write") await ensureParents(physicalPath, walked.stats, input.operationId);
       await options.checkpoint?.("staged");
-      const recheck = await checkPath(physicalPath, portable);
-      const latest = await snapshot(physicalPath, recheck.stats[recheck.stats.length - 1]);
+      const latest = await snapshot(physicalPath, await recheckTarget(physicalPath));
       if (latest.hash !== input.expectedHash) throw new Error("Local file changed while sync prepared recovery");
       if (current.hash === "folder" && latest.children) throw new Error("Folder acquired live descendants");
       currentOwner(ownerToken);

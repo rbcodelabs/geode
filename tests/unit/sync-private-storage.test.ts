@@ -66,3 +66,17 @@ it("sweepBindings removes stale binding dirs but skips ones that could still res
   expect((await SyncPrivateStorage.sweepBindings(root, [], true)).removed.sort()).toEqual([live, resumable].sort());
   await expect(fs.stat(root)).rejects.toThrow();
 }));
+
+it("releaseBytes deletes only the frozen bytes, keeps the journal for recovery, is idempotent, and validates the key", () => withRoot(async root => {
+  const storage = new SyncPrivateStorage(root);
+  await storage.stage(K1, new Uint8Array([1, 2, 3]).buffer); await storage.saveOperation(K1, { operationId: K1, phase: "committed" });
+  await storage.stage(K2, new Uint8Array([4]).buffer);
+  await storage.releaseBytes(K1); await storage.releaseBytes(K1);
+  expect((await fs.readdir(root)).sort()).toEqual([`${K1}.json`, `${K2}.blob`].sort());
+  expect(await storage.loadOperations()).toEqual([{ operationId: K1, phase: "committed" }]);
+  await expect(storage.readStage(K1)).rejects.toThrow();
+  await expect(storage.releaseBytes("../escape")).rejects.toThrow(/identity/);
+  // The terminal release afterwards is still clean.
+  await storage.release(K1);
+  expect(await fs.readdir(root)).toEqual([`${K2}.blob`]);
+}));

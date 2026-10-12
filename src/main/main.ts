@@ -1018,6 +1018,7 @@ function registerIpc() {
       case "save-operation": result = await storage.saveOperation(request.key, request.value); break;
       case "load-operations": result = await storage.loadOperations(); break;
       case "release": result = await storage.release(request.key); break;
+      case "release-bytes": result = await storage.releaseBytes(request.key); break;
       case "gc": if (!Array.isArray(request.retain) || request.retain.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await storage.gc(request.retain); break;
       case "sweep": if (!Array.isArray(request.keep) || request.keep.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await SyncPrivateStorage.sweepBindings(vaultPrivateRoot, request.keep, request.force === true); break;
       default: throw new Error("Invalid sync storage request");

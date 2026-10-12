@@ -522,3 +522,79 @@ describe('a host that cannot hold one file', () => {
         await expect(start(b)).rejects.toThrow('ENOSPC');
     });
 });
+describe('staged bytes are released per operation, journal first', () => {
+    type Client = ReturnType<typeof client>;
+    // Mirrors the real host: releaseStagedBytes drops only the blob; release drops blob and journal.
+    function hosted(c: Client, log: Array<{ id: string; phase: string | undefined; batch: string[] | null }> = []) {
+        c.ports.release = async id => { c.staged.delete(id); c.operations.delete(id); };
+        c.ports.releaseStagedBytes = async id => { log.push({ id, phase: c.operations.get(id)?.phase, batch: c.state()?.pendingBatch ?? null }); c.staged.delete(id); };
+        return c;
+    }
+    const files = { 'a.md': 'aaaa', 'b.md': 'bbbb', 'c.md': 'cccc', 'd.md': 'dddd' };
+    it('a download batch never holds a file both staged and applied: each blob goes as soon as its operation is committed', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const log: Array<{ id: string; phase: string | undefined; batch: string[] | null }> = [], b = hosted(client(r), log);
+        const stagedBeforeApply: number[] = [], apply = b.ports.apply;
+        b.ports.apply = async input => { stagedBeforeApply.push(b.staged.size); return apply(input); };
+        await start(b);
+        // Four blobs are staged up front (the batch is prepared whole), then one is freed after each apply.
+        expect(stagedBeforeApply).toEqual([4, 3, 2, 1]);
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0);
+        // Crash safety: every release happened after that operation's 'committed' journal was saved, while the batch still named it.
+        expect(log).toHaveLength(4);
+        expect(log.every(entry => entry.phase === 'committed' && entry.batch?.includes(entry.id))).toBe(true);
+        expect(Object.keys(files).every(name => b.text(name) === files[name as keyof typeof files])).toBe(true);
+    });
+    it('uploads free their frozen bytes after the record commits', async () => {
+        const r = remote(), log: Array<{ id: string; phase: string | undefined; batch: string[] | null }> = [], a = hosted(client(r, files), log);
+        const stagedAtAppend: number[] = [], append = r.session.appendRecord;
+        r.session.appendRecord = async record => { stagedAtAppend.push(a.staged.size); return append(record); };
+        await start(a);
+        expect(stagedAtAppend.length).toBeGreaterThanOrEqual(4); expect(stagedAtAppend.at(-1)).toBeLessThan(stagedAtAppend[0]);
+        expect(log.every(entry => entry.phase === 'committed')).toBe(true); expect(a.staged.size).toBe(0);
+    });
+    it('a crash after some operations were applied and their bytes released: recovery finishes without the released bytes', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = hosted(client(r)), apply = b.ports.apply; let applied = 0;
+        b.ports.apply = async input => { if (applied === 2) throw new Error('process killed'); applied++; return apply(input); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('process killed');
+        // Two operations are committed with their bytes gone; the other two are still prepared with bytes intact; the batch names all four.
+        expect(b.staged.size).toBe(2); expect(b.operations.size).toBe(4);
+        expect(b.state()!.pendingBatch).toHaveLength(4);
+        expect([...b.operations.values()].filter(op => op.phase === 'committed')).toHaveLength(2);
+        b.ports.apply = apply; b.restart();
+        await b.controller.run({}, signal());
+        expect(Object.keys(files).every(name => b.text(name) === files[name as keyof typeof files])).toBe(true);
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); expect(b.state()!.pendingBatch).toBeUndefined();
+        expect(Object.values(b.state()!.baseline).filter(item => item.present && item.kind === 'file')).toHaveLength(4);
+    });
+    it('a crash between the apply and the committed journal keeps the bytes: the operation is retried, not lost', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'aaaa' }); await start(a);
+        const b = hosted(client(r)), save = b.ports.saveOperation; let crash = true;
+        b.ports.saveOperation = async op => { if (crash && op.phase === 'committed') { crash = false; throw new Error('killed before the journal was durable'); } return save(op); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('killed before');
+        expect(b.text('a.md')).toBe('aaaa'); // applied
+        expect(b.staged.size).toBe(1); expect([...b.operations.values()][0].phase).toBe('prepared'); // but still fully recoverable
+        b.restart(); await b.controller.run({}, signal());
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); expect(b.text('a.md')).toBe('aaaa');
+    });
+    it('a crash between the committed journal and the byte release leaks nothing the terminal release does not reclaim', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'aaaa' }); await start(a);
+        const b = hosted(client(r)); let crash = true;
+        b.ports.releaseStagedBytes = async () => { if (crash) { crash = false; throw new Error('killed before the release'); } };
+        await b.controller.preview(signal());
+        const result = await b.controller.run({ approvePreview: true }, signal()); // a failed best-effort release must not fail a durable sync
+        expect(result.upToDate).toBe(true); expect(b.text('a.md')).toBe('aaaa');
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); // terminal release() swept it
+    });
+    it('is optional: a host without releaseStagedBytes behaves exactly as before', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = client(r); b.ports.release = async id => { b.staged.delete(id); b.operations.delete(id); };
+        const stagedBeforeApply: number[] = [], apply = b.ports.apply;
+        b.ports.apply = async input => { stagedBeforeApply.push(b.staged.size); return apply(input); };
+        await start(b);
+        expect(stagedBeforeApply).toEqual([4, 4, 4, 4]); expect(b.staged.size).toBe(0);
+    });
+});

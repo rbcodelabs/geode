@@ -110,6 +110,14 @@ export interface HistoryControllerPorts {
      * the state that stops naming them in pendingBatch has been durably saved.
      */
     release?(operationId: string): Promise<void>;
+    /**
+     * Deletes only the staged bytes of an operation, keeping its journal. Idempotent and optional. The controller calls it
+     * for an operation immediately after that operation's journal was durably saved with phase 'committed', and never
+     * earlier: until then recovery may still need the bytes to retry the apply or upload. A committed operation's bytes are
+     * never read again (recovery skips it), but the pendingBatch still names it, so its journal must stay until `release`.
+     * This is what keeps a phone from holding a downloaded file twice (staged copy and vault copy) for the whole batch.
+     */
+    releaseStagedBytes?(operationId: string): Promise<void>;
     /** Idempotent by operationId; preserve durable preimages and validate expectedHash before mutation. Folder trash MUST refuse nonempty directories. */
     apply(input: HistoryApply): Promise<void>;
     isIncluded(namespace: HistoryNamespace, path: string): boolean;
@@ -954,6 +962,8 @@ export class HistoryController {
                 for (const committed of done)
                     committed.phase = 'committed';
                 await this.checked(signal, () => Promise.all(done.map(committed => this.ports.saveOperation(committed))));
+                for (const committed of done)
+                    await this.releaseCommittedBytes(committed, signal);
                 if (failure !== undefined)
                     throw failure;
                 i += batch.length;
@@ -1061,6 +1071,22 @@ export class HistoryController {
         }
         operation.phase = 'committed';
         await this.checked(signal, () => this.ports.saveOperation(operation));
+        await this.releaseCommittedBytes(operation, signal);
+    }
+    /**
+     * Best-effort, and only ever after saveOperation(committed) resolved. A crash in between merely leaves the bytes for the
+     * terminal release() (or startup GC) to reclaim; a crash after it finds a committed journal and never asks for the bytes.
+     */
+    private async releaseCommittedBytes(operation: HistoryOperation, signal: AbortSignal) {
+        if (operation.phase !== 'committed' || !operation.payload || !this.ports.releaseStagedBytes)
+            return;
+        this.assert(signal);
+        try {
+            await this.ports.releaseStagedBytes(operation.id);
+        }
+        catch {
+            this.assert(signal);
+        }
     }
     /**
      * Best-effort reclamation: a failure must not fail a sync whose work is

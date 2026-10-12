@@ -199,6 +199,11 @@ that no longer matches. If it runs unattended (`run`, no preview first) the conf
 files are plain uploads and nothing is deleted; once someone runs `preview`, the
 new key is recorded and the next `run` asks for one `preview --approve`.
 
+Staged bytes: a run freezes every file it will upload or apply in the state directory's `ops/` before the first
+mutation (so an interrupted batch can be resumed), and drops each file's frozen bytes as soon as that operation is
+committed (`release-bytes`), keeping its journal until the batch is recorded. The state directory therefore holds at
+most one extra copy of the batch while it runs, shrinking as it goes, instead of all of it until the end.
+
 ## Safety rails
 
 | Rail | Refusal | Rule | Override |

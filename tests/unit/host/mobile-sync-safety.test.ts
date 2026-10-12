@@ -442,7 +442,70 @@ describe("Keychain-backed host.secrets.app", () => {
   });
 });
 
-describe("files over the 32 MiB single-call bridge limit (up to the 100 MiB sync cap)", () => {
+describe("free-space check is measured per batch but never trusted past the point it would refuse", () => {
+  it("measures once for many small stages, and re-measures (and refuses) as soon as the estimate would not clear", async () => {
+    const { vault, safety, token } = await open();
+    let measured = 0; const original = vault.plugin.syncPrivateAvailableBytes!.bind(vault.plugin);
+    vault.plugin.syncPrivateAvailableBytes = async () => { measured++; return original(); };
+    vault.availableBytes = 100 * 1024 * 1024;
+    for (let index = 0; index < 20; index++) await safety.storage(token, BINDING, { action: "stage", key: uuid(), data: bytes("small " + index) });
+    expect(measured).toBe(1);
+    // 35 MiB needs 74 MiB: the cached 100 MiB still clears it...
+    await safety.storage(token, BINDING, { action: "stage", key: uuid(), data: new ArrayBuffer(35 * 1024 * 1024) });
+    // ...but another 35 MiB would not (estimate 65 MiB left), so the real figure is read again, and it is the real figure that decides.
+    vault.availableBytes = 200 * 1024 * 1024;
+    await safety.storage(token, BINDING, { action: "stage", key: uuid(), data: new ArrayBuffer(35 * 1024 * 1024) });
+    expect(measured).toBe(2);
+  });
+  it("refuses on a fresh measurement when space is short", async () => {
+    const { vault, safety, token } = await open();
+    vault.availableBytes = 10 * 1024 * 1024;
+    await expect(safety.storage(token, BINDING, { action: "stage", key: uuid(), data: new ArrayBuffer(35 * 1024 * 1024) })).rejects.toThrow(/Insufficient disk space/);
+  });
+});
+
+describe("path checks stat the target, not every segment, and still fail closed", () => {
+  it("a link on an ancestor is refused for a new file, an existing file, and at the re-check", async () => {
+    const { vault, safety, token } = await open();
+    vault.put("Real/keep.md", "x"); vault.links.add("Real/Linked");
+    await expect(safety.apply(token, write("Real/Linked/new.md", "n", null))).rejects.toThrow(/symbolic/);
+    vault.put("Real/Dir/old.md", "old");
+    let statsOfTarget = 0; vault.beforeStat = path => { if (path === "Real/Dir/old.md" && ++statsOfTarget === 2) vault.links.add("Real/Dir"); };
+    await expect(safety.apply(token, write("Real/Dir/old.md", "new", await hash("old")))).rejects.toThrow(/symbolic/);
+    expect(vault.text("Real/Dir/old.md")).toBe("old");
+  });
+  it("a new file under several missing folders still creates them parents-first", async () => {
+    const { vault, safety, token } = await open();
+    vault.put("Top/keep.md", "x");
+    await safety.apply(token, write("Top/A/B/C/deep.md", "deep", null));
+    expect(vault.text("Top/A/B/C/deep.md")).toBe("deep");
+    expect(vault.calls.filter(call => call.startsWith("mkdir"))).toEqual(["mkdir Top/A", "mkdir Top/A/B", "mkdir Top/A/B/C"]);
+  });
+  it("a file as an ancestor is refused", async () => {
+    const { vault, safety, token } = await open();
+    vault.put("Top/file.md", "x");
+    await expect(safety.apply(token, write("Top/file.md/child.md", "n", null))).rejects.toThrow(/not a directory/);
+  });
+});
+
+describe("release-bytes (per-operation release of staged bytes)", () => {
+  it("drops the blob but keeps the journal; a later full release removes both; bad keys are refused", async () => {
+    const { vault, safety, token } = await open();
+    const key = uuid();
+    await safety.storage(token, BINDING, { action: "stage", key, data: bytes("frozen") });
+    await safety.storage(token, BINDING, { action: "save-operation", key, value: { id: key, phase: "committed" } });
+    await safety.storage(token, BINDING, { action: "release-bytes", key });
+    await safety.storage(token, BINDING, { action: "release-bytes", key });
+    expect([...vault.privateFiles.keys()].map(path => path.split("/").pop())).toEqual([`${key}.json`]);
+    await expect(safety.storage(token, BINDING, { action: "load-operations" })).resolves.toEqual([{ id: key, phase: "committed" }]);
+    await expect(safety.storage(token, BINDING, { action: "read-stage", key })).rejects.toThrow(/missing/);
+    await safety.storage(token, BINDING, { action: "release", key });
+    expect(vault.privateFiles.size).toBe(0);
+    await expect(safety.storage(token, BINDING, { action: "release-bytes", key: "../escape" })).rejects.toThrow(/identity/);
+  });
+});
+
+describe("files over the 32 MiB single-call bridge limit (up to the 100 MiB sync cap)", { timeout: 60_000 }, () => {
   const MIB = 1024 * 1024;
   // Real sizes: the fake native plugin enforces the real 32 MiB single-call limit, so a 33 MiB file must travel in chunks.
   const big = (seed: number, size = 33 * MIB) => { const data = new Uint8Array(size); for (let index = 0; index < size; index += 4099) data[index] = (index / 4099 + seed) & 255; return data; };

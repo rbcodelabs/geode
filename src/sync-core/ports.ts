@@ -287,6 +287,7 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
     stage: async (key, data) => await storage({ action: "stage", key, data }) as string,
     readStage: async key => await storage({ action: "read-stage", key }) as ArrayBuffer,
     release: async key => { await storage({ action: "release", key }); },
+    releaseStagedBytes: async key => { await storage({ action: "release-bytes", key }); },
     snapshot, read, isIncluded: (namespace, path) => includedAncestors.has(`${namespace}:${path}`) || included(namespace, path),
     exclude: async (resource, data) => { const reason = resource.namespace === "content" ? await provider.excludePath?.(resource.path, data) : null; assertContext(); return reason ?? null; },
     apply: async (input: HistoryApply) => { assertContext(); await host.safety.apply(lease, { namespace: input.namespace, operationId: input.operationId, path: input.path, expectedHash: input.expectedHash, kind: input.deleted ? "trash" : input.kind === "folder" ? "mkdir" : "write", data: input.data }); assertContext(); if (input.namespace === "portable-config") await ctx.portableChanged(); assertContext(); },
