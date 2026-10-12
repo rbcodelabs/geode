@@ -867,6 +867,8 @@ class SettingsModal extends Modal {
 
   /** Rebuild the left nav column: built-in tabs, then an alphabetized "Plugin options" group. */
   private renderNav(): void {
+    // Rebuilding the list resets its scroll; keep the user's place across tab switches.
+    const scrollTop = this.navEl.scrollTop;
     this.navEl.empty();
 
     const addNavItem = (id: string, label: string, container: HTMLElement) => {
@@ -896,20 +898,48 @@ class SettingsModal extends Modal {
       addNavItem("performance", "Performance", this.navEl);
     }
 
-    const pluginTabs = [...this.geodeApp.settingTabs.keys()]
-      .map((id) => ({ id, name: this.geodeApp.pluginManager?.getManifest(id)?.name ?? id }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    if (pluginTabs.length) {
+    const manifestName = (pluginId: string) => this.geodeApp.pluginManager?.getManifest(pluginId)?.name ?? pluginId;
+    const meta = this.geodeApp.settingTabMeta;
+    // Plugins that registered extra sections get their own sidebar group
+    // (primary tab first as "General", then sections in registration order);
+    // the rest stay in the shared "Plugin options" group.
+    const sectionsByPlugin = new Map<string, { id: string; label: string }[]>();
+    for (const [id, m] of meta) {
+      if (!this.geodeApp.settingTabs.has(id)) continue;
+      const list = sectionsByPlugin.get(m.pluginId) ?? [];
+      list.push({ id, label: m.label });
+      sectionsByPlugin.set(m.pluginId, list);
+    }
+    const makeGroup = (titleText: string): HTMLElement => {
       const group = document.createElement("div");
       group.className = "vertical-tab-header-group";
       const title = document.createElement("div");
       title.className = "vertical-tab-header-group-title";
-      title.textContent = "Plugin options";
+      title.textContent = titleText;
       group.appendChild(title);
-      for (const { id, name } of pluginTabs) addNavItem(id, name, group);
       this.navEl.appendChild(group);
+      return group;
+    };
+
+    const pluginTabs = [...this.geodeApp.settingTabs.keys()]
+      .filter((id) => !meta.has(id) && !sectionsByPlugin.has(id))
+      .map((id) => ({ id, name: manifestName(id) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (pluginTabs.length) {
+      const group = makeGroup("Plugin options");
+      for (const { id, name } of pluginTabs) addNavItem(id, name, group);
     }
+
+    const sectioned = [...sectionsByPlugin.keys()]
+      .map((pluginId) => ({ pluginId, name: manifestName(pluginId) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const { pluginId, name } of sectioned) {
+      const group = makeGroup(name);
+      if (this.geodeApp.settingTabs.has(pluginId)) addNavItem(pluginId, "General", group);
+      for (const { id, label } of sectionsByPlugin.get(pluginId)!) addNavItem(id, label, group);
+    }
+    this.navEl.scrollTop = scrollTop;
   }
 
   private renderAppearanceTab(container: HTMLElement): void {
@@ -2334,6 +2364,11 @@ export class App {
 
   /** Registered plugin settings tabs, keyed by plugin id (`Plugin.addSettingTab`). */
   settingTabs = new Map<string, PluginSettingTab>();
+  /**
+   * Nav metadata for entries in `settingTabs` that belong to a plugin but are
+   * not its primary tab (`Plugin.addSettingSection`). Keyed by the same tab id.
+   */
+  settingTabMeta = new Map<string, { pluginId: string; label: string }>();
   private settingTabListeners = new Set<() => void>();
 
   registerSettingTab(id: string, tab: PluginSettingTab): void {
@@ -2344,6 +2379,20 @@ export class App {
   unregisterSettingTab(id: string): void {
     this.settingTabs.delete(id);
     this.settingTabListeners.forEach((fn) => fn());
+  }
+
+  /** Register an extra settings section for a plugin; it renders as its own sidebar entry under the plugin's group. Returns the tab id (usable with `setting.openTabById`). */
+  registerSettingSection(pluginId: string, sectionId: string, label: string, tab: PluginSettingTab): string {
+    const id = `${pluginId}:${sectionId}`;
+    this.settingTabMeta.set(id, { pluginId, label });
+    this.registerSettingTab(id, tab);
+    return id;
+  }
+
+  unregisterSettingSection(pluginId: string, sectionId: string): void {
+    const id = `${pluginId}:${sectionId}`;
+    this.settingTabMeta.delete(id);
+    this.unregisterSettingTab(id);
   }
 
   /** Subscribe to setting-tab registry changes; returns an unsubscribe function. */
