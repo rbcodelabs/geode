@@ -19,13 +19,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
+import { FRESH_DOCUMENTS_PREFIX, FRESH_USER_DATA_PREFIX } from "./fresh-instance-paths.mts";
 
 const keep = process.argv.includes("--keep");
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const electronBin = createRequire(import.meta.url)("electron") as unknown as string;
 
-const userData = fs.mkdtempSync(path.join(os.tmpdir(), "fresh-instance-ud-"));
-const documents = fs.mkdtempSync(path.join(os.tmpdir(), "fresh-instance-docs-"));
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), FRESH_USER_DATA_PREFIX));
+const documents = fs.mkdtempSync(path.join(os.tmpdir(), FRESH_DOCUMENTS_PREFIX));
 console.log(`user data : ${userData}\ndocuments : ${documents}`);
 
 const child = spawn(electronBin, [repoRoot, `--user-data-dir=${userData}`], {

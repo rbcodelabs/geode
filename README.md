@@ -272,8 +272,8 @@ npm run fresh            # temp dirs are deleted when you quit
 npm run fresh -- --keep  # keep them, to inspect config or the Starter Vault
 ```
 
-On first run Geode creates and opens a `Geode Starter Vault`. That folder lives
-in the OS Documents directory, which `--user-data-dir` does not redirect, so the
+On first run Geode shows the vault picker; clicking "Try the sample vault" creates
+and opens a `Geode Starter Vault`. That folder lives in the OS Documents directory, which `--user-data-dir` does not redirect, so the
 script points `GEODE_DOCUMENTS_DIR` at a temp folder too. Your real
 `~/Documents/Geode Starter Vault` is never touched. The temp dirs are named
 `fresh-instance-*` rather than `geode-*` because `npm run e2e:kill` reaps
