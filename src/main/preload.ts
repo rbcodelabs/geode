@@ -127,12 +127,18 @@ const api = {
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
   scanForSync: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-sync-scan"),
+  scanForSyncBlocked: (): Promise<{ entries: VaultFileEntry[]; blocked: Array<{ path: string; reason: string }> }> => ipcRenderer.invoke("vault-sync-scan-blocked"),
   scanForRefresh: (): Promise<VaultRefreshResult<VaultFileEntry>> => ipcRenderer.invoke("vault-refresh-scan"),
   httpRequest: (id: string, request: HostHttpRequest): Promise<HostHttpResponse> => ipcRenderer.invoke("host-http-request", id, request),
   cancelHttpRequest: (id: string): void => ipcRenderer.send("host-http-cancel", id),
   claimSyncOwner: (): Promise<string | null> => ipcRenderer.invoke("sync-owner-claim"),
   privateSyncStorage: (token: string, binding: string, request: import("../shared/sync-safety").SyncStorageRequest): Promise<unknown> => ipcRenderer.invoke("sync-private-storage", token, binding, request),
   releaseSyncOwner: (token: string): Promise<void> => ipcRenderer.invoke("sync-owner-release", token),
+  /** Desktop hub sync provider: the store half (filesystem / ssh) runs in the main process. */
+  hubSync: {
+    call: (request: import("../shared/hub-sync").HubRequest, requestId: string) => ipcRenderer.invoke("hub-sync", request, requestId),
+    abort: (requestId: string): void => ipcRenderer.send("hub-sync-abort", requestId),
+  } as import("../shared/hub-sync").HubSyncBridge,
   applySyncMutation: (token: string, input: GuardedMutation): Promise<GuardedMutationResult> => ipcRenderer.invoke("sync-local-apply", token, input),
   onSyncPrepare: (handler: (token: string, path: string) => Promise<string | null>): (() => void) => {
     const listener = async (_event: Electron.IpcRendererEvent, token: string, path: string) => {

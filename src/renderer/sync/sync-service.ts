@@ -8,6 +8,10 @@ import { HistoryController, type HistoryComparisonChoice, type HistoryConflictCo
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope } from "./scope";
 import { projectPortableConfig, serializePortableConfig } from "./portable-config";
 import { buildHistoryPorts, type SyncHostLite } from "../../sync-core/ports";
+import { SyncRailError, deleteLimitRefusal, knownFileCount, shrunkScanRefusal, type SyncRailOverrides } from "../../sync-core/rails";
+
+/** Per-attempt rail context handed to the operation of a provider that opted in with `safetyRails`. */
+interface RailContext { overrides: SyncRailOverrides; stats: { known: number; found: number }; stateKey: string }
 
 type Provider = SyncProvider | AppendOnlySyncProvider;
 interface BindingState { schema: 1; localRoot: string; providerId?: string; binding?: VaultDescriptor; deviceId: string; scope: SyncScope; paused: boolean; createIntent?: { name: string; operationId: string } }
@@ -49,6 +53,10 @@ export class SyncService extends Events implements SyncApi {
   private appendSetupReady = false;
   private closing = false;
   private cancellations = 0;
+  /** One-shot overrides for a rail refusal; set by the user, consumed by the next controller attempt, never by the poll. */
+  private railOverrides?: SyncRailOverrides;
+  private railRefusal?: SyncRailError;
+  private lastScan = { known: 0, found: 0 };
   constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly portableChanged: () => Promise<void> = async () => {}) {
     super(); this.conditional = new SyncCoordinator(host, vaultId, Date.now, () => !this.selected && !this.closing && !this.cancellations && !(this.setupTarget && isHistory(this.setupTarget) && this.appendSetupReady));
     this.conditional.on("status", status => { if (!this.selected) this.trigger("status", status); });
@@ -85,6 +93,10 @@ export class SyncService extends Events implements SyncApi {
   getActiveProvider() { return this.selected ? { id: this.selected.id, name: this.selected.name } : this.conditional.getActiveProvider(); }
   getStatus() { return this.selected || this.status.state === "error" && this.status.providerId && !this.conditional.getActiveProvider() ? { ...this.status } : this.conditional.getStatus(); }
   getHistoryDetails() { return this.details; }
+  /** The rail (deletion cap / shrunk scan) that last refused a run, until a later attempt succeeds. */
+  getRailRefusal(): { status: SyncRailError["status"]; message: string; detail: Record<string, unknown> } | undefined { return this.railRefusal && { status: this.railRefusal.status, message: this.railRefusal.message, detail: this.railRefusal.detail }; }
+  /** Lifts specific rails for the next attempt only. Explicit and per rail; there is no "force everything". */
+  allowRailOverrideOnce(overrides: SyncRailOverrides) { this.railOverrides = { ...this.railOverrides, ...overrides }; }
   isAppendOnly() { return Boolean(this.selected); }
   getBoundVaultName() { return this.boundVaultName; }
   /**
@@ -244,9 +256,11 @@ export class SyncService extends Events implements SyncApi {
     };
   }
   /** @param silent read-only work that must not publish its failure as global sync status. */
-  private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal) => Promise<T>, silent = false): Promise<T> {
+  private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal, rails?: RailContext) => Promise<T>, silent = false): Promise<T> {
     if (this.running || this.closing || this.cancellations) throw new Error("Sync already running or disconnecting");
     const provider = this.selected; if (!provider) throw new Error("Select a provider");
+    // One-shot: taken here so a failed attempt cannot leave an override armed for the unattended poll.
+    const railOverrides = silent ? {} : (this.railOverrides ?? {}); if (!silent) this.railOverrides = undefined;
     const root = this.vaultId(); const generation = this.generation; const abort = new AbortController(); this.abort = abort;
     const assertContext = () => { if (abort.signal.aborted || this.vaultId() !== root || generation !== this.generation || this.selected !== provider || this.providers.get(provider.id) !== provider) throw new DOMException("Sync context changed", "AbortError"); };
     const work = (async () => {
@@ -255,6 +269,23 @@ export class SyncService extends Events implements SyncApi {
       const lease = this.lease; const bindingKey = await hash(encoded([provider.id, state.binding])); assertContext();
       const stateKey = `sync-history/${root}/${bindingKey}`;
       const { ports, storage } = buildHistoryPorts(this.liteHost(), { provider, scope: state.scope, bindingVaultId: state.binding.vaultId, bindingKey, stateKey, lease, assertContext, renameHints: this.renameHints, portableChanged: this.portableChanged });
+      // Rails (ADR 0025) for providers that opt in. The shrunk-scan check lives in the snapshot port so it fires in
+      // preview and run alike, before anything is planned from the short scan.
+      let rails: RailContext | undefined;
+      if (provider.safetyRails === true) {
+        rails = { overrides: railOverrides, stats: { known: 0, found: 0 }, stateKey };
+        const inner = ports.snapshot, stats = rails.stats;
+        ports.snapshot = async onProgress => {
+          const snapshot = await inner(onProgress);
+          stats.known = knownFileCount(await this.host.deviceState.read<HistoryControllerState>(stateKey));
+          const content = (items: Array<{ namespace: string }>) => items.filter(item => item.namespace === "content").length;
+          stats.found = snapshot.entries.filter(entry => entry.namespace === "content" && entry.kind === "file").length + content(snapshot.blocked) + content(snapshot.excluded);
+          this.lastScan = { ...stats };
+          const refusal = railOverrides.shrunkScan ? null : shrunkScanRefusal(stats.known, stats.found);
+          if (refusal) throw refusal;
+          return snapshot;
+        };
+      }
       // Reclaim staged bytes no live 'prepared' operation or durable pendingBatch can need
       // (crash orphans, pre-release leftovers) and stale sibling bindings. Housekeeping
       // only: a failure here must never block a sync, but a lost context must still abort.
@@ -269,12 +300,12 @@ export class SyncService extends Events implements SyncApi {
       // dropped silently rather than asserted: this is the one callback that must
       // never throw into the sync, and a late tick is simply not news any more.
       progress: value => { if (!abort.signal.aborted && this.vaultId() === root && this.generation === generation && this.selected === provider) this.publishProgress(value); } });
-      return operation(controller, abort.signal);
+      return operation(controller, abort.signal, rails);
     })();
     this.running = work;
     let completed = false;
-    try { const result = await work; completed = true; return result; }
-    catch (error) { if (!silent && !abort.signal.aborted && root === this.vaultId() && generation === this.generation && this.selected === provider && this.status.state !== "paused") this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); throw error; }
+    try { const result = await work; completed = true; if (!silent) this.railRefusal = undefined; return result; }
+    catch (error) { if (!silent && error instanceof SyncRailError && !abort.signal.aborted) this.railRefusal = error; if (!silent &&!abort.signal.aborted && root === this.vaultId() && generation === this.generation && this.selected === provider && this.status.state !== "paused") this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); throw error; }
     // Cancellation reaches neither summarize() nor the error branch above — an
     // aborted run deliberately sets no status — so progress is retired here, on
     // the one path every completion, failure and cancellation passes through.
@@ -295,10 +326,38 @@ export class SyncService extends Events implements SyncApi {
     const target = active ? this.providers.get(active.id) : undefined;
     return this.setup(async (_signal, assert) => { await this.conditional.waitUntilReady(); assert(); if (this.selected) throw new Error("Disconnect before changing providers"); const result = await action(); assert(); return result; }, target);
   }
-  async preview(): Promise<SyncPreview> { return this.selected ? this.summarize(await this.withController((controller, signal) => controller.preview(signal))) : this.withConditional(() => this.conditional.preview()); }
+  async preview(): Promise<SyncPreview> {
+    if (!this.selected) return this.withConditional(() => this.conditional.preview());
+    const armed = this.railOverrides;
+    const raw = await this.withController((controller, signal) => controller.preview(signal));
+    const result = this.summarize(raw);
+    // The user's explicit "sync despite the short scan" covers the preview they just read and the one confirmation
+    // that follows it (a first run is previewed, then confirmed); it is not carried any further.
+    if (armed?.shrunkScan && raw.requiresApproval) this.railOverrides = { shrunkScan: true };
+    // A preview shows the plan even when it would be refused; the refusal is reported (status + railRefusal) so the
+    // user sees counts and the explicit override together, and run() enforces it.
+    if (this.selected.safetyRails === true) {
+      const refusal = deleteLimitRefusal(raw, this.lastScan.found, armed ?? {});
+      if (refusal) { this.railRefusal = refusal; this.setStatus({ ...this.status, state: "error", message: refusal.message }); }
+    }
+    return result;
+  }
   async run(options: { approvePreview?: boolean } = {}): Promise<SyncRunResult> {
     if (!this.selected) return this.withConditional(() => this.conditional.run(options));
-    const result = this.summarize(await this.withController((controller, signal) => controller.run(options, signal))); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();
+    const shown = this.details;
+    const result = this.summarize(await this.withController(async (controller, signal, rails) => {
+      if (rails) {
+        // Rail (b), before anything is applied. An approved device is re-planned (a preview cannot move its approval);
+        // an unapproved one is checked against the plan the user was shown, which run() then verifies by signature,
+        // so the counts judged here are the counts executed.
+        const state = await controller.getState(signal);
+        let plan: Pick<HistoryPreview, "deletions" | "uploads" | "downloads" | "signature"> | undefined;
+        if (!state.pendingBatch?.length) plan = state.approved ? await controller.preview(signal) : shown && shown.signature === state.previewSignature ? shown : undefined;
+        const refusal = plan && deleteLimitRefusal(plan, Math.max(rails.stats.found, knownFileCount(state)), rails.overrides);
+        if (refusal) throw refusal;
+      }
+      return controller.run(options, signal);
+    })); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();
     this.polling ??= setInterval(() => this.schedule(0), 30_000); if (this.status.state === "pending") this.schedule(0); return result;
   }
   async listConflicts(): Promise<SyncConflict[]> {
@@ -357,7 +416,7 @@ export class SyncService extends Events implements SyncApi {
   async disconnect() {
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;
-    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
+    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.railRefusal = undefined; this.railOverrides = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
     finally { this.closing = false; }
   }
   /** Best-effort: disconnect has already removed the device state that could resume these operations. */

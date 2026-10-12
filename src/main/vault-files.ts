@@ -17,6 +17,8 @@ export interface ListVaultFilesOptions {
   strictSync?: boolean;
   /** Authoritative ordinary refresh: retain hidden-path pruning, fail closed on visible I/O errors. */
   refreshOnly?: boolean;
+  /** Receives paths that exist but cannot be read as ordinary files (iCloud placeholders). Sync scans only. */
+  onBlocked?: (issue: { path: string; reason: string }) => void;
   ioDelayMs?: number;
   yieldEveryOperations?: number;
   yieldToEventLoop?: () => Promise<void>;
@@ -95,6 +97,21 @@ export async function listVaultFiles(
     } catch (error) {
       if (options.strictSync) throw failure(error, "read-directory", dir);
       return [];
+    }
+    if (options.strictSync && !options.refreshOnly) {
+      // Rail (d), ADR 0025: an iCloud placeholder `.name.icloud` with no real `name` beside it stands in for a file that
+      // exists but is not on disk. Left to the dot-name pruning below it would simply be absent from the scan, and the
+      // engine reads absence as "deleted". Refuse to produce a scan at all; Geode never downloads it (the user does).
+      const names = new Set(entries.map(entry => entry.name));
+      for (const entry of entries) {
+        const stub = entry.isFile() ? /^\.(.+)\.icloud$/.exec(entry.name) : null;
+        if (!stub || names.has(stub[1])) continue;
+        const rel = toRel(root, path.join(dir, stub[1]));
+        // With a collector the path is reported as blocked (untouchable: never read as deleted, never downloaded);
+        // without one the scan fails closed.
+        if (options.onBlocked) options.onBlocked({ path: rel, reason: "icloud-not-downloaded" });
+        else throw new Error(`iCloud placeholder not downloaded: ${rel}. Geode never downloads it; download it in Finder, then sync again.`);
+      }
     }
     const nested = await Promise.all(entries.map(async (entry): Promise<VaultFileEntry[]> => {
       // Pruning during traversal, so a segment test is enough here — but it

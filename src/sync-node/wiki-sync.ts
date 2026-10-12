@@ -6,6 +6,10 @@ import type { AppendOnlySyncProvider, VaultDescriptor } from "../sync-core/histo
 import { buildHistoryPorts } from "../sync-core/ports";
 import type { SyncStorageRequest } from "../shared/sync-safety";
 import { DEFAULT_SYNC_SCOPE, type SyncScope } from "../sync-core/scope";
+import { DELETE_LIMIT_FRACTION, MIN_DELETE_LIMIT, MIN_SCAN_RATIO, SyncRailError, deleteLimitFor, deleteLimitRefusal, knownFileCount, shrunkScanRefusal } from "../sync-core/rails";
+
+export { DELETE_LIMIT_FRACTION, MIN_DELETE_LIMIT, MIN_SCAN_RATIO, SyncRailError, deleteLimitFor };
+export type { SyncRailStatus } from "../sync-core/rails";
 import { FsStoreProvider } from "./fs-store";
 import { NodeHost, SyncLockedError, SyncStateDirError, defaultStateDir, type NodeHostOptions } from "./node-host";
 import { spawnSshStore } from "./rpc-store";
@@ -72,10 +76,6 @@ export interface WikiSyncContext {
   now?: () => number;
 }
 
-export const MIN_DELETE_LIMIT = 20;
-export const DELETE_LIMIT_FRACTION = 0.01;
-export const MIN_SCAN_RATIO = 0.5;
-export const deleteLimitFor = (vaultFiles: number): number => Math.max(MIN_DELETE_LIMIT, Math.floor(vaultFiles * DELETE_LIMIT_FRACTION));
 
 const CONFIG_FILE = "cli-config.json";
 const APPROVAL_KEY = "cli/approval";
@@ -83,15 +83,6 @@ const LAST_RUN_KEY = "cli/last-run";
 const never = new AbortController().signal;
 
 /* ------------------------------------------------------------------ errors */
-
-export type SyncRailStatus = "approval-required" | "approval-stale" | "delete-limit-exceeded" | "scan-shrunk";
-
-/** A safety rail refused the run. Nothing was changed. `override` names the explicit flag that lifts it. */
-export class SyncRailError extends Error {
-  constructor(readonly status: SyncRailStatus, message: string, readonly detail: Record<string, unknown>, readonly override: string | null) {
-    super(message); this.name = "SyncRailError";
-  }
-}
 
 /** A refusal that is not a rail: not initialised, already initialised, no such conflict... Named, exit 1. */
 export class SyncRefusal extends Error {
@@ -186,9 +177,6 @@ interface Live {
   storage(request: SyncStorageRequest): Promise<unknown>;
 }
 
-const knownFileCount = (state: HistoryControllerState | null): number =>
-  state ? Object.values(state.baseline).filter(entry => entry.present && entry.kind === "file" && entry.namespace === "content").length : 0;
-
 async function openHost(ctx: WikiSyncContext, config: WikiSyncConfig, stateDir: string, overrides: SyncOverrides): Promise<NodeHost> {
   await requireDirectory(ctx.root);
   return NodeHost.open({
@@ -221,10 +209,8 @@ async function withLive<T>(ctx: WikiSyncContext, overrides: SyncOverrides, fn: (
         stats.files = snapshot.entries.filter(entry => entry.namespace === "content" && entry.kind === "file").length;
         stats.found = stats.files + snapshot.blocked.filter(item => item.namespace === "content").length + snapshot.excluded.filter(item => item.namespace === "content").length;
         // Rail (c). Blocked and excluded paths still exist on disk, so they count as "seen".
-        if (stats.known > 0 && stats.found < stats.known * MIN_SCAN_RATIO && !overrides.shrunkScan) {
-          throw new SyncRailError("scan-shrunk", `The scan found ${stats.found} files but this device previously knew ${stats.known} (under ${MIN_SCAN_RATIO * 100}%). Is the volume mounted and --root correct?`,
-            { found: stats.found, known: stats.known, ratio: Number((stats.found / stats.known).toFixed(3)), minimumRatio: MIN_SCAN_RATIO }, "--override-shrunk-scan");
-        }
+        const refusal = overrides.shrunkScan ? null : shrunkScanRefusal(stats.known, stats.found);
+        if (refusal) throw refusal;
         return snapshot;
       };
       const session = await provider.open({ binding: config.descriptor, deviceId: config.deviceId }, never);
@@ -266,10 +252,8 @@ async function previewWithRails(live: Live, overrides: SyncOverrides): Promise<{
   const summary = summarise(preview);
   const limit = overrides.deleteLimit ?? deleteLimitFor(live.stats.found);
   const rails: RailReport = { scan: { known: live.stats.known, found: live.stats.found }, deletes: { planned: preview.deletions, limit, vaultFiles: live.stats.found }, overridesActive: activeOverrides(overrides) };
-  if (preview.deletions > limit) {
-    throw new SyncRailError("delete-limit-exceeded", `This run would delete ${preview.deletions} items, over the limit of ${limit} (max(${MIN_DELETE_LIMIT}, ${DELETE_LIMIT_FRACTION * 100}% of ${live.stats.found} files)). Review with \`sync preview\`.`,
-      { deletions: preview.deletions, limit, vaultFiles: live.stats.found, uploads: preview.uploads, downloads: preview.downloads, signature: preview.signature }, "--override-delete-limit <n>");
-  }
+  const refusal = deleteLimitRefusal(preview, live.stats.found, overrides);
+  if (refusal) throw refusal;
   return { summary, rails };
 }
 
