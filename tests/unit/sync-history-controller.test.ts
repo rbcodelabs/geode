@@ -447,3 +447,49 @@ describe('staged byte lifetime', () => {
         expect(a.staged.size).toBe(1);
     });
 });
+describe('remote entries that are out of scope on this device', () => {
+    // What a device that does not sync `cache/` sees when another device (or an older build) already uploaded it.
+    const denyCache = (c: ReturnType<typeof client>) => { c.ports.isIncluded = (_ns, path) => !(path === 'cache' || path.startsWith('cache/')); return c; };
+    const uploaded = async () => {
+        const r = remote(), a = client(r, { 'keep.md': 'k', 'cache/index.sqlite': 'big', 'cache/cache.json': 'bigger' }); await start(a);
+        return { r, a };
+    };
+    it('neither downloads them nor reports them, so a fresh device syncs only what is in scope', async () => {
+        const { r } = await uploaded();
+        const reads: string[] = [], readBlob = r.session.readBlob;
+        r.session.readBlob = async ref => { reads.push(ref.id); return readBlob(ref); };
+        const b = denyCache(client(r));
+        const preview = await b.controller.preview(signal());
+        expect(preview.deletions).toBe(0); expect(preview.conflicts).toEqual([]); expect(preview.blocked).toEqual([]);
+        await b.controller.run({ approvePreview: true }, signal());
+        expect(b.text('keep.md')).toBe('k');
+        expect(b.files.has('cache/index.sqlite')).toBe(false); expect(b.folders.has('cache')).toBe(false);
+        expect(reads).toHaveLength(1); // only keep.md's blob was fetched
+        expect(b.staged.size).toBe(1);
+    });
+    it('does not plan deletions, trip a delete limit or block when the uploading device stops syncing them', async () => {
+        const { r, a } = await uploaded();
+        const before = r.records.size;
+        denyCache(a); a.restart();
+        // The local copies may be gone (cache rebuilt, volume cleaned) or still present: neither is a deletion or an upload.
+        for (const keepLocal of [true, false]) {
+            if (!keepLocal) { a.files.delete('cache/index.sqlite'); a.files.delete('cache/cache.json'); a.folders.delete('cache'); }
+            const preview = await a.controller.preview(signal());
+            expect(preview.deletions).toBe(0); expect(preview.uploads).toBe(0); expect(preview.downloads).toBe(0);
+            expect(preview.blocked).toEqual([]); expect(preview.conflicts).toEqual([]); expect(preview.upToDate).toBe(true);
+        }
+        await a.controller.run({}, signal());
+        expect(r.records.size).toBe(before); // nothing tombstoned remotely either
+    });
+    it('does not let an unavailable blob of an out-of-scope entity hold the device in a blocked state', async () => {
+        const { r } = await uploaded();
+        const cacheRecords = [...r.records.values()].filter(rec => rec.location.name === 'index.sqlite');
+        const scan = r.session.scan;
+        r.session.scan = async (...args) => ({ ...await scan(...args), blobAvailability: cacheRecords.map(rec => ({ id: rec.blob!.id, status: 'pending' as const })) });
+        const b = denyCache(client(r));
+        const preview = await b.controller.preview(signal());
+        expect(preview.blocked).toEqual([]);
+        const everything = client(r); // a device that does sync it is still told
+        expect((await everything.controller.preview(signal())).blocked).toContainEqual({ namespace: 'content', path: 'cache/index.sqlite', reason: 'pending-blob' });
+    });
+});

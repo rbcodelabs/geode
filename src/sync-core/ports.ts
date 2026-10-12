@@ -1,6 +1,6 @@
 import type { HistoryApply, HistoryControllerPorts, HistoryControllerState, HistoryLocalResource, HistoryLocalSnapshot, HistoryOperation } from "./history-controller";
 import { SYNC_MAX_FILE_BYTES } from "./history-types";
-import { isPathInSyncScope, isRawConfigResourcePath, portableResourcePhysicalPath, rawConfigCategory, rawResourcePath, type SyncScope } from "./scope";
+import { isLocalOnlyConfigPath, isPathInSyncScope, isRawConfigResourcePath, portableResourcePhysicalPath, rawConfigCategory, rawResourcePath, type SyncScope } from "./scope";
 import { isPortableAssetPath } from "../shared/portable-assets";
 import type { GuardedMutation, GuardedMutationResult, SyncStorageRequest } from "../shared/sync-safety";
 
@@ -110,6 +110,8 @@ export const sha256Hex = async (data: ArrayBuffer): Promise<string> => [...new U
 /** Whether a (namespace, path) pair is synchronised under the given scope. */
 export function isIncludedInScope(scope: SyncScope, namespace: string, path: string): boolean {
   if (namespace === "portable-config") {
+    // Rebuildable local caches (.geode/metadata-cache, atomic-write temp files) never travel, in any spelling of the path.
+    if (isLocalOnlyConfigPath(path)) return false;
     if (isRawConfigResourcePath(path)) {
       // A raw-file host only: config files and their folders, named by full path, gated by the same category flags.
       const category = rawConfigCategory(path);

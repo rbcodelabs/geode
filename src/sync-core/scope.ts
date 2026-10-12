@@ -39,12 +39,37 @@ const NEVER_SYNCED_SEGMENTS = new Set(["node_modules", "cache", "caches"]);
 export const CONFIG_ROOTS: readonly string[] = [".geode", ".obsidian"];
 
 /**
+ * Direct children of a config root that are rebuildable or machine-local state and never travel:
+ * `.geode/metadata-cache/` holds the SQLite index and cache.json (hundreds of MB, rewritten constantly,
+ * rebuilt from the vault on every device). Not a user scope choice: no flag turns these on.
+ */
+const LOCAL_ONLY_CONFIG_CHILDREN = new Set(["metadata-cache"]);
+/** Atomic-write leftovers (`x.tmp`, `.x.tmp-<pid>-<uuid>`, `.cache.x.tmp`): half-written by definition. */
+const TEMP_FILE_NAME = /\.tmp(?:-[^/]*)?$/i;
+
+/**
+ * True for a path inside a config root that must never be synchronised, whatever the scope says. Accepts
+ * every spelling a config path takes on its way through the engine: physical (`.geode/metadata-cache/x`),
+ * raw resource (`raw.geode/metadata-cache/x`) and the root-relative form the app uses for projected
+ * config (`metadata-cache/x`). Only meaningful for configuration paths: a user's content folder may
+ * legitimately be called `metadata-cache`, so content-namespace paths are never passed here.
+ */
+export function isLocalOnlyConfigPath(path: string): boolean {
+  const parts = path.split("/");
+  if (CONFIG_ROOTS.includes(parts[0]) || Object.hasOwn(RAW_ROOT, parts[0])) parts.shift();
+  if (parts.length === 0) return false;
+  if (LOCAL_ONLY_CONFIG_CHILDREN.has(parts[0].toLowerCase())) return true;
+  return parts.some(part => TEMP_FILE_NAME.test(part));
+}
+
+/**
  * Which scope flag governs a vault-relative path under `.geode/` or `.obsidian/`, or null when the path is
  * not portable configuration (workspace*.json, caches, `.geode/sync`, any other dotted path). Pure path
  * classification: whether that flag is ON is the caller's scope, not decided here.
  */
 export function portableConfigCategory(path: string): keyof SyncScope | null {
   try { validateSyncPath(path); } catch { return null; }
+  if (isLocalOnlyConfigPath(path)) return null;
   const parts = path.split("/");
   if (parts.slice(1).some(part => part.startsWith(".") || NEVER_SYNCED_SEGMENTS.has(part.toLowerCase()))) return null;
   const rule = [...CONFIG_RULES, ...OBSIDIAN_CONFIG_RULES].find(([pattern]) => pattern.test(path));
@@ -65,6 +90,7 @@ export function isPathInSyncScope(path: string, scope: Readonly<SyncScope>): boo
   if (scope.excludedFolders.some(folder => path === folder || path.startsWith(`${folder}/`))) return false;
   if (path.split("/").slice(1).some(part => part.startsWith("."))) return false;
   if (path.startsWith(".")) {
+    if (isLocalOnlyConfigPath(path)) return false;
     const rule = CONFIG_RULES.find(([pattern]) => pattern.test(path));
     return rule ? Boolean(scope[rule[1]]) : false;
   }
@@ -108,7 +134,7 @@ export const isRawConfigResourcePath = (path: string): boolean => rawPhysicalPat
  */
 export function rawConfigCategory(resource: string): keyof SyncScope | "root" | null {
   const physical = rawPhysicalPath(resource);
-  if (physical === null) return null;
+  if (physical === null || isLocalOnlyConfigPath(physical)) return null;
   if (CONFIG_ROOTS.includes(physical)) return "root";
   return portableConfigCategory(physical) ?? portableConfigCategory(`${physical}/x`);
 }

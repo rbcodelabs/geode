@@ -248,6 +248,10 @@ ported, not shared:
   never downloaded by Geode. A read the provider fails with `CONTENT_UNAVAILABLE` is also demoted to that path being
   blocked, not an error that fails the run. These are stubs and read failures only; the mobile host does not
   detect evicted-but-named files.
+* **Local caches never sync.** `.geode/metadata-cache/` and atomic-write temp files in a config root are excluded
+  by `isLocalOnlyConfigPath` (src/sync-core/scope.ts) at every choke point (desktop, mobile, headless scan; app and
+  raw-file scopes), regardless of user scope. Copies already on the hub are skipped by the planner, not downloaded,
+  deleted or counted by the rails.
 * **32 MiB bridge limit.** Binary data crosses the Capacitor bridge as base64, and the native plugin rejects a
   payload over 32 MiB (`PAYLOAD_TOO_LARGE`; the sync-private store has the same cap). The provider advertises
   100 MiB, so on iOS a local file between 32 and 100 MiB is shown as blocked (`too-large-for-mobile`) and is neither

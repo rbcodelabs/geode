@@ -466,7 +466,14 @@ export class HistoryController {
         for (const [entityId, entity] of Object.entries(derived.entities)) {
             const statuses = entity.heads.map(id => state.history.records[id]?.blob?.id).filter((id): id is string => Boolean(id)).map(id => availability[id]);
             const status = statuses.includes('corrupt') ? 'corrupt' : statuses.includes('pending') ? 'pending' : undefined;
-            if (status) blocked.push({ namespace: entity.namespace, path: entity.path ?? state.baseline[entityId]?.path ?? state.history.records[entity.heads[0]]?.location.name ?? entityId, reason: `${status}-blob` });
+            if (!status)
+                continue;
+            const blockedPath = entity.path ?? state.baseline[entityId]?.path ?? state.history.records[entity.heads[0]]?.location.name ?? entityId;
+            // An entity this device does not sync (out of scope, e.g. a cache another device uploaded) can never be applied
+            // here, so its unavailable blob must not hold this device's sync in a blocked state.
+            if (entity.path !== undefined && !this.included(snapshot, entity.namespace, entity.path))
+                continue;
+            blocked.push({ namespace: entity.namespace, path: blockedPath, reason: `${status}-blob` });
         }
         if (Object.keys(derived.quarantined).length)
             blocked.push({ namespace: 'content', path: '(remote history)', reason: 'quarantined-remote-history' });

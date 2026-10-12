@@ -167,7 +167,10 @@ same allowlist for both roots:
 The headless scope turns all of those on (`rawConfig: true`) and carries the files
 byte for byte. Never synced, whatever the scope: `workspace*.json`, `graph.json`
 and any other unlisted file in a config root, any `cache`/`caches`/`node_modules`
-folder or dot name below a config root, `.geode/sync` (reserved), `.git`, `.trash`,
+folder or dot name below a config root, `.geode/metadata-cache/` (the rebuildable
+SQLite index and `cache.json`, hundreds of MB per device) and any atomic-write
+leftover (`*.tmp`, `*.tmp-<pid>-<uuid>`) in a config root (`isLocalOnlyConfigPath`:
+no scope flag turns them on, in any scan implementation), `.geode/sync` (reserved), `.git`, `.trash`,
 `.geode-trash`, `.geode-sync-tmp`, `.worktrees`, `.DS_Store`, and every other dot path
 (`.claude`, `.gitignore`, `.gitkeep`, `.linear.json`). Symlinks anywhere, including
 inside a config root, are reported as blocked and never followed; a symlinked
@@ -181,6 +184,13 @@ On the wire a config file is a `portable-config` resource named
 asset names so they stay interchangeable with the desktop app. The desktop app
 ignores `raw.*` resources (its scope does not set `rawConfig`), and a raw-file
 host does not exchange the app's projected documents (`editor.json` ...).
+
+Out-of-scope entries that are already on the hub (uploaded by an older build, say) are
+inert: the planner skips a remote entity whose path is not in this device's scope, so
+it is never downloaded, never deleted locally, never tombstoned remotely, never
+reported as a conflict or a pending/corrupt blob, and it cannot trip rail (b) or (c)
+(neither counts anything outside the planned actions and local content files). They
+simply stay on the hub until it is cleaned by hand.
 
 Config files are not content files for the rails: they do not enter rail (c)'s
 "known" or "found" counts, and deleting one counts as a deletion under rail (b)
