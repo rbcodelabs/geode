@@ -272,6 +272,15 @@ const localReadReason = (error: unknown): string => {
     return 'local-read-failed';
 };
 /**
+ * The guarded apply refused because the local path is not in the state the plan froze (changed, a folder where a file goes,
+ * live descendants). It is a fact about this one path, so the operation is abandoned and the batch goes on; the next plan sees
+ * the path as it now is (adopts it, or reports a conflict). The text is matched because the error crosses IPC as a string.
+ */
+const isGuardRefusal = (error: unknown): boolean => {
+    const message = error instanceof Error ? error.message : String(error);
+    return /Local file changed (before|while) sync|Sync cannot replace a folder or delete live descendants|Folder acquired live descendants|Sync parent is not a directory/.test(message);
+};
+/**
  * A host that cannot hold this one file (a phone without room for a 90 MiB blob, a native build with a smaller transport
  * limit) says so with a SyncBlockedError from stage(), which survives an RPC boundary as `[blocked:<reason>]`. Anything
  * else thrown by stage() is systemic (ENOSPC, a broken journal) and still fails the run.
@@ -814,7 +823,10 @@ export class HistoryController {
             throw outcome.cause;
         return outcome.operation;
     }
+    /** Paths whose guarded apply was refused during the current run (see isGuardRefusal). */
+    private refused: HistoryPathIssue[] = [];
     private async execute(state: HistoryControllerState, plan: Plan, signal: AbortSignal): Promise<HistoryPathIssue[]> {
+        this.refused = [];
         const operations: HistoryOperation[] = [];
         const demoted: HistoryPathIssue[] = [];
         // No mutation before the whole ordered batch is durably ready; this is what
@@ -853,7 +865,7 @@ export class HistoryController {
         Object.assign(state.baseline, plan.adoptions);
         await this.save(state, signal);
         await this.releaseTerminal(operations, signal);
-        return demoted;
+        return [...demoted, ...this.refused];
     }
     /**
      * The one place a batch is actually performed, shared by a fresh run and by
@@ -1068,7 +1080,19 @@ export class HistoryController {
             if (!apply)
                 throw new Error('Missing guarded operation');
             tick();
-            await this.checked(signal, () => this.ports.apply({ ...apply, ...(data ? { data } : {}) }));
+            try {
+                await this.checked(signal, () => this.ports.apply({ ...apply, ...(data ? { data } : {}) }));
+            }
+            catch (error) {
+                this.assert(signal);
+                if (!isGuardRefusal(error))
+                    throw error;
+                // One path that no longer matches its plan must not wedge the run (and every retry of it) forever.
+                operation.phase = 'abandoned';
+                await this.checked(signal, () => this.ports.saveOperation(operation));
+                this.refused.push({ namespace: operation.record.namespace, path: operation.path, reason: 'local-changed-before-apply' });
+                return;
+            }
         }
         operation.phase = 'committed';
         await this.checked(signal, () => this.ports.saveOperation(operation));

@@ -53,6 +53,7 @@ const BINDING = /^[a-f0-9]{64}$/;
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 const toHex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map(value => value.toString(16).padStart(2, "0")).join("");
 export const sha256Hex = async (data: ArrayBuffer | Uint8Array): Promise<string> => toHex(await crypto.subtle.digest("SHA-256", data as ArrayBuffer));
+const describeHash = (hash: string | null): string => hash === null ? "absent" : hash === "folder" ? "a folder" : hash.slice(0, 12);
 const copyBuffer = (bytes: Uint8Array): ArrayBuffer => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.byteLength === b.byteLength && a.every((value, index) => value === b[index]);
 
@@ -309,7 +310,10 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
         if (current.hash === desiredHash) { receipt.state = "applied"; await writeReceipt(receipt); return { status: "already-applied", hash: desiredHash, recoveryPath }; }
         if (receipt.state === "applied") throw new Error("Local file changed after sync application");
       }
-      if (current.hash !== input.expectedHash) throw new Error("Local file changed before sync application");
+      // Nothing to protect and nothing to do: the target already is what this operation would make it. A fresh operation id (a
+      // re-plan after an interrupted run wrote the file but never recorded it) lands here too, not only a retry of the same one.
+      if (current.hash !== input.expectedHash && !receipt && current.hash === desiredHash) return { status: "already-applied", hash: desiredHash, recoveryPath };
+      if (current.hash !== input.expectedHash) throw new Error(`Local file changed before sync application: ${physicalPath} (expected ${describeHash(input.expectedHash)}, found ${describeHash(current.hash)})`);
       if (current.hash === "folder" && (input.kind !== "trash" || current.children)) throw new Error("Sync cannot replace a folder or delete live descendants");
       if (!receipt) {
         if (current.bytes) await ports.privateStore.write(`${recoveryPath}/before`, new Uint8Array(current.bytes));
@@ -320,7 +324,7 @@ export function createMobileSyncSafety(ports: MobileSyncPorts, options: MobileSy
       if (input.kind === "write") await ensureParents(physicalPath, walked.stats, input.operationId);
       await options.checkpoint?.("staged");
       const latest = await snapshot(physicalPath, await recheckTarget(physicalPath));
-      if (latest.hash !== input.expectedHash) throw new Error("Local file changed while sync prepared recovery");
+      if (latest.hash !== input.expectedHash) throw new Error(`Local file changed while sync prepared recovery: ${physicalPath} (expected ${describeHash(input.expectedHash)}, found ${describeHash(latest.hash)})`);
       if (current.hash === "folder" && latest.children) throw new Error("Folder acquired live descendants");
       currentOwner(ownerToken);
       if (input.kind === "write") await ports.vault.writeBinary(physicalPath, input.data!, input.operationId);

@@ -146,7 +146,8 @@ describe("trash and mkdir", () => {
     expect(vault.trashed).toEqual([]);
     await expect(safety.apply(token, { operationId: uuid(), path: "A/B/C", expectedHash: null, kind: "mkdir" })).resolves.toMatchObject({ status: "applied", hash: "folder" });
     expect(vault.folders.has("A/B/C")).toBe(true);
-    await expect(safety.apply(token, { operationId: uuid(), path: "A/B/C", expectedHash: null, kind: "mkdir" })).rejects.toThrow(/changed before/);
+    // A folder that is already there is what a mkdir would make: satisfied, not refused (a fresh id after an interrupted run).
+    await expect(safety.apply(token, { operationId: uuid(), path: "A/B/C", expectedHash: null, kind: "mkdir" })).resolves.toMatchObject({ status: "already-applied", hash: "folder" });
   });
 });
 
@@ -597,5 +598,35 @@ describe("files over the 32 MiB single-call bridge limit (up to the 100 MiB sync
     await expect(host.vaultFiles.readBinary("Media/huge.bin")).rejects.toBeInstanceOf(SyncBlockedError);
     vault.chunked = false;
     await expect(host.vaultFiles.readBinary("Media/clip.bin")).rejects.toMatchObject({ syncBlockedReason: "too-large-for-mobile" });
+  });
+});
+
+describe("guard refusals say which file, and an operation that is already satisfied is not refused", () => {
+  const countWrites = (vault: FakeManagedVault) => vault.calls.filter(call => call.startsWith("writeBinary")).length;
+  it("names the path and the expected/actual state", async () => {
+    const { vault, safety, token } = await open();
+    vault.put("Notes/a.md", "local");
+    const error = await safety.apply(token, write("Notes/a.md", "remote", null)).catch(caught => caught);
+    expect(error.message).toMatch(/^Local file changed before sync application: Notes\/a\.md \(expected absent, found [0-9a-f]{12}\)$/);
+    vault.folders.add("Notes/dir"); vault.put("Notes/dir/child.md", "x");
+    const folder = await safety.apply(token, write("Notes/dir", "file", null)).catch(caught => caught);
+    expect(folder.message).toContain("Notes/dir (expected absent, found a folder)");
+  });
+  it("a fresh operation id over a file that already has the desired bytes is already-applied, without writing; different bytes are still refused", async () => {
+    const { vault, safety, token } = await open();
+    vault.put("Notes/a.md", "remote content");
+    const before = countWrites(vault);
+    const result = await safety.apply(token, write("Notes/a.md", "remote content", null));   // stale expectation (absent), new operation id
+    expect(result.status).toBe("already-applied"); expect(result.hash).toBe(await hash("remote content"));
+    expect(countWrites(vault)).toBe(before);
+    await expect(safety.apply(token, write("Notes/a.md", "other content", null))).rejects.toThrow(/changed before sync application/);
+    expect(vault.text("Notes/a.md")).toBe("remote content");
+  });
+  it("a mkdir of an existing folder and a trash of an absent file are already-applied", async () => {
+    const { vault, safety, token } = await open();
+    vault.put("Top/keep.md", "x");
+    expect((await safety.apply(token, { operationId: uuid(), path: "Top", expectedHash: null, kind: "mkdir" })).status).toBe("already-applied");
+    expect((await safety.apply(token, { operationId: uuid(), path: "Top/gone.md", expectedHash: await hash("was here"), kind: "trash" })).status).toBe("already-applied");
+    expect(vault.trashed).toEqual([]);
   });
 });

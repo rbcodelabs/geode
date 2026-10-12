@@ -109,7 +109,10 @@ export async function applyGuardedMutation(root: string, recoveryRoot: string, i
       }
       if (receipt.state === "applied") throw new Error("Local file changed after sync application");
     }
-    if (current.hash !== input.expectedHash) throw new Error("Local file changed before sync application");
+    // Already what this operation would make it: nothing to protect, nothing to do (also for a fresh operation id after an interrupted run).
+    const describe = (value: string | null) => value === null ? "absent" : value === "folder" ? "a folder" : value.slice(0, 12);
+    if (current.hash !== input.expectedHash && !receipt && current.hash === desiredHash) return { status: "already-applied", hash: desiredHash, recoveryPath };
+    if (current.hash !== input.expectedHash) throw new Error(`Local file changed before sync application: ${physicalPath} (expected ${describe(input.expectedHash)}, found ${describe(current.hash)})`);
     if (current.hash === "folder" && (input.kind !== "trash" || (await fs.readdir(target)).length)) throw new Error("Sync cannot replace a folder or delete live descendants");
     await ensureDurableDirectory(recoveryPath);
     if (!receipt) {

@@ -609,3 +609,48 @@ describe('staged bytes are released per operation, journal first', () => {
         expect(stagedBeforeApply).toEqual([4, 4, 4, 4]); expect(b.staged.size).toBe(0);
     });
 });
+describe('a path that no longer matches its plan', () => {
+    const refusal = (path: string) => new Error(`Local file changed before sync application: ${path} (expected absent, found a folder)`);
+    const files = { 'a.md': 'aaaa', 'b.md': 'bbbb', 'c.md': 'cccc' };
+    it('is abandoned and reported while the rest of the batch applies; the next run is not wedged', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = client(r), apply = b.ports.apply, attempts: string[] = [];
+        b.ports.apply = async input => { attempts.push(input.path); if (input.path === 'b.md') throw refusal('b.md'); return apply(input); };
+        const result = await start(b);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'b.md', reason: 'local-changed-before-apply' });
+        expect(b.text('a.md')).toBe('aaaa'); expect(b.text('c.md')).toBe('cccc'); expect(b.files.has('b.md')).toBe(false);
+        expect(b.state()!.pendingBatch).toBeUndefined();
+        // Not retried from a stale journal: the next run re-plans b.md from what is on disk now.
+        attempts.length = 0; b.ports.apply = apply;
+        await b.controller.run({}, signal());
+        expect(b.text('b.md')).toBe('bbbb');
+    });
+    it('also unwedges recovery of an interrupted batch whose journal froze a stale expectation', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = client(r), apply = b.ports.apply; let applied = 0;
+        b.ports.apply = async input => { if (applied === 1) throw new Error('process killed'); applied++; return apply(input); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('process killed');
+        b.restart(); b.ports.apply = async input => { if (input.path === 'b.md') throw refusal('b.md'); return apply(input); };
+        // Every retry used to fail on b.md forever; now recovery finishes and clears the pending batch.
+        await b.controller.run({}, signal());
+        expect(b.state()!.pendingBatch).toBeUndefined();
+        expect(b.text('a.md')).toBe('aaaa'); expect(b.text('c.md')).toBe('cccc');
+    });
+    it('still fails the run for a systemic apply error', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one' }); await start(a);
+        const b = client(r); b.ports.apply = async () => { throw new Error('native write failed'); };
+        await expect(start(b)).rejects.toThrow('native write failed');
+    });
+    it('a file that already holds the remote content is adopted: no write is planned, none attempted', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        // The interrupted-run aftermath: the bytes are on disk, nothing was recorded.
+        const b = client(r, files), apply = b.ports.apply; let writes = 0;
+        b.ports.apply = async input => { writes++; return apply(input); };
+        const preview = await b.controller.preview(signal());
+        expect(preview.downloads).toBe(0); expect(preview.conflicts).toEqual([]);
+        await b.controller.run({ approvePreview: true }, signal());
+        expect(writes).toBe(0);
+        expect(Object.values(b.state()!.baseline).filter(item => item.present && item.kind === 'file')).toHaveLength(3);
+    });
+});
