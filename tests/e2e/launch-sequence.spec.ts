@@ -57,3 +57,50 @@ test("launch screen shows plugin steps, then dismisses; failures never block the
     fs.rmSync(vaultPath, { recursive: true, force: true });
   }
 });
+
+const SKIP_MAIN_JS = `const { Plugin } = require("obsidian");
+module.exports = class extends Plugin {
+  onload() {
+    this.app.launch.registerStep({
+      id: "e2e-launch:optional", title: "Optional warmup", order: 1, optional: true,
+      run(ctx) { ctx.setProgress("warming caches"); return new Promise((_r, rej) => ctx.signal.addEventListener("abort", () => rej(new Error("aborted")))); },
+    });
+    this.app.launch.registerStep({
+      id: "e2e-launch:after", title: "After warmup", order: 2,
+      async run() { await new Promise((r) => setTimeout(r, 3000)); },
+    });
+  }
+};`;
+
+test("Skip button on a running optional step skips it, the sequence continues, and the vault opens", async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-e2e-"));
+  const vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), "geode-vault-"));
+  const dir = path.join(vaultPath, ".geode", "plugins", "e2e-launch");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(MANIFEST));
+  fs.writeFileSync(path.join(dir, "main.js"), SKIP_MAIN_JS);
+  fs.writeFileSync(path.join(vaultPath, ".geode", "plugins.json"), JSON.stringify(["e2e-launch"]));
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultPath], lastVault: vaultPath }));
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot, env: { ...process.env } });
+  try {
+    const window = await app.firstWindow();
+    const overlay = window.locator(".launch-overlay");
+    await expect(overlay).toBeVisible({ timeout: 15_000 });
+    const skip = overlay.locator(".launch-overlay-skip");
+    await expect(skip).toBeVisible();
+    await expect(skip).toHaveText("Skip “Optional warmup”");
+    await skip.click();
+    // The optional step is marked skipped and the next step starts running.
+    await expect(overlay.locator(".launch-overlay-step.is-running .launch-overlay-step-title")).toHaveText("After warmup");
+    await expect(overlay.locator(".launch-overlay-step.is-skipped", { hasText: "Optional warmup" })).toHaveCount(1);
+    // The next step is required, so Skip is hidden again.
+    await expect(skip).toBeHidden();
+    await expect(overlay).toHaveCount(0, { timeout: 15_000 });
+    await expect(window.locator(".workspace")).toBeVisible();
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  }
+});
