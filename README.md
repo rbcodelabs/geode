@@ -251,6 +251,7 @@ spike, not a released cloud service.
 npm install
 npm run build      # bundle main/preload/renderer with esbuild
 npm start          # launch Electron
+npm run fresh      # launch an isolated first-run instance (build first)
 npm run dev        # esbuild watch mode
 npm run typecheck  # strict tsc
 npm run parity:check # verify the checked-in Obsidian compatibility ledger is current
@@ -259,6 +260,24 @@ npm run release     # same, plus publish (prefer the protected GitHub workflow)
 ```
 
 A demo vault lives in `test-vault/`.
+
+### Test a first run
+
+`npm run fresh` launches Geode as if it had never been installed: empty app data
+and an empty Documents folder, so nothing from your real install or an earlier
+dev run leaks in. Run `npm run build` first; the command does not build.
+
+```bash
+npm run fresh            # temp dirs are deleted when you quit
+npm run fresh -- --keep  # keep them, to inspect config or the Starter Vault
+```
+
+On first run Geode creates and opens a `Geode Starter Vault`. That folder lives
+in the OS Documents directory, which `--user-data-dir` does not redirect, so the
+script points `GEODE_DOCUMENTS_DIR` at a temp folder too. Your real
+`~/Documents/Geode Starter Vault` is never touched. The temp dirs are named
+`fresh-instance-*` rather than `geode-*` because `npm run e2e:kill` reaps
+`geode-*` dirs and their processes.
 
 ### Develop the iOS shell
 
