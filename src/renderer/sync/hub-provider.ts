@@ -1,5 +1,5 @@
 import { APPEND_ONLY_PROTOCOL, type AppendOnlySession, type AppendOnlySyncProvider, type BlobRef, type HistoryRecord, type HistoryScan, type VaultDescriptor } from "./history-types";
-import type { HubConfig, HubErrorInfo, HubRequest, HubResultMap, HubSyncBridge, HubTarget } from "../../shared/hub-sync";
+import { hubTargetProblem, type HubConfig, type HubErrorInfo, type HubProbeResult, type HubRequest, type HubResultMap, type HubSyncBridge, type HubTarget } from "../../shared/hub-sync";
 
 /**
  * Built-in sync provider "Folder or SSH hub": the same hub stores the headless `geode-wiki sync` uses, reachable
@@ -42,8 +42,18 @@ export class HubSyncProvider implements AppendOnlySyncProvider {
     if (value.schema !== 1 || !value.target || typeof value.target.path !== "string") throw new Error("Hub configuration is invalid; configure the hub again");
     return value;
   }
+  /** Validates (the same strict rules main applies) and saves. Hostile or malformed input is refused here, before any ssh could be spawned. */
   async setConfig(config: HubConfig): Promise<void> {
-    await this.deviceState.write(this.configKey(), { schema: 1, target: normaliseTarget(config.target), create: config.create === true } satisfies HubConfig);
+    const target = normaliseTarget(config.target);
+    const problem = hubTargetProblem(target);
+    if (problem) throw new HubSyncError({ code: "invalid-target", message: problem });
+    await this.deviceState.write(this.configKey(), { schema: 1, target, create: config.create === true } satisfies HubConfig);
+  }
+
+  /** "Test connection": reachability and, when creating is on, whether the hub can be created. Creates nothing. */
+  async probe(signal: AbortSignal): Promise<HubProbeResult> {
+    const config = await this.requireConfig();
+    return this.invoke({ method: "probe", target: config.target, create: config.create }, signal);
   }
   clearConfig(): Promise<void> { return this.deviceState.remove(this.configKey()); }
 

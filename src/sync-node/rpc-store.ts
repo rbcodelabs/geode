@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { hubTargetProblem } from "../shared/hub-sync";
 import { spawn } from "node:child_process";
 import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySession, type AppendOnlySyncProvider, type BlobRef, type HistoryRecord, type HistoryScan, type VaultDescriptor } from "../sync-core/history-types";
 import { FrameParser, FrameWriter, type Frame, PROTOCOL_NAME, PROTOCOL_VERSION, type WritableLike } from "./rpc-framing";
@@ -318,7 +319,6 @@ export function spawnTransport(command: SpawnCommand, onStderr?: (line: string) 
   return { drained, input: child.stdout, output: child.stdin, close: () => { child.stdin.destroy(); if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); } };
 }
 
-const SAFE_HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@:%\[\]-]*$/;
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /**
@@ -328,10 +328,10 @@ const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
  * `command` replaces the whole invocation (tests run the server directly).
  */
 export function spawnSshStore(options: { host: string; storePath: string; sshOptions?: string[]; command?: SpawnCommand; onStderr?: (line: string) => void; onTransport?: (transport: StoreTransport) => void }): RpcStoreProvider {
-  if (!options.command && !SAFE_HOST.test(options.host)) throw new SyncStoreError("invalid-request", "Invalid ssh host");
+  if (!options.command) { const problem = hubTargetProblem({ kind: "ssh", host: options.host, path: options.storePath }); if (problem) throw new SyncStoreError("invalid-request", problem); }
   const command: SpawnCommand = options.command ?? {
     file: "ssh",
-    args: ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4", ...(options.sshOptions ?? []), options.host, `geode-wiki sync serve --store ${shellQuote(options.storePath)}`],
+    args: ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4", ...(options.sshOptions ?? []), "--", options.host, `geode-wiki sync serve --store ${shellQuote(options.storePath)}`],
   };
   return new RpcStoreProvider(() => { const transport = spawnTransport(command, options.onStderr); options.onTransport?.(transport); return transport; });
 }

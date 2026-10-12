@@ -20,6 +20,7 @@ export interface HubOpenReply {
 
 export type HubRequest =
   | { method: "discover"; target: HubTarget }
+  | { method: "probe"; target: HubTarget; create: boolean }
   | { method: "createVault"; target: HubTarget; input: { name: string; operationId: string } }
   | { method: "open"; target: HubTarget; binding: VaultDescriptor; deviceId: string }
   | { method: "scan"; sessionId: string; cursor: string | undefined }
@@ -31,6 +32,7 @@ export type HubRequest =
 
 export interface HubResultMap {
   discover: VaultDescriptor[];
+  probe: HubProbeResult;
   createVault: VaultDescriptor;
   open: HubOpenReply;
   scan: HistoryScan;
@@ -56,3 +58,30 @@ export interface HubConfig {
   /** Allows creating a new, empty hub vault in the store. Without it a typo cannot silently start a second history. */
   create: boolean;
 }
+
+/**
+ * Strict ssh host grammar: a hostname, IPv4 address or ~/.ssh/config alias, optionally `user@`. It must start with an
+ * alphanumeric (never `-`, so ssh can never read it as an option), and contains no whitespace, control characters,
+ * quotes, `;`, `$`, backticks or any other shell/ssh metacharacter. IPv6 literals are not accepted; use an alias.
+ */
+export const SSH_HOST_PATTERN = /^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}@)?[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$/;
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/** A human-readable reason a hub target is unusable, or null. Pure, so the settings UI and the main process agree. */
+export function hubTargetProblem(value: unknown): string | null {
+  const target = value as { kind?: unknown; path?: unknown; host?: unknown } | null;
+  if (!target || typeof target !== "object") return "No hub is configured";
+  if (typeof target.path !== "string" || !target.path.trim()) return "Enter the hub store path";
+  if (CONTROL.test(target.path)) return "The hub path contains a control character (newline, tab or NUL)";
+  if (target.kind === "fs") return /^(?:\/|[A-Za-z]:[\\/])/.test(target.path) ? null : "The hub folder must be an absolute path";
+  if (target.kind === "ssh") {
+    if (typeof target.host !== "string" || !SSH_HOST_PATTERN.test(target.host)) return "Enter a valid ssh host: a host name or ~/.ssh/config alias, optionally user@host (no spaces, quotes or leading dash)";
+    if (target.path.split("/").includes("..")) return "The hub path on the ssh host must not contain '..'";
+    return null;
+  }
+  return "Unknown hub kind";
+}
+
+/** Result of "Test connection": what was reachable, and what was (not) checked. */
+export interface HubProbeResult { vaults: VaultDescriptor[]; detail: string }

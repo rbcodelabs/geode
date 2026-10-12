@@ -47,6 +47,7 @@ it("drives the real binary in real subprocesses, with an enforced layering", () 
     "src/cli/sync.ts",
     "src/renderer/api/frontmatter.ts",
     "src/renderer/comments/model.ts",
+    "src/shared/hub-sync.ts",
     "src/shared/portable-assets.ts",
     "src/sync-core/history-controller.ts",
     "src/sync-core/history-reducer.ts",

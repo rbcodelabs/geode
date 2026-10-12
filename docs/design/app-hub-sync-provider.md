@@ -72,6 +72,28 @@ thrown errors) and rethrown renderer-side as `HubSyncError`.
 * Electron started from the Dock has no `SSH_AUTH_SOCK`; keys must be usable without an agent (the same
   limitation as the launchd schedule in the CLI doc). Surfaced as the authentication message above.
 
+## Hostile input, deadlines, Test connection (QA follow-up)
+
+* **The ssh host is user-controlled.** `hubTargetProblem` (`src/shared/hub-sync.ts`, shared by the form, the
+  provider and main, and by `spawnSshStore` so the CLI gets it too) accepts only a host name, IPv4 address or
+  `~/.ssh/config` alias, optionally `user@`: it must start alphanumeric, no whitespace/control characters,
+  quotes, `;`, `$`, backticks, `:`, `/`, brackets. ssh is always spawned from an argv array (never a shell) with
+  `--` before the host. The store path is single-quoted with the existing `shellQuote`; control characters
+  (newline, NUL) and `..` segments are refused. The form refuses bad values with a message and saves nothing;
+  main re-validates every request. Tests assert ssh is never spawned for hostile hosts.
+* **No operation can wedge the UI.** Every connecting call races a deadline (30 s ssh, 15 s folder) against the
+  store call itself, so a store that never settles (and ignores its abort signal) still rejects with a
+  "Timed out accessing the hub folder <typed path>" error and releases the provider. Creating a vault first runs
+  a read-only pre-check (`inspectFsHub`) that walks up to the nearest existing ancestor, so an impossible path
+  (a file in the way, an unwritable or non-existent root) fails at once with a message that names the path the
+  user typed. errno messages never leak internal `blobs/`/`records/` paths.
+* **Test connection** is a `probe` request: for a folder it reports reachable vaults plus, with "Create the hub if
+  it is missing" on (or the folder missing), whether the hub can be created/written (access checks on the nearest
+  existing ancestor; nothing is created). For an existing hub with Create off it says it checked read access only.
+  Over ssh it can only list vaults; creatability is known when you create.
+* **Settings save themselves** (debounced 300 ms) and "Create shared vault" / "Find shared vaults" / "Test
+  connection" flush a pending save first, so a ticked box is never ignored for want of a Save click.
+
 ## Safety rails
 
 Rails live in `src/sync-core/rails.ts` (pure; the CLI's `wiki-sync.ts` now imports the same constants

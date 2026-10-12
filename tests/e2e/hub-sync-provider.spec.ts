@@ -62,13 +62,32 @@ test("two desktop app instances sync through a directory hub with the built-in F
     let modal = await openSyncTab(page);
     await modal.getByRole("combobox", { name: "Sync provider" }).selectOption("geode.hub");
     await expect(modal.getByRole("textbox", { name: "Hub store path" })).toBeVisible();
-    await modal.getByRole("textbox", { name: "Hub store path" }).fill(hub);
-    await modal.getByRole("checkbox", { name: "Create the hub if it is missing" }).check();
-    await modal.getByRole("button", { name: "Save hub settings" }).click();
-    await expect(modal.locator("[data-hub-result]")).toContainText("saved");
+    await expect(modal).toContainText("Setup needed");
+    const result = modal.locator("[data-hub-result]");
+    // Hostile ssh hosts are refused in the form, with a clear message (and nothing is spawned).
+    await modal.getByRole("combobox", { name: "Hub type" }).selectOption("ssh");
+    await modal.getByRole("textbox", { name: "Hub ssh host" }).fill("-oProxyCommand=evil");
+    await modal.getByRole("textbox", { name: "Hub store path" }).fill("/srv/hub");
     await modal.getByRole("button", { name: "Test connection" }).click();
-    await expect(modal.locator("[data-hub-result]")).toContainText("holds no vault yet");
+    await expect(result).toContainText("valid ssh host");
+    await modal.getByRole("combobox", { name: "Hub type" }).selectOption("fs");
+    // A folder that cannot be created is reported legibly by Test connection, even with Create on.
+    await modal.getByRole("textbox", { name: "Hub store path" }).fill("/geode-e2e-nonexistent-root/hub");
+    await modal.getByRole("checkbox", { name: "Create the hub if it is missing" }).check();
+    await modal.getByRole("button", { name: "Test connection" }).click();
+    await expect(result).toContainText(/Cannot create .*no write permission/);
+    await expect(result).not.toContainText("holds no vault yet");
 
+    // Typing the path and ticking Create is enough: no Save click. "Create shared vault" must see both.
+    await modal.getByRole("textbox", { name: "Hub store path" }).fill(hub);
+    await modal.getByRole("button", { name: "Test connection" }).click();
+    await expect(result).toContainText("holds no vault yet");
+    await expect(result).toContainText("can be created");
+    expect(fs.existsSync(hub), "Test connection creates nothing").toBe(false);
+
+    // Flip the box off and on and click straight away: the debounced autosave must be flushed by the click itself.
+    await modal.getByRole("checkbox", { name: "Create the hub if it is missing" }).uncheck();
+    await modal.getByRole("checkbox", { name: "Create the hub if it is missing" }).check();
     await modal.getByRole("textbox", { name: "Shared vault name" }).fill("E2E Hub");
     await modal.getByRole("button", { name: "Create shared vault" }).click();
     await expect(modal).toContainText('Bound to shared vault "E2E Hub"');

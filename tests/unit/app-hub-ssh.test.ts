@@ -47,6 +47,8 @@ describe("the default ssh transport", () => {
     // ssh was invoked non-interactively, with a connect timeout, to the configured alias, running the documented command.
     const argv = readFileSync(log, "utf8").trim().split("\n");
     expect(argv).toEqual(expect.arrayContaining(["-o", "BatchMode=yes", "ConnectTimeout=10", "geode-hub"]));
+    // `--` ends option parsing before the host, so the host can never be read as an ssh option.
+    expect(argv[argv.length - 3]).toBe("--"); expect(argv[argv.length - 2]).toBe("geode-hub");
     expect(argv[argv.length - 1]).toBe(`geode-wiki sync serve --store '${store}'`);
 
     // A CLI device on the store directory itself (the hub machine's own view) converges with it.

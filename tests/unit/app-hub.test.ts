@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { dispatchHubRequest } from "../../src/main/hub-sync-ipc";
-import { HubError, HubStoreManager, classifySshFailure, validateHubTarget } from "../../src/sync-node/app-hub";
+import { HubError, HubStoreManager, classifySshFailure, inspectFsHub, validateHubTarget } from "../../src/sync-node/app-hub";
+import { spawnSshStore } from "../../src/sync-node/rpc-store";
 import { SyncStoreError } from "../../src/sync-node/store-errors";
 import type { AppendOnlySyncProvider } from "../../src/sync-core/history-types";
 import { HubSyncError, HubSyncProvider } from "../../src/renderer/sync/hub-provider";
@@ -23,9 +26,86 @@ describe("validateHubTarget", () => {
   });
   it.each([
     [null], [{}], [{ kind: "fs" }], [{ kind: "fs", path: "relative/hub" }], [{ kind: "fs", path: "/a\0b" }], [{ kind: "fs", path: "  " }],
-    [{ kind: "ssh", host: "-oProxyCommand=evil", path: "/x" }], [{ kind: "ssh", host: "a b", path: "/x" }], [{ kind: "ssh", host: "", path: "/x" }], [{ kind: "ssh", path: "/x" }],
-    [{ kind: "ftp", path: "/x" }],
+    [{ kind: "ssh", host: "", path: "/x" }], [{ kind: "ssh", path: "/x" }], [{ kind: "ftp", path: "/x" }],
+    [{ kind: "fs", path: "/a\nb" }], [{ kind: "ssh", host: "h", path: "/a\nb" }], [{ kind: "ssh", host: "h", path: "/a/../b" }],
   ])("refuses %j", value => { expect(() => validateHubTarget(value)).toThrow(HubError); });
+
+  // The host is user-controlled and ends up in an ssh argv: nothing that ssh or a shell could read as more than a name.
+  it.each([
+    "-oProxyCommand=evil", "-F/x", "-F", "--", "-", "user@-oFoo", "-oFoo@host", "a b", "a\tb", "a\nb", "host\n", "host;id", "host&&id", "host|id", "host`id`", "host$(id)", "$HOST",
+    "ho'st", 'ho"st', "ho\\st", "host:22", "host/path", "host#x", "host!", "host*", "host?", "[::1]", "user@", "@host", "user@@host", " host", "host ", "h\u0000st", "hôst", ".", "a..".repeat(100),
+  ])("refuses the hostile ssh host %j", host => {
+    expect(() => validateHubTarget({ kind: "ssh", host, path: "/x" })).toThrow(HubError);
+  });
+
+  it("never spawns ssh for a hostile host, from the IPC dispatcher or from spawnSshStore", async () => {
+    const bin = dir("ssh-marker"), marker = join(bin, "spawned");
+    writeFileSync(join(bin, "ssh"), `#!/bin/sh\ntouch "${marker}"\n`); chmodSync(join(bin, "ssh"), 0o755);
+    const original = process.env.PATH; process.env.PATH = `${bin}:${original}`;
+    try {
+      for (const host of ["-oProxyCommand=touch /tmp/pwned", "-F/x", "user@-oFoo", "a b"]) {
+        const response = await dispatchHubRequest(new HubStoreManager(), "w", { method: "discover", target: { kind: "ssh", host, path: "/h" } }, never);
+        expect(response).toMatchObject({ ok: false, error: { code: "invalid-target" } });
+        expect(() => spawnSshStore({ host, storePath: "/h" })).toThrow();
+      }
+      expect(() => spawnSshStore({ host: "ok", storePath: "/h\nrm -rf /" })).toThrow();
+      expect(existsSync(marker)).toBe(false);
+    } finally { process.env.PATH = original; }
+  });
+});
+
+describe("inspectFsHub (Test connection / create pre-check; nothing is created)", () => {
+  it("an existing readable hub is reported as a read-only check", async () => {
+    const hub = dir("exists");
+    expect(await inspectFsHub(hub, false)).toMatchObject({ exists: true, detail: expect.stringContaining("write access was not checked") });
+    expect(await inspectFsHub(hub, true)).toMatchObject({ exists: true, detail: expect.stringContaining("writable") });
+  });
+  it("a missing folder under a writable ancestor is creatable, and is not created", async () => {
+    const root = dir("root"), hub = join(root, "a", "b", "hub");
+    expect(await inspectFsHub(hub, true)).toMatchObject({ exists: false, detail: expect.stringContaining("can be created") });
+    expect(existsSync(join(root, "a"))).toBe(false);
+    expect((await inspectFsHub(hub, false)).detail).toContain("does not exist yet");
+  });
+  it.skipIf(process.getuid?.() === 0)("an unwritable ancestor is reported as 'cannot create', naming the typed path", async () => {
+    const root = dir("ro"); chmodSync(root, 0o500);
+    try { await expect(inspectFsHub(join(root, "hub"), true)).rejects.toMatchObject({ message: expect.stringMatching(/Cannot create .*hub: no write permission in/) }); }
+    finally { chmodSync(root, 0o700); }
+    await expect(inspectFsHub("/geode-nonexistent-root/hub", true)).rejects.toMatchObject({ message: expect.stringContaining("/geode-nonexistent-root/hub") });
+  });
+  it("a file in the path is named as such, without internal blobs/ paths", async () => {
+    const root = dir("file"); writeFileSync(join(root, "afile"), "x");
+    for (const hub of [join(root, "afile"), join(root, "afile", "hub"), join(root, "afile", "x", "hub")]) {
+      const error = await inspectFsHub(hub, true).catch(e => e);
+      expect(error).toBeInstanceOf(HubError); expect(error.message).toContain(root); expect(error.message).not.toMatch(/blobs|records/);
+    }
+    // And through the real create path (the errno from mkdir is translated, not leaked).
+    const manager = new HubStoreManager();
+    const failure = await manager.createVault({ kind: "fs", path: join(root, "afile", "hub") }, { name: "x", operationId: "o" }).catch(e => e);
+    expect(failure.message).toContain(join(root, "afile", "hub")); expect(failure.message).not.toMatch(/blobs|records/);
+  });
+  it("Test connection through the dispatcher reports reachability plus the create check", async () => {
+    const root = dir("probe"), hub = join(root, "hub"), manager = new HubStoreManager();
+    const response = await dispatchHubRequest(manager, "w", { method: "probe", target: { kind: "fs", path: hub }, create: true }, never);
+    expect(response).toMatchObject({ ok: true, value: { vaults: [], detail: expect.stringContaining("can be created") } });
+    expect(existsSync(hub)).toBe(false);
+  });
+});
+
+describe("a folder hub that never answers cannot wedge the caller", () => {
+  const hung = (onClose?: () => void) => ({
+    id: "x", name: "x", protocol: "append-only-history-v1", capabilities: { binary: true, conditionalWrites: false, appendOnly: true, delta: true, maxFileSize: 104857600 },
+    discover: () => new Promise(() => {}), createVault: () => new Promise(() => {}), open: () => new Promise(() => {}),
+    close: async () => { onClose?.(); },
+  } as unknown as AppendOnlySyncProvider & { close(): Promise<void> });
+  it.each(["discover", "createVault"] as const)("%s times out with a legible error even though the store ignores its signal", async method => {
+    let closed = false;
+    const manager = new HubStoreManager({ connectTimeoutMs: 60, fsProvider: () => hung(() => { closed = true; }) });
+    const root = dir("hang"), target = { kind: "fs" as const, path: join(root, "hub") };
+    const started = Date.now();
+    const call = method === "discover" ? manager.discover(target) : manager.createVault(target, { name: "n", operationId: "o" });
+    await expect(call).rejects.toMatchObject({ code: "timeout", message: expect.stringContaining(join(root, "hub")) });
+    expect(Date.now() - started).toBeLessThan(2000); expect(closed).toBe(true);
+  });
 });
 
 describe("classifySshFailure turns ssh's words into a status a person can act on", () => {
@@ -140,9 +220,18 @@ describe("HubSyncProvider", () => {
     await provider.clearConfig(); expect(await provider.getConfig()).toBeNull();
   });
 
+  it("refuses hostile or malformed settings with a clear message and saves nothing", async () => {
+    const { provider, state } = mk(dir("h"));
+    for (const target of [{ kind: "ssh" as const, host: "-oProxyCommand=evil", path: "/h" }, { kind: "ssh" as const, host: "a b", path: "/h" }, { kind: "ssh" as const, host: "h", path: "/h\n/x" }, { kind: "fs" as const, path: "relative" }, { kind: "fs" as const, path: "" }]) {
+      const error = await provider.setConfig({ schema: 1, target, create: false }).catch(e => e);
+      expect(error).toBeInstanceOf(HubSyncError); expect(error.code).toBe("invalid-target"); expect(error.message).toMatch(/valid ssh host|absolute|control character|Enter the hub/);
+    }
+    expect(state.size).toBe(0);
+  });
+
   it("surfaces main-process failures as HubSyncError with code and hint", async () => {
-    const { provider } = mk(dir("h"));
-    await provider.setConfig({ schema: 1, target: { kind: "fs", path: "relative" }, create: false });
+    const { provider, state } = mk(dir("h"));
+    state.set("sync-hub/config//vault/a", { schema: 1, target: { kind: "fs", path: "relative" }, create: false }); // as if edited on disk: main re-validates
     const error = await provider.discover(never).catch(e => e);
     expect(error).toBeInstanceOf(HubSyncError); expect(error.code).toBe("invalid-target");
   });

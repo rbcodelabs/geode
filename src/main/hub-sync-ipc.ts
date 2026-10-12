@@ -10,6 +10,7 @@ export async function dispatchHubRequest(manager: HubStoreManager, owner: string
   try {
     switch (request.method) {
       case "discover": return { ok: true, value: await manager.discover(validateHubTarget(request.target), signal) };
+      case "probe": return { ok: true, value: await manager.probe(validateHubTarget(request.target), request.create === true, signal) };
       case "createVault": {
         const input = request.input;
         if (typeof input?.name !== "string" || !input.name.trim() || typeof input.operationId !== "string" || !input.operationId) throw new HubError("invalid-request", "A vault name is required");
