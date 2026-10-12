@@ -77,6 +77,8 @@ export interface HistoryControllerState {
     approved: boolean;
     scopeKey?: string;
     previewSignature?: string;
+    /** Diagnostic only: per-part hashes of the previewed plan, logged if Confirm computes a different signature. */
+    previewParts?: Record<string, string>;
     conflicts: HistoryConflict[];
     blocked: HistoryPathIssue[];
     completedOperations: string[];
@@ -304,6 +306,7 @@ export class HistoryController {
         }
         catch { /* observational only; never allowed to affect the run */ }
     }
+    private lastSignatureParts?: Record<string, string>;
     private assert(signal: AbortSignal) { signal.throwIfAborted(); this.ports.assertContext(); }
     private async checked<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> { this.assert(signal); const result = await operation(); this.assert(signal); return result; }
     private async exclusive<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> { if (this.active)
@@ -340,7 +343,7 @@ export class HistoryController {
         });
     }
     async preview(signal: AbortSignal): Promise<HistoryPreview> { return this.exclusive(signal, async () => { const state = await this.load(signal); if (state.pendingBatch?.length)
-        throw new Error('Resume pending sync before preview'); const plan = await this.plan(state, signal); state.previewSignature = plan.preview.signature; await this.save(state, signal); return plan.preview; }); }
+        throw new Error('Resume pending sync before preview'); const plan = await this.plan(state, signal); state.previewSignature = plan.preview.signature; state.previewParts = this.lastSignatureParts; await this.save(state, signal); return plan.preview; }); }
     async run(options: {
         approvePreview?: boolean;
     }, signal: AbortSignal): Promise<HistoryPreview> {
@@ -349,8 +352,11 @@ export class HistoryController {
             if (state.pendingBatch?.length)
                 await this.recover(state, signal);
             const plan = await this.plan(state, signal);
-            if (!state.approved && (!options.approvePreview || state.previewSignature !== plan.preview.signature))
+            if (!state.approved && (!options.approvePreview || state.previewSignature !== plan.preview.signature)) {
+                const was = state.previewParts ?? {}, now = this.lastSignatureParts ?? {};
+                console.error('[sync] preview mismatch; differing parts:', JSON.stringify(Object.keys({ ...was, ...now }).filter(k => was[k] !== now[k]).map(k => [k, was[k], now[k]])), 'approvePreview=', options.approvePreview);
                 throw new Error('Preview this exact sync before approving it');
+            }
             state.approved = true;
             delete state.previewSignature;
             const demoted = await this.execute(state, plan, signal);
@@ -683,7 +689,11 @@ export class HistoryController {
         actions.sort((a, b) => priority(a) - priority(b) || (a.deleted ? -1 : 1) * (a.path.split('/').length - b.path.split('/').length) || a.path.localeCompare(b.path));
         state.conflicts = conflicts;
         state.blocked = blocked;
-        const signature = await this.hash(new TextEncoder().encode(JSON.stringify({ scope: snapshot.scopeKey, actions, conflicts, blocked, excluded: snapshot.excluded, records: Object.keys(state.history.records).sort(), quarantined: Object.keys(state.history.quarantined).sort() })).buffer, signal);
+        const signed = { scope: snapshot.scopeKey, actions, conflicts, blocked, excluded: snapshot.excluded, records: Object.keys(state.history.records).sort(), quarantined: Object.keys(state.history.quarantined).sort() };
+        const signature = await this.hash(new TextEncoder().encode(JSON.stringify(signed)).buffer, signal);
+        const parts: Record<string, string> = {};
+        for (const [name, value] of Object.entries(signed)) parts[name] = `${Array.isArray(value) ? value.length : '-'}:${(await this.hash(new TextEncoder().encode(JSON.stringify(value) ?? '').buffer, signal)).slice(0, 10)}`;
+        this.lastSignatureParts = parts;
         const preview: HistoryPreview = { signature, requiresApproval: !state.approved, uploads: actions.filter(a => a.type === 'publish' && !a.deleted).length, downloads: actions.filter(a => a.type === 'apply' && !a.deleted).length, deletions: actions.filter(a => a.deleted).length, conflicts, blocked, excluded: snapshot.excluded, pending: derived.pending.length, upToDate: state.approved && !actions.length && !conflicts.length && !blocked.length && !derived.pending.length && !Object.keys(derived.quarantined).length };
         const locations = new Map<string, HistoryRecord['location']>();
         for (const [id, r] of byEntity) {
