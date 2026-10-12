@@ -13,7 +13,7 @@ import { CommandRegistry } from "./commands";
 import { displayHotkey, eventToBinding, bindingIdentity, type Hotkey } from "../shared/hotkey";
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
-import { CommunityManager } from "./community/community-manager";
+import { CommunityManager, type UpdateSummary } from "./community/community-manager";
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
@@ -30,6 +30,15 @@ import { FormatConverterPlugin } from "./internal-plugins/format-converter/forma
 import { SlashCommandsPlugin } from "./internal-plugins/slash-commands/slash-commands-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
+import {
+  LaunchRegistry,
+  LaunchRunner,
+  createLaunchApi,
+  summarizeLaunchFailures,
+  type LaunchApi,
+  type LaunchPhase,
+} from "./launch/launch-sequence";
+import { LaunchOverlay } from "./launch/launch-overlay";
 import {
   MarkdownProcessorRegistry,
   type MarkdownCodeBlockProcessor,
@@ -169,6 +178,8 @@ export type PickerItem =
 
 /** Most plugin-provided rows a single query may add to the quick switcher. */
 const MAX_PLUGIN_ROWS = 20;
+/** Whole-budget cap for the launch-time community update check; network trouble must not hang launch. */
+const COMMUNITY_UPDATE_LAUNCH_TIMEOUT_MS = 15_000;
 
 /**
  * Builds the New Tab picker's result list for one query: vault files and saved
@@ -2281,9 +2292,21 @@ export class App {
    * Undefined until a vault is open and after it closes.
    */
   onboarding?: OnboardingPlugin;
+  /**
+   * Launch sequence: plugins register steps that run (with a launch screen)
+   * after plugins load, via `app.launch.registerStep`. See
+   * docs/design/launch-sequence.md. Recreated per vault open; undefined
+   * before a vault is open.
+   */
+  launch?: LaunchApi;
+  private launchRegistry?: LaunchRegistry;
+  private launchRunner?: LaunchRunner;
+  private launchOverlay?: LaunchOverlay;
+  private launchUnsubscribePlugins?: () => void;
 
   /** Internal plugins resolvable through `app.plugins.getPlugin(id)` (Obsidian-style lookup). */
   getInternalPlugin(id: string): unknown {
+    if (id === "launch") return this.launch;
     return id === "onboarding" ? this.onboarding : undefined;
   }
   private audioRecorderPlugin?: AudioRecorderPlugin;
@@ -2314,7 +2337,6 @@ export class App {
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
-  private communityUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   private hostDisposers = new Set<() => void>();
   private syncRefreshRecoveries = new Set<() => void>();
   private successfulReconciles = 0;
@@ -3204,6 +3226,7 @@ export class App {
     this.themeManager.apply(this.settings.cssTheme);
 
     this.pluginManager = new PluginManager(this);
+    this.setupLaunchSequence(path);
     this.onboarding.attachPluginManager(this.pluginManager);
     // Queued until flushLayoutReady() (after layout restore), so a restored
     // checklist pane is seen and not duplicated. No-op under GEODE_HEADLESS.
@@ -3214,7 +3237,16 @@ export class App {
     if (this.host.runtime.runtime === "electron") {
       this.workspace.onLayoutReady(() => void onboardingForLaunch.autoOpenIfOutstanding());
     }
-    await measureOperation("startup-plugins", () => this.pluginManager.initialize());
+    // Built-in steps (plugin updates) run BEFORE any plugin is loaded, so an
+    // update is a plain on-disk install: nothing live to kill or hot-reload.
+    await this.runLaunchPhase("before-plugins");
+    try {
+      await measureOperation("startup-plugins", () => this.pluginManager.initialize());
+      // Plugins registered their steps in onload(); the launch screen stays up until they finish.
+      await this.runLaunchPhase("after-plugins");
+    } finally {
+      this.finishLaunchSequence();
+    }
     if (this.pluginManager.isRecoveryMode()) this.showCrashRecoveryBanner(shell);
 
     // Restore the saved workspace layout (tabs + docked plugin panes) now
@@ -3308,12 +3340,8 @@ export class App {
       mobileNavigation.querySelector<HTMLButtonElement>('[aria-label="Files"]')?.focus({ preventScroll: true });
     }
 
-    // Check opt-in community items for updates shortly after startup, off the
-    // critical path. No-op unless a tracked item has auto-update enabled.
-    this.communityUpdateTimer = setTimeout(() => {
-      this.communityUpdateTimer = null;
-      void this.checkCommunityUpdates(false);
-    }, 2500);
+    // Auto-updates of tracked community items now happen in the launch
+    // sequence (before plugins load); nothing hot-reloads a plugin mid-session.
 
     // Re-render open views when files change externally.
     //
@@ -3876,8 +3904,7 @@ export class App {
     if (activeReconcile) await activeReconcile;
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
-    if (this.communityUpdateTimer) clearTimeout(this.communityUpdateTimer);
-    this.communityUpdateTimer = null;
+    this.teardownLaunchSequence();
     await this.vault.close();
     this.metadataCache.dispose();
     this.workspace?.dispose();
@@ -3892,8 +3919,7 @@ export class App {
     if (activeReconcile) await activeReconcile;
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
-    if (this.communityUpdateTimer) clearTimeout(this.communityUpdateTimer);
-    this.communityUpdateTimer = null;
+    this.teardownLaunchSequence();
     this.activeSettingsModal?.close();
     await this.workspace?.closeAllLeaves();
     await this.pluginManager?.dispose();
@@ -5817,9 +5843,12 @@ export class App {
    * (the command) checks every non-pinned item; otherwise (on-launch) only
    * opt-in items past the cadence.
    */
-  async checkCommunityUpdates(force: boolean): Promise<void> {
+  async checkCommunityUpdates(
+    force: boolean,
+    opts: { reload?: boolean; signal?: AbortSignal; onProgress?: (text: string) => void } = {}
+  ): Promise<UpdateSummary | null> {
     try {
-      const sum = await this.communityManager.checkForUpdates({ force });
+      const sum = await this.communityManager.checkForUpdates({ force, ...opts });
       if (sum.updated.length) {
         this.notify(`Updated ${sum.updated.length} community item(s): ${sum.updated.join(", ")}`);
       } else if (force) {
@@ -5829,9 +5858,88 @@ export class App {
       if (force && sum.failed.length) {
         this.notify(`${sum.failed.length} community update check(s) failed — see console`);
       }
+      return sum;
     } catch (err) {
       console.error("Community update check failed", err);
+      return null;
     }
+  }
+
+  private isHeadlessHost(): boolean {
+    return (globalThis as { window?: { geode?: { isHeadless?: boolean } } }).window?.geode?.isHeadless === true;
+  }
+
+  /** Fresh registry/runner/overlay per vault open, with the built-in steps registered. */
+  private setupLaunchSequence(vaultPath: string): void {
+    this.teardownLaunchSequence();
+    const registry = new LaunchRegistry();
+    const runner = new LaunchRunner(registry);
+    this.launchRegistry = registry;
+    this.launchRunner = runner;
+    this.launch = createLaunchApi(registry);
+
+    registry.registerStep({
+      id: "core:community-updates",
+      title: "Checking plugin updates",
+      description: "Installing updates before plugins start",
+      phase: "before-plugins",
+      order: 100,
+      optional: true,
+      timeoutMs: COMMUNITY_UPDATE_LAUNCH_TIMEOUT_MS,
+      run: async (ctx) => {
+        // e2e/headless must not depend on the network.
+        if (this.isHeadlessHost()) return "skipped";
+        const sum = await this.checkCommunityUpdates(false, {
+          reload: false,
+          signal: ctx.signal,
+          onProgress: (text) => ctx.setProgress(text),
+        });
+        if (!sum) throw new Error("update check failed");
+        if (sum.failed.length && !sum.updated.length) {
+          throw new Error(`${sum.failed.length} update check(s) failed`);
+        }
+        if (!sum.checked) return "skipped";
+      },
+    });
+
+    // A plugin that forgot to dispose its steps still loses them when it is disabled.
+    this.launchUnsubscribePlugins = this.pluginManager.onChange(() => {
+      for (const owner of new Set(registry.list().map((s) => s.ownerId))) {
+        if (owner !== "core" && !this.pluginManager.isEnabled(owner)) runner.unregisterOwner(owner);
+      }
+    });
+
+    const name = vaultPath.split(/[\\/]/).filter(Boolean).pop();
+    this.launchOverlay = new LaunchOverlay(runner, {
+      brandChipHtml: this.brandChipHtml(),
+      vaultName: name,
+    });
+    this.launchOverlay.start();
+  }
+
+  private async runLaunchPhase(phase: LaunchPhase): Promise<void> {
+    await this.launchRunner?.runPhase(phase);
+  }
+
+  /** Dismiss the launch screen; failures never block the vault, they only produce a notice. */
+  private finishLaunchSequence(): void {
+    const runner = this.launchRunner;
+    if (!runner) return;
+    runner.finish();
+    this.launchOverlay?.dismiss();
+    const summary = summarizeLaunchFailures(runner.getSnapshot());
+    if (summary) this.notify(summary);
+  }
+
+  private teardownLaunchSequence(): void {
+    this.launchUnsubscribePlugins?.();
+    this.launchUnsubscribePlugins = undefined;
+    this.launchOverlay?.dismiss();
+    this.launchOverlay = undefined;
+    this.launchRegistry?.clear();
+    this.launchRegistry = undefined;
+    this.launchRunner = undefined;
+    this.launch = undefined;
   }
 
   /**

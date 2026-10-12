@@ -147,7 +147,19 @@ export class CommunityManager {
    * community.json. Never throws — per-item failures are collected.
    */
   async checkForUpdates(
-    opts: { force?: boolean; repos?: string[] } = {}
+    opts: {
+      force?: boolean;
+      repos?: string[];
+      /**
+       * Hot-reload an updated plugin (default true). Launch passes false: no
+       * plugin is loaded yet, so the update is a plain on-disk install and
+       * `pluginManager.reload` must not be touched.
+       */
+      reload?: boolean;
+      /** Stop before the next item once aborted (launch timeout / Skip). Completed items are still saved. */
+      signal?: AbortSignal;
+      onProgress?: (text: string) => void;
+    } = {}
   ): Promise<UpdateSummary> {
     const now = Date.now();
     let config = await this.load();
@@ -159,7 +171,12 @@ export class CommunityManager {
 
     const summary: UpdateSummary = { checked: 0, updated: [], failed: [] };
 
+    const reload = opts.reload !== false;
+    let index = 0;
     for (const item of candidates) {
+      if (opts.signal?.aborted) break;
+      index++;
+      opts.onProgress?.(`Checking ${item.id} (${index}/${candidates.length})`);
       summary.checked++;
       try {
         const preview = await this.resolve(item.repo, { type: item.type });
@@ -183,6 +200,8 @@ export class CommunityManager {
           continue;
         }
 
+        // Never begin an install after launch gave up on this step.
+        if (opts.signal?.aborted) break;
         const installOpts: ResolveOpts = preview.source === "release"
           ? { type: item.type, tag: preview.ref, expected: preview }
           : { type: item.type, expected: preview };
@@ -208,7 +227,7 @@ export class CommunityManager {
         });
 
         if (installed.type === "plugin") {
-          await this.app.pluginManager.reload(installed.id);
+          if (reload) await this.app.pluginManager.reload(installed.id);
         } else if (this.app.settings.cssTheme === installed.id) {
           // Only the *active* theme needs a live re-apply; others just sit on disk.
           await this.app.themeManager.apply(installed.id);
