@@ -3237,7 +3237,7 @@ export class App {
     // it is what a phone can use once its host provides `syncSafety` (guarded apply) and `secrets.app` (Keychain).
     if (this.host.syncSafety && (this.host.hubSync || typeof WebSocket === "function")) {
       const appSecrets = this.host.secrets.app;
-      const secrets = appSecrets ? { available: this.host.secrets.available, get: (key: string) => appSecrets.get(key), set: (key: string, value: string) => appSecrets.set(key, value), remove: (key: string) => appSecrets.remove(key) } : undefined;
+      const secrets = appSecrets ? { available: this.host.secrets.appAvailable ?? this.host.secrets.available, get: (key: string) => appSecrets.get(key), set: (key: string, value: string) => appSecrets.set(key, value), remove: (key: string) => appSecrets.remove(key) } : undefined;
       const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root, secrets ? { secrets } : {});
       this.hubSyncProvider = provider; this.hubSyncUnregister = this.sync.register("geode", provider);
     }

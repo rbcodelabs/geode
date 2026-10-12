@@ -2,6 +2,10 @@ import { registerPlugin, type Plugin, type PluginListenerHandle } from "@capacit
 import { VaultAccessError, type HostServices, type VaultAccessState, type VaultEvent, type VaultFileEntry } from "./contracts";
 import type { PluginFileSet } from "./contracts";
 import { assertValidThemeId } from "../../shared/theme-id";
+import type { SyncVaultPathIssue } from "../../sync-core/ports";
+import { SyncBlockedError } from "../../sync-core/ports";
+import { base64ToBytes, bytesToBase64 } from "./base64";
+import { createMobileSyncSafety, type MobileSyncPorts, type NativeStat } from "./mobile-sync-safety";
 
 type EmptyResult = Record<string, never>;
 
@@ -28,6 +32,21 @@ export interface ManagedVaultPlugin extends Plugin {
   listThemes(): Promise<{ ids: string[] }>;
   readPluginFile(options: { path: string; maxBytes: number }): Promise<{ content: string }>;
   replacePluginFiles(options: { id: string; expectedManifest: string; replacement: PluginFileSet }): Promise<EmptyResult>;
+  /**
+   * Guarded-sync primitives (all optional so an older native build simply has no `host.syncSafety`).
+   * `stat` never follows or resolves links: a link anywhere on the path is reported as "symlink".
+   */
+  stat?(options: { path: string }): Promise<NativeStat>;
+  /** App-sandbox storage outside every vault (Application Support, excluded from backup). Relative, `/`-separated paths. */
+  syncPrivateWrite?(options: { path: string; base64: string }): Promise<EmptyResult>;
+  syncPrivateRead?(options: { path: string }): Promise<{ found: boolean; base64?: string }>;
+  syncPrivateList?(options: { path: string }): Promise<{ entries: Array<{ name: string; isFolder: boolean }> }>;
+  syncPrivateRemove?(options: { path: string; recursive: boolean }): Promise<EmptyResult>;
+  syncPrivateAvailableBytes?(): Promise<{ bytes: number }>;
+  /** Keychain (kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly) under Geode's own service namespace. */
+  appSecretGet?(options: { key: string }): Promise<{ found: boolean; value?: string }>;
+  appSecretSet?(options: { key: string; value: string }): Promise<EmptyResult>;
+  appSecretRemove?(options: { key: string }): Promise<EmptyResult>;
   addListener(eventName: "change", listenerFunc: (event: VaultEvent) => void): Promise<PluginListenerHandle>;
 }
 
@@ -52,6 +71,27 @@ function managedVaultPath(path: string): string {
   return normalized;
 }
 
+const ICLOUD_STUB = /^\.(.+)\.icloud$/;
+
+/**
+ * Splits a native listing into real entries and iCloud placeholders. A `.name.icloud` file stands in for a
+ * file that exists but is not on this device; left alone it would simply be absent and the engine would read
+ * that as "deleted". It is reported as blocked (untouchable, never downloaded by Geode) at the real file's path.
+ */
+export function splitICloudPlaceholders(entries: VaultFileEntry[]): { entries: VaultFileEntry[]; blocked: SyncVaultPathIssue[] } {
+  const paths = new Set(entries.map((entry) => entry.path));
+  const blocked: SyncVaultPathIssue[] = [];
+  const real: VaultFileEntry[] = [];
+  for (const entry of entries) {
+    const slash = entry.path.lastIndexOf("/");
+    const stub = entry.isFolder ? null : ICLOUD_STUB.exec(entry.path.slice(slash + 1));
+    if (!stub) { real.push(entry); continue; }
+    const actual = entry.path.slice(0, slash + 1) + stub[1];
+    if (!paths.has(actual)) blocked.push({ path: actual, reason: "icloud-not-downloaded" });
+  }
+  return { entries: real, blocked };
+}
+
 function vaultAccessError(error: unknown, id: string): never {
   const native = error as { code?: string; data?: Record<string, unknown>; id?: string; name?: string; state?: string; message?: string };
   const data = native.data ?? native;
@@ -69,8 +109,45 @@ function vaultAccessError(error: unknown, id: string): never {
   throw error;
 }
 
+/** Guarded sync over the native plugin; absent (so history sync stays refused) when the native build lacks the primitives. */
+function createCapacitorSyncSafety(plugin: ManagedVaultPlugin, portable: HostServices, rootId: () => string | null): HostServices["syncSafety"] {
+  const { stat, writeBinary, syncPrivateWrite, syncPrivateRead, syncPrivateList, syncPrivateRemove } = plugin;
+  if (!stat || !writeBinary || !syncPrivateWrite || !syncPrivateRead || !syncPrivateList || !syncPrivateRemove) return undefined;
+  const ports: MobileSyncPorts = {
+    rootId,
+    vault: {
+      stat: (path) => stat.call(plugin, { path: managedVaultPath(path) }),
+      readBinary: async (path) => decodeBase64((await plugin.readBinary({ path: managedVaultPath(path) })).base64),
+      writeBinary: async (path, data, mutationId) => { await writeBinary.call(plugin, { path: managedVaultPath(path), base64: bytesToBase64(new Uint8Array(data)), mutationId }); },
+      mkdir: async (path, mutationId) => { await plugin.mkdir({ path: managedVaultPath(path), mutationId }); },
+      trash: async (path, mutationId) => { await plugin.trash({ path: managedVaultPath(path), mutationId }); },
+    },
+    privateStore: {
+      write: async (path, data) => { await syncPrivateWrite.call(plugin, { path, base64: bytesToBase64(data) }); },
+      read: async (path) => { const result = await syncPrivateRead.call(plugin, { path }); return result.found && result.base64 !== undefined ? base64ToBytes(result.base64) : null; },
+      list: async (path) => (await syncPrivateList.call(plugin, { path })).entries,
+      remove: async (path, recursive) => { await syncPrivateRemove.call(plugin, { path, recursive }); },
+      availableBytes: async () => plugin.syncPrivateAvailableBytes ? (await plugin.syncPrivateAvailableBytes()).bytes : null,
+    },
+    config: portable.config,
+  };
+  return createMobileSyncSafety(ports);
+}
+
+/** Geode's own secrets (the hub token) in the iOS Keychain. Never in device state, the vault, or web storage. */
+function createKeychainSecrets(plugin: ManagedVaultPlugin): NonNullable<HostServices["secrets"]["app"]> | undefined {
+  const { appSecretGet, appSecretSet, appSecretRemove } = plugin;
+  if (!appSecretGet || !appSecretSet || !appSecretRemove) return undefined;
+  return {
+    get: async (key) => { const result = await appSecretGet.call(plugin, { key }); return result.found && typeof result.value === "string" ? result.value : null; },
+    set: async (key, value) => { await appSecretSet.call(plugin, { key, value }); },
+    remove: async (key) => { await appSecretRemove.call(plugin, { key }); },
+  };
+}
+
 export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostServices): HostServices {
   let opened = false;
+  let activeRoot: string | null = null;
   const requireOpen = () => {
     if (!opened) throw new Error("No managed vault is open");
   };
@@ -78,8 +155,13 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     ? "tablet" as const
     : "phone" as const;
 
+  const syncSafety = createCapacitorSyncSafety(plugin, portable, () => activeRoot);
+  const appSecrets = createKeychainSecrets(plugin);
+
   return {
     ...portable,
+    ...(syncSafety ? { syncSafety } : {}),
+    ...(appSecrets ? { secrets: { ...portable.secrets, appAvailable: true, app: appSecrets } } : {}),
     capabilities: Object.freeze({ ...portable.capabilities, externalVaultFolder: true }),
     runtime: {
       runtime: "ios",
@@ -104,6 +186,7 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
         try {
           const result = await plugin.openVault({ id: path });
           opened = true;
+          activeRoot = result.id;
           return { root: result.id, name: result.name };
         } catch (error) {
           vaultAccessError(error, path);
@@ -113,6 +196,7 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       getLaunchVault: async () => (await plugin.getLaunchVault()).id,
       closeVault: async () => {
         opened = false;
+        activeRoot = null;
         await plugin.closeVault();
       },
     },
@@ -127,7 +211,14 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       },
       readBinary: async (path) => {
         requireOpen();
-        return decodeBase64((await plugin.readBinary({ path: managedVaultPath(path) })).base64);
+        try { return decodeBase64((await plugin.readBinary({ path: managedVaultPath(path) })).base64); }
+        catch (error) {
+          // Not errors in the file: sync demotes just this path to "blocked" instead of failing the whole run.
+          const code = (error as { code?: string }).code;
+          if (code === "CONTENT_UNAVAILABLE") throw new SyncBlockedError("icloud-not-downloaded", "The provider has not downloaded this file to the device");
+          if (code === "PAYLOAD_TOO_LARGE") throw new SyncBlockedError("too-large-for-mobile", "This file is larger than the 32 MiB the iOS bridge can carry");
+          throw error;
+        }
       },
       writeBinary: async (path, data, _writeOptions, mutationId) => {
         requireOpen();
@@ -180,7 +271,8 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       reconcileScan: async () => {
         requireOpen();
         try {
-          return { status: "complete", entries: (await plugin.list()).entries };
+          const { entries, blocked } = splitICloudPlaceholders((await plugin.list()).entries);
+          return { status: "complete", entries, ...(blocked.length ? { blocked } : {}) };
         } catch (error) {
           const native = error as { code?: string };
           if (native.code === "CONTENT_UNAVAILABLE" || native.code?.startsWith("VAULT_")) {

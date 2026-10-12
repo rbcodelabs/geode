@@ -196,6 +196,8 @@ export interface SecureSecretService {
     set(key: string, value: string): Promise<void>;
     remove(key: string): Promise<void>;
   };
+  /** Whether `app` can store a secret right now. Defaults to `available` (Electron: one safeStorage backs both); the phone's Keychain serves `app` while plugin secrets stay unavailable. */
+  readonly appAvailable?: boolean;
   fromCapability(capability: string): {
     get(key: string): Promise<string | null>;
     set(key: string, value: string): Promise<void>;
