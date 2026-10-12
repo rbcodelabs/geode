@@ -12,6 +12,8 @@ export interface StoreTransport {
   output: WritableLike;
   /** Tears the connection down (kills the child / ends the streams). Idempotent. */
   close(): void | Promise<void>;
+  /** Resolves once the peer's stderr is fully read (child exited and its pipes closed), every line delivered. */
+  drained?: Promise<void>;
 }
 
 const CHUNK = 4 * 1024 * 1024;
@@ -305,6 +307,7 @@ export function spawnTransport(command: SpawnCommand, onStderr?: (line: string) 
   child.stdin.on("error", () => { });
   child.on("error", () => { });
   let tail = "";
+  const drained = new Promise<void>(resolve => child.on("close", () => { if (tail && onStderr) onStderr(tail); tail = ""; resolve(); }));
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (text: string) => {
     if (!onStderr) return;
@@ -312,7 +315,7 @@ export function spawnTransport(command: SpawnCommand, onStderr?: (line: string) 
     const lines = tail.split("\n"); tail = lines.pop() ?? "";
     for (const line of lines) onStderr(line);
   });
-  return { input: child.stdout, output: child.stdin, close: () => { child.stdin.destroy(); if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); } };
+  return { drained, input: child.stdout, output: child.stdin, close: () => { child.stdin.destroy(); if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); } };
 }
 
 const SAFE_HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@:%\[\]-]*$/;
@@ -324,11 +327,11 @@ const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
  * ~60s (15s x 4) and surfaces as `unavailable`; the next call respawns ssh.
  * `command` replaces the whole invocation (tests run the server directly).
  */
-export function spawnSshStore(options: { host: string; storePath: string; sshOptions?: string[]; command?: SpawnCommand; onStderr?: (line: string) => void }): RpcStoreProvider {
+export function spawnSshStore(options: { host: string; storePath: string; sshOptions?: string[]; command?: SpawnCommand; onStderr?: (line: string) => void; onTransport?: (transport: StoreTransport) => void }): RpcStoreProvider {
   if (!options.command && !SAFE_HOST.test(options.host)) throw new SyncStoreError("invalid-request", "Invalid ssh host");
   const command: SpawnCommand = options.command ?? {
     file: "ssh",
     args: ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4", ...(options.sshOptions ?? []), options.host, `geode-wiki sync serve --store ${shellQuote(options.storePath)}`],
   };
-  return new RpcStoreProvider(() => spawnTransport(command, options.onStderr));
+  return new RpcStoreProvider(() => { const transport = spawnTransport(command, options.onStderr); options.onTransport?.(transport); return transport; });
 }

@@ -62,7 +62,11 @@ export function classifySshFailure(stderr: string, host: string): HubErrorInfo |
   return null;
 }
 
-interface Live { provider: AppendOnlySyncProvider & { close?(): Promise<void> }; session: AppendOnlySession; owner: string; stderr: string[]; target: HubTarget }
+/** Last stderr lines of the ssh child, plus a promise that settles once that stream is fully read. */
+type Stderr = string[] & { drained?: Promise<void> };
+const DRAIN_WAIT_MS = 1500;
+
+interface Live { provider: AppendOnlySyncProvider & { close?(): Promise<void> }; session: AppendOnlySession; owner: string; stderr: Stderr; target: HubTarget }
 
 export interface HubStoreManagerOptions {
   /** Test seams. */
@@ -79,17 +83,24 @@ export class HubStoreManager {
   private readonly sessions = new Map<string, Live>();
   constructor(private readonly options: HubStoreManagerOptions = {}) {}
 
-  private make(target: HubTarget, stderr: string[]): AppendOnlySyncProvider & { close?(): Promise<void> } {
+  private make(target: HubTarget, stderr: Stderr): AppendOnlySyncProvider & { close?(): Promise<void> } {
     const onStderr = (line: string) => { stderr.push(line); if (stderr.length > STDERR_LINES) stderr.shift(); };
     if (target.kind === "fs") return this.options.fsProvider?.(target.path) ?? new FsStoreProvider(target.path);
     if (this.options.sshProvider) return this.options.sshProvider({ host: target.host, path: target.path }, onStderr);
     // ConnectTimeout bounds a black-holed host; BatchMode (set by spawnSshStore) means no prompt can ever hang us.
-    return spawnSshStore({ host: target.host, storePath: target.path, sshOptions: ["-o", "ConnectTimeout=10"], onStderr });
+    return spawnSshStore({ host: target.host, storePath: target.path, sshOptions: ["-o", "ConnectTimeout=10"], onStderr, onTransport: transport => { stderr.drained = transport.drained; } });
   }
 
   /** Maps any failure to a HubError, preferring what ssh itself said over the generic "unavailable". */
-  private fail(error: unknown, target: HubTarget, stderr: string[], timedOut: boolean): HubError {
+  private async fail(error: unknown, target: HubTarget, stderr: Stderr, timedOut: boolean): Promise<HubError> {
     if (error instanceof HubError) return error;
+    // The transport can report "closed" before the child's last stderr line has been read; wait (bounded) for the
+    // stream to finish so the message is what ssh actually said, not the vague "unavailable".
+    if (!timedOut && target.kind === "ssh" && stderr.drained) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([stderr.drained, new Promise<void>(resolve => { timer = setTimeout(resolve, DRAIN_WAIT_MS); })]);
+      clearTimeout(timer);
+    }
     if (timedOut) return new HubError("timeout", `Timed out connecting to the hub${target.kind === "ssh" ? ` over ssh (${target.host})` : ""}`, target.kind === "ssh" ? "Check the network and that ssh works non-interactively: ssh -o BatchMode=yes " + target.host + " true" : undefined);
     if (target.kind === "ssh") {
       const classified = classifySshFailure(stderr.join("\n"), target.host);
@@ -104,8 +115,8 @@ export class HubStoreManager {
     return new HubError("hub-failed", message);
   }
 
-  private async withProvider<T>(target: HubTarget, signal: AbortSignal | undefined, work: (provider: AppendOnlySyncProvider, deadline: AbortSignal) => Promise<T>, keep?: (provider: AppendOnlySyncProvider & { close?(): Promise<void> }, stderr: string[], result: T) => void): Promise<T> {
-    const stderr: string[] = [];
+  private async withProvider<T>(target: HubTarget, signal: AbortSignal | undefined, work: (provider: AppendOnlySyncProvider, deadline: AbortSignal) => Promise<T>, keep?: (provider: AppendOnlySyncProvider & { close?(): Promise<void> }, stderr: Stderr, result: T) => void): Promise<T> {
+    const stderr: Stderr = [];
     const provider = this.make(target, stderr);
     const deadline = new AbortController();
     let timedOut = false;
@@ -119,7 +130,7 @@ export class HubStoreManager {
       keep?.(provider, stderr, result); kept = Boolean(keep);
       return result;
     } catch (error) {
-      throw this.fail(error, target, stderr, timedOut);
+      throw await this.fail(error, target, stderr, timedOut);
     } finally {
       clearTimeout(timer); signal?.removeEventListener("abort", forward);
       if (!kept) await provider.close?.().catch(() => {});
@@ -159,7 +170,7 @@ export class HubStoreManager {
     catch (error) {
       // Same translation as connection-time failures: a dead ssh link reads as ssh's own words, not "unavailable".
       if (error instanceof HubError) throw error;
-      throw this.fail(error, live.target, live.stderr, false);
+      throw await this.fail(error, live.target, live.stderr, false);
     }
   }
 
@@ -179,7 +190,8 @@ export class HubStoreManager {
     return this.use(owner, sessionId, signal, async (session, s) => {
       if (!session.appendRecords) throw new HubError("invalid-request", "This session cannot batch appends");
       const result = await session.appendRecords(records, s);
-      return { appended: result.appended, ...(result.error ? { error: this.fail(result.error, { kind: "fs", path: "" }, [], false).toInfo() } : {}) };
+      const live = this.live(owner, sessionId);
+      return { appended: result.appended, ...(result.error ? { error: (await this.fail(result.error, live.target, live.stderr, false)).toInfo() } : {}) };
     });
   }
 

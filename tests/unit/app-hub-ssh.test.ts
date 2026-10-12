@@ -80,6 +80,16 @@ describe("the default ssh transport", () => {
     await expect(new HubStoreManager().discover({ kind: "ssh", host: "geode-hub", path: "/h" })).rejects.toMatchObject({ code: "ssh-no-geode-wiki" });
   });
 
+  it("reads ssh's last words even when the pipe closes before stderr is written (forced race)", async () => {
+    // stdout closes first and stderr is written right after: the store can see "connection closed" before any stderr line is read.
+    installSsh(`exec 1>&-\necho "rick@geode-hub: Permission denied (publickey)." >&2\nexit 255`);
+    await expect(new HubStoreManager().discover({ kind: "ssh", host: "geode-hub", path: "/h" })).rejects.toMatchObject({ code: "ssh-auth" });
+    installSsh(`exec 1>&-\nprintf "bash: geode-wiki: command not found" >&2\nexit 127`); // no trailing newline
+    await expect(new HubStoreManager().discover({ kind: "ssh", host: "geode-hub", path: "/h" })).rejects.toMatchObject({ code: "ssh-no-geode-wiki" });
+    installSsh(`exec 1>&-\necho "Host key verification failed." >&2\nexit 255`);
+    await expect(new HubStoreManager().discover({ kind: "ssh", host: "geode-hub", path: "/h" })).rejects.toMatchObject({ code: "ssh-host-key" });
+  });
+
   it("a hung ssh is an error after the deadline, not a hang, and the child is gone", async () => {
     const pidFile = join(dir("pid"), "pid");
     installSsh(`echo $$ > "${pidFile}"\nexec sleep 30`);
