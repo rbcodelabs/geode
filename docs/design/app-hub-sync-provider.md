@@ -1,12 +1,15 @@
-# App hub sync provider ("Folder or SSH hub")
+# App hub sync provider ("Folder, SSH or HTTPS hub")
 
-The desktop app can sync to the same hub store the headless `geode-wiki sync` CLI uses: a
-directory store (`FsStoreProvider`) or an ssh-reachable one (`geode-wiki sync serve --store` over
-`ssh`, `RpcStoreProvider`). CLI reference: [headless-wiki-sync.md](headless-wiki-sync.md),
+The app can sync to the same hub store the headless `geode-wiki sync` CLI uses: a directory store
+(`FsStoreProvider`), an ssh-reachable one (`geode-wiki sync serve --store` over `ssh`,
+`RpcStoreProvider`), or, on desktop and on iOS, an HTTPS one (`geode-wiki sync serve --http` behind TLS, over
+a WebSocket; see "HTTPS hub" below). CLI reference: [headless-wiki-sync.md](headless-wiki-sync.md),
 [ADR 0025](../adr/0025-geode-wiki-sync-cli.md). This page records how the app side is built and
 what it does and does not share with the CLI.
 
 ## Decision: engine stays in the renderer, only the *store* crosses the process boundary
+
+(Folder and ssh targets. The HTTPS target does not cross the process boundary at all; see "HTTPS hub".)
 
 The app already runs `HistoryController` in the renderer (`SyncService`), scanning and applying through
 guarded main-process IPC. A hub store is just an `AppendOnlySession` (`scan`, `putBlob`, `readBlob`,
@@ -45,7 +48,7 @@ One `ipcMain.handle("hub-sync", (e, req))` with a discriminated request, plus `h
 | `scan` `putBlob` `readBlob` `appendRecord` `appendRecords` | `sessionId`, as the session API | as the session API |
 | `close` | `sessionId` | void |
 
-`target` is `{kind:"fs", path}` or `{kind:"ssh", host, path}`; validated in main (absolute path, no NUL,
+`target` is `{kind:"fs", path}` or `{kind:"ssh", host, path}` (the type `MainHubTarget`; the `http` target kind is never sent over IPC); validated in main (absolute path, no NUL,
 host matches the existing `SAFE_HOST` rule). A renderer abort sends `hub-sync-abort(requestId)`.
 Errors are returned as a `{error:{code, message, hint}}` envelope (Electron drops custom fields on
 thrown errors) and rethrown renderer-side as `HubSyncError`.
@@ -138,6 +141,144 @@ names on both sides and do converge). A migration would mean teaching the app to
 (a scope flag plus a main-process apply path for config files) and a decision on plugin code. That is
 out of scope here.
 
+## HTTPS hub (desktop and iOS)
+
+A phone has no Node, no `child_process` and no main process, so folder and ssh hubs cannot exist there
+([ADR 0007](../adr/0007-mobile-runtime-and-platform-boundary.md): no Node/Electron on iOS). The HTTPS target
+is the one hub kind the renderer can reach by itself, which is also why it is the only kind offered on a phone
+(`HubSyncProvider.supportedKinds` is `["http"]` when the host supplies no `hubSync` bridge). Why this transport and not
+the alternatives: [ADR 0029](../adr/0029-https-websocket-hub-transport.md).
+
+```
+renderer (desktop window or iOS web view)               hub machine
+SyncService -> HistoryController
+   HubSyncProvider -> HttpStoreProvider  --- wss:// --->  TLS proxy (tailscale serve) --- ws://127.0.0.1:8787 --->
+   (src/renderer/sync/http-store.ts)                      geode-wiki sync serve --http  -> serveStore -> directory store
+```
+
+* **Target.** `{kind:"http", url}`. The URL must be `https:` or `wss:` (`hubUrlProblem`, `src/shared/hub-sync.ts`):
+  printable ASCII only (an international domain is entered as punycode), no embedded user name/password, no
+  backslash, a real host. A path or query is allowed (a reverse-proxy prefix); the fragment is dropped
+  (`canonicalHubUrl`). `https://` is dialled as `wss://`. `ws://` and `http://` are refused by the product; only a
+  test seam (`allowInsecure`) permits them. The settings form and the provider share this check; nothing is saved
+  on a bad URL.
+* **The session lives in the renderer.** `HttpStoreProvider` / `HttpStoreSession` mirror the ssh client
+  (`RpcClient`/`RpcStoreSession`) one for one: lazy connect, hello first, reconnect with hello + open replay,
+  pipelined requests, 4 MiB chunking, the same named errors (`src/shared/store-errors.ts`) and the same framing
+  (`src/shared/store-framing.ts`, `store-protocol.ts`), so the history engine cannot tell the transports apart. It
+  is browser-safe on purpose: no `node:` imports, no `Buffer`, `crypto.subtle` for sha256, the platform
+  `WebSocket`. There is no main-process bridge and no IPC for this target, and no connection stays open while
+  sync is idle: the provider opens a client per operation or per opened session and closes it with it. A connect
+  deadline of 15 s applies.
+* **Config and identity** are the same as for the other targets (`host.deviceState`, `sync-hub/config/<vault
+  root>`); the config holds the URL and the create flag, never the token.
+
+### Token storage
+
+The token is a shared secret and is stored only in the host's secure storage, `host.secrets.app`:
+
+* Electron: `safeStorage`-encrypted, through three IPC handlers (`app-secret-read|write|remove`, preload
+  `readAppSecret`/`writeAppSecret`/`removeAppSecret`). They use a namespace, `@geode`, that starts with a character
+  no plugin id can start with, so a plugin capability can never address it; keys are limited to
+  `[A-Za-z0-9._:/-]{1,300}` and values to 8192 characters.
+* iOS: the Keychain, through `appSecretGet|Set|Remove` on the native managed-vault plugin
+  (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, Geode's own service namespace), so it does not migrate to
+  another device through a backup.
+* The key is `hub-token/<host:port>` (`hubTokenKey`): a token is only ever read for the host it was entered for.
+* **No fallback.** If the host has no secure storage (`canStoreToken` false) the provider refuses to take a token
+  (`secure-storage-unavailable`) rather than keep it in device state, web storage or the vault, and the settings
+  field is disabled with an explanation. The token is never put in the vault, so it is not synced.
+
+### WebSocket authentication
+
+A browser `WebSocket` (WKWebView included) cannot set an `Authorization` header, and a token in the URL would be
+written to proxy and access logs and to history. So the client offers two sub-protocols in
+`Sec-WebSocket-Protocol`: the real one, `geode-store.v1`, and `bearer.<base64url(utf8 token)>`. The server
+(`src/sync-node/http-serve.ts`):
+
+* authenticates **before** the upgrade, comparing SHA-256 digests with `timingSafeEqual`; a missing or wrong token
+  is a body-less `401` with `WWW-Authenticate: Bearer` and nothing else about the server is revealed (a plain
+  HTTP request gets a body-less `426`);
+* also accepts `Authorization: Bearer <token>` (the CLI and Node clients); it never accepts the token from the URL;
+* never echoes the token entry back: the `101` response names only `geode-store.v1`;
+* requires the token to be at least 24 characters, and `GET`, `Upgrade: websocket`, version 13, and either no
+  named sub-protocol or `geode-store.v1`; `503` with `Retry-After` past 8 simultaneous connections.
+
+Because the refusal happens before the upgrade, a browser reports a bad token only as a failed connection. The
+client therefore cannot tell "wrong token" from "unreachable": both surface as `unavailable`, with a message that
+names both causes.
+
+### Frames: binary only
+
+One connection is one `serveStore` session speaking the unchanged JSON-lines + binary framing; the WebSocket is a
+byte pipe and message boundaries carry no meaning (the framing parser reassembles). The server sends only binary
+frames and rejects text frames (close `1003`), unmasked client frames, reserved bits, unknown opcodes and bad
+fragmentation (`1002`), and any frame whose declared length exceeds `MAX_HEADER_BYTES + MAX_FRAME_BYTES` (`1009`,
+before reading the payload). Ping every 25 s; a peer that does not answer is dropped. Minimal RFC 6455 is
+implemented in-repo (no dependency); no extensions.
+
+### Origin is not checked
+
+The server does not look at the `Origin` header. Defence rests on the token (a page on another origin has no token
+to offer) and on binding to loopback behind a TLS proxy that is reachable only over the tailnet. An `Origin`
+allow-list would be defence in depth against a token leaked into a hostile page; it is not implemented.
+
+### Mobile support
+
+The history engine needs a guarded way to write into the vault and a place to keep frozen bytes and operation
+journals, both of which are Node modules on desktop (`sync-apply.ts`, `sync-private-storage.ts`). On iOS they are
+ported, not shared:
+
+* `src/renderer/host/mobile-sync-safety.ts` builds `host.syncSafety` from a small set of native ports
+  (`MobileSyncPorts`: `stat`, `readBinary`, `writeBinary`, `mkdir`, `trash`, app-sandbox private storage). It is
+  the same hash guard, intent receipts, preimage recovery and crash-safe retry, and the same storage vocabulary, as
+  the desktop. Sync-private bytes live in the app sandbox (Application Support, excluded from backup), never in
+  the vault tree, so they are never scanned or uploaded.
+* `capacitor-host.ts` supplies `host.syncSafety` only when the native plugin has the primitives; an older native
+  build has none and history sync stays refused. The native methods added are `stat` (never follows links: a link on
+  the path reports `symlink`), `syncPrivateWrite|Read|List|Remove|AvailableBytes`, `appSecretGet|Set|Remove`, and a
+  `writeBinary` that stages in the target's directory and swaps atomically with rollback.
+* Differences forced by the platform: one web view owns the vault, so the owner lease is an in-memory token scoped
+  to the open vault; deletions go through the vault's own trash; and the window between the final hash re-check and
+  the native write cannot be closed from JavaScript. The check is repeated immediately before the mutation, as on
+  desktop, but a file edited by another process (the Files app, a provider) inside that window can still be
+  overwritten. This is a limitation of the platform, not something the port can close.
+* **Blocked paths.** The mobile scan reports a `.name.icloud` stub with no real sibling as blocked
+  (`icloud-not-downloaded`, `splitICloudPlaceholders`) at the real file's path: untouchable, never read as deleted,
+  never downloaded by Geode. A read the provider fails with `CONTENT_UNAVAILABLE` is also demoted to that path being
+  blocked, not an error that fails the run. These are stubs and read failures only; the mobile host does not
+  detect evicted-but-named files.
+* **32 MiB bridge limit.** Binary data crosses the Capacitor bridge as base64, and the native plugin rejects a
+  payload over 32 MiB (`PAYLOAD_TOO_LARGE`; the sync-private store has the same cap). The provider advertises
+  100 MiB, so on iOS a local file between 32 and 100 MiB is shown as blocked (`too-large-for-mobile`) and is neither
+  uploaded nor treated as deleted. The same native cap applies to `writeBinary`, so a remote file of that size cannot
+  be written into the phone's vault; that path was not exercised on a device.
+* Rails (deletion cap, shrunk-scan guard, first-run approval) are evaluated by `SyncService` exactly as on desktop.
+  The phone settings rows are laid out one full-width, touch-sized field per row.
+
+### Running the hub
+
+`geode-wiki sync serve --http` and the TLS front are described in
+[headless-wiki-sync.md](headless-wiki-sync.md#https-hub-geode-wiki-sync-serve---http).
+
+### HTTPS risks
+
+* **The token is a bearer secret for the whole store.** Anyone holding it can read, add and (through the append-only
+  protocol) publish deletions for every vault in that store. There is one token per hub, no per-device revocation
+  other than rotating it, and no rate limiting beyond the connection cap. Treat it like an ssh key.
+* **TLS is the proxy's job.** The server itself speaks plain `ws://`. `serve --http` warns when it is bound to a
+  non-loopback address, but cannot tell whether a TLS proxy is in front. Binding a public address without one
+  sends the token and vault data in the clear.
+* **Origin is not checked** (above).
+* **Failed auth is indistinguishable from unreachable** on a browser/WKWebView client (above).
+* **Mobile apply window and 32 MiB limit** (above).
+* **Not covered by automated tests:** a real tailnet with `tailscale serve`, a physical iPhone against a remote
+  hub, App Transport Security behaviour against a real certificate, and background/suspended-app reconnects. The
+  server, client, convergence (a desktop-style device and the mobile host through one hub), mobile safety port and
+  a phone Playwright spec are covered in `tests/unit/sync-http-serve.test.ts`, `sync-http-store.test.ts`,
+  `hub-http-provider.test.ts`, `mobile-hub-convergence.test.ts`, `tests/unit/host/mobile-sync-safety.test.ts`
+  and `tests/mobile/hub-sync.spec.ts`; the native Swift stores have XCUITests and a simulator proof.
+
 ## Risks
 
 * Renderer-chosen filesystem path: any renderer code (including a community plugin with preload
@@ -147,8 +288,8 @@ out of scope here.
   documented, not prevented.
 * The iCloud rail is coarser in the app (whole run) than in the CLI (one path).
 * `geode-wiki` must be on the hub's non-login PATH for ssh.
-* Large blobs (<= 100 MiB) cross IPC as ArrayBuffers: peak memory is one blob per in-flight upload
-  (concurrency 4).
+* Large blobs (<= 100 MiB) cross IPC as ArrayBuffers on folder/ssh targets: peak memory is one blob per
+  in-flight upload (concurrency 4). The HTTPS target does not use IPC; it sends 4 MiB frames from the renderer.
 
 ## Test plan
 
