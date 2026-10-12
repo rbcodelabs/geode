@@ -11,6 +11,8 @@ export interface VaultRefreshResult<T> {
   entries: T[];
   errorCode?: string;
   failure?: VaultRefreshFailure;
+  /** Sync scans only: paths that exist but cannot be read as ordinary files (iCloud placeholders). Untouchable by sync. */
+  blocked?: Array<{ path: string; reason: string }>;
 }
 
 export function safeRelativePath(value: string | undefined): string | undefined {

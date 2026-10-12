@@ -114,6 +114,7 @@ import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
+import { HUB_PROVIDER_ID, HubSyncProvider, describeHubTarget } from "./sync/hub-provider";
 import { formatSyncFeedback, renderSyncFeedback } from "./sync/feedback";
 import { describeSyncProgress } from "./sync/progress";
 import type { SyncPreview, SyncStatusProgress } from "./sync/types";
@@ -1826,6 +1827,67 @@ class SettingsModal extends Modal {
     }
   }
 
+  /** Location, ssh host and create-if-missing for the built-in "Folder or SSH hub" provider (docs/design/app-hub-sync-provider.md). */
+  private renderHubConfigRows(container: HTMLElement, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
+    const provider = this.geodeApp.hubSyncProvider; if (!provider) return;
+    const row = this.addRow(container, "Hub location", "A folder (local, network or cloud-synced) or an ssh host and path. This is the same store `geode-wiki sync` uses; ssh runs non-interactively with your ~/.ssh/config.");
+    row.control.parentElement?.classList.add("sync-wrapped-setting");
+    const kind = document.createElement("select"); kind.setAttribute("aria-label", "Hub type");
+    kind.append(new Option("Folder", "fs"), new Option("SSH host", "ssh"));
+    const host = document.createElement("input"); host.type = "text"; host.setAttribute("aria-label", "Hub ssh host"); host.placeholder = "ssh host or ~/.ssh/config alias";
+    const path = document.createElement("input"); path.type = "text"; path.setAttribute("aria-label", "Hub store path"); path.placeholder = "/path/to/hub";
+    const createLabel = document.createElement("label"); const create = document.createElement("input"); create.type = "checkbox"; create.setAttribute("aria-label", "Create the hub if it is missing");
+    createLabel.append(create, " Create the hub if it is missing");
+    const save = document.createElement("button"); save.type = "button"; save.textContent = "Save hub settings";
+    const test = document.createElement("button"); test.type = "button"; test.textContent = "Test connection";
+    const result = document.createElement("div"); result.className = "setting-item-description"; result.setAttribute("data-hub-result", "");
+    const syncVisibility = () => { host.hidden = kind.value !== "ssh"; };
+    kind.addEventListener("change", syncVisibility); syncVisibility();
+    trackBusy(host); trackBusy(path); trackBusy(create); trackBusy(save); trackBusy(test);
+    const read = () => kind.value === "ssh"
+      ? { schema: 1 as const, target: { kind: "ssh" as const, host: host.value, path: path.value }, create: create.checked }
+      : { schema: 1 as const, target: { kind: "fs" as const, path: path.value }, create: create.checked };
+    void provider.getConfig().then(config => {
+      if (!config || !row.control.isConnected) return;
+      kind.value = config.target.kind; if (config.target.kind === "ssh") host.value = config.target.host; path.value = config.target.path; create.checked = config.create; syncVisibility();
+      result.textContent = `Hub: ${describeHubTarget(config.target)}`;
+    }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
+    save.addEventListener("click", () => { void provider.setConfig(read()).then(() => { result.textContent = "Hub settings saved."; }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); }); });
+    test.addEventListener("click", () => {
+      result.textContent = "Connecting...";
+      void provider.setConfig(read()).then(() => provider.discover(new AbortController().signal)).then(vaults => {
+        result.textContent = vaults.length ? `Connected. Hub vault: ${vaults.map(vault => `"${vault.name}"`).join(", ")}. Use Find shared vaults to join it.` : "Connected. The hub holds no vault yet.";
+      }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
+    });
+    row.control.append(kind, host, path, createLabel, save, test, result);
+  }
+
+  /** Explicit first-sync confirmation with the plan counts, and the safety-rail refusal with its one-shot override. */
+  private renderHubPlanRows(container: HTMLElement, perform: (action: () => Promise<unknown>, kind?: "preview" | "run") => void, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
+    const sync = this.geodeApp.sync, details = sync.getHistoryDetails();
+    if (details?.requiresApproval && sync.getStatus().state !== "paused") {
+      const plan = this.addRow(container, "First sync plan", `${details.uploads} upload(s) to the hub, ${details.downloads} download(s) from it, ${details.deletions} deletion(s), ${details.conflicts.length} conflict(s). Nothing changes until you confirm.`);
+      plan.control.parentElement?.setAttribute("data-hub-plan", ""); plan.control.parentElement?.classList.add("sync-wrapped-setting");
+      const confirm = document.createElement("button"); confirm.type = "button"; confirm.textContent = "Confirm first sync";
+      confirm.addEventListener("click", () => perform(() => sync.run({ approvePreview: true }), "run")); plan.control.appendChild(confirm); trackBusy(confirm);
+    }
+    const refusal = sync.getRailRefusal();
+    if (!refusal) return;
+    const row = this.addRow(container, "Safety rail", refusal.message);
+    row.control.parentElement?.setAttribute("data-sync-rail", refusal.status); row.control.parentElement?.classList.add("sync-wrapped-setting");
+    const lift = document.createElement("button"); lift.type = "button";
+    if (refusal.status === "delete-limit-exceeded") {
+      const count = Number(refusal.detail.deletions);
+      lift.textContent = `Allow ${count} deletions once`;
+      lift.addEventListener("click", () => { sync.allowRailOverrideOnce({ deleteLimit: count }); perform(() => details?.requiresApproval ? sync.run({ approvePreview: true }) : sync.run(), "run"); });
+    } else {
+      lift.textContent = "Sync despite the short scan (once)";
+      // An approved device runs on the overridden scan; one still awaiting its first confirmation only previews (the confirm row follows).
+      lift.addEventListener("click", () => { sync.allowRailOverrideOnce({ shrunkScan: true }); if (details?.requiresApproval || sync.getStatus().state === "preview") perform(() => sync.preview()); else perform(() => sync.run(), "run"); });
+    }
+    row.control.appendChild(lift); trackBusy(lift);
+  }
+
   private renderSyncTab(container: HTMLElement, summary = ""): void {
     const generation = ++this.syncTabGeneration;
     // innerHTML detaches the previous render's nodes but leaves `container`
@@ -1885,10 +1947,15 @@ class SettingsModal extends Modal {
         .finally(() => { performBusy = false; if (container.isConnected) this.renderSyncTab(container, summary); });
     };
     const addAction = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); trackBusy(button, !active); };
+    const isHub = active?.id === HUB_PROVIDER_ID;
+    const hubPlan = isHub ? this.geodeApp.sync.getHistoryDetails() : undefined;
     addAction("Preview", () => this.geodeApp.sync.preview());
-    addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
+    // The hub provider never offers a bare "Approve": the first run is confirmed from the plan counts shown below.
+    if (!isHub) addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
+    else if (!hubPlan?.requiresApproval && status.state !== "paused" && status.state !== "preview") addAction("Sync now", () => this.geodeApp.sync.run(), 'run');
     addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
     container.appendChild(actions);
+    if (isHub) this.renderHubPlanRows(container, perform, trackBusy);
     // Blocked/excluded files are structured detail on getHistoryDetails(), which is the only
     // place any provider reports per-file rejection reasons today — the plain/conditional
     // sync path (coordinator.ts) has no equivalent list, only an aggregate skipped count.
@@ -1897,6 +1964,7 @@ class SettingsModal extends Modal {
     const details = this.geodeApp.sync.getHistoryDetails();
     this.renderSyncIssueGroups(container, "Blocked", details?.blocked ?? []);
     this.renderSyncIssueGroups(container, "Excluded", details?.excluded ?? []);
+    if (isHub) this.renderHubConfigRows(container, trackBusy);
     if (this.geodeApp.sync.isAppendOnly()) {
       const setup = this.addRow(container, "Shared vault setup", "Experimental immutable history. Create a new shared vault or explicitly join an existing one. Files over 100 MiB are blocked; secrets and plugin data are excluded.");
       setup.control.parentElement?.classList.add("sync-wrapped-setting");
@@ -2090,6 +2158,9 @@ export class App {
   private uniqueNoteRibbonEl: HTMLElement | null = null;
   readonly webViewer: WebViewerService;
   readonly sync: SyncService;
+  /** Built-in "Folder or SSH hub" sync provider; present on desktop only, re-created per opened vault. */
+  hubSyncProvider?: HubSyncProvider;
+  private hubSyncUnregister?: () => Promise<void>;
   readonly comments: CommentService;
   vault: Vault;
   metadataCache: MetadataCache;
@@ -3042,6 +3113,13 @@ export class App {
     this.syncAudioRecorderPlugin();
     this.syncFormatConverterPlugin();
     this.syncSlashCommandsPlugin();
+    // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
+    // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
+    await this.hubSyncUnregister?.(); this.hubSyncUnregister = undefined; this.hubSyncProvider = undefined;
+    if (this.host.hubSync && this.host.syncSafety) {
+      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root);
+      this.hubSyncProvider = provider; this.hubSyncUnregister = this.sync.register("geode", provider);
+    }
     this.registerActions();
     this.registerCommands();
     this.hostDisposers.add(this.commands.attach(document, (event) => this.keymap.handleKeydown(event)));

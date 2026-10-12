@@ -14,7 +14,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent" | "onAgentBrowserWindowOpen"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 >>;
@@ -28,6 +28,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       claimOwner: () => preload.claimSyncOwner!(), releaseOwner: token => preload.releaseSyncOwner!(token), apply: (token, input) => preload.applySyncMutation!(token, input),
       onPrepare: handler => preload.onSyncPrepare!(handler), onRelease: handler => preload.onSyncRelease!(handler),
     } : undefined,
+    ...(preload.hubSync ? { hubSync: preload.hubSync } : {}),
     network: {
       request: async (input, signal) => {
         if (!preload.httpRequest) throw new Error("Host networking unavailable");
@@ -101,7 +102,10 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       onChange: (cb) => preload.onVaultEvent(cb),
       reconcileScan: async () => {
         if (!preload.scanForSync) return { status: "unavailable", entries: [], errorCode: "strict-scan-unavailable" };
-        try { return { status: "complete", entries: await preload.scanForSync() }; }
+        try {
+          if (preload.scanForSyncBlocked) { const { entries, blocked } = await preload.scanForSyncBlocked(); return { status: "complete", entries, ...(blocked.length ? { blocked } : {}) }; }
+          return { status: "complete", entries: await preload.scanForSync() };
+        }
         catch { return { status: "unavailable", entries: [], errorCode: "local-scan-failed" }; }
       },
       refreshScan: async () => {

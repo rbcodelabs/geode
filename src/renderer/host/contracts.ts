@@ -280,6 +280,8 @@ export interface DesktopHostService {
 
 export interface HostServices {
   readonly syncSafety?: import("../../shared/sync-safety").SyncSafetyService;
+  /** Desktop only: main-process store access (directory / ssh hub) for the built-in hub sync provider. */
+  readonly hubSync?: import("../../shared/hub-sync").HubSyncBridge;
   readonly network?: { request(input: import("../../shared/network").HostHttpRequest, signal?: AbortSignal): Promise<import("../../shared/network").HostHttpResponse>; };
   /** Internal desktop-only Project integration; absent on mobile/browser. */
   externalRoots?: import("../../shared/external-roots").ExternalRootsHost;

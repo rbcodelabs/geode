@@ -14,6 +14,7 @@ import type { DataWriteOptions } from "../renderer/vault";
 import { withPathLock, withVaultMutation } from "./path-lock";
 import { SenderRequests } from "./network";
 import { applyGuardedMutation } from "./sync-apply";
+import { registerHubSyncIpc } from "./hub-sync-ipc";
 import { SyncPrivateStorage } from "./sync-private-storage";
 import { PrivateKeyStore } from "./private-key-store";
 import { applyPortableMutation } from "./sync-config-apply";
@@ -990,6 +991,7 @@ function registerIpc() {
   ipcMain.on("sync-editor-result", (e, token: string, phase: string, reason: unknown) => {
     syncEditorWaiters.get(`${e.sender.id}:${token}:${phase}`)?.(reason === null ? null : typeof reason === "string" ? reason : "Invalid editor guard response");
   });
+  registerHubSyncIpc(ipcMain);
   ipcMain.handle("sync-owner-claim", async e => {
     const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
@@ -1083,6 +1085,18 @@ function registerIpc() {
     const entries = await listVaultFiles(session.root, { strictSync: true });
     if (sessions.get(win.id) !== session) throw new Error("Vault changed during sync scan");
     return entries;
+  });
+
+  // Same strict scan, but iCloud placeholders come back as blocked paths (untouchable by the engine) instead of
+  // failing the whole scan. Used by the desktop sync host; `vault-sync-scan` stays for older callers.
+  ipcMain.handle("vault-sync-scan-blocked", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const blocked: Array<{ path: string; reason: string }> = [];
+    const entries = await listVaultFiles(session.root, { strictSync: true, onBlocked: issue => blocked.push(issue) });
+    if (sessions.get(win.id) !== session) throw new Error("Vault changed during sync scan");
+    return { entries, blocked };
   });
 
   ipcMain.handle("vault-list", async (e) => {

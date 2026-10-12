@@ -72,6 +72,11 @@ export interface AppendOnlySyncProvider {
   readonly name: string;
   readonly protocol: typeof APPEND_ONLY_PROTOCOL;
   readonly capabilities: { readonly binary: true; readonly conditionalWrites: false; readonly appendOnly: true; readonly delta: true; readonly maxFileSize: 104857600 };
+  /**
+   * Opts the host into the unattended-run rails (deletion cap, shrunk-scan guard; see rails.ts). Providers that
+   * leave it out are driven exactly as before.
+   */
+  readonly safetyRails?: boolean;
   discover(signal: AbortSignal): Promise<VaultDescriptor[]>;
   createVault(input: { name: string; operationId: string }, signal: AbortSignal): Promise<VaultDescriptor>;
   open(context: { binding: VaultDescriptor; deviceId: string }, signal: AbortSignal): Promise<AppendOnlySession>;
