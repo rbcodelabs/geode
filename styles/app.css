@@ -6659,3 +6659,122 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
   gap: 12px;
   margin-top: 16px;
 }
+
+/* ---- Launch sequence overlay (reuses .vault-picker surface/lockup/chip) ---- */
+
+.vault-picker.launch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  opacity: 0;
+  /* Never intercept clicks while fading out (e2e and fast users). */
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+  /* Opaque even before a vault theme loads. */
+  background-color: var(--background-primary);
+}
+
+.vault-picker.launch-overlay.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.launch-overlay-skip[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vault-picker.launch-overlay {
+    transition: none;
+  }
+}
+
+.launch-overlay-progress {
+  width: min(360px, 100%);
+  height: 4px;
+  border-radius: 2px;
+  background: var(--background-modifier-border, rgba(0, 0, 0, 0.1));
+  overflow: hidden;
+}
+
+.launch-overlay-progress-bar {
+  height: 100%;
+  width: 0;
+  background: #789348;
+  transition: width 0.2s ease;
+}
+
+.launch-overlay-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: min(360px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.launch-overlay-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
+.launch-overlay-step .launch-overlay-mark {
+  margin-top: 7px;
+  background: var(--text-faint);
+}
+
+.launch-overlay-step.is-running {
+  color: var(--text-normal);
+}
+
+.launch-overlay-step.is-running .launch-overlay-mark {
+  background: #789348;
+  animation: launch-overlay-pulse 1s ease-in-out infinite;
+}
+
+.launch-overlay-step.is-done .launch-overlay-mark {
+  background: #789348;
+}
+
+.launch-overlay-step.is-failed .launch-overlay-mark {
+  background: var(--text-error, #c0392b);
+}
+
+.launch-overlay-step-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.launch-overlay-step-detail {
+  font-size: 12px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launch-overlay-step-status {
+  font-size: 12px;
+  color: var(--text-faint);
+  flex: none;
+}
+
+.launch-overlay-actions {
+  min-height: 32px;
+}
+
+@keyframes launch-overlay-pulse {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .launch-overlay-step.is-running .launch-overlay-mark {
+    animation: none;
+  }
+}

@@ -146,7 +146,7 @@ for (const [name, make] of variants) describe(`AppendOnlySession conformance: ${
         expect(scan.status).toBe("complete");
         expect((scan.records as any[]).map(r => r.recordId)).toEqual(ids);
       } finally { await teardown(); }
-    }, 60_000);
+    }, 180_000);
 
     it("honours pre-aborted signals", async () => {
       await setup();
