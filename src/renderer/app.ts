@@ -19,6 +19,9 @@ import { CommunityManager, type UpdateSummary } from "./community/community-mana
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
+import { renderMobileSupportedPluginCatalog } from "./community/mobile-supported-catalog-view";
+import { loadMobileSupportedCatalog } from "./community/mobile-supported-plugins";
+import { GEODE_APP_VERSION } from "./app-version";
 import {
   appendLoadErrorDiagnostic,
   createTrackedItemEnableControl,
@@ -1333,6 +1336,23 @@ class SettingsModal extends Modal {
         install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
         enable: (pluginId) => this.geodeApp.pluginManager.enable(pluginId),
         getLoadError: (pluginId) => this.geodeApp.pluginManager.getLoadError(pluginId),
+        onInstalled: () => { void this.renderCommunityList(listEl); },
+      });
+    }
+
+    const mobileTransport = this.geodeApp.host.supportedPluginTransport;
+    if (!this.geodeApp.host.capabilities.nodePlugins && this.geodeApp.pluginManager.isMobileRuntime() && mobileTransport) {
+      const catalogEl = document.createElement("section");
+      catalogEl.className = "supported-plugin-catalog";
+      container.appendChild(catalogEl);
+      void renderMobileSupportedPluginCatalog(catalogEl, {
+        load: () => loadMobileSupportedCatalog({
+          transport: mobileTransport,
+          deviceState: this.geodeApp.host.deviceState,
+          currentGeodeVersion: GEODE_APP_VERSION,
+        }),
+        install: (catalog, pluginId) => this.geodeApp.communityManager.installMobileSupported(catalog, pluginId),
+        getInstalledVersion: (pluginId) => this.geodeApp.pluginManager.getManifest(pluginId)?.version,
         onInstalled: () => { void this.renderCommunityList(listEl); },
       });
     }
