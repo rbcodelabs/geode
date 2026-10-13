@@ -122,6 +122,7 @@ const args = process.argv.slice(2);
 appendFileSync(process.env.PROOF_SSH_LOG, JSON.stringify(args) + "\\n");
 if (process.env.PROOF_SSH_FAIL) { process.stderr.write("ssh: connect to host: Connection refused\\n"); process.exit(255); }
 let i = 0; while (args[i] === "-o") i += 2;
+if (args[i] === "--") i++; // spawnSshStore ends the options with a double dash so a host can never be read as one
 const command = args.slice(i + 1).join(" ");
 const gate = process.env.PROOF_SSH_GATE;
 if (gate) { writeFileSync(gate + ".waiting", String(process.pid)); while (!existsSync(gate)) await new Promise((r) => setTimeout(r, 20)); }

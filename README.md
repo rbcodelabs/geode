@@ -319,7 +319,7 @@ security-scoped bookmark and an opaque `external://…` identity. Cancel keeps t
 current vault untouched, and a missing, unavailable, or revoked folder presents
 an exact-vault Reconnect action instead of silently selecting an empty vault.
 Native note bytes use coordinated atomic replacement, attachments are
-read as binary (with a 32 MiB bridge limit), and deleted items move into the
+read as binary (32 MiB per bridge call; sync moves larger files up to 100 MiB in chunks), and deleted items move into the
 recoverable, normally hidden `.geode-trash` area under the active root. Renderer
 and plugin APIs receive only normalized vault-relative paths and stable opaque
 vault identities—never absolute URLs or bookmark bytes. Security-scoped access

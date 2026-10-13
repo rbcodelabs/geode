@@ -49,7 +49,7 @@ const hubHasNote = (hub: string, name: string) => {
 
 const countRecords = (hub: string) => { try { return fs.readdirSync(path.join(hub, "records")).length; } catch { return 0; } };
 
-test("two desktop app instances sync through a directory hub with the built-in Folder or SSH hub provider", async ({}, testInfo) => {
+test("two desktop app instances sync through a directory hub with the built-in hub provider", async ({}, testInfo) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "geode-hub-e2e-"));
   const hub = path.join(base, "hub");
   const a = device(base, "a"), b = device(base, "b");
@@ -131,9 +131,39 @@ test("two desktop app instances sync through a directory hub with the built-in F
     page = await launch(a);
     await expect.poll(() => fs.existsSync(path.join(a.vault, "FromB.md")), { timeout: 60_000 }).toBe(true);
     expect(fs.readFileSync(path.join(a.vault, "FromB.md"), "utf8")).toBe("written on B");
-    expect(await page.evaluate(() => (window as any).app.sync.getActiveProvider())).toEqual({ id: "geode.hub", name: "Folder or SSH hub" });
+    expect(await page.evaluate(() => (window as any).app.sync.getActiveProvider())).toEqual({ id: "geode.hub", name: "Folder, SSH or HTTPS hub" });
   } finally {
     for (const d of [a, b]) await d.app?.close().catch(() => {});
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the HTTPS hub option takes a URL and a token, refuses hostile URLs, and never offers a plaintext transport", async ({}, testInfo) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "geode-hub-http-e2e-"));
+  const a = device(base, "a");
+  try {
+    const page = await launch(a);
+    const modal = await openSyncTab(page);
+    await modal.getByRole("combobox", { name: "Sync provider" }).selectOption("geode.hub");
+    await expect(modal.getByRole("combobox", { name: "Hub type" }).locator("option")).toHaveText(["Folder", "SSH host", "HTTPS hub"]);
+    await modal.getByRole("combobox", { name: "Hub type" }).selectOption("http");
+    const url = modal.getByRole("textbox", { name: "Hub URL" });
+    await expect(url).toBeVisible();
+    await expect(modal.getByRole("textbox", { name: "Hub store path" })).toBeHidden();
+    await expect(modal.getByLabel("Hub token")).toHaveAttribute("type", "password");
+    const result = modal.locator("[data-hub-result]");
+    for (const [hostile, reason] of [["http://hub.example", "https:// or wss://"], ["https://user:secret@hub.example", "user name or password"], ["javascript:alert(1)", "https:// or wss://"]] as const) {
+      await url.fill(hostile);
+      await modal.getByRole("button", { name: "Test connection" }).click();
+      await expect(result).toContainText(reason);
+    }
+    // A well-formed but unreachable hub (nothing listens on port 1): a legible, actionable failure, not a hang or a crash.
+    await url.fill("https://127.0.0.1:1");
+    await modal.getByRole("button", { name: "Test connection" }).click();
+    await expect(result).toContainText(/token|reach/i, { timeout: 30_000 });
+    await page.screenshot({ path: shotPath(testInfo, "https-hub-settings.png") });
+  } finally {
+    await a.app?.close().catch(() => {});
     fs.rmSync(base, { recursive: true, force: true });
   }
 });

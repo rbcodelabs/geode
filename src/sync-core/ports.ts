@@ -1,6 +1,6 @@
 import type { HistoryApply, HistoryControllerPorts, HistoryControllerState, HistoryLocalResource, HistoryLocalSnapshot, HistoryOperation } from "./history-controller";
 import { SYNC_MAX_FILE_BYTES } from "./history-types";
-import { isPathInSyncScope, isRawConfigResourcePath, portableResourcePhysicalPath, rawConfigCategory, rawResourcePath, type SyncScope } from "./scope";
+import { isLocalOnlyConfigPath, isPathInSyncScope, isRawConfigResourcePath, portableResourcePhysicalPath, rawConfigCategory, rawResourcePath, type SyncScope } from "./scope";
 import { isPortableAssetPath } from "../shared/portable-assets";
 import type { GuardedMutation, GuardedMutationResult, SyncStorageRequest } from "../shared/sync-safety";
 
@@ -110,6 +110,8 @@ export const sha256Hex = async (data: ArrayBuffer): Promise<string> => [...new U
 /** Whether a (namespace, path) pair is synchronised under the given scope. */
 export function isIncludedInScope(scope: SyncScope, namespace: string, path: string): boolean {
   if (namespace === "portable-config") {
+    // Rebuildable local caches (.geode/metadata-cache, atomic-write temp files) never travel, in any spelling of the path.
+    if (isLocalOnlyConfigPath(path)) return false;
     if (isRawConfigResourcePath(path)) {
       // A raw-file host only: config files and their folders, named by full path, gated by the same category flags.
       const category = rawConfigCategory(path);
@@ -280,11 +282,12 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
   const ports: HistoryControllerPorts = {
     load: async () => { const value = await host.deviceState.read(stateKey); assertContext(); return value; },
     save: async (value: HistoryControllerState) => { assertContext(); await host.deviceState.write(stateKey, value); assertContext(); },
-    loadOperations: async () => await storage({ action: "load-operations" }) as HistoryOperation[],
+    loadOperations: async ids => await storage({ action: "load-operations", ...(ids ? { ids: [...ids] } : {}) }) as HistoryOperation[],
     saveOperation: async value => { await storage({ action: "save-operation", key: value.id, value }); },
     stage: async (key, data) => await storage({ action: "stage", key, data }) as string,
     readStage: async key => await storage({ action: "read-stage", key }) as ArrayBuffer,
     release: async key => { await storage({ action: "release", key }); },
+    releaseStagedBytes: async key => { await storage({ action: "release-bytes", key }); },
     snapshot, read, isIncluded: (namespace, path) => includedAncestors.has(`${namespace}:${path}`) || included(namespace, path),
     exclude: async (resource, data) => { const reason = resource.namespace === "content" ? await provider.excludePath?.(resource.path, data) : null; assertContext(); return reason ?? null; },
     apply: async (input: HistoryApply) => { assertContext(); await host.safety.apply(lease, { namespace: input.namespace, operationId: input.operationId, path: input.path, expectedHash: input.expectedHash, kind: input.deleted ? "trash" : input.kind === "folder" ? "mkdir" : "write", data: input.data }); assertContext(); if (input.namespace === "portable-config") await ctx.portableChanged(); assertContext(); },

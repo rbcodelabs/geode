@@ -273,6 +273,9 @@ const api = {
   readSecret: (capability: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", capability, key),
   writeSecret: (capability: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", capability, key, value),
   removeSecret: (capability: string, key: string): Promise<void> => ipcRenderer.invoke("secret-remove", capability, key),
+  readAppSecret: (key: string): Promise<string | null> => ipcRenderer.invoke("app-secret-read", key),
+  writeAppSecret: (key: string, value: string): Promise<void> => ipcRenderer.invoke("app-secret-write", key, value),
+  removeAppSecret: (key: string): Promise<void> => ipcRenderer.invoke("app-secret-remove", key),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   openLocalFile: (href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }
@@ -441,7 +444,7 @@ export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
   "audioCaptureWorklet" | "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
-  "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
+  "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless"
 > & {
@@ -484,6 +487,10 @@ export type GeodeApi = Omit<
   setSecret?: ElectronOnlyGeodeApi["setSecret"];
   deleteSecret?: ElectronOnlyGeodeApi["deleteSecret"];
   isSecretEncryptionAvailable?: ElectronOnlyGeodeApi["isSecretEncryptionAvailable"];
+  /** Geode's own secrets (the HTTPS hub token); Electron-only here, the mobile host supplies `host.secrets.app` directly. */
+  readAppSecret?: ElectronOnlyGeodeApi["readAppSecret"];
+  writeAppSecret?: ElectronOnlyGeodeApi["writeAppSecret"];
+  removeAppSecret?: ElectronOnlyGeodeApi["removeAppSecret"];
   /**
    * Secret-backed request-header rules for the agent browser (P1). Electron
    * desktop-only, like the secret-storage bridge above — absent on the

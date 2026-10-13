@@ -1,12 +1,15 @@
-# App hub sync provider ("Folder or SSH hub")
+# App hub sync provider ("Folder, SSH or HTTPS hub")
 
-The desktop app can sync to the same hub store the headless `geode-wiki sync` CLI uses: a
-directory store (`FsStoreProvider`) or an ssh-reachable one (`geode-wiki sync serve --store` over
-`ssh`, `RpcStoreProvider`). CLI reference: [headless-wiki-sync.md](headless-wiki-sync.md),
+The app can sync to the same hub store the headless `geode-wiki sync` CLI uses: a directory store
+(`FsStoreProvider`), an ssh-reachable one (`geode-wiki sync serve --store` over `ssh`,
+`RpcStoreProvider`), or, on desktop and on iOS, an HTTPS one (`geode-wiki sync serve --http` behind TLS, over
+a WebSocket; see "HTTPS hub" below). CLI reference: [headless-wiki-sync.md](headless-wiki-sync.md),
 [ADR 0025](../adr/0025-geode-wiki-sync-cli.md). This page records how the app side is built and
 what it does and does not share with the CLI.
 
 ## Decision: engine stays in the renderer, only the *store* crosses the process boundary
+
+(Folder and ssh targets. The HTTPS target does not cross the process boundary at all; see "HTTPS hub".)
 
 The app already runs `HistoryController` in the renderer (`SyncService`), scanning and applying through
 guarded main-process IPC. A hub store is just an `AppendOnlySession` (`scan`, `putBlob`, `readBlob`,
@@ -45,7 +48,7 @@ One `ipcMain.handle("hub-sync", (e, req))` with a discriminated request, plus `h
 | `scan` `putBlob` `readBlob` `appendRecord` `appendRecords` | `sessionId`, as the session API | as the session API |
 | `close` | `sessionId` | void |
 
-`target` is `{kind:"fs", path}` or `{kind:"ssh", host, path}`; validated in main (absolute path, no NUL,
+`target` is `{kind:"fs", path}` or `{kind:"ssh", host, path}` (the type `MainHubTarget`; the `http` target kind is never sent over IPC); validated in main (absolute path, no NUL,
 host matches the existing `SAFE_HOST` rule). A renderer abort sends `hub-sync-abort(requestId)`.
 Errors are returned as a `{error:{code, message, hint}}` envelope (Electron drops custom fields on
 thrown errors) and rethrown renderer-side as `HubSyncError`.
@@ -138,6 +141,225 @@ names on both sides and do converge). A migration would mean teaching the app to
 (a scope flag plus a main-process apply path for config files) and a decision on plugin code. That is
 out of scope here.
 
+## HTTPS hub (desktop and iOS)
+
+A phone has no Node, no `child_process` and no main process, so folder and ssh hubs cannot exist there
+([ADR 0007](../adr/0007-mobile-runtime-and-platform-boundary.md): no Node/Electron on iOS). The HTTPS target
+is the one hub kind the renderer can reach by itself, which is also why it is the only kind offered on a phone
+(`HubSyncProvider.supportedKinds` is `["http"]` when the host supplies no `hubSync` bridge). Why this transport and not
+the alternatives: [ADR 0029](../adr/0029-https-websocket-hub-transport.md).
+
+```
+renderer (desktop window or iOS web view)               hub machine
+SyncService -> HistoryController
+   HubSyncProvider -> HttpStoreProvider  --- wss:// --->  TLS proxy (tailscale serve) --- ws://127.0.0.1:8787 --->
+   (src/renderer/sync/http-store.ts)                      geode-wiki sync serve --http  -> serveStore -> directory store
+```
+
+* **Target.** `{kind:"http", url}`. The URL must be `https:` or `wss:` (`hubUrlProblem`, `src/shared/hub-sync.ts`):
+  printable ASCII only (an international domain is entered as punycode), no embedded user name/password, no
+  backslash, a real host. A path or query is allowed (a reverse-proxy prefix); the fragment is dropped
+  (`canonicalHubUrl`). `https://` is dialled as `wss://`. `ws://` and `http://` are refused by the product; only a
+  test seam (`allowInsecure`) permits them. The settings form and the provider share this check; nothing is saved
+  on a bad URL.
+* **The session lives in the renderer.** `HttpStoreProvider` / `HttpStoreSession` mirror the ssh client
+  (`RpcClient`/`RpcStoreSession`) one for one: lazy connect, hello first, reconnect with hello + open replay,
+  pipelined requests, 4 MiB chunking, the same named errors (`src/shared/store-errors.ts`) and the same framing
+  (`src/shared/store-framing.ts`, `store-protocol.ts`), so the history engine cannot tell the transports apart. It
+  is browser-safe on purpose: no `node:` imports, no `Buffer`, `crypto.subtle` for sha256, the platform
+  `WebSocket`. There is no main-process bridge and no IPC for this target, and no connection stays open while
+  sync is idle: the provider opens a client per operation or per opened session and closes it with it. A connect
+  deadline of 15 s applies.
+* **Config and identity** are the same as for the other targets (`host.deviceState`, `sync-hub/config/<vault
+  root>`); the config holds the URL and the create flag, never the token.
+
+### Token storage
+
+The token is a shared secret and is stored only in the host's secure storage, `host.secrets.app`:
+
+* Electron: `safeStorage`-encrypted, through three IPC handlers (`app-secret-read|write|remove`, preload
+  `readAppSecret`/`writeAppSecret`/`removeAppSecret`). They use a namespace, `@geode`, that starts with a character
+  no plugin id can start with, so a plugin capability can never address it; keys are limited to
+  `[A-Za-z0-9._:/-]{1,300}` and values to 8192 characters.
+* iOS: the Keychain, through `appSecretGet|Set|Remove` on the native managed-vault plugin
+  (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, Geode's own service namespace), so it does not migrate to
+  another device through a backup.
+* The key is `hub-token/<host:port>` (`hubTokenKey`): a token is only ever read for the host it was entered for.
+* **No fallback.** If the host has no secure storage (`canStoreToken` false) the provider refuses to take a token
+  (`secure-storage-unavailable`) rather than keep it in device state, web storage or the vault, and the settings
+  field is disabled with an explanation. The token is never put in the vault, so it is not synced.
+
+### WebSocket authentication
+
+A browser `WebSocket` (WKWebView included) cannot set an `Authorization` header, and a token in the URL would be
+written to proxy and access logs and to history. So the client offers two sub-protocols in
+`Sec-WebSocket-Protocol`: the real one, `geode-store.v1`, and `bearer.<base64url(utf8 token)>`. The server
+(`src/sync-node/http-serve.ts`):
+
+* authenticates **before** the upgrade, comparing SHA-256 digests with `timingSafeEqual`; a missing or wrong token
+  is a body-less `401` with `WWW-Authenticate: Bearer` and nothing else about the server is revealed (a plain
+  HTTP request gets a body-less `426`);
+* also accepts `Authorization: Bearer <token>` (the CLI and Node clients); it never accepts the token from the URL;
+* never echoes the token entry back: the `101` response names only `geode-store.v1`;
+* requires the token to be at least 24 characters, and `GET`, `Upgrade: websocket`, version 13, and either no
+  named sub-protocol or `geode-store.v1`; `503` with `Retry-After` past 8 simultaneous connections.
+
+Because the refusal happens before the upgrade, a browser reports a bad token only as a failed connection. The
+client therefore cannot tell "wrong token" from "unreachable": both surface as `unavailable`, with a message that
+names both causes.
+
+### Frames: binary only
+
+One connection is one `serveStore` session speaking the unchanged JSON-lines + binary framing; the WebSocket is a
+byte pipe and message boundaries carry no meaning (the framing parser reassembles). The server sends only binary
+frames and rejects text frames (close `1003`), unmasked client frames, reserved bits, unknown opcodes and bad
+fragmentation (`1002`), and any frame whose declared length exceeds `MAX_HEADER_BYTES + MAX_FRAME_BYTES` (`1009`,
+before reading the payload). Ping every 25 s; a peer that does not answer is dropped. Minimal RFC 6455 is
+implemented in-repo (no dependency); no extensions.
+
+### Origin is not checked
+
+The server does not look at the `Origin` header. Defence rests on the token (a page on another origin has no token
+to offer) and on binding to loopback behind a TLS proxy that is reachable only over the tailnet. An `Origin`
+allow-list would be defence in depth against a token leaked into a hostile page; it is not implemented.
+
+### Mobile support
+
+The history engine needs a guarded way to write into the vault and a place to keep frozen bytes and operation
+journals, both of which are Node modules on desktop (`sync-apply.ts`, `sync-private-storage.ts`). On iOS they are
+ported, not shared:
+
+* `src/renderer/host/mobile-sync-safety.ts` builds `host.syncSafety` from a small set of native ports
+  (`MobileSyncPorts`: `stat`, `readBinary`, `writeBinary`, `mkdir`, `trash`, app-sandbox private storage). It is
+  the same hash guard, intent receipts, preimage recovery and crash-safe retry, and the same storage vocabulary, as
+  the desktop. Sync-private bytes live in the app sandbox (Application Support, excluded from backup), never in
+  the vault tree, so they are never scanned or uploaded.
+* `capacitor-host.ts` supplies `host.syncSafety` only when the native plugin has the primitives; an older native
+  build has none and history sync stays refused. The native methods added are `stat` (never follows links: a link on
+  the path reports `symlink`), `syncPrivateWrite|Read|List|Remove|AvailableBytes`, `appSecretGet|Set|Remove`, and a
+  `writeBinary` that stages in the target's directory and swaps atomically with rollback.
+* Differences forced by the platform: one web view owns the vault, so the owner lease is an in-memory token scoped
+  to the open vault; deletions go through the vault's own trash; and the window between the final hash re-check and
+  the native write cannot be closed from JavaScript. The check is repeated immediately before the mutation, as on
+  desktop, but a file edited by another process (the Files app, a provider) inside that window can still be
+  overwritten. This is a limitation of the platform, not something the port can close.
+* **Blocked paths.** The mobile scan reports a `.name.icloud` stub with no real sibling as blocked
+  (`icloud-not-downloaded`, `splitICloudPlaceholders`) at the real file's path: untouchable, never read as deleted,
+  never downloaded by Geode. A read the provider fails with `CONTENT_UNAVAILABLE` is also demoted to that path being
+  blocked, not an error that fails the run. These are stubs and read failures only; the mobile host does not
+  detect evicted-but-named files.
+* **Local caches never sync.** `.geode/metadata-cache/` and atomic-write temp files in a config root are excluded
+  by `isLocalOnlyConfigPath` (src/sync-core/scope.ts) at every choke point (desktop, mobile, headless scan; app and
+  raw-file scopes), regardless of user scope. Copies already on the hub are skipped by the planner, not downloaded,
+  deleted or counted by the rails.
+* **32 MiB bridge limit, and chunked transfer above it.** Binary data crosses the Capacitor bridge as base64 and the
+  native plugin rejects a single payload over 32 MiB (`PAYLOAD_TOO_LARGE`). Files from 32 up to the 100 MiB sync cap
+  move in 8 MiB chunks (`src/renderer/host/chunked-binary.ts`, native `readBinaryRange`, `writeBinaryChunk` /
+  `writeBinaryCommit` / `writeBinaryAbort`, `syncPrivateReadRange`, `syncPrivateWriteChunk`). The single call is tried
+  first and is unchanged, so only a file that does not fit pays for chunking.
+  * Reads return the file's total size and mtime with every chunk; a change between chunks fails the read as
+    `changed-during-read` (a blocked path in a scan) instead of returning a torn file.
+  * Vault writes append to a dotted temp (`.geode-write-chunk-<operationId>`) in the target's directory and are
+    published by the same fsync, backup and atomic swap with rollback as a single-call write, so the hash-guarded,
+    receipt-and-preimage design in `mobile-sync-safety.ts` is untouched: the target holds either the old bytes or the new
+    ones, never a partial file. The temp is named by the operation, so a retry after a crash restarts the same file;
+    native also deletes chunk temps untouched for a day. Sync-private files use a `.chunked.tmp` sibling renamed on the
+    last chunk (startup GC already removes `.tmp` names).
+  * Bounds: the native side takes at most 16 MiB per call, 100 MiB per file, requires each chunk to land at exactly the
+    temp's current size, and checks the assembled size at commit. Paths still go through `validatedURL`.
+  * Peak memory is the file plus one chunk (the assembled `ArrayBuffer`); a 100 MiB file therefore needs roughly
+    200 MiB in the web view while it is staged and hashed. Not measured on a device.
+  * A native build without the chunked methods keeps the old limit, but it is now per file: staging a file the host
+    cannot hold throws a `SyncBlockedError` (`too-large-for-mobile`), which the history controller demotes to that one
+    path being blocked, while the rest of the batch applies. Any other staging failure (a full disk) still fails the run.
+* **Staged bytes are released per operation.** A batch is prepared whole before anything is applied (that is what makes
+  ordered, multi-step operations such as a rename's write-then-delete recoverable as one unit), so every downloaded file
+  is first frozen in the sync-private store. Previously those copies all stayed until the batch's state was saved, so
+  the phone held the downloaded part of the vault twice at the end of a run (about `vault + 2 x downloaded`). Now each
+  operation's frozen bytes are dropped (`releaseStagedBytes`, storage action `release-bytes`) right after its journal
+  was durably saved as `committed`, which caps the peak at `vault + downloaded`, reached when staging finishes. The
+  ordering that makes this safe: recovery never reads the bytes of a committed operation (it skips it) but does need the
+  journal, which `pendingBatch` still names, so only the blob goes early; blob and journal go together through
+  `release` after the state that stops naming the batch is saved, exactly as before. A crash before the committed
+  journal is durable finds the bytes and retries (apply and upload are idempotent by operation id); a crash after finds a
+  committed journal and needs nothing. A failed or skipped early release only delays reclamation to `release` / startup GC.
+  **Not done, and why:** getting below `vault + downloaded` needs downloads not to be frozen at all, or the batch to be
+  committed in windows. Windowing is unsafe as the controller stands: actions are ordered writes first, deletions last,
+  and a rename is a write (new path) plus a delete (old path) that sort far apart; committing the writes of one window
+  into the baseline before the delete runs, then crashing, makes the next plan see the old file as a brand-new local
+  file and republish it. Not freezing downloads (journal only the remote blob id and refetch on recovery) changes the
+  "frozen bytes differ from retry content" guarantee and makes recovery depend on the hub being reachable, so it needs its
+  own design and decision, not a drive-by change.
+* **Bridge calls per applied file.** Measured with a counting fake of the native plugin (`tests/unit/mobile-transfer-calls.test.ts`,
+  60 downloaded files three folders deep): 23.1 calls per file before, 17.9 after (`stat` 6.6 to 3.5, `syncPrivateAvailableBytes`
+  1.07 to 0.02, `syncPrivateRemove` 3.6 to 2.5). The guarded-apply path check now stats the full target once (the native `stat`
+  reports a link on any component and "none" for a missing or non-directory component) plus the nearest existing ancestor
+  when the target is new, and the re-check before the write stats only the target; free space is measured once per few seconds
+  and re-measured the moment the running estimate would not clear a stage; the terminal release skips a blob already freed.
+  Receipts, journals, staged bytes and the hash guard are unchanged. Remaining per file: journal and receipt writes (the
+  crash-recovery record), the staged read, and the post-run re-plan's read of each new file (the mobile host has no hash
+  cache). Device state is saved a constant number of times per batch, not per operation. The per-file full reconcile is fixed, see the next bullet.
+* **Post-apply editor refresh is path-scoped.** After every guarded apply the app used to run a full vault reconcile raced against
+  a 4 s timeout. On a 10,000-file vault that exceeded 4 s, so every apply failed with "Editor refresh incomplete", the run
+  aborted, and the retry hit the same wall. Now the mobile safety service reports what each apply did (`SyncApplyOutcome`:
+  path, kind, size, changed) to the release handlers, and `PostApplyRefresh` (src/renderer/sync/post-apply-refresh.ts) refreshes
+  that path alone: changes queue by path and one drain applies them in batches through the same editor-refresh code as a
+  full reconcile, with no scan and no manifest commit (the paths are acknowledged so a later full reconcile does not re-report
+  them). Settings documents only re-read settings, and a failed apply refreshes nothing. A host that does not report outcomes
+  (desktop) still rescans. **How the safety property is kept:** the guard exists so no editor keeps or overwrites bytes sync
+  just changed, so the hold is only ever lifted by a refresh that really completed. If the refresh finishes in time, the guard
+  is released then. If it is merely slow (over 4 s), the apply now returns normally, every view is made inert (read-only), and
+  the refresh lifts that hold itself when it completes (the same recovery hook a failed refresh uses); later applies join the
+  queue and are refreshed as one batch. If the refresh fails, the apply still fails, the sync retries, and the hold stays until
+  a refresh succeeds. The vault model's child index is likewise updated per created or deleted entry (insert into the sorted
+  children of the parent) instead of rebuilt for the whole vault. Recovery of an interrupted batch reads only the journals the
+  batch names, once each, and startup GC no longer reads journals it was told to keep. Counted in tests: 120 applies cost 120
+  full-vault native list calls before and 0 after. Not verified on a device or in the real editor UI.
+* **An idle cycle is O(1) bridge calls.** The phone used to read and SHA-256 every local file three times per run (the rail
+  preview, the plan, the re-plan), because the mobile host had no hash cache. Now (a) `createPrivateHashCache`
+  (src/renderer/host/private-hash-cache.ts) keeps `path -> {size, mtime, sha256, provider}` in the private store, one document per
+  vault, held in memory after the first read and rewritten only when a cycle changed a row; (b) `controller.run` accepts
+  `beforeExecute`, so the delete-limit rail judges the plan run() executes instead of a separate preview, and an approved device
+  whose plan holds no action and no adoption returns without the second walk. Counted at 300 and 3,000 files: readBinary 900 per
+  idle cycle (3 per file) and 3 native `list` calls before; 0 and 2 after, total 6 calls regardless of vault size.
+  **Reuse rule** (unchanged engine rule, now active on the phone): a cached hash is used only if size and mtime equal the row
+  exactly, the row was written by the same provider, and the mtime is at least 2 s old (a file written or touched inside the
+  window is read every cycle until it ages out). Anything else, including a missing, unreadable or version-mismatched cache, is a
+  cold miss: read and hash. **Residual risk:** a file whose bytes change while size AND mtime stay identical (`touch -r`, a restore
+  that preserves mtime, a tool that writes in place and resets the clock) is not noticed by the scan until its stat tuple changes.
+  Every apply over such a path still reads the real bytes and checks the hash guard, so a remote change cannot overwrite it
+  blindly; the cost is a delayed upload of that edit. ctime is not used: on iOS it is the creation date and does not move on edit.
+  After an upgrade there are no rows, so the first cycle hashes everything once. Files just written by a sync are read once on the
+  next cycle (their mtime is "now"), then cached. The remote scan is already incremental by cursor. What stays O(files) is
+  in-memory JS (history derivation and planning) and the one listing; neither crosses the bridge per file. Journals are read only
+  for a pending batch (by id), and startup GC reads only journals it was not told to keep, so a clean device reads none.
+* Rails (deletion cap, shrunk-scan guard, first-run approval) are evaluated by `SyncService` exactly as on desktop.
+  The phone settings rows are laid out one full-width, touch-sized field per row.
+
+### Running the hub
+
+`geode-wiki sync serve --http` and the TLS front are described in
+[headless-wiki-sync.md](headless-wiki-sync.md#https-hub-geode-wiki-sync-serve---http).
+
+### HTTPS risks
+
+* **The token is a bearer secret for the whole store.** Anyone holding it can read, add and (through the append-only
+  protocol) publish deletions for every vault in that store. There is one token per hub, no per-device revocation
+  other than rotating it, and no rate limiting beyond the connection cap. Treat it like an ssh key.
+* **TLS is the proxy's job.** The server itself speaks plain `ws://`. `serve --http` warns when it is bound to a
+  non-loopback address, but cannot tell whether a TLS proxy is in front. Binding a public address without one
+  sends the token and vault data in the clear.
+* **Origin is not checked** (above).
+* **Failed auth is indistinguishable from unreachable** on a browser/WKWebView client (above).
+* **Mobile apply window** (above). Chunked transfer of 32-100 MiB files is covered by unit tests against an in-memory
+  native plugin and a compile check of the Swift, not by a run on a device.
+* **Not covered by automated tests:** a real tailnet with `tailscale serve`, a physical iPhone against a remote
+  hub, App Transport Security behaviour against a real certificate, and background/suspended-app reconnects. The
+  server, client, convergence (a desktop-style device and the mobile host through one hub), mobile safety port and
+  a phone Playwright spec are covered in `tests/unit/sync-http-serve.test.ts`, `sync-http-store.test.ts`,
+  `hub-http-provider.test.ts`, `mobile-hub-convergence.test.ts`, `tests/unit/host/mobile-sync-safety.test.ts`
+  and `tests/mobile/hub-sync.spec.ts`; the native Swift stores have XCUITests and a simulator proof.
+
 ## Risks
 
 * Renderer-chosen filesystem path: any renderer code (including a community plugin with preload
@@ -147,8 +369,8 @@ out of scope here.
   documented, not prevented.
 * The iCloud rail is coarser in the app (whole run) than in the CLI (one path).
 * `geode-wiki` must be on the hub's non-login PATH for ssh.
-* Large blobs (<= 100 MiB) cross IPC as ArrayBuffers: peak memory is one blob per in-flight upload
-  (concurrency 4).
+* Large blobs (<= 100 MiB) cross IPC as ArrayBuffers on folder/ssh targets: peak memory is one blob per
+  in-flight upload (concurrency 4). The HTTPS target does not use IPC; it sends 4 MiB frames from the renderer.
 
 ## Test plan
 

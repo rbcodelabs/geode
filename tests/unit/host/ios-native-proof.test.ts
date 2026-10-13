@@ -172,6 +172,16 @@ describe("iOS native smoke proof", () => {
     expect(plugin).not.toContain('call.resolve(["root": vaultRoot.path');
   });
 
+  it("stat decides which component is last by position: a file named like its parent folder is not its parent", () => {
+    // Device regression: Skills/worktree-bootstrap/worktree-bootstrap statted as the 6-child FOLDER Skills/worktree-bootstrap,
+    // because `component == components.last` matched the middle component by name, so the guard refused the write forever.
+    const plugin = fs.readFileSync(path.join(root, "ios/App/App/GeodeManagedVaultPlugin.swift"), "utf8");
+    const stat = plugin.slice(plugin.indexOf("@objc func stat("), plugin.indexOf("private func lexicalComponents"));
+    expect(stat).toContain("components.enumerated()");
+    expect(stat).toContain("index == components.count - 1");
+    expect(stat).not.toContain("components.last");
+  });
+
   it("declares Apple's app-container file timestamp reason", () => {
     const manifest = fs.readFileSync(path.join(root, "ios/App/App/PrivacyInfo.xcprivacy"), "utf8");
 

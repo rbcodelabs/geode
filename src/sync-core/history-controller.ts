@@ -88,7 +88,8 @@ export interface HistoryControllerState {
 export interface HistoryControllerPorts {
     load(): Promise<unknown | null>;
     save(state: HistoryControllerState): Promise<void>;
-    loadOperations(): Promise<HistoryOperation[]>;
+    /** `ids` narrows the load to the journals a pending batch names; a host may ignore it and return every journal. */
+    loadOperations(ids?: readonly string[]): Promise<HistoryOperation[]>;
     saveOperation(operation: HistoryOperation): Promise<void>;
     /**
      * @param onProgress observational only, and optional precisely so that a host
@@ -108,6 +109,14 @@ export interface HistoryControllerPorts {
      * the state that stops naming them in pendingBatch has been durably saved.
      */
     release?(operationId: string): Promise<void>;
+    /**
+     * Deletes only the staged bytes of an operation, keeping its journal. Idempotent and optional. The controller calls it
+     * for an operation immediately after that operation's journal was durably saved with phase 'committed', and never
+     * earlier: until then recovery may still need the bytes to retry the apply or upload. A committed operation's bytes are
+     * never read again (recovery skips it), but the pendingBatch still names it, so its journal must stay until `release`.
+     * This is what keeps a phone from holding a downloaded file twice (staged copy and vault copy) for the whole batch.
+     */
+    releaseStagedBytes?(operationId: string): Promise<void>;
     /** Idempotent by operationId; preserve durable preimages and validate expectedHash before mutation. Folder trash MUST refuse nonempty directories. */
     apply(input: HistoryApply): Promise<void>;
     isIncluded(namespace: HistoryNamespace, path: string): boolean;
@@ -261,6 +270,26 @@ const localReadReason = (error: unknown): string => {
     return 'local-read-failed';
 };
 /**
+ * The guarded apply refused because the local path is not in the state the plan froze (changed, a folder where a file goes,
+ * live descendants). It is a fact about this one path, so the operation is abandoned and the batch goes on; the next plan sees
+ * the path as it now is (adopts it, or reports a conflict). The text is matched because the error crosses IPC as a string.
+ */
+const isGuardRefusal = (error: unknown): boolean => {
+    const message = error instanceof Error ? error.message : String(error);
+    return /Local file changed (before|while) sync|Sync cannot replace a folder or delete live descendants|Folder acquired live descendants|Sync parent is not a directory/.test(message);
+};
+/**
+ * A host that cannot hold this one file (a phone without room for a 90 MiB blob, a native build with a smaller transport
+ * limit) says so with a SyncBlockedError from stage(), which survives an RPC boundary as `[blocked:<reason>]`. Anything
+ * else thrown by stage() is systemic (ENOSPC, a broken journal) and still fails the run.
+ */
+const stageBlockedReason = (error: unknown): string | null => {
+    const direct = (error as { syncBlockedReason?: unknown } | null)?.syncBlockedReason;
+    if (typeof direct === 'string')
+        return direct;
+    return /\[blocked:([a-z0-9-]+)\]/.exec(error instanceof Error ? error.message : String(error))?.[1] ?? null;
+};
+/**
  * prepare() either produces a durable intent or demotes exactly one resource.
  * `cause` is retained so callers that must not skip work (resolve()) can rethrow
  * the original error unchanged instead of inventing a new one.
@@ -343,16 +372,27 @@ export class HistoryController {
         throw new Error('Resume pending sync before preview'); const plan = await this.plan(state, signal); state.previewSignature = plan.preview.signature; await this.save(state, signal); return plan.preview; }); }
     async run(options: {
         approvePreview?: boolean;
+        /** Called with the plan's counts after it is approved and before anything is executed; throw to refuse the run. Saves a separate preview pass for callers that only wanted the counts. */
+        beforeExecute?: (plan: Pick<HistoryPreview, 'deletions' | 'uploads' | 'downloads' | 'signature'>) => void | Promise<void>;
     }, signal: AbortSignal): Promise<HistoryPreview> {
         return this.exclusive(signal, async () => {
             const state = await this.load(signal);
             if (state.pendingBatch?.length)
                 await this.recover(state, signal);
             const plan = await this.plan(state, signal);
-            if (!state.approved && (!options.approvePreview || state.previewSignature !== plan.preview.signature))
+            if (!state.approved && (!options.approvePreview || state.previewSignature !== plan.preview.signature)) {
                 throw new Error('Preview this exact sync before approving it');
+            }
+            await options.beforeExecute?.(plan.preview);
+            const wasApproved = state.approved;
             state.approved = true;
             delete state.previewSignature;
+            // Idle fast path: an approved device whose plan holds no action and no adoption has nothing to execute, and the
+            // re-plan after executing would be this same plan again (same snapshot, same history). Skip the second walk of the vault.
+            if (wasApproved && !plan.actions.length && !Object.keys(plan.adoptions).length) {
+                await this.save(state, signal);
+                return plan.preview;
+            }
             const demoted = await this.execute(state, plan, signal);
             const after = await this.plan(state, signal, 'finalizing');
             // Demotions describe what this run skipped, and the re-plan cannot
@@ -460,7 +500,14 @@ export class HistoryController {
         for (const [entityId, entity] of Object.entries(derived.entities)) {
             const statuses = entity.heads.map(id => state.history.records[id]?.blob?.id).filter((id): id is string => Boolean(id)).map(id => availability[id]);
             const status = statuses.includes('corrupt') ? 'corrupt' : statuses.includes('pending') ? 'pending' : undefined;
-            if (status) blocked.push({ namespace: entity.namespace, path: entity.path ?? state.baseline[entityId]?.path ?? state.history.records[entity.heads[0]]?.location.name ?? entityId, reason: `${status}-blob` });
+            if (!status)
+                continue;
+            const blockedPath = entity.path ?? state.baseline[entityId]?.path ?? state.history.records[entity.heads[0]]?.location.name ?? entityId;
+            // An entity this device does not sync (out of scope, e.g. a cache another device uploaded) can never be applied
+            // here, so its unavailable blob must not hold this device's sync in a blocked state.
+            if (entity.path !== undefined && !this.included(snapshot, entity.namespace, entity.path))
+                continue;
+            blocked.push({ namespace: entity.namespace, path: blockedPath, reason: `${status}-blob` });
         }
         if (Object.keys(derived.quarantined).length)
             blocked.push({ namespace: 'content', path: '(remote history)', reason: 'quarantined-remote-history' });
@@ -683,7 +730,8 @@ export class HistoryController {
         actions.sort((a, b) => priority(a) - priority(b) || (a.deleted ? -1 : 1) * (a.path.split('/').length - b.path.split('/').length) || a.path.localeCompare(b.path));
         state.conflicts = conflicts;
         state.blocked = blocked;
-        const signature = await this.hash(new TextEncoder().encode(JSON.stringify({ scope: snapshot.scopeKey, actions, conflicts, blocked, excluded: snapshot.excluded, records: Object.keys(state.history.records).sort(), quarantined: Object.keys(state.history.quarantined).sort() })).buffer, signal);
+        const signed = { scope: snapshot.scopeKey, actions, conflicts, blocked, excluded: snapshot.excluded, records: Object.keys(state.history.records).sort(), quarantined: Object.keys(state.history.quarantined).sort() };
+        const signature = await this.hash(new TextEncoder().encode(JSON.stringify(signed)).buffer, signal);
         const preview: HistoryPreview = { signature, requiresApproval: !state.approved, uploads: actions.filter(a => a.type === 'publish' && !a.deleted).length, downloads: actions.filter(a => a.type === 'apply' && !a.deleted).length, deletions: actions.filter(a => a.deleted).length, conflicts, blocked, excluded: snapshot.excluded, pending: derived.pending.length, upToDate: state.approved && !actions.length && !conflicts.length && !blocked.length && !derived.pending.length && !Object.keys(derived.quarantined).length };
         const locations = new Map<string, HistoryRecord['location']>();
         for (const [id, r] of byEntity) {
@@ -730,7 +778,23 @@ export class HistoryController {
                 data = fetched ? await fetched : await this.verified(await this.checked(signal, () => this.options.session.readBlob(record.blob!, signal)), record.blob.sha256, record.blob.size, signal);
             }
         }
-        const payload = data ? { key: await this.checked(signal, () => this.ports.stage(id, data!)), sha256: await this.hash(data, signal), size: data.byteLength } : undefined;
+        let payload: { key: string; sha256: string; size: number } | undefined;
+        if (data) {
+            let key: string;
+            try {
+                key = await this.checked(signal, () => this.ports.stage(id, data!));
+            }
+            catch (error) {
+                // Resource-local, like a failed local read: demote this one file and let the rest of the batch proceed.
+                this.assert(signal);
+                const reason = stageBlockedReason(error);
+                if (reason === null)
+                    throw error;
+                await this.ports.release?.(id).catch(() => { });
+                return { ok: false, issue: { namespace: record.namespace, path: action.path, reason }, cause: error };
+            }
+            payload = { key, sha256: await this.hash(data, signal), size: data.byteLength };
+        }
         const candidate = { ...record, ...(payload && !record.blob ? { blob: { id: 'pending', sha256: payload.sha256, size: payload.size } } : {}) };
         if (mergeHistory({ records: {}, quarantined: {} }, [candidate], this.options.vaultId).quarantined[record.recordId])
             throw new Error('Invalid local history record');
@@ -761,7 +825,10 @@ export class HistoryController {
             throw outcome.cause;
         return outcome.operation;
     }
+    /** Paths whose guarded apply was refused during the current run (see isGuardRefusal). */
+    private refused: HistoryPathIssue[] = [];
     private async execute(state: HistoryControllerState, plan: Plan, signal: AbortSignal): Promise<HistoryPathIssue[]> {
+        this.refused = [];
         const operations: HistoryOperation[] = [];
         const demoted: HistoryPathIssue[] = [];
         // No mutation before the whole ordered batch is durably ready; this is what
@@ -800,7 +867,7 @@ export class HistoryController {
         Object.assign(state.baseline, plan.adoptions);
         await this.save(state, signal);
         await this.releaseTerminal(operations, signal);
-        return demoted;
+        return [...demoted, ...this.refused];
     }
     /**
      * The one place a batch is actually performed, shared by a fresh run and by
@@ -910,6 +977,8 @@ export class HistoryController {
                 for (const committed of done)
                     committed.phase = 'committed';
                 await this.checked(signal, () => Promise.all(done.map(committed => this.ports.saveOperation(committed))));
+                for (const committed of done)
+                    await this.releaseCommittedBytes(committed, signal);
                 if (failure !== undefined)
                     throw failure;
                 i += batch.length;
@@ -1013,10 +1082,38 @@ export class HistoryController {
             if (!apply)
                 throw new Error('Missing guarded operation');
             tick();
-            await this.checked(signal, () => this.ports.apply({ ...apply, ...(data ? { data } : {}) }));
+            try {
+                await this.checked(signal, () => this.ports.apply({ ...apply, ...(data ? { data } : {}) }));
+            }
+            catch (error) {
+                this.assert(signal);
+                if (!isGuardRefusal(error))
+                    throw error;
+                // One path that no longer matches its plan must not wedge the run (and every retry of it) forever.
+                operation.phase = 'abandoned';
+                await this.checked(signal, () => this.ports.saveOperation(operation));
+                this.refused.push({ namespace: operation.record.namespace, path: operation.path, reason: 'local-changed-before-apply' });
+                return;
+            }
         }
         operation.phase = 'committed';
         await this.checked(signal, () => this.ports.saveOperation(operation));
+        await this.releaseCommittedBytes(operation, signal);
+    }
+    /**
+     * Best-effort, and only ever after saveOperation(committed) resolved. A crash in between merely leaves the bytes for the
+     * terminal release() (or startup GC) to reclaim; a crash after it finds a committed journal and never asks for the bytes.
+     */
+    private async releaseCommittedBytes(operation: HistoryOperation, signal: AbortSignal) {
+        if (operation.phase !== 'committed' || !operation.payload || !this.ports.releaseStagedBytes)
+            return;
+        this.assert(signal);
+        try {
+            await this.ports.releaseStagedBytes(operation.id);
+        }
+        catch {
+            this.assert(signal);
+        }
     }
     /**
      * Best-effort reclamation: a failure must not fail a sync whose work is
@@ -1051,7 +1148,7 @@ export class HistoryController {
             await this.abandon(state, signal);
             return;
         }
-        const all = new Map((await this.checked(signal, () => this.ports.loadOperations())).map(o => [o.id, o]));
+        const all = new Map((await this.checked(signal, () => this.ports.loadOperations(state.pendingBatch))).map(o => [o.id, o]));
         const operations = state.pendingBatch!.map(id => { const op = all.get(id); if (!op)
             throw new Error('Missing durable sync intent'); return op; });
         // Recovery is the path that runs after a restart, i.e. the one a user hits
@@ -1065,7 +1162,7 @@ export class HistoryController {
         await this.releaseTerminal(operations, signal);
     }
     private async abandon(state: HistoryControllerState, signal: AbortSignal) {
-        const all = new Map((await this.checked(signal, () => this.ports.loadOperations())).map(o => [o.id, o]));
+        const all = new Map((await this.checked(signal, () => this.ports.loadOperations(state.pendingBatch))).map(o => [o.id, o]));
         const operations = (state.pendingBatch ?? []).map(id => { const op = all.get(id); if (!op)
             throw new Error('Missing durable sync intent'); return op; });
         for (const op of operations) {

@@ -447,3 +447,210 @@ describe('staged byte lifetime', () => {
         expect(a.staged.size).toBe(1);
     });
 });
+describe('remote entries that are out of scope on this device', () => {
+    // What a device that does not sync `cache/` sees when another device (or an older build) already uploaded it.
+    const denyCache = (c: ReturnType<typeof client>) => { c.ports.isIncluded = (_ns, path) => !(path === 'cache' || path.startsWith('cache/')); return c; };
+    const uploaded = async () => {
+        const r = remote(), a = client(r, { 'keep.md': 'k', 'cache/index.sqlite': 'big', 'cache/cache.json': 'bigger' }); await start(a);
+        return { r, a };
+    };
+    it('neither downloads them nor reports them, so a fresh device syncs only what is in scope', async () => {
+        const { r } = await uploaded();
+        const reads: string[] = [], readBlob = r.session.readBlob;
+        r.session.readBlob = async ref => { reads.push(ref.id); return readBlob(ref); };
+        const b = denyCache(client(r));
+        const preview = await b.controller.preview(signal());
+        expect(preview.deletions).toBe(0); expect(preview.conflicts).toEqual([]); expect(preview.blocked).toEqual([]);
+        await b.controller.run({ approvePreview: true }, signal());
+        expect(b.text('keep.md')).toBe('k');
+        expect(b.files.has('cache/index.sqlite')).toBe(false); expect(b.folders.has('cache')).toBe(false);
+        expect(reads).toHaveLength(1); // only keep.md's blob was fetched
+        expect(b.staged.size).toBe(1);
+    });
+    it('does not plan deletions, trip a delete limit or block when the uploading device stops syncing them', async () => {
+        const { r, a } = await uploaded();
+        const before = r.records.size;
+        denyCache(a); a.restart();
+        // The local copies may be gone (cache rebuilt, volume cleaned) or still present: neither is a deletion or an upload.
+        for (const keepLocal of [true, false]) {
+            if (!keepLocal) { a.files.delete('cache/index.sqlite'); a.files.delete('cache/cache.json'); a.folders.delete('cache'); }
+            const preview = await a.controller.preview(signal());
+            expect(preview.deletions).toBe(0); expect(preview.uploads).toBe(0); expect(preview.downloads).toBe(0);
+            expect(preview.blocked).toEqual([]); expect(preview.conflicts).toEqual([]); expect(preview.upToDate).toBe(true);
+        }
+        await a.controller.run({}, signal());
+        expect(r.records.size).toBe(before); // nothing tombstoned remotely either
+    });
+    it('does not let an unavailable blob of an out-of-scope entity hold the device in a blocked state', async () => {
+        const { r } = await uploaded();
+        const cacheRecords = [...r.records.values()].filter(rec => rec.location.name === 'index.sqlite');
+        const scan = r.session.scan;
+        r.session.scan = async (...args) => ({ ...await scan(...args), blobAvailability: cacheRecords.map(rec => ({ id: rec.blob!.id, status: 'pending' as const })) });
+        const b = denyCache(client(r));
+        const preview = await b.controller.preview(signal());
+        expect(preview.blocked).toEqual([]);
+        const everything = client(r); // a device that does sync it is still told
+        expect((await everything.controller.preview(signal())).blocked).toContainEqual({ namespace: 'content', path: 'cache/index.sqlite', reason: 'pending-blob' });
+    });
+});
+describe('a host that cannot hold one file', () => {
+    const tooLarge = (message = 'too large for this device') => Object.assign(new Error(`[blocked:too-large-for-mobile] ${message}`), { syncBlockedReason: 'too-large-for-mobile' });
+    it('demotes just that download to blocked: the rest of the batch applies, nothing is left staged, and the run does not fail', async () => {
+        const r = remote(), a = client(r, { 'huge.md': 'x'.repeat(50), 'small.md': 'ok', 'other.md': 'fine' }); await start(a);
+        const b = client(r), stage = b.ports.stage, released: string[] = [];
+        b.ports.stage = async (id, data) => { if (data.byteLength > 10) throw tooLarge(); return stage(id, data); };
+        b.ports.release = async id => { released.push(id); b.staged.delete(id); b.operations.delete(id); };
+        const result = await start(b);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'huge.md', reason: 'too-large-for-mobile' });
+        expect(b.text('small.md')).toBe('ok'); expect(b.text('other.md')).toBe('fine'); expect(b.files.has('huge.md')).toBe(false);
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); expect(b.state()!.pendingBatch).toBeUndefined();
+        expect(released.length).toBeGreaterThan(0);
+        // Not sticky: once the host can hold it (a newer native build), the same file downloads.
+        b.ports.stage = stage; const again = await b.controller.run({}, signal());
+        expect(again.blocked).toEqual([]); expect(b.text('huge.md')).toBe('x'.repeat(50));
+    });
+    it('also recognises the reason when it has crossed an RPC boundary as message text only', async () => {
+        const r = remote(), a = client(r, { 'huge.md': 'x'.repeat(50), 'small.md': 'ok' }); await start(a);
+        const b = client(r), stage = b.ports.stage;
+        b.ports.stage = async (id, data) => { if (data.byteLength > 10) throw new Error('Error invoking remote method: Error: [blocked:too-large-for-mobile] nope'); return stage(id, data); };
+        const result = await start(b);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'huge.md', reason: 'too-large-for-mobile' }); expect(b.text('small.md')).toBe('ok');
+    });
+    it('still fails the run for a systemic stage failure such as a full disk', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one' }); await start(a);
+        const b = client(r); b.ports.stage = async () => { throw new Error('ENOSPC: no space left on device'); };
+        await expect(start(b)).rejects.toThrow('ENOSPC');
+    });
+});
+describe('staged bytes are released per operation, journal first', () => {
+    type Client = ReturnType<typeof client>;
+    // Mirrors the real host: releaseStagedBytes drops only the blob; release drops blob and journal.
+    function hosted(c: Client, log: Array<{ id: string; phase: string | undefined; batch: string[] | null }> = []) {
+        c.ports.release = async id => { c.staged.delete(id); c.operations.delete(id); };
+        c.ports.releaseStagedBytes = async id => { log.push({ id, phase: c.operations.get(id)?.phase, batch: c.state()?.pendingBatch ?? null }); c.staged.delete(id); };
+        return c;
+    }
+    const files = { 'a.md': 'aaaa', 'b.md': 'bbbb', 'c.md': 'cccc', 'd.md': 'dddd' };
+    it('a download batch never holds a file both staged and applied: each blob goes as soon as its operation is committed', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const log: Array<{ id: string; phase: string | undefined; batch: string[] | null }> = [], b = hosted(client(r), log);
+        const stagedBeforeApply: number[] = [], apply = b.ports.apply;
+        b.ports.apply = async input => { stagedBeforeApply.push(b.staged.size); return apply(input); };
+        await start(b);
+        // Four blobs are staged up front (the batch is prepared whole), then one is freed after each apply.
+        expect(stagedBeforeApply).toEqual([4, 3, 2, 1]);
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0);
+        // Crash safety: every release happened after that operation's 'committed' journal was saved, while the batch still named it.
+        expect(log).toHaveLength(4);
+        expect(log.every(entry => entry.phase === 'committed' && entry.batch?.includes(entry.id))).toBe(true);
+        expect(Object.keys(files).every(name => b.text(name) === files[name as keyof typeof files])).toBe(true);
+    });
+    it('uploads free their frozen bytes after the record commits', async () => {
+        const r = remote(), log: Array<{ id: string; phase: string | undefined; batch: string[] | null }> = [], a = hosted(client(r, files), log);
+        const stagedAtAppend: number[] = [], append = r.session.appendRecord;
+        r.session.appendRecord = async record => { stagedAtAppend.push(a.staged.size); return append(record); };
+        await start(a);
+        expect(stagedAtAppend.length).toBeGreaterThanOrEqual(4); expect(stagedAtAppend.at(-1)).toBeLessThan(stagedAtAppend[0]);
+        expect(log.every(entry => entry.phase === 'committed')).toBe(true); expect(a.staged.size).toBe(0);
+    });
+    it('a crash after some operations were applied and their bytes released: recovery finishes without the released bytes', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = hosted(client(r)), apply = b.ports.apply; let applied = 0;
+        b.ports.apply = async input => { if (applied === 2) throw new Error('process killed'); applied++; return apply(input); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('process killed');
+        // Two operations are committed with their bytes gone; the other two are still prepared with bytes intact; the batch names all four.
+        expect(b.staged.size).toBe(2); expect(b.operations.size).toBe(4);
+        expect(b.state()!.pendingBatch).toHaveLength(4);
+        expect([...b.operations.values()].filter(op => op.phase === 'committed')).toHaveLength(2);
+        b.ports.apply = apply; b.restart();
+        await b.controller.run({}, signal());
+        expect(Object.keys(files).every(name => b.text(name) === files[name as keyof typeof files])).toBe(true);
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); expect(b.state()!.pendingBatch).toBeUndefined();
+        expect(Object.values(b.state()!.baseline).filter(item => item.present && item.kind === 'file')).toHaveLength(4);
+    });
+    it('recovery asks the host for exactly the journals the pending batch names', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = hosted(client(r)), apply = b.ports.apply; let applied = 0;
+        b.ports.apply = async input => { if (applied === 2) throw new Error('process killed'); applied++; return apply(input); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('process killed');
+        const pending = b.state()!.pendingBatch!, asked: Array<readonly string[] | undefined> = [], load = b.ports.loadOperations;
+        b.ports.loadOperations = async ids => { asked.push(ids); return load(ids); };
+        b.ports.apply = apply; b.restart(); await b.controller.run({}, signal());
+        expect(asked).toEqual([pending]);
+    });
+    it('a crash between the apply and the committed journal keeps the bytes: the operation is retried, not lost', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'aaaa' }); await start(a);
+        const b = hosted(client(r)), save = b.ports.saveOperation; let crash = true;
+        b.ports.saveOperation = async op => { if (crash && op.phase === 'committed') { crash = false; throw new Error('killed before the journal was durable'); } return save(op); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('killed before');
+        expect(b.text('a.md')).toBe('aaaa'); // applied
+        expect(b.staged.size).toBe(1); expect([...b.operations.values()][0].phase).toBe('prepared'); // but still fully recoverable
+        b.restart(); await b.controller.run({}, signal());
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); expect(b.text('a.md')).toBe('aaaa');
+    });
+    it('a crash between the committed journal and the byte release leaks nothing the terminal release does not reclaim', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'aaaa' }); await start(a);
+        const b = hosted(client(r)); let crash = true;
+        b.ports.releaseStagedBytes = async () => { if (crash) { crash = false; throw new Error('killed before the release'); } };
+        await b.controller.preview(signal());
+        const result = await b.controller.run({ approvePreview: true }, signal()); // a failed best-effort release must not fail a durable sync
+        expect(result.upToDate).toBe(true); expect(b.text('a.md')).toBe('aaaa');
+        expect(b.staged.size).toBe(0); expect(b.operations.size).toBe(0); // terminal release() swept it
+    });
+    it('is optional: a host without releaseStagedBytes behaves exactly as before', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = client(r); b.ports.release = async id => { b.staged.delete(id); b.operations.delete(id); };
+        const stagedBeforeApply: number[] = [], apply = b.ports.apply;
+        b.ports.apply = async input => { stagedBeforeApply.push(b.staged.size); return apply(input); };
+        await start(b);
+        expect(stagedBeforeApply).toEqual([4, 4, 4, 4]); expect(b.staged.size).toBe(0);
+    });
+});
+describe('a path that no longer matches its plan', () => {
+    const refusal = (path: string) => new Error(`Local file changed before sync application: ${path} (expected absent, found a folder)`);
+    const files = { 'a.md': 'aaaa', 'b.md': 'bbbb', 'c.md': 'cccc' };
+    it('is abandoned and reported while the rest of the batch applies; the next run is not wedged', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = client(r), apply = b.ports.apply, attempts: string[] = [];
+        b.ports.apply = async input => { attempts.push(input.path); if (input.path === 'b.md') throw refusal('b.md'); return apply(input); };
+        const result = await start(b);
+        expect(result.blocked).toContainEqual({ namespace: 'content', path: 'b.md', reason: 'local-changed-before-apply' });
+        expect(b.text('a.md')).toBe('aaaa'); expect(b.text('c.md')).toBe('cccc'); expect(b.files.has('b.md')).toBe(false);
+        expect(b.state()!.pendingBatch).toBeUndefined();
+        // Not retried from a stale journal: the next run re-plans b.md from what is on disk now.
+        attempts.length = 0; b.ports.apply = apply;
+        await b.controller.run({}, signal());
+        expect(b.text('b.md')).toBe('bbbb');
+    });
+    it('also unwedges recovery of an interrupted batch whose journal froze a stale expectation', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        const b = client(r), apply = b.ports.apply; let applied = 0;
+        b.ports.apply = async input => { if (applied === 1) throw new Error('process killed'); applied++; return apply(input); };
+        await b.controller.preview(signal());
+        await expect(b.controller.run({ approvePreview: true }, signal())).rejects.toThrow('process killed');
+        b.restart(); b.ports.apply = async input => { if (input.path === 'b.md') throw refusal('b.md'); return apply(input); };
+        // Every retry used to fail on b.md forever; now recovery finishes and clears the pending batch.
+        await b.controller.run({}, signal());
+        expect(b.state()!.pendingBatch).toBeUndefined();
+        expect(b.text('a.md')).toBe('aaaa'); expect(b.text('c.md')).toBe('cccc');
+    });
+    it('still fails the run for a systemic apply error', async () => {
+        const r = remote(), a = client(r, { 'a.md': 'one' }); await start(a);
+        const b = client(r); b.ports.apply = async () => { throw new Error('native write failed'); };
+        await expect(start(b)).rejects.toThrow('native write failed');
+    });
+    it('a file that already holds the remote content is adopted: no write is planned, none attempted', async () => {
+        const r = remote(), a = client(r, files); await start(a);
+        // The interrupted-run aftermath: the bytes are on disk, nothing was recorded.
+        const b = client(r, files), apply = b.ports.apply; let writes = 0;
+        b.ports.apply = async input => { writes++; return apply(input); };
+        const preview = await b.controller.preview(signal());
+        expect(preview.downloads).toBe(0); expect(preview.conflicts).toEqual([]);
+        await b.controller.run({ approvePreview: true }, signal());
+        expect(writes).toBe(0);
+        expect(Object.values(b.state()!.baseline).filter(item => item.present && item.kind === 'file')).toHaveLength(3);
+    });
+});

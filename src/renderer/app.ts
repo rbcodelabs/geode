@@ -1,4 +1,6 @@
 import { Vault } from "./vault";
+import { PostApplyRefresh } from "./sync/post-apply-refresh";
+import { watchSyncStatus } from "./sync/status-refresh";
 import { version as appVersion } from "../../package.json";
 import { vaultRefreshFailure, vaultRefreshPresentation, type VaultRefreshFailure } from "../shared/vault-refresh";
 import { MetadataCache, parseMetadata } from "./metadata-cache";
@@ -84,7 +86,7 @@ import {
   type BookmarksRoot,
 } from "./bookmarks";
 import { renamePathForBasename, rewriteWikilinksForRename } from "./rename";
-import { buildConflictPath, formatConflictTimestamp } from "./reconciliation";
+import { buildConflictPath, formatConflictTimestamp, type ReconcileChange } from "./reconciliation";
 import {
   ActionRegistry,
   DOCUMENT_MENU_SPEC,
@@ -1870,45 +1872,65 @@ class SettingsModal extends Modal {
     }
   }
 
-  /** Location, ssh host and create-if-missing for the built-in "Folder or SSH hub" provider (docs/design/app-hub-sync-provider.md). */
+  /** Location (folder, ssh host or HTTPS URL + token) and create-if-missing for the built-in hub provider (docs/design/app-hub-sync-provider.md). */
   private renderHubConfigRows(container: HTMLElement, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
     const provider = this.geodeApp.hubSyncProvider; if (!provider) return;
-    const row = this.addRow(container, "Hub location", "A folder (local, network or cloud-synced) or an ssh host and path. This is the same store `geode-wiki sync` uses; ssh runs non-interactively with your ~/.ssh/config. Changes save automatically.");
+    const row = this.addRow(container, "Hub location", "A folder (local, network or cloud-synced), an ssh host and path, or the HTTPS URL of a hub started with `geode-wiki sync serve --http`. This is the same store `geode-wiki sync` uses; ssh runs non-interactively with your ~/.ssh/config. The HTTPS token is kept in secure storage on this device only. Changes save automatically.");
     row.control.parentElement?.classList.add("sync-wrapped-setting");
     const field = (label: string, input: HTMLElement) => { const wrap = document.createElement("label"); wrap.className = "sync-hub-field"; const text = document.createElement("span"); text.textContent = label + " "; wrap.append(text, input); return wrap; };
     const kind = document.createElement("select"); kind.setAttribute("aria-label", "Hub type");
-    kind.append(new Option("Folder", "fs"), new Option("SSH host", "ssh"));
+    const kindLabels = { fs: "Folder", ssh: "SSH host", http: "HTTPS hub" } as const;
+    for (const supported of provider.supportedKinds) kind.append(new Option(kindLabels[supported], supported));
     const host = document.createElement("input"); host.type = "text"; host.setAttribute("aria-label", "Hub ssh host"); host.placeholder = "ssh host or ~/.ssh/config alias";
     const path = document.createElement("input"); path.type = "text"; path.setAttribute("aria-label", "Hub store path"); path.placeholder = "/path/to/hub";
-    const hostField = field("SSH host", host), typeField = field("Hub type", kind), pathField = field("Hub path", path);
+    const url = document.createElement("input"); url.type = "url"; url.setAttribute("aria-label", "Hub URL"); url.placeholder = "https://my-box.tailnet-name.ts.net"; url.autocomplete = "off"; url.spellcheck = false;
+    const token = document.createElement("input"); token.type = "password"; token.setAttribute("aria-label", "Hub token"); token.placeholder = "Hub token"; token.autocomplete = "off"; token.spellcheck = false;
+    const hostField = field("SSH host", host), typeField = field("Hub type", kind), pathField = field("Hub path", path), urlField = field("Hub URL", url), tokenField = field("Token", token);
+    const secureNote = document.createElement("div"); secureNote.className = "setting-item-description"; secureNote.setAttribute("data-hub-secure-storage", "");
+    if (!provider.canStoreToken) { token.disabled = true; secureNote.textContent = "Secure storage is unavailable on this device, so an HTTPS hub cannot be used here. The token is never kept in the vault or in app settings."; }
     const createLabel = document.createElement("label"); const create = document.createElement("input"); create.type = "checkbox"; create.setAttribute("aria-label", "Create the hub if it is missing");
     createLabel.append(create, " Create the hub if it is missing");
     const save = document.createElement("button"); save.type = "button"; save.textContent = "Save hub settings";
     const test = document.createElement("button"); test.type = "button"; test.textContent = "Test connection";
     const result = document.createElement("div"); result.className = "setting-item-description"; result.setAttribute("data-hub-result", "");
-    const syncVisibility = () => { hostField.hidden = kind.value !== "ssh"; };
+    const syncVisibility = () => { hostField.hidden = kind.value !== "ssh"; pathField.hidden = kind.value === "http"; urlField.hidden = tokenField.hidden = secureNote.hidden = kind.value !== "http"; };
     kind.addEventListener("change", syncVisibility); syncVisibility();
-    trackBusy(host); trackBusy(path); trackBusy(create); trackBusy(save); trackBusy(test);
-    const read = () => kind.value === "ssh"
+    trackBusy(host); trackBusy(path); trackBusy(url); trackBusy(create); trackBusy(save); trackBusy(test);
+    if (provider.canStoreToken) trackBusy(token);
+    const read = () => kind.value === "http"
+      ? { schema: 1 as const, target: { kind: "http" as const, url: url.value }, create: create.checked }
+      : kind.value === "ssh"
       ? { schema: 1 as const, target: { kind: "ssh" as const, host: host.value, path: path.value }, create: create.checked }
       : { schema: 1 as const, target: { kind: "fs" as const, path: path.value }, create: create.checked };
     // Every edit is saved (debounced); actions that depend on the settings first call settle(), so a ticked box or a
     // typed path is never ignored because the Save button was not pressed.
-    let debounce: ReturnType<typeof setTimeout> | undefined, chain: Promise<void> = Promise.resolve(), saveError: Error | null = null, dirty = false;
+    let debounce: ReturnType<typeof setTimeout> | undefined, chain: Promise<void> = Promise.resolve(), saveError: Error | null = null, dirty = false, tokenDirty = false;
     const saveNow = () => {
       dirty = false; const snapshot = read();
-      chain = chain.then(() => provider.setConfig(snapshot)).then(() => { saveError = null; result.textContent = "Hub settings saved."; }, error => { saveError = error instanceof Error ? error : new Error(String(error)); result.textContent = saveError.message; });
+      const pendingToken = tokenDirty ? token.value : ""; tokenDirty = false;
+      chain = chain.then(async () => {
+        await provider.setConfig(snapshot);
+        if (snapshot.target.kind === "http" && pendingToken) {
+          await provider.setToken(snapshot.target.url, pendingToken);
+          if (document.activeElement !== token) { token.value = ""; token.placeholder = "Token saved on this device"; }
+        }
+      }).then(() => { saveError = null; result.textContent = "Hub settings saved."; }, error => { saveError = error instanceof Error ? error : new Error(String(error)); result.textContent = saveError.message; });
     };
     const queue = () => { dirty = true; clearTimeout(debounce); debounce = setTimeout(saveNow, 300); };
     this.hubConfigSettle = async () => {
       clearTimeout(debounce); if (dirty) saveNow();
       await chain; if (saveError) throw saveError;
     };
-    for (const el of [host, path]) el.addEventListener("input", queue);
+    for (const el of [host, path, url]) el.addEventListener("input", queue);
     for (const el of [kind, create]) el.addEventListener("change", queue);
+    // The token is saved when the field is left (not per keystroke) and never shown again once saved.
+    token.addEventListener("input", () => { tokenDirty = true; });
+    token.addEventListener("change", () => { tokenDirty = true; queue(); });
     void provider.getConfig().then(config => {
       if (!config || !row.control.isConnected || dirty) return;
-      kind.value = config.target.kind; if (config.target.kind === "ssh") host.value = config.target.host; path.value = config.target.path; create.checked = config.create; syncVisibility();
+      kind.value = config.target.kind; if (config.target.kind === "ssh") host.value = config.target.host;
+      if (config.target.kind === "http") { url.value = config.target.url; void provider.hasToken(config.target.url).then(saved => { if (saved && !tokenDirty) token.placeholder = "Token saved on this device"; }); } else path.value = config.target.path;
+      create.checked = config.create; syncVisibility();
       result.textContent = `Hub: ${describeHubTarget(config.target)}`;
     }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
     save.addEventListener("click", () => { void this.hubConfigSettle!().then(() => { result.textContent = "Hub settings saved."; }).catch(() => {}); });
@@ -1918,7 +1940,7 @@ class SettingsModal extends Modal {
         result.textContent = (vaults.length ? `Connected. Hub vault: ${vaults.map(vault => `"${vault.name}"`).join(", ")}. Use Find shared vaults to join it.` : "Connected. The hub holds no vault yet.") + " " + detail;
       }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
     });
-    row.control.append(typeField, hostField, pathField, createLabel, save, test, result);
+    row.control.append(typeField, hostField, pathField, urlField, tokenField, secureNote, createLabel, save, test, result);
   }
 
   /** Explicit first-sync confirmation with the plan counts, and the safety-rail refusal with its one-shot override. */
@@ -1974,6 +1996,8 @@ class SettingsModal extends Modal {
     if (this.geodeApp.sync.isAppendOnly()) { const boundVaultName = this.geodeApp.sync.getBoundVaultName(); if (boundVaultName) this.addRow(container, "Vault", `Bound to shared vault "${boundVaultName}"`); }
     const statusRow = this.addRow(container, "Status", status.message ?? status.state);
     statusRow.control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
+    const blockedNow = this.geodeApp.sync.getHistoryDetails()?.blocked.length ?? 0;
+    if (blockedNow && statusRow.description) statusRow.description.textContent = `${status.message ?? status.state}. Each file and the reason is listed under Blocked below.`;
     // Before a shared vault is bound the engine's "preview" state reads oddly; say what is actually needed.
     if (isHub && status.state === "preview" && !this.geodeApp.sync.getBoundVaultName()) {
       statusRow.control.textContent = "Setup needed";
@@ -1999,6 +2023,19 @@ class SettingsModal extends Modal {
     // this function started.
     const trackBusy = (el: HTMLButtonElement | HTMLInputElement, defaultDisabled = false) => { busyControls.push({ el, defaultDisabled }); applyBusyState(); };
     const showProgress = this.renderSyncProgress(container, generation, busy => { backgroundBusy = busy; applyBusyState(); });
+    // The panel draws once; without this a finished run left "disconnected" (the launch default) on screen until the tab was
+    // reopened. Redraw (debounced, never while a field is being edited) when the visible status changes, and stop with the
+    // progress subscription whenever the tab is left, redrawn or the modal closes.
+    {
+      const stopProgress = this.stopSyncProgress as (() => void) | null;
+      const stopStatus = watchSyncStatus(status, {
+        subscribe: listener => this.geodeApp.sync.on("status", listener),
+        isLive: () => container.isConnected && generation === this.syncTabGeneration,
+        isEditing: () => { const active = document.activeElement; return !!active && container.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName); },
+        redraw: () => this.renderSyncTab(container, summary),
+      });
+      this.stopSyncProgress = () => { stopProgress?.(); stopStatus(); };
+    }
     const actions = document.createElement("div"); actions.className = "setting-item-control";
     const perform = (action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => {
       performBusy = true;
@@ -2225,7 +2262,7 @@ export class App {
   private uniqueNoteRibbonEl: HTMLElement | null = null;
   readonly webViewer: WebViewerService;
   readonly sync: SyncService;
-  /** Built-in "Folder or SSH hub" sync provider; present on desktop only, re-created per opened vault. */
+  /** Built-in "Folder, SSH or HTTPS hub" sync provider; present where the host has guarded sync (`syncSafety`), re-created per opened vault. */
   hubSyncProvider?: HubSyncProvider;
   private hubSyncUnregister?: () => Promise<void>;
   readonly comments: CommentService;
@@ -3095,40 +3132,34 @@ export class App {
       for (const leaf of this.workspace.getLeavesOfType("base")) if (leaf.view instanceof BaseView && await leaf.view.getDirtySourceConflict(relative, true)) reason = "Unsaved Base changes block incoming sync";
       return reason;
     });
-    const stopRelease = this.host.syncSafety?.onRelease(async token => {
-      if (!syncGuards.has(token)) return;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const before = this.successfulReconciles;
-      try {
-        await Promise.race([this.reconcileVault("manual"), new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Editor refresh timed out")), 4000);
-        })]);
-        if (this.successfulReconciles === before) throw new Error("Editor refresh incomplete");
-        if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed");
-        await this.reloadPortableSettings();
+    // Stale writers stay read-only until a refresh has REALLY completed: the views are made inert, and the inert state is only
+    // lifted by `recover`, which performReconcile runs after a successful refresh (or the user's Retry). Both a failed and a
+    // merely slow refresh take this path; only a failed one fails the sync.
+    const holdStale = (token: string) => {
+      const elements: HTMLElement[] = [];
+      syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
+        const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
+        held.count++; staleViews.set(element, held); elements.push(element); element.inert = true;
+      } });
+      const recover = () => {
+        this.syncRefreshRecoveries.delete(recover); this.hostDisposers.delete(recover);
+        for (const element of elements) { const held = staleViews.get(element); if (held && --held.count === 0) { element.inert = held.original; staleViews.delete(element); } }
         finishGuard(token);
-      } catch (error) {
-        // Keep stale writers paused/read-only, but restore the surrounding app so
-        // Retry refresh and vault switching remain available after a timeout.
-        if (syncDisposed || this.workspace !== syncWorkspace) throw error;
-        const elements: HTMLElement[] = [];
-        syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
-          const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
-          held.count++; staleViews.set(element, held); elements.push(element); element.inert = true;
-        } });
-        const recover = () => {
-          this.syncRefreshRecoveries.delete(recover); this.hostDisposers.delete(recover);
-          for (const element of elements) { const held = staleViews.get(element); if (held && --held.count === 0) { element.inert = held.original; staleViews.delete(element); } }
-          finishGuard(token);
-        };
-        this.syncRefreshRecoveries.add(recover);
-        this.hostDisposers.add(recover);
-        document.body.inert = previousInert;
-        throw error;
-      } finally {
-        clearTimeout(timeout);
-      }
+      };
+      this.syncRefreshRecoveries.add(recover);
+      this.hostDisposers.add(recover);
+      document.body.inert = previousInert;
+    };
+    const postApply = new PostApplyRefresh({
+      hasFile: path => this.vault.getFileByPath(path) !== null, hasFolder: path => this.vault.getFolderByPath(path) !== null,
+      refreshChanges: changes => this.performReconcile(this.reconcileGeneration, changes),
+      refreshAll: () => this.reconcileVault("manual"),
+      fullInFlight: () => this.reconcileInFlight, successCount: () => this.successfulReconciles,
+      reloadPortableSettings: () => this.reloadPortableSettings(),
+      holdStale, finishGuard,
+      assertLive: () => { if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed"); },
     });
+    const stopRelease = this.host.syncSafety?.onRelease(async (token, outcome) => { if (syncGuards.has(token)) await postApply.release(token, outcome); });
     this.hostDisposers.add(() => { syncDisposed = true; stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
     this.statusBar = new StatusBar(this, shell);
     const mobileNavigation = this.createMobileNavigation();
@@ -3213,8 +3244,12 @@ export class App {
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
     // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
     await this.hubSyncUnregister?.(); this.hubSyncUnregister = undefined; this.hubSyncProvider = undefined;
-    if (this.host.hubSync && this.host.syncSafety) {
-      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root);
+    // Folder and ssh hubs need the desktop main process (`host.hubSync`); the HTTPS hub only needs a WebSocket and secure storage, so
+    // it is what a phone can use once its host provides `syncSafety` (guarded apply) and `secrets.app` (Keychain).
+    if (this.host.syncSafety && (this.host.hubSync || typeof WebSocket === "function")) {
+      const appSecrets = this.host.secrets.app;
+      const secrets = appSecrets ? { available: this.host.secrets.appAvailable ?? this.host.secrets.available, get: (key: string) => appSecrets.get(key), set: (key: string, value: string) => appSecrets.set(key, value), remove: (key: string) => appSecrets.remove(key) } : undefined;
+      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root, secrets ? { secrets } : {});
       this.hubSyncProvider = provider; this.hubSyncUnregister = this.sync.register("geode", provider);
     }
     this.registerActions();
@@ -3409,7 +3444,7 @@ export class App {
     return tracked;
   }
 
-  private async performReconcile(generation: number): Promise<void> {
+  private async performReconcile(generation: number, scoped?: ReconcileChange[]): Promise<void> {
     let didPause = false;
     let holdViewsForRetry = false;
     let manifestCommitted = false;
@@ -3420,12 +3455,12 @@ export class App {
       await this.workspace.pauseAutosave();
       didPause = true;
       operation = "scan";
-      const result = await this.vault.reconcile();
+      const result: Awaited<ReturnType<Vault["reconcile"]>> = scoped ? { status: "complete", changes: scoped } : await this.vault.reconcile();
       if (result.status !== "complete") {
         if (generation === this.reconcileGeneration) this.showReconcileState(result.status, result.failure ?? vaultRefreshFailure(result.errorCode));
         return;
       }
-      if (!result.manifest || generation !== this.reconcileGeneration) return;
+      if ((!scoped && !result.manifest) || generation !== this.reconcileGeneration) return;
       const publish: Array<() => void> = [];
       const refreshEditors: Array<() => void | Promise<void>> = [];
       for (let index = 0; index < result.changes.length; index += 1) {
@@ -3512,7 +3547,8 @@ export class App {
         for (const refresh of refreshEditors) { await refresh(); if (generation !== this.reconcileGeneration) return; }
       } catch (error) { holdViewsForRetry = true; throw error; }
       operation = "save-manifest";
-      await this.vault.commitReconcileManifest(result.manifest);
+      if (scoped) this.vault.acknowledgePaths(scoped.map(change => change.path));
+      else await this.vault.commitReconcileManifest(result.manifest!);
       manifestCommitted = true;
       operation = "finish-refresh";
       this.clearReconcileState();

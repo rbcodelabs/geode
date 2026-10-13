@@ -186,6 +186,18 @@ export interface DeviceStateService {
 /** Host-backed secret storage. `available=false` means callers must disable credentialed features. */
 export interface SecureSecretService {
   readonly available: boolean;
+  /**
+   * Secrets owned by Geode itself (today: the HTTPS hub token), in a namespace no plugin capability can name. Absent where the
+   * host has no secure storage for the app; features that need a credential must then refuse to take one. The iOS Keychain
+   * implementation plugs in here (capacitor-host), see docs/design/app-hub-sync-provider.md.
+   */
+  readonly app?: {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+    remove(key: string): Promise<void>;
+  };
+  /** Whether `app` can store a secret right now. Defaults to `available` (Electron: one safeStorage backs both); the phone's Keychain serves `app` while plugin secrets stay unavailable. */
+  readonly appAvailable?: boolean;
   fromCapability(capability: string): {
     get(key: string): Promise<string | null>;
     set(key: string, value: string): Promise<void>;

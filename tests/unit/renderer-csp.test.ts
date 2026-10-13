@@ -47,7 +47,9 @@ describe.each(SHELLS)("renderer CSP (%s)", (shell) => {
 
   it("keeps every directive on a same-origin footing", () => {
     expect(directives.get("default-src")).toEqual(["'self'"]);
-    expect(directives.has("connect-src")).toBe(false);
+    // The HTTPS sync hub is a user-configured host, so its WebSocket needs `wss:`; without a connect-src
+    // WebKit refuses it ("The operation is insecure"). Nothing wider: no ws:, http(s) or wildcard.
+    expect(directives.get("connect-src")).toEqual(["'self'", "wss:"]);
     // No remote origins anywhere: a data: font is deliberately narrower than
     // permitting a font CDN, and this policy should not drift into one.
     for (const [name, sources] of directives) {

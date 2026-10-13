@@ -246,6 +246,7 @@ export class NodeHost implements SyncHostLite {
         case "save-operation": return storage.saveOperation(request.key, request.value);
         case "load-operations": return storage.loadOperations();
         case "release": return storage.release(request.key);
+        case "release-bytes": return storage.releaseBytes(request.key);
         case "gc": if (!Array.isArray(request.retain) || request.retain.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); return storage.gc(request.retain);
         case "sweep": if (!Array.isArray(request.keep) || request.keep.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); return SyncPrivateStorage.sweepBindings(opsRoot, request.keep, request.force === true);
         default: throw new Error("Invalid sync storage request");

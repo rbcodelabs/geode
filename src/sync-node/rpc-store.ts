@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { hubTargetProblem } from "../shared/hub-sync";
+import { APPEND_BATCH, APPEND_BATCH_JSON_BYTES, CLIENT_CHUNK_BYTES, LEGACY_UPLOADS, MAX_UPLOAD_CONCURRENCY, READ_CONCURRENCY, READ_WINDOW, SCAN_PAGE } from "../shared/store-protocol";
 import { spawn } from "node:child_process";
 import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySession, type AppendOnlySyncProvider, type BlobRef, type HistoryRecord, type HistoryScan, type VaultDescriptor } from "../sync-core/history-types";
 import { FrameParser, FrameWriter, type Frame, PROTOCOL_NAME, PROTOCOL_VERSION, type WritableLike } from "./rpc-framing";
@@ -17,17 +18,7 @@ export interface StoreTransport {
   drained?: Promise<void>;
 }
 
-const CHUNK = 4 * 1024 * 1024;
-const SCAN_PAGE = 200;
-/** Records per appendRecords request, and the JSON size past which a batch is split (the header line is capped at 16 MiB). */
-const APPEND_BATCH = 64;
-const APPEND_BATCH_JSON_BYTES = 2 * 1024 * 1024;
-/** Upload concurrency against a server that does not advertise `maxUploads` (it allows 4 open uploads). */
-const LEGACY_UPLOADS = 4;
-const MAX_UPLOAD_CONCURRENCY = 16;
-/** Chunk requests of one blob kept in flight, and how many whole-blob reads the engine may overlap. Reads need no server feature: requests are already served in arrival order. */
-const READ_WINDOW = 4;
-const READ_CONCURRENCY = 12;
+const CHUNK = CLIENT_CHUNK_BYTES;
 
 /** What the connected server said it can do in its hello reply. Absent fields mean an older server. */
 export interface ServerFeatures { putBlob: boolean; appendRecords: boolean; maxUploads: number }

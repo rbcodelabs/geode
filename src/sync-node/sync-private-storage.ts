@@ -55,6 +55,15 @@ export class SyncPrivateStorage {
     });
   }
   /**
+   * Deletes only the frozen bytes of one operation, keeping its journal. For an operation whose journal already durably
+   * says 'committed': recovery looks the journal up (the batch still names it) but never reads the bytes of a committed
+   * operation again. Idempotent.
+   */
+  async releaseBytes(key: string): Promise<void> {
+    const target = this.file(key, ".blob");
+    await withPathLock([target], () => fs.rm(target, { force: true }));
+  }
+  /**
    * Startup garbage collection for one binding directory. Keeps only what crash
    * recovery can still need: journals and blobs of 'prepared' operations, plus
    * anything in `retain` (the ids of a durable pendingBatch, whose committed

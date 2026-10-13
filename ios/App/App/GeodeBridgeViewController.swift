@@ -14,6 +14,7 @@ final class GeodeBridgeViewController: CAPBridgeViewController {
         super.viewDidAppear(animated)
         refreshNativeSafeAreaCSSVariables()
 #if DEBUG
+        runSyncNativeProbeIfRequested()
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains(Self.editArgument) || arguments.contains(Self.verifyArgument) else { return }
         runNativeSmoke(verifyOnly: arguments.contains(Self.verifyArgument))

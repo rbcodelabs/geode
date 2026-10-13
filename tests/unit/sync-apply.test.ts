@@ -60,3 +60,13 @@ it("rejects traversal and symlink targets", async () => {
   await fs.symlink(path.join(f.vault, "Note.md"), path.join(f.vault, "Alias.md"));
   await expect(applyGuardedMutation(f.vault, f.recovery, { ...input, path: "Alias.md", expectedHash: hash("old") }, f.deps)).rejects.toThrow(/symbolic/i);
 });
+
+it("names the file and states on a guard refusal, and treats an already-satisfied operation as applied (fresh id too)", async () => {
+  const f = await fixture();
+  const stale = { operationId: randomUUID(), path: "Note.md", expectedHash: null, kind: "write" as const, data: bytes("old") };
+  // Same bytes already on disk, stale expectation, brand-new operation id: nothing to protect, nothing to write.
+  expect((await applyGuardedMutation(f.vault, f.recovery, stale, f.deps)).status).toBe("already-applied");
+  const error = await applyGuardedMutation(f.vault, f.recovery, { ...stale, operationId: randomUUID(), data: bytes("different") }, f.deps).catch(caught => caught);
+  expect(error.message).toMatch(/^Local file changed before sync application: Note\.md \(expected absent, found [0-9a-f]{12}\)$/);
+  expect(await fs.readFile(path.join(f.vault, "Note.md"), "utf8")).toBe("old");
+});

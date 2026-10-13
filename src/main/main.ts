@@ -1018,6 +1018,7 @@ function registerIpc() {
       case "save-operation": result = await storage.saveOperation(request.key, request.value); break;
       case "load-operations": result = await storage.loadOperations(); break;
       case "release": result = await storage.release(request.key); break;
+      case "release-bytes": result = await storage.releaseBytes(request.key); break;
       case "gc": if (!Array.isArray(request.retain) || request.retain.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await storage.gc(request.retain); break;
       case "sweep": if (!Array.isArray(request.keep) || request.keep.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await SyncPrivateStorage.sweepBindings(vaultPrivateRoot, request.keep, request.force === true); break;
       default: throw new Error("Invalid sync storage request");
@@ -1223,6 +1224,24 @@ function registerIpc() {
     await secretStore.write(secretKey(namespace, key), safeStorage.encryptString(value));
   });
   ipcMain.handle("secret-remove", async (e, capability: string, key: string) => secretStore.remove(secretKey(secretOwner(e.sender.id, capability), key)));
+  // Geode's own secrets (the HTTPS hub token). The namespace starts with "@", which no plugin id can (ids are [a-z0-9][a-z0-9-]*), so
+  // a plugin capability can never address it; keys are restricted to a small grammar instead of being trusted.
+  const APP_SECRET_NAMESPACE = "@geode";
+  const appSecretKey = (key: unknown) => {
+    if (typeof key !== "string" || !/^[A-Za-z0-9._:\/-]{1,300}$/.test(key)) throw new Error("Invalid app secret key");
+    return secretKey(APP_SECRET_NAMESPACE, key);
+  };
+  ipcMain.handle("app-secret-read", async (_e, key: string) => {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const encrypted = await secretStore.read(appSecretKey(key));
+    return encrypted ? safeStorage.decryptString(encrypted) : null;
+  });
+  ipcMain.handle("app-secret-write", async (_e, key: string, value: string) => {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure secret storage is unavailable");
+    if (typeof value !== "string" || !value || value.length > 8192) throw new Error("Invalid app secret value");
+    await secretStore.write(appSecretKey(key), safeStorage.encryptString(value));
+  });
+  ipcMain.handle("app-secret-remove", async (_e, key: string) => secretStore.remove(appSecretKey(key)));
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;

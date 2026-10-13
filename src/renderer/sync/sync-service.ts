@@ -24,6 +24,8 @@ export class SyncService extends Events implements SyncApi {
   private readonly conditional: SyncCoordinator;
   private readonly providers = new Map<string, Provider>();
   private selected?: AppendOnlySyncProvider;
+  /** Key of the history-controller state for the current binding; set when a sync run starts, cleared by disconnect. */
+  private historyStateKey?: string;
   private status: SyncStatus = { state: "disconnected", conflicts: 0 };
   private details?: HistoryPreview;
   private abort?: AbortController;
@@ -104,7 +106,7 @@ export class SyncService extends Events implements SyncApi {
    * rather than at each call site. A stale "47%" surviving a failure is its own
    * bug, and there are eleven setStatus() callers to forget.
    */
-  private setStatus(status: SyncStatus) { this.cancelProgress(); this.status = status; this.trigger("status", status); }
+  private setStatus(status: SyncStatus) { this.cancelProgress(); if (status.state === "error") console.error("[sync] error:", status.message ?? "(no message)"); this.status = status; this.trigger("status", status); }
   private progressStartedAt = 0;
   private progressEmittedAt = 0;
   private progressPhase?: SyncProgressPhase;
@@ -267,7 +269,7 @@ export class SyncService extends Events implements SyncApi {
       const state = await this.load(); assertContext(); if (!state.binding) throw new Error("Create or join a shared vault before preview"); if (state.paused) throw new Error("Sync is paused");
       this.lease ??= await this.host.syncSafety!.claimOwner() ?? undefined; assertContext(); if (!this.lease) throw new Error("Another window owns sync for this vault");
       const lease = this.lease; const bindingKey = await hash(encoded([provider.id, state.binding])); assertContext();
-      const stateKey = `sync-history/${root}/${bindingKey}`;
+      const stateKey = `sync-history/${root}/${bindingKey}`; this.historyStateKey = stateKey;
       const { ports, storage } = buildHistoryPorts(this.liteHost(), { provider, scope: state.scope, bindingVaultId: state.binding.vaultId, bindingKey, stateKey, lease, assertContext, renameHints: this.renameHints, portableChanged: this.portableChanged });
       // Rails (ADR 0025) for providers that opt in. The shrunk-scan check lives in the snapshot port so it fires in
       // preview and run alike, before anything is planned from the short scan.
@@ -313,6 +315,8 @@ export class SyncService extends Events implements SyncApi {
   }
   private summarize(value: HistoryPreview): SyncPreview {
     this.details = value;
+    // The blocked-file list is easy to miss on a phone layout; keep it in the device log so it can be read from a connected Mac.
+    if (value.blocked.length) console.log("[sync] blocked:", JSON.stringify(value.blocked.slice(0, 50)));
     const outstanding = value.uploads + value.downloads + value.deletions;
     const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length;
     // Per-file detail (path + reason for each blocked item) lives on `details.blocked`,
@@ -347,14 +351,16 @@ export class SyncService extends Events implements SyncApi {
     const shown = this.details;
     const result = this.summarize(await this.withController(async (controller, signal, rails) => {
       if (rails) {
-        // Rail (b), before anything is applied. An approved device is re-planned (a preview cannot move its approval);
-        // an unapproved one is checked against the plan the user was shown, which run() then verifies by signature,
-        // so the counts judged here are the counts executed.
+        // Rail (b), before anything is applied. An approved device is judged on the very plan run() is about to execute
+        // (beforeExecute, so no separate preview walk of the vault); an unapproved one is checked against the plan the user was
+        // shown, which run() then verifies by signature, so the counts judged here are the counts executed.
         const state = await controller.getState(signal);
-        let plan: Pick<HistoryPreview, "deletions" | "uploads" | "downloads" | "signature"> | undefined;
-        if (!state.pendingBatch?.length) plan = state.approved ? await controller.preview(signal) : shown && shown.signature === state.previewSignature ? shown : undefined;
-        const refusal = plan && deleteLimitRefusal(plan, Math.max(rails.stats.found, knownFileCount(state)), rails.overrides);
-        if (refusal) throw refusal;
+        const judge = (plan: Pick<HistoryPreview, "deletions" | "uploads" | "downloads" | "signature">) => {
+          const refusal = deleteLimitRefusal(plan, Math.max(rails.stats.found, knownFileCount(state)), rails.overrides);
+          if (refusal) throw refusal;
+        };
+        if (!state.pendingBatch?.length && !state.approved && shown && shown.signature === state.previewSignature) judge(shown);
+        return controller.run({ ...options, ...(!state.pendingBatch?.length && state.approved ? { beforeExecute: judge } : {}) }, signal);
       }
       return controller.run(options, signal);
     })); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();
@@ -416,7 +422,13 @@ export class SyncService extends Events implements SyncApi {
   async disconnect() {
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;
-    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.railRefusal = undefined; this.railOverrides = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
+    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed");
+      // The history state is tagged with this binding's deviceId; removing only the binding would make the next connect
+      // mint a new id and then reject the orphaned history as "Unsupported sync state".
+      const historyKey = this.historyStateKey; this.historyStateKey = undefined;
+      if (historyKey) { try { await this.host.deviceState.remove(historyKey); } catch { /* best effort */ } }
+      if (root !== this.vaultId()) throw new Error("Vault changed");
+      await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.railRefusal = undefined; this.railOverrides = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
     finally { this.closing = false; }
   }
   /** Best-effort: disconnect has already removed the device state that could resume these operations. */

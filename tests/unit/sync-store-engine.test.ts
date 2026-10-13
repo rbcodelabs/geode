@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { HistoryController, type HistoryControllerPorts, type HistoryControllerState, type HistoryLocalResource, type HistoryOperation } from "../../src/sync-core/history-controller";
 import type { AppendOnlySession, AppendOnlySyncProvider } from "../../src/sync-core/history-types";
 import { FsStoreProvider } from "../../src/sync-node/index";
-import { childProvider, cleanBundle, inProcessProvider, never, rm, tmpStore, type Child } from "../helpers/sync-store-harness";
+import { childProvider, cleanBundle, httpFixture, inProcessProvider, never, rm, tmpStore, type Child } from "../helpers/sync-store-harness";
 
 afterAll(() => cleanBundle());
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -48,9 +48,10 @@ function device(vaultId: string, session: AppendOnlySession, initial: Record<str
 }
 
 interface Hub { provider: AppendOnlySyncProvider; store: string; cleanup(): Promise<void> }
-const hubs: Array<[string, () => Hub]> = [
+const hubs: Array<[string, () => Hub | Promise<Hub>]> = [
   ["FsStore", () => { const store = tmpStore(); return { provider: new FsStoreProvider(store), store, cleanup: async () => rm(store) }; }],
   ["RpcStore over in-process pipes", () => { const store = tmpStore(), provider = inProcessProvider(store); return { provider, store, cleanup: async () => { await provider.close(); rm(store); } }; }],
+  ["HttpStore over a loopback WebSocket", async () => { const store = tmpStore(), fixture = await httpFixture(store); return { provider: fixture.provider, store, cleanup: async () => { await fixture.close(); rm(store); } }; }],
   ["RpcStore over a child process", () => {
     const store = tmpStore(), children: Child[] = [], provider = childProvider(store, children);
     return { provider, store, cleanup: async () => { await provider.close(); await Promise.all(children.map(c => c.exited)); rm(store); } };
@@ -59,7 +60,7 @@ const hubs: Array<[string, () => Hub]> = [
 
 for (const [name, make] of hubs) describe(`two HistoryControllers converge through ${name}`, () => {
   it("replicates creates, edits, deletes and folders; surfaces a conflict head on concurrent edits", async () => {
-    const hub = make();
+    const hub = await make();
     try {
       const binding = await hub.provider.createVault({ name: "wiki", operationId: "engine-op" }, never);
       const open = (id: string) => hub.provider.open({ binding, deviceId: id }, never);

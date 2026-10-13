@@ -35,6 +35,7 @@ geode-wiki sync init    --root ~/Notes2 --ssh hub --store /srv/notes-hub        
 | `conflicts` | Unresolved conflicts with each version's device/size/hash | no | no |
 | `resolve <path> (--keep local\|remote \| --version <recordId>) [overrides]` | Settle one conflict | yes | yes |
 | `serve --store <dir>` | Serve a store over stdio (binary frames only on stdout; no `--root`) | n/a | is the store |
+| `serve --store <dir> --http --token-file <file> [--listen host:port]` | Serve the store over WebSocket for the app and the iOS app (no `--root`; see HTTPS hub) | n/a | is the store |
 | `gc [--trash-days n]` | Reclaim sync-private storage; with `--trash-days`, purge trash older than n days | yes | no |
 | `schedule print\|install\|uninstall\|status [--interval s] [--platform launchd\|systemd] [--target-dir d] [--activate]` | Unit files for an unattended `sync run` (see Scheduling) | no | no |
 
@@ -60,6 +61,83 @@ otherwise (`state-dir-invalid`).
 `message` is in the payload. Statuses ride the usual envelope
 (`command` is `"sync run"` etc.); refusal detail is in `result`, including
 `override` — the flag that would lift a rail.
+
+## HTTPS hub: `geode-wiki sync serve --http`
+
+The ssh transport needs an ssh client, which a phone does not have. `serve --http` serves the same store protocol
+over a WebSocket so the desktop app and the iOS app can use the hub with just a URL and a token. Why, and what
+was rejected: [ADR 0029](../adr/0029-https-websocket-hub-transport.md); how the app side works:
+[app-hub-sync-provider.md](app-hub-sync-provider.md#https-hub-desktop-and-ios).
+
+```bash
+geode-wiki sync serve --store /srv/notes-hub --http --token-file ~/.config/geode-wiki/hub.token --listen 127.0.0.1:8787
+```
+
+| Option | Meaning |
+|---|---|
+| `--http` | Serve over WebSocket instead of stdio. Without it, `--listen` and `--token-file` are a usage error (exit 2) |
+| `--token-file <file>` | Required with `--http`. The shared secret, read from a file and never from argv (which `ps` shows). Trimmed; at least 24 characters or exit 2. A warning is logged if the file is readable by group/other |
+| `--listen <host:port>` | Default `127.0.0.1:8787`. Also `:port` or `port`; IPv6 as `[::1]:8787`. A non-loopback host logs a warning that TLS is not terminated here |
+
+It runs until SIGINT/SIGTERM (closing every connection with 1001 and finishing open sessions), logs to stderr, and
+accepts at most 8 simultaneous connections. Each connection is one store session, so the engine's guarantees are
+the same as over ssh. `--json` has no effect on a running server. `sync init` (the CLI device) still reaches a hub
+only through a folder or `--ssh`; the HTTPS URL is entered in the app's Settings > Sync.
+
+**TLS is not terminated by the server.** It speaks `ws://`, so bind it to loopback and put a TLS terminator in front.
+`tailscale serve` does this and keeps the hub reachable only on your tailnet:
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:8787
+# the app's hub URL is then https://<machine>.<tailnet>.ts.net
+```
+
+(`tailscale serve` proxies to the local port; it is not Tailscale Funnel, which would publish the hub to the internet.)
+
+### Token
+
+Generate a token of at least 24 characters, with only URL-safe characters, and keep it private:
+
+```bash
+mkdir -p ~/.config/geode-wiki
+head -c 36 /dev/urandom | base64 | tr -d '=+/\n' > ~/.config/geode-wiki/hub.token
+chmod 600 ~/.config/geode-wiki/hub.token
+```
+
+Paste the same value into the app (Settings > Sync, HTTPS hub). The app keeps it in the OS secure storage
+(Electron safeStorage, iOS Keychain), never in the vault. There is one token per hub; to revoke it, replace the file
+and restart the server, then enter the new token on each device.
+
+### Running it under systemd
+
+`~/.config/systemd/user/geode-wiki-hub.service`:
+
+```ini
+[Unit]
+Description=Geode wiki sync hub (WebSocket)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/env node %h/geode/dist/cli/geode-wiki.mjs sync serve --store %h/notes-hub --http --token-file %h/.config/geode-wiki/hub.token --listen 127.0.0.1:8787
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now geode-wiki-hub.service
+loginctl enable-linger "$USER"   # keep it running when you are logged out
+journalctl --user -u geode-wiki-hub.service -f
+```
+
+Adjust the `geode-wiki.mjs` path (`npm run build:cli` produces `dist/cli/geode-wiki.mjs`) and the store path. A
+bare `geode-wiki` on the unit's PATH works too. Authentication is checked before the WebSocket upgrade: a wrong token
+is a body-less `401`.
+
+Limits: the server does not check the `Origin` header (the token is the control),
+and it has no per-device tokens.
 
 ## What is synced
 
@@ -89,7 +167,10 @@ same allowlist for both roots:
 The headless scope turns all of those on (`rawConfig: true`) and carries the files
 byte for byte. Never synced, whatever the scope: `workspace*.json`, `graph.json`
 and any other unlisted file in a config root, any `cache`/`caches`/`node_modules`
-folder or dot name below a config root, `.geode/sync` (reserved), `.git`, `.trash`,
+folder or dot name below a config root, `.geode/metadata-cache/` (the rebuildable
+SQLite index and `cache.json`, hundreds of MB per device) and any atomic-write
+leftover (`*.tmp`, `*.tmp-<pid>-<uuid>`) in a config root (`isLocalOnlyConfigPath`:
+no scope flag turns them on, in any scan implementation), `.geode/sync` (reserved), `.git`, `.trash`,
 `.geode-trash`, `.geode-sync-tmp`, `.worktrees`, `.DS_Store`, and every other dot path
 (`.claude`, `.gitignore`, `.gitkeep`, `.linear.json`). Symlinks anywhere, including
 inside a config root, are reported as blocked and never followed; a symlinked
@@ -104,12 +185,24 @@ asset names so they stay interchangeable with the desktop app. The desktop app
 ignores `raw.*` resources (its scope does not set `rawConfig`), and a raw-file
 host does not exchange the app's projected documents (`editor.json` ...).
 
+Out-of-scope entries that are already on the hub (uploaded by an older build, say) are
+inert: the planner skips a remote entity whose path is not in this device's scope, so
+it is never downloaded, never deleted locally, never tombstoned remotely, never
+reported as a conflict or a pending/corrupt blob, and it cannot trip rail (b) or (c)
+(neither counts anything outside the planned actions and local content files). They
+simply stay on the hub until it is cleaned by hand.
+
 Config files are not content files for the rails: they do not enter rail (c)'s
 "known" or "found" counts, and deleting one counts as a deletion under rail (b)
 like any other. A device that synced before this existed has a recorded scope key
 that no longer matches. If it runs unattended (`run`, no preview first) the config
 files are plain uploads and nothing is deleted; once someone runs `preview`, the
 new key is recorded and the next `run` asks for one `preview --approve`.
+
+Staged bytes: a run freezes every file it will upload or apply in the state directory's `ops/` before the first
+mutation (so an interrupted batch can be resumed), and drops each file's frozen bytes as soon as that operation is
+committed (`release-bytes`), keeping its journal until the batch is recorded. The state directory therefore holds at
+most one extra copy of the batch while it runs, shrinking as it goes, instead of all of it until the end.
 
 ## Safety rails
 

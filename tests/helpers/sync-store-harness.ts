@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { build } from "esbuild";
-import { RpcStoreProvider, serveStore, type ServeStats, type StoreTransport } from "../../src/sync-node/index";
+import { RpcStoreProvider, serveStore, startHttpStoreServer, type HttpStoreServer, type ServeStats, type StoreTransport } from "../../src/sync-node/index";
+import { HttpStoreProvider, type WebSocketLike } from "../../src/renderer/sync/http-store";
 import type { BlobRef, HistoryRecord, VaultDescriptor } from "../../src/sync-core/history-types";
 
 export const never = new AbortController().signal;
@@ -65,3 +66,16 @@ export async function newVault(provider: { createVault(i: { name: string; operat
   return provider.createVault({ name: "hub", operationId: "op-1" }, never);
 }
 export { mkdirSync };
+
+export const HTTP_TEST_TOKEN = "harness-token-" + "z".repeat(24);
+export interface HttpFixture { provider: HttpStoreProvider; server: HttpStoreServer; sockets: WebSocketLike[]; close(): Promise<void> }
+/** A real `serveStore`-per-connection WebSocket server on a loopback port plus the browser-safe client, using the platform WebSocket. */
+export async function httpFixture(store: string, options: { token?: string; clientToken?: string; maxConnections?: number } = {}): Promise<HttpFixture> {
+  const server = await startHttpStoreServer({ store, token: options.token ?? HTTP_TEST_TOKEN, port: 0, pingIntervalMs: 60_000, ...(options.maxConnections ? { maxConnections: options.maxConnections } : {}) });
+  const sockets: WebSocketLike[] = [];
+  const provider = new HttpStoreProvider({
+    url: `ws://127.0.0.1:${server.port}/`, allowInsecure: true, token: () => options.clientToken ?? options.token ?? HTTP_TEST_TOKEN,
+    webSocket: (url, protocols) => { const socket = new WebSocket(url, protocols) as unknown as WebSocketLike; sockets.push(socket); return socket; },
+  });
+  return { provider, server, sockets, close: async () => { await provider.close(); await server.close(); } };
+}
