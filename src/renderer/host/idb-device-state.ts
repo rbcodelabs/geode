@@ -34,6 +34,12 @@ function run<T>(db: IDBDatabase, mode: IDBTransactionMode, action: (store: IDBOb
 
 export function createIdbDeviceState(legacy: DeviceStateService, factory: IDBFactory = indexedDB): DeviceStateService {
   const db = openDb(factory);
+  // Removing a legacy key rewrites the browser host's whole localStorage snapshot (which also carries the metadata
+  // cache and grows with the vault). That rewrite can itself throw QuotaExceededError, so only touch legacy when it
+  // really holds the key, and never let a failed cleanup fail the write that already succeeded in IndexedDB.
+  const dropLegacy = async (key: string): Promise<void> => {
+    try { if ((await legacy.read(key)) !== null) await legacy.remove(key); } catch { /* the IndexedDB value is the one that counts */ }
+  };
   return {
     read: async <T>(key: string) => {
       const stored = await run(await db, "readonly", store => store.get(key));
@@ -41,11 +47,11 @@ export function createIdbDeviceState(legacy: DeviceStateService, factory: IDBFac
     },
     write: async (key, value) => {
       await run(await db, "readwrite", store => store.put(value, key));
-      await legacy.remove(key);
+      await dropLegacy(key);
     },
     remove: async key => {
       await run(await db, "readwrite", store => store.delete(key));
-      await legacy.remove(key);
+      await dropLegacy(key);
     },
   };
 }
