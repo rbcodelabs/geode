@@ -61,7 +61,7 @@ export class SyncService extends Events implements SyncApi {
   private lastScan = { known: 0, found: 0 };
   constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly portableChanged: () => Promise<void> = async () => {}) {
     super(); this.conditional = new SyncCoordinator(host, vaultId, Date.now, () => !this.selected && !this.closing && !this.cancellations && !(this.setupTarget && isHistory(this.setupTarget) && this.appendSetupReady));
-    this.conditional.on("status", status => { if (!this.selected) this.trigger("status", status); });
+    this.conditional.on("status", status => { if (!this.selected) { this.noteSettled(status.state); this.trigger("status", status); } });
   }
   private observe() {
     if (this.observedRoot !== this.vaultId()) { this.renameHints.clear(); this.observedRoot = this.vaultId(); }
@@ -106,7 +106,12 @@ export class SyncService extends Events implements SyncApi {
    * rather than at each call site. A stale "47%" surviving a failure is its own
    * bug, and there are eleven setStatus() callers to forget.
    */
-  private setStatus(status: SyncStatus) { this.cancelProgress(); if (status.state === "error") console.error("[sync] error:", status.message ?? "(no message)"); this.status = status; this.trigger("status", status); }
+  private setStatus(status: SyncStatus) { this.cancelProgress(); this.noteSettled(status.state); if (status.state === "error") console.error("[sync] error:", status.message ?? "(no message)"); this.status = status; this.trigger("status", status); }
+  private lastSyncedAt?: number;
+  private lastStateSeen?: SyncStatus["state"];
+  /** Wall-clock time a run last settled back to idle, for the Sync tab's "last synced" line. In-memory: it is not persisted across launches. */
+  getLastSyncedAt() { return this.lastSyncedAt; }
+  private noteSettled(state: SyncStatus["state"]) { if (state === "idle" && (this.lastStateSeen === "syncing" || this.lastStateSeen === "pending")) this.lastSyncedAt = Date.now(); this.lastStateSeen = state; }
   private progressStartedAt = 0;
   private progressEmittedAt = 0;
   private progressPhase?: SyncProgressPhase;
