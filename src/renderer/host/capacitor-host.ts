@@ -65,6 +65,9 @@ export interface ManagedVaultPlugin extends Plugin {
   getSecret?(options: { namespace: string; key: string }): Promise<{ value: string | null }>;
   setSecret?(options: { namespace: string; key: string; value: string }): Promise<EmptyResult>;
   removeSecret?(options: { namespace: string; key: string }): Promise<EmptyResult>;
+  /** Native URLSession request (the WebView CSP blocks plugin network access). */
+  httpRequest?(options: { id: string; url: string; method?: string; headers?: Record<string, string>; bodyBase64?: string; timeoutMs?: number }): Promise<{ status: number; headers: Record<string, string>; bodyBase64: string }>;
+  cancelHttpRequest?(options: { id: string }): Promise<EmptyResult>;
   /** Hands an http(s) URL to the system browser. */
   openExternal?(options: { url: string }): Promise<EmptyResult>;
   addListener(eventName: "change", listenerFunc: (event: VaultEvent) => void): Promise<PluginListenerHandle>;
@@ -189,6 +192,26 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     set: async (namespace, key, value) => { await plugin.setSecret!({ namespace, key, value }); },
     remove: async (namespace, key) => { await plugin.removeSecret!({ namespace, key }); },
   } : undefined);
+  const toBase64 = (data: ArrayBuffer | string | undefined): string | undefined => {
+    if (data === undefined) return undefined;
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data);
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  };
+  const network: HostServices["network"] = plugin.httpRequest ? {
+    request: async (input, signal) => {
+      if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+      const id = crypto.randomUUID();
+      const cancel = () => { void plugin.cancelHttpRequest?.({ id }); };
+      signal?.addEventListener("abort", cancel, { once: true });
+      try {
+        const result = await plugin.httpRequest!({ id, url: input.url, method: input.method, headers: input.headers, bodyBase64: toBase64(input.body) });
+        if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+        return { status: result.status, headers: result.headers, body: decodeBase64(result.bodyBase64) };
+      } finally { signal?.removeEventListener("abort", cancel); }
+    },
+  } : undefined;
   const formFactor = typeof window !== "undefined" && window.matchMedia?.("(min-width: 701px)").matches
     ? "tablet" as const
     : "phone" as const;
@@ -341,6 +364,7 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       },
     },
     secrets,
+    ...(network ? { network } : {}),
     navigation: {
       ...portable.navigation,
       openExternal: async (url) => {

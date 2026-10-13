@@ -190,3 +190,51 @@ describe("deep link parsing for plugin protocol handlers", () => {
     });
   });
 });
+
+describe("mobile native network for plugins", () => {
+  const nativeWithHttp = (httpRequest: ManagedVaultPlugin["httpRequest"], cancelHttpRequest = vi.fn(async () => ({}) as Record<string, never>)) =>
+    ({ httpRequest, cancelHttpRequest, addListener: vi.fn(async () => ({ remove: vi.fn() })) }) as unknown as ManagedVaultPlugin;
+
+  it("has no network service when the native bridge lacks httpRequest", () => {
+    const host = createCapacitorHost({ addListener: vi.fn() } as unknown as ManagedVaultPlugin, createBrowserHost(createBrowserHostState()));
+    expect(host.network).toBeUndefined();
+  });
+
+  it("encodes request bodies and decodes binary responses through the native bridge", async () => {
+    const httpRequest = vi.fn(async () => ({ status: 201, headers: { "content-type": "application/octet-stream" }, bodyBase64: "AAEC/w==" }));
+    const host = createCapacitorHost(nativeWithHttp(httpRequest), createBrowserHost(createBrowserHostState()));
+    const response = await host.network!.request({ url: "https://docs.googleapis.com/v1/documents", method: "POST", headers: { Authorization: "Bearer x" }, body: '{"a":"é"}' });
+    expect(response.status).toBe(201);
+    expect([...new Uint8Array(response.body)]).toEqual([0, 1, 2, 255]);
+    const call = httpRequest.mock.calls[0][0] as { bodyBase64: string; url: string; id: string };
+    expect(new TextDecoder().decode(Uint8Array.from(atob(call.bodyBase64), (c) => c.charCodeAt(0)))).toBe('{"a":"é"}');
+    expect(call.url).toBe("https://docs.googleapis.com/v1/documents");
+  });
+
+  it("cancels the native task when the caller aborts", async () => {
+    let release!: () => void;
+    const httpRequest = vi.fn(() => new Promise<{ status: number; headers: Record<string, string>; bodyBase64: string }>((resolve) => { release = () => resolve({ status: 200, headers: {}, bodyBase64: "" }); }));
+    const cancel = vi.fn(async () => ({}) as Record<string, never>);
+    const host = createCapacitorHost(nativeWithHttp(httpRequest, cancel), createBrowserHost(createBrowserHostState()));
+    const controller = new AbortController();
+    const pending = host.network!.request({ url: "https://example.com/" }, controller.signal);
+    controller.abort();
+    release();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancel).toHaveBeenCalledWith({ id: (httpRequest.mock.calls[0][0] as { id: string }).id });
+    await expect(host.network!.request({ url: "https://example.com/" }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("exposes plugin fetch only when the host has a network service", async () => {
+    const { createLegacyGeodeFacade } = await import("../../../src/renderer/host/legacy-facade");
+    const none = createLegacyGeodeFacade(createBrowserHost(createBrowserHostState()));
+    expect(none.pluginFetch).toBeUndefined();
+    const httpRequest = vi.fn(async () => ({ status: 200, headers: { "x-k": "v" }, bodyBase64: btoa("ok") }));
+    const host = createCapacitorHost(nativeWithHttp(httpRequest), createBrowserHost(createBrowserHostState()));
+    const facade = createLegacyGeodeFacade(host);
+    const result = await facade.pluginFetch!({ url: "https://example.com/u", method: "GET", headers: {} });
+    expect(result.status).toBe(200);
+    expect(new TextDecoder().decode(result.arrayBuffer)).toBe("ok");
+    expect(result.headers).toEqual({ "x-k": "v" });
+  });
+});

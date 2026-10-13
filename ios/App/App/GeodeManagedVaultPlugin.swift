@@ -111,7 +111,9 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             CAPPluginMethod(name: "getSecret", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "setSecret", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "removeSecret", returnType: CAPPluginReturnPromise),
-            CAPPluginMethod(name: "openExternal", returnType: CAPPluginReturnPromise)
+            CAPPluginMethod(name: "openExternal", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "httpRequest", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "cancelHttpRequest", returnType: CAPPluginReturnPromise)
         ]
 #if DEBUG
         methods.append(CAPPluginMethod(name: "debugProbe", returnType: CAPPluginReturnPromise))
@@ -506,6 +508,68 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             }
             return [:]
         }
+    }
+
+    // MARK: Plugin network (URLSession; the WebView CSP blocks direct plugin fetches)
+
+    private static let httpResponseLimit = 32 * 1024 * 1024
+    private static let httpDefaultTimeout: TimeInterval = 30
+    private static let httpMaxTimeout: TimeInterval = 120
+    private let httpTasksLock = NSLock()
+    private var httpTasks: [String: URLSessionTask] = [:]
+
+    @objc func httpRequest(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), !id.isEmpty, id.count <= 100,
+              let value = call.getString("url"), let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
+            call.reject("Only http(s) requests are supported", "INVALID_URL")
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = (call.getString("method") ?? "GET").uppercased()
+        let requestedTimeout = TimeInterval(call.getInt("timeoutMs") ?? 0) / 1000
+        request.timeoutInterval = requestedTimeout > 0 ? min(requestedTimeout, Self.httpMaxTimeout) : Self.httpDefaultTimeout
+        for (name, headerValue) in call.getObject("headers") ?? [:] {
+            guard let text = headerValue as? String else { continue }
+            request.setValue(text, forHTTPHeaderField: name)
+        }
+        if let base64 = call.getString("bodyBase64") {
+            guard let body = Data(base64Encoded: base64), body.count <= Self.httpResponseLimit else {
+                call.reject("Request body is invalid or too large", "INVALID_BODY")
+                return
+            }
+            request.httpBody = body
+        }
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            self?.httpTasksLock.lock(); self?.httpTasks[id] = nil; self?.httpTasksLock.unlock()
+            if let error = error as NSError? {
+                call.reject(error.code == NSURLErrorCancelled ? "Request cancelled" : "Network request failed", error.code == NSURLErrorCancelled ? "CANCELLED" : "NETWORK_ERROR")
+                return
+            }
+            guard let http = response as? HTTPURLResponse, let data else {
+                call.reject("Network request failed", "NETWORK_ERROR")
+                return
+            }
+            guard data.count <= Self.httpResponseLimit else {
+                call.reject("Response exceeds the mobile limit", "RESPONSE_TOO_LARGE")
+                return
+            }
+            var headers: JSObject = [:]
+            for (key, headerValue) in http.allHeaderFields {
+                if let key = key as? String, let headerValue = headerValue as? String { headers[key.lowercased()] = headerValue }
+            }
+            call.resolve(["status": http.statusCode, "headers": headers, "bodyBase64": data.base64EncodedString()])
+        }
+        httpTasksLock.lock(); httpTasks[id] = task; httpTasksLock.unlock()
+        task.resume()
+    }
+
+    @objc func cancelHttpRequest(_ call: CAPPluginCall) {
+        if let id = call.getString("id") {
+            httpTasksLock.lock(); let task = httpTasks[id]; httpTasksLock.unlock()
+            task?.cancel()
+        }
+        call.resolve()
     }
 
     // MARK: System browser and deep links

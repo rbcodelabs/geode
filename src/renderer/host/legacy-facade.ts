@@ -24,6 +24,15 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     list: () => host.vaultFiles.list(),
     httpRequest: async (_id, input) => { if (!host.network) throw new Error("Host networking unavailable"); return host.network.request(input); },
     cancelHttpRequest: () => {},
+    // Plugins' raw fetch() is blocked by the shell CSP; hosts with a native
+    // network service (iOS) proxy it so plugin code sees a real Response.
+    ...(host.network ? {
+      pluginFetch: async (request) => {
+        const body = request.bodyBuffer;
+        const response = await host.network!.request({ url: request.url, method: request.method, headers: request.headers, body });
+        return { status: response.status, statusText: "", headers: response.headers, arrayBuffer: response.body };
+      },
+    } : {}),
     claimSyncOwner: async () => host.syncSafety?.claimOwner() ?? null,
     hubSync: host.hubSync ?? { call: async () => { throw new Error("Hub sync is unavailable on this host"); }, abort: () => {} },
     privateSyncStorage: async (token, binding, request) => { if (!host.syncSafety) throw new Error("Private sync storage unavailable"); return host.syncSafety.storage(token, binding, request); },

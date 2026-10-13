@@ -16,6 +16,8 @@ Threads bundle was (correctly) rejected by the 16 MiB mobile entrypoint cap.
 | Update safety | `PluginFileSet.entry` (`main.js` \| `main.mobile.js`) tells the host which file a rollback restores; the last known-good mobile bundle is kept on a failed update. |
 | Secrets | `loadSecret/saveSecret/removeSecret` work on mobile: iOS Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`), namespaced by plugin id. A plugin only receives an opaque per-session capability minted with its entrypoint read; it cannot address another plugin's namespace. The plain browser host keeps secrets **unavailable**. |
 | OAuth return | `geode://<action>?…` links (the `obsidian://` alias too) reach `registerObsidianProtocolHandler(action, …)`. Native forwards them with `retainUntilConsumed`, and the app buffers links that arrive before a handler registers. `Info.plist` registers the `geode` scheme. |
+| Network | `requestUrl` and plugin `fetch()` go through a native `URLSession` bridge (`host.network`): http(s) only, 30 s default / 120 s max timeout, 32 MiB response cap, cancellable. The shell CSP (`default-src 'self'`) otherwise blocks every plugin request (found when the real Google Docs Sync bundle was loaded). |
+| WebSocket | The mobile CSP adds `connect-src 'self' wss:` so the Threads relay client can connect; no other direct network origin is allowed. |
 | Open a web page | `window.open(http(s) url)` is routed to the system browser (`UIApplication.open`); other schemes are refused. |
 
 Unchanged limits: no Node/Electron modules, ESM preflight, 16 MiB entrypoint cap, admission
