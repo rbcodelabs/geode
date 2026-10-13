@@ -6982,3 +6982,8 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
     animation: none;
   }
 }
+
+/* Mobile: tracked community rows (now reachable via Supported plugins installs) must wrap, and installs need a 44px touch target. */
+.is-mobile .community-item { flex-wrap: wrap; }
+.is-mobile .community-item-controls { flex-shrink: 1; flex-wrap: wrap; min-width: 0; }
+.is-mobile .supported-plugin-install { min-height: 44px; }

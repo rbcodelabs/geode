@@ -108,6 +108,11 @@ test("@phone @tablet lists supported plugins honestly and installs the tested re
   await expect(future).toContainText("Requires Geode 99.0.0 or newer");
   await expect(future.getByRole("button")).toHaveCount(0);
 
+  // Touch targets: Install buttons meet the 44px minimum on phone and tablet.
+  for (const install of await catalogEl.getByRole("button", { name: "Install" }).all()) {
+    expect((await install.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+
   // Hash mismatch: rejected, nothing written to the vault.
   const tampered = catalogEl.locator('[data-plugin-id="fixture-tampered"]');
   await tampered.getByRole("button", { name: "Install" }).click();
@@ -130,6 +135,10 @@ test("@phone @tablet lists supported plugins honestly and installs the tested re
   expect(await page.evaluate(() => (window as any).app.pluginManager.isEnabled("fixture-mobile"))).toBe(false);
   expect(await page.evaluate(() => (window as any).app.commands.has("fixture-mobile:hello"))).toBe(false);
   await expect(page.locator('style[data-plugin-id="fixture-mobile"]')).toHaveCount(0);
+
+  // The newly tracked community row must not overflow its card.
+  const tracked = page.locator('.community-list .community-item[data-repo="fixtures/fixture-mobile"]');
+  expect(await tracked.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
 
   // The explicit opt-in is the existing mobile plugin row's Enable action.
   const installed = page.locator('.community-list .mobile-plugin-item[data-plugin-id="fixture-mobile"]');
