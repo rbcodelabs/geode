@@ -130,7 +130,12 @@ const builds = [
     outfile: "dist/mobile/mobile-renderer.js",
     platform: "browser",
     format: "iife",
-    define: katexCssDefine,
+    // The mobile runtime has no main process to ask `app.getVersion()`; the
+    // Supported plugins catalog gates entries on the running Geode version.
+    define: {
+      ...katexCssDefine,
+      __GEODE_APP_VERSION__: JSON.stringify(JSON.parse(readFileSync("package.json", "utf8")).version),
+    },
     metafile: true,
     plugins: [mobileBoundaryPlugin],
   },

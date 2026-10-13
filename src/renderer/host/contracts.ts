@@ -295,6 +295,12 @@ export interface HostServices {
   /** Desktop only: main-process store access (directory / ssh hub) for the built-in hub sync provider. */
   readonly hubSync?: import("../../shared/hub-sync").HubSyncBridge;
   readonly network?: { request(input: import("../../shared/network").HostHttpRequest, signal?: AbortSignal): Promise<import("../../shared/network").HostHttpResponse>; };
+  /**
+   * Mobile only: bounded https byte fetch for the Supported plugins catalog and
+   * tested-release artifacts. Deliberately not a general plugin network API
+   * (that is `network`, Slice 3A2); absent on desktop, which installs in main.
+   */
+  readonly supportedPluginTransport?: import("../../shared/network").PluginArtifactTransport;
   /** Internal desktop-only Project integration; absent on mobile/browser. */
   externalRoots?: import("../../shared/external-roots").ExternalRootsHost;
   readonly capabilities: Readonly<HostCapabilities>;

@@ -9,6 +9,9 @@
 import type { App } from "../app";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "../../main/github-resolve";
 import type { ObsidianImportResult } from "../../main/obsidian-import";
+import type { SupportedPluginCatalog } from "../../shared/supported-plugin-catalog";
+import { GEODE_APP_VERSION } from "../app-version";
+import { installMobileSupportedPlugin } from "./mobile-supported-plugins";
 import {
   findItem,
   itemsToCheck,
@@ -115,6 +118,43 @@ export class CommunityManager {
     if (!window.geode.installSupportedPlugin) throw new Error("Supported plugin catalog is unavailable");
     const installed = await window.geode.installSupportedPlugin(pluginId, release);
     await this.recordInstalled(installed, release === "tested" ? installed.version : undefined);
+    return installed;
+  }
+
+  /**
+   * Mobile: install the catalog-tested release of a supported plugin (see
+   * mobile-supported-plugins.ts). Hash-verified before any write, recorded in
+   * community.json pinned to the tested version, and never enabled here — a
+   * plugin that was already enabled is reloaded so it runs the files on disk.
+   */
+  async installMobileSupported(catalog: SupportedPluginCatalog, pluginId: string): Promise<InstalledResult> {
+    const host = this.app.host;
+    const transport = host.supportedPluginTransport;
+    if (!transport) throw new Error("Supported plugin installation is unavailable on this host");
+    const files = host.vaultFiles;
+    const installed = await installMobileSupportedPlugin(catalog, pluginId, {
+      transport,
+      currentGeodeVersion: GEODE_APP_VERSION,
+      readExistingManifest: async (id) => {
+        const path = `.geode/plugins/${id}/manifest.json`;
+        return (await files.exists(path)) ? files.read(path) : null;
+      },
+      mkdir: (path) => files.mkdir(path),
+      writeFile: async (path, data) => { await files.write(path, data); },
+      removeFolder: async (path) => { await (files.rmdir ? files.rmdir(path, true) : files.trash(path)); },
+      replacePluginFiles: (id, expected, replacement) => host.plugins.replacePluginFiles(id, expected, replacement),
+    });
+    await this.recordInstalled(installed, installed.version);
+    if (this.app.pluginManager.isEnabled(installed.id)) {
+      try {
+        await this.app.pluginManager.reload(installed.id);
+      } catch (error) {
+        throw new Error(
+          `Installed ${installed.name} ${installed.version}, but reloading it failed: ` +
+          (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
     return installed;
   }
 
