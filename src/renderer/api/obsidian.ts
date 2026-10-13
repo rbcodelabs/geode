@@ -267,17 +267,24 @@ export async function requestUrl(param: RequestUrlParam | string): Promise<Reque
 // ---------------------------------------------------------------------------
 
 const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+/**
+ * Mobile is a property of the running shell, not the module: mobile.ts marks
+ * `<body class="is-mobile">` before the app boots, so these resolve lazily and
+ * stay false on desktop. Plugins branch on `Platform.isMobile` to avoid Node.
+ */
+const bodyIsMobile = () => typeof document !== "undefined" && document.body?.classList.contains("is-mobile") === true;
+const hostRuntime = () => (typeof window !== "undefined" ? window.hostServices?.runtime : undefined);
 export const Platform = {
-  isDesktop: true,
-  isMobile: false,
-  isDesktopApp: true,
-  isMobileApp: false,
-  isPhone: false,
-  isTablet: false,
+  get isDesktop() { return !bodyIsMobile(); },
+  get isMobile() { return bodyIsMobile(); },
+  get isDesktopApp() { return !bodyIsMobile(); },
+  get isMobileApp() { return bodyIsMobile(); },
+  get isPhone() { return bodyIsMobile() && hostRuntime()?.formFactor !== "tablet"; },
+  get isTablet() { return bodyIsMobile() && hostRuntime()?.formFactor === "tablet"; },
   isMacOS: /Mac/.test(ua),
   isWin: /Win/.test(ua),
   isLinux: /Linux/.test(ua),
-  isIosApp: false,
+  get isIosApp() { return bodyIsMobile() && hostRuntime()?.runtime === "ios"; },
   isAndroidApp: false,
   isSafari: /^((?!chrome|android).)*safari/i.test(ua),
   resourcePathPrefix: "app://local/",

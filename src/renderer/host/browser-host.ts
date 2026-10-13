@@ -1,5 +1,7 @@
 import type { HostServices, VaultEvent, VaultFileEntry } from "./contracts";
 import { assertValidThemeId } from "../../shared/theme-id";
+import { parseGeodeDeepLink } from "../../shared/deep-link-parse";
+import { createMobilePluginSecretService, pluginIdFromEntryPath, type NamespacedSecretBackend } from "./plugin-secrets";
 
 export interface BrowserHostState {
   readonly vaultName: string;
@@ -136,10 +138,19 @@ export function createBrowserHost(
       errorCode?: string;
     }>;
     onPluginFileRead?: (path: string) => void;
+    /** Backing store for plugin secrets (tests only; the browser has no Keychain). */
+    secretBackend?: NamespacedSecretBackend;
+    /** Subscribes the host to externally delivered `geode://` links (tests only). */
+    deepLinks?: { subscribe(callback: (url: string) => void): () => void };
     beforePluginReplace?: (id: string) => Promise<void>;
   } = {},
 ): HostServices {
   const listeners = new Set<(event: VaultEvent) => void>();
+  const secrets = createMobilePluginSecretService(options.secretBackend);
+  const secretsCapability = (path: string) => {
+    const id = pluginIdFromEntryPath(path);
+    return id ? secrets.capabilityFor(id) : undefined;
+  };
   let activeState = state;
   let activeVaultId = "managed://default";
   let opened = false;
@@ -183,7 +194,10 @@ export function createBrowserHost(
       formFactor: "phone",
       getWindowChromeState: async () => ({ platform: "darwin", isFullScreen: false, macChrome: "native" }),
       onWindowChromeState: () => () => {},
-      onDeepLink: () => () => {},
+      onDeepLink: (callback) => options.deepLinks?.subscribe((url) => {
+        const link = parseGeodeDeepLink(url);
+        if (link) callback(link);
+      }) ?? (() => {}),
       onForeground: (callback) => {
         const handler = () => {
           if (document.visibilityState === "visible") callback();
@@ -401,10 +415,7 @@ export function createBrowserHost(
       write: async (key, value) => persistMapChange(activeState, activeState.deviceState, key, () => activeState.deviceState.set(key, structuredClone(value))),
       remove: async key => persistMapChange(activeState, activeState.deviceState, key, () => activeState.deviceState.delete(key)),
     },
-    secrets: {
-      available: false,
-      fromCapability: () => ({ get: async () => null, set: async () => { throw new Error("Secure secret storage is unavailable in the browser host"); }, remove: async () => {} }),
-    },
+    secrets,
     config: {
       read: async (name) => structuredClone(activeState.config.get(name) ?? null),
       write: async (name, data) => persistMapChange(activeState, activeState.config, name, () => activeState.config.set(name, structuredClone(data))),
@@ -453,13 +464,13 @@ export function createBrowserHost(
         const now = Date.now();
         let key: string;
         try { key = normalizeVaultPath(path); } catch { return { ok: false, errorCode: "INVALID_PLUGIN_PATH", mainReceivedAt: now, fsStartedAt: now, fsFinishedAt: now }; }
-        if (!/^\.geode\/plugins\/[a-z0-9][a-z0-9-]*\/(manifest\.json|main\.js|styles\.css)$/.test(key)) {
+        if (!/^\.geode\/plugins\/[a-z0-9][a-z0-9-]*\/(manifest\.json|main\.js|main\.mobile\.js|styles\.css)$/.test(key)) {
           return { ok: false, errorCode: "INVALID_PLUGIN_PATH", mainReceivedAt: now, fsStartedAt: now, fsFinishedAt: now };
         }
         const content = activeState.files.get(key)?.data;
         return content === undefined
           ? { ok: false, errorCode: "PLUGIN_FILE_NOT_FOUND", mainReceivedAt: rendererSentAt, fsStartedAt: now, fsFinishedAt: Date.now() }
-          : { ok: true, content, mainReceivedAt: rendererSentAt, fsStartedAt: now, fsFinishedAt: Date.now() };
+          : { ok: true, content, secretCapability: secretsCapability(key), mainReceivedAt: rendererSentAt, fsStartedAt: now, fsFinishedAt: Date.now() };
       },
       replacePluginFiles: async (id, expectedManifest, replacement) => {
         requireOpen();
@@ -468,7 +479,7 @@ export function createBrowserHost(
         const base = `.geode/plugins/${id}`;
         const current = {
           manifest: activeState.files.get(`${base}/manifest.json`)?.data,
-          main: activeState.files.get(`${base}/main.js`)?.data,
+          main: activeState.files.get(`${base}/${replacement.entry ?? "main.js"}`)?.data,
           styles: activeState.files.get(`${base}/styles.css`)?.data ?? null,
         };
         if (current.manifest !== expectedManifest) {
@@ -478,7 +489,7 @@ export function createBrowserHost(
         try {
           const stamp = now();
           activeState.files.set(`${base}/manifest.json`, { data: replacement.manifest, ctime: stamp, mtime: stamp });
-          activeState.files.set(`${base}/main.js`, { data: replacement.main, ctime: stamp, mtime: stamp });
+          activeState.files.set(`${base}/${replacement.entry ?? "main.js"}`, { data: replacement.main, ctime: stamp, mtime: stamp });
           if (replacement.styles === null) activeState.files.delete(`${base}/styles.css`);
           else activeState.files.set(`${base}/styles.css`, { data: replacement.styles, ctime: stamp, mtime: stamp });
           activeState.persist();

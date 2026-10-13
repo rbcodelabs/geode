@@ -16,7 +16,7 @@ import {
   instantiateMobilePluginClass,
   type MobilePluginAdmission,
 } from "./mobile-plugin-runtime";
-import type { PluginFileSet } from "./host/contracts";
+import type { PluginEntryFile, PluginFileSet } from "./host/contracts";
 import { ThreadsProjectsAdapter, threadsProjectSource, portableThreadsProjects, observeThreadsData } from "./integrations/threads-projects";
 import { pluginFetch } from "./plugin-fetch";
 
@@ -323,7 +323,7 @@ export class PluginManager {
         replacementManifestSource = this.manifestSources.get(id);
         this.manifests.set(id, replacementManifest);
         this.assertCanEnable(id, replacementManifest);
-        const nextCode = await this.readPluginFile(id, "main.js");
+        const nextCode = (await this.readEntrypoint(id)).code;
         // Reject unsupported updates before the known-good instance is touched.
         await compileMobilePluginModule(nextCode, id);
       } catch (validationError) {
@@ -407,10 +407,11 @@ export class PluginManager {
 
     let PluginClass: PluginConstructor;
     let code: string;
+    let entry: PluginEntryFile = "main.js";
     try {
-      code = await measureOperation(`plugin-code-read:${id}`, () =>
-        this.readPluginFile(id, "main.js")
-      );
+      ({ code, entry } = await measureOperation(`plugin-code-read:${id}`, () =>
+        this.readEntrypoint(id)
+      ));
       PluginClass = this.isMobileRuntime()
         ? await instantiateMobilePluginClass(code, id)
         : instantiatePluginClass(code, id);
@@ -428,7 +429,7 @@ export class PluginManager {
       manifest,
       instance,
       code,
-      files: { manifest: this.manifestSources.get(id) ?? JSON.stringify(manifest), main: code, styles },
+      files: { manifest: this.manifestSources.get(id) ?? JSON.stringify(manifest), main: code, ...(entry === "main.js" ? {} : { entry }), styles },
     });
 
     let onloadResult: void | Promise<unknown>;
@@ -537,12 +538,30 @@ export class PluginManager {
     return css;
   }
 
+  /**
+   * Read the plugin entrypoint. A mobile runtime prefers a plugin-supplied
+   * `main.mobile.js` (a browser-only bundle) and falls back to `main.js` only
+   * when that file does not exist; any other failure surfaces unchanged so a
+   * broken mobile bundle can never silently load the Node/Electron bundle.
+   */
+  private async readEntrypoint(id: string): Promise<{ code: string; entry: PluginEntryFile }> {
+    if (this.isMobileRuntime()) {
+      try {
+        return { code: await this.readPluginFile(id, "main.mobile.js"), entry: "main.mobile.js" };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/^(PLUGIN_FILE_NOT_FOUND|NOT_FOUND|ENOENT)\b/.test(message)) throw error;
+      }
+    }
+    return { code: await this.readPluginFile(id, "main.js"), entry: "main.js" };
+  }
+
   private async readPluginFile(id: string, fileName: string): Promise<string> {
     const api = window.geode;
     if (!api.readPluginFile) return api.read(`${pluginDir(id)}/${fileName}`);
     const rendererSentAt = Date.now();
     const result = await api.readPluginFile(`${pluginDir(id)}/${fileName}`, rendererSentAt);
-    if (fileName === "main.js" && result.secretCapability) this.secretCapabilities.set(id, result.secretCapability);
+    if ((fileName === "main.js" || fileName === "main.mobile.js") && result.secretCapability) this.secretCapabilities.set(id, result.secretCapability);
     const rendererReceivedAt = Date.now();
     recordMeasure(`plugin-read-main-queue:${id}:${fileName}`, Math.max(0, result.mainReceivedAt - rendererSentAt));
     recordMeasure(`plugin-read-filesystem:${id}:${fileName}`, Math.max(0, result.fsFinishedAt - result.fsStartedAt));

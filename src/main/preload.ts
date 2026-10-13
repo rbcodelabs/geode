@@ -57,7 +57,7 @@ export interface TimedPluginReadResult {
   fsFinishedAt: number;
   secretCapability?: string;
 }
-export interface PluginFileSet { manifest: string; main: string; styles: string | null }
+export interface PluginFileSet { manifest: string; main: string; entry?: "main.js" | "main.mobile.js"; styles: string | null }
 
 export interface GuestWindowOpenRequest {
   url: string;
