@@ -290,7 +290,14 @@ for (const failure of ['throw', 'timeout'] as const) {
           await (window as any).guardOriginalReconcile('manual');
         };
       }, failure);
-      await expect(apply()).rejects.toThrow(/refresh incomplete/i);
+      if (failure === 'throw') await expect(apply()).rejects.toThrow(/refresh incomplete/i);
+      else {
+        // A refresh that is merely slow (past the guard's 4 s patience) no longer fails the apply, so a large vault's sync is not aborted
+        // and retried forever. The safety property is unchanged and asserted below: until a refresh really completes every view stays
+        // inert/suspended and nothing queued can write; the in-flight refresh lifts the hold itself.
+        await expect(apply()).resolves.toBeDefined();
+        expect(await second.evaluate(() => (window as any).refreshEntered)).toBe(true);
+      }
       if (failure === 'throw') await expect(apply('Note.md', 'remote')).rejects.toThrow(/refresh incomplete/i);
       expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
       expect(await second.evaluate(() => ({ body: document.body.inert, editor: (window as any).app.workspace.activeLeaf.view.containerEl.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: false, editor: true, suspended: true });

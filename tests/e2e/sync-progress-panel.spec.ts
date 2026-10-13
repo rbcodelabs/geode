@@ -307,7 +307,8 @@ test("a stalled sync keeps counting up in the panel even though it emits no even
     const listeners = () => page.evaluate(() => (window as any).app.sync.handlers.get("status").size as number);
     const open = await listeners();
     await modal.getByRole("tab", { name: "Appearance" }).click();
-    expect(await listeners()).toBe(open - 1);
+    // Two subscriptions belong to the open Sync tab: the progress panel's and the status-refresh watcher (watchSyncStatus). Both must go.
+    expect(await listeners()).toBe(open - 2);
     await expect(modal.locator(".sync-progress")).toHaveCount(0);
   } finally {
     await app.close();
