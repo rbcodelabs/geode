@@ -630,3 +630,16 @@ describe("guard refusals say which file, and an operation that is already satisf
     expect(vault.trashed).toEqual([]);
   });
 });
+
+describe("a file named like its parent folder", () => {
+  it("is created and replaced like any other file (Skills/x/x, extensionless)", async () => {
+    const { vault, safety, token } = await open();
+    vault.put("Skills/worktree-bootstrap/SKILL.md", "skill");
+    const created = await safety.apply(token, write("Skills/worktree-bootstrap/worktree-bootstrap", "#!/usr/bin/env node\n", null));
+    expect(created.status).toBe("applied");
+    expect(vault.text("Skills/worktree-bootstrap/worktree-bootstrap")).toBe("#!/usr/bin/env node\n");
+    const replaced = await safety.apply(token, write("Skills/worktree-bootstrap/worktree-bootstrap", "v2", await hash("#!/usr/bin/env node\n")));
+    expect(replaced.status).toBe("applied");
+    expect(vault.folders.has("Skills/worktree-bootstrap/worktree-bootstrap")).toBe(false);
+  });
+});

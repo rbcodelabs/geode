@@ -557,14 +557,15 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             let path = try self.requiredPath(call)
             let components = try self.lexicalComponents(path)
             var current = try self.vaultRoot
-            for component in components {
+            // By position, never by name: a file named like its parent folder (Skills/x/x) must not be mistaken for the last component.
+            for (index, component) in components.enumerated() {
                 current.appendPathComponent(component, isDirectory: false)
                 guard let attributes = try? self.fileManager.attributesOfItem(atPath: current.path) else {
                     return ["kind": "none", "size": 0, "children": 0]
                 }
                 let type = attributes[.type] as? FileAttributeType
                 if type == .typeSymbolicLink { return ["kind": "symlink", "size": 0, "children": 0] }
-                if component == components.last {
+                if index == components.count - 1 {
                     if type == .typeDirectory {
                         let children = (try? self.fileManager.contentsOfDirectory(atPath: current.path).count) ?? 0
                         return ["kind": "folder", "size": 0, "children": children]
