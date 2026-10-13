@@ -1,5 +1,6 @@
 import { Vault } from "./vault";
 import { PostApplyRefresh } from "./sync/post-apply-refresh";
+import { watchSyncStatus } from "./sync/status-refresh";
 import { version as appVersion } from "../../package.json";
 import { vaultRefreshFailure, vaultRefreshPresentation, type VaultRefreshFailure } from "../shared/vault-refresh";
 import { MetadataCache, parseMetadata } from "./metadata-cache";
@@ -1995,6 +1996,8 @@ class SettingsModal extends Modal {
     if (this.geodeApp.sync.isAppendOnly()) { const boundVaultName = this.geodeApp.sync.getBoundVaultName(); if (boundVaultName) this.addRow(container, "Vault", `Bound to shared vault "${boundVaultName}"`); }
     const statusRow = this.addRow(container, "Status", status.message ?? status.state);
     statusRow.control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
+    const blockedNow = this.geodeApp.sync.getHistoryDetails()?.blocked.length ?? 0;
+    if (blockedNow && statusRow.description) statusRow.description.textContent = `${status.message ?? status.state}. Each file and the reason is listed under Blocked below.`;
     // Before a shared vault is bound the engine's "preview" state reads oddly; say what is actually needed.
     if (isHub && status.state === "preview" && !this.geodeApp.sync.getBoundVaultName()) {
       statusRow.control.textContent = "Setup needed";
@@ -2020,6 +2023,19 @@ class SettingsModal extends Modal {
     // this function started.
     const trackBusy = (el: HTMLButtonElement | HTMLInputElement, defaultDisabled = false) => { busyControls.push({ el, defaultDisabled }); applyBusyState(); };
     const showProgress = this.renderSyncProgress(container, generation, busy => { backgroundBusy = busy; applyBusyState(); });
+    // The panel draws once; without this a finished run left "disconnected" (the launch default) on screen until the tab was
+    // reopened. Redraw (debounced, never while a field is being edited) when the visible status changes, and stop with the
+    // progress subscription whenever the tab is left, redrawn or the modal closes.
+    {
+      const stopProgress = this.stopSyncProgress as (() => void) | null;
+      const stopStatus = watchSyncStatus(status, {
+        subscribe: listener => this.geodeApp.sync.on("status", listener),
+        isLive: () => container.isConnected && generation === this.syncTabGeneration,
+        isEditing: () => { const active = document.activeElement; return !!active && container.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName); },
+        redraw: () => this.renderSyncTab(container, summary),
+      });
+      this.stopSyncProgress = () => { stopProgress?.(); stopStatus(); };
+    }
     const actions = document.createElement("div"); actions.className = "setting-item-control";
     const perform = (action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => {
       performBusy = true;
