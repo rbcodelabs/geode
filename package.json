@@ -71,7 +71,7 @@
     "@types/pg": "8.23.1",
     "electron": "^42.4.0",
     "electron-builder": "^26.16.1",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.11"
   },
