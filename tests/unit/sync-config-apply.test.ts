@@ -27,3 +27,19 @@ it("merges guarded portable fields and retry receipts without replacing unrelate
     await expect(applyPortableMutation(root, path.join(root, "recovery"), { ...input, operationId: randomUUID() }, {})).rejects.toThrow(/changed/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+it("persists theme auto verbatim through a guarded appearance mutation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-config-auto-"));
+  try {
+    await fs.mkdir(path.join(root, ".geode"));
+    const file = path.join(root, ".geode/app.json");
+    const local = { theme: "dark", privateEndpoint: "local-only" };
+    await fs.writeFile(file, JSON.stringify(local));
+    const documents = await projectPortableConfig({ read: async () => local }, { ...DEFAULT_SYNC_SCOPE, hotkeys: false, corePlugins: false });
+    const current = documents.find(document => document.name === "appearance.json")!;
+    const expectedHash = createHash("sha256").update(Buffer.from(serializePortableConfig(current))).digest("hex");
+    const data = serializePortableConfig({ name: "appearance.json", value: { theme: "auto", baseFontSize: 16, cssTheme: "" } });
+    await applyPortableMutation(root, path.join(root, "recovery"), { operationId: randomUUID(), path: "appearance.json", expectedHash, kind: "write" as const, data }, {});
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toMatchObject({ theme: "auto", privateEndpoint: "local-only" });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

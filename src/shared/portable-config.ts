@@ -6,7 +6,7 @@ import moment from 'moment';
 
 export interface PortableConfigValues {
   'editor.json': { readableLineLength: boolean; foldHeading: boolean; showLineNumber: boolean; showRibbon: boolean; showStatusBar: boolean };
-  'appearance.json': { theme: 'dark' | 'light'; baseFontSize: number; cssTheme: string };
+  'appearance.json': { theme: 'dark' | 'light' | 'auto'; baseFontSize: number; cssTheme: string };
   'hotkeys.json': { version: 1; overrides: Record<string, Hotkey[]> };
   'daily-notes.json': DailyNotesConfig;
 }
@@ -21,7 +21,7 @@ export interface PortableConfigOwners {
 
 // AppSettings is private to App; mirror only its explicitly approved portable defaults.
 const EDITOR_DEFAULTS: PortableConfigValues['editor.json'] = { readableLineLength: true, foldHeading: false, showLineNumber: false, showRibbon: true, showStatusBar: true };
-const APPEARANCE_DEFAULTS: PortableConfigValues['appearance.json'] = { theme: 'dark', baseFontSize: 16, cssTheme: '' };
+const APPEARANCE_DEFAULTS: PortableConfigValues['appearance.json'] = { theme: 'auto', baseFontSize: 16, cssTheme: '' };
 const DAILY_DEFAULTS = { enabled: true, folder: '', format: 'YYYY-MM-DD', template: '' };
 const utf8 = new TextEncoder();
 const MAX_CONFIG_BYTES = 1024 * 1024;
@@ -84,7 +84,7 @@ function validateDocument(name: string, value: unknown): PortableConfigDocument 
     }
     case 'appearance.json': {
       const raw = exactObject(value,Object.keys(APPEARANCE_DEFAULTS));
-      if ((raw.theme !== 'dark' && raw.theme !== 'light') || typeof raw.baseFontSize !== 'number' || !Number.isFinite(raw.baseFontSize) || raw.baseFontSize <= 0
+      if ((raw.theme !== 'dark' && raw.theme !== 'light' && raw.theme !== 'auto') || typeof raw.baseFontSize !== 'number' || !Number.isFinite(raw.baseFontSize) || raw.baseFontSize <= 0
         || typeof raw.cssTheme !== 'string' || (raw.cssTheme !== '' && !safeComponent(raw.cssTheme))) return invalid();
       return { name, value: { theme: raw.theme, baseFontSize: raw.baseFontSize, cssTheme: raw.cssTheme } };
     }
@@ -106,7 +106,13 @@ export async function projectPortableConfig(config: Pick<ConfigService,'read'>, 
   if (scope.mainSettings || scope.appearance) {
     const app = await config.read('app');
     if (scope.mainSettings) documents.push(validateDocument('editor.json',projectFields(app,EDITOR_DEFAULTS)));
-    if (scope.appearance) documents.push(validateDocument('appearance.json',projectFields(app,APPEARANCE_DEFAULTS)));
+    if (scope.appearance) {
+      const fields = projectFields(app,APPEARANCE_DEFAULTS);
+      // Legacy Obsidian-style "system" means follow the OS, which Geode calls "auto".
+      // Mapped on projection only; incoming wire payloads must already use the canonical value.
+      if (fields.theme === 'system') fields.theme = 'auto';
+      documents.push(validateDocument('appearance.json',fields));
+    }
   }
   if (scope.hotkeys) {
     const raw = sourceObject(await config.read('hotkeys'));

@@ -4,7 +4,7 @@ import { DEFAULT_SYNC_SCOPE } from '../../src/renderer/sync/scope';
 const encoder=new TextEncoder();
 const bytes=(value:unknown)=>encoder.encode(JSON.stringify(value)).buffer;
 const editor={readableLineLength:true,foldHeading:false,showLineNumber:false,showRibbon:true,showStatusBar:true};
-const appearance={theme:'dark' as const,baseFontSize:16,cssTheme:''};
+const appearance={theme:'auto' as const,baseFontSize:16,cssTheme:''};
 const daily={enabled:true,folder:'',format:'YYYY-MM-DD',template:''};
 const source=(values:Record<string,unknown>)=>({read:vi.fn(async(name:string)=>values[name]??null)});
 const owners=():PortableConfigOwners=>({applyEditor:vi.fn(async()=>{}),applyAppearance:vi.fn(async()=>{}),applyHotkeys:vi.fn(async()=>{}),applyDailyNotes:vi.fn(async()=>{})});
@@ -40,7 +40,7 @@ describe('portable configuration',()=>{
   });
   it.each([
     ['editor.json',{...editor,password:'secret'}],['editor.json',{...editor,showRibbon:'yes'}],['editor.json',{}],
-    ['appearance.json',{...appearance,theme:'auto'}],['appearance.json',{...appearance,baseFontSize:0}],['appearance.json',{...appearance,cssTheme:'../escape'}],
+    ['appearance.json',{...appearance,theme:'purple'}],['appearance.json',{...appearance,theme:''}],['appearance.json',{...appearance,theme:null}],['appearance.json',{...appearance,theme:42}],['appearance.json',{...appearance,theme:'system'}],['appearance.json',{...appearance,baseFontSize:0}],['appearance.json',{...appearance,cssTheme:'../escape'}],
     ['daily-notes.json',{...daily,folder:'../outside'}],['daily-notes.json',{...daily,template:'/outside.md'}],['daily-notes.json',{...daily,template:'.geode/secrets.json'}],
     ['daily-notes.json',{...daily,format:'[../]YYYY'}],['daily-notes.json',{...daily,extra:'bad'}],
     ['hotkeys.json',{version:2,overrides:{}}],['hotkeys.json',{version:1,overrides:{x:[{code:'MetaLeft',modifiers:[]}]}}],
@@ -49,6 +49,26 @@ describe('portable configuration',()=>{
     ['other.json',{}],['../editor.json',editor],
   ])('rejects invalid incoming %s payload %j',(name,value)=>{
     expect(()=>parsePortableConfig(name as string,bytes(value))).toThrow();
+  });
+  it.each(['dark','light','auto'] as const)('accepts and round-trips theme %s',theme=>{
+    const doc:PortableConfigDocument={name:'appearance.json',value:{theme,baseFontSize:16,cssTheme:''}};
+    expect(parsePortableConfig('appearance.json',bytes(doc.value))).toEqual(doc);
+    expect(parsePortableConfig(doc.name,serializePortableConfig(doc))).toEqual(doc);
+  });
+  it('projects the app default theme auto, maps legacy system to auto, and defaults absent theme to auto',async()=>{
+    const themeOf=async(app:unknown)=>(await projectPortableConfig(source({app}),DEFAULT_SYNC_SCOPE)).find(d=>d.name==='appearance.json')!.value as {theme:string};
+    expect((await themeOf({theme:'auto'})).theme).toBe('auto');
+    expect((await themeOf({theme:'system'})).theme).toBe('auto');
+    expect((await themeOf({})).theme).toBe('auto');
+    await expect(themeOf({theme:'purple'})).rejects.toThrow();
+  });
+  it('projects daily-notes on disk lacking enabled with enabled true',async()=>{
+    const out=await projectPortableConfig(source({'daily-notes':{folder:'J',format:'YYYY-MM-DD',template:''}}),DEFAULT_SYNC_SCOPE);
+    expect(out.find(d=>d.name==='daily-notes.json')!.value).toEqual({enabled:true,folder:'J',format:'YYYY-MM-DD',template:''});
+  });
+  it('passes theme auto unchanged to the appearance owner',async()=>{
+    const callbacks=owners(); const document:PortableConfigDocument={name:'appearance.json',value:{theme:'auto',baseFontSize:16,cssTheme:''}};
+    await applyPortableConfig(document,callbacks); expect(callbacks.applyAppearance).toHaveBeenCalledWith({theme:'auto',baseFontSize:16,cssTheme:''});
   });
   it('rejects malformed JSON and malformed UTF8',()=>{
     expect(()=>parsePortableConfig('editor.json',encoder.encode('{').buffer)).toThrow();
