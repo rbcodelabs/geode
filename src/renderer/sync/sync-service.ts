@@ -315,6 +315,8 @@ export class SyncService extends Events implements SyncApi {
   }
   private summarize(value: HistoryPreview): SyncPreview {
     this.details = value;
+    // The blocked-file list is easy to miss on a phone layout; keep it in the device log so it can be read from a connected Mac.
+    if (value.blocked.length) console.log("[sync] blocked:", JSON.stringify(value.blocked.slice(0, 50)));
     const outstanding = value.uploads + value.downloads + value.deletions;
     const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length;
     // Per-file detail (path + reason for each blocked item) lives on `details.blocked`,
@@ -349,14 +351,16 @@ export class SyncService extends Events implements SyncApi {
     const shown = this.details;
     const result = this.summarize(await this.withController(async (controller, signal, rails) => {
       if (rails) {
-        // Rail (b), before anything is applied. An approved device is re-planned (a preview cannot move its approval);
-        // an unapproved one is checked against the plan the user was shown, which run() then verifies by signature,
-        // so the counts judged here are the counts executed.
+        // Rail (b), before anything is applied. An approved device is judged on the very plan run() is about to execute
+        // (beforeExecute, so no separate preview walk of the vault); an unapproved one is checked against the plan the user was
+        // shown, which run() then verifies by signature, so the counts judged here are the counts executed.
         const state = await controller.getState(signal);
-        let plan: Pick<HistoryPreview, "deletions" | "uploads" | "downloads" | "signature"> | undefined;
-        if (!state.pendingBatch?.length) plan = state.approved ? await controller.preview(signal) : shown && shown.signature === state.previewSignature ? shown : undefined;
-        const refusal = plan && deleteLimitRefusal(plan, Math.max(rails.stats.found, knownFileCount(state)), rails.overrides);
-        if (refusal) throw refusal;
+        const judge = (plan: Pick<HistoryPreview, "deletions" | "uploads" | "downloads" | "signature">) => {
+          const refusal = deleteLimitRefusal(plan, Math.max(rails.stats.found, knownFileCount(state)), rails.overrides);
+          if (refusal) throw refusal;
+        };
+        if (!state.pendingBatch?.length && !state.approved && shown && shown.signature === state.previewSignature) judge(shown);
+        return controller.run({ ...options, ...(!state.pendingBatch?.length && state.approved ? { beforeExecute: judge } : {}) }, signal);
       }
       return controller.run(options, signal);
     })); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();

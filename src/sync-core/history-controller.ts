@@ -375,6 +375,8 @@ export class HistoryController {
         throw new Error('Resume pending sync before preview'); const plan = await this.plan(state, signal); state.previewSignature = plan.preview.signature; state.previewParts = this.lastSignatureParts; await this.save(state, signal); return plan.preview; }); }
     async run(options: {
         approvePreview?: boolean;
+        /** Called with the plan's counts after it is approved and before anything is executed; throw to refuse the run. Saves a separate preview pass for callers that only wanted the counts. */
+        beforeExecute?: (plan: Pick<HistoryPreview, 'deletions' | 'uploads' | 'downloads' | 'signature'>) => void | Promise<void>;
     }, signal: AbortSignal): Promise<HistoryPreview> {
         return this.exclusive(signal, async () => {
             const state = await this.load(signal);
@@ -386,8 +388,16 @@ export class HistoryController {
                 console.error('[sync] preview mismatch; differing parts:', JSON.stringify(Object.keys({ ...was, ...now }).filter(k => was[k] !== now[k]).map(k => [k, was[k], now[k]])), 'approvePreview=', options.approvePreview);
                 throw new Error('Preview this exact sync before approving it');
             }
+            await options.beforeExecute?.(plan.preview);
+            const wasApproved = state.approved;
             state.approved = true;
             delete state.previewSignature;
+            // Idle fast path: an approved device whose plan holds no action and no adoption has nothing to execute, and the
+            // re-plan after executing would be this same plan again (same snapshot, same history). Skip the second walk of the vault.
+            if (wasApproved && !plan.actions.length && !Object.keys(plan.adoptions).length) {
+                await this.save(state, signal);
+                return plan.preview;
+            }
             const demoted = await this.execute(state, plan, signal);
             const after = await this.plan(state, signal, 'finalizing');
             // Demotions describe what this run skipped, and the re-plan cannot

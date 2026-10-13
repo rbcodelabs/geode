@@ -1,9 +1,10 @@
 import { registerPlugin, type Plugin, type PluginListenerHandle } from "@capacitor/core";
-import { VaultAccessError, type HostServices, type VaultAccessState, type VaultEvent, type VaultFileEntry } from "./contracts";
+import { VaultAccessError, type HashCacheService, type HostServices, type VaultAccessState, type VaultEvent, type VaultFileEntry } from "./contracts";
 import type { PluginFileSet } from "./contracts";
 import { assertValidThemeId } from "../../shared/theme-id";
 import type { SyncVaultPathIssue } from "../../sync-core/ports";
 import { SyncBlockedError } from "../../sync-core/ports";
+import { createPrivateHashCache } from "./private-hash-cache";
 import { readPrivateBinary, readVaultBinary, writePrivateBinary, writeVaultBinary } from "./chunked-binary";
 import { createMobileSyncSafety, type MobileSyncPorts, type NativeStat } from "./mobile-sync-safety";
 
@@ -115,6 +116,19 @@ function vaultAccessError(error: unknown, id: string): never {
 }
 
 /** Guarded sync over the native plugin; absent (so history sync stays refused) when the native build lacks the primitives. */
+function privatePorts(plugin: ManagedVaultPlugin): MobileSyncPorts["privateStore"] | undefined {
+  const { syncPrivateWrite, syncPrivateRead, syncPrivateList, syncPrivateRemove } = plugin;
+  if (!syncPrivateWrite || !syncPrivateRead || !syncPrivateList || !syncPrivateRemove) return undefined;
+  const native = plugin as Required<Pick<ManagedVaultPlugin, "syncPrivateWrite" | "syncPrivateRead">> & ManagedVaultPlugin;
+  return {
+    write: (path, data) => writePrivateBinary(native, path, data),
+    read: (path) => readPrivateBinary(native, path),
+    list: async (path) => (await syncPrivateList.call(plugin, { path })).entries,
+    remove: async (path, recursive) => { await syncPrivateRemove.call(plugin, { path, recursive }); },
+    availableBytes: async () => plugin.syncPrivateAvailableBytes ? (await plugin.syncPrivateAvailableBytes()).bytes : null,
+  };
+}
+
 function createCapacitorSyncSafety(plugin: ManagedVaultPlugin, portable: HostServices, rootId: () => string | null): HostServices["syncSafety"] {
   const { stat, writeBinary, syncPrivateWrite, syncPrivateRead, syncPrivateList, syncPrivateRemove } = plugin;
   if (!stat || !writeBinary || !syncPrivateWrite || !syncPrivateRead || !syncPrivateList || !syncPrivateRemove) return undefined;
@@ -150,7 +164,12 @@ function createKeychainSecrets(plugin: ManagedVaultPlugin): NonNullable<HostServ
   };
 }
 
-export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostServices): HostServices {
+export interface CapacitorHostOptions {
+  /** Test seam: replaces the private-store-backed sync hash cache. */
+  hashCache?: (rootId: () => string | null) => HashCacheService;
+}
+
+export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostServices, options: CapacitorHostOptions = {}): HostServices {
   let opened = false;
   let activeRoot: string | null = null;
   const requireOpen = () => {
@@ -162,10 +181,14 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
 
   const syncSafety = createCapacitorSyncSafety(plugin, portable, () => activeRoot);
   const appSecrets = createKeychainSecrets(plugin);
+  // Only where guarded sync exists (the cache serves the append-only engine alone).
+  const privateStore = syncSafety ? privatePorts(plugin) : undefined;
+  const hashCache = options.hashCache ? options.hashCache(() => activeRoot) : privateStore ? createPrivateHashCache(privateStore, () => activeRoot) : undefined;
 
   return {
     ...portable,
     ...(syncSafety ? { syncSafety } : {}),
+    ...(hashCache && syncSafety ? { hashCache } : {}),
     ...(appSecrets ? { secrets: { ...portable.secrets, appAvailable: true, app: appSecrets } } : {}),
     capabilities: Object.freeze({ ...portable.capabilities, externalVaultFolder: true }),
     runtime: {

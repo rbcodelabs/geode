@@ -315,6 +315,24 @@ ported, not shared:
   children of the parent) instead of rebuilt for the whole vault. Recovery of an interrupted batch reads only the journals the
   batch names, once each, and startup GC no longer reads journals it was told to keep. Counted in tests: 120 applies cost 120
   full-vault native list calls before and 0 after. Not verified on a device or in the real editor UI.
+* **An idle cycle is O(1) bridge calls.** The phone used to read and SHA-256 every local file three times per run (the rail
+  preview, the plan, the re-plan), because the mobile host had no hash cache. Now (a) `createPrivateHashCache`
+  (src/renderer/host/private-hash-cache.ts) keeps `path -> {size, mtime, sha256, provider}` in the private store, one document per
+  vault, held in memory after the first read and rewritten only when a cycle changed a row; (b) `controller.run` accepts
+  `beforeExecute`, so the delete-limit rail judges the plan run() executes instead of a separate preview, and an approved device
+  whose plan holds no action and no adoption returns without the second walk. Counted at 300 and 3,000 files: readBinary 900 per
+  idle cycle (3 per file) and 3 native `list` calls before; 0 and 2 after, total 6 calls regardless of vault size.
+  **Reuse rule** (unchanged engine rule, now active on the phone): a cached hash is used only if size and mtime equal the row
+  exactly, the row was written by the same provider, and the mtime is at least 2 s old (a file written or touched inside the
+  window is read every cycle until it ages out). Anything else, including a missing, unreadable or version-mismatched cache, is a
+  cold miss: read and hash. **Residual risk:** a file whose bytes change while size AND mtime stay identical (`touch -r`, a restore
+  that preserves mtime, a tool that writes in place and resets the clock) is not noticed by the scan until its stat tuple changes.
+  Every apply over such a path still reads the real bytes and checks the hash guard, so a remote change cannot overwrite it
+  blindly; the cost is a delayed upload of that edit. ctime is not used: on iOS it is the creation date and does not move on edit.
+  After an upgrade there are no rows, so the first cycle hashes everything once. Files just written by a sync are read once on the
+  next cycle (their mtime is "now"), then cached. The remote scan is already incremental by cursor. What stays O(files) is
+  in-memory JS (history derivation and planning) and the one listing; neither crosses the bridge per file. Journals are read only
+  for a pending batch (by id), and startup GC reads only journals it was not told to keep, so a clean device reads none.
 * Rails (deletion cap, shrunk-scan guard, first-run approval) are evaluated by `SyncService` exactly as on desktop.
   The phone settings rows are laid out one full-width, touch-sized field per row.
 

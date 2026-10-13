@@ -25,6 +25,14 @@ export class FakeManagedVault {
   /** Changes made by "another app" (Files, iCloud) at a chosen moment. */
   beforeStat?: (path: string) => void;
   mtime = 1000;
+  /** Per-file modification times for files written through the plugin or touched; other files report the current `mtime`. */
+  readonly fileMtimes = new Map<string, number>();
+  /** A file changed behind sync's back (Files app, another app): new bytes, and optionally a new mtime. */
+  edit(path: string, bytes: string | Uint8Array, mtime?: number): this {
+    this.files.set(path, typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes);
+    if (mtime !== undefined) this.fileMtimes.set(path, mtime);
+    return this;
+  }
   /** The native single-call payload cap, and the cap on a whole chunked file. */
   bridgeLimit = 32 * 1024 * 1024;
   readonly syncFileLimit = 100 * 1024 * 1024;
@@ -40,14 +48,14 @@ export class FakeManagedVault {
     const parentOf = (path: string) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
     const hasFolder = (path: string) => path === "" || this.folders.has(path);
     const has = (path: string) => this.files.has(path) || this.folders.has(path);
-    const entry = (path: string) => ({ path, isFolder: this.folders.has(path), mtime: this.mtime, ctime: 1, size: this.files.get(path)?.byteLength ?? 0 });
+    const entry = (path: string) => ({ path, isFolder: this.folders.has(path), mtime: this.fileMtimes.get(path) ?? this.mtime, ctime: 1, size: this.files.get(path)?.byteLength ?? 0 });
     const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
     const privateOk = (path: string) => { if (!path || path.startsWith("/") || path.split("/").some(part => !part || part === "." || part === "..")) fail("INVALID_PATH"); };
     const writeFile = (path: string, bytes: Uint8Array) => {
       this.beforeWrite?.(path);
       if (!hasFolder(parentOf(path))) fail("NOT_FOUND");
       if (this.folders.has(path)) fail("IO_FAILURE");
-      this.files.set(path, bytes); this.mtime++;
+      this.files.set(path, bytes); this.fileMtimes.set(path, ++this.mtime);
     };
     const plugin = {
       chooseExternalVault: async () => ({ id: null }),
