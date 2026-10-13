@@ -3,6 +3,11 @@ name: iOS TestFlight
 # Builds the Capacitor iOS app, signs it with cloud-managed distribution signing
 # (App Store Connect API key, no certificate handling here) and uploads it to
 # TestFlight. Run manually or push a tag like ios-v0.25.0 (must match package.json).
+#
+# Signing uses its own App Store Connect API key (environment secrets IOS_APP_STORE_KEY_BASE64,
+# IOS_APP_STORE_KEY_ID, IOS_APP_STORE_ISSUER). Cloud-managed distribution signing needs a key with
+# enough permissions to create certificates and profiles (Admin), which is more than the desktop
+# release's notarization key needs, so the two are deliberately separate secrets.
 on:
   push:
     tags: ["ios-v*"]
@@ -75,20 +80,20 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
       - name: Export, sign, and (optionally) upload to TestFlight
         env:
-          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          IOS_APP_STORE_KEY_BASE64: ${{ secrets.IOS_APP_STORE_KEY_BASE64 }}
+          IOS_APP_STORE_KEY_ID: ${{ secrets.IOS_APP_STORE_KEY_ID }}
+          IOS_APP_STORE_ISSUER: ${{ secrets.IOS_APP_STORE_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
         run: |
           set -euo pipefail
-          for name in APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID; do
+          for name in IOS_APP_STORE_KEY_BASE64 IOS_APP_STORE_KEY_ID IOS_APP_STORE_ISSUER APPLE_TEAM_ID; do
             [[ -n "${!name:-}" ]] || { echo "Missing required secret: $name" >&2; exit 1; }
           done
           [[ "$APPLE_TEAM_ID" == "6M8F464WCQ" ]] || { echo "APPLE_TEAM_ID does not match the team pinned in ios/ExportOptions.plist" >&2; exit 1; }
-          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          key_path="$RUNNER_TEMP/AuthKey_${IOS_APP_STORE_KEY_ID}.p8"
           trap 'rm -f "$key_path"' EXIT
-          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$key_path"
+          printf '%s' "$IOS_APP_STORE_KEY_BASE64" | base64 -D > "$key_path"
           chmod 600 "$key_path"
 
           options="$RUNNER_TEMP/ExportOptions.plist"
@@ -103,8 +108,8 @@ jobs:
             -exportOptionsPlist "$options" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$key_path" \
-            -authenticationKeyID "$APPLE_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APPLE_API_ISSUER"
+            -authenticationKeyID "$IOS_APP_STORE_KEY_ID" \
+            -authenticationKeyIssuerID "$IOS_APP_STORE_ISSUER"
       - name: Upload ipa artifact
         if: env.DO_UPLOAD != 'true'
         uses: actions/upload-artifact@v4
