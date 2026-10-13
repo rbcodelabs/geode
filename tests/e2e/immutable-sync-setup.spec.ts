@@ -58,7 +58,13 @@ test("immutable setup requires explicit create and preview through real settings
       )
       .toBeGreaterThanOrEqual(240);
     expect(await modal.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-    await expect(setup.getByRole('button', { name: 'Create shared vault', exact: true })).toBeVisible();
+    // Once a vault is bound the create/join choices fold away behind "Change shared vault". The tab re-renders
+    // asynchronously, so retry the open-then-assert as one unit rather than holding a possibly detached handle.
+    await expect(async () => {
+      const change = setup.getByRole('button', { name: 'Change shared vault' });
+      if (await change.count() && (await change.getAttribute('aria-expanded')) !== 'true') await change.click();
+      await expect(setup.getByRole('button', { name: 'Create shared vault', exact: true })).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10000 });
     await page.screenshot({ path: info.outputPath("immutable-setup-small.png") });
     await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: info.outputPath("immutable-setup-large.png") });
   } finally { await app.close(); fs.rmSync(vault, { recursive: true, force: true }); fs.rmSync(profile, { recursive: true, force: true }); }

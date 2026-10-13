@@ -128,7 +128,8 @@ import { SyncService } from "./sync/sync-service";
 import { HUB_PROVIDER_ID, HubSyncProvider, describeHubTarget } from "./sync/hub-provider";
 import { formatSyncFeedback, renderSyncFeedback } from "./sync/feedback";
 import { describeSyncProgress } from "./sync/progress";
-import type { SyncPreview, SyncStatusProgress } from "./sync/types";
+import type { SyncPreview, SyncStatus, SyncStatusProgress } from "./sync/types";
+import { describeSyncCard, type SyncCardInput, type SyncCardPrimary } from "./sync/status-card";
 import { stripCommentMetadata } from "./comments/model";
 import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
 import { applyThemeWithFade, normalizeThemeSetting, osPrefersDark, resolveTheme, watchOsAppearance, type ThemeSetting } from "./color-scheme";
@@ -956,6 +957,8 @@ class SettingsModal extends Modal {
       for (const { id, label } of sectionsByPlugin.get(pluginId)!) addNavItem(id, label, group);
     }
     this.navEl.scrollTop = scrollTop;
+    // On phones the tab strip scrolls sideways and is rebuilt on every activation, which resets it: bring the active tab back into view.
+    if (document.body.classList.contains("is-mobile")) this.navEl.querySelector<HTMLElement>(".vertical-tab-nav-item.is-active")?.scrollIntoView({ block: "nearest", inline: "center" });
   }
 
   private renderAppearanceTab(container: HTMLElement): void {
@@ -1761,7 +1764,7 @@ class SettingsModal extends Modal {
    * throw away scroll position, button focus and any half-finished interaction,
    * and at 17,251 operations it would be unusable.
    */
-  private renderSyncProgress(container: HTMLElement, generation: number, onBusyChange?: (busy: boolean) => void): { begin: () => void } {
+  private renderSyncProgress(container: HTMLElement, generation: number, onBusyChange?: (busy: boolean) => void, onStatus?: (status: SyncStatus) => void): { begin: () => void } {
     const activity = document.createElement("div");
     activity.className = "sync-progress";
     activity.setAttribute("role", "status");
@@ -1824,6 +1827,7 @@ class SettingsModal extends Modal {
 
     stop = this.geodeApp.sync.on("status", status => {
       if (!live()) { teardown(); return; }
+      onStatus?.(status);
       paint(status.progress);
     });
     this.stopSyncProgress = teardown;
@@ -1875,9 +1879,15 @@ class SettingsModal extends Modal {
   /** Location (folder, ssh host or HTTPS URL + token) and create-if-missing for the built-in hub provider (docs/design/app-hub-sync-provider.md). */
   private renderHubConfigRows(container: HTMLElement, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
     const provider = this.geodeApp.hubSyncProvider; if (!provider) return;
-    const row = this.addRow(container, "Hub location", "A folder (local, network or cloud-synced), an ssh host and path, or the HTTPS URL of a hub started with `geode-wiki sync serve --http`. This is the same store `geode-wiki sync` uses; ssh runs non-interactively with your ~/.ssh/config. The HTTPS token is kept in secure storage on this device only. Changes save automatically.");
-    row.control.parentElement?.classList.add("sync-wrapped-setting");
-    const field = (label: string, input: HTMLElement) => { const wrap = document.createElement("label"); wrap.className = "sync-hub-field"; const text = document.createElement("span"); text.textContent = label + " "; wrap.append(text, input); return wrap; };
+    const row = this.addRow(container, "Hub location", "Step 1 of 2. The hub is where the shared copy of your vault lives: a folder, an SSH host, or an HTTPS hub started with `geode-wiki sync serve --http`. Everything you type here saves automatically.");
+    row.control.parentElement?.classList.add("sync-stacked-setting");
+    const field = (label: string, input: HTMLElement, help?: string) => {
+      const wrap = document.createElement("label"); wrap.className = "sync-field";
+      const text = document.createElement("span"); text.className = "sync-field-label"; text.textContent = label;
+      wrap.append(text, input);
+      if (help) { const note = document.createElement("span"); note.className = "sync-field-help"; note.textContent = help; wrap.append(note); }
+      return wrap;
+    };
     const kind = document.createElement("select"); kind.setAttribute("aria-label", "Hub type");
     const kindLabels = { fs: "Folder", ssh: "SSH host", http: "HTTPS hub" } as const;
     for (const supported of provider.supportedKinds) kind.append(new Option(kindLabels[supported], supported));
@@ -1885,15 +1895,17 @@ class SettingsModal extends Modal {
     const path = document.createElement("input"); path.type = "text"; path.setAttribute("aria-label", "Hub store path"); path.placeholder = "/path/to/hub";
     const url = document.createElement("input"); url.type = "url"; url.setAttribute("aria-label", "Hub URL"); url.placeholder = "https://my-box.tailnet-name.ts.net"; url.autocomplete = "off"; url.spellcheck = false;
     const token = document.createElement("input"); token.type = "password"; token.setAttribute("aria-label", "Hub token"); token.placeholder = "Hub token"; token.autocomplete = "off"; token.spellcheck = false;
-    const hostField = field("SSH host", host), typeField = field("Hub type", kind), pathField = field("Hub path", path), urlField = field("Hub URL", url), tokenField = field("Token", token);
-    const secureNote = document.createElement("div"); secureNote.className = "setting-item-description"; secureNote.setAttribute("data-hub-secure-storage", "");
+    const hostField = field("SSH host", host, "Runs non-interactively using your ~/.ssh/config, so a host alias works."), typeField = field("Where is the hub?", kind), pathField = field("Folder path", path, "A local, network or cloud-synced folder. The same store `geode-wiki sync` uses."), urlField = field("Hub URL", url), tokenField = field("Token", token, "Kept in secure storage on this device only, never in the vault.");
+    const pathLabel = pathField.querySelector<HTMLElement>(".sync-field-label")!;
+    const secureNote = document.createElement("div"); secureNote.className = "sync-field-help"; secureNote.setAttribute("data-hub-secure-storage", "");
     if (!provider.canStoreToken) { token.disabled = true; secureNote.textContent = "Secure storage is unavailable on this device, so an HTTPS hub cannot be used here. The token is never kept in the vault or in app settings."; }
     const createLabel = document.createElement("label"); const create = document.createElement("input"); create.type = "checkbox"; create.setAttribute("aria-label", "Create the hub if it is missing");
     createLabel.append(create, " Create the hub if it is missing");
     const save = document.createElement("button"); save.type = "button"; save.textContent = "Save hub settings";
     const test = document.createElement("button"); test.type = "button"; test.textContent = "Test connection";
-    const result = document.createElement("div"); result.className = "setting-item-description"; result.setAttribute("data-hub-result", "");
-    const syncVisibility = () => { hostField.hidden = kind.value !== "ssh"; pathField.hidden = kind.value === "http"; urlField.hidden = tokenField.hidden = secureNote.hidden = kind.value !== "http"; };
+    const buttons = document.createElement("div"); buttons.className = "sync-setup-buttons"; buttons.append(test, save);
+    const result = document.createElement("div"); result.className = "sync-setup-result"; result.setAttribute("data-hub-result", ""); result.setAttribute("aria-live", "polite");
+    const syncVisibility = () => { const ssh = kind.value === "ssh", http = kind.value === "http"; hostField.hidden = !ssh; pathField.hidden = http; urlField.hidden = tokenField.hidden = secureNote.hidden = !http; pathLabel.textContent = ssh ? "Path on the host" : "Folder path"; };
     kind.addEventListener("change", syncVisibility); syncVisibility();
     trackBusy(host); trackBusy(path); trackBusy(url); trackBusy(create); trackBusy(save); trackBusy(test);
     if (provider.canStoreToken) trackBusy(token);
@@ -1937,10 +1949,10 @@ class SettingsModal extends Modal {
     test.addEventListener("click", () => {
       result.textContent = "Connecting...";
       void this.hubConfigSettle!().then(() => provider.probe(new AbortController().signal)).then(({ vaults, detail }) => {
-        result.textContent = (vaults.length ? `Connected. Hub vault: ${vaults.map(vault => `"${vault.name}"`).join(", ")}. Use Find shared vaults to join it.` : "Connected. The hub holds no vault yet.") + " " + detail;
+        result.textContent = (vaults.length ? `Connected. Hub vault: ${vaults.map(vault => `"${vault.name}"`).join(", ")}. To use it on this device, choose "Join" under Shared vault setup.` : "Connected. The hub holds no vault yet.") + " " + detail;
       }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
     });
-    row.control.append(typeField, hostField, pathField, urlField, tokenField, secureNote, createLabel, save, test, result);
+    createLabel.className = "sync-field-check"; row.control.append(typeField, hostField, pathField, urlField, tokenField, secureNote, createLabel, buttons, result);
   }
 
   /** Explicit first-sync confirmation with the plan counts, and the safety-rail refusal with its one-shot override. */
@@ -1971,6 +1983,91 @@ class SettingsModal extends Modal {
     row.control.appendChild(lift); trackBusy(lift);
   }
 
+  /**
+   * Shared vault setup as two clearly separate choices instead of one row of unrelated controls:
+   * start a new vault (first device) or join one that exists (every other device). Once a vault is
+   * bound the choices fold away, because switching vaults is rare and the controls are just noise.
+   */
+  private renderSharedVaultSetup(container: HTMLElement, ctx: { perform: (action: () => Promise<unknown>, kind?: "preview" | "run") => void; trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void; applyBusyState: () => void; boundVaultName?: string; isHub: boolean }): void {
+    const sync = this.geodeApp.sync;
+    const bound = Boolean(ctx.boundVaultName);
+    const lead = bound
+      ? `This device syncs with "${ctx.boundVaultName}". You rarely need to change this.`
+      : `${ctx.isHub ? "Step 2 of 2. " : ""}Choose how this device gets its vault: start a new shared vault on your first device, or join one that already exists.`;
+    const row = this.addRow(container, "Shared vault setup", lead);
+    row.control.parentElement?.classList.add("sync-stacked-setting");
+    const options = document.createElement("div"); options.className = "sync-option-grid";
+    const option = (title: string, help: string) => {
+      const card = document.createElement("div"); card.className = "sync-option"; card.setAttribute("role", "group"); card.setAttribute("aria-label", title);
+      const heading = document.createElement("div"); heading.className = "sync-option-title"; heading.textContent = title;
+      const note = document.createElement("div"); note.className = "sync-option-help"; note.textContent = help;
+      card.append(heading, note); options.appendChild(card); return card;
+    };
+    // Choice 1: create. The name field belongs to this action only.
+    const create = option("Start a new shared vault", "Use this on your first device. This vault becomes the shared copy that your other devices join.");
+    const nameLabel = document.createElement("label"); nameLabel.className = "sync-field";
+    const nameText = document.createElement("span"); nameText.className = "sync-field-label"; nameText.textContent = "Name for the shared vault";
+    const name = document.createElement("input"); name.type = "text"; name.setAttribute("aria-label", "Shared vault name"); name.placeholder = "e.g. Personal notes";
+    nameLabel.append(nameText, name);
+    const createButton = document.createElement("button"); createButton.type = "button"; createButton.textContent = "Create shared vault"; createButton.classList.add("mod-cta");
+    createButton.addEventListener("click", () => ctx.perform(async () => { await this.hubConfigSettle?.(); return sync.createVault(name.value); }));
+    create.append(nameLabel, createButton);
+    // Choice 2: join. Discovery is an explicit step, and each result carries its own Join button.
+    const join = option("Join an existing shared vault", "Use this on your other devices to download a vault that is already on the hub.");
+    const discover = document.createElement("button"); discover.type = "button"; discover.textContent = "Find shared vaults";
+    const choices = document.createElement("div"); choices.className = "sync-vault-choices"; choices.setAttribute("aria-live", "polite");
+    join.append(discover, choices);
+    ctx.trackBusy(name); ctx.trackBusy(createButton); ctx.trackBusy(discover);
+    discover.addEventListener("click", () => {
+      discover.disabled = true;
+      void (this.hubConfigSettle?.() ?? Promise.resolve()).then(() => sync.discoverVaults()).then(vaults => {
+        choices.replaceChildren();
+        if (!vaults.length) { choices.textContent = "No shared vaults found on this hub yet. Start one from your first device."; return; }
+        for (const vault of vaults) {
+          const line = document.createElement("div"); line.className = "sync-vault-choice";
+          const label = document.createElement("span"); label.textContent = vault.name;
+          const button = document.createElement("button"); button.type = "button"; button.textContent = `Join ${vault.name}`; button.title = vault.vaultId;
+          button.addEventListener("click", () => ctx.perform(() => sync.joinVault(vault)));
+          line.append(label, button); choices.appendChild(line); ctx.trackBusy(button);
+        }
+      // A hard `false` here would re-enable discovery even while a background sync
+      // started mid-discovery — restore the shared busy state instead of a literal value.
+      }).catch(error => { choices.textContent = error instanceof Error ? error.message : "Discovery unavailable"; }).finally(() => ctx.applyBusyState());
+    });
+    const fine = document.createElement("div"); fine.className = "sync-field-help"; fine.textContent = "Experimental immutable history. Files over 100 MiB are blocked; secrets and plugin data are excluded.";
+    if (!bound) { row.control.append(options, fine); return; }
+    const toggle = document.createElement("button"); toggle.type = "button"; toggle.setAttribute("data-keep-enabled", ""); toggle.textContent = "Change shared vault";
+    const wrap = document.createElement("div"); wrap.className = "sync-option-wrap"; wrap.append(options, fine);
+    const paint = (open: boolean) => { toggle.setAttribute("aria-expanded", String(open)); wrap.hidden = !open; };
+    paint(this.syncSectionOpen.get("vault-change") ?? false);
+    toggle.addEventListener("click", () => { const next = toggle.getAttribute("aria-expanded") !== "true"; this.syncSectionOpen.set("vault-change", next); paint(next); });
+    row.control.append(toggle, wrap);
+  }
+
+  private syncSectionOpen = new Map<string, boolean>();
+  /** A collapsible Sync-tab section. The user's own toggle wins over the auto-open default and survives re-renders. */
+  private createSyncSection(parent: HTMLElement, id: string, title: string, autoOpen: boolean) {
+    const section = document.createElement("div"); section.className = "sync-section"; section.dataset.syncSection = id;
+    const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "sync-section-toggle"; toggle.setAttribute("data-keep-enabled", "");
+    const chevron = document.createElement("span"); chevron.className = "sync-section-chevron"; chevron.setAttribute("aria-hidden", "true"); chevron.textContent = "▸";
+    const name = document.createElement("span"); name.className = "sync-section-title"; name.textContent = title;
+    const badge = document.createElement("span"); badge.className = "sync-section-badge"; badge.hidden = true;
+    const summary = document.createElement("span"); summary.className = "sync-section-summary";
+    toggle.append(chevron, name, badge, summary);
+    const body = document.createElement("div"); body.className = "sync-section-body"; body.id = `sync-section-${id}`;
+    toggle.setAttribute("aria-controls", body.id);
+    const paint = (open: boolean) => { toggle.setAttribute("aria-expanded", String(open)); body.hidden = !open; section.classList.toggle("is-open", open); };
+    paint(this.syncSectionOpen.get(id) ?? autoOpen);
+    toggle.addEventListener("click", () => { const next = toggle.getAttribute("aria-expanded") !== "true"; this.syncSectionOpen.set(id, next); paint(next); });
+    section.append(toggle, body); parent.appendChild(section);
+    return {
+      section, body, summary,
+      setOpen: (open: boolean) => { this.syncSectionOpen.set(id, open); paint(open); },
+      openIfUnset: () => { if (!this.syncSectionOpen.has(id)) paint(true); },
+      setBadge: (value: string | number | null, tone: "ok" | "warn" | "bad") => { badge.hidden = value === null || value === ""; badge.textContent = value === null ? "" : String(value); badge.dataset.tone = tone; },
+    };
+  }
+
   private renderSyncTab(container: HTMLElement, summary = ""): void {
     const generation = ++this.syncTabGeneration;
     // innerHTML detaches the previous render's nodes but leaves `container`
@@ -1979,36 +2076,78 @@ class SettingsModal extends Modal {
     this.stopSyncProgress?.();
     this.stopSyncProgress = null;
     container.innerHTML = `<h2>Sync</h2>`;
-    const providers = this.geodeApp.sync.listProviders();
-    const active = this.geodeApp.sync.getActiveProvider();
-    const status = this.geodeApp.sync.getStatus();
+    const sync = this.geodeApp.sync;
+    const providers = sync.listProviders();
+    const active = sync.getActiveProvider();
+    const status = sync.getStatus();
     const isHub = active?.id === HUB_PROVIDER_ID;
     this.hubConfigSettle = undefined;
-    const { control } = this.addRow(container, "Sync provider", active ? `Connected to ${active.name}` : "Select a plugin-provided full-vault transport.");
+    const initialDetails = sync.getHistoryDetails();
+    const boundVaultName = sync.isAppendOnly() ? sync.getBoundVaultName() : undefined;
+    const cardInput = (s: SyncStatus): SyncCardInput => {
+      const details = sync.getHistoryDetails();
+      return { state: s.state, conflicts: s.conflicts || details?.conflicts.length || 0, message: s.message, connected: Boolean(sync.getActiveProvider()), isHub, bound: !sync.isAppendOnly() || Boolean(sync.getBoundVaultName()), requiresApproval: Boolean(details?.requiresApproval), blocked: details?.blocked.length ?? 0, lastSyncedAt: sync.getLastSyncedAt(), now: Date.now() };
+    };
+    const cardView = describeSyncCard(cardInput(status));
+
+    // Status card: the one thing the tab leads with. Headline, last sync, pending counts, live progress and the single next action.
+    const card = document.createElement("div"); card.className = "sync-status-card";
+    const head = document.createElement("div"); head.className = "sync-status-head";
+    const dot = document.createElement("div"); dot.className = "sync-status-dot"; dot.setAttribute("aria-hidden", "true");
+    const textWrap = document.createElement("div"); textWrap.className = "sync-status-text";
+    // Not a heading on purpose: the tab's own "Sync" heading must stay the only one matching that name.
+    const headline = document.createElement("div"); headline.className = "sync-status-headline";
+    const sub = document.createElement("div"); sub.className = "sync-status-sub";
+    textWrap.append(headline, sub);
+    const actions = document.createElement("div"); actions.className = "sync-card-actions";
+    head.append(dot, textWrap, actions);
+    const countsEl = document.createElement("div"); countsEl.className = "sync-status-counts";
+    card.append(head, countsEl);
+    const paintCounts = () => {
+      const details = sync.getHistoryDetails(); const live = sync.getStatus();
+      const chips: Array<[number, string, string?]> = [];
+      if (details) chips.push([details.uploads, "to upload"], [details.downloads, "to download"], [details.deletions, "to delete"]);
+      const conflictCount = live.conflicts || details?.conflicts.length || 0;
+      chips.push([conflictCount, conflictCount === 1 ? "conflict" : "conflicts", "hot"]);
+      countsEl.replaceChildren(...chips.filter(([count]) => count > 0).map(([count, label, tone]) => {
+        const chip = document.createElement("span"); chip.className = "sync-status-count" + (tone ? " mod-" + tone : "");
+        const number = document.createElement("b"); number.textContent = String(count); chip.append(number, " " + label); return chip;
+      }));
+      countsEl.hidden = !countsEl.childElementCount;
+    };
+    const paintCard = (s: SyncStatus) => { const view = describeSyncCard(cardInput(s)); card.dataset.tone = view.tone; headline.textContent = view.headline; sub.textContent = view.sub; paintCounts(); };
+    paintCard(status);
+    container.appendChild(card);
+    // The first-sync plan and any safety-rail refusal sit directly under the card so they are never buried in a section.
+    const planHost = document.createElement("div"); planHost.className = "sync-plan-host"; container.appendChild(planHost);
+
+    const connectionAuto = !active || (sync.isAppendOnly() && (!boundVaultName || status.state === "preview" || status.state === "error" || status.state === "conflict"));
+    const connection = this.createSyncSection(container, "connection", "Connection", connectionAuto);
+    const scopeSection = this.createSyncSection(container, "scope", "What syncs", false);
+    const blockedCount = initialDetails?.blocked.length ?? 0, excludedCount = initialDetails?.excluded.length ?? 0, appendConflictCount = initialDetails?.conflicts.length ?? 0;
+    const issues = this.createSyncSection(container, "issues", "Conflicts & issues", Boolean(status.conflicts || blockedCount || appendConflictCount));
+    let plainConflictCount = 0;
+    const paintIssuesHeader = () => {
+      const conflictTotal = (status.conflicts || appendConflictCount) + (appendConflictCount ? 0 : plainConflictCount > status.conflicts ? plainConflictCount - status.conflicts : 0);
+      const parts = [conflictTotal ? `${conflictTotal} conflict${conflictTotal === 1 ? "" : "s"}` : "", blockedCount ? `${blockedCount} blocked` : "", excludedCount ? `${excludedCount} excluded` : ""].filter(Boolean);
+      issues.summary.textContent = parts.length ? parts.join(" · ") : "Nothing needs attention";
+      issues.setBadge(conflictTotal + blockedCount || null, conflictTotal ? "warn" : "bad");
+    };
+    paintIssuesHeader();
+    connection.summary.textContent = active ? (boundVaultName ? `${active.name} · ${boundVaultName}` : active.name) : "Not connected";
+    connection.setBadge(active ? "Connected" : null, "ok");
+
+    const { control } = this.addRow(connection.body, "Sync provider", active ? `Connected to ${active.name}` : "Select a plugin-provided full-vault transport.");
     const select = document.createElement("select");
     select.setAttribute("aria-label", "Sync provider");
     select.append(new Option("Not connected", ""), ...providers.map(provider => new Option(provider.name, provider.id)));
     select.value = active?.id ?? "";
-    select.addEventListener("change", () => { void (select.value ? this.geodeApp.sync.activate(select.value) : this.geodeApp.sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
+    select.addEventListener("change", () => { void (select.value ? sync.activate(select.value) : sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
     control.appendChild(select);
     // The provider row above names the transport (e.g. "Google Drive (managed vault)"); the
     // bound shared vault has its own name, only meaningful on the append-only/history path.
-    if (this.geodeApp.sync.isAppendOnly()) { const boundVaultName = this.geodeApp.sync.getBoundVaultName(); if (boundVaultName) this.addRow(container, "Vault", `Bound to shared vault "${boundVaultName}"`); }
-    const statusRow = this.addRow(container, "Status", status.message ?? status.state);
-    statusRow.control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
-    const blockedNow = this.geodeApp.sync.getHistoryDetails()?.blocked.length ?? 0;
-    if (blockedNow && statusRow.description) statusRow.description.textContent = `${status.message ?? status.state}. Each file and the reason is listed under Blocked below.`;
-    // Before a shared vault is bound the engine's "preview" state reads oddly; say what is actually needed.
-    if (isHub && status.state === "preview" && !this.geodeApp.sync.getBoundVaultName()) {
-      statusRow.control.textContent = "Setup needed";
-      if (statusRow.description) statusRow.description.textContent = "Choose a hub location below, then create or join a shared vault.";
-    }
-    // A long description (still possible via the per-reason groups below) must not sit
-    // beside the short control text at the row's vertical center — that is exactly the
-    // overlap the multi-file blocked-list bug produced. Wrapping lets the control drop
-    // below instead of floating across wrapped lines.
-    statusRow.control.parentElement?.classList.add("sync-wrapped-setting");
-    if (summary) renderSyncFeedback(container, summary);
+    if (boundVaultName) this.addRow(connection.body, "Vault", `Bound to shared vault "${boundVaultName}"`);
+    if (summary) renderSyncFeedback(card, summary);
     // Two independent things disable these controls: a background sync tick the user
     // didn't trigger from this panel (backgroundBusy) and an in-flight perform() click
     // (performBusy). Either can end while the other is still true, so a control is only
@@ -2022,7 +2161,7 @@ class SettingsModal extends Modal {
     // already in flight lands on a late-created button too, not just the ones present when
     // this function started.
     const trackBusy = (el: HTMLButtonElement | HTMLInputElement, defaultDisabled = false) => { busyControls.push({ el, defaultDisabled }); applyBusyState(); };
-    const showProgress = this.renderSyncProgress(container, generation, busy => { backgroundBusy = busy; applyBusyState(); });
+    const showProgress = this.renderSyncProgress(card, generation, busy => { backgroundBusy = busy; applyBusyState(); }, paintCard);
     // The panel draws once; without this a finished run left "disconnected" (the launch default) on screen until the tab was
     // reopened. Redraw (debounced, never while a field is being edited) when the visible status changes, and stop with the
     // progress subscription whenever the tab is left, redrawn or the modal closes.
@@ -2036,10 +2175,9 @@ class SettingsModal extends Modal {
       });
       this.stopSyncProgress = () => { stopProgress?.(); stopStatus(); };
     }
-    const actions = document.createElement("div"); actions.className = "setting-item-control";
     const perform = (action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => {
       performBusy = true;
-      container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button,input,select").forEach(control => { control.disabled = true; });
+      container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button:not([data-keep-enabled]),input,select").forEach(control => { control.disabled = true; });
       // Disabled buttons alone say nothing about whether work is happening. Paint
       // the activity surface on click, before the first tick can possibly arrive,
       // so the panel is never blank while an action is in flight.
@@ -2051,45 +2189,39 @@ class SettingsModal extends Modal {
       }).catch(error => { summary = error instanceof Error ? error.message : String(error); this.geodeApp.notify(summary); })
         .finally(() => { performBusy = false; if (container.isConnected) this.renderSyncTab(container, summary); });
     };
-    const addAction = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); trackBusy(button, !active); };
+    const addActionButton = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); trackBusy(button, !active); return button; };
     const hubPlan = isHub ? this.geodeApp.sync.getHistoryDetails() : undefined;
-    addAction("Preview", () => this.geodeApp.sync.preview());
+    const navButton = (label: string, onClick: () => void) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.setAttribute("data-keep-enabled", ""); button.addEventListener("click", onClick); actions.appendChild(button); return button; };
+    const primary: SyncCardPrimary = cardView.primary;
+    // Hub: a bound vault waiting on its first preview needs Preview, never a bare approval.
+    const wantsPreview = isHub && status.state === "preview" && !hubPlan?.requiresApproval;
+    let emphasised: HTMLButtonElement | undefined;
+    if (primary === "setup") emphasised = navButton("Set up sync", () => { connection.setOpen(true); (isHub && boundVaultName === undefined ? connection.body.querySelector<HTMLElement>("input,select") : select)?.focus(); connection.section.scrollIntoView({ block: "nearest" }); });
+    else if (primary === "resolve") emphasised = navButton("Resolve conflicts", () => { issues.setOpen(true); issues.section.scrollIntoView({ block: "nearest" }); issues.body.querySelector<HTMLElement>("button")?.focus(); });
+    else if (primary === "review") emphasised = navButton("Review plan", () => { const plan = planHost.querySelector<HTMLElement>("[data-hub-plan]"); plan?.scrollIntoView({ block: "nearest" }); plan?.querySelector<HTMLElement>("button")?.focus(); });
+    const firstAction = (...labels: string[]) => labels.map(label => [...actions.querySelectorAll("button")].find(button => button.textContent === label)).find(Boolean) as HTMLButtonElement | undefined;
+    addActionButton("Preview", () => this.geodeApp.sync.preview());
     // The hub provider never offers a bare "Approve": the first run is confirmed from the plan counts shown below.
-    if (!isHub) addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
-    else if (!hubPlan?.requiresApproval && status.state !== "paused" && status.state !== "preview") addAction("Sync now", () => this.geodeApp.sync.run(), 'run');
-    addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
-    container.appendChild(actions);
-    if (isHub) this.renderHubPlanRows(container, perform, trackBusy);
+    if (!isHub) addActionButton("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
+    else if (!hubPlan?.requiresApproval && status.state !== "paused" && status.state !== "preview") addActionButton("Sync now", () => this.geodeApp.sync.run(), 'run');
+    addActionButton(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
+    if (!emphasised) emphasised = primary === "resume" ? firstAction("Resume") : primary === "approve" ? firstAction("Approve & sync") : primary === "sync" || primary === "retry" ? firstAction("Sync now", "Approve & sync") : undefined;
+    if (!emphasised && wantsPreview) emphasised = firstAction("Preview");
+    emphasised?.classList.add("mod-cta");
+    if (isHub) this.renderHubPlanRows(planHost, perform, trackBusy);
     // Blocked/excluded files are structured detail on getHistoryDetails(), which is the only
     // place any provider reports per-file rejection reasons today — the plain/conditional
     // sync path (coordinator.ts) has no equivalent list, only an aggregate skipped count.
     // Rendered unconditionally (not gated on isAppendOnly()) so leftover detail from a sync
     // that just errored out is never silently dropped from view.
     const details = this.geodeApp.sync.getHistoryDetails();
-    this.renderSyncIssueGroups(container, "Blocked", details?.blocked ?? []);
-    this.renderSyncIssueGroups(container, "Excluded", details?.excluded ?? []);
-    if (isHub) this.renderHubConfigRows(container, trackBusy);
+    this.renderSyncIssueGroups(issues.body, "Blocked", details?.blocked ?? []);
+    this.renderSyncIssueGroups(issues.body, "Excluded", details?.excluded ?? []);
+    if (isHub) this.renderHubConfigRows(connection.body, trackBusy);
     if (this.geodeApp.sync.isAppendOnly()) {
-      const setup = this.addRow(container, "Shared vault setup", "Experimental immutable history. Create a new shared vault or explicitly join an existing one. Files over 100 MiB are blocked; secrets and plugin data are excluded.");
-      setup.control.parentElement?.classList.add("sync-wrapped-setting");
-      const name = document.createElement("input"); name.type = "text"; name.setAttribute("aria-label", "Shared vault name"); name.placeholder = "Shared vault name";
-      const create = document.createElement("button"); create.type = "button"; create.textContent = "Create shared vault"; create.addEventListener("click", () => perform(async () => { await this.hubConfigSettle?.(); return this.geodeApp.sync.createVault(name.value); }));
-      const discover = document.createElement("button"); discover.type = "button"; discover.textContent = "Find shared vaults";
-      trackBusy(name); trackBusy(create); trackBusy(discover);
-      const choices = document.createElement("div");
-      discover.addEventListener("click", () => {
-        discover.disabled = true;
-        void (this.hubConfigSettle?.() ?? Promise.resolve()).then(() => this.geodeApp.sync.discoverVaults()).then(vaults => {
-          choices.replaceChildren();
-          if (!vaults.length) choices.textContent = "No accessible shared vaults found.";
-          for (const vault of vaults) { const join = document.createElement("button"); join.type = "button"; join.textContent = `Join ${vault.name}`; join.title = vault.vaultId; join.addEventListener("click", () => perform(() => this.geodeApp.sync.joinVault(vault))); choices.appendChild(join); trackBusy(join); }
-        // A hard `false` here would re-enable discovery even while a background sync
-        // started mid-discovery — restore the shared busy state instead of a literal value.
-        }).catch(error => { choices.textContent = error instanceof Error ? error.message : "Discovery unavailable"; }).finally(() => applyBusyState());
-      });
-      setup.control.append(name, create, discover, choices);
+      this.renderSharedVaultSetup(connection.body, { perform, trackBusy, applyBusyState, boundVaultName, isHub });
       if (status.state === "error") {
-        const recovery = this.addRow(container, "Pending recovery", "Stopping retries preserves frozen bytes and preimages. This does not undo remote records that may already be published; review the new preview before continuing.");
+        const recovery = this.addRow(connection.body, "Pending recovery", "Stopping retries preserves frozen bytes and preimages. This does not undo remote records that may already be published; review the new preview before continuing.");
         recovery.control.parentElement?.classList.add("sync-wrapped-setting");
         const stop = document.createElement("button"); stop.type = "button"; stop.textContent = "Stop pending retries & preview"; stop.addEventListener("click", () => perform(() => this.geodeApp.sync.abandonPending())); recovery.control.appendChild(stop); trackBusy(stop);
       }
@@ -2103,7 +2235,7 @@ class SettingsModal extends Modal {
       // silently keeping the older workflow.
       const appendOnlyConflicts = details?.conflicts ?? [];
       const conflictRows = appendOnlyConflicts.map(conflict => {
-        const row = this.addRow(container, conflict.path, planConflictRow(conflict, null).description);
+        const row = this.addRow(issues.body, conflict.path, planConflictRow(conflict, null).description);
         row.control.parentElement?.classList.add("sync-wrapped-setting");
         const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep local"; keep.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "current" } }))); row.control.appendChild(keep); trackBusy(keep);
         for (const recordId of conflict.heads) { const accept = document.createElement("button"); accept.type = "button"; accept.textContent = `Accept version ${recordId.slice(0, 8)}`; accept.title = recordId; accept.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "version", recordId } }))); row.control.appendChild(accept); trackBusy(accept); }
@@ -2140,9 +2272,11 @@ class SettingsModal extends Modal {
     // moment it registers, but a final pass here is cheap and guards against any control
     // above that was pushed before backgroundBusy's first callback landed.
     applyBusyState();
-    const conflictContainer = document.createElement("div"); container.appendChild(conflictContainer);
+    const conflictContainer = document.createElement("div"); issues.body.appendChild(conflictContainer);
     void this.geodeApp.sync.listConflicts().then(conflicts => {
       if (!conflictContainer.isConnected || this.geodeApp.sync.isAppendOnly()) return;
+      plainConflictCount = conflicts.length; paintIssuesHeader();
+      if (conflicts.length) issues.openIfUnset();
       for (const conflict of conflicts) {
         const row = this.addRow(conflictContainer, conflict.path, conflict.conflictPath ? `Remote copy: ${conflict.conflictPath}. Keep local sends your current version; Accept remote restores the remote version. Copies are retained for recovery.` : "Deleted remotely. Keep local uploads this file again; Accept remote moves the local file to trash.");
         row.control.parentElement?.setAttribute("data-sync-conflict", conflict.id);
@@ -2153,20 +2287,30 @@ class SettingsModal extends Modal {
       }
     }).catch(error => this.geodeApp.notify(String(error)));
     void this.geodeApp.sync.getScope().then(scope => {
-      const labels: Array<[keyof typeof scope, string]> = [
-        ["markdown", "Notes and Canvas/Base files"], ["images", "Images"], ["audio", "Audio"], ["video", "Video"], ["pdfs", "PDFs"], ["other", "Other file types"],
-        ["mainSettings", "Main settings"], ["appearance", "Appearance"], ["themesAndSnippets", "Themes and snippets"], ["hotkeys", "Hotkeys"], ["corePlugins", "Core plugin settings"],
-        ["communityPlugins", "Installed community plugins"], ["communityPluginData", "Community plugin data"],
+      const groups: Array<[string, Array<[keyof typeof scope, string]>]> = [
+        ["Files", [["markdown", "Notes and Canvas/Base files"], ["images", "Images"], ["audio", "Audio"], ["video", "Video"], ["pdfs", "PDFs"], ["other", "Other file types"]]],
+        ["App settings", [["mainSettings", "Main settings"], ["appearance", "Appearance"], ["themesAndSnippets", "Themes and snippets"], ["hotkeys", "Hotkeys"], ["corePlugins", "Core plugin settings"]]],
+        ["Plugins", [["communityPlugins", "Installed community plugins"], ["communityPluginData", "Community plugin data"]]],
       ];
-      for (const [key, label] of labels) {
-        const { control: scopeControl } = this.addRow(container, label, "Device-local selective sync setting.");
-        const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = Boolean(scope[key]);
-        if (this.geodeApp.sync.isAppendOnly() && (key === "communityPlugins" || key === "communityPluginData")) { checkbox.disabled = true; checkbox.checked = false; }
-        checkbox.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ [key]: checkbox.checked }).catch(error => this.geodeApp.notify(String(error))); });
-        scopeControl.appendChild(checkbox);
+      const boxes: HTMLInputElement[] = [];
+      const scopeNote = document.createElement("div"); scopeNote.className = "sync-field-help sync-scope-note"; scopeNote.textContent = "These choices apply to this device only.";
+      scopeSection.body.appendChild(scopeNote);
+      const paintScopeSummary = () => { scopeSection.summary.textContent = `${boxes.filter(box => box.checked).length} of ${boxes.length} syncing`; };
+      for (const [groupName, items] of groups) {
+        const heading = document.createElement("div"); heading.className = "sync-scope-group"; heading.textContent = groupName; scopeSection.body.appendChild(heading);
+        for (const [key, label] of items) {
+          const { control: scopeControl, info: scopeInfo } = this.addRow(scopeSection.body, label);
+          scopeControl.parentElement?.classList.add("sync-scope-row");
+          const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = Boolean(scope[key]); checkbox.setAttribute("aria-label", label);
+          if (this.geodeApp.sync.isAppendOnly() && (key === "communityPlugins" || key === "communityPluginData")) { checkbox.disabled = true; checkbox.checked = false; }
+          checkbox.addEventListener("change", () => { paintScopeSummary(); void this.geodeApp.sync.updateScope({ [key]: checkbox.checked }).catch(error => this.geodeApp.notify(String(error))); });
+          scopeInfo.addEventListener("click", () => { if (!checkbox.disabled) { checkbox.checked = !checkbox.checked; checkbox.dispatchEvent(new Event("change")); } });
+          scopeControl.appendChild(checkbox); boxes.push(checkbox);
+        }
       }
-      const { control: excludedControl } = this.addRow(container, "Excluded folders", "Comma-separated vault-relative folders. Changing scope does not delete already-uploaded remote files.");
-      const excluded = document.createElement("input"); excluded.type = "text"; excluded.value = scope.excludedFolders.join(", ");
+      paintScopeSummary();
+      const { control: excludedControl } = this.addRow(scopeSection.body, "Excluded folders", "Comma-separated vault-relative folders. Changing scope does not delete already-uploaded remote files.");
+      const excluded = document.createElement("input"); excluded.type = "text"; excluded.value = scope.excludedFolders.join(", "); excluded.setAttribute("aria-label", "Excluded folders"); excluded.placeholder = "e.g. Attachments, Archive/Old";
       excluded.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ excludedFolders: excluded.value.split(",").map(value => value.trim()).filter(Boolean) }).catch(error => this.geodeApp.notify(String(error))); });
       excludedControl.appendChild(excluded);
     }).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error)));

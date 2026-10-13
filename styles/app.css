@@ -4095,6 +4095,189 @@ body:not(.is-mobile) .modal-button-container .mod-secondary {
 .sync-progress.is-stalled .sync-progress-bar::-webkit-progress-value {
   background: var(--text-error, #e06c75);
 }
+/* Sync tab: status card + collapsible sections (docs: Compass "Sync tab redesign A"). */
+.sync-status-card {
+  --sync-tone: var(--text-muted);
+  display: grid;
+  gap: var(--size-4-3);
+  margin: var(--size-4-2) 0 var(--size-4-3);
+  padding: var(--size-4-4);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 4px solid var(--sync-tone);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+.sync-status-card[data-tone="ok"] { --sync-tone: var(--color-green, #4caf50); }
+.sync-status-card[data-tone="busy"] { --sync-tone: var(--interactive-accent); }
+.sync-status-card[data-tone="warn"] { --sync-tone: var(--color-orange, #e9973f); }
+.sync-status-card[data-tone="bad"] { --sync-tone: var(--text-error, #e06c75); }
+.sync-status-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-3);
+}
+.sync-status-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--sync-tone);
+}
+.sync-status-card[data-tone="busy"] .sync-status-dot { animation: sync-status-pulse 1.4s ease-in-out infinite; }
+@keyframes sync-status-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .sync-status-card[data-tone="busy"] .sync-status-dot { animation: none; } }
+.sync-status-text { flex: 1 1 220px; min-width: 0; }
+.sync-status-headline {
+  color: var(--text-normal);
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+}
+.sync-status-sub {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+.sync-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+.sync-status-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+.sync-status-counts[hidden] { display: none; }
+.sync-status-count {
+  padding: 2px var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+.sync-status-count b { margin-right: 4px; color: var(--text-normal); }
+.sync-status-count.mod-hot { color: var(--color-orange, #e9973f); }
+.sync-status-card .sync-progress { margin: 0; }
+.sync-status-card > p[role="status"] { margin: 0; color: var(--text-muted); font-size: var(--font-ui-small); }
+.sync-plan-host:empty { display: none; }
+.sync-section {
+  margin-top: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+.sync-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  width: 100%;
+  padding: var(--size-4-3) var(--size-4-4);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  text-align: left;
+  cursor: pointer;
+}
+.sync-section-toggle:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.sync-section-chevron { display: inline-block; width: 1em; font-size: 1.25em; line-height: 1; color: var(--text-muted); transition: transform 0.12s ease; }
+.sync-section.is-open > .sync-section-toggle .sync-section-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .sync-section-chevron { transition: none; } }
+.sync-section-title { font-weight: var(--font-semibold); }
+.sync-section-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-section-badge {
+  padding: 0 var(--size-4-2);
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+.sync-section-badge[data-tone="ok"] { color: var(--color-green, #4caf50); }
+.sync-section-badge[data-tone="warn"] { color: var(--color-orange, #e9973f); }
+.sync-section-badge[data-tone="bad"] { color: var(--text-error, #e06c75); }
+.sync-section-body { padding: 0 var(--size-4-4) var(--size-4-3); border-top: 1px solid var(--background-modifier-border); }
+.sync-section-body[hidden] { display: none; }
+/* Guided setup: labelled fields stacked in reading order, and two separate vault choices. */
+.setting-item.sync-stacked-setting { flex-direction: column; align-items: stretch; gap: var(--size-4-3); }
+.sync-stacked-setting > .setting-item-control { flex-direction: column; align-items: stretch; width: 100%; gap: var(--size-4-3); }
+.sync-field { display: grid; gap: 4px; }
+.sync-field[hidden] { display: none; }
+.sync-field-label { color: var(--text-normal); font-size: var(--font-ui-small); font-weight: var(--font-semibold); }
+.sync-field-help { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.sync-field input[type="text"], .sync-field select { width: 100%; }
+.sync-field-check { display: flex; align-items: center; gap: var(--size-4-2); font-size: var(--font-ui-small); }
+.sync-setup-buttons { display: flex; flex-wrap: wrap; gap: var(--size-4-2); }
+.sync-setup-result { min-height: 1.2em; color: var(--text-muted); font-size: var(--font-ui-small); overflow-wrap: anywhere; }
+.sync-option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--size-4-3); }
+.sync-option {
+  display: grid;
+  align-content: start;
+  gap: var(--size-4-3);
+  padding: var(--size-4-4);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+.sync-option-title { color: var(--text-normal); font-weight: var(--font-semibold); }
+.sync-option-help { color: var(--text-muted); font-size: var(--font-ui-small); }
+.sync-option button { justify-self: start; }
+.sync-option-wrap[hidden] { display: none; }
+.sync-option-wrap { display: grid; gap: var(--size-4-3); }
+.sync-vault-choices { display: grid; gap: var(--size-4-2); color: var(--text-muted); font-size: var(--font-ui-small); }
+.sync-vault-choice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--size-4-2); color: var(--text-normal); }
+/* Touch: the card and setup controls sit outside .setting-item-control, so the generic mobile sizing misses them. Tablets are wider than the phone breakpoint but still touch. */
+body.is-mobile .mod-settings :is(.sync-card-actions, .sync-setup-buttons, .sync-option, .sync-field, .sync-vault-choice, .setting-item-control) :is(button, select, input[type="text"]) { min-height: 44px; }
+body.is-mobile .mod-settings .sync-section-toggle { min-height: 48px; }
+body.is-mobile .mod-settings .sync-field-check { min-height: 44px; }
+body.is-mobile .mod-settings .setting-item.sync-scope-row { flex-direction: row; align-items: center; }
+body.is-mobile .mod-settings .sync-scope-row input[type="checkbox"] { width: 24px; height: 24px; }
+@media (max-width: 700px) {
+  body.is-mobile .mod-settings .sync-status-head { align-items: flex-start; }
+  body.is-mobile .mod-settings .sync-card-actions { flex: 1 1 100%; }
+  body.is-mobile .mod-settings .sync-card-actions button { flex: 1 1 calc(50% - var(--size-4-2)); }
+  body.is-mobile .mod-settings .sync-section-toggle { flex-wrap: wrap; }
+  body.is-mobile .mod-settings .sync-section-summary { flex: 1 1 100%; padding-left: 1.5em; text-align: left; white-space: normal; }
+  body.is-mobile .mod-settings .sync-option button, body.is-mobile .mod-settings .sync-setup-buttons button { justify-self: stretch; flex: 1 1 100%; }
+}
+.sync-scope-note { margin-top: var(--size-4-3); }
+.setting-item.sync-scope-row { flex-direction: row; align-items: center; gap: var(--size-4-3); min-height: 44px; }
+.sync-scope-row > .setting-item-info { flex: 1; cursor: pointer; }
+.sync-scope-row > .setting-item-control { flex: none; min-height: 0; }
+.sync-section-body input[type="text"] { width: 100%; }
+.sync-status-dot { margin-top: 0.45em; align-self: flex-start; }
+/* Phones: an on/off setting is label-left, checkbox-right on one line, not a label with a checkbox stranded under it. */
+@media (max-width: 700px) {
+  body.is-mobile .mod-settings .setting-item:has(> .setting-item-control > input[type="checkbox"]:only-child) {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--size-4-3);
+    min-height: 48px;
+  }
+  body.is-mobile .mod-settings .setting-item:has(> .setting-item-control > input[type="checkbox"]:only-child) > .setting-item-info { flex: 1; min-width: 0; }
+  body.is-mobile .mod-settings .setting-item:has(> .setting-item-control > input[type="checkbox"]:only-child) > .setting-item-control { flex: none; min-height: 0; }
+  body.is-mobile .mod-settings .setting-item-control > input[type="checkbox"]:only-child { width: 24px; height: 24px; }
+}
+.sync-scope-group {
+  margin-top: var(--size-4-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .setting-item-group {
   margin: var(--size-4-4) 0;
 }
