@@ -1889,13 +1889,13 @@ class SettingsModal extends Modal {
       return wrap;
     };
     const kind = document.createElement("select"); kind.setAttribute("aria-label", "Hub type");
-    const kindLabels = { fs: "Folder (local, network or cloud-synced)", ssh: "SSH host", http: "HTTPS hub" } as const;
+    const kindLabels = { fs: "Folder", ssh: "SSH host", http: "HTTPS hub" } as const;
     for (const supported of provider.supportedKinds) kind.append(new Option(kindLabels[supported], supported));
     const host = document.createElement("input"); host.type = "text"; host.setAttribute("aria-label", "Hub ssh host"); host.placeholder = "ssh host or ~/.ssh/config alias";
     const path = document.createElement("input"); path.type = "text"; path.setAttribute("aria-label", "Hub store path"); path.placeholder = "/path/to/hub";
     const url = document.createElement("input"); url.type = "url"; url.setAttribute("aria-label", "Hub URL"); url.placeholder = "https://my-box.tailnet-name.ts.net"; url.autocomplete = "off"; url.spellcheck = false;
     const token = document.createElement("input"); token.type = "password"; token.setAttribute("aria-label", "Hub token"); token.placeholder = "Hub token"; token.autocomplete = "off"; token.spellcheck = false;
-    const hostField = field("SSH host", host, "Runs non-interactively using your ~/.ssh/config, so a host alias works."), typeField = field("Where is the hub?", kind), pathField = field("Folder path", path, "The same store `geode-wiki sync` uses."), urlField = field("Hub URL", url), tokenField = field("Token", token, "Kept in secure storage on this device only, never in the vault.");
+    const hostField = field("SSH host", host, "Runs non-interactively using your ~/.ssh/config, so a host alias works."), typeField = field("Where is the hub?", kind), pathField = field("Folder path", path, "A local, network or cloud-synced folder. The same store `geode-wiki sync` uses."), urlField = field("Hub URL", url), tokenField = field("Token", token, "Kept in secure storage on this device only, never in the vault.");
     const pathLabel = pathField.querySelector<HTMLElement>(".sync-field-label")!;
     const secureNote = document.createElement("div"); secureNote.className = "sync-field-help"; secureNote.setAttribute("data-hub-secure-storage", "");
     if (!provider.canStoreToken) { token.disabled = true; secureNote.textContent = "Secure storage is unavailable on this device, so an HTTPS hub cannot be used here. The token is never kept in the vault or in app settings."; }
