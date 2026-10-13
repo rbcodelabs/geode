@@ -1889,7 +1889,7 @@ class SettingsModal extends Modal {
       return wrap;
     };
     const kind = document.createElement("select"); kind.setAttribute("aria-label", "Hub type");
-    const kindLabels = { fs: "A folder (local, network or cloud-synced)", ssh: "An SSH host", http: "An HTTPS hub" } as const;
+    const kindLabels = { fs: "Folder (local, network or cloud-synced)", ssh: "SSH host", http: "HTTPS hub" } as const;
     for (const supported of provider.supportedKinds) kind.append(new Option(kindLabels[supported], supported));
     const host = document.createElement("input"); host.type = "text"; host.setAttribute("aria-label", "Hub ssh host"); host.placeholder = "ssh host or ~/.ssh/config alias";
     const path = document.createElement("input"); path.type = "text"; path.setAttribute("aria-label", "Hub store path"); path.placeholder = "/path/to/hub";
