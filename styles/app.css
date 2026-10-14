@@ -431,6 +431,24 @@ body.is-mobile .app-shell {
   min-height: 100svh;
 }
 
+/* While the software keyboard is up, iOS pans the page instead of resizing it. Pin the shell to the
+   visual viewport (published by trackMobileVisualViewport) so the header stays at the top of the
+   visible area and the bottom navigation sits above the keyboard. */
+body.is-mobile .app-shell {
+  position: fixed;
+  top: var(--geode-visual-viewport-top, 0px);
+  left: 0;
+  right: 0;
+  height: var(--geode-visual-viewport-height, 100dvh);
+  min-height: 0;
+}
+
+/* The keyboard covers the home indicator, so its safe-area padding would only waste space. */
+body.is-mobile.is-keyboard-open .mobile-navigation {
+  min-height: 52px;
+  padding-bottom: 0;
+}
+
 body.is-mobile .mobile-navigation {
   display: grid;
   grid-template-columns: repeat(5, minmax(44px, 1fr));
@@ -445,6 +463,11 @@ body.is-mobile .mobile-navigation {
 
 body.is-mobile .tooltip {
   display: none;
+}
+
+/* Keep the readout clear of the bottom navigation border. */
+body.is-mobile .status-bar {
+  padding: 6px 14px 10px;
 }
 
 .mobile-navigation-action {
@@ -1433,7 +1456,6 @@ body.is-mobile .workspace-ribbon {
   body.is-mobile .workspace-center {
     width: 100%;
     padding-top: max(env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px));
-    transform: translateY(var(--geode-visual-viewport-top, 0px));
   }
 
   body.is-mobile .workspace-center .workspace-tabs {
@@ -1504,6 +1526,12 @@ body.is-mobile .workspace-ribbon {
     border: 0;
     background: rgba(0, 0, 0, 0.46);
     z-index: 50;
+  }
+
+  /* The page header would otherwise peek out beside the drawer with its
+     edge icons sliced in half; the dimmed strip should read as inert. */
+  body.is-mobile .workspace.mobile-drawer-active .workspace-center .view-header {
+    visibility: hidden;
   }
 
   body.is-mobile .sidebar-toggle-button,
@@ -1598,6 +1626,12 @@ body.is-mobile .workspace-ribbon {
     border: 0;
     background: rgba(0, 0, 0, 0.46);
     z-index: 50;
+  }
+
+  /* The page header would otherwise peek out beside the drawer with its
+     edge icons sliced in half; the dimmed strip should read as inert. */
+  body.is-mobile .workspace.mobile-drawer-active .workspace-center .view-header {
+    visibility: hidden;
   }
 
   body.is-mobile .workspace-sidebar.mod-right .sidebar-resize-handle {
@@ -7009,6 +7043,19 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
   color: var(--text-error, #e5484d);
 }
 
+/* iOS Safari/WKWebView zooms the whole page when a focused field's computed
+   font-size is under 16px. Keep every editable control at 16px on mobile
+   (the viewport meta also pins maximum-scale=1 as a second guard). */
+body.is-mobile input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+body.is-mobile textarea,
+body.is-mobile select,
+body.is-mobile [contenteditable]:not([contenteditable="false"]),
+body.is-mobile .view-header-title,
+body.is-mobile .cm-editor .cm-content,
+body.is-mobile .cm-editor .cm-scroller {
+  font-size: max(16px, 1em);
+}
+
 .format-converter-modal .format-converter-warning {
   color: var(--text-error, #e5484d);
 }
@@ -7150,3 +7197,39 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
 .is-mobile .community-item { flex-wrap: wrap; }
 .is-mobile .community-item-controls { flex-shrink: 1; flex-wrap: wrap; min-width: 0; }
 .is-mobile .supported-plugin-install { min-height: 44px; }
+
+/* Software keyboard up (see trackMobileVisualViewport). The modal container is fixed to the layout
+   viewport, which keeps its full height under the keyboard, so a centred or full-height modal ran behind
+   the keyboard and, once iOS panned the page, had its header and Done button above the visible top.
+   Confine the container to the visual viewport using the same variables that pin the app shell; the modal
+   then centres, sizes and scrolls inside the region the user can actually see. */
+body.is-keyboard-open .modal-container {
+  inset: auto 0 auto 0;
+  top: var(--geode-visual-viewport-top, 0px);
+  height: var(--geode-visual-viewport-height, 100%);
+}
+
+/* The keyboard covers the home indicator, so the full-height Settings modal needs no bottom safe-area gap. */
+body.is-keyboard-open .modal-container:has(.mod-settings) {
+  padding-bottom: 8px;
+}
+
+/* A prompt hangs 80px below the container top; under the keyboard keep it compact and let it shrink so its
+   results list scrolls inside what remains instead of past the keyboard. */
+body.is-keyboard-open .modal.prompt {
+  top: max(8px, env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px));
+  max-height: calc(100% - max(8px, env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px)) - 8px);
+}
+
+/* iOS Safari/WKWebView zooms the whole page when a focused field's computed
+   font-size is under 16px. Keep every editable control at 16px on mobile
+   (the viewport meta also pins maximum-scale=1 as a second guard). */
+body.is-mobile input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+body.is-mobile textarea,
+body.is-mobile select,
+body.is-mobile [contenteditable]:not([contenteditable="false"]),
+body.is-mobile .view-header-title,
+body.is-mobile .cm-editor .cm-content,
+body.is-mobile .cm-editor .cm-scroller {
+  font-size: max(16px, 1em);
+}
