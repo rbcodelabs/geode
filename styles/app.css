@@ -7074,6 +7074,19 @@ body.is-mobile .cm-editor .cm-scroller {
   margin-top: 16px;
 }
 
+.note-composer-picker .prompt-instructions {
+  padding: 8px 12px;
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 12px);
+}
+.note-composer-confirm .note-composer-confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
 /* ---- Launch sequence overlay (reuses .vault-picker surface/lockup/chip) ---- */
 
 .vault-picker.launch-overlay {
