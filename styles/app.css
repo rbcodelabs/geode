@@ -6846,6 +6846,19 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
   color: var(--text-error, #e5484d);
 }
 
+/* iOS Safari/WKWebView zooms the whole page when a focused field's computed
+   font-size is under 16px. Keep every editable control at 16px on mobile
+   (the viewport meta also pins maximum-scale=1 as a second guard). */
+body.is-mobile input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+body.is-mobile textarea,
+body.is-mobile select,
+body.is-mobile [contenteditable]:not([contenteditable="false"]),
+body.is-mobile .view-header-title,
+body.is-mobile .cm-editor .cm-content,
+body.is-mobile .cm-editor .cm-scroller {
+  font-size: max(16px, 1em);
+}
+
 .format-converter-modal .format-converter-warning {
   color: var(--text-error, #e5484d);
 }
