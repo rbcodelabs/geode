@@ -76,7 +76,35 @@ async function reopenGraphDrawer(page: Page): Promise<void> {
   await page.evaluate(() => (window as any).app.openGraphView());
 }
 
+/**
+ * On a phone the graph lives in a sliding drawer. Pointer coordinates are
+ * computed from the canvas rect, so reading it mid-slide leaves every later
+ * synthetic event aimed at where the canvas used to be. Resolve once the
+ * rect has been identical for several consecutive frames.
+ */
+async function settleGraphCanvas(graph: Locator): Promise<void> {
+  await graph.evaluate((element) => new Promise<void>((resolve) => {
+    const canvas = element.querySelector("canvas")!;
+    const key = () => {
+      const r = canvas.getBoundingClientRect();
+      return `${r.left}|${r.top}|${r.width}|${r.height}`;
+    };
+    let last = key();
+    let stable = 0;
+    const started = performance.now();
+    const tick = () => {
+      const now = key();
+      stable = now === last ? stable + 1 : 0;
+      last = now;
+      if (stable >= 5 || performance.now() - started > 5000) resolve();
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }));
+}
+
 async function graphNodePoint(graph: Locator, id: string, offsetX = 0): Promise<{ clientX: number; clientY: number }> {
+  await settleGraphCanvas(graph);
   return graph.evaluate((element, { nodeId, offset }) => {
     const positions = JSON.parse((element as HTMLElement).dataset.graphNodePositions!) as Record<string, [number, number]>;
     const [x, y] = positions[nodeId];
@@ -1332,7 +1360,8 @@ test("@phone a delayed reconcile settles before vault switch and foreground cann
     void app.switchVaultInWindow("external://browser-provider-second");
     testApi.foreground();
   });
-  await expect.poll(() => page.evaluate(() => (window as any).app?.vault?.root), { timeout: 8_000 })
+  // The vault switch reloads the page; evaluate throws while the old context is torn down.
+  await expect.poll(() => page.evaluate(() => (window as any).app?.vault?.root).catch(() => undefined), { timeout: 8_000 })
     .toBe("external://browser-provider-second");
   expect(await page.evaluate(() => (window as any).__geodeMobileTest.listenerCount())).toBe(1);
   await expect.poll(() => page.evaluate(() => window.hostServices!.vaultFiles.read("Notes/Second.md")))
@@ -1376,6 +1405,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   }
   await expect(graph).toBeVisible();
 
+  await settleGraphCanvas(graph);
   const canvasBox = (await canvas.boundingBox())!;
   const beforePan = Number(await graph.getAttribute("data-graph-pan-x"));
   const empty = { clientX: canvasBox.x + 20, clientY: canvasBox.y + canvasBox.height - 24 };
