@@ -221,14 +221,19 @@ Automated (this change):
   rollback removes the token on later failure.
 - **QR render/scan**: encode the invitation with `qrcode-generator`, decode it with `jsqr` from the rendered matrix, and assert
   string equality (a real round trip, no camera).
-- **E2E (Electron, Playwright)**: Settings > Sync shows the card only with an HTTPS hub + token; Show code renders a QR
-  and countdown; Cancel removes it; redeeming over loopback with the in-test phone implementation shows "Paired" and
-  closes the listener.
-- **Mobile harness (Playwright, `tests/mobile`)**: paste flow against a stub desktop endpoint: confirmation sheet shows the
-  provider/host/vault; decline stores nothing; accept stores the token through the fake secrets store, saves hub config
-  and applies portable categories; no-secure-storage host is refused before any network call.
+- **Mobile harness (Playwright, `tests/mobile/pairing.spec.ts`, iPhone 13 project)**: the real phone panel, flow and apply path against the
+  real `PairingService` (relayed through Node because the harness page is `file://`; CSP bypassed as in `supported-plugins.spec.ts`
+  because iOS uses native `CapacitorHttp`): paste -> confirmation sheet shows hub host, vault and categories and *nothing is stored
+  before confirming*; accept -> token only in the fake Keychain (not in web storage), config saved, portable categories applied through
+  `syncSafety.apply({namespace:"portable-config", expectedHash})`, desktop session consumed, replay refused; decline stores nothing;
+  no Keychain -> refused with the desktop session still live (token not spent); foreign/malformed code -> rejected with no network
+  request. The real **desktop card** also runs there (the IPC hop replaced by exposed functions): QR + countdown + paste string appear,
+  the code contains neither token nor hub URL, redeeming delivers the bundle and the card reports "Paired", Cancel revokes at once.
+- **Typecheck + unit** cover the preload/`ipcMain` seam only through `startPairing` (display name forced to the machine's, errors mapped to
+  plain replies); the Electron IPC registration itself is not exercised end to end (see below).
 
-Not automatable here (reported as NOT VERIFIED): the iOS camera permission and real `getUserMedia` scan, the iOS Local
+Not verified in this environment (reported as NOT VERIFIED; the dev box has no Electron binary, Xvfb or GTK libraries):
+an Electron end-to-end run of the Settings card over real IPC, the iOS camera permission and real `getUserMedia` scan, the iOS Local
 Network prompt and ATS behaviour for a cleartext LAN fetch from the WKWebView, a real Wi-Fi/tailnet path, and the native
 Keychain write in this flow (the Keychain plugin exists; this flow's use of it is exercised only through the host
 interface).

@@ -141,7 +141,7 @@ const api = {
   } as import("../shared/hub-sync").HubSyncBridge,
   /** "Pair mobile device": the session server runs in main; the bundle crosses IPC in memory only (docs/design/mobile-qr-pairing.md). */
   pairing: {
-    start: (bundle: import("../shared/pairing/bundle").PairingBundle): Promise<import("./pairing-ipc").PairingStartReply> => ipcRenderer.invoke("pairing-start", bundle),
+    start: (bundle: import("../shared/pairing/bundle").PairingBundle): Promise<import("./pairing-start").PairingStartReply> => ipcRenderer.invoke("pairing-start", bundle),
     cancel: (): Promise<void> => ipcRenderer.invoke("pairing-cancel"),
     onEvent: (handler: (event: { type: "redeemed" | "expired" | "cancelled" | "too-many-attempts" }) => void): (() => void) => {
       const listener = (_e: Electron.IpcRendererEvent, event: { type: "redeemed" | "expired" | "cancelled" | "too-many-attempts" }) => handler(event);

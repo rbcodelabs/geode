@@ -43,7 +43,10 @@ end-to-end encrypted channel and receives both the non-secret setup and the cred
 4. **Transport.** Version 1 ships **same-network direct**: while a session is live the desktop main process listens on
    an ephemeral port, accepts only private-range peers (RFC 1918, link-local, tailnet CGNAT, loopback, ULA), caps request
    bodies at 4 KiB and answers one JSON endpoint. Because LAN HTTP has no certificate, confidentiality and server
-   authentication come from the pinned key agreement above, not from TLS. A **relay** (a rendezvous mailbox hosted by
+   authentication come from the pinned key agreement above, not from TLS. On iOS the one POST goes through native `CapacitorHttp`
+   (as the Supported plugins downloads already do), so the WebView CSP stays `connect-src 'self' wss:`, there is no CORS preflight, and
+   App Transport Security (`NSAllowsLocalNetworking`) is what limits cleartext to local addresses; the client additionally refuses any
+   non-private address in the invitation. A **relay** (a rendezvous mailbox hosted by
    the user's own hub) is designed into the address field (`https://` entries) but not built in this change; see the design doc.
 5. **What is delivered.** Active sync provider id, vault id (shared vault UUID) and display name, the non-secret provider
    config (for the hub provider: the HTTPS URL; never a token), the portable categories `editor`, `appearance`, `hotkeys`
@@ -55,7 +58,8 @@ end-to-end encrypted channel and receives both the non-secret setup and the cred
    through the existing `portable-config` validator). Nothing is written until the user confirms a sheet that names the provider, hub
    host and vault and states that a credential will be stored in Keychain. Declining discards the reply from memory.
 7. **Apply path.** Credentials go to `host.secrets.app` (Keychain via `GeodeKeychainStore`, ADR 0007), keyed like a typed-in
-   token (`hubTokenKey`). If no secure storage exists the flow **fails closed before redeeming**: the token is not
+   token (`hubTokenKey`). The native Keychain bridge exists (`GeodeKeychainStore`); an older native build without it, or any browser host,
+   has no `secrets.app`, and then the flow **fails closed before redeeming**: the token is not
    burned and nothing is stored in localStorage, device state or the vault. Provider config is saved through
    `HubSyncProvider.setConfig`. Portable settings are applied by `syncSafety.apply` with `namespace: "portable-config"`
    under a claimed owner lease and a preimage hash guard, i.e. the ADR 0015 guarded-mutation path; if the lease or guard
