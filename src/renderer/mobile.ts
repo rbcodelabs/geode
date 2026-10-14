@@ -4,7 +4,7 @@ import { createCapacitorHost, GeodeManagedVault } from "./host/capacitor-host";
 import { createLegacyGeodeFacade } from "./host/legacy-facade";
 import { installHostServices } from "./host/registry";
 import { VaultAccessError } from "./host/contracts";
-import { createIdbDeviceState } from "./host/idb-device-state";
+import { withDurableMobileStorage } from "./host/mobile-storage";
 import { createMobileArtifactTransport } from "./host/mobile-http-transport";
 
 const state = createBrowserHostState({ storage: window.localStorage });
@@ -131,11 +131,11 @@ const browserHost = createBrowserHost(state, {
   },
 });
 const nativeHost = Capacitor.isNativePlatform() ? createCapacitorHost(GeodeManagedVault, browserHost) : browserHost;
-// Native iOS: per-file sync history overflows the 5 MB localStorage snapshot the browser host uses.
+// Native iOS: per-file sync history and the reconcile manifest overflow the 5 MB localStorage snapshot the browser host uses.
 const supportedPluginTransport = createMobileArtifactTransport();
 const host = installHostServices({
   ...(Capacitor.isNativePlatform() && typeof indexedDB !== "undefined"
-    ? { ...nativeHost, deviceState: createIdbDeviceState(nativeHost.deviceState) }
+    ? withDurableMobileStorage(nativeHost)
     : nativeHost),
   supportedPluginTransport,
 });
