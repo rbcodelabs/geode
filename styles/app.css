@@ -7028,10 +7028,15 @@ body.is-keyboard-open .modal.prompt {
   max-height: calc(100% - max(8px, env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px)) - 8px);
 }
 
-/* iOS Safari/WKWebView zooms the whole page when a text field under 16px takes focus. The zoom pans the
-   page, defeats the visual-viewport tracking above (it deliberately ignores scale > 1, which is how a
-   real pinch looks) and left Settings text fields with the modal scrolled off screen. Keep every
-   focusable text control at 16px on mobile so focusing a field never zooms. */
-body.is-mobile :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [type="color"], [type="file"]), textarea, select) {
-  font-size: 16px;
+/* iOS Safari/WKWebView zooms the whole page when a focused field's computed
+   font-size is under 16px. Keep every editable control at 16px on mobile
+   (the viewport meta also pins maximum-scale=1 as a second guard). */
+body.is-mobile input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+body.is-mobile textarea,
+body.is-mobile select,
+body.is-mobile [contenteditable]:not([contenteditable="false"]),
+body.is-mobile .view-header-title,
+body.is-mobile .cm-editor .cm-content,
+body.is-mobile .cm-editor .cm-scroller {
+  font-size: max(16px, 1em);
 }
