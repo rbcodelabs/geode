@@ -91,6 +91,23 @@ function persistBrowserHostState(state: BrowserHostState, storage?: BrowserHostS
   storage.setItem(BROWSER_HOST_STORAGE_KEY, JSON.stringify(serialized));
 }
 
+/**
+ * Applies one keyed change and snapshots the state. If the snapshot write is rejected (localStorage quota on iOS),
+ * the change is rolled back: otherwise the oversized value stays in memory and every later write, to any key,
+ * serializes it again and fails too, until the page is reloaded.
+ */
+function persistMapChange(state: BrowserHostState, map: Map<string, unknown>, key: string, apply: () => void): void {
+  const had = map.has(key);
+  const previous = map.get(key);
+  apply();
+  try {
+    state.persist();
+  } catch (error) {
+    if (had) map.set(key, previous); else map.delete(key);
+    throw error;
+  }
+}
+
 function normalizeVaultPath(path: string): string {
   if (path.includes("\0") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\")) {
     throw new Error(`Expected a vault-relative path: ${path}`);
@@ -381,8 +398,8 @@ export function createBrowserHost(
     },
     deviceState: {
       read: async <T>(key: string) => activeState.deviceState.has(key) ? structuredClone(activeState.deviceState.get(key)) as T : null,
-      write: async (key, value) => { activeState.deviceState.set(key, structuredClone(value)); activeState.persist(); },
-      remove: async key => { activeState.deviceState.delete(key); activeState.persist(); },
+      write: async (key, value) => persistMapChange(activeState, activeState.deviceState, key, () => activeState.deviceState.set(key, structuredClone(value))),
+      remove: async key => persistMapChange(activeState, activeState.deviceState, key, () => activeState.deviceState.delete(key)),
     },
     secrets: {
       available: false,
@@ -390,11 +407,15 @@ export function createBrowserHost(
     },
     config: {
       read: async (name) => structuredClone(activeState.config.get(name) ?? null),
-      write: async (name, data) => { activeState.config.set(name, structuredClone(data)); activeState.persist(); },
+      write: async (name, data) => persistMapChange(activeState, activeState.config, name, () => activeState.config.set(name, structuredClone(data))),
     },
     metadataIndex: {
       readCache: async () => structuredClone(activeState.metadataCache),
-      writeCache: async (data) => { activeState.metadataCache = structuredClone(data); activeState.persist(); },
+      writeCache: async (data) => {
+        const previous = activeState.metadataCache;
+        activeState.metadataCache = structuredClone(data);
+        try { activeState.persist(); } catch (error) { activeState.metadataCache = previous; throw error; }
+      },
       startBackgroundIndexer: async () => null,
       onMessage: () => () => {},
     },
