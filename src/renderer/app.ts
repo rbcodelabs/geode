@@ -145,9 +145,10 @@ import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, typ
 import { SyncService } from "./sync/sync-service";
 import { HUB_PROVIDER_ID, HubSyncProvider, describeHubTarget } from "./sync/hub-provider";
 import { renderPairingCard } from "./pairing/desktop-card";
-import { renderPhonePairingPanel } from "./pairing/phone-panel";
+import { describeApplied, renderPhonePairingPanel } from "./pairing/phone-panel";
 import { buildPairingBundle } from "./pairing/apply";
 import { createCameraScanner } from "./pairing/scanner";
+import { createPairingFetch } from "./pairing/native-fetch";
 import { formatSyncFeedback, renderSyncFeedback } from "./sync/feedback";
 import { describeSyncProgress } from "./sync/progress";
 import type { SyncPreview, SyncStatus, SyncStatusProgress } from "./sync/types";
@@ -2204,7 +2205,7 @@ class SettingsModal extends Modal {
    * ADR 0030 mobile pairing. Desktop (an HTTPS hub is the active provider): "Pair mobile device" shows a code. Phone: "Set up from
    * desktop" scans or pastes one. Both live in the Connection section and are torn down with the tab.
    */
-  private renderPairingRows(container: HTMLElement, isHub: boolean, activeProviderId: string | undefined, redraw: () => void): void {
+  private renderPairingRows(container: HTMLElement, isHub: boolean, activeProviderId: string | undefined, redraw: (summary?: string) => void): void {
     const provider = this.geodeApp.hubSyncProvider; if (!provider) return;
     const host = this.geodeApp.host, disposers: Array<() => void> = [];
     const appSecrets = host.secrets.app;
@@ -2222,12 +2223,13 @@ class SettingsModal extends Modal {
         scanner: createCameraScanner(),
         flow: {
           ports: { hub: provider, secrets, config: host.config, ...(host.syncSafety ? { syncSafety: host.syncSafety } : {}), reloadSettings: () => this.geodeApp.reloadPortableSettingsForPairing() },
+          redeemOptions: { fetch: createPairingFetch() },
           precheck: () => activeProviderId && activeProviderId !== HUB_PROVIDER_ID ? "Another sync provider is connected on this device. Disconnect it before setting up from a code." : null,
         },
-        onApplied: async () => {
+        onApplied: async ({ report, bundle }) => {
           // Selecting the provider only chooses it. Joining the vault and the first sync still need the user's explicit preview/approval (ADR 0015).
           if (!this.geodeApp.sync.getActiveProvider()) await this.geodeApp.sync.activate(HUB_PROVIDER_ID).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error)));
-          redraw();
+          redraw(`${describeApplied(report)}${bundle.vault ? ` Next, join the shared vault "${bundle.vault.name}" below and review the first sync plan.` : ""}`);
         },
       }));
     }
@@ -2499,7 +2501,7 @@ class SettingsModal extends Modal {
     this.renderSyncIssueGroups(issues.body, "Blocked", details?.blocked ?? []);
     this.renderSyncIssueGroups(issues.body, "Excluded", details?.excluded ?? []);
     if (isHub) this.renderHubConfigRows(connection.body, trackBusy);
-    this.renderPairingRows(connection.body, isHub, active?.id, () => this.renderSyncTab(container));
+    this.renderPairingRows(connection.body, isHub, active?.id, summary => this.renderSyncTab(container, summary));
     if (this.geodeApp.sync.isAppendOnly()) {
       this.renderSharedVaultSetup(connection.body, { perform, trackBusy, applyBusyState, boundVaultName, isHub });
       if (status.state === "error") {
