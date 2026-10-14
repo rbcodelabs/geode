@@ -465,6 +465,11 @@ body.is-mobile .tooltip {
   display: none;
 }
 
+/* Keep the readout clear of the bottom navigation border. */
+body.is-mobile .status-bar {
+  padding: 6px 14px 10px;
+}
+
 .mobile-navigation-action {
   min-width: 44px;
   min-height: 44px;
@@ -1523,6 +1528,12 @@ body.is-mobile .workspace-ribbon {
     z-index: 50;
   }
 
+  /* The page header would otherwise peek out beside the drawer with its
+     edge icons sliced in half; the dimmed strip should read as inert. */
+  body.is-mobile .workspace.mobile-drawer-active .workspace-center .view-header {
+    visibility: hidden;
+  }
+
   body.is-mobile .sidebar-toggle-button,
   body.is-mobile .workspace-tab-header-tab-list,
   body.is-mobile .workspace-tab-header-new-tab,
@@ -1615,6 +1626,12 @@ body.is-mobile .workspace-ribbon {
     border: 0;
     background: rgba(0, 0, 0, 0.46);
     z-index: 50;
+  }
+
+  /* The page header would otherwise peek out beside the drawer with its
+     edge icons sliced in half; the dimmed strip should read as inert. */
+  body.is-mobile .workspace.mobile-drawer-active .workspace-center .view-header {
+    visibility: hidden;
   }
 
   body.is-mobile .workspace-sidebar.mod-right .sidebar-resize-handle {
