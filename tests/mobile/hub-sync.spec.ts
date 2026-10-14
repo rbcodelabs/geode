@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
+import { chooseSettingsSection } from "./settings-nav";
 
 const mobileUrl = pathToFileURL(path.resolve(__dirname, "../../dist/mobile/index.html")).href;
 
@@ -43,7 +44,7 @@ test("@phone the Sync tab offers the HTTPS hub on a phone, fits the screen, and 
   await page.locator(".menu.mod-mobile-more").getByText("Settings", { exact: true }).click();
   const modal = page.locator(".modal.mod-settings");
   await expect(modal).toBeVisible();
-  await modal.getByText("Sync", { exact: true }).first().click();
+  await chooseSettingsSection(page, "Sync");
 
   await page.getByRole("combobox", { name: "Sync provider" }).selectOption("geode.hub");
   const type = page.getByRole("combobox", { name: "Hub type" });
@@ -104,7 +105,7 @@ test("@phone without secure storage the HTTPS hub refuses a token instead of kee
   const nav = page.getByRole("navigation", { name: "Mobile navigation" });
   await nav.getByRole("button", { name: "More" }).click();
   await page.locator(".menu.mod-mobile-more").getByText("Settings", { exact: true }).click();
-  await page.locator(".modal.mod-settings").getByText("Sync", { exact: true }).first().click();
+  await chooseSettingsSection(page, "Sync");
   await page.getByRole("combobox", { name: "Sync provider" }).selectOption("geode.hub");
   await expect(page.locator("[data-hub-secure-storage]")).toContainText("Secure storage is unavailable");
   await expect(page.getByLabel("Hub token")).toBeDisabled();

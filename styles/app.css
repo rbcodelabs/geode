@@ -3601,6 +3601,12 @@ body:not(.is-mobile) .modal-button-container .mod-secondary {
   display: none;
 }
 
+/* Phone-only section picker (see the `max-width: 700px` block below). */
+.settings-section-selector,
+.settings-section-sheet-layer {
+  display: none;
+}
+
 /* ---- Settings nav (left column) ---- */
 
 .vertical-tab-header {
@@ -4369,39 +4375,196 @@ body.is-mobile .mod-settings .sync-scope-row input[type="checkbox"] { width: 24p
     min-height: 44px;
   }
 
+  /* The sideways-scrolling tab strip is replaced by a section selector + bottom sheet. The nav stays in the DOM (hidden) as the source of tab state. */
   body.is-mobile .mod-settings .vertical-tab-header {
-    display: flex;
-    flex: 0 0 auto;
-    gap: 4px;
-    width: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 8px;
-    border-right: 0;
-    border-bottom: 1px solid var(--background-modifier-border);
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
-  }
-
-  body.is-mobile .mod-settings .vertical-tab-header::-webkit-scrollbar {
     display: none;
   }
 
-  body.is-mobile .mod-settings .vertical-tab-header-group {
-    display: contents;
-  }
-
-  body.is-mobile .mod-settings .vertical-tab-header-group-title {
-    display: none;
-  }
-
-  body.is-mobile .mod-settings .vertical-tab-nav-item {
+  body.is-mobile .mod-settings .settings-section-selector {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     flex: 0 0 auto;
-    min-height: 44px;
-    padding: 8px 12px;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 52px;
+    padding: 0 16px;
+    border: 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+    border-radius: 0;
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    font: inherit;
+    font-size: var(--font-ui-medium);
+    font-weight: 600;
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body.is-mobile .mod-settings .settings-section-selector:active {
+    background: var(--background-modifier-hover);
+  }
+
+  body.is-mobile .mod-settings .settings-section-selector-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  body.is-mobile .mod-settings .settings-section-selector-chevron {
+    display: inline-flex;
+    flex: none;
+    color: var(--text-muted);
+  }
+
+  body.is-mobile .settings-section-selector-chevron svg,
+  body.is-mobile .settings-section-row-check svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Bottom sheet. Anchored with bottom: 0 inside the modal container so it never depends on viewport variables. */
+  body.is-mobile .settings-section-sheet-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  body.is-mobile .settings-section-backdrop {
+    position: absolute;
+    inset: 0;
+    background: var(--background-modifier-cover);
+  }
+
+  body.is-mobile .settings-section-sheet {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    width: 100%;
+    max-height: 70%;
+    border: 1px solid var(--background-modifier-border);
+    border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+    background: var(--background-primary);
+    box-shadow: var(--shadow-l);
+    padding-bottom: max(12px, env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px));
+    animation: settings-section-sheet-in 200ms ease-out;
+  }
+
+  body.is-mobile .settings-section-sheet:focus {
+    outline: none;
+  }
+
+  @keyframes settings-section-sheet-in {
+    from { transform: translateY(24px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    body.is-mobile .settings-section-sheet { animation: none; }
+  }
+
+  body.is-mobile .settings-section-sheet-handle {
+    flex: none;
+    width: 36px;
+    height: 5px;
+    margin: 8px auto 0;
+    border-radius: 3px;
+    background: var(--background-modifier-border-hover);
+  }
+
+  body.is-mobile .settings-section-sheet-header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 8px 0 20px;
+    min-height: 48px;
+  }
+
+  body.is-mobile .settings-section-sheet-title {
+    font-size: var(--font-ui-medium);
+    font-weight: 600;
+    color: var(--text-normal);
+  }
+
+  body.is-mobile .settings-section-sheet-done {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text-accent);
+    font: inherit;
+    font-weight: 600;
+  }
+
+  body.is-mobile .settings-section-sheet-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px;
+  }
+
+  body.is-mobile .settings-section-group + .settings-section-group {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--background-modifier-border);
+  }
+
+  body.is-mobile .settings-section-group-title {
+    padding: 8px 12px 4px;
+    font-size: var(--font-ui-smaller, 12px);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+  }
+
+  body.is-mobile .settings-section-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--radius-m, 8px);
+    background: transparent;
+    color: var(--text-normal);
+    font: inherit;
+    font-size: var(--font-ui-medium);
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body.is-mobile .settings-section-row:active {
+    background: var(--background-modifier-hover);
+  }
+
+  body.is-mobile .settings-section-row.is-current {
+    font-weight: 600;
+  }
+
+  body.is-mobile .settings-section-row-check {
+    display: inline-flex;
+    flex: none;
+    color: var(--interactive-accent);
+  }
+
+  body.is-mobile .settings-section-selector:focus-visible,
+  body.is-mobile .settings-section-row:focus-visible,
+  body.is-mobile .settings-section-sheet-done:focus-visible {
+    outline: 2px solid var(--interactive-accent);
+    outline-offset: -2px;
   }
 
   body.is-mobile .mod-settings .vertical-tab-content-container {

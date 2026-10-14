@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { chooseSettingsSection } from "./settings-nav";
 
 const mobileUrl = pathToFileURL(path.resolve(__dirname, "../../dist/mobile/index.html")).href;
 const externalVaultProofUrl = `${mobileUrl}?external-vault-proof=1`;
@@ -235,10 +236,10 @@ test("@phone keeps drawers and settings inside the device safe area", async ({ p
 
   const modal = page.locator(".modal.mod-settings");
   const modalContent = modal.locator(".modal-content");
-  const tabHeader = modal.locator(".vertical-tab-header");
+  const sectionSelector = modal.locator(".settings-section-selector");
   const content = modal.locator(".vertical-tab-content-container");
   const modalBox = (await modal.boundingBox())!;
-  const headerBox = (await tabHeader.boundingBox())!;
+  const headerBox = (await sectionSelector.boundingBox())!;
   const contentBox = (await content.boundingBox())!;
 
   expect(modalBox.x).toBeGreaterThanOrEqual(8);
@@ -251,13 +252,13 @@ test("@phone keeps drawers and settings inside the device safe area", async ({ p
   expect(headerBox.height).toBeLessThan(100);
   expect(contentBox.width).toBeGreaterThanOrEqual(modalBox.width - 34);
 
-  const appearanceTab = tabHeader.getByText("Appearance", { exact: true });
-  const corePluginsTab = tabHeader.getByText("Core plugins", { exact: true });
-  const communityTab = tabHeader.getByText("Community plugins & themes", { exact: true });
-  expect((await appearanceTab.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  expect((await communityTab.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  await corePluginsTab.click();
-  await expect(corePluginsTab).toHaveClass(/is-active/);
+  // Phones pick a section from a bottom sheet instead of a sideways-scrolling strip (see settings-section-sheet.spec.ts).
+  const sheet = page.getByRole("dialog", { name: "Settings sections" });
+  await sectionSelector.click();
+  expect((await sheet.getByRole("button", { name: "Appearance" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  expect((await sheet.getByRole("button", { name: "Community plugins & themes" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await sheet.getByRole("button", { name: "Core plugins" }).click();
+  await expect(modal.locator(".vertical-tab-nav-item.is-active")).toHaveText("Core plugins");
   await expect(content.getByRole("heading", { name: "Web Viewer" })).toBeVisible();
   await expect(content.getByRole("checkbox", { name: "Enable Web Viewer" })).toBeChecked();
   expect(await page.evaluate(async () => {
@@ -290,7 +291,7 @@ test("@phone keeps drawers and settings inside the device safe area", async ({ p
   });
   await expect(page.locator(".notice")).toContainText("Web Viewer is not available on this device");
   await expect(page.getByRole("button", { name: "Open browser" })).toHaveCount(0);
-  await appearanceTab.click();
+  await chooseSettingsSection(page, "Appearance");
 
   for (const item of await content.locator(".setting-item").all()) {
     const itemBox = (await item.boundingBox())!;
@@ -2116,7 +2117,7 @@ test("@phone @tablet mobile plugins enforce admission, resolver, lifecycle, and 
 
   await page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("button", { name: "More" }).click();
   await page.locator(".menu.mod-mobile-more").getByText("Settings", { exact: true }).click();
-  await page.getByText("Community plugins & themes", { exact: true }).click();
+  await chooseSettingsSection(page, "Community plugins & themes");
   const list = page.locator(".community-list");
   await expect(list.locator('[data-plugin-id="mobile-dom"]')).toContainText("Mobile compatible");
   await expect(list.locator('[data-plugin-id="desktop-tripwire"]')).toContainText("Desktop only");
