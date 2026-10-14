@@ -160,3 +160,12 @@ test("@phone falls back to the cached catalog when the network is unavailable", 
   await expect(page.locator(".supported-plugin-catalog .supported-catalog-state")).toContainText("using cached catalog");
   await expect(page.locator(".supported-plugin-catalog .supported-plugin-item")).toHaveCount(4);
 });
+
+test("@phone shows the failure reason when the catalog is unavailable and nothing is cached", async ({ page }) => {
+  await page.route(CATALOG_URL, (route) => route.fulfill({ status: 503, headers: CORS, body: "down" }));
+  await openCommunitySettings(page);
+  const state = page.locator(".supported-plugin-catalog .supported-catalog-state");
+  await expect(state).toContainText("Supported plugins are temporarily unavailable");
+  await expect(state).toContainText("Download failed (HTTP 503)");
+  await expect(page.locator(".supported-plugin-catalog .supported-plugin-item")).toHaveCount(0);
+});

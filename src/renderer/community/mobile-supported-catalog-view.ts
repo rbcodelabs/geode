@@ -112,7 +112,7 @@ export async function renderMobileSupportedPluginCatalog(
 
   const result = await deps.load();
   if (result.status === "unavailable") {
-    state.textContent = "Supported plugins are temporarily unavailable. Check your connection and reopen Settings to try again.";
+    state.textContent = `Supported plugins are temporarily unavailable. Check your connection and reopen Settings to try again.${result.error ? ` (${result.error})` : ""}`;
     return;
   }
   state.textContent = supportedCatalogStateLabel(result.status, result.fetchedAt);

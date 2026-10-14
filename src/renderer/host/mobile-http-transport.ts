@@ -67,7 +67,14 @@ export function createMobileArtifactTransport(): PluginArtifactTransport {
         if (data.byteLength > maxBytes) throw new Error("Download is too large");
         return new Uint8Array(data);
       }
-      throw new Error("Download returned an unsupported body");
+      // A JSON content type makes the native layer parse the body into an object
+      // before we see it (the catalog is served as application/json). Re-encode it.
+      if (data !== null && typeof data === "object") {
+        const bytes = new TextEncoder().encode(JSON.stringify(data));
+        if (bytes.byteLength > maxBytes) throw new Error("Download is too large");
+        return bytes;
+      }
+      throw new Error(`Download returned an unsupported body (${data === null ? "null" : typeof data})`);
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
