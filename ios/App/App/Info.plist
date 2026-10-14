@@ -26,6 +26,15 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Geode uses the camera only to scan the pairing code shown on your computer. Nothing is recorded or saved.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Geode connects to your computer on your local network to finish pairing with the code you scanned.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

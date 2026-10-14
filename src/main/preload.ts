@@ -139,6 +139,15 @@ const api = {
     call: (request: import("../shared/hub-sync").HubRequest, requestId: string) => ipcRenderer.invoke("hub-sync", request, requestId),
     abort: (requestId: string): void => ipcRenderer.send("hub-sync-abort", requestId),
   } as import("../shared/hub-sync").HubSyncBridge,
+  /** "Pair mobile device": the session server runs in main; the bundle crosses IPC in memory only (docs/design/mobile-qr-pairing.md). */
+  pairing: {
+    start: (bundle: import("../shared/pairing/bundle").PairingBundle): Promise<import("./pairing-start").PairingStartReply> => ipcRenderer.invoke("pairing-start", bundle),
+    cancel: (): Promise<void> => ipcRenderer.invoke("pairing-cancel"),
+    onEvent: (handler: (event: { type: "redeemed" | "expired" | "cancelled" | "too-many-attempts" }) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, event: { type: "redeemed" | "expired" | "cancelled" | "too-many-attempts" }) => handler(event);
+      ipcRenderer.on("pairing-event", listener); return () => ipcRenderer.removeListener("pairing-event", listener);
+    },
+  },
   applySyncMutation: (token: string, input: GuardedMutation): Promise<GuardedMutationResult> => ipcRenderer.invoke("sync-local-apply", token, input),
   onSyncPrepare: (handler: (token: string, path: string) => Promise<string | null>): (() => void) => {
     const listener = async (_event: Electron.IpcRendererEvent, token: string, path: string) => {
@@ -446,8 +455,10 @@ export type GeodeApi = Omit<
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless" | "pairing"
 > & {
+  /** Desktop only: absent on mobile/browser hosts. */
+  pairing?: ElectronOnlyGeodeApi["pairing"];
   /** Desktop-only: true under GEODE_HEADLESS / --headless (e2e). Absent (falsy) on mobile/browser. */
   isHeadless?: boolean;
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
