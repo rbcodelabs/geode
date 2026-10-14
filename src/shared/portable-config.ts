@@ -74,6 +74,8 @@ function validateHotkeys(value: unknown): PortableConfigValues['hotkeys.json'] {
   }
   return { version: 1, overrides };
 }
+/** Strict validation of one category (exact keys, types, path safety). Throws on anything else. */
+export function validatePortableConfig(name: string, value: unknown): PortableConfigDocument { return validateDocument(name, value); }
 function validateDocument(name: string, value: unknown): PortableConfigDocument {
   switch (name) {
     case 'editor.json': {
