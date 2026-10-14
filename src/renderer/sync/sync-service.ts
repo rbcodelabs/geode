@@ -35,6 +35,7 @@ export class SyncService extends Events implements SyncApi {
   private session?: AppendOnlySession;
   /** The bound shared vault's own name (VaultDescriptor.name), cached from load()/save() so the renderer can read it synchronously — distinct from getActiveProvider().name, which is the transport/provider name. */
   private boundVaultName?: string;
+  private boundVaultId?: string;
   private lease?: string;
   private generation = 0;
   private debounce?: ReturnType<typeof setTimeout>;
@@ -119,6 +120,8 @@ export class SyncService extends Events implements SyncApi {
   allowRailOverrideOnce(overrides: SyncRailOverrides) { this.railOverrides = { ...this.railOverrides, ...overrides }; }
   isAppendOnly() { return Boolean(this.selected); }
   getBoundVaultName() { return this.boundVaultName; }
+  /** The shared vault UUID of the current binding (what mobile pairing tells a phone to join). */
+  getBoundVaultId() { return this.boundVaultId; }
   /**
    * Any state change ends the run being reported, so progress is dropped here
    * rather than at each call site. A stale "47%" surviving a failure is its own
@@ -178,9 +181,9 @@ export class SyncService extends Events implements SyncApi {
     if (this.vaultId() !== root) throw new Error("Vault changed");
     if (value && (value.schema !== 1 || value.localRoot !== root)) throw new Error("Experimental sync state requires reconnect and preview");
     const state = value ?? { schema: 1, localRoot: root, deviceId: crypto.randomUUID(), scope: { ...DEFAULT_SYNC_SCOPE, excludedFolders: [] }, paused: false };
-    this.boundVaultName = state.binding?.name; return state;
+    this.boundVaultName = state.binding?.name; this.boundVaultId = state.binding?.vaultId; return state;
   }
-  private async save(value: BindingState) { const root = value.localRoot; if (this.vaultId() !== root) throw new Error("Vault changed"); await this.host.deviceState.write(this.key(root), value); if (this.vaultId() !== root) throw new Error("Vault changed"); this.boundVaultName = value.binding?.name; }
+  private async save(value: BindingState) { const root = value.localRoot; if (this.vaultId() !== root) throw new Error("Vault changed"); await this.host.deviceState.write(this.key(root), value); if (this.vaultId() !== root) throw new Error("Vault changed"); this.boundVaultName = value.binding?.name; this.boundVaultId = value.binding?.vaultId; }
   private async restore(provider: AppendOnlySyncProvider): Promise<void> {
     const root = this.vaultId(); const generation = this.generation; const state = await this.load();
     await this.conditional.waitUntilReady();
@@ -484,7 +487,7 @@ export class SyncService extends Events implements SyncApi {
       const historyKey = this.historyStateKey; this.historyStateKey = undefined;
       if (historyKey) { try { await this.host.deviceState.remove(historyKey); } catch { /* best effort */ } }
       if (root !== this.vaultId()) throw new Error("Vault changed");
-      await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.railRefusal = undefined; this.railOverrides = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
+      await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.boundVaultId = undefined; this.railRefusal = undefined; this.railOverrides = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
     finally { this.closing = false; }
   }
   /** Best-effort: disconnect has already removed the device state that could resume these operations. */
