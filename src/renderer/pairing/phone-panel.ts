@@ -3,6 +3,7 @@ import type { PairingBundle } from "../../shared/pairing/bundle";
 import { PORTABLE_CATEGORIES } from "../../shared/pairing/bundle";
 import { runPairingFlow, type PairingFlowDeps, type PairingOutcome } from "./flow";
 import { ScannerError, type PairingScanner } from "./scanner";
+import type { ApplyReport } from "./apply";
 
 export interface PhonePanelDeps {
   flow: Omit<PairingFlowDeps, "confirm" | "onStep">;
@@ -18,6 +19,12 @@ const CATEGORY_LABELS: Record<string, string> = { editor: "Editor", appearance: 
 export function describePairingError(error: unknown): string {
   if (error instanceof PairingError || error instanceof ScannerError) return error.message;
   return "Pairing failed. Nothing was changed.";
+}
+
+/** One-paragraph result of an apply: what was stored, applied and skipped (never any value). */
+export function describeApplied(report: ApplyReport): string {
+  const skipped = report.skipped.length ? ` Skipped: ${report.skipped.map(item => `${CATEGORY_LABELS[item.category]} (${item.reason})`).join("; ")}.` : "";
+  return `Set up. ${report.credentialStored ? "Hub token saved to Keychain. " : "Enter the hub token below. "}${report.applied.length ? `Applied: ${report.applied.map(key => CATEGORY_LABELS[key]).join(", ")}.` : ""}${skipped}`;
 }
 
 /** Settings > Sync "Set up from desktop" (phone). Scan or paste, confirm, apply. Returns a disposer. */
@@ -58,9 +65,7 @@ export function renderPhonePairingPanel(parent: HTMLElement, deps: PhonePanelDep
       const outcome = await runPairingFlow(text, { ...deps.flow, confirm: confirmSheet, onStep: step => { if (!disposed) status.textContent = steps[step]; } });
       if (disposed) return;
       if (outcome.status === "declined") { status.textContent = "Cancelled. Nothing was changed. Show a new code on your computer to try again."; paste.value = ""; return; }
-      const { report } = outcome;
-      const skipped = report.skipped.length ? ` Skipped: ${report.skipped.map(item => `${CATEGORY_LABELS[item.category]} (${item.reason})`).join("; ")}.` : "";
-      status.textContent = `Set up. ${report.credentialStored ? "Hub token saved to Keychain. " : "Enter the hub token below. "}${report.applied.length ? `Applied: ${report.applied.map(key => CATEGORY_LABELS[key]).join(", ")}.` : ""}${skipped}`;
+      status.textContent = describeApplied(outcome.report);
       paste.value = ""; await deps.onApplied(outcome);
     } catch (error) { if (!disposed) status.textContent = describePairingError(error); }
     finally { if (!disposed) setBusy(false); }
