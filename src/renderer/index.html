@@ -22,7 +22,7 @@
       allowing a remote font CDN. Matches img-src, and the artifact sandbox CSP
       (src/artifacts/security-policy.ts) already allows data: fonts.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' wss:" />
     <title>Geode</title>
     <link rel="stylesheet" href="../../styles/app.css" />
   </head>

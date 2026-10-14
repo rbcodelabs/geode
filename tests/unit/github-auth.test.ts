@@ -8,6 +8,11 @@ import {
   GithubAuthService,
   GithubTokenStore,
   resolveGithubClientId,
+  resolveGithubAppSettings,
+  parseGithubAppConfig,
+  assessPermissions,
+  isRepoAllowed,
+  type GithubAppSettings,
   DEFAULT_GITHUB_CLIENT_ID,
   type GithubHttp,
   type GithubHttpRequest,
@@ -63,7 +68,21 @@ function fakeCrypto(): SecretCrypto {
   };
 }
 
-function setup(routes: Record<string, Handler | Handler[]>, opts: { crypto?: SecretCrypto } = {}) {
+const APP_URL = "https://api.github.com/apps/geode-app";
+const goodApp = {
+  slug: "geode-app",
+  name: "Geode App",
+  client_id: "client-x",
+  owner: { login: "acme", type: "Organization" },
+  permissions: { contents: "write", pull_requests: "write", metadata: "read", actions: "read", checks: "read" },
+};
+
+function setup(
+  routes: Record<string, Handler | Handler[]>,
+  opts: { crypto?: SecretCrypto; settings?: Partial<GithubAppSettings> } = {},
+) {
+  routes = { [APP_URL]: () => ({ json: goodApp }), ...routes };
+  const settings: GithubAppSettings = { clientId: "client-x", appSlug: "geode-app", allow: [], ...opts.settings };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-gh-"));
   tmpDirs.push(dir);
   const file = path.join(dir, "github-auth.json");
@@ -75,15 +94,14 @@ function setup(routes: Record<string, Handler | Handler[]>, opts: { crypto?: Sec
   const service = new GithubAuthService({
     http: fake.http,
     store,
-    clientId: "client-x",
-    appSlug: "geode-app",
+    settings: () => settings,
     now: () => clock.t,
     sleep: async (ms) => {
       sleeps.push(ms);
       clock.t += ms;
     },
   });
-  return { service, store, file, secrets, clock, sleeps, ...fake };
+  return { service, store, file, secrets, clock, sleeps, settings, ...fake };
 }
 
 const userRoute: Record<string, Handler> = { "https://api.github.com/user": () => ({ json: { login: "octocat" } }) };
@@ -99,10 +117,14 @@ describe("device flow", () => {
     expect(device.userCode).toBe("ABCD-1234");
     expect(h.service.getStatus()).toMatchObject({ state: "pending", userCode: "ABCD-1234" });
     await h.service.waitForSignIn();
-    expect(h.service.getStatus()).toEqual({ state: "connected", login: "octocat" });
+    expect(h.service.getStatus()).toEqual({
+      state: "connected",
+      login: "octocat",
+      app: { slug: "geode-app", clientId: "client-x" },
+    });
     expect(h.sleeps).toEqual([5000, 5000]);
     expect(await h.service.getAccessToken()).toBe("ghu_access1");
-    expect(h.calls[0].form).toEqual({ client_id: "client-x" });
+    expect(h.calls.find((c) => c.url === DEVICE_URL)?.form).toEqual({ client_id: "client-x" });
   });
 
   it("bumps the interval on slow_down", async () => {
@@ -156,7 +178,7 @@ describe("device flow", () => {
   it("refuses to start without a keychain", async () => {
     const h = setup({}, { crypto: { ...fakeCrypto(), isEncryptionAvailable: () => false } });
     await expect(h.service.startSignIn()).rejects.toBeInstanceOf(GithubAuthError);
-    expect(h.service.getStatus()).toEqual({ state: "disconnected", encryptionAvailable: false });
+    expect(h.service.getStatus()).toMatchObject({ state: "disconnected", encryptionAvailable: false });
   });
 });
 
@@ -290,9 +312,15 @@ describe("installation coverage", () => {
     const h = setup(routes);
     await h.service.startSignIn();
     await h.service.waitForSignIn();
-    expect(await h.service.checkRepo("ACME/Widgets")).toEqual({ covered: true, installationId: 42, installUrl: null });
+    expect(await h.service.checkRepo("ACME/Widgets")).toEqual({
+      covered: true,
+      reason: "covered",
+      installationId: 42,
+      installUrl: null,
+    });
     expect(await h.service.checkRepo("acme/other")).toEqual({
       covered: false,
+      reason: "not_installed",
       installationId: null,
       installUrl: "https://github.com/apps/geode-app/installations/new",
     });
@@ -307,5 +335,172 @@ describe("client id", () => {
   it("defaults and honors the env override", () => {
     expect(resolveGithubClientId({})).toBe(DEFAULT_GITHUB_CLIENT_ID);
     expect(resolveGithubClientId({ GEODE_GITHUB_CLIENT_ID: " Iv-test " })).toBe("Iv-test");
+  });
+});
+
+describe("app settings layers", () => {
+  it("reads geode.json, lets the vault override it, and env beats both", () => {
+    const global = { clientId: "Iv-global", appSlug: "global-app" };
+    expect(resolveGithubAppSettings({ env: {}, global })).toMatchObject({ clientId: "Iv-global", appSlug: "global-app" });
+    expect(resolveGithubAppSettings({ env: {}, global, vault: { appSlug: "vault-app" } })).toMatchObject({
+      clientId: "Iv-global",
+      appSlug: "vault-app",
+    });
+    expect(
+      resolveGithubAppSettings({ env: { GEODE_GITHUB_APP_SLUG: "env-app" }, global, vault: { appSlug: "vault-app" } }).appSlug,
+    ).toBe("env-app");
+    expect(resolveGithubAppSettings({ env: {} })).toMatchObject({ clientId: DEFAULT_GITHUB_CLIENT_ID, allow: [] });
+  });
+
+  it("drops malformed values instead of trusting them", () => {
+    expect(parseGithubAppConfig({ clientId: 5, appSlug: "bad slug!", allowedOwners: "acme" })).toEqual({});
+    expect(parseGithubAppConfig("nope")).toEqual({});
+  });
+
+  it("fails closed when an allowlist has only invalid entries", () => {
+    const s = resolveGithubAppSettings({ env: {}, global: { allowedOwners: ["../evil", 3] } });
+    expect(isRepoAllowed(s.allow, "acme/widgets")).toBe(false);
+  });
+
+  it("lets a vault narrow but never widen the global allowlist", () => {
+    const global = { allowedOwners: ["acme"] };
+    const wide = resolveGithubAppSettings({ env: {}, global, vault: { allowedOwners: ["evil"] } });
+    expect(isRepoAllowed(wide.allow, "evil/x")).toBe(false);
+    expect(isRepoAllowed(wide.allow, "acme/x")).toBe(false);
+    const narrow = resolveGithubAppSettings({ env: {}, global, vault: { allowedRepos: ["acme/only"] } });
+    expect(isRepoAllowed(narrow.allow, "acme/only")).toBe(true);
+    expect(isRepoAllowed(narrow.allow, "acme/other")).toBe(false);
+  });
+
+  it("env allowlist replaces geode.json and matches case-insensitively", () => {
+    const s = resolveGithubAppSettings({ env: { GEODE_GITHUB_ALLOWED_OWNERS: "Bankrate-Prototypes" }, global: { allowedOwners: ["acme"] } });
+    expect(isRepoAllowed(s.allow, "bankrate-prototypes/app")).toBe(true);
+    expect(isRepoAllowed(s.allow, "acme/app")).toBe(false);
+  });
+});
+
+describe("permission assessment", () => {
+  it("is clean for exactly the required set", () => {
+    expect(assessPermissions(goodApp.permissions)).toEqual({ missing: [], extra: [] });
+  });
+
+  it("flags missing pull_requests and extra powers", () => {
+    const r = assessPermissions({ contents: "write", metadata: "read", actions: "read", checks: "read", administration: "write", members: "read" });
+    expect(r.missing).toEqual([{ permission: "pull_requests", needed: "write", have: null }]);
+    expect(r.extra.map((e) => e.permission).sort()).toEqual(["administration", "members"]);
+  });
+
+  it("treats too-weak and too-strong levels", () => {
+    const r = assessPermissions({ ...goodApp.permissions, contents: "read", actions: "write" });
+    expect(r.missing).toEqual([{ permission: "contents", needed: "write", have: "read" }]);
+    expect(r.extra).toEqual([{ permission: "actions", level: "write", needed: "read" }]);
+  });
+});
+
+describe("App verification at sign-in", () => {
+  const ok = { [DEVICE_URL]: () => ({ json: deviceResponse }), [DEVICE_GRANT]: () => ({ json: tokenResponse(1) }), ...userRoute };
+
+  it("refuses an unknown App slug and never asks for a device code", async () => {
+    const h = setup({ ...ok, [APP_URL]: () => ({ status: 404, json: { message: "Not Found" } }) });
+    await expect(h.service.startSignIn()).rejects.toMatchObject({ code: "app_not_found" });
+    expect(h.calls.some((c) => c.url === DEVICE_URL)).toBe(false);
+  });
+
+  it("refuses a client ID that belongs to a different App", async () => {
+    const h = setup({ ...ok, [APP_URL]: () => ({ json: { ...goodApp, client_id: "other" } }) });
+    await expect(h.service.startSignIn()).rejects.toMatchObject({ code: "app_mismatch" });
+  });
+
+  it("explains device_flow_disabled and links the (org) App settings", async () => {
+    const h = setup({ ...ok, [DEVICE_URL]: () => ({ json: { error: "device_flow_disabled", error_description: "Device flow must be explicitly enabled" } }) });
+    const err = await h.service.startSignIn().catch((e) => e);
+    expect(err).toBeInstanceOf(GithubAuthError);
+    expect(err).toMatchObject({ code: "device_flow_disabled", url: "https://github.com/organizations/acme/settings/apps/geode-app" });
+    expect(err.message).toMatch(/Device Flow is turned off/);
+  });
+
+  it("still tries to connect when GitHub cannot confirm the App", async () => {
+    const h = setup({ ...ok, [APP_URL]: () => ({ status: 503, json: null }) });
+    await h.service.startSignIn();
+    await h.service.waitForSignIn();
+    expect(h.service.getStatus()).toMatchObject({ state: "connected" });
+  });
+
+  it("requires confirmation for extra permissions, then connects", async () => {
+    const wide = { ...goodApp, permissions: { ...goodApp.permissions, administration: "write" } };
+    const h = setup({ ...ok, [APP_URL]: () => ({ json: wide }) });
+    await expect(h.service.startSignIn()).rejects.toMatchObject({ code: "confirmation_required" });
+    await h.service.startSignIn({ confirmExtraPermissions: true });
+    await h.service.waitForSignIn();
+    expect(h.service.getStatus()).toMatchObject({ state: "connected" });
+  });
+
+  it("warns (does not block) about missing permissions and names the App", async () => {
+    const weak = { ...goodApp, permissions: { contents: "write", metadata: "read" } };
+    const h = setup({ ...ok, [APP_URL]: () => ({ json: weak }) });
+    const report = await h.service.getAppReport();
+    expect(report).toMatchObject({ name: "Geode App", slug: "geode-app", problem: null });
+    expect(report.permissions?.missing.map((m) => m.permission)).toEqual(["pull_requests", "actions", "checks"]);
+    await h.service.startSignIn();
+  });
+});
+
+describe("App change", () => {
+  const ok = { [DEVICE_URL]: () => ({ json: deviceResponse }), [DEVICE_GRANT]: () => ({ json: tokenResponse(1) }), ...userRoute };
+
+  it("drops the token and asks to reconnect when the client ID changes", async () => {
+    const h = setup(ok);
+    await h.service.startSignIn();
+    await h.service.waitForSignIn();
+    expect(h.store.load()?.clientId).toBe("client-x");
+    h.settings.clientId = "client-y";
+    expect(h.service.getStatus()).toMatchObject({ state: "reauth_required", app: { clientId: "client-y" } });
+    await expect(h.service.getAccessToken()).rejects.toMatchObject({ code: "reauth_required" });
+    expect(h.store.load()).toBeNull();
+  });
+
+  it("treats a legacy token with no recorded App as the default App", async () => {
+    const h = setup({}, { settings: { clientId: DEFAULT_GITHUB_CLIENT_ID } });
+    await h.store.save({ accessToken: "ghu_old", refreshToken: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null, login: "o", clientId: null });
+    expect(await h.service.getAccessToken()).toBe("ghu_old");
+    const other = setup({}, { settings: { clientId: "client-x" } });
+    await other.store.save({ accessToken: "ghu_old", refreshToken: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null, login: "o", clientId: null });
+    await expect(other.service.getAccessToken()).rejects.toMatchObject({ code: "reauth_required" });
+  });
+});
+
+describe("allowlist", () => {
+  const routes: Record<string, Handler> = {
+    [DEVICE_URL]: () => ({ json: deviceResponse }),
+    [DEVICE_GRANT]: () => ({ json: tokenResponse(1) }),
+    ...userRoute,
+    "https://api.github.com/user/installations?per_page=100": () => ({ json: { installations: [{ id: 42, account: { login: "acme" } }] } }),
+    "https://api.github.com/user/installations/42/repositories?per_page=100": () => ({
+      json: { repositories: [{ id: 1, full_name: "acme/widgets", private: true }, { id: 2, full_name: "acme/secret", private: true }] },
+    }),
+  };
+
+  it("filters listAccess, blocks checkRepo, and refuses tokens for repos outside it", async () => {
+    const h = setup(routes, { settings: { allow: [{ owners: [], repos: ["acme/widgets"] }] } });
+    await h.service.startSignIn();
+    await h.service.waitForSignIn();
+    expect((await h.service.listAccess())[0].repositories.map((r) => r.fullName)).toEqual(["acme/widgets"]);
+    expect(await h.service.checkRepo("acme/secret")).toMatchObject({ covered: false, reason: "not_allowed", installUrl: null });
+    expect(await h.service.checkRepo("acme/widgets")).toMatchObject({ covered: true });
+    await expect(h.service.getAccessToken("acme/secret")).rejects.toMatchObject({ code: "not_allowed" });
+    expect(await h.service.getAccessToken("acme/widgets")).toBe("ghu_access1");
+  });
+});
+
+describe("settings panel warnings", () => {
+  it("says PRs will fail and that agents hold extra powers", async () => {
+    const { permissionWarnings } = await import("../../src/renderer/settings/github-tab");
+    const report = {
+      permissions: assessPermissions({ contents: "write", metadata: "read", actions: "read", checks: "read", administration: "write" }),
+    } as Parameters<typeof permissionWarnings>[0];
+    const lines = permissionWarnings(report);
+    expect(lines[0]).toMatch(/Opening pull requests will fail/);
+    expect(lines[1]).toMatch(/administration \(write\).*Agent threads will hold/);
+    expect(permissionWarnings(null)).toEqual([]);
   });
 });

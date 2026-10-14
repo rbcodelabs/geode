@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "./build-cli.mjs";
+import { auditCliImports } from "./cli-import-audit.mjs";
 
 /**
  * The `geode-wiki` proof: a real binary, in real subprocesses.
@@ -74,23 +75,13 @@ try {
   const inputs = built.metafile.inputs;
   const sources = Object.keys(inputs).filter((path) => path.startsWith("src/")).sort();
 
-  // The enforcement, per edge. This is the constraint the increment was given —
-  // "a thin argument-parsing and formatting layer that does not reach past
-  // src/wiki/index.ts" — written as something that fails a build rather than as
-  // a sentence in a design doc.
-  const ENTRY_POINTS = new Set(["src/wiki/index.ts", "src/catalog/index.ts"]);
+  // The enforcement, per edge, lives in scripts/cli-import-audit.mjs so the sync proof and the unit
+  // tests (which break it on purpose) share one rule set. A module under src/cli/ may import
+  // src/wiki/index.ts, src/catalog/index.ts, src/sync-node/index.ts (sync.ts only) and its siblings.
   const cliModules = sources.filter((path) => path.startsWith("src/cli/"));
   assert.ok(cliModules.length >= 2, "the CLI must be more than one module for this audit to mean anything");
-  for (const module of cliModules) {
-    for (const edge of inputs[module].imports) {
-      if (!edge.path.startsWith("src/")) continue;
-      assert.ok(
-        ENTRY_POINTS.has(edge.path) || edge.path.startsWith("src/cli/"),
-        `${module} imports ${edge.path} (as ${JSON.stringify(edge.original)}): the CLI may only reach ` +
-        `src/wiki/index.ts, src/catalog/index.ts and its own modules`,
-      );
-    }
-  }
+  const violations = auditCliImports(inputs);
+  assert.deepEqual(violations, [], `import-rule violations:\n  ${violations.join("\n  ")}`);
 
   // Named boundaries first, so crossing one reports *which* was crossed.
   // `src/wiki/search.ts` and `src/wiki/link-resolution.ts` carry the same
@@ -127,8 +118,37 @@ try {
     "src/cli/geode-wiki.ts",
     "src/cli/main.ts",
     "src/cli/output.ts",
+    "src/cli/sync-schedule.ts",
+    "src/cli/sync.ts",
     "src/renderer/api/frontmatter.ts",
     "src/renderer/comments/model.ts",
+    "src/shared/hub-sync.ts",
+    "src/shared/portable-assets.ts",
+    "src/shared/store-errors.ts",
+    "src/shared/store-protocol.ts",
+    "src/sync-core/history-controller.ts",
+    "src/sync-core/history-reducer.ts",
+    "src/sync-core/history-types.ts",
+    "src/sync-core/ports.ts",
+    "src/sync-core/rails.ts",
+    "src/sync-core/scope.ts",
+    "src/sync-node/fs-store.ts",
+    "src/sync-node/http-serve.ts",
+    "src/sync-node/index.ts",
+    "src/sync-node/node-hash-cache.ts",
+    "src/sync-node/node-host.ts",
+    "src/sync-node/node-icloud.ts",
+    "src/sync-node/node-scan.ts",
+    "src/sync-node/path-lock.ts",
+    "src/sync-node/rpc-framing.ts",
+    "src/sync-node/rpc-store.ts",
+    "src/sync-node/serve.ts",
+    "src/sync-node/store-errors.ts",
+    "src/sync-node/store-lock.ts",
+    "src/sync-node/sync-apply.ts",
+    "src/sync-node/sync-private-storage.ts",
+    "src/sync-node/trash.ts",
+    "src/sync-node/wiki-sync.ts",
     "src/wiki/catalog-contract.ts",
     "src/wiki/catalog-materialize.ts",
     "src/wiki/constants.ts",
@@ -162,7 +182,7 @@ try {
   assert.equal(help.code, 0, "--help must succeed");
   for (const command of [
     "info", "list", "read", "search", "resolve", "outgoing", "backlinks",
-    "create", "update", "delete", "catalog-publish", "catalog-restore",
+    "create", "update", "delete", "catalog-publish", "catalog-restore", "sync",
   ]) {
     assert.ok(help.stdout.includes(command), `--help must document ${command}`);
   }
@@ -291,6 +311,18 @@ try {
   const cappedWrite = await json(["create", ...V, ...capped, "Whatever.md", "--text", "x"]);
   assert.equal(cappedWrite.payload.status, "capture-incomplete");
   assert.equal(cappedWrite.code, 1);
+
+  // The total note-text ceiling is its own named refusal, with a hint naming
+  // the flag — and raising the flag is what makes the write go through.
+  const totalRefused = await json(["create", ...V, "--max-total-note-bytes", "1", "Ceiling.md", "--text", "xx"]);
+  assert.equal(totalRefused.payload.status, "total-note-byte-limit");
+  assert.equal(totalRefused.code, 1);
+  assert.ok(totalRefused.payload.result.hint.includes("--max-total-note-bytes"));
+  assert.ok(totalRefused.stdout.includes("--max-total-note-bytes"), "the human line must name the flag too");
+  const totalRaised = await json(["create", ...V, "--max-total-note-bytes", "1073741824", "Ceiling.md", "--text", "xx"]);
+  assert.equal(totalRaised.payload.status, "ok");
+  const totalCleanup = await json(["delete", ...V, "Ceiling.md"]);
+  assert.equal(totalCleanup.payload.status, "ok");
 
   /* ------------------------------- CROSS-PROCESS CONSISTENCY: the whole point */
 

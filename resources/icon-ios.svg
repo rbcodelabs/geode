@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Geode iOS app icon (App Store). Same brand chip + faceted gem as resources/icon.svg, but a
+       FULL-BLEED opaque square: iOS applies its own corner mask, and App Store Connect rejects an icon
+       with an alpha channel, a transparent margin or a baked-in shadow. Render to
+       ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png with no alpha channel
+       (tests/unit/ios-app-icon.test.ts guards this). -->
+  <defs>
+    <linearGradient id="gem" x1="306" y1="254.5" x2="718" y2="769.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#DBEA9D" />
+      <stop offset="1" stop-color="#789348" />
+    </linearGradient>
+    <linearGradient id="topHi" x1="0" y1="0" x2="0" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#294835" />
+  <rect width="1024" height="1024" fill="url(#topHi)" />
+  <path d="M512,254.5 L718,409 L640.75,769.5 L383.25,769.5 L306,409 Z" fill="url(#gem)" />
+  <path d="M512,254.5 L718,409 L640.75,769.5 L512,512 Z" fill="#294835" fill-opacity="0.24" />
+  <path d="M512,254.5 L512,512 L383.25,769.5 L306,409 Z" fill="#294835" fill-opacity="0.08" />
+</svg>

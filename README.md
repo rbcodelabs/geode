@@ -5,7 +5,7 @@ with plugin and partial theme compatibility. Your notes are plain `.md` files
 in a folder on your disk. Links between notes are first-class. No account, no
 cloud, no lock-in.
 
-> ⚠️ Early alpha (v0.27.1). The core loop works — vaults, editing, wikilinks,
+> ⚠️ Early alpha (v0.30.1). The core loop works — vaults, editing, wikilinks,
 > backlinks, search, tags, reading view, community plugins/themes, a Web
 > Viewer — but many features are still on the
 > [roadmap](docs/spec/00-overview.md).
@@ -251,6 +251,7 @@ spike, not a released cloud service.
 npm install
 npm run build      # bundle main/preload/renderer with esbuild
 npm start          # launch Electron
+npm run fresh      # launch an isolated first-run instance (build first)
 npm run dev        # esbuild watch mode
 npm run typecheck  # strict tsc
 npm run parity:check # verify the checked-in Obsidian compatibility ledger is current
@@ -259,6 +260,24 @@ npm run release     # same, plus publish (prefer the protected GitHub workflow)
 ```
 
 A demo vault lives in `test-vault/`.
+
+### Test a first run
+
+`npm run fresh` launches Geode as if it had never been installed: empty app data
+and an empty Documents folder, so nothing from your real install or an earlier
+dev run leaks in. Run `npm run build` first; the command does not build.
+
+```bash
+npm run fresh            # temp dirs are deleted when you quit
+npm run fresh -- --keep  # keep them, to inspect config or the Starter Vault
+```
+
+On first run Geode shows the vault picker; clicking "Try the sample vault" creates
+and opens a `Geode Starter Vault`. That folder lives in the OS Documents directory, which `--user-data-dir` does not redirect, so the
+script points `GEODE_DOCUMENTS_DIR` at a temp folder too. Your real
+`~/Documents/Geode Starter Vault` is never touched. The temp dirs are named
+`fresh-instance-*` rather than `geode-*` because `npm run e2e:kill` reaps
+`geode-*` dirs and their processes.
 
 ### Develop the iOS shell
 
@@ -300,7 +319,7 @@ security-scoped bookmark and an opaque `external://…` identity. Cancel keeps t
 current vault untouched, and a missing, unavailable, or revoked folder presents
 an exact-vault Reconnect action instead of silently selecting an empty vault.
 Native note bytes use coordinated atomic replacement, attachments are
-read as binary (with a 32 MiB bridge limit), and deleted items move into the
+read as binary (32 MiB per bridge call; sync moves larger files up to 100 MiB in chunks), and deleted items move into the
 recoverable, normally hidden `.geode-trash` area under the active root. Renderer
 and plugin APIs receive only normalized vault-relative paths and stable opaque
 vault identities—never absolute URLs or bookmark bytes. Security-scoped access

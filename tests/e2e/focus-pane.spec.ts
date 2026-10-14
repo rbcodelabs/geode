@@ -136,3 +136,20 @@ test("closing the focused group, or revealing a hidden leaf, ends focus", async 
   });
   await expect(window.locator(".workspace.is-focus-pane")).toHaveCount(0);
 });
+
+test("double-clicking a document tab toggles focus mode; double-clicking the close button does not", async () => {
+  await openSecondGroup();
+  const tab = window.locator(".workspace-center .workspace-tab-header", { hasText: "two" });
+
+  await tab.dblclick();
+  await expect(window.locator(".workspace.is-focus-pane")).toHaveCount(1);
+  await expect(window.locator(".workspace-center .workspace-tabs:visible")).toHaveCount(1);
+
+  await tab.dblclick();
+  await expect(window.locator(".workspace.is-focus-pane")).toHaveCount(0);
+
+  // The close button is excluded from the gesture.
+  await tab.hover();
+  await tab.locator(".workspace-tab-header-inner-close-button").dblclick();
+  await expect(window.locator(".workspace.is-focus-pane")).toHaveCount(0);
+});

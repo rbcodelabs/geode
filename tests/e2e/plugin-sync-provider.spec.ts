@@ -39,7 +39,7 @@ test("a Geode plugin provides full-vault sync through the built-in approval UI",
     const window = await app.firstWindow();
     await window.waitForFunction(() => Boolean((window as any).app?.workspace));
     expect(await window.evaluate(() => (window as any).app.pluginManager?.getLoadError("sync-probe") ?? null)).toBeNull();
-    await expect.poll(() => window.evaluate(() => ({ providers: (window as any).app?.sync?.listProviders().length, enabled: (window as any).app?.pluginManager?.isEnabled("sync-probe"), manifests: [...((window as any).app?.pluginManager?.manifests?.keys?.() ?? [])] }))).toEqual({ providers: 1, enabled: true, manifests: ["sync-probe"] });
+    await expect.poll(() => window.evaluate(() => ({ providers: (window as any).app?.sync?.listProviders().filter((provider: any) => provider.id !== "geode.hub").length, enabled: (window as any).app?.pluginManager?.isEnabled("sync-probe"), manifests: [...((window as any).app?.pluginManager?.manifests?.keys?.() ?? [])] }))).toEqual({ providers: 1, enabled: true, manifests: ["sync-probe"] });
     await window.evaluate(() => (window as any).app.setting.openTabById("sync"));
     const modal = window.locator('.modal.mod-settings[aria-label="Settings"]');
     await expect(modal.getByRole("heading", { name: "Sync" })).toBeVisible();

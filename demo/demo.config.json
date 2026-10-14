@@ -1,0 +1,338 @@
+{
+  "title": "Getting started with Geode",
+  "target": {
+    "type": "electron",
+    "app": ".",
+    "env": {
+      "GEODE_HEADLESS": "0",
+      "GEODE_SCREENSHOT_MODE": "1"
+    },
+    "readySelector": ".nav-file-title[data-path=\"Welcome.md\"]",
+    "fixture": {
+      "source": "test-vault",
+      "exclude": [
+        ".geode"
+      ]
+    },
+    "userDataFiles": {
+      "geode.json": {
+        "recentVaults": [
+          "{{fixture}}"
+        ],
+        "lastVault": "{{fixture}}"
+      }
+    }
+  },
+  "environment": {
+    "record": {
+      "runner": "ssh",
+      "host": "dev-builder",
+      "remoteDir": "~/product-demo-work",
+      "shellInit": "export PATH=\"$HOME/.local/share/fnm:$PATH\"; eval \"$(fnm env)\"",
+      "setup": [
+        "npm ci",
+        "node node_modules/electron/install.js",
+        "npm run build"
+      ]
+    }
+  },
+  "capture": {
+    "width": 1280,
+    "height": 800,
+    "fps": 30
+  },
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "look": {
+    "windowWidth": 1440,
+    "cornerRadius": 14,
+    "dock": true,
+    "menuBar": {
+      "appName": "Geode",
+      "items": [
+        "File",
+        "Edit",
+        "View",
+        "Go",
+        "Window",
+        "Help"
+      ],
+      "clock": "Sun Oct 11  9:41 AM"
+    },
+    "appIcon": "resources/icon.png"
+  },
+  "voice": {
+    "modelId": "eleven_multilingual_v2",
+    "stability": 0.5,
+    "similarityBoost": 0.75,
+    "style": 0
+  },
+  "timing": {
+    "leadMs": 400,
+    "tailMs": 700,
+    "maxSlowdown": 1.3
+  },
+  "scenes": [
+    {
+      "id": "intro",
+      "narration": "Welcome to Geode, a local-first Markdown knowledge base. Everything you write lives as plain files in a folder on your computer, which Geode calls a vault. Here we have opened a small demo vault. On the left, the file explorer lists your notes. Let's open the Welcome note.",
+      "actions": [
+        {
+          "type": "waitFor",
+          "selector": ".nav-file-title[data-path=\"Welcome.md\"]"
+        },
+        {
+          "type": "pause",
+          "ms": 1800
+        },
+        {
+          "type": "hover",
+          "selector": ".nav-vault-name",
+          "cue": "which Geode calls a vault",
+          "optional": true
+        },
+        {
+          "type": "hover",
+          "selector": ".nav-file-title[data-path=\"Projects\"], .nav-folder-title[data-path=\"Projects\"]",
+          "optional": true,
+          "cue": "the file explorer"
+        },
+        {
+          "type": "pause",
+          "ms": 600
+        },
+        {
+          "type": "click",
+          "selector": ".nav-file-title[data-path=\"Welcome.md\"]",
+          "cue": "Welcome note"
+        },
+        {
+          "type": "pause",
+          "ms": 2500
+        }
+      ]
+    },
+    {
+      "id": "new-note",
+      "narration": "Creating a note takes one shortcut. Press Command N, and Geode makes a new note with its title ready to edit. Type a name, press Enter, and start writing. Notes are plain Markdown, so everything stays simple and portable.",
+      "actions": [
+        {
+          "type": "pause",
+          "ms": 600
+        },
+        {
+          "type": "press",
+          "key": "ControlOrMeta+n",
+          "label": "⌘ N",
+          "cue": "Press Command N"
+        },
+        {
+          "type": "pause",
+          "ms": 900
+        },
+        {
+          "type": "type",
+          "text": "Meeting Ideas",
+          "delayMs": 90,
+          "cue": "Type a name"
+        },
+        {
+          "type": "pause",
+          "ms": 400
+        },
+        {
+          "type": "press",
+          "key": "Enter",
+          "cue": "press Enter"
+        },
+        {
+          "type": "pause",
+          "ms": 700
+        },
+        {
+          "type": "click",
+          "selector": ".workspace-split.mod-root .cm-content",
+          "cue": "start writing"
+        },
+        {
+          "type": "type",
+          "text": "# Meeting Ideas",
+          "delayMs": 70
+        },
+        {
+          "type": "press",
+          "key": "Enter"
+        },
+        {
+          "type": "press",
+          "key": "Enter"
+        },
+        {
+          "type": "type",
+          "text": "Follow up on the roadmap and the ",
+          "delayMs": 65
+        },
+        {
+          "type": "pause",
+          "ms": 1200
+        }
+      ]
+    },
+    {
+      "id": "wikilinks",
+      "narration": "To link notes together, type two opening square brackets. Geode suggests matching notes as you type. Pick one and press Enter, and you have a wikilink. Linked notes are always one step away.",
+      "actions": [
+        {
+          "type": "type",
+          "text": "[[Wel",
+          "delayMs": 140,
+          "cue": "type two opening square brackets"
+        },
+        {
+          "type": "waitFor",
+          "selector": ".cm-tooltip-autocomplete",
+          "timeoutMs": 6000
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "press",
+          "key": "Enter",
+          "cue": "Pick one and press Enter"
+        },
+        {
+          "type": "pause",
+          "ms": 400
+        },
+        {
+          "type": "type",
+          "text": " note.",
+          "delayMs": 80
+        },
+        {
+          "type": "pause",
+          "ms": 1800
+        }
+      ]
+    },
+    {
+      "id": "backlinks",
+      "narration": "Links work in both directions. Open the Welcome note and look at the Backlinks panel on the right. Meeting Ideas is listed under linked mentions, so you always see what points to the page you are reading. Notes that mention a title without linking it show up as unlinked mentions.",
+      "actions": [
+        {
+          "type": "click",
+          "selector": ".nav-file-title[data-path=\"Welcome.md\"]",
+          "cue": "Open the Welcome note"
+        },
+        {
+          "type": "pause",
+          "ms": 1200
+        },
+        {
+          "type": "click",
+          "selector": ".workspace-sidebar.mod-right [data-type=\"backlinks\"]",
+          "optional": true,
+          "cue": "Backlinks panel"
+        },
+        {
+          "type": "waitFor",
+          "selector": ".workspace-sidebar.mod-right .sidebar-view.mod-active .pane-result",
+          "timeoutMs": 8000,
+          "optional": true
+        },
+        {
+          "type": "hover",
+          "selector": ".workspace-sidebar.mod-right .sidebar-view.mod-active .pane-result",
+          "optional": true,
+          "cue": "Meeting Ideas is listed"
+        },
+        {
+          "type": "pause",
+          "ms": 3000
+        }
+      ]
+    },
+    {
+      "id": "quick-switcher",
+      "narration": "Need to jump somewhere fast? Press Command O to open the quick switcher. Start typing part of a name, and the results filter instantly. Press Enter to open the match.",
+      "actions": [
+        {
+          "type": "pause",
+          "ms": 400
+        },
+        {
+          "type": "press",
+          "key": "ControlOrMeta+o",
+          "label": "⌘ O",
+          "cue": "Press Command O"
+        },
+        {
+          "type": "waitFor",
+          "selector": ".modal .prompt-input"
+        },
+        {
+          "type": "pause",
+          "ms": 700
+        },
+        {
+          "type": "type",
+          "text": "road",
+          "delayMs": 160,
+          "cue": "Start typing part of a name"
+        },
+        {
+          "type": "pause",
+          "ms": 1400
+        },
+        {
+          "type": "press",
+          "key": "Enter",
+          "cue": "Press Enter to open"
+        },
+        {
+          "type": "pause",
+          "ms": 2000
+        }
+      ]
+    },
+    {
+      "id": "graph",
+      "narration": "Finally, Command G opens the graph view. Every note is a dot and every link is a line between them, so you can see how your ideas connect, including the note we just created. That is the basics. Create notes, link them, and let Geode show you the connections. Thanks for watching.",
+      "actions": [
+        {
+          "type": "pause",
+          "ms": 400
+        },
+        {
+          "type": "press",
+          "key": "ControlOrMeta+g",
+          "label": "⌘ G",
+          "cue": "Command G"
+        },
+        {
+          "type": "waitFor",
+          "selector": ".workspace-sidebar.mod-right .graph-view-canvas",
+          "timeoutMs": 8000
+        },
+        {
+          "type": "pause",
+          "ms": 4500
+        },
+        {
+          "type": "hover",
+          "selector": ".workspace-sidebar.mod-right .graph-view-canvas",
+          "cue": "Every note is a dot"
+        },
+        {
+          "type": "pause",
+          "ms": 3500
+        }
+      ]
+    }
+  ]
+}

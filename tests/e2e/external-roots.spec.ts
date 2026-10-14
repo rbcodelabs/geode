@@ -3,6 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 
+// Project/external roots are macOS-only (security-scoped bookmarks); the host API is
+// absent elsewhere by design, so there is nothing to exercise on Linux or Windows.
+test.skip(process.platform !== "darwin", "external roots are macOS-only");
+
 const repoRoot = path.resolve(__dirname, "..", "..");
 
 async function fixture() {

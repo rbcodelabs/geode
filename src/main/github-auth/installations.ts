@@ -1,4 +1,4 @@
-import { GITHUB_API_BASE } from "./config";
+import { GITHUB_API_BASE, isRepoAllowed, type GithubAllowPolicy } from "./config";
 import { asRecord, type GithubHttp } from "./http";
 
 export interface GithubRepo {
@@ -14,7 +14,10 @@ export interface GithubInstallation {
 }
 
 export interface RepoCoverage {
+  /** Installed AND permitted by the allowlist: the only state in which an agent may use the repo. */
   covered: boolean;
+  /** Why not covered: the App is not installed there, or the allowlist excludes it. */
+  reason: "covered" | "not_installed" | "not_allowed";
   installationId: number | null;
   /** Where the user can grant the App access when `covered` is false. */
   installUrl: string | null;
@@ -73,15 +76,20 @@ export function checkRepoCoverage(
   installations: GithubInstallation[],
   repoFullName: string,
   appSlug: string,
+  allow: GithubAllowPolicy[] = [],
 ): RepoCoverage {
+  if (!isRepoAllowed(allow, repoFullName)) {
+    return { covered: false, reason: "not_allowed", installationId: null, installUrl: null };
+  }
   const wanted = repoFullName.toLowerCase();
   for (const inst of installations) {
     if (inst.repositories.some((r) => r.fullName.toLowerCase() === wanted)) {
-      return { covered: true, installationId: inst.id, installUrl: null };
+      return { covered: true, reason: "covered", installationId: inst.id, installUrl: null };
     }
   }
   return {
     covered: false,
+    reason: "not_installed",
     installationId: null,
     installUrl: `https://github.com/apps/${encodeURIComponent(appSlug)}/installations/new`,
   };

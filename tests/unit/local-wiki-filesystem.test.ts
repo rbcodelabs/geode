@@ -22,6 +22,13 @@ async function snapshot(root: string, options: Parameters<typeof openLocalWikiSn
 }
 
 describe("bounded Node folder capture", () => {
+  it("lists directory entries in a fixed, case-insensitive order so a capped capture is the same on every filesystem", async () => {
+    const root = await fixture({ "Zeta.md": "z", "alpha.md": "a", "Beta.md": "b", "a/inner.md": "i" });
+    const names: string[] = [];
+    for await (const name of nodeWikiFileSystem.entries(root)) names.push(name);
+    expect(names).toEqual(["a", "alpha.md", "Beta.md", "Zeta.md"]);
+  });
+
   it("reads nested Markdown, indexes attachments without reading them and uses memory after open", async () => {
     const root = await fixture({ "nested/Source.MD": "[[Target]]", "Target.md": "# Target", "asset.png": new Uint8Array([0xff]) });
     const opened: string[] = [];

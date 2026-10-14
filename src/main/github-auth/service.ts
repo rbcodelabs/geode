@@ -5,7 +5,15 @@ import {
   requestDeviceCode,
   type DeviceCodeInfo,
 } from "./device-flow";
-import { GITHUB_REVOKE_PAGE_URL } from "./config";
+import {
+  appSettingsUrl,
+  assessPermissions,
+  fetchAppInfo,
+  type GithubAppInfo,
+  type GithubAppLookup,
+  type PermissionReport,
+} from "./app-info";
+import { DEFAULT_GITHUB_CLIENT_ID, GITHUB_REVOKE_PAGE_URL, isRepoAllowed, type GithubAppSettings } from "./config";
 import type { GithubHttp } from "./http";
 import {
   checkRepoCoverage,
@@ -20,18 +28,39 @@ import type { GithubTokenStore, StoredAuth } from "./token-store";
 /** Refresh this long before the access token actually expires. */
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
-export type GithubAuthStatus =
+/** The App Geode is configured to use (not necessarily one the user has signed in to yet). */
+export interface GithubActiveApp {
+  slug: string;
+  clientId: string;
+}
+
+export type GithubAuthState =
   | { state: "disconnected"; encryptionAvailable: boolean }
   | { state: "pending"; userCode: string; verificationUri: string; expiresAt: number }
   | { state: "connected"; login: string | null }
   | { state: "reauth_required"; message: string }
   | { state: "error"; message: string };
 
+export type GithubAuthStatus = GithubAuthState & { app: GithubActiveApp };
+
+/** Result of checking the configured App against GitHub: identity, settings link and permission diff. */
+export interface GithubAppReport {
+  slug: string;
+  clientId: string;
+  /** Display name when GitHub could be asked; null otherwise. */
+  name: string | null;
+  ownerLogin: string | null;
+  settingsUrl: string;
+  /** Set when the App could not be confirmed (not found, ID mismatch, offline). */
+  problem: { code: "app_not_found" | "app_mismatch" | "unavailable"; message: string } | null;
+  permissions: PermissionReport | null;
+}
+
 export interface GithubAuthDeps {
   http: GithubHttp;
   store: GithubTokenStore;
-  clientId: string;
-  appSlug: string;
+  /** Read per call so the active App can change (config edit, different vault) while running. */
+  settings: () => GithubAppSettings;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -39,6 +68,7 @@ export interface GithubAuthDeps {
 export class GithubAuthService {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private appLookup: { slug: string; at: number; result: GithubAppLookup } | null = null;
   private pending: { device: DeviceCodeInfo; expiresAt: number; abort: AbortController; done: Promise<void> } | null = null;
   private failure: { state: "error" | "reauth_required"; message: string } | null = null;
   private refreshing: Promise<StoredAuth> | null = null;
@@ -48,7 +78,35 @@ export class GithubAuthService {
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
+  private get app(): GithubActiveApp {
+    const { appSlug, clientId } = this.deps.settings();
+    return { slug: appSlug, clientId };
+  }
+
+  /**
+   * The stored tokens, but only if the configured App still matches the one
+   * that issued them. Tokens from another App are dropped (never sent on), and
+   * the user is asked to reconnect. Tokens saved before the client ID was
+   * recorded came from the default App unless proven otherwise.
+   */
+  private loadMatching(): StoredAuth | null {
+    const stored = this.deps.store.load();
+    if (!stored) return null;
+    const wanted = this.deps.settings().clientId;
+    if ((stored.clientId ?? DEFAULT_GITHUB_CLIENT_ID) === wanted) return stored;
+    this.failure = {
+      state: "reauth_required",
+      message: "The GitHub App Geode is configured to use has changed. Connect GitHub again to use the new App.",
+    };
+    void this.deps.store.clear();
+    return null;
+  }
+
   getStatus(): GithubAuthStatus {
+    return { ...this.rawStatus(), app: this.app };
+  }
+
+  private rawStatus(): GithubAuthState {
     if (this.pending) {
       return {
         state: "pending",
@@ -57,7 +115,7 @@ export class GithubAuthService {
         expiresAt: this.pending.expiresAt,
       };
     }
-    const stored = this.deps.store.load();
+    const stored = this.loadMatching();
     if (stored) return { state: "connected", login: stored.login };
     if (this.failure) return this.failure;
     return { state: "disconnected", encryptionAvailable: this.deps.store.isAvailable() };
@@ -68,28 +126,74 @@ export class GithubAuthService {
    * GitHub issues it; polling continues in the background. `waitForSignIn()`
    * resolves when it finishes (tests use it; the UI polls `getStatus`).
    */
-  async startSignIn(): Promise<DeviceCodeInfo> {
+  async startSignIn(opts: { confirmExtraPermissions?: boolean } = {}): Promise<DeviceCodeInfo> {
     if (!this.deps.store.isAvailable()) {
       throw new GithubAuthError("unexpected", "No OS keychain is available, so GitHub tokens cannot be stored safely.");
     }
+    const { clientId } = this.deps.settings();
+    // Verify the App before asking GitHub for a code, so a wrong slug/client ID
+    // or missing permission is explained instead of surfacing as a bare failure.
+    const report = await this.getAppReport(true);
+    if (report.problem && report.problem.code !== "unavailable") {
+      throw new GithubAuthError(report.problem.code, report.problem.message, report.settingsUrl);
+    }
+    if (report.permissions?.extra.length && !opts.confirmExtraPermissions) {
+      const names = report.permissions.extra.map((e) => `${e.permission} (${e.level})`).join(", ");
+      throw new GithubAuthError(
+        "confirmation_required",
+        `This GitHub App grants more than Geode needs: ${names}. Agent threads will hold these powers. Confirm to connect anyway.`,
+        report.settingsUrl,
+      );
+    }
     this.cancelPending();
     this.failure = null;
-    const device = await requestDeviceCode(this.deps.http, this.deps.clientId);
+    const device = await requestDeviceCode(this.deps.http, clientId, report.settingsUrl);
     const abort = new AbortController();
-    const done = this.completeSignIn(device, abort.signal);
+    const done = this.completeSignIn(device, abort.signal, clientId);
     this.pending = { device, expiresAt: this.now() + device.expiresIn * 1000, abort, done };
     return device;
+  }
+
+  /** Identity + permission check of the configured App. `fresh` bypasses the 60s cache. */
+  async getAppReport(fresh = false): Promise<GithubAppReport> {
+    const { appSlug, clientId } = this.deps.settings();
+    let cached = this.appLookup;
+    if (fresh || !cached || cached.slug !== appSlug || this.now() - cached.at > 60_000) {
+      cached = { slug: appSlug, at: this.now(), result: await fetchAppInfo(this.deps.http, appSlug) };
+      this.appLookup = cached;
+    }
+    const lookup = cached.result;
+    const app: GithubAppInfo | null = lookup.kind === "found" ? lookup.app : null;
+    const settingsUrl = appSettingsUrl(app, appSlug);
+    const base = { slug: appSlug, clientId, name: app?.name ?? null, ownerLogin: app?.ownerLogin ?? null, settingsUrl };
+    if (lookup.kind === "not_found") {
+      return { ...base, permissions: null, problem: { code: "app_not_found", message: `No GitHub App with the slug "${appSlug}" exists. Check github.appSlug.` } };
+    }
+    if (lookup.kind === "unavailable") {
+      return { ...base, permissions: null, problem: { code: "unavailable", message: lookup.message } };
+    }
+    if (lookup.app.clientId && lookup.app.clientId !== clientId) {
+      return {
+        ...base,
+        permissions: null,
+        problem: {
+          code: "app_mismatch",
+          message: `The client ID ${clientId} does not belong to the GitHub App "${appSlug}" (its client ID is ${lookup.app.clientId}). Fix github.clientId or github.appSlug.`,
+        },
+      };
+    }
+    return { ...base, permissions: assessPermissions(lookup.app.permissions), problem: null };
   }
 
   waitForSignIn(): Promise<void> {
     return this.pending?.done ?? Promise.resolve();
   }
 
-  private async completeSignIn(device: DeviceCodeInfo, signal: AbortSignal): Promise<void> {
+  private async completeSignIn(device: DeviceCodeInfo, signal: AbortSignal, clientId: string): Promise<void> {
     try {
       const tokens = await pollForToken({
         http: this.deps.http,
-        clientId: this.deps.clientId,
+        clientId,
         device,
         sleep: this.sleep,
         now: this.now,
@@ -102,7 +206,7 @@ export class GithubAuthService {
       } catch {
         // The login is cosmetic; the tokens are still valid.
       }
-      await this.deps.store.save({ ...tokens, login });
+      await this.deps.store.save({ ...tokens, login, clientId });
     } catch (error) {
       if (!signal.aborted) this.failure = { state: "error", message: (error as Error).message };
     } finally {
@@ -121,8 +225,11 @@ export class GithubAuthService {
    * on demand; it is never injected globally. Throws GithubAuthError with
    * `reauth_required` when the user must reconnect.
    */
-  async getAccessToken(): Promise<string> {
-    const stored = this.deps.store.load();
+  async getAccessToken(repoFullName?: string): Promise<string> {
+    if (repoFullName && !isRepoAllowed(this.deps.settings().allow, repoFullName)) {
+      throw new GithubAuthError("not_allowed", `${repoFullName} is outside the repositories Geode is allowed to reach (github.allowedOwners / allowedRepos).`);
+    }
+    const stored = this.loadMatching();
     if (!stored) throw new GithubAuthError("reauth_required", "GitHub is not connected.");
     if (!this.isNearExpiry(stored)) return stored.accessToken;
     return (await this.refresh(stored)).accessToken;
@@ -144,8 +251,8 @@ export class GithubAuthService {
   private async doRefresh(stored: StoredAuth): Promise<StoredAuth> {
     if (!stored.refreshToken) return this.requireReauth("GitHub sign-in expired. Connect GitHub again.");
     try {
-      const tokens = await refreshTokens(this.deps.http, this.deps.clientId, stored.refreshToken, this.now());
-      const next: StoredAuth = { ...tokens, login: stored.login };
+      const tokens = await refreshTokens(this.deps.http, stored.clientId ?? this.deps.settings().clientId, stored.refreshToken, this.now());
+      const next: StoredAuth = { ...tokens, login: stored.login, clientId: stored.clientId ?? this.deps.settings().clientId };
       await this.deps.store.save(next);
       return next;
     } catch (error) {
@@ -169,18 +276,26 @@ export class GithubAuthService {
       return await call(token);
     } catch (error) {
       if (!(error instanceof GithubUnauthorizedError)) throw error;
-      const stored = this.deps.store.load();
+      const stored = this.loadMatching();
       if (!stored) throw error;
       return call((await this.refresh(stored)).accessToken);
     }
   }
 
-  listAccess(): Promise<GithubInstallation[]> {
-    return this.withToken((token) => listInstallations(this.deps.http, token));
+  /** Installations the App can reach, narrowed to what the allowlist permits. */
+  async listAccess(): Promise<GithubInstallation[]> {
+    const all = await this.withToken((token) => listInstallations(this.deps.http, token));
+    const { allow } = this.deps.settings();
+    if (!allow.length) return all;
+    return all
+      .map((inst) => ({ ...inst, repositories: inst.repositories.filter((r) => isRepoAllowed(allow, r.fullName)) }))
+      .filter((inst) => inst.repositories.length > 0);
   }
 
   async checkRepo(repoFullName: string): Promise<RepoCoverage> {
-    return checkRepoCoverage(await this.listAccess(), repoFullName, this.deps.appSlug);
+    const { appSlug, allow } = this.deps.settings();
+    if (!isRepoAllowed(allow, repoFullName)) return checkRepoCoverage([], repoFullName, appSlug, allow);
+    return checkRepoCoverage(await this.listAccess(), repoFullName, appSlug, allow);
   }
 
   /**

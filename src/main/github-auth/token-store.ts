@@ -5,6 +5,8 @@ const TOKEN_SECRET_ID = "github-app-auth";
 
 export interface StoredAuth extends TokenSet {
   login: string | null;
+  /** The App (client ID) that issued these tokens; a token is only valid for that App. */
+  clientId: string | null;
 }
 
 /**
@@ -35,6 +37,7 @@ export class GithubTokenStore {
         accessTokenExpiresAt: parsed.accessTokenExpiresAt ?? null,
         refreshTokenExpiresAt: parsed.refreshTokenExpiresAt ?? null,
         login: parsed.login ?? null,
+        clientId: typeof parsed.clientId === "string" ? parsed.clientId : null,
       };
     } catch {
       return null;

@@ -268,10 +268,10 @@ export async function dependencyInventory(directory) {
     await walk("");
     return { sha256: hash.digest("hex"), files, bytes, excludedCacheDirectories: [...cacheNames] };
 }
-export async function stageDependencies(source, destination) {
+export async function stageDependencies(source, destination, { minFreeBytes = 5 * 1024 ** 3 } = {}) {
     const canonical = await realpath(source), original = await dependencyInventory(canonical);
     const available = await statfs(dirname(destination)).then(s => s.bavail * s.bsize);
-    if (available < 5 * 1024 ** 3 + original.bytes)
+    if (available < minFreeBytes + original.bytes)
         throw Error("Insufficient disk headroom for private dependencies");
     await mkdir(destination);
     await cp(canonical, destination, { recursive: true, verbatimSymlinks: true, filter: path => !relative(canonical, path).split(/[\\/]/).some(name => cacheNames.has(name)) });

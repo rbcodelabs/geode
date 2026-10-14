@@ -9,6 +9,9 @@
 import type { App } from "../app";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "../../main/github-resolve";
 import type { ObsidianImportResult } from "../../main/obsidian-import";
+import type { SupportedPluginCatalog } from "../../shared/supported-plugin-catalog";
+import { GEODE_APP_VERSION } from "../app-version";
+import { installMobileSupportedPlugin } from "./mobile-supported-plugins";
 import {
   findItem,
   itemsToCheck,
@@ -118,6 +121,43 @@ export class CommunityManager {
     return installed;
   }
 
+  /**
+   * Mobile: install the catalog-tested release of a supported plugin (see
+   * mobile-supported-plugins.ts). Hash-verified before any write, recorded in
+   * community.json pinned to the tested version, and never enabled here — a
+   * plugin that was already enabled is reloaded so it runs the files on disk.
+   */
+  async installMobileSupported(catalog: SupportedPluginCatalog, pluginId: string): Promise<InstalledResult> {
+    const host = this.app.host;
+    const transport = host.supportedPluginTransport;
+    if (!transport) throw new Error("Supported plugin installation is unavailable on this host");
+    const files = host.vaultFiles;
+    const installed = await installMobileSupportedPlugin(catalog, pluginId, {
+      transport,
+      currentGeodeVersion: GEODE_APP_VERSION,
+      readExistingManifest: async (id) => {
+        const path = `.geode/plugins/${id}/manifest.json`;
+        return (await files.exists(path)) ? files.read(path) : null;
+      },
+      mkdir: (path) => files.mkdir(path),
+      writeFile: async (path, data) => { await files.write(path, data); },
+      removeFolder: async (path) => { await (files.rmdir ? files.rmdir(path, true) : files.trash(path)); },
+      replacePluginFiles: (id, expected, replacement) => host.plugins.replacePluginFiles(id, expected, replacement),
+    });
+    await this.recordInstalled(installed, installed.version);
+    if (this.app.pluginManager.isEnabled(installed.id)) {
+      try {
+        await this.app.pluginManager.reload(installed.id);
+      } catch (error) {
+        throw new Error(
+          `Installed ${installed.name} ${installed.version}, but reloading it failed: ` +
+          (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+    return installed;
+  }
+
   private async recordInstalled(installed: InstalledResult, pinnedVersion?: string): Promise<void> {
     const item: CommunityItem = {
       repo: installed.repo,
@@ -147,7 +187,19 @@ export class CommunityManager {
    * community.json. Never throws — per-item failures are collected.
    */
   async checkForUpdates(
-    opts: { force?: boolean; repos?: string[] } = {}
+    opts: {
+      force?: boolean;
+      repos?: string[];
+      /**
+       * Hot-reload an updated plugin (default true). Launch passes false: no
+       * plugin is loaded yet, so the update is a plain on-disk install and
+       * `pluginManager.reload` must not be touched.
+       */
+      reload?: boolean;
+      /** Stop before the next item once aborted (launch timeout / Skip). Completed items are still saved. */
+      signal?: AbortSignal;
+      onProgress?: (text: string) => void;
+    } = {}
   ): Promise<UpdateSummary> {
     const now = Date.now();
     let config = await this.load();
@@ -159,7 +211,12 @@ export class CommunityManager {
 
     const summary: UpdateSummary = { checked: 0, updated: [], failed: [] };
 
+    const reload = opts.reload !== false;
+    let index = 0;
     for (const item of candidates) {
+      if (opts.signal?.aborted) break;
+      index++;
+      opts.onProgress?.(`Checking ${item.id} (${index}/${candidates.length})`);
       summary.checked++;
       try {
         const preview = await this.resolve(item.repo, { type: item.type });
@@ -183,6 +240,8 @@ export class CommunityManager {
           continue;
         }
 
+        // Never begin an install after launch gave up on this step.
+        if (opts.signal?.aborted) break;
         const installOpts: ResolveOpts = preview.source === "release"
           ? { type: item.type, tag: preview.ref, expected: preview }
           : { type: item.type, expected: preview };
@@ -208,7 +267,7 @@ export class CommunityManager {
         });
 
         if (installed.type === "plugin") {
-          await this.app.pluginManager.reload(installed.id);
+          if (reload) await this.app.pluginManager.reload(installed.id);
         } else if (this.app.settings.cssTheme === installed.id) {
           // Only the *active* theme needs a live re-apply; others just sit on disk.
           await this.app.themeManager.apply(installed.id);
@@ -247,6 +306,20 @@ export class CommunityManager {
    * default), delete its files, and untrack it. Files go to the OS trash,
    * matching the vault's delete behavior.
    */
+  /**
+   * Remove an installed plugin/theme folder. Prefers the OS trash so a mistaken
+   * uninstall is recoverable, but a machine with no trash service (headless
+   * Linux, some sandboxes) rejects that call; the folder is a reinstallable
+   * download, so remove it outright rather than leave the uninstall wedged.
+   */
+  private async removeInstalledFolder(path: string): Promise<void> {
+    try {
+      await window.geode.trash(path);
+    } catch {
+      await window.geode.rmdir(path, true);
+    }
+  }
+
   async uninstall(repo: string): Promise<void> {
     const config = await this.load();
     const item = findItem(config, repo);
@@ -256,13 +329,13 @@ export class CommunityManager {
       if (this.app.pluginManager.isEnabled(item.id)) {
         await this.app.pluginManager.disable(item.id);
       }
-      await window.geode.trash(`.geode/plugins/${item.id}`);
+      await this.removeInstalledFolder(`.geode/plugins/${item.id}`);
       await this.app.pluginManager.rescan();
     } else {
       if (this.app.settings.cssTheme === item.id) {
         await this.app.applyCommunityTheme(""); // revert to built-in default
       }
-      await window.geode.trash(`.geode/themes/${item.id}`);
+      await this.removeInstalledFolder(`.geode/themes/${item.id}`);
     }
     await this.save(removeItem(config, repo));
   }

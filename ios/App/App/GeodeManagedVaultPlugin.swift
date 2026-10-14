@@ -90,7 +90,23 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             CAPPluginMethod(name: "listPluginIds", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "listThemes", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "readPluginFile", returnType: CAPPluginReturnPromise),
-            CAPPluginMethod(name: "replacePluginFiles", returnType: CAPPluginReturnPromise)
+            CAPPluginMethod(name: "replacePluginFiles", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "stat", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "writeBinary", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "readBinaryRange", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "writeBinaryChunk", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "writeBinaryCommit", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "writeBinaryAbort", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateReadRange", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateWriteChunk", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateWrite", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateRead", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateList", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateRemove", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "syncPrivateAvailableBytes", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "appSecretGet", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "appSecretSet", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "appSecretRemove", returnType: CAPPluginReturnPromise)
         ]
 #if DEBUG
         methods.append(CAPPluginMethod(name: "debugProbe", returnType: CAPPluginReturnPromise))
@@ -104,6 +120,9 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
     private let ioQueue = DispatchQueue(label: "com.rbcodelabs.geode.managed-vault")
     private let trashName = ".geode-trash"
     private let binaryBridgeLimit = 32 * 1024 * 1024
+    /// Largest file the chunked sync calls will carry in total (matches SYNC_MAX_FILE_BYTES); one call still never exceeds `binaryChunkLimit`.
+    private let syncFileLimit = 100 * 1024 * 1024
+    private let binaryChunkLimit = 16 * 1024 * 1024
     private let pluginBridgeLimit = 16 * 1024 * 1024
     private var activeRoot: URL?
     private var activeVaultId: String?
@@ -405,6 +424,250 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                 main: main,
                 styles: styles
             )
+            return [:]
+        }
+    }
+
+    // MARK: Guarded sync support (binary writes, stat, sync-private storage) and app secrets
+
+    /// Same atomic temp-and-swap with rollback as `write`, for bytes. The renderer's hash guard decides whether to call it.
+    @objc func writeBinary(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            guard let encoded = call.getString("base64"), encoded.utf8.count <= self.binaryBridgeLimit * 4 / 3 + 4,
+                  let data = Data(base64Encoded: encoded) else { throw ManagedVaultFailure.io }
+            guard data.count <= self.binaryBridgeLimit else { throw ManagedVaultFailure.payloadTooLarge }
+            let url = try self.validatedURL(path)
+            let existed = self.fileManager.fileExists(atPath: url.path)
+            try self.atomicWrite(data, to: url)
+            let entry = try self.entry(url, path: path)
+            self.emit(event: existed ? "modify" : "create", path: path, mutationId: call.getString("mutationId"))
+            return ["mtime": entry.mtime, "ctime": entry.ctime, "size": entry.size]
+        }
+    }
+
+    /// Chunked counterparts of `readBinary`/`writeBinary` for files over the bridge limit, up to `syncFileLimit`.
+    /// `size` and `mtime` come back with every chunk so the caller can tell the file changed mid-read.
+    @objc func readBinaryRange(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            guard let offset = call.getInt("offset"), let length = call.getInt("length"),
+                  offset >= 0, length > 0, length <= self.binaryChunkLimit else { throw ManagedVaultFailure.invalidPath }
+            let url = try self.validatedURL(path)
+            guard self.fileManager.fileExists(atPath: url.path) else { throw ManagedVaultFailure.notFound }
+            if self.fileManager.isUbiquitousItem(at: url),
+               let status = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]).ubiquitousItemDownloadingStatus,
+               status != .current { throw ManagedVaultFailure.contentUnavailable }
+            let before = try self.entry(url, path: path)
+            guard before.size <= self.syncFileLimit else { throw ManagedVaultFailure.payloadTooLarge }
+            var coordinationError: NSError?
+            var operationError: Error?
+            var chunk = Data()
+            NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordinationError) { coordinated in
+                do {
+                    let handle = try FileHandle(forReadingFrom: coordinated)
+                    defer { try? handle.close() }
+                    try handle.seek(toOffset: UInt64(offset))
+                    chunk = try handle.read(upToCount: length) ?? Data()
+                } catch { operationError = error }
+            }
+            if let error = coordinationError ?? operationError { throw self.map(error) }
+            return ["base64": chunk.base64EncodedString(), "size": before.size, "mtime": before.mtime]
+        }
+    }
+
+    /// Chunk temp: dotted (never scanned or synced), in the target's own directory (same volume, so the commit is an atomic swap),
+    /// and named by the operation so a retry after a crash restarts the same file instead of leaking a new one.
+    private func chunkTemporary(for destination: URL, mutationId: String) throws -> URL {
+        guard UUID(uuidString: mutationId) != nil else { throw ManagedVaultFailure.invalidPath }
+        return destination.deletingLastPathComponent().appendingPathComponent(".geode-write-chunk-\(mutationId.lowercased())")
+    }
+
+    /// A crash can orphan a chunk temp whose operation never retries; reclaim those a day after their last write.
+    private func sweepStaleChunkTemporaries(in directory: URL) {
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        for url in (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] where url.lastPathComponent.hasPrefix(".geode-write-chunk-") {
+            if let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, modified < cutoff { try? fileManager.removeItem(at: url) }
+        }
+    }
+
+    /// Appends one chunk; offset 0 starts a fresh temp, any other offset must equal the temp's current size.
+    @objc func writeBinaryChunk(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            guard let offset = call.getInt("offset"), offset >= 0, let mutationId = call.getString("mutationId"),
+                  let encoded = call.getString("base64"), let data = Data(base64Encoded: encoded) else { throw ManagedVaultFailure.invalidPath }
+            guard data.count <= self.binaryChunkLimit, offset + data.count <= self.syncFileLimit else { throw ManagedVaultFailure.payloadTooLarge }
+            let destination = try self.validatedURL(path)
+            guard self.fileManager.fileExists(atPath: destination.deletingLastPathComponent().path) else { throw ManagedVaultFailure.notFound }
+            let temporary = try self.chunkTemporary(for: destination, mutationId: mutationId)
+            if offset == 0 {
+                self.sweepStaleChunkTemporaries(in: temporary.deletingLastPathComponent())
+                try? self.fileManager.removeItem(at: temporary)
+                guard self.fileManager.createFile(atPath: temporary.path, contents: nil) else { throw ManagedVaultFailure.io }
+            } else {
+                let current = (try? self.fileManager.attributesOfItem(atPath: temporary.path))?[.size] as? NSNumber
+                guard current?.intValue == offset else { throw ManagedVaultFailure.io }
+            }
+            do {
+                let handle = try FileHandle(forWritingTo: temporary)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                try? self.fileManager.removeItem(at: temporary)
+                throw self.map(error)
+            }
+            return ["size": offset + data.count]
+        }
+    }
+
+    /// Verifies the assembled size, then swaps the temp over the target with the same fsync/backup/rollback as `writeBinary`.
+    @objc func writeBinaryCommit(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            guard let size = call.getInt("size"), let mutationId = call.getString("mutationId") else { throw ManagedVaultFailure.invalidPath }
+            let url = try self.validatedURL(path)
+            let temporary = try self.chunkTemporary(for: url, mutationId: mutationId)
+            let current = (try? self.fileManager.attributesOfItem(atPath: temporary.path))?[.size] as? NSNumber
+            guard current?.intValue == size else { try? self.fileManager.removeItem(at: temporary); throw ManagedVaultFailure.io }
+            let existed = self.fileManager.fileExists(atPath: url.path)
+            try self.synchronize(temporary)
+            try self.atomicSwap(temporary: temporary, to: url)
+            let entry = try self.entry(url, path: path)
+            self.emit(event: existed ? "modify" : "create", path: path, mutationId: mutationId)
+            return ["mtime": entry.mtime, "ctime": entry.ctime, "size": entry.size]
+        }
+    }
+
+    /// Idempotent; discards a half-assembled chunked write.
+    @objc func writeBinaryAbort(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            guard let mutationId = call.getString("mutationId") else { throw ManagedVaultFailure.invalidPath }
+            try? self.fileManager.removeItem(at: try self.chunkTemporary(for: try self.validatedURL(path), mutationId: mutationId))
+            return [:]
+        }
+    }
+
+    /// What is at a vault path, without following links: a link on any component reports "symlink" so sync fails closed.
+    /// Unlike `validatedURL` this never rejects an escaping link, it reports it.
+    @objc func stat(_ call: CAPPluginCall) {
+        perform(call) {
+            let path = try self.requiredPath(call)
+            let components = try self.lexicalComponents(path)
+            var current = try self.vaultRoot
+            // By position, never by name: a file named like its parent folder (Skills/x/x) must not be mistaken for the last component.
+            for (index, component) in components.enumerated() {
+                current.appendPathComponent(component, isDirectory: false)
+                guard let attributes = try? self.fileManager.attributesOfItem(atPath: current.path) else {
+                    return ["kind": "none", "size": 0, "children": 0]
+                }
+                let type = attributes[.type] as? FileAttributeType
+                if type == .typeSymbolicLink { return ["kind": "symlink", "size": 0, "children": 0] }
+                if index == components.count - 1 {
+                    if type == .typeDirectory {
+                        let children = (try? self.fileManager.contentsOfDirectory(atPath: current.path).count) ?? 0
+                        return ["kind": "folder", "size": 0, "children": children]
+                    }
+                    return ["kind": "file", "size": (attributes[.size] as? NSNumber)?.intValue ?? 0, "children": 0]
+                }
+                if type != .typeDirectory { return ["kind": "none", "size": 0, "children": 0] }
+            }
+            return ["kind": "none", "size": 0, "children": 0]
+        }
+    }
+
+    private func lexicalComponents(_ path: String) throws -> [String] {
+        guard !path.isEmpty, !path.contains("\0"), !path.hasPrefix("/"), !path.contains("\\") else { throw ManagedVaultFailure.invalidPath }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.first != trashName, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { throw ManagedVaultFailure.invalidPath }
+        return parts
+    }
+
+    private func syncPrivateStore() throws -> GeodeSyncPrivateStore {
+        GeodeSyncPrivateStore(root: try GeodeSyncPrivateStore.defaultRoot(), byteLimit: syncFileLimit)
+    }
+
+    @objc func syncPrivateWrite(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path"), let encoded = call.getString("base64"),
+                  let data = Data(base64Encoded: encoded) else { throw ManagedVaultFailure.invalidPath }
+            guard data.count <= self.binaryBridgeLimit else { throw ManagedVaultFailure.payloadTooLarge }
+            try self.syncPrivateStore().write(data, to: path)
+            return [:]
+        }
+    }
+
+    @objc func syncPrivateRead(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path") else { throw ManagedVaultFailure.invalidPath }
+            guard let data = try self.syncPrivateStore().read(path, maxBytes: self.binaryBridgeLimit) else { return ["found": false] }
+            return ["found": true, "base64": data.base64EncodedString()]
+        }
+    }
+
+    /// Ranged read of a sync-private file: files over the bridge limit travel as several calls. `size` is the whole file.
+    @objc func syncPrivateReadRange(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path"), let offset = call.getInt("offset"), let length = call.getInt("length"),
+                  offset >= 0, length > 0, length <= self.binaryChunkLimit else { throw ManagedVaultFailure.invalidPath }
+            guard let range = try self.syncPrivateStore().readRange(path, offset: offset, length: length) else { return ["found": false] }
+            return ["found": true, "base64": range.data.base64EncodedString(), "size": range.size]
+        }
+    }
+
+    /// Appends one chunk to `<path>.chunked.tmp` (offset 0 starts afresh); the final chunk fsyncs and renames over `path`.
+    @objc func syncPrivateWriteChunk(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path"), let offset = call.getInt("offset"), offset >= 0,
+                  let encoded = call.getString("base64"), let data = Data(base64Encoded: encoded) else { throw ManagedVaultFailure.invalidPath }
+            guard data.count <= self.binaryChunkLimit else { throw ManagedVaultFailure.payloadTooLarge }
+            try self.syncPrivateStore().writeChunk(data, to: path, offset: offset, final: call.getBool("final") ?? false)
+            return [:]
+        }
+    }
+
+    @objc func syncPrivateList(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path") else { throw ManagedVaultFailure.invalidPath }
+            let entries: JSArray = try self.syncPrivateStore().list(path).map { ["name": $0.name, "isFolder": $0.isFolder] as JSObject }
+            return ["entries": entries]
+        }
+    }
+
+    @objc func syncPrivateRemove(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let path = call.getString("path") else { throw ManagedVaultFailure.invalidPath }
+            try self.syncPrivateStore().remove(path, recursive: call.getBool("recursive") ?? false)
+            return [:]
+        }
+    }
+
+    @objc func syncPrivateAvailableBytes(_ call: CAPPluginCall) {
+        perform(call) { ["bytes": Double(try self.syncPrivateStore().availableBytes())] }
+    }
+
+    @objc func appSecretGet(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let key = call.getString("key") else { throw ManagedVaultFailure.invalidPath }
+            guard let value = try GeodeKeychainStore().get(key) else { return ["found": false] }
+            return ["found": true, "value": value]
+        }
+    }
+
+    @objc func appSecretSet(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let key = call.getString("key"), let value = call.getString("value") else { throw ManagedVaultFailure.invalidPath }
+            try GeodeKeychainStore().set(key, value)
+            return [:]
+        }
+    }
+
+    @objc func appSecretRemove(_ call: CAPPluginCall) {
+        perform(call) {
+            guard let key = call.getString("key") else { throw ManagedVaultFailure.invalidPath }
+            try GeodeKeychainStore().remove(key)
             return [:]
         }
     }
@@ -1002,12 +1265,23 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
         let parent = destination.deletingLastPathComponent()
         guard fileManager.fileExists(atPath: parent.path) else { throw ManagedVaultFailure.notFound }
         let temporary = parent.appendingPathComponent(".geode-write-\(UUID().uuidString)")
+        do {
+            try data.write(to: temporary, options: [.withoutOverwriting])
+            try synchronize(temporary)
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            throw map(error)
+        }
+        try atomicSwap(temporary: temporary, to: destination, injectPostSwapFailure: injectPostSwapFailure)
+    }
+
+    /// Replaces `destination` with an already-written, fsynced `temporary` in the same directory; backs up and rolls back on failure.
+    private func atomicSwap(temporary: URL, to destination: URL, injectPostSwapFailure: Bool = false) throws {
+        let parent = destination.deletingLastPathComponent()
         let backup = parent.appendingPathComponent(".geode-backup-\(UUID().uuidString)")
         let hadOriginal = fileManager.fileExists(atPath: destination.path)
         var swapped = false
         do {
-            try data.write(to: temporary, options: [.withoutOverwriting])
-            try synchronize(temporary)
             if hadOriginal {
                 try fileManager.copyItem(at: destination, to: backup)
                 try synchronize(backup)
@@ -1147,6 +1421,20 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
 
     private func map(_ error: Error) -> ManagedVaultFailure {
         if let failure = error as? ManagedVaultFailure { return failure }
+        if let store = error as? GeodeSyncPrivateStore.StoreError {
+            switch store {
+            case .invalidPath: return .invalidPath
+            case .tooLarge: return .payloadTooLarge
+            case .io: return .io
+            }
+        }
+        if let keychain = error as? GeodeKeychainStore.KeychainError {
+            switch keychain {
+            case .invalidKey, .invalidData: return .invalidPath
+            // Only the OSStatus is reported, never the key or value.
+            case .status(let status): return ManagedVaultFailure(code: "KEYCHAIN_FAILURE", message: "Secure storage failed (status \(status))")
+            }
+        }
         let cocoa = error as NSError
         if cocoa.domain == NSCocoaErrorDomain {
             if cocoa.code == NSFileNoSuchFileError { return .notFound }

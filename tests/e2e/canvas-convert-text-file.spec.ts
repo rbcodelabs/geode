@@ -111,8 +111,8 @@ test("converts a Canvas text card in place to a collision-safe sibling note", as
     await prompt.press("Enter");
     const createdRelativePath = "Boards/Converted 2.md";
     const createdPath = path.join(vaultDir, createdRelativePath);
-    await expect.poll(() => fs.existsSync(createdPath)).toBe(true);
-    expect(fs.readFileSync(createdPath, "utf8")).toBe(textBytes);
+    // The file appears before its bytes land, so poll the content, not just existence.
+    await expect.poll(() => (fs.existsSync(createdPath) ? fs.readFileSync(createdPath, "utf8") : null)).toBe(textBytes);
 
     const converted = view.locator('.canvas-node[data-node-id="convert-me"]');
     await expect(converted).toHaveClass(/canvas-node-file/);

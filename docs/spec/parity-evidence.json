@@ -2686,6 +2686,14 @@
     ],
     "notes": "Added at the Workspace level, where plugins call it: setActiveLeaf previously existed only on TabGroup and Sidebar, and took no options. Both documented forms are accepted, the options object and the deprecated (leaf, pushHistory, focus) triple. focus defaults to false and, when true, moves keyboard focus into the leaf content rather than being accepted and ignored. Observed in Electron restoring the kanban board in front of a note opened behind it."
   },
+  "HELP-229876d87d7b": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/slash-commands.test.ts",
+      "tests/e2e/slash-commands.spec.ts"
+    ],
+    "notes": "Observed in Electron: typing / opens a menu over the Command palette registry, fuzzy filtering uses the palette scorer, Enter removes the typed trigger text and runs the command, a space cancels the menu, and a mid-word slash does not open it. Core plugins toggle (on by default) wired. Arrow-key navigation and Esc cancel rely on CodeMirror's stock completion keymap and were not separately asserted, so the row remains partial."
+  },
   "HELP-eab17f7eff0f": {
     "status": "partial",
     "evidence": [
@@ -2807,5 +2815,18 @@
     "status": "verified",
     "evidence": ["tests/unit/keymap-scope.test.ts"],
     "notes": "Callback contexts expose the exact held platform modifiers; tests cover wildcard, empty no-modifier, and Mod resolving to Ctrl or Meta."
+  },
+  "HELP-63abe8319cd5": {
+    "status": "partial",
+    "evidence": ["tests/unit/unique-notes.test.ts","tests/e2e/unique-note-creator.spec.ts"],
+    "notes": "Observed: the 'Create new unique note' command and ribbon icon create an empty YYYYMMDDHHmm-named note by default (and open it); a configured folder, Moment date format (same tokens as Daily notes) and template (with {{title}}/{{date}} expanded) are applied; a name collision takes the next available timestamp; settings persist per vault with an enable toggle. The ribbon uses Lucide file-stack as the nearest match to the sheets-in-box icon, and a missing template reports an error notice rather than linking to the plugin's settings, so the row remains partial."
+  },
+  "HELP-d5b5268c30ff": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/format-converter.test.ts",
+      "tests/e2e/format-converter.spec.ts"
+    ],
+    "notes": "Unit-tested conversions (Roam tags/highlights/TODOs, Bear highlights, Zettelkasten full/pretty links, alias/tag/cssclass to list properties; code, inline code and frontmatter protected) and driven end to end in Electron: Core plugins toggle (off by default), ribbon binary icon, Open format converter command, modal with per-conversion checkboxes, backup warning and Start conversion rewriting a fixture vault. Partial: the spec does not define how a Zettelkasten UID is recognised, so Geode assumes a 12-14 digit filename prefix; the Help page was not diffed line by line for edge cases."
   }
 }

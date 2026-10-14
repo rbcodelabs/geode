@@ -27,6 +27,7 @@ npm run build      # bundle main/preload/renderer with esbuild
 npm start           # launch Electron
 npm run dev         # esbuild watch mode
 npm run typecheck   # strict tsc
+npm run fresh       # launch a first-run instance (empty app data + Documents); run build first
 npm run e2e:kill    # reap orphaned e2e Electron processes + temp dirs
 
 npm run build:cli   # bundle the headless `geode-wiki` command to dist/cli/
@@ -37,7 +38,19 @@ npm run build:cli   # bundle the headless `geode-wiki` command to dist/cli/
 build artifact, so `build:cli` is a prerequisite for invoking it, and an in-repo
 `bin` only: nothing is published to a registry.
 
+`geode-wiki sync` drives the append-only history engine headlessly, with safety rails — see
+[`docs/design/headless-wiki-sync.md`](docs/design/headless-wiki-sync.md); `npm run proof:wiki-sync` exercises the built binary.
+
 A demo vault lives in `test-vault/`.
+
+## Running E2E on Linux (CI, test workers)
+
+Use `npm run build && npm run e2e:linux -- --shards=2` (wraps `xvfb-run`, one Xvfb
+display per shard, one Playwright worker each). Do not pass `--workers=2` to a single
+`xvfb-run`: workers sharing one display fight over input focus. On Linux a headless
+run maps the Electron window (Xvfb is invisible to everyone); an unmapped window gets
+no frames, which hangs screenshots and every requestAnimationFrame-driven view. Specs
+for macOS-only features (external roots) skip themselves on other platforms.
 
 ## E2E tests are not headless
 

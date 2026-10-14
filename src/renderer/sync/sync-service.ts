@@ -1,5 +1,5 @@
 import { Events } from "../events";
-import type { HashCacheEntry, HostServices } from "../host/contracts";
+import type { HostServices } from "../host/contracts";
 import { SyncCoordinator } from "./coordinator";
 import type { SyncApi, SyncConflict, SyncPreview, SyncProgress, SyncProgressPhase, SyncProvider, SyncRunResult, SyncStatus } from "./types";
 import { SYNC_PROGRESS_THROTTLE_MS } from "./progress";
@@ -7,29 +7,25 @@ import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySyncProvider,
 import { HistoryController, type HistoryComparisonChoice, type HistoryConflictComparison, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope } from "./scope";
 import { projectPortableConfig, serializePortableConfig } from "./portable-config";
-import { isPortableAssetPath } from "../../shared/portable-assets";
+import { buildHistoryPorts, type SyncHostLite } from "../../sync-core/ports";
+import { SyncRailError, deleteLimitRefusal, knownFileCount, shrunkScanRefusal, type SyncRailOverrides } from "../../sync-core/rails";
+
+/** Per-attempt rail context handed to the operation of a provider that opted in with `safetyRails`. */
+interface RailContext { overrides: SyncRailOverrides; stats: { known: number; found: number }; stateKey: string }
 
 type Provider = SyncProvider | AppendOnlySyncProvider;
 interface BindingState { schema: 1; localRoot: string; providerId?: string; binding?: VaultDescriptor; deviceId: string; scope: SyncScope; paused: boolean; createIntent?: { name: string; operationId: string } }
 const hash = async (data: ArrayBuffer) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", data))].map(value => value.toString(16).padStart(2, "0")).join("");
 const encoded = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).buffer;
 const isHistory = (provider: Provider): provider is AppendOnlySyncProvider => "protocol" in provider && provider.protocol === APPEND_ONLY_PROTOCOL;
-// The hash cache is durable (SQLite, survives app restarts), so a stat taken
-// in the same instant as a write can be trusted forever once cached, not just
-// until the next real edit — a much longer-lived hazard than the in-memory
-// caches this pattern is normally borrowed from. Requiring the cached mtime
-// to be at least this old before trusting a hit forces a just-touched file
-// through a fresh read+hash (same as a cold miss) exactly once, after which
-// its mtime has "aged out" and later hits are safe again. 2000ms mirrors
-// schedule()'s own default debounce below — an already-established cadence
-// for "let the filesystem settle" in this file, not a new arbitrary number.
-const RACY_WRITE_WINDOW_MS = 2000;
 
 /** Host-owned lifecycle facade; conditional transports retain their original API. */
 export class SyncService extends Events implements SyncApi {
   private readonly conditional: SyncCoordinator;
   private readonly providers = new Map<string, Provider>();
   private selected?: AppendOnlySyncProvider;
+  /** Key of the history-controller state for the current binding; set when a sync run starts, cleared by disconnect. */
+  private historyStateKey?: string;
   private status: SyncStatus = { state: "disconnected", conflicts: 0 };
   private details?: HistoryPreview;
   private abort?: AbortController;
@@ -59,9 +55,13 @@ export class SyncService extends Events implements SyncApi {
   private appendSetupReady = false;
   private closing = false;
   private cancellations = 0;
+  /** One-shot overrides for a rail refusal; set by the user, consumed by the next controller attempt, never by the poll. */
+  private railOverrides?: SyncRailOverrides;
+  private railRefusal?: SyncRailError;
+  private lastScan = { known: 0, found: 0 };
   constructor(private readonly host: HostServices, private readonly vaultId: () => string, private readonly portableChanged: () => Promise<void> = async () => {}) {
     super(); this.conditional = new SyncCoordinator(host, vaultId, Date.now, () => !this.selected && !this.closing && !this.cancellations && !(this.setupTarget && isHistory(this.setupTarget) && this.appendSetupReady));
-    this.conditional.on("status", status => { if (!this.selected) this.trigger("status", status); });
+    this.conditional.on("status", status => { if (!this.selected) { this.noteSettled(status.state); this.trigger("status", status); } });
   }
   private observe() {
     if (this.observedRoot !== this.vaultId()) { this.renameHints.clear(); this.observedRoot = this.vaultId(); }
@@ -95,6 +95,10 @@ export class SyncService extends Events implements SyncApi {
   getActiveProvider() { return this.selected ? { id: this.selected.id, name: this.selected.name } : this.conditional.getActiveProvider(); }
   getStatus() { return this.selected || this.status.state === "error" && this.status.providerId && !this.conditional.getActiveProvider() ? { ...this.status } : this.conditional.getStatus(); }
   getHistoryDetails() { return this.details; }
+  /** The rail (deletion cap / shrunk scan) that last refused a run, until a later attempt succeeds. */
+  getRailRefusal(): { status: SyncRailError["status"]; message: string; detail: Record<string, unknown> } | undefined { return this.railRefusal && { status: this.railRefusal.status, message: this.railRefusal.message, detail: this.railRefusal.detail }; }
+  /** Lifts specific rails for the next attempt only. Explicit and per rail; there is no "force everything". */
+  allowRailOverrideOnce(overrides: SyncRailOverrides) { this.railOverrides = { ...this.railOverrides, ...overrides }; }
   isAppendOnly() { return Boolean(this.selected); }
   getBoundVaultName() { return this.boundVaultName; }
   /**
@@ -102,7 +106,12 @@ export class SyncService extends Events implements SyncApi {
    * rather than at each call site. A stale "47%" surviving a failure is its own
    * bug, and there are eleven setStatus() callers to forget.
    */
-  private setStatus(status: SyncStatus) { this.cancelProgress(); this.status = status; this.trigger("status", status); }
+  private setStatus(status: SyncStatus) { this.cancelProgress(); this.noteSettled(status.state); if (status.state === "error") console.error("[sync] error:", status.message ?? "(no message)"); this.status = status; this.trigger("status", status); }
+  private lastSyncedAt?: number;
+  private lastStateSeen?: SyncStatus["state"];
+  /** Wall-clock time a run last settled back to idle, for the Sync tab's "last synced" line. In-memory: it is not persisted across launches. */
+  getLastSyncedAt() { return this.lastSyncedAt; }
+  private noteSettled(state: SyncStatus["state"]) { if (state === "idle" && (this.lastStateSeen === "syncing" || this.lastStateSeen === "pending")) this.lastSyncedAt = Date.now(); this.lastStateSeen = state; }
   private progressStartedAt = 0;
   private progressEmittedAt = 0;
   private progressPhase?: SyncProgressPhase;
@@ -232,31 +241,58 @@ export class SyncService extends Events implements SyncApi {
       const state = await this.load(); assert(); state.scope = { ...state.scope, ...patch, communityPlugins: false, communityPluginData: false }; await this.save(state); assert(); this.details = undefined; this.observe(); this.setStatus({ state: "preview", providerId: this.selected?.id, conflicts: 0, message: "Scope changed. Preview before syncing." });
     });
   }
-  private included(scope: SyncScope, namespace: string, path: string): boolean {
-    if (namespace === "portable-config") {
-      if (isPortableAssetPath(path)) return scope.themesAndSnippets;
-      return path === "editor.json" ? scope.mainSettings : path === "appearance.json" ? scope.appearance : path === "hotkeys.json" ? scope.hotkeys : path === "daily-notes.json" && scope.corePlugins;
-    }
-    return !path.split("/").some(part => part.startsWith(".")) && isPathInSyncScope(path, scope);
-  }
-  private async stableId(vaultId: string, path: string): Promise<string> {
-    const namespace = Uint8Array.from(vaultId.replace(/-/g, "").match(/../g)!, part => parseInt(part, 16));
-    const name = new TextEncoder().encode("portable-config:" + path); const bytes = new Uint8Array(namespace.length + name.length); bytes.set(namespace); bytes.set(name, namespace.length);
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", bytes)); digest[6] = (digest[6] & 15) | 80; digest[8] = (digest[8] & 63) | 128;
-    const hex = [...digest.slice(0, 16)].map(value => value.toString(16).padStart(2, "0")).join(""); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  /** Narrow adapter over HostServices for the platform-neutral history engine (src/sync-core). */
+  private liteHost(): SyncHostLite {
+    const host = this.host;
+    return {
+      vault: { reconcileScan: () => host.vaultFiles.reconcileScan(), readBinary: path => host.vaultFiles.readBinary(path) },
+      hashCache: host.hashCache && { readAll: () => host.hashCache!.readAll(), upsertBatch: entries => host.hashCache!.upsertBatch(entries), prune: keep => host.hashCache!.prune(keep) },
+      deviceState: { read: key => host.deviceState.read(key), write: (key, value) => host.deviceState.write(key, value) },
+      safety: { storage: (token, binding, request) => host.syncSafety!.storage(token, binding, request), apply: (token, input) => host.syncSafety!.apply(token, input) },
+      portableConfig: {
+        project: async scope => (await projectPortableConfig(host.config, scope)).map(document => ({
+          name: document.name,
+          data: serializePortableConfig(document),
+          isInitialDefault: async () => {
+            const source = document.name === "hotkeys.json" ? "hotkeys" : document.name === "daily-notes.json" ? "daily-notes" : "app";
+            const raw = await host.config.read(source);
+            return !raw || typeof raw !== "object" || !Object.keys(document.value).some(field => Object.prototype.hasOwnProperty.call(raw, field));
+          },
+        })),
+      },
+    };
   }
   /** @param silent read-only work that must not publish its failure as global sync status. */
-  private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal) => Promise<T>, silent = false): Promise<T> {
+  private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal, rails?: RailContext) => Promise<T>, silent = false): Promise<T> {
     if (this.running || this.closing || this.cancellations) throw new Error("Sync already running or disconnecting");
     const provider = this.selected; if (!provider) throw new Error("Select a provider");
+    // One-shot: taken here so a failed attempt cannot leave an override armed for the unattended poll.
+    const railOverrides = silent ? {} : (this.railOverrides ?? {}); if (!silent) this.railOverrides = undefined;
     const root = this.vaultId(); const generation = this.generation; const abort = new AbortController(); this.abort = abort;
     const assertContext = () => { if (abort.signal.aborted || this.vaultId() !== root || generation !== this.generation || this.selected !== provider || this.providers.get(provider.id) !== provider) throw new DOMException("Sync context changed", "AbortError"); };
     const work = (async () => {
       const state = await this.load(); assertContext(); if (!state.binding) throw new Error("Create or join a shared vault before preview"); if (state.paused) throw new Error("Sync is paused");
       this.lease ??= await this.host.syncSafety!.claimOwner() ?? undefined; assertContext(); if (!this.lease) throw new Error("Another window owns sync for this vault");
       const lease = this.lease; const bindingKey = await hash(encoded([provider.id, state.binding])); assertContext();
-      const stateKey = `sync-history/${root}/${bindingKey}`;
-      const storage = async (request: Parameters<NonNullable<HostServices["syncSafety"]>["storage"]>[2]) => { assertContext(); const value = await this.host.syncSafety!.storage(lease, bindingKey, request); assertContext(); return value; };
+      const stateKey = `sync-history/${root}/${bindingKey}`; this.historyStateKey = stateKey;
+      const { ports, storage } = buildHistoryPorts(this.liteHost(), { provider, scope: state.scope, bindingVaultId: state.binding.vaultId, bindingKey, stateKey, lease, assertContext, renameHints: this.renameHints, portableChanged: this.portableChanged });
+      // Rails (ADR 0025) for providers that opt in. The shrunk-scan check lives in the snapshot port so it fires in
+      // preview and run alike, before anything is planned from the short scan.
+      let rails: RailContext | undefined;
+      if (provider.safetyRails === true) {
+        rails = { overrides: railOverrides, stats: { known: 0, found: 0 }, stateKey };
+        const inner = ports.snapshot, stats = rails.stats;
+        ports.snapshot = async onProgress => {
+          const snapshot = await inner(onProgress);
+          stats.known = knownFileCount(await this.host.deviceState.read<HistoryControllerState>(stateKey));
+          const content = (items: Array<{ namespace: string }>) => items.filter(item => item.namespace === "content").length;
+          stats.found = snapshot.entries.filter(entry => entry.namespace === "content" && entry.kind === "file").length + content(snapshot.blocked) + content(snapshot.excluded);
+          this.lastScan = { ...stats };
+          const refusal = railOverrides.shrunkScan ? null : shrunkScanRefusal(stats.known, stats.found);
+          if (refusal) throw refusal;
+          return snapshot;
+        };
+      }
       // Reclaim staged bytes no live 'prepared' operation or durable pendingBatch can need
       // (crash orphans, pre-release leftovers) and stale sibling bindings. Housekeeping
       // only: a failure here must never block a sync, but a lost context must still abort.
@@ -265,151 +301,18 @@ export class SyncService extends Events implements SyncApi {
         await storage({ action: "gc", retain: Array.isArray(pending) ? pending : [] });
         await storage({ action: "sweep", keep: [bindingKey], force: false });
       } catch { assertContext(); }
-      const read = async (resource: HistoryLocalResource): Promise<ArrayBuffer> => {
-        assertContext();
-        if (resource.namespace === "portable-config" && !isPortableAssetPath(resource.path)) {
-          const documents = await projectPortableConfig(this.host.config, state.scope); assertContext(); const document = documents.find(item => item.name === resource.path); if (!document) throw new Error("Portable category left scope"); return serializePortableConfig(document);
-        }
-        const data = await this.host.vaultFiles.readBinary(resource.namespace === "portable-config" ? ".geode/" + resource.path : resource.path); assertContext(); return data;
-      };
-      let includedAncestors = new Set<string>();
-      // `onProgress` is what makes planning countable. reconcileScan() hands back
-      // the whole entry list up front and costs comparatively nothing; the loop
-      // below is where a 12 GB vault spends its time, because every entry pays a
-      // full read, a SHA-256 and a content-based exclusion test. So the entry
-      // count is a real denominator that is known before any of that work starts.
-      // A tick per entry is negligible against a read plus a hash, and the 250 ms
-      // throttle collapses them to ~4 status events/sec exactly as transfers do.
-      const snapshot = async (onProgress?: (completed: number, total: number, currentPath?: string) => void): Promise<HistoryLocalSnapshot> => {
-        const scan = await this.host.vaultFiles.reconcileScan(); assertContext();
-        const result: HistoryLocalSnapshot = { authoritative: scan.status === "complete", scopeKey: JSON.stringify(state.scope), entries: [], excluded: [], blocked: [] };
-        const folders = new Map<string, HistoryLocalResource>();
-        const walked = scan.entries.length;
-        let visited = 0;
-        // Every entry pays a full binary read plus a SHA-256 (and, for content
-        // paths, two provider exclude checks) on every preview()/run() cycle even
-        // when its content hasn't changed since the last cycle — this cache
-        // (persisted per vault, keyed by (path, size, mtime, providerId), see
-        // HostServices.hashCache and metadata-cache-store.ts's hash_cache_entries
-        // table) skips all of that for any entry whose stat still matches under
-        // the currently-active provider, whether the cached verdict was "hash it"
-        // or "exclude it" (excludeReason). Absent host support (mobile/browser,
-        // where append-only sync never runs anyway) this degrades to the
-        // unconditional behavior that existed before it.
-        const hashCache = (await this.host.hashCache?.readAll()) ?? {}; assertContext();
-        const hashCacheUpdates: Record<string, HashCacheEntry> = {};
-        for (const entry of scan.entries) {
-          // Before the work, counting entries already finished — the same
-          // convention `transferring` uses, so `completed` can never claim an
-          // entry that has not been dealt with. Reported ahead of every `continue`
-          // path so a vault full of skipped entries still advances.
-          onProgress?.(visited++, walked, entry.path);
-          const namespace = entry.path.startsWith(".geode/") ? "portable-config" : "content";
-          const path = namespace === "portable-config" ? entry.path.slice(7) : entry.path;
-          if (entry.isFolder) { if (!entry.path.split("/").some(part => part.startsWith(".")) || namespace === "portable-config" && isPortableAssetPath(path)) folders.set(`${namespace}:${path}`, { namespace, path, kind: "folder" }); continue; }
-          if (!this.included(state.scope, namespace, path) || namespace === "portable-config" && !isPortableAssetPath(path)) continue;
-          const resource: HistoryLocalResource = { namespace, path, kind: "file", size: entry.size };
-          if (entry.size > SYNC_MAX_FILE_BYTES) { result.blocked.push({ namespace, path, reason: "File exceeds 100 MiB limit" }); continue; }
-          const cached = hashCache[entry.path];
-          // A cache row is trusted only when: its stat still matches (as before);
-          // it was written by *this* provider — excludePath()'s verdict is a
-          // property of the active provider, not the file, so a reconnect to a
-          // different provider must always re-evaluate a path rather than
-          // silently inherit a stale include/exclude verdict for an unchanged
-          // file; and its mtime is old enough to rule out a write racing the
-          // stat that produced it (RACY_WRITE_WINDOW_MS above) — this cache is
-          // durable across restarts, so an untrusted racy hit here would
-          // otherwise stick indefinitely rather than self-correct on the next
-          // real edit. Anything else is treated exactly like a cold miss,
-          // including a fresh read+hash for a just-touched file.
-          if (cached && cached.mtimeMs === entry.mtime && cached.size === entry.size && cached.providerId === provider.id
-            && Date.now() - entry.mtime >= RACY_WRITE_WINDOW_MS) {
-            if (cached.excludeReason !== null) { result.excluded.push({ namespace, path, reason: cached.excludeReason }); continue; }
-            // Verdict was "included": reuse the hash, no read, no digest, and no re-running either exclude check.
-            resource.sha256 = cached.sha256;
-          } else {
-            const reason = namespace === "content" ? await provider.excludePath?.(path) : null; assertContext();
-            if (reason) {
-              // Cache the exclude verdict too — without this, an excluded file (e.g.
-              // matched by a gitignore-style rule) gets fully re-tested, and for a
-              // content-based rule re-read off disk, on every single cycle forever,
-              // since only the hashed/included path ever wrote to the cache before.
-              hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: entry.size, sha256: "", excludeReason: reason, providerId: provider.id };
-              result.excluded.push({ namespace, path, reason }); continue;
-            }
-            const data = await read(resource); const contentReason = namespace === "content" ? await provider.excludePath?.(path, data) : null; assertContext();
-            if (contentReason) {
-              hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: data.byteLength, sha256: "", excludeReason: contentReason, providerId: provider.id };
-              result.excluded.push({ namespace, path, reason: contentReason }); continue;
-            }
-            resource.sha256 = await hash(data); resource.size = data.byteLength;
-            hashCacheUpdates[entry.path] = { mtimeMs: entry.mtime, size: resource.size, sha256: resource.sha256, excludeReason: null, providerId: provider.id };
-          }
-          if (namespace === "portable-config") resource.entityId = await this.stableId(state.binding!.vaultId, path);
-          result.entries.push(resource);
-        }
-        // Terminal tick for the walk, mirroring performAll()'s: the throttle's
-        // trailing timer would deliver the last held-back tick anyway, but a run
-        // that ends one entry short on screen is the exact frozen-at-96% bug the
-        // progress work exists to remove, so it is stated rather than inferred.
-        onProgress?.(walked, walked);
-        if (Object.keys(hashCacheUpdates).length) { await this.host.hashCache?.upsertBatch(hashCacheUpdates); assertContext(); }
-        // Only a complete scan is authoritative about which paths still exist —
-        // reusing pruneMetadataEntries' precedent, pruning against a partial/capped
-        // scan would delete cache rows for files the walk simply hasn't reached yet.
-        if (scan.status === "complete") { await this.host.hashCache?.prune(scan.entries.filter(item => !item.isFolder).map(item => item.path)); assertContext(); }
-        for (const document of await projectPortableConfig(this.host.config, state.scope)) {
-          const data = serializePortableConfig(document);
-          const source = document.name === "hotkeys.json" ? "hotkeys" : document.name === "daily-notes.json" ? "daily-notes" : "app";
-          const raw = await this.host.config.read(source); assertContext();
-          const initialDefault = !raw || typeof raw !== "object" || !Object.keys(document.value).some(field => Object.prototype.hasOwnProperty.call(raw, field));
-          result.entries.push({ namespace: "portable-config", path: document.name, kind: "file", sha256: await hash(data), size: data.byteLength, entityId: await this.stableId(state.binding!.vaultId, document.name), ...(initialDefault ? { initialDefault: true as const } : {}) });
-        }
-        const ancestors = new Set<string>();
-        for (const resource of result.entries) { const parts = resource.path.split("/"); while (parts.pop() && parts.length) ancestors.add(`${resource.namespace}:${parts.join("/")}`); }
-        for (const [key, folder] of folders) {
-          if (ancestors.has(key) || this.included(state.scope, folder.namespace, folder.path)) {
-            if (folder.namespace === "portable-config") folder.entityId = await this.stableId(state.binding!.vaultId, folder.path);
-            result.entries.push(folder);
-          }
-        }
-        includedAncestors = ancestors;
-        for (const resource of result.entries) if (resource.namespace === "content") {
-          for (const [destination, source] of this.renameHints) if (resource.path === destination || resource.path.startsWith(destination + "/")) {
-            resource.renamedFrom = source + resource.path.slice(destination.length);
-            if (!state.scope.excludedFolders.some(folder => source === folder || source.startsWith(folder + "/"))) {
-              const parents = resource.renamedFrom.split("/"); if (resource.kind !== "folder") parents.pop();
-              while (parents.length) { ancestors.add(`content:${parents.join("/")}`); parents.pop(); }
-            }
-            break;
-          }
-        }
-        assertContext(); return result;
-      };
       this.session = await provider.open({ binding: state.binding, deviceId: state.deviceId }, abort.signal); assertContext();
-      const controller = new HistoryController({ vaultId: state.binding.vaultId, deviceId: state.deviceId, bindingKey, session: this.session, ports: {
-        load: async () => { const value = await this.host.deviceState.read(stateKey); assertContext(); return value; },
-        save: async (value: HistoryControllerState) => { assertContext(); await this.host.deviceState.write(stateKey, value); assertContext(); },
-        loadOperations: async () => await storage({ action: "load-operations" }) as HistoryOperation[],
-        saveOperation: async value => { await storage({ action: "save-operation", key: value.id, value }); },
-        stage: async (key, data) => await storage({ action: "stage", key, data }) as string,
-        readStage: async key => await storage({ action: "read-stage", key }) as ArrayBuffer,
-        release: async key => { await storage({ action: "release", key }); },
-        snapshot, read, isIncluded: (namespace, path) => includedAncestors.has(`${namespace}:${path}`) || this.included(state.scope, namespace, path),
-        exclude: async (resource, data) => { const reason = resource.namespace === "content" ? await provider.excludePath?.(resource.path, data) : null; assertContext(); return reason ?? null; },
-        apply: async input => { assertContext(); await this.host.syncSafety!.apply(lease, { namespace: input.namespace, operationId: input.operationId, path: input.path, expectedHash: input.expectedHash, kind: input.deleted ? "trash" : input.kind === "folder" ? "mkdir" : "write", data: input.data }); assertContext(); if (input.namespace === "portable-config") await this.portableChanged(); assertContext(); },
-        assertContext, newId: () => crypto.randomUUID(),
-      },
+      const controller = new HistoryController({ vaultId: state.binding.vaultId, deviceId: state.deviceId, bindingKey, session: this.session, ports,
       // Progress from a run whose vault, provider or generation has moved on is
       // dropped silently rather than asserted: this is the one callback that must
       // never throw into the sync, and a late tick is simply not news any more.
       progress: value => { if (!abort.signal.aborted && this.vaultId() === root && this.generation === generation && this.selected === provider) this.publishProgress(value); } });
-      return operation(controller, abort.signal);
+      return operation(controller, abort.signal, rails);
     })();
     this.running = work;
     let completed = false;
-    try { const result = await work; completed = true; return result; }
-    catch (error) { if (!silent && !abort.signal.aborted && root === this.vaultId() && generation === this.generation && this.selected === provider && this.status.state !== "paused") this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); throw error; }
+    try { const result = await work; completed = true; if (!silent) this.railRefusal = undefined; return result; }
+    catch (error) { if (!silent && error instanceof SyncRailError && !abort.signal.aborted) this.railRefusal = error; if (!silent &&!abort.signal.aborted && root === this.vaultId() && generation === this.generation && this.selected === provider && this.status.state !== "paused") this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); throw error; }
     // Cancellation reaches neither summarize() nor the error branch above — an
     // aborted run deliberately sets no status — so progress is retired here, on
     // the one path every completion, failure and cancellation passes through.
@@ -417,6 +320,8 @@ export class SyncService extends Events implements SyncApi {
   }
   private summarize(value: HistoryPreview): SyncPreview {
     this.details = value;
+    // The blocked-file list is easy to miss on a phone layout; keep it in the device log so it can be read from a connected Mac.
+    if (value.blocked.length) console.log("[sync] blocked:", JSON.stringify(value.blocked.slice(0, 50)));
     const outstanding = value.uploads + value.downloads + value.deletions;
     const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length;
     // Per-file detail (path + reason for each blocked item) lives on `details.blocked`,
@@ -430,10 +335,40 @@ export class SyncService extends Events implements SyncApi {
     const target = active ? this.providers.get(active.id) : undefined;
     return this.setup(async (_signal, assert) => { await this.conditional.waitUntilReady(); assert(); if (this.selected) throw new Error("Disconnect before changing providers"); const result = await action(); assert(); return result; }, target);
   }
-  async preview(): Promise<SyncPreview> { return this.selected ? this.summarize(await this.withController((controller, signal) => controller.preview(signal))) : this.withConditional(() => this.conditional.preview()); }
+  async preview(): Promise<SyncPreview> {
+    if (!this.selected) return this.withConditional(() => this.conditional.preview());
+    const armed = this.railOverrides;
+    const raw = await this.withController((controller, signal) => controller.preview(signal));
+    const result = this.summarize(raw);
+    // The user's explicit "sync despite the short scan" covers the preview they just read and the one confirmation
+    // that follows it (a first run is previewed, then confirmed); it is not carried any further.
+    if (armed?.shrunkScan && raw.requiresApproval) this.railOverrides = { shrunkScan: true };
+    // A preview shows the plan even when it would be refused; the refusal is reported (status + railRefusal) so the
+    // user sees counts and the explicit override together, and run() enforces it.
+    if (this.selected.safetyRails === true) {
+      const refusal = deleteLimitRefusal(raw, this.lastScan.found, armed ?? {});
+      if (refusal) { this.railRefusal = refusal; this.setStatus({ ...this.status, state: "error", message: refusal.message }); }
+    }
+    return result;
+  }
   async run(options: { approvePreview?: boolean } = {}): Promise<SyncRunResult> {
     if (!this.selected) return this.withConditional(() => this.conditional.run(options));
-    const result = this.summarize(await this.withController((controller, signal) => controller.run(options, signal))); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();
+    const shown = this.details;
+    const result = this.summarize(await this.withController(async (controller, signal, rails) => {
+      if (rails) {
+        // Rail (b), before anything is applied. An approved device is judged on the very plan run() is about to execute
+        // (beforeExecute, so no separate preview walk of the vault); an unapproved one is checked against the plan the user was
+        // shown, which run() then verifies by signature, so the counts judged here are the counts executed.
+        const state = await controller.getState(signal);
+        const judge = (plan: Pick<HistoryPreview, "deletions" | "uploads" | "downloads" | "signature">) => {
+          const refusal = deleteLimitRefusal(plan, Math.max(rails.stats.found, knownFileCount(state)), rails.overrides);
+          if (refusal) throw refusal;
+        };
+        if (!state.pendingBatch?.length && !state.approved && shown && shown.signature === state.previewSignature) judge(shown);
+        return controller.run({ ...options, ...(!state.pendingBatch?.length && state.approved ? { beforeExecute: judge } : {}) }, signal);
+      }
+      return controller.run(options, signal);
+    })); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();
     this.polling ??= setInterval(() => this.schedule(0), 30_000); if (this.status.state === "pending") this.schedule(0); return result;
   }
   async listConflicts(): Promise<SyncConflict[]> {
@@ -492,7 +427,13 @@ export class SyncService extends Events implements SyncApi {
   async disconnect() {
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;
-    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
+    try { const root = this.vaultId(); const key = this.key(root); await this.cancel(); if (root !== this.vaultId()) throw new Error("Vault changed");
+      // The history state is tagged with this binding's deviceId; removing only the binding would make the next connect
+      // mint a new id and then reject the orphaned history as "Unsupported sync state".
+      const historyKey = this.historyStateKey; this.historyStateKey = undefined;
+      if (historyKey) { try { await this.host.deviceState.remove(historyKey); } catch { /* best effort */ } }
+      if (root !== this.vaultId()) throw new Error("Vault changed");
+      await this.host.deviceState.remove(key); if (root !== this.vaultId()) throw new Error("Vault changed"); await this.purgePrivateStorage(root); await this.conditional.disconnect(); if (root !== this.vaultId()) throw new Error("Vault changed"); this.selected = undefined; this.details = undefined; this.boundVaultName = undefined; this.railRefusal = undefined; this.railOverrides = undefined; this.setStatus({ state: "disconnected", conflicts: 0 }); }
     finally { this.closing = false; }
   }
   /** Best-effort: disconnect has already removed the device state that could resume these operations. */

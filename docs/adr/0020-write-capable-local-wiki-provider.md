@@ -62,7 +62,8 @@ refusal has its own status rather than a generic failure:
 | `absent` | `update`/`delete` found no note at that path |
 | `portability-collision` | A different path folds onto the same NFC-lowercased identity |
 | `path-changed` | Root identity, containment or symlink re-verification failed at write time |
-| `note-byte-limit` | Would exceed the configured per-note or total byte limits |
+| `note-byte-limit` | The note exceeds the per-note byte limit |
+| `total-note-byte-limit` | The note fits, but captured note text plus this note would exceed the total byte limit (CLI: `--max-total-note-bytes`) |
 | `entry-limit` | The folder already holds the configured maximum number of entries |
 | `capture-incomplete` | Discovery was cut short by a limit, so absence cannot be distinguished from "never seen" |
 | `write-failed` | The filesystem refused the operation |

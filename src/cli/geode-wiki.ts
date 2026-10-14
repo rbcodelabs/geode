@@ -44,6 +44,7 @@ import {
   type WikiSession,
 } from "../wiki/index";
 import { publishFolder, restoreFolder } from "../catalog/index";
+import { runSync } from "./sync";
 import {
   coverageWarnings,
   emit,
@@ -78,6 +79,10 @@ Catalog commands (libpq PG* variables select the server):
                   --base-sequence <n> [--schema <name>]
   catalog-restore --into <dir> --vault-id <id> [--schema <name>]
 
+Sync commands (see "geode-wiki sync --help"):
+  sync init | preview | run | status | conflicts | resolve | serve | gc
+                                  keep a folder in step with a hub store, with safety rails
+
 Options:
   --json                  structured output; named statuses preserved verbatim
   --limit <n>             search: maximum hits
@@ -85,6 +90,10 @@ Options:
   --text-file <path>      create/update: read the text from a file, or - for stdin
   --max-entries <n>       capture: override the entry ceiling
   --max-note-bytes <n>    capture: override the per-note byte ceiling
+  --max-total-note-bytes <n>
+                          capture: override the total note-text ceiling (default 64 MiB);
+                          raise it for vaults whose markdown exceeds that, or create/update
+                          is refused with "total-note-byte-limit" and reads are partial
   --schema <name>         catalog: schema name; defaults to GEODE_CATALOG_SCHEMA
   --help                  this text
 
@@ -95,6 +104,8 @@ Exit codes:
                   "portability-collision", "oversize", "conflict", and so on
   2  usage        argv could not be turned into an operation; nothing ran
   3  unavailable  the vault folder or the catalog store could not be reached
+  4  conflicts    (sync) unresolved conflicts remain
+  5  locked       (sync) another sync run holds the vault's lock; nothing was done
 
 There is no "refresh" command. Every invocation is a fresh capture, so the
 process is the refresh.`;
@@ -108,6 +119,7 @@ const CAPTURE: OptionSpec = {
   root: { type: "string" },
   "max-entries": { type: "string" },
   "max-note-bytes": { type: "string" },
+  "max-total-note-bytes": { type: "string" },
 };
 const TEXT: OptionSpec = { text: { type: "string" }, "text-file": { type: "string" } };
 
@@ -181,6 +193,12 @@ export interface RunContext {
   readonly streams: Streams;
   readonly env: NodeJS.ProcessEnv;
   readonly stdin: NodeJS.ReadableStream;
+  /** Raw stdout, for `sync serve` only (binary frames). Absent in in-process callers. */
+  readonly rawOut?: NodeJS.WritableStream;
+  /** Test seam for `sync schedule`: replaces launchctl/systemctl execution. */
+  readonly scheduleRunner?: import("./sync-schedule").ScheduleRunner;
+  /** Test seam for `sync serve --http`: aborting stops the server. */
+  readonly stopSignal?: AbortSignal;
 }
 
 /**
@@ -201,6 +219,7 @@ export async function run(argv: readonly string[], context: RunContext): Promise
   }
 
   const name = argv[0];
+  if (name === "sync") return runSync(argv.slice(1), context);
   const spec = COMMANDS[name];
   if (!spec) {
     const known = Object.keys(COMMANDS).sort().join(", ");
@@ -266,7 +285,7 @@ async function dispatch(
   // `search --root /nowhere q --limit many` has two problems, and the one the
   // caller has to fix first is the one they wrote.
   const limits: Partial<WikiLimits> = {};
-  for (const [flag, key] of [["max-entries", "maxEntries"], ["max-note-bytes", "maxNoteBytes"]] as const) {
+  for (const [flag, key] of [["max-entries", "maxEntries"], ["max-note-bytes", "maxNoteBytes"], ["max-total-note-bytes", "maxTotalNoteBytes"]] as const) {
     const raw = values[flag];
     if (raw === undefined) continue;
     const parsed = integer(raw as string, `--${flag}`);
@@ -458,6 +477,10 @@ async function resolveText(
   return usage(`${name} requires --text <string> or --text-file <path>`, name);
 }
 
+const TOTAL_BYTES_HINT =
+  "hint: the vault's captured note text is at the total ceiling, not this note. " +
+  "Re-run with --max-total-note-bytes <n> set above the vault's total markdown size (default 67108864).";
+
 async function commandWrite(
   name: "create" | "update" | "delete",
   session: WikiSession, path: string, text: string,
@@ -468,8 +491,13 @@ async function commandWrite(
     : await session.deleteNote(path);
 
   return {
-    command: name, status: result.status, result: { path, ...result }, coverage, warnings,
-    lines: [result.status === "ok" ? `ok  ${result.path ?? path}` : refusalLine(result.status, { path })],
+    command: name, status: result.status,
+    result: { path, ...result, ...(result.status === "total-note-byte-limit" ? { hint: TOTAL_BYTES_HINT } : {}) },
+    coverage, warnings,
+    lines: result.status === "ok" ? [`ok  ${result.path ?? path}`]
+      : result.status === "total-note-byte-limit"
+        ? [refusalLine(result.status, { path }), TOTAL_BYTES_HINT]
+        : [refusalLine(result.status, { path })],
   };
 }
 

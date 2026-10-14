@@ -186,6 +186,18 @@ export interface DeviceStateService {
 /** Host-backed secret storage. `available=false` means callers must disable credentialed features. */
 export interface SecureSecretService {
   readonly available: boolean;
+  /**
+   * Secrets owned by Geode itself (today: the HTTPS hub token), in a namespace no plugin capability can name. Absent where the
+   * host has no secure storage for the app; features that need a credential must then refuse to take one. The iOS Keychain
+   * implementation plugs in here (capacitor-host), see docs/design/app-hub-sync-provider.md.
+   */
+  readonly app?: {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+    remove(key: string): Promise<void>;
+  };
+  /** Whether `app` can store a secret right now. Defaults to `available` (Electron: one safeStorage backs both); the phone's Keychain serves `app` while plugin secrets stay unavailable. */
+  readonly appAvailable?: boolean;
   fromCapability(capability: string): {
     get(key: string): Promise<string | null>;
     set(key: string, value: string): Promise<void>;
@@ -280,7 +292,15 @@ export interface DesktopHostService {
 
 export interface HostServices {
   readonly syncSafety?: import("../../shared/sync-safety").SyncSafetyService;
+  /** Desktop only: main-process store access (directory / ssh hub) for the built-in hub sync provider. */
+  readonly hubSync?: import("../../shared/hub-sync").HubSyncBridge;
   readonly network?: { request(input: import("../../shared/network").HostHttpRequest, signal?: AbortSignal): Promise<import("../../shared/network").HostHttpResponse>; };
+  /**
+   * Mobile only: bounded https byte fetch for the Supported plugins catalog and
+   * tested-release artifacts. Deliberately not a general plugin network API
+   * (that is `network`, Slice 3A2); absent on desktop, which installs in main.
+   */
+  readonly supportedPluginTransport?: import("../../shared/network").PluginArtifactTransport;
   /** Internal desktop-only Project integration; absent on mobile/browser. */
   externalRoots?: import("../../shared/external-roots").ExternalRootsHost;
   readonly capabilities: Readonly<HostCapabilities>;

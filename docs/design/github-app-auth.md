@@ -1,6 +1,35 @@
 # GitHub App auth (device flow)
 
-Geode signs a user in to GitHub with the OAuth **device flow** of a GitHub App. No backend and no client secret: the App's client ID is public (`Iv23litirg6G1u4PLtEp`, overridable with `GEODE_GITHUB_CLIENT_ID`). Code lives in `src/main/github-auth/`.
+Geode signs a user in to GitHub with the OAuth **device flow** of a GitHub App. No backend and no client secret: the App's client ID is public. Code lives in `src/main/github-auth/`.
+
+## Choosing the App
+
+Layers, highest precedence first (clientId / appSlug come from the first layer that sets them):
+
+1. Environment: `GEODE_GITHUB_CLIENT_ID`, `GEODE_GITHUB_APP_SLUG`
+2. Per vault: `<vault>/.geode/app.json`
+3. `github` key in `geode.json` (`~/Library/Application Support/Geode/geode.json` on macOS)
+4. Built-in default (`geode-rb-code-labs`)
+
+```json
+{ "github": { "clientId": "Iv23li…", "appSlug": "bankrate-prototypes", "allowedOwners": ["bankrate-prototypes"], "allowedRepos": ["me/side-project"] } }
+```
+
+Malformed values are ignored. A vault can be authored by someone else, so its allowlist can only **narrow** the global one (every list must pass). Env `GEODE_GITHUB_ALLOWED_OWNERS` / `GEODE_GITHUB_ALLOWED_REPOS` (comma separated) replace the geode.json list.
+
+## Checks before sign-in
+
+- `GET /apps/{slug}` (public) must exist and its `client_id` must match, else `app_not_found` / `app_mismatch`. If GitHub cannot answer, sign-in proceeds.
+- `device_flow_disabled` is reported plainly, with a link to the App settings.
+- Permissions are compared with what Geode needs (contents write, pull_requests write, metadata/actions/checks read). **Missing** ones warn that features will fail. **Extra** ones warn that agent threads will hold them and require an explicit "Connect anyway" (`confirmation_required`).
+
+## Allowlist
+
+`allowedOwners` / `allowedRepos` filter `listAccess`, make `checkRepo` return `reason: "not_allowed"`, and make `getToken(repo)` refuse. Limitation: a user-to-server token itself is not narrowed. The allowlist limits what Geode reports and hands out, not what the token could do if exfiltrated.
+
+## Changing the App
+
+Stored tokens record the issuing client ID. If the configured App no longer matches, the token is dropped and status becomes `reauth_required`. Tokens saved before this was recorded are assumed to come from the default App.
 
 ## Required GitHub App settings
 
@@ -8,7 +37,7 @@ Geode signs a user in to GitHub with the OAuth **device flow** of a GitHub App. 
 - Expiring user access tokens: **on** (8h access token, rotating refresh token)
 - Webhook: **off**
 - Repository permissions: Contents read/write, Pull requests read/write, Actions read, Metadata read
-- The install page slug is read from `GEODE_GITHUB_APP_SLUG` (default `geode-rb-code-labs`).
+- Installation page slug: see "Choosing the App".
 
 ## Flow
 

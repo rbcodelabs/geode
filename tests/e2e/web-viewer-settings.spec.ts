@@ -141,7 +141,9 @@ test("Web Viewer persistence is per-vault, legacy app settings remain compatible
       a.host.config.write = a.__originalWrite;
     });
     await enabled.click();
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "web-viewer.json"), "utf8"))).toEqual({
+    // The settings file is written asynchronously after the click; wait for it to exist.
+    const webViewerJson = path.join(vaultDir, ".geode", "web-viewer.json");
+    await expect.poll(() => (fs.existsSync(webViewerJson) ? JSON.parse(fs.readFileSync(webViewerJson, "utf8")) : null)).toEqual({
       enabled: false,
       homeUrl: "https://legacy.example/home",
       searchEngine: "https://legacy.example/?q=",

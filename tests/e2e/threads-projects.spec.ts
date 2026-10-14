@@ -3,6 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 
+// Both tests drive Project/external roots, which exist only on macOS.
+test.skip(process.platform !== "darwin", "external roots are macOS-only");
+
 const repoRoot = path.resolve(__dirname, "../..");
 // Synthetic equivalent of the existing Threads manager contract, not a copy of
 // plugin code or user data. No agents, schedulers, subprocesses or network calls.

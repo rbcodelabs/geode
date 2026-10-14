@@ -172,7 +172,7 @@ export class Vault extends Events {
       if (ev.event === "create") {
         if (this.files.has(ev.path)) return;
         this.indexEntry({ path: ev.path, isFolder: false, mtime: Date.now(), ctime: Date.now(), size: 0 });
-        this.rebuildChildren();
+        this.linkEntry(this.files.get(ev.path)!);
         this.contents.delete(ev.path);
         this.trigger("create", this.getFileByPath(ev.path));
       } else if (ev.event === "modify") {
@@ -186,12 +186,12 @@ export class Vault extends Events {
         if (!f) return;
         this.files.delete(ev.path);
         this.contents.delete(ev.path);
-        this.rebuildChildren();
+        this.unlinkEntry(f);
         this.trigger("delete", f);
       } else if (ev.event === "create-folder") {
         if (this.folders.has(ev.path)) return;
         this.indexEntry({ path: ev.path, isFolder: true, mtime: Date.now(), ctime: Date.now(), size: 0 });
-        this.rebuildChildren();
+        this.linkEntry(this.folders.get(ev.path)!);
         this.trigger("create", this.folders.get(ev.path));
       } else if (ev.event === "delete-folder") {
         const f = this.folders.get(ev.path);
@@ -277,7 +277,7 @@ export class Vault extends Events {
       if (this.getAbstractFileByPath(change.path)) return;
       this.indexEntry(change.entry);
       if (content !== undefined) this.contents.set(change.path, content);
-      this.rebuildChildren();
+      this.linkEntry((change.entry.isFolder ? this.folders.get(change.path) : this.files.get(change.path))!);
       this.trigger("create", this.getAbstractFileByPath(change.path));
       return;
     }
@@ -285,7 +285,7 @@ export class Vault extends Events {
       const file = this.files.get(change.path);
       if (!file) {
         this.indexEntry(change.entry);
-        this.rebuildChildren();
+        this.linkEntry(this.files.get(change.path)!);
         this.trigger("create", this.files.get(change.path));
         return;
       }
@@ -302,7 +302,7 @@ export class Vault extends Events {
       if (!file) return;
       this.files.delete(change.path);
       this.contents.delete(change.path);
-      this.rebuildChildren();
+      this.unlinkEntry(file);
       this.trigger("delete", file);
       return;
     }
@@ -370,6 +370,45 @@ export class Vault extends Events {
         parent: pathParent(entry.path),
       }));
     }
+  }
+
+  /** Folders before files, then case-insensitive by name: the order every children array keeps. */
+  private compareChildren = (a: TAbstractFile, b: TAbstractFile): number => {
+    const af = this.folders.has(a.path) ? 0 : 1, bf = this.folders.has(b.path) ? 0 : 1;
+    if (af !== bf) return af - bf;
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  };
+
+  /**
+   * O(depth + log siblings) alternative to rebuildChildren() for ONE entry that was just indexed (a file or folder created by
+   * a host event or a reconcile change). Creates any missing ancestor folders and inserts the entry into its parent's sorted
+   * children. rebuildChildren() walks and re-sorts the whole vault, which a thousand-file sync would pay once per file.
+   */
+  private linkEntry(entry: TFile | TFolder): void {
+    const parentPath = entry.parent;
+    if (entry.path === "") return;
+    let parent = this.folders.get(parentPath);
+    if (!parent) {
+      parent = { kind: "folder", path: parentPath, name: pathName(parentPath), parent: pathParent(parentPath), children: [] };
+      this.folders.set(parentPath, parent);
+      this.linkEntry(parent);
+    }
+    if (parent.children.includes(entry)) return;
+    let low = 0, high = parent.children.length;
+    while (low < high) { const mid = (low + high) >> 1; if (this.compareChildren(parent.children[mid], entry) <= 0) low = mid + 1; else high = mid; }
+    parent.children.splice(low, 0, entry);
+  }
+
+  /** Counterpart of linkEntry for one removed file or folder (its descendants, if any, are the caller's business). */
+  private unlinkEntry(entry: TFile | TFolder): void {
+    const parent = this.folders.get(entry.parent);
+    const index = parent ? parent.children.indexOf(entry) : -1;
+    if (parent && index >= 0) parent.children.splice(index, 1);
+  }
+
+  /** Marks paths whose live model is already authoritative, so a later full reconcile does not re-report them. */
+  acknowledgePaths(paths: Iterable<string>): void {
+    for (const path of paths) this.acknowledgedPathsSinceManifest.add(path);
   }
 
   /** Ensure every parent folder exists and recompute children arrays. */
@@ -600,7 +639,7 @@ export class Vault extends Events {
     this.indexEntry({ path, isFolder: false, mtime, ctime, size });
     this.acknowledgedPathsSinceManifest.add(path);
     this.contents.set(path, data);
-    this.rebuildChildren();
+    this.linkEntry(this.files.get(path)!);
     const file = this.files.get(path)!;
     this.trigger("create", file);
     return file;
@@ -618,7 +657,7 @@ export class Vault extends Events {
     );
     this.indexEntry({ path, isFolder: false, mtime, ctime, size });
     this.acknowledgedPathsSinceManifest.add(path);
-    this.rebuildChildren();
+    this.linkEntry(this.files.get(path)!);
     const file = this.files.get(path)!;
     this.trigger("create", file);
     return file;

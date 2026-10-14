@@ -4,6 +4,8 @@ import { createCapacitorHost, GeodeManagedVault } from "./host/capacitor-host";
 import { createLegacyGeodeFacade } from "./host/legacy-facade";
 import { installHostServices } from "./host/registry";
 import { VaultAccessError } from "./host/contracts";
+import { createIdbDeviceState } from "./host/idb-device-state";
+import { createMobileArtifactTransport } from "./host/mobile-http-transport";
 
 const state = createBrowserHostState({ storage: window.localStorage });
 const externalProofEnabled = new URLSearchParams(location.search).get("external-vault-proof") === "1";
@@ -128,9 +130,15 @@ const browserHost = createBrowserHost(state, {
     return { status: mobileTest.reconcileStatus, entries };
   },
 });
-const host = installHostServices(Capacitor.isNativePlatform()
-  ? createCapacitorHost(GeodeManagedVault, browserHost)
-  : browserHost);
+const nativeHost = Capacitor.isNativePlatform() ? createCapacitorHost(GeodeManagedVault, browserHost) : browserHost;
+// Native iOS: per-file sync history overflows the 5 MB localStorage snapshot the browser host uses.
+const supportedPluginTransport = createMobileArtifactTransport();
+const host = installHostServices({
+  ...(Capacitor.isNativePlatform() && typeof indexedDB !== "undefined"
+    ? { ...nativeHost, deviceState: createIdbDeviceState(nativeHost.deviceState) }
+    : nativeHost),
+  supportedPluginTransport,
+});
 
 // Compatibility is deliberately installed only after the portable host. New
 // shared code consumes HostServices; legacy plugin/renderer paths can migrate

@@ -19,8 +19,8 @@ import type { PrivilegedFetchRequest, PrivilegedFetchResponse } from "../shared/
 import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog";
 import type { SecretSnapshot } from "./secret-store";
 import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
-type GithubIpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
-import type { GithubAuthStatus, GithubInstallation, RepoCoverage } from "./github-auth";
+type GithubIpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string; url?: string };
+import type { GithubAppReport, GithubAuthStatus, GithubInstallation, RepoCoverage } from "./github-auth";
 import type { HeaderRuleAddResult, HeaderRuleSummary } from "./browser-header-rules";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -127,12 +127,18 @@ const api = {
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
   scanForSync: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-sync-scan"),
+  scanForSyncBlocked: (): Promise<{ entries: VaultFileEntry[]; blocked: Array<{ path: string; reason: string }> }> => ipcRenderer.invoke("vault-sync-scan-blocked"),
   scanForRefresh: (): Promise<VaultRefreshResult<VaultFileEntry>> => ipcRenderer.invoke("vault-refresh-scan"),
   httpRequest: (id: string, request: HostHttpRequest): Promise<HostHttpResponse> => ipcRenderer.invoke("host-http-request", id, request),
   cancelHttpRequest: (id: string): void => ipcRenderer.send("host-http-cancel", id),
   claimSyncOwner: (): Promise<string | null> => ipcRenderer.invoke("sync-owner-claim"),
   privateSyncStorage: (token: string, binding: string, request: import("../shared/sync-safety").SyncStorageRequest): Promise<unknown> => ipcRenderer.invoke("sync-private-storage", token, binding, request),
   releaseSyncOwner: (token: string): Promise<void> => ipcRenderer.invoke("sync-owner-release", token),
+  /** Desktop hub sync provider: the store half (filesystem / ssh) runs in the main process. */
+  hubSync: {
+    call: (request: import("../shared/hub-sync").HubRequest, requestId: string) => ipcRenderer.invoke("hub-sync", request, requestId),
+    abort: (requestId: string): void => ipcRenderer.send("hub-sync-abort", requestId),
+  } as import("../shared/hub-sync").HubSyncBridge,
   applySyncMutation: (token: string, input: GuardedMutation): Promise<GuardedMutationResult> => ipcRenderer.invoke("sync-local-apply", token, input),
   onSyncPrepare: (handler: (token: string, path: string) => Promise<string | null>): (() => void) => {
     const listener = async (_event: Electron.IpcRendererEvent, token: string, path: string) => {
@@ -246,10 +252,12 @@ const api = {
    */
   githubAuth: {
     status: (): Promise<GithubAuthStatus> => ipcRenderer.invoke("github-auth-status"),
-    start: (): Promise<GithubIpcResult<{ userCode: string; verificationUri: string }>> => ipcRenderer.invoke("github-auth-start"),
+    appInfo: (): Promise<GithubIpcResult<GithubAppReport>> => ipcRenderer.invoke("github-auth-app-info"),
+    start: (opts?: { confirmExtraPermissions?: boolean }): Promise<GithubIpcResult<{ userCode: string; verificationUri: string }>> => ipcRenderer.invoke("github-auth-start", opts),
     listAccess: (): Promise<GithubIpcResult<GithubInstallation[]>> => ipcRenderer.invoke("github-auth-list-access"),
     checkRepo: (repo: string): Promise<GithubIpcResult<RepoCoverage>> => ipcRenderer.invoke("github-auth-check-repo", repo),
-    getToken: (): Promise<GithubIpcResult<string>> => ipcRenderer.invoke("github-auth-get-token"),
+    /** Pass `owner/name` to have the allowlist enforced for that repo. */
+    getToken: (repo?: string): Promise<GithubIpcResult<string>> => ipcRenderer.invoke("github-auth-get-token", repo),
     disconnect: (): Promise<GithubIpcResult<{ revokeUrl: string }>> => ipcRenderer.invoke("github-auth-disconnect"),
     openUrl: (url: string): Promise<void> => ipcRenderer.invoke("github-auth-open-url", url),
   },
@@ -265,6 +273,9 @@ const api = {
   readSecret: (capability: string, key: string): Promise<string | null> => ipcRenderer.invoke("secret-read", capability, key),
   writeSecret: (capability: string, key: string, value: string): Promise<void> => ipcRenderer.invoke("secret-write", capability, key, value),
   removeSecret: (capability: string, key: string): Promise<void> => ipcRenderer.invoke("secret-remove", capability, key),
+  readAppSecret: (key: string): Promise<string | null> => ipcRenderer.invoke("app-secret-read", key),
+  writeAppSecret: (key: string, value: string): Promise<void> => ipcRenderer.invoke("app-secret-write", key, value),
+  removeAppSecret: (key: string): Promise<void> => ipcRenderer.invoke("app-secret-remove", key),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("open-external", url),
   openLocalFile: (href: string): Promise<
     | { kind: "vault"; path: string; line?: number; column?: number }
@@ -433,7 +444,7 @@ export type GeodeApi = Omit<
   ElectronOnlyGeodeApi,
   "audioCaptureWorklet" | "upsertMetadataCacheEntries" | "pruneMetadataCache" | "reportMetadataFallback" | "externalRoots" |
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
-  "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" |
+  "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless"
 > & {
@@ -476,6 +487,10 @@ export type GeodeApi = Omit<
   setSecret?: ElectronOnlyGeodeApi["setSecret"];
   deleteSecret?: ElectronOnlyGeodeApi["deleteSecret"];
   isSecretEncryptionAvailable?: ElectronOnlyGeodeApi["isSecretEncryptionAvailable"];
+  /** Geode's own secrets (the HTTPS hub token); Electron-only here, the mobile host supplies `host.secrets.app` directly. */
+  readAppSecret?: ElectronOnlyGeodeApi["readAppSecret"];
+  writeAppSecret?: ElectronOnlyGeodeApi["writeAppSecret"];
+  removeAppSecret?: ElectronOnlyGeodeApi["removeAppSecret"];
   /**
    * Secret-backed request-header rules for the agent browser (P1). Electron
    * desktop-only, like the secret-storage bridge above — absent on the

@@ -1,4 +1,6 @@
 import { Vault } from "./vault";
+import { PostApplyRefresh } from "./sync/post-apply-refresh";
+import { watchSyncStatus } from "./sync/status-refresh";
 import { version as appVersion } from "../../package.json";
 import { vaultRefreshFailure, vaultRefreshPresentation, type VaultRefreshFailure } from "../shared/vault-refresh";
 import { MetadataCache, parseMetadata } from "./metadata-cache";
@@ -13,10 +15,13 @@ import { CommandRegistry } from "./commands";
 import { displayHotkey, eventToBinding, bindingIdentity, type Hotkey } from "../shared/hotkey";
 import { PluginManager } from "./plugin-manager";
 import { ThemeManager } from "./theme-manager";
-import { CommunityManager } from "./community/community-manager";
+import { CommunityManager, type UpdateSummary } from "./community/community-manager";
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
 import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
+import { renderMobileSupportedPluginCatalog } from "./community/mobile-supported-catalog-view";
+import { loadMobileSupportedCatalog } from "./community/mobile-supported-plugins";
+import { GEODE_APP_VERSION } from "./app-version";
 import {
   appendLoadErrorDiagnostic,
   createTrackedItemEnableControl,
@@ -26,8 +31,19 @@ import {
 } from "./community/community-list-view";
 import { MarkdownRenderer } from "./markdown/render";
 import { AudioRecorderPlugin } from "./internal-plugins/audio-recorder/audio-recorder-plugin";
+import { FormatConverterPlugin } from "./internal-plugins/format-converter/format-converter-plugin";
+import { SlashCommandsPlugin } from "./internal-plugins/slash-commands/slash-commands-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
+import {
+  LaunchRegistry,
+  LaunchRunner,
+  createLaunchApi,
+  summarizeLaunchFailures,
+  type LaunchApi,
+  type LaunchPhase,
+} from "./launch/launch-sequence";
+import { LaunchOverlay } from "./launch/launch-overlay";
 import {
   MarkdownProcessorRegistry,
   type MarkdownCodeBlockProcessor,
@@ -73,7 +89,7 @@ import {
   type BookmarksRoot,
 } from "./bookmarks";
 import { renamePathForBasename, rewriteWikilinksForRename } from "./rename";
-import { buildConflictPath, formatConflictTimestamp } from "./reconciliation";
+import { buildConflictPath, formatConflictTimestamp, type ReconcileChange } from "./reconciliation";
 import {
   ActionRegistry,
   DOCUMENT_MENU_SPEC,
@@ -94,6 +110,7 @@ import {
 } from "./daily-notes";
 import type { Command } from "./commands";
 import moment from "moment";
+import { UniqueNotesService, uniqueNotePath } from "./unique-notes";
 import { TemplatesService, renderTemplate, templateFiles, templatePath, templateNoteName, type TemplatesConfig } from "./templates";
 import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
@@ -111,9 +128,11 @@ import { VaultAccessError } from "./host/contracts";
 import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
+import { HUB_PROVIDER_ID, HubSyncProvider, describeHubTarget } from "./sync/hub-provider";
 import { formatSyncFeedback, renderSyncFeedback } from "./sync/feedback";
 import { describeSyncProgress } from "./sync/progress";
-import type { SyncPreview, SyncStatusProgress } from "./sync/types";
+import type { SyncPreview, SyncStatus, SyncStatusProgress } from "./sync/types";
+import { describeSyncCard, type SyncCardInput, type SyncCardPrimary } from "./sync/status-card";
 import { stripCommentMetadata } from "./comments/model";
 import { CommentService, type CommentMessage, type CommentThread } from "./comments/service";
 import { applyThemeWithFade, normalizeThemeSetting, osPrefersDark, resolveTheme, watchOsAppearance, type ThemeSetting } from "./color-scheme";
@@ -139,6 +158,10 @@ interface AppSettings {
   webViewer: WebViewerOptions;
   /** Audio recorder core plugin; off by default, as in Obsidian. */
   audioRecorderEnabled: boolean;
+  /** Format converter core plugin; off by default, as in Obsidian. */
+  formatConverterEnabled: boolean;
+  /** Slash commands core plugin (enabled by default, as in Obsidian). */
+  slashCommandsEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -161,6 +184,8 @@ export type PickerItem =
 
 /** Most plugin-provided rows a single query may add to the quick switcher. */
 const MAX_PLUGIN_ROWS = 20;
+/** Whole-budget cap for the launch-time community update check; network trouble must not hang launch. */
+const COMMUNITY_UPDATE_LAUNCH_TIMEOUT_MS = 15_000;
 
 /**
  * Builds the New Tab picker's result list for one query: vault files and saved
@@ -697,8 +722,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
+type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
 /** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
 const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
@@ -720,6 +745,8 @@ class SettingsModal extends Modal {
    * detached container would repaint elements nobody can see.
    */
   private stopSyncProgress: (() => void) | null = null;
+  /** Flushes the hub-location form's pending save; set while the Sync tab shows the hub provider. */
+  private hubConfigSettle?: () => Promise<void>;
   private stopExternalRootsTab: (() => void) | null = null;
   private stopGithubTab: (() => void) | null = null;
 
@@ -811,6 +838,8 @@ class SettingsModal extends Modal {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "daily-notes") {
       this.renderDailyNotesTab(this.contentContainerEl);
+    } else if (id === "unique-notes") {
+      this.renderUniqueNotesTab(this.contentContainerEl);
     } else if (id === "templates") {
       this.renderTemplatesTab(this.contentContainerEl);
     } else if (id === "core-plugins") {
@@ -858,6 +887,8 @@ class SettingsModal extends Modal {
 
   /** Rebuild the left nav column: built-in tabs, then an alphabetized "Plugin options" group. */
   private renderNav(): void {
+    // Rebuilding the list resets its scroll; keep the user's place across tab switches.
+    const scrollTop = this.navEl.scrollTop;
     this.navEl.empty();
 
     const addNavItem = (id: string, label: string, container: HTMLElement) => {
@@ -875,6 +906,7 @@ class SettingsModal extends Modal {
     addNavItem("appearance", "Appearance", this.navEl);
     addNavItem("hotkeys", "Hotkeys", this.navEl);
     addNavItem("daily-notes", "Daily Notes", this.navEl);
+    addNavItem("unique-notes", "Unique note creator", this.navEl);
     addNavItem("templates", "Templates", this.navEl);
     addNavItem("core-plugins", "Core plugins", this.navEl);
     addNavItem("community-plugins", "Community plugins & themes", this.navEl);
@@ -886,20 +918,50 @@ class SettingsModal extends Modal {
       addNavItem("performance", "Performance", this.navEl);
     }
 
-    const pluginTabs = [...this.geodeApp.settingTabs.keys()]
-      .map((id) => ({ id, name: this.geodeApp.pluginManager?.getManifest(id)?.name ?? id }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    if (pluginTabs.length) {
+    const manifestName = (pluginId: string) => this.geodeApp.pluginManager?.getManifest(pluginId)?.name ?? pluginId;
+    const meta = this.geodeApp.settingTabMeta;
+    // Plugins that registered extra sections get their own sidebar group
+    // (primary tab first as "General", then sections in registration order);
+    // the rest stay in the shared "Plugin options" group.
+    const sectionsByPlugin = new Map<string, { id: string; label: string }[]>();
+    for (const [id, m] of meta) {
+      if (!this.geodeApp.settingTabs.has(id)) continue;
+      const list = sectionsByPlugin.get(m.pluginId) ?? [];
+      list.push({ id, label: m.label });
+      sectionsByPlugin.set(m.pluginId, list);
+    }
+    const makeGroup = (titleText: string): HTMLElement => {
       const group = document.createElement("div");
       group.className = "vertical-tab-header-group";
       const title = document.createElement("div");
       title.className = "vertical-tab-header-group-title";
-      title.textContent = "Plugin options";
+      title.textContent = titleText;
       group.appendChild(title);
-      for (const { id, name } of pluginTabs) addNavItem(id, name, group);
       this.navEl.appendChild(group);
+      return group;
+    };
+
+    const pluginTabs = [...this.geodeApp.settingTabs.keys()]
+      .filter((id) => !meta.has(id) && !sectionsByPlugin.has(id))
+      .map((id) => ({ id, name: manifestName(id) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (pluginTabs.length) {
+      const group = makeGroup("Plugin options");
+      for (const { id, name } of pluginTabs) addNavItem(id, name, group);
     }
+
+    const sectioned = [...sectionsByPlugin.keys()]
+      .map((pluginId) => ({ pluginId, name: manifestName(pluginId) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const { pluginId, name } of sectioned) {
+      const group = makeGroup(name);
+      if (this.geodeApp.settingTabs.has(pluginId)) addNavItem(pluginId, "General", group);
+      for (const { id, label } of sectionsByPlugin.get(pluginId)!) addNavItem(id, label, group);
+    }
+    this.navEl.scrollTop = scrollTop;
+    // On phones the tab strip scrolls sideways and is rebuilt on every activation, which resets it: bring the active tab back into view.
+    if (document.body.classList.contains("is-mobile")) this.navEl.querySelector<HTMLElement>(".vertical-tab-nav-item.is-active")?.scrollIntoView({ block: "nearest", inline: "center" });
   }
 
   private renderAppearanceTab(container: HTMLElement): void {
@@ -1101,12 +1163,43 @@ class SettingsModal extends Modal {
     }
   }
 
+  private renderUniqueNotesTab(container: HTMLElement): void {
+    const unique = this.geodeApp.uniqueNotes;
+    container.innerHTML = `<h2>Unique note creator</h2>`;
+    const update = async (patch: Partial<{ enabled: boolean; folder: string; format: string; template: string }>, sync?: () => void) => {
+      try { await unique.update(patch); this.geodeApp.syncUniqueNoteRibbon(); sync?.(); }
+      catch (err) {
+        console.error(err);
+        this.geodeApp.notify("Could not save Unique note creator settings. Your previous settings are still active.");
+        if (sync) sync(); else if (this.activeTabId === "unique-notes") this.activateTab("unique-notes");
+      }
+    };
+    this.addToggle(container, "Enable Unique note creator", unique.enabled, enabled => void update({ enabled }));
+    for (const [key, label] of [["folder", "New file location"], ["format", "Date format"], ["template", "Template file location"]] as const) {
+      const input = this.addTextInput(container, label, unique.options[key], value => {
+        void update({ [key]: value }, () => { input.value = unique.options[key]; });
+      });
+    }
+  }
+
   private renderCorePluginsTab(container: HTMLElement): void {
     const webViewer = this.geodeApp.webViewer;
-    container.innerHTML = `<h2>Core plugins</h2><h3>Audio recorder</h3>`;
+    container.innerHTML = `<h2>Core plugins</h2><h3>Slash commands</h3>`;
+    this.addToggle(container, "Enable Slash commands", this.geodeApp.settings.slashCommandsEnabled, (enabled) => {
+      this.geodeApp.settings.slashCommandsEnabled = enabled;
+      this.geodeApp.syncSlashCommandsPlugin();
+      this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
     this.addToggle(container, "Enable Audio recorder", this.geodeApp.settings.audioRecorderEnabled, (enabled) => {
       this.geodeApp.settings.audioRecorderEnabled = enabled;
       this.geodeApp.syncAudioRecorderPlugin();
+      this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Format converter</h3>`);
+    this.addToggle(container, "Enable Format converter", this.geodeApp.settings.formatConverterEnabled, (enabled) => {
+      this.geodeApp.settings.formatConverterEnabled = enabled;
+      this.geodeApp.syncFormatConverterPlugin();
       this.geodeApp.saveSettings();
     });
     container.insertAdjacentHTML("beforeend", `<h3>Web Viewer</h3>`);
@@ -1243,6 +1336,23 @@ class SettingsModal extends Modal {
         install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
         enable: (pluginId) => this.geodeApp.pluginManager.enable(pluginId),
         getLoadError: (pluginId) => this.geodeApp.pluginManager.getLoadError(pluginId),
+        onInstalled: () => { void this.renderCommunityList(listEl); },
+      });
+    }
+
+    const mobileTransport = this.geodeApp.host.supportedPluginTransport;
+    if (!this.geodeApp.host.capabilities.nodePlugins && this.geodeApp.pluginManager.isMobileRuntime() && mobileTransport) {
+      const catalogEl = document.createElement("section");
+      catalogEl.className = "supported-plugin-catalog";
+      container.appendChild(catalogEl);
+      void renderMobileSupportedPluginCatalog(catalogEl, {
+        load: () => loadMobileSupportedCatalog({
+          transport: mobileTransport,
+          deviceState: this.geodeApp.host.deviceState,
+          currentGeodeVersion: GEODE_APP_VERSION,
+        }),
+        install: (catalog, pluginId) => this.geodeApp.communityManager.installMobileSupported(catalog, pluginId),
+        getInstalledVersion: (pluginId) => this.geodeApp.pluginManager.getManifest(pluginId)?.version,
         onInstalled: () => { void this.renderCommunityList(listEl); },
       });
     }
@@ -1674,7 +1784,7 @@ class SettingsModal extends Modal {
    * throw away scroll position, button focus and any half-finished interaction,
    * and at 17,251 operations it would be unusable.
    */
-  private renderSyncProgress(container: HTMLElement, generation: number, onBusyChange?: (busy: boolean) => void): { begin: () => void } {
+  private renderSyncProgress(container: HTMLElement, generation: number, onBusyChange?: (busy: boolean) => void, onStatus?: (status: SyncStatus) => void): { begin: () => void } {
     const activity = document.createElement("div");
     activity.className = "sync-progress";
     activity.setAttribute("role", "status");
@@ -1737,6 +1847,7 @@ class SettingsModal extends Modal {
 
     stop = this.geodeApp.sync.on("status", status => {
       if (!live()) { teardown(); return; }
+      onStatus?.(status);
       paint(status.progress);
     });
     this.stopSyncProgress = teardown;
@@ -1785,6 +1896,198 @@ class SettingsModal extends Modal {
     }
   }
 
+  /** Location (folder, ssh host or HTTPS URL + token) and create-if-missing for the built-in hub provider (docs/design/app-hub-sync-provider.md). */
+  private renderHubConfigRows(container: HTMLElement, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
+    const provider = this.geodeApp.hubSyncProvider; if (!provider) return;
+    const row = this.addRow(container, "Hub location", "Step 1 of 2. The hub is where the shared copy of your vault lives: a folder, an SSH host, or an HTTPS hub started with `geode-wiki sync serve --http`. Everything you type here saves automatically.");
+    row.control.parentElement?.classList.add("sync-stacked-setting");
+    const field = (label: string, input: HTMLElement, help?: string) => {
+      const wrap = document.createElement("label"); wrap.className = "sync-field";
+      const text = document.createElement("span"); text.className = "sync-field-label"; text.textContent = label;
+      wrap.append(text, input);
+      if (help) { const note = document.createElement("span"); note.className = "sync-field-help"; note.textContent = help; wrap.append(note); }
+      return wrap;
+    };
+    const kind = document.createElement("select"); kind.setAttribute("aria-label", "Hub type");
+    const kindLabels = { fs: "Folder", ssh: "SSH host", http: "HTTPS hub" } as const;
+    for (const supported of provider.supportedKinds) kind.append(new Option(kindLabels[supported], supported));
+    const host = document.createElement("input"); host.type = "text"; host.setAttribute("aria-label", "Hub ssh host"); host.placeholder = "ssh host or ~/.ssh/config alias";
+    const path = document.createElement("input"); path.type = "text"; path.setAttribute("aria-label", "Hub store path"); path.placeholder = "/path/to/hub";
+    const url = document.createElement("input"); url.type = "url"; url.setAttribute("aria-label", "Hub URL"); url.placeholder = "https://my-box.tailnet-name.ts.net"; url.autocomplete = "off"; url.spellcheck = false;
+    const token = document.createElement("input"); token.type = "password"; token.setAttribute("aria-label", "Hub token"); token.placeholder = "Hub token"; token.autocomplete = "off"; token.spellcheck = false;
+    const hostField = field("SSH host", host, "Runs non-interactively using your ~/.ssh/config, so a host alias works."), typeField = field("Where is the hub?", kind), pathField = field("Folder path", path, "A local, network or cloud-synced folder. The same store `geode-wiki sync` uses."), urlField = field("Hub URL", url), tokenField = field("Token", token, "Kept in secure storage on this device only, never in the vault.");
+    const pathLabel = pathField.querySelector<HTMLElement>(".sync-field-label")!;
+    const secureNote = document.createElement("div"); secureNote.className = "sync-field-help"; secureNote.setAttribute("data-hub-secure-storage", "");
+    if (!provider.canStoreToken) { token.disabled = true; secureNote.textContent = "Secure storage is unavailable on this device, so an HTTPS hub cannot be used here. The token is never kept in the vault or in app settings."; }
+    const createLabel = document.createElement("label"); const create = document.createElement("input"); create.type = "checkbox"; create.setAttribute("aria-label", "Create the hub if it is missing");
+    createLabel.append(create, " Create the hub if it is missing");
+    const save = document.createElement("button"); save.type = "button"; save.textContent = "Save hub settings";
+    const test = document.createElement("button"); test.type = "button"; test.textContent = "Test connection";
+    const buttons = document.createElement("div"); buttons.className = "sync-setup-buttons"; buttons.append(test, save);
+    const result = document.createElement("div"); result.className = "sync-setup-result"; result.setAttribute("data-hub-result", ""); result.setAttribute("aria-live", "polite");
+    const syncVisibility = () => { const ssh = kind.value === "ssh", http = kind.value === "http"; hostField.hidden = !ssh; pathField.hidden = http; urlField.hidden = tokenField.hidden = secureNote.hidden = !http; pathLabel.textContent = ssh ? "Path on the host" : "Folder path"; };
+    kind.addEventListener("change", syncVisibility); syncVisibility();
+    trackBusy(host); trackBusy(path); trackBusy(url); trackBusy(create); trackBusy(save); trackBusy(test);
+    if (provider.canStoreToken) trackBusy(token);
+    const read = () => kind.value === "http"
+      ? { schema: 1 as const, target: { kind: "http" as const, url: url.value }, create: create.checked }
+      : kind.value === "ssh"
+      ? { schema: 1 as const, target: { kind: "ssh" as const, host: host.value, path: path.value }, create: create.checked }
+      : { schema: 1 as const, target: { kind: "fs" as const, path: path.value }, create: create.checked };
+    // Every edit is saved (debounced); actions that depend on the settings first call settle(), so a ticked box or a
+    // typed path is never ignored because the Save button was not pressed.
+    let debounce: ReturnType<typeof setTimeout> | undefined, chain: Promise<void> = Promise.resolve(), saveError: Error | null = null, dirty = false, tokenDirty = false;
+    const saveNow = () => {
+      dirty = false; const snapshot = read();
+      const pendingToken = tokenDirty ? token.value : ""; tokenDirty = false;
+      chain = chain.then(async () => {
+        await provider.setConfig(snapshot);
+        if (snapshot.target.kind === "http" && pendingToken) {
+          await provider.setToken(snapshot.target.url, pendingToken);
+          if (document.activeElement !== token) { token.value = ""; token.placeholder = "Token saved on this device"; }
+        }
+      }).then(() => { saveError = null; result.textContent = "Hub settings saved."; }, error => { saveError = error instanceof Error ? error : new Error(String(error)); result.textContent = saveError.message; });
+    };
+    const queue = () => { dirty = true; clearTimeout(debounce); debounce = setTimeout(saveNow, 300); };
+    this.hubConfigSettle = async () => {
+      clearTimeout(debounce); if (dirty) saveNow();
+      await chain; if (saveError) throw saveError;
+    };
+    for (const el of [host, path, url]) el.addEventListener("input", queue);
+    for (const el of [kind, create]) el.addEventListener("change", queue);
+    // The token is saved when the field is left (not per keystroke) and never shown again once saved.
+    token.addEventListener("input", () => { tokenDirty = true; });
+    token.addEventListener("change", () => { tokenDirty = true; queue(); });
+    void provider.getConfig().then(config => {
+      if (!config || !row.control.isConnected || dirty) return;
+      kind.value = config.target.kind; if (config.target.kind === "ssh") host.value = config.target.host;
+      if (config.target.kind === "http") { url.value = config.target.url; void provider.hasToken(config.target.url).then(saved => { if (saved && !tokenDirty) token.placeholder = "Token saved on this device"; }); } else path.value = config.target.path;
+      create.checked = config.create; syncVisibility();
+      result.textContent = `Hub: ${describeHubTarget(config.target)}`;
+    }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
+    save.addEventListener("click", () => { void this.hubConfigSettle!().then(() => { result.textContent = "Hub settings saved."; }).catch(() => {}); });
+    test.addEventListener("click", () => {
+      result.textContent = "Connecting...";
+      void this.hubConfigSettle!().then(() => provider.probe(new AbortController().signal)).then(({ vaults, detail }) => {
+        result.textContent = (vaults.length ? `Connected. Hub vault: ${vaults.map(vault => `"${vault.name}"`).join(", ")}. To use it on this device, choose "Join" under Shared vault setup.` : "Connected. The hub holds no vault yet.") + " " + detail;
+      }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
+    });
+    createLabel.className = "sync-field-check"; row.control.append(typeField, hostField, pathField, urlField, tokenField, secureNote, createLabel, buttons, result);
+  }
+
+  /** Explicit first-sync confirmation with the plan counts, and the safety-rail refusal with its one-shot override. */
+  private renderHubPlanRows(container: HTMLElement, perform: (action: () => Promise<unknown>, kind?: "preview" | "run") => void, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
+    const sync = this.geodeApp.sync, details = sync.getHistoryDetails();
+    if (details?.requiresApproval && sync.getStatus().state !== "paused") {
+      const plan = this.addRow(container, "First sync plan", `${details.uploads} upload(s) to the hub, ${details.downloads} download(s) from it, ${details.deletions} deletion(s), ${details.conflicts.length} conflict(s). Nothing changes until you confirm.`);
+      plan.control.parentElement?.setAttribute("data-hub-plan", ""); plan.control.parentElement?.classList.add("sync-wrapped-setting");
+      const confirm = document.createElement("button"); confirm.type = "button"; confirm.textContent = "Confirm first sync";
+      confirm.addEventListener("click", () => perform(() => sync.run({ approvePreview: true }), "run")); plan.control.appendChild(confirm); trackBusy(confirm);
+      // In a short window the plan row can sit below the fold; the one primary action must be reachable.
+      requestAnimationFrame(() => plan.control.parentElement?.scrollIntoView?.({ block: "nearest" }));
+    }
+    const refusal = sync.getRailRefusal();
+    if (!refusal) return;
+    const row = this.addRow(container, "Safety rail", refusal.message);
+    row.control.parentElement?.setAttribute("data-sync-rail", refusal.status); row.control.parentElement?.classList.add("sync-wrapped-setting");
+    const lift = document.createElement("button"); lift.type = "button";
+    if (refusal.status === "delete-limit-exceeded") {
+      const count = Number(refusal.detail.deletions);
+      lift.textContent = `Allow ${count} deletions once`;
+      lift.addEventListener("click", () => { sync.allowRailOverrideOnce({ deleteLimit: count }); perform(() => details?.requiresApproval ? sync.run({ approvePreview: true }) : sync.run(), "run"); });
+    } else {
+      lift.textContent = "Sync despite the short scan (once)";
+      // An approved device runs on the overridden scan; one still awaiting its first confirmation only previews (the confirm row follows).
+      lift.addEventListener("click", () => { sync.allowRailOverrideOnce({ shrunkScan: true }); if (details?.requiresApproval || sync.getStatus().state === "preview") perform(() => sync.preview()); else perform(() => sync.run(), "run"); });
+    }
+    row.control.appendChild(lift); trackBusy(lift);
+  }
+
+  /**
+   * Shared vault setup as two clearly separate choices instead of one row of unrelated controls:
+   * start a new vault (first device) or join one that exists (every other device). Once a vault is
+   * bound the choices fold away, because switching vaults is rare and the controls are just noise.
+   */
+  private renderSharedVaultSetup(container: HTMLElement, ctx: { perform: (action: () => Promise<unknown>, kind?: "preview" | "run") => void; trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void; applyBusyState: () => void; boundVaultName?: string; isHub: boolean }): void {
+    const sync = this.geodeApp.sync;
+    const bound = Boolean(ctx.boundVaultName);
+    const lead = bound
+      ? `This device syncs with "${ctx.boundVaultName}". You rarely need to change this.`
+      : `${ctx.isHub ? "Step 2 of 2. " : ""}Choose how this device gets its vault: start a new shared vault on your first device, or join one that already exists.`;
+    const row = this.addRow(container, "Shared vault setup", lead);
+    row.control.parentElement?.classList.add("sync-stacked-setting");
+    const options = document.createElement("div"); options.className = "sync-option-grid";
+    const option = (title: string, help: string) => {
+      const card = document.createElement("div"); card.className = "sync-option"; card.setAttribute("role", "group"); card.setAttribute("aria-label", title);
+      const heading = document.createElement("div"); heading.className = "sync-option-title"; heading.textContent = title;
+      const note = document.createElement("div"); note.className = "sync-option-help"; note.textContent = help;
+      card.append(heading, note); options.appendChild(card); return card;
+    };
+    // Choice 1: create. The name field belongs to this action only.
+    const create = option("Start a new shared vault", "Use this on your first device. This vault becomes the shared copy that your other devices join.");
+    const nameLabel = document.createElement("label"); nameLabel.className = "sync-field";
+    const nameText = document.createElement("span"); nameText.className = "sync-field-label"; nameText.textContent = "Name for the shared vault";
+    const name = document.createElement("input"); name.type = "text"; name.setAttribute("aria-label", "Shared vault name"); name.placeholder = "e.g. Personal notes";
+    nameLabel.append(nameText, name);
+    const createButton = document.createElement("button"); createButton.type = "button"; createButton.textContent = "Create shared vault"; createButton.classList.add("mod-cta");
+    createButton.addEventListener("click", () => ctx.perform(async () => { await this.hubConfigSettle?.(); return sync.createVault(name.value); }));
+    create.append(nameLabel, createButton);
+    // Choice 2: join. Discovery is an explicit step, and each result carries its own Join button.
+    const join = option("Join an existing shared vault", "Use this on your other devices to download a vault that is already on the hub.");
+    const discover = document.createElement("button"); discover.type = "button"; discover.textContent = "Find shared vaults";
+    const choices = document.createElement("div"); choices.className = "sync-vault-choices"; choices.setAttribute("aria-live", "polite");
+    join.append(discover, choices);
+    ctx.trackBusy(name); ctx.trackBusy(createButton); ctx.trackBusy(discover);
+    discover.addEventListener("click", () => {
+      discover.disabled = true;
+      void (this.hubConfigSettle?.() ?? Promise.resolve()).then(() => sync.discoverVaults()).then(vaults => {
+        choices.replaceChildren();
+        if (!vaults.length) { choices.textContent = "No shared vaults found on this hub yet. Start one from your first device."; return; }
+        for (const vault of vaults) {
+          const line = document.createElement("div"); line.className = "sync-vault-choice";
+          const label = document.createElement("span"); label.textContent = vault.name;
+          const button = document.createElement("button"); button.type = "button"; button.textContent = `Join ${vault.name}`; button.title = vault.vaultId;
+          button.addEventListener("click", () => ctx.perform(() => sync.joinVault(vault)));
+          line.append(label, button); choices.appendChild(line); ctx.trackBusy(button);
+        }
+      // A hard `false` here would re-enable discovery even while a background sync
+      // started mid-discovery — restore the shared busy state instead of a literal value.
+      }).catch(error => { choices.textContent = error instanceof Error ? error.message : "Discovery unavailable"; }).finally(() => ctx.applyBusyState());
+    });
+    const fine = document.createElement("div"); fine.className = "sync-field-help"; fine.textContent = "Experimental immutable history. Files over 100 MiB are blocked; secrets and plugin data are excluded.";
+    if (!bound) { row.control.append(options, fine); return; }
+    const toggle = document.createElement("button"); toggle.type = "button"; toggle.setAttribute("data-keep-enabled", ""); toggle.textContent = "Change shared vault";
+    const wrap = document.createElement("div"); wrap.className = "sync-option-wrap"; wrap.append(options, fine);
+    const paint = (open: boolean) => { toggle.setAttribute("aria-expanded", String(open)); wrap.hidden = !open; };
+    paint(this.syncSectionOpen.get("vault-change") ?? false);
+    toggle.addEventListener("click", () => { const next = toggle.getAttribute("aria-expanded") !== "true"; this.syncSectionOpen.set("vault-change", next); paint(next); });
+    row.control.append(toggle, wrap);
+  }
+
+  private syncSectionOpen = new Map<string, boolean>();
+  /** A collapsible Sync-tab section. The user's own toggle wins over the auto-open default and survives re-renders. */
+  private createSyncSection(parent: HTMLElement, id: string, title: string, autoOpen: boolean) {
+    const section = document.createElement("div"); section.className = "sync-section"; section.dataset.syncSection = id;
+    const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "sync-section-toggle"; toggle.setAttribute("data-keep-enabled", "");
+    const chevron = document.createElement("span"); chevron.className = "sync-section-chevron"; chevron.setAttribute("aria-hidden", "true"); chevron.textContent = "▸";
+    const name = document.createElement("span"); name.className = "sync-section-title"; name.textContent = title;
+    const badge = document.createElement("span"); badge.className = "sync-section-badge"; badge.hidden = true;
+    const summary = document.createElement("span"); summary.className = "sync-section-summary";
+    toggle.append(chevron, name, badge, summary);
+    const body = document.createElement("div"); body.className = "sync-section-body"; body.id = `sync-section-${id}`;
+    toggle.setAttribute("aria-controls", body.id);
+    const paint = (open: boolean) => { toggle.setAttribute("aria-expanded", String(open)); body.hidden = !open; section.classList.toggle("is-open", open); };
+    paint(this.syncSectionOpen.get(id) ?? autoOpen);
+    toggle.addEventListener("click", () => { const next = toggle.getAttribute("aria-expanded") !== "true"; this.syncSectionOpen.set(id, next); paint(next); });
+    section.append(toggle, body); parent.appendChild(section);
+    return {
+      section, body, summary,
+      setOpen: (open: boolean) => { this.syncSectionOpen.set(id, open); paint(open); },
+      openIfUnset: () => { if (!this.syncSectionOpen.has(id)) paint(true); },
+      setBadge: (value: string | number | null, tone: "ok" | "warn" | "bad") => { badge.hidden = value === null || value === ""; badge.textContent = value === null ? "" : String(value); badge.dataset.tone = tone; },
+    };
+  }
+
   private renderSyncTab(container: HTMLElement, summary = ""): void {
     const generation = ++this.syncTabGeneration;
     // innerHTML detaches the previous render's nodes but leaves `container`
@@ -1793,27 +2096,78 @@ class SettingsModal extends Modal {
     this.stopSyncProgress?.();
     this.stopSyncProgress = null;
     container.innerHTML = `<h2>Sync</h2>`;
-    const providers = this.geodeApp.sync.listProviders();
-    const active = this.geodeApp.sync.getActiveProvider();
-    const status = this.geodeApp.sync.getStatus();
-    const { control } = this.addRow(container, "Sync provider", active ? `Connected to ${active.name}` : "Select a plugin-provided full-vault transport.");
+    const sync = this.geodeApp.sync;
+    const providers = sync.listProviders();
+    const active = sync.getActiveProvider();
+    const status = sync.getStatus();
+    const isHub = active?.id === HUB_PROVIDER_ID;
+    this.hubConfigSettle = undefined;
+    const initialDetails = sync.getHistoryDetails();
+    const boundVaultName = sync.isAppendOnly() ? sync.getBoundVaultName() : undefined;
+    const cardInput = (s: SyncStatus): SyncCardInput => {
+      const details = sync.getHistoryDetails();
+      return { state: s.state, conflicts: s.conflicts || details?.conflicts.length || 0, message: s.message, connected: Boolean(sync.getActiveProvider()), isHub, bound: !sync.isAppendOnly() || Boolean(sync.getBoundVaultName()), requiresApproval: Boolean(details?.requiresApproval), blocked: details?.blocked.length ?? 0, lastSyncedAt: sync.getLastSyncedAt(), now: Date.now() };
+    };
+    const cardView = describeSyncCard(cardInput(status));
+
+    // Status card: the one thing the tab leads with. Headline, last sync, pending counts, live progress and the single next action.
+    const card = document.createElement("div"); card.className = "sync-status-card";
+    const head = document.createElement("div"); head.className = "sync-status-head";
+    const dot = document.createElement("div"); dot.className = "sync-status-dot"; dot.setAttribute("aria-hidden", "true");
+    const textWrap = document.createElement("div"); textWrap.className = "sync-status-text";
+    // Not a heading on purpose: the tab's own "Sync" heading must stay the only one matching that name.
+    const headline = document.createElement("div"); headline.className = "sync-status-headline";
+    const sub = document.createElement("div"); sub.className = "sync-status-sub";
+    textWrap.append(headline, sub);
+    const actions = document.createElement("div"); actions.className = "sync-card-actions";
+    head.append(dot, textWrap, actions);
+    const countsEl = document.createElement("div"); countsEl.className = "sync-status-counts";
+    card.append(head, countsEl);
+    const paintCounts = () => {
+      const details = sync.getHistoryDetails(); const live = sync.getStatus();
+      const chips: Array<[number, string, string?]> = [];
+      if (details) chips.push([details.uploads, "to upload"], [details.downloads, "to download"], [details.deletions, "to delete"]);
+      const conflictCount = live.conflicts || details?.conflicts.length || 0;
+      chips.push([conflictCount, conflictCount === 1 ? "conflict" : "conflicts", "hot"]);
+      countsEl.replaceChildren(...chips.filter(([count]) => count > 0).map(([count, label, tone]) => {
+        const chip = document.createElement("span"); chip.className = "sync-status-count" + (tone ? " mod-" + tone : "");
+        const number = document.createElement("b"); number.textContent = String(count); chip.append(number, " " + label); return chip;
+      }));
+      countsEl.hidden = !countsEl.childElementCount;
+    };
+    const paintCard = (s: SyncStatus) => { const view = describeSyncCard(cardInput(s)); card.dataset.tone = view.tone; headline.textContent = view.headline; sub.textContent = view.sub; paintCounts(); };
+    paintCard(status);
+    container.appendChild(card);
+    // The first-sync plan and any safety-rail refusal sit directly under the card so they are never buried in a section.
+    const planHost = document.createElement("div"); planHost.className = "sync-plan-host"; container.appendChild(planHost);
+
+    const connectionAuto = !active || (sync.isAppendOnly() && (!boundVaultName || status.state === "preview" || status.state === "error" || status.state === "conflict"));
+    const connection = this.createSyncSection(container, "connection", "Connection", connectionAuto);
+    const scopeSection = this.createSyncSection(container, "scope", "What syncs", false);
+    const blockedCount = initialDetails?.blocked.length ?? 0, excludedCount = initialDetails?.excluded.length ?? 0, appendConflictCount = initialDetails?.conflicts.length ?? 0;
+    const issues = this.createSyncSection(container, "issues", "Conflicts & issues", Boolean(status.conflicts || blockedCount || appendConflictCount));
+    let plainConflictCount = 0;
+    const paintIssuesHeader = () => {
+      const conflictTotal = (status.conflicts || appendConflictCount) + (appendConflictCount ? 0 : plainConflictCount > status.conflicts ? plainConflictCount - status.conflicts : 0);
+      const parts = [conflictTotal ? `${conflictTotal} conflict${conflictTotal === 1 ? "" : "s"}` : "", blockedCount ? `${blockedCount} blocked` : "", excludedCount ? `${excludedCount} excluded` : ""].filter(Boolean);
+      issues.summary.textContent = parts.length ? parts.join(" · ") : "Nothing needs attention";
+      issues.setBadge(conflictTotal + blockedCount || null, conflictTotal ? "warn" : "bad");
+    };
+    paintIssuesHeader();
+    connection.summary.textContent = active ? (boundVaultName ? `${active.name} · ${boundVaultName}` : active.name) : "Not connected";
+    connection.setBadge(active ? "Connected" : null, "ok");
+
+    const { control } = this.addRow(connection.body, "Sync provider", active ? `Connected to ${active.name}` : "Select a plugin-provided full-vault transport.");
     const select = document.createElement("select");
     select.setAttribute("aria-label", "Sync provider");
     select.append(new Option("Not connected", ""), ...providers.map(provider => new Option(provider.name, provider.id)));
     select.value = active?.id ?? "";
-    select.addEventListener("change", () => { void (select.value ? this.geodeApp.sync.activate(select.value) : this.geodeApp.sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
+    select.addEventListener("change", () => { void (select.value ? sync.activate(select.value) : sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
     control.appendChild(select);
     // The provider row above names the transport (e.g. "Google Drive (managed vault)"); the
     // bound shared vault has its own name, only meaningful on the append-only/history path.
-    if (this.geodeApp.sync.isAppendOnly()) { const boundVaultName = this.geodeApp.sync.getBoundVaultName(); if (boundVaultName) this.addRow(container, "Vault", `Bound to shared vault "${boundVaultName}"`); }
-    const statusRow = this.addRow(container, "Status", status.message ?? status.state);
-    statusRow.control.textContent = status.conflicts ? `${status.conflicts} conflict(s)` : status.state;
-    // A long description (still possible via the per-reason groups below) must not sit
-    // beside the short control text at the row's vertical center — that is exactly the
-    // overlap the multi-file blocked-list bug produced. Wrapping lets the control drop
-    // below instead of floating across wrapped lines.
-    statusRow.control.parentElement?.classList.add("sync-wrapped-setting");
-    if (summary) renderSyncFeedback(container, summary);
+    if (boundVaultName) this.addRow(connection.body, "Vault", `Bound to shared vault "${boundVaultName}"`);
+    if (summary) renderSyncFeedback(card, summary);
     // Two independent things disable these controls: a background sync tick the user
     // didn't trigger from this panel (backgroundBusy) and an in-flight perform() click
     // (performBusy). Either can end while the other is still true, so a control is only
@@ -1827,11 +2181,23 @@ class SettingsModal extends Modal {
     // already in flight lands on a late-created button too, not just the ones present when
     // this function started.
     const trackBusy = (el: HTMLButtonElement | HTMLInputElement, defaultDisabled = false) => { busyControls.push({ el, defaultDisabled }); applyBusyState(); };
-    const showProgress = this.renderSyncProgress(container, generation, busy => { backgroundBusy = busy; applyBusyState(); });
-    const actions = document.createElement("div"); actions.className = "setting-item-control";
+    const showProgress = this.renderSyncProgress(card, generation, busy => { backgroundBusy = busy; applyBusyState(); }, paintCard);
+    // The panel draws once; without this a finished run left "disconnected" (the launch default) on screen until the tab was
+    // reopened. Redraw (debounced, never while a field is being edited) when the visible status changes, and stop with the
+    // progress subscription whenever the tab is left, redrawn or the modal closes.
+    {
+      const stopProgress = this.stopSyncProgress as (() => void) | null;
+      const stopStatus = watchSyncStatus(status, {
+        subscribe: listener => this.geodeApp.sync.on("status", listener),
+        isLive: () => container.isConnected && generation === this.syncTabGeneration,
+        isEditing: () => { const active = document.activeElement; return !!active && container.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName); },
+        redraw: () => this.renderSyncTab(container, summary),
+      });
+      this.stopSyncProgress = () => { stopProgress?.(); stopStatus(); };
+    }
     const perform = (action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => {
       performBusy = true;
-      container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button,input,select").forEach(control => { control.disabled = true; });
+      container.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("button:not([data-keep-enabled]),input,select").forEach(control => { control.disabled = true; });
       // Disabled buttons alone say nothing about whether work is happening. Paint
       // the activity surface on click, before the first tick can possibly arrive,
       // so the panel is never blank while an action is in flight.
@@ -1843,40 +2209,39 @@ class SettingsModal extends Modal {
       }).catch(error => { summary = error instanceof Error ? error.message : String(error); this.geodeApp.notify(summary); })
         .finally(() => { performBusy = false; if (container.isConnected) this.renderSyncTab(container, summary); });
     };
-    const addAction = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); trackBusy(button, !active); };
-    addAction("Preview", () => this.geodeApp.sync.preview());
-    addAction("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
-    addAction(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
-    container.appendChild(actions);
+    const addActionButton = (label: string, action: () => Promise<unknown>, kind: 'preview' | 'run' = 'preview') => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.disabled = !active; button.addEventListener("click", () => perform(action, kind)); actions.appendChild(button); trackBusy(button, !active); return button; };
+    const hubPlan = isHub ? this.geodeApp.sync.getHistoryDetails() : undefined;
+    const navButton = (label: string, onClick: () => void) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.setAttribute("data-keep-enabled", ""); button.addEventListener("click", onClick); actions.appendChild(button); return button; };
+    const primary: SyncCardPrimary = cardView.primary;
+    // Hub: a bound vault waiting on its first preview needs Preview, never a bare approval.
+    const wantsPreview = isHub && status.state === "preview" && !hubPlan?.requiresApproval;
+    let emphasised: HTMLButtonElement | undefined;
+    if (primary === "setup") emphasised = navButton("Set up sync", () => { connection.setOpen(true); (isHub && boundVaultName === undefined ? connection.body.querySelector<HTMLElement>("input,select") : select)?.focus(); connection.section.scrollIntoView({ block: "nearest" }); });
+    else if (primary === "resolve") emphasised = navButton("Resolve conflicts", () => { issues.setOpen(true); issues.section.scrollIntoView({ block: "nearest" }); issues.body.querySelector<HTMLElement>("button")?.focus(); });
+    else if (primary === "review") emphasised = navButton("Review plan", () => { const plan = planHost.querySelector<HTMLElement>("[data-hub-plan]"); plan?.scrollIntoView({ block: "nearest" }); plan?.querySelector<HTMLElement>("button")?.focus(); });
+    const firstAction = (...labels: string[]) => labels.map(label => [...actions.querySelectorAll("button")].find(button => button.textContent === label)).find(Boolean) as HTMLButtonElement | undefined;
+    addActionButton("Preview", () => this.geodeApp.sync.preview());
+    // The hub provider never offers a bare "Approve": the first run is confirmed from the plan counts shown below.
+    if (!isHub) addActionButton("Approve & sync", () => this.geodeApp.sync.run({ approvePreview: true }), 'run');
+    else if (!hubPlan?.requiresApproval && status.state !== "paused" && status.state !== "preview") addActionButton("Sync now", () => this.geodeApp.sync.run(), 'run');
+    addActionButton(status.state === "paused" ? "Resume" : "Pause", () => status.state === "paused" ? this.geodeApp.sync.resume() : this.geodeApp.sync.pause());
+    if (!emphasised) emphasised = primary === "resume" ? firstAction("Resume") : primary === "approve" ? firstAction("Approve & sync") : primary === "sync" || primary === "retry" ? firstAction("Sync now", "Approve & sync") : undefined;
+    if (!emphasised && wantsPreview) emphasised = firstAction("Preview");
+    emphasised?.classList.add("mod-cta");
+    if (isHub) this.renderHubPlanRows(planHost, perform, trackBusy);
     // Blocked/excluded files are structured detail on getHistoryDetails(), which is the only
     // place any provider reports per-file rejection reasons today — the plain/conditional
     // sync path (coordinator.ts) has no equivalent list, only an aggregate skipped count.
     // Rendered unconditionally (not gated on isAppendOnly()) so leftover detail from a sync
     // that just errored out is never silently dropped from view.
     const details = this.geodeApp.sync.getHistoryDetails();
-    this.renderSyncIssueGroups(container, "Blocked", details?.blocked ?? []);
-    this.renderSyncIssueGroups(container, "Excluded", details?.excluded ?? []);
+    this.renderSyncIssueGroups(issues.body, "Blocked", details?.blocked ?? []);
+    this.renderSyncIssueGroups(issues.body, "Excluded", details?.excluded ?? []);
+    if (isHub) this.renderHubConfigRows(connection.body, trackBusy);
     if (this.geodeApp.sync.isAppendOnly()) {
-      const setup = this.addRow(container, "Shared vault setup", "Experimental immutable history. Create a new shared vault or explicitly join an existing one. Files over 100 MiB are blocked; secrets and plugin data are excluded.");
-      setup.control.parentElement?.classList.add("sync-wrapped-setting");
-      const name = document.createElement("input"); name.type = "text"; name.setAttribute("aria-label", "Shared vault name"); name.placeholder = "Shared vault name";
-      const create = document.createElement("button"); create.type = "button"; create.textContent = "Create shared vault"; create.addEventListener("click", () => perform(() => this.geodeApp.sync.createVault(name.value)));
-      const discover = document.createElement("button"); discover.type = "button"; discover.textContent = "Find shared vaults";
-      trackBusy(name); trackBusy(create); trackBusy(discover);
-      const choices = document.createElement("div");
-      discover.addEventListener("click", () => {
-        discover.disabled = true;
-        void this.geodeApp.sync.discoverVaults().then(vaults => {
-          choices.replaceChildren();
-          if (!vaults.length) choices.textContent = "No accessible shared vaults found.";
-          for (const vault of vaults) { const join = document.createElement("button"); join.type = "button"; join.textContent = `Join ${vault.name}`; join.title = vault.vaultId; join.addEventListener("click", () => perform(() => this.geodeApp.sync.joinVault(vault))); choices.appendChild(join); trackBusy(join); }
-        // A hard `false` here would re-enable discovery even while a background sync
-        // started mid-discovery — restore the shared busy state instead of a literal value.
-        }).catch(error => { choices.textContent = error instanceof Error ? error.message : "Discovery unavailable"; }).finally(() => applyBusyState());
-      });
-      setup.control.append(name, create, discover, choices);
+      this.renderSharedVaultSetup(connection.body, { perform, trackBusy, applyBusyState, boundVaultName, isHub });
       if (status.state === "error") {
-        const recovery = this.addRow(container, "Pending recovery", "Stopping retries preserves frozen bytes and preimages. This does not undo remote records that may already be published; review the new preview before continuing.");
+        const recovery = this.addRow(connection.body, "Pending recovery", "Stopping retries preserves frozen bytes and preimages. This does not undo remote records that may already be published; review the new preview before continuing.");
         recovery.control.parentElement?.classList.add("sync-wrapped-setting");
         const stop = document.createElement("button"); stop.type = "button"; stop.textContent = "Stop pending retries & preview"; stop.addEventListener("click", () => perform(() => this.geodeApp.sync.abandonPending())); recovery.control.appendChild(stop); trackBusy(stop);
       }
@@ -1890,7 +2255,7 @@ class SettingsModal extends Modal {
       // silently keeping the older workflow.
       const appendOnlyConflicts = details?.conflicts ?? [];
       const conflictRows = appendOnlyConflicts.map(conflict => {
-        const row = this.addRow(container, conflict.path, planConflictRow(conflict, null).description);
+        const row = this.addRow(issues.body, conflict.path, planConflictRow(conflict, null).description);
         row.control.parentElement?.classList.add("sync-wrapped-setting");
         const keep = document.createElement("button"); keep.type = "button"; keep.textContent = "Keep local"; keep.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "current" } }))); row.control.appendChild(keep); trackBusy(keep);
         for (const recordId of conflict.heads) { const accept = document.createElement("button"); accept.type = "button"; accept.textContent = `Accept version ${recordId.slice(0, 8)}`; accept.title = recordId; accept.addEventListener("click", () => perform(() => this.geodeApp.sync.resolveHistoryConflict({ entityId: conflict.entityId, heads: conflict.heads, choice: { kind: "version", recordId } }))); row.control.appendChild(accept); trackBusy(accept); }
@@ -1927,9 +2292,11 @@ class SettingsModal extends Modal {
     // moment it registers, but a final pass here is cheap and guards against any control
     // above that was pushed before backgroundBusy's first callback landed.
     applyBusyState();
-    const conflictContainer = document.createElement("div"); container.appendChild(conflictContainer);
+    const conflictContainer = document.createElement("div"); issues.body.appendChild(conflictContainer);
     void this.geodeApp.sync.listConflicts().then(conflicts => {
       if (!conflictContainer.isConnected || this.geodeApp.sync.isAppendOnly()) return;
+      plainConflictCount = conflicts.length; paintIssuesHeader();
+      if (conflicts.length) issues.openIfUnset();
       for (const conflict of conflicts) {
         const row = this.addRow(conflictContainer, conflict.path, conflict.conflictPath ? `Remote copy: ${conflict.conflictPath}. Keep local sends your current version; Accept remote restores the remote version. Copies are retained for recovery.` : "Deleted remotely. Keep local uploads this file again; Accept remote moves the local file to trash.");
         row.control.parentElement?.setAttribute("data-sync-conflict", conflict.id);
@@ -1940,20 +2307,30 @@ class SettingsModal extends Modal {
       }
     }).catch(error => this.geodeApp.notify(String(error)));
     void this.geodeApp.sync.getScope().then(scope => {
-      const labels: Array<[keyof typeof scope, string]> = [
-        ["markdown", "Notes and Canvas/Base files"], ["images", "Images"], ["audio", "Audio"], ["video", "Video"], ["pdfs", "PDFs"], ["other", "Other file types"],
-        ["mainSettings", "Main settings"], ["appearance", "Appearance"], ["themesAndSnippets", "Themes and snippets"], ["hotkeys", "Hotkeys"], ["corePlugins", "Core plugin settings"],
-        ["communityPlugins", "Installed community plugins"], ["communityPluginData", "Community plugin data"],
+      const groups: Array<[string, Array<[keyof typeof scope, string]>]> = [
+        ["Files", [["markdown", "Notes and Canvas/Base files"], ["images", "Images"], ["audio", "Audio"], ["video", "Video"], ["pdfs", "PDFs"], ["other", "Other file types"]]],
+        ["App settings", [["mainSettings", "Main settings"], ["appearance", "Appearance"], ["themesAndSnippets", "Themes and snippets"], ["hotkeys", "Hotkeys"], ["corePlugins", "Core plugin settings"]]],
+        ["Plugins", [["communityPlugins", "Installed community plugins"], ["communityPluginData", "Community plugin data"]]],
       ];
-      for (const [key, label] of labels) {
-        const { control: scopeControl } = this.addRow(container, label, "Device-local selective sync setting.");
-        const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = Boolean(scope[key]);
-        if (this.geodeApp.sync.isAppendOnly() && (key === "communityPlugins" || key === "communityPluginData")) { checkbox.disabled = true; checkbox.checked = false; }
-        checkbox.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ [key]: checkbox.checked }).catch(error => this.geodeApp.notify(String(error))); });
-        scopeControl.appendChild(checkbox);
+      const boxes: HTMLInputElement[] = [];
+      const scopeNote = document.createElement("div"); scopeNote.className = "sync-field-help sync-scope-note"; scopeNote.textContent = "These choices apply to this device only.";
+      scopeSection.body.appendChild(scopeNote);
+      const paintScopeSummary = () => { scopeSection.summary.textContent = `${boxes.filter(box => box.checked).length} of ${boxes.length} syncing`; };
+      for (const [groupName, items] of groups) {
+        const heading = document.createElement("div"); heading.className = "sync-scope-group"; heading.textContent = groupName; scopeSection.body.appendChild(heading);
+        for (const [key, label] of items) {
+          const { control: scopeControl, info: scopeInfo } = this.addRow(scopeSection.body, label);
+          scopeControl.parentElement?.classList.add("sync-scope-row");
+          const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = Boolean(scope[key]); checkbox.setAttribute("aria-label", label);
+          if (this.geodeApp.sync.isAppendOnly() && (key === "communityPlugins" || key === "communityPluginData")) { checkbox.disabled = true; checkbox.checked = false; }
+          checkbox.addEventListener("change", () => { paintScopeSummary(); void this.geodeApp.sync.updateScope({ [key]: checkbox.checked }).catch(error => this.geodeApp.notify(String(error))); });
+          scopeInfo.addEventListener("click", () => { if (!checkbox.disabled) { checkbox.checked = !checkbox.checked; checkbox.dispatchEvent(new Event("change")); } });
+          scopeControl.appendChild(checkbox); boxes.push(checkbox);
+        }
       }
-      const { control: excludedControl } = this.addRow(container, "Excluded folders", "Comma-separated vault-relative folders. Changing scope does not delete already-uploaded remote files.");
-      const excluded = document.createElement("input"); excluded.type = "text"; excluded.value = scope.excludedFolders.join(", ");
+      paintScopeSummary();
+      const { control: excludedControl } = this.addRow(scopeSection.body, "Excluded folders", "Comma-separated vault-relative folders. Changing scope does not delete already-uploaded remote files.");
+      const excluded = document.createElement("input"); excluded.type = "text"; excluded.value = scope.excludedFolders.join(", "); excluded.setAttribute("aria-label", "Excluded folders"); excluded.placeholder = "e.g. Attachments, Archive/Old";
       excluded.addEventListener("change", () => { void this.geodeApp.sync.updateScope({ excludedFolders: excluded.value.split(",").map(value => value.trim()).filter(Boolean) }).catch(error => this.geodeApp.notify(String(error))); });
       excludedControl.appendChild(excluded);
     }).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error)));
@@ -2045,8 +2422,13 @@ export class App {
   readonly host: HostServices;
   readonly dailyNotes: DailyNotesService;
   readonly templates: TemplatesService;
+  readonly uniqueNotes: UniqueNotesService;
+  private uniqueNoteRibbonEl: HTMLElement | null = null;
   readonly webViewer: WebViewerService;
   readonly sync: SyncService;
+  /** Built-in "Folder, SSH or HTTPS hub" sync provider; present where the host has guarded sync (`syncSafety`), re-created per opened vault. */
+  hubSyncProvider?: HubSyncProvider;
+  private hubSyncUnregister?: () => Promise<void>;
   readonly comments: CommentService;
   vault: Vault;
   metadataCache: MetadataCache;
@@ -2111,12 +2493,27 @@ export class App {
    * Undefined until a vault is open and after it closes.
    */
   onboarding?: OnboardingPlugin;
+  /**
+   * Launch sequence: plugins register steps that run (with a launch screen)
+   * after plugins load, via `app.launch.registerStep`. See
+   * docs/design/launch-sequence.md. Recreated per vault open; undefined
+   * before a vault is open.
+   */
+  launch?: LaunchApi;
+  private launchRegistry?: LaunchRegistry;
+  private launchRunner?: LaunchRunner;
+  private launchOverlay?: LaunchOverlay;
+  private launchUnsubscribePlugins?: () => void;
 
   /** Internal plugins resolvable through `app.plugins.getPlugin(id)` (Obsidian-style lookup). */
   getInternalPlugin(id: string): unknown {
+    if (id === "launch") return this.launch;
     return id === "onboarding" ? this.onboarding : undefined;
   }
   private audioRecorderPlugin?: AudioRecorderPlugin;
+  private formatConverterPlugin?: FormatConverterPlugin;
+  /** Live Slash commands plugin, or undefined while the core plugin is off. */
+  slashCommandsPlugin?: SlashCommandsPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2130,6 +2527,8 @@ export class App {
     cssTheme: "",
     webViewer: { ...DEFAULT_WEB_VIEWER_OPTIONS },
     audioRecorderEnabled: false,
+    formatConverterEnabled: false,
+    slashCommandsEnabled: true,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -2139,7 +2538,6 @@ export class App {
   /** True while restoring a saved layout, to suppress re-saving the in-progress state. */
   private restoringLayout = false;
   private saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
-  private communityUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   private hostDisposers = new Set<() => void>();
   private syncRefreshRecoveries = new Set<() => void>();
   private successfulReconciles = 0;
@@ -2159,6 +2557,7 @@ export class App {
     this.host = host;
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
+    this.uniqueNotes = new UniqueNotesService(host.config);
     this.webViewer = new WebViewerService(host.config, () => this.applyWebViewerLifecycle());
     this.sync = new SyncService(host, () => this.vault.root, () => this.reloadPortableSettings());
     this.settings.webViewer = this.webViewer.options;
@@ -2285,6 +2684,11 @@ export class App {
 
   /** Registered plugin settings tabs, keyed by plugin id (`Plugin.addSettingTab`). */
   settingTabs = new Map<string, PluginSettingTab>();
+  /**
+   * Nav metadata for entries in `settingTabs` that belong to a plugin but are
+   * not its primary tab (`Plugin.addSettingSection`). Keyed by the same tab id.
+   */
+  settingTabMeta = new Map<string, { pluginId: string; label: string }>();
   private settingTabListeners = new Set<() => void>();
 
   registerSettingTab(id: string, tab: PluginSettingTab): void {
@@ -2295,6 +2699,20 @@ export class App {
   unregisterSettingTab(id: string): void {
     this.settingTabs.delete(id);
     this.settingTabListeners.forEach((fn) => fn());
+  }
+
+  /** Register an extra settings section for a plugin; it renders as its own sidebar entry under the plugin's group. Returns the tab id (usable with `setting.openTabById`). */
+  registerSettingSection(pluginId: string, sectionId: string, label: string, tab: PluginSettingTab): string {
+    const id = `${pluginId}:${sectionId}`;
+    this.settingTabMeta.set(id, { pluginId, label });
+    this.registerSettingTab(id, tab);
+    return id;
+  }
+
+  unregisterSettingSection(pluginId: string, sectionId: string): void {
+    const id = `${pluginId}:${sectionId}`;
+    this.settingTabMeta.delete(id);
+    this.unregisterSettingTab(id);
   }
 
   /** Subscribe to setting-tab registry changes; returns an unsubscribe function. */
@@ -2771,6 +3189,8 @@ export class App {
         showLineNumber: typeof saved.showLineNumber === "boolean" ? saved.showLineNumber : this.settings.showLineNumber,
         webViewer: this.webViewer.options,
         audioRecorderEnabled: saved.audioRecorderEnabled === true,
+        formatConverterEnabled: saved.formatConverterEnabled === true,
+        slashCommandsEnabled: saved.slashCommandsEnabled !== false,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -2787,6 +3207,8 @@ export class App {
     // before any hosted plugin (e.g. Calendar) can query "daily-notes".
     await this.dailyNotes.load();
     await this.templates.load();
+    await this.uniqueNotes.load();
+    this.syncUniqueNoteRibbon();
     await this.webViewer.load(saved?.webViewer);
 
     // Same shape as daily-notes above: read the persisted Bookmarks tree
@@ -2820,6 +3242,16 @@ export class App {
       void this.createNewCanvas(activeFile?.parent ?? "");
     });
     this.ribbonActionsEl.appendChild(createCanvasButton);
+    const uniqueNoteButton = document.createElement("button");
+    uniqueNoteButton.type = "button";
+    uniqueNoteButton.className = "side-dock-ribbon-action";
+    uniqueNoteButton.title = "Create new unique note";
+    uniqueNoteButton.setAttribute("aria-label", "Create new unique note");
+    setIcon(uniqueNoteButton, "file-stack");
+    uniqueNoteButton.addEventListener("click", () => void this.createUniqueNote());
+    this.ribbonActionsEl.appendChild(uniqueNoteButton);
+    this.uniqueNoteRibbonEl = uniqueNoteButton;
+    this.syncUniqueNoteRibbon();
     const ribbonBottom = document.createElement("div");
     ribbonBottom.className = "workspace-ribbon-bottom";
     const settingsButton = document.createElement("button");
@@ -2864,40 +3296,34 @@ export class App {
       for (const leaf of this.workspace.getLeavesOfType("base")) if (leaf.view instanceof BaseView && await leaf.view.getDirtySourceConflict(relative, true)) reason = "Unsaved Base changes block incoming sync";
       return reason;
     });
-    const stopRelease = this.host.syncSafety?.onRelease(async token => {
-      if (!syncGuards.has(token)) return;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const before = this.successfulReconciles;
-      try {
-        await Promise.race([this.reconcileVault("manual"), new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Editor refresh timed out")), 4000);
-        })]);
-        if (this.successfulReconciles === before) throw new Error("Editor refresh incomplete");
-        if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed");
-        await this.reloadPortableSettings();
+    // Stale writers stay read-only until a refresh has REALLY completed: the views are made inert, and the inert state is only
+    // lifted by `recover`, which performReconcile runs after a successful refresh (or the user's Retry). Both a failed and a
+    // merely slow refresh take this path; only a failed one fails the sync.
+    const holdStale = (token: string) => {
+      const elements: HTMLElement[] = [];
+      syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
+        const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
+        held.count++; staleViews.set(element, held); elements.push(element); element.inert = true;
+      } });
+      const recover = () => {
+        this.syncRefreshRecoveries.delete(recover); this.hostDisposers.delete(recover);
+        for (const element of elements) { const held = staleViews.get(element); if (held && --held.count === 0) { element.inert = held.original; staleViews.delete(element); } }
         finishGuard(token);
-      } catch (error) {
-        // Keep stale writers paused/read-only, but restore the surrounding app so
-        // Retry refresh and vault switching remain available after a timeout.
-        if (syncDisposed || this.workspace !== syncWorkspace) throw error;
-        const elements: HTMLElement[] = [];
-        syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
-          const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
-          held.count++; staleViews.set(element, held); elements.push(element); element.inert = true;
-        } });
-        const recover = () => {
-          this.syncRefreshRecoveries.delete(recover); this.hostDisposers.delete(recover);
-          for (const element of elements) { const held = staleViews.get(element); if (held && --held.count === 0) { element.inert = held.original; staleViews.delete(element); } }
-          finishGuard(token);
-        };
-        this.syncRefreshRecoveries.add(recover);
-        this.hostDisposers.add(recover);
-        document.body.inert = previousInert;
-        throw error;
-      } finally {
-        clearTimeout(timeout);
-      }
+      };
+      this.syncRefreshRecoveries.add(recover);
+      this.hostDisposers.add(recover);
+      document.body.inert = previousInert;
+    };
+    const postApply = new PostApplyRefresh({
+      hasFile: path => this.vault.getFileByPath(path) !== null, hasFolder: path => this.vault.getFolderByPath(path) !== null,
+      refreshChanges: changes => this.performReconcile(this.reconcileGeneration, changes),
+      refreshAll: () => this.reconcileVault("manual"),
+      fullInFlight: () => this.reconcileInFlight, successCount: () => this.successfulReconciles,
+      reloadPortableSettings: () => this.reloadPortableSettings(),
+      holdStale, finishGuard,
+      assertLive: () => { if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed"); },
     });
+    const stopRelease = this.host.syncSafety?.onRelease(async (token, outcome) => { if (syncGuards.has(token)) await postApply.release(token, outcome); });
     this.hostDisposers.add(() => { syncDisposed = true; stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
     this.statusBar = new StatusBar(this, shell);
     const mobileNavigation = this.createMobileNavigation();
@@ -2977,6 +3403,19 @@ export class App {
     await this.onboarding.ready;
 
     this.syncAudioRecorderPlugin();
+    this.syncFormatConverterPlugin();
+    this.syncSlashCommandsPlugin();
+    // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
+    // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
+    await this.hubSyncUnregister?.(); this.hubSyncUnregister = undefined; this.hubSyncProvider = undefined;
+    // Folder and ssh hubs need the desktop main process (`host.hubSync`); the HTTPS hub only needs a WebSocket and secure storage, so
+    // it is what a phone can use once its host provides `syncSafety` (guarded apply) and `secrets.app` (Keychain).
+    if (this.host.syncSafety && (this.host.hubSync || typeof WebSocket === "function")) {
+      const appSecrets = this.host.secrets.app;
+      const secrets = appSecrets ? { available: this.host.secrets.appAvailable ?? this.host.secrets.available, get: (key: string) => appSecrets.get(key), set: (key: string, value: string) => appSecrets.set(key, value), remove: (key: string) => appSecrets.remove(key) } : undefined;
+      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root, secrets ? { secrets } : {});
+      this.hubSyncProvider = provider; this.hubSyncUnregister = this.sync.register("geode", provider);
+    }
     this.registerActions();
     this.registerCommands();
     this.hostDisposers.add(this.commands.attach(document, (event) => this.keymap.handleKeydown(event)));
@@ -2986,6 +3425,7 @@ export class App {
     this.themeManager.apply(this.settings.cssTheme);
 
     this.pluginManager = new PluginManager(this);
+    this.setupLaunchSequence(path);
     this.onboarding.attachPluginManager(this.pluginManager);
     // Queued until flushLayoutReady() (after layout restore), so a restored
     // checklist pane is seen and not duplicated. No-op under GEODE_HEADLESS.
@@ -2996,7 +3436,16 @@ export class App {
     if (this.host.runtime.runtime === "electron") {
       this.workspace.onLayoutReady(() => void onboardingForLaunch.autoOpenIfOutstanding());
     }
-    await measureOperation("startup-plugins", () => this.pluginManager.initialize());
+    // Built-in steps (plugin updates) run BEFORE any plugin is loaded, so an
+    // update is a plain on-disk install: nothing live to kill or hot-reload.
+    await this.runLaunchPhase("before-plugins");
+    try {
+      await measureOperation("startup-plugins", () => this.pluginManager.initialize());
+      // Plugins registered their steps in onload(); the launch screen stays up until they finish.
+      await this.runLaunchPhase("after-plugins");
+    } finally {
+      this.finishLaunchSequence();
+    }
     if (this.pluginManager.isRecoveryMode()) this.showCrashRecoveryBanner(shell);
 
     // Restore the saved workspace layout (tabs + docked plugin panes) now
@@ -3090,12 +3539,8 @@ export class App {
       mobileNavigation.querySelector<HTMLButtonElement>('[aria-label="Files"]')?.focus({ preventScroll: true });
     }
 
-    // Check opt-in community items for updates shortly after startup, off the
-    // critical path. No-op unless a tracked item has auto-update enabled.
-    this.communityUpdateTimer = setTimeout(() => {
-      this.communityUpdateTimer = null;
-      void this.checkCommunityUpdates(false);
-    }, 2500);
+    // Auto-updates of tracked community items now happen in the launch
+    // sequence (before plugins load); nothing hot-reloads a plugin mid-session.
 
     // Re-render open views when files change externally.
     //
@@ -3163,7 +3608,7 @@ export class App {
     return tracked;
   }
 
-  private async performReconcile(generation: number): Promise<void> {
+  private async performReconcile(generation: number, scoped?: ReconcileChange[]): Promise<void> {
     let didPause = false;
     let holdViewsForRetry = false;
     let manifestCommitted = false;
@@ -3174,12 +3619,12 @@ export class App {
       await this.workspace.pauseAutosave();
       didPause = true;
       operation = "scan";
-      const result = await this.vault.reconcile();
+      const result: Awaited<ReturnType<Vault["reconcile"]>> = scoped ? { status: "complete", changes: scoped } : await this.vault.reconcile();
       if (result.status !== "complete") {
         if (generation === this.reconcileGeneration) this.showReconcileState(result.status, result.failure ?? vaultRefreshFailure(result.errorCode));
         return;
       }
-      if (!result.manifest || generation !== this.reconcileGeneration) return;
+      if ((!scoped && !result.manifest) || generation !== this.reconcileGeneration) return;
       const publish: Array<() => void> = [];
       const refreshEditors: Array<() => void | Promise<void>> = [];
       for (let index = 0; index < result.changes.length; index += 1) {
@@ -3266,7 +3711,8 @@ export class App {
         for (const refresh of refreshEditors) { await refresh(); if (generation !== this.reconcileGeneration) return; }
       } catch (error) { holdViewsForRetry = true; throw error; }
       operation = "save-manifest";
-      await this.vault.commitReconcileManifest(result.manifest);
+      if (scoped) this.vault.acknowledgePaths(scoped.map(change => change.path));
+      else await this.vault.commitReconcileManifest(result.manifest!);
       manifestCommitted = true;
       operation = "finish-refresh";
       this.clearReconcileState();
@@ -3658,8 +4104,7 @@ export class App {
     if (activeReconcile) await activeReconcile;
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
-    if (this.communityUpdateTimer) clearTimeout(this.communityUpdateTimer);
-    this.communityUpdateTimer = null;
+    this.teardownLaunchSequence();
     await this.vault.close();
     this.metadataCache.dispose();
     this.workspace?.dispose();
@@ -3674,8 +4119,7 @@ export class App {
     if (activeReconcile) await activeReconcile;
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
-    if (this.communityUpdateTimer) clearTimeout(this.communityUpdateTimer);
-    this.communityUpdateTimer = null;
+    this.teardownLaunchSequence();
     this.activeSettingsModal?.close();
     await this.workspace?.closeAllLeaves();
     await this.pluginManager?.dispose();
@@ -3684,6 +4128,10 @@ export class App {
     this.onboarding = undefined;
     this.audioRecorderPlugin?.unload();
     this.audioRecorderPlugin = undefined;
+    this.formatConverterPlugin?.unload();
+    this.formatConverterPlugin = undefined;
+    this.slashCommandsPlugin?.unload();
+    this.slashCommandsPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
     await this.vault.close();
@@ -4039,6 +4487,15 @@ export class App {
       this.settings.theme = resolveTheme(this.settings.theme, osPrefersDark()) === "dark" ? "light" : "dark";
       this.applySettings();
       this.saveSettings();
+    });
+    this.commands.add({
+      id: "unique-note",
+      name: "Create new unique note",
+      checkCallback: (checking) => {
+        if (!this.uniqueNotes.enabled) return false;
+        if (!checking) void this.createUniqueNote();
+        return true;
+      },
     });
     this.commands.add({
       id: "daily-note",
@@ -4668,6 +5125,31 @@ export class App {
       }
     }
     await this.openFile(file, false);
+  }
+
+  /** Show the Unique note creator ribbon icon only while the core plugin is enabled. */
+  syncUniqueNoteRibbon(): void {
+    if (this.uniqueNoteRibbonEl) this.uniqueNoteRibbonEl.hidden = !this.uniqueNotes.enabled;
+  }
+
+  /**
+   * Create a note named by the current time in the configured format/folder
+   * (next free timestamp on collision), seeded from the optional template,
+   * and open it. Shares the Daily notes date-format and Templates rendering.
+   */
+  async createUniqueNote(): Promise<void> {
+    if (!this.uniqueNotes.enabled) return;
+    const settings = this.uniqueNotes.options;
+    try {
+      const { path, name, time } = uniqueNotePath(moment(), settings, p => !!this.vault.getAbstractFileByPath(p));
+      const content = settings.template
+        ? renderTemplate(await this.readTemplate(settings.template), name, time, this.templates.options)
+        : "";
+      const file = await this.vault.create(path, content);
+      await this.openFile(file, false);
+    } catch (err) {
+      this.notify(`Could not create unique note: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // --- Bookmarks -----------------------------------------------------------
@@ -5518,6 +6000,15 @@ export class App {
     }
   }
 
+  /** Load or unload the Slash commands core plugin to match `settings.slashCommandsEnabled`. */
+  syncSlashCommandsPlugin(): void {
+    this.slashCommandsPlugin?.unload();
+    this.slashCommandsPlugin = undefined;
+    if (!this.settings.slashCommandsEnabled) return;
+    this.slashCommandsPlugin = new SlashCommandsPlugin(this);
+    this.slashCommandsPlugin.load();
+  }
+
   /** Load or unload the Audio recorder core plugin to match `settings.audioRecorderEnabled`. */
   syncAudioRecorderPlugin(): void {
     this.audioRecorderPlugin?.unload();
@@ -5525,6 +6016,15 @@ export class App {
     if (!this.settings.audioRecorderEnabled) return;
     this.audioRecorderPlugin = new AudioRecorderPlugin(this);
     this.audioRecorderPlugin.load();
+  }
+
+  /** Load or unload the Format converter core plugin to match `settings.formatConverterEnabled`. */
+  syncFormatConverterPlugin(): void {
+    this.formatConverterPlugin?.unload();
+    this.formatConverterPlugin = undefined;
+    if (!this.settings.formatConverterEnabled) return;
+    this.formatConverterPlugin = new FormatConverterPlugin(this);
+    this.formatConverterPlugin.load();
   }
 
   saveSettings() {
@@ -5543,9 +6043,12 @@ export class App {
    * (the command) checks every non-pinned item; otherwise (on-launch) only
    * opt-in items past the cadence.
    */
-  async checkCommunityUpdates(force: boolean): Promise<void> {
+  async checkCommunityUpdates(
+    force: boolean,
+    opts: { reload?: boolean; signal?: AbortSignal; onProgress?: (text: string) => void } = {}
+  ): Promise<UpdateSummary | null> {
     try {
-      const sum = await this.communityManager.checkForUpdates({ force });
+      const sum = await this.communityManager.checkForUpdates({ force, ...opts });
       if (sum.updated.length) {
         this.notify(`Updated ${sum.updated.length} community item(s): ${sum.updated.join(", ")}`);
       } else if (force) {
@@ -5555,9 +6058,88 @@ export class App {
       if (force && sum.failed.length) {
         this.notify(`${sum.failed.length} community update check(s) failed — see console`);
       }
+      return sum;
     } catch (err) {
       console.error("Community update check failed", err);
+      return null;
     }
+  }
+
+  private isHeadlessHost(): boolean {
+    return (globalThis as { window?: { geode?: { isHeadless?: boolean } } }).window?.geode?.isHeadless === true;
+  }
+
+  /** Fresh registry/runner/overlay per vault open, with the built-in steps registered. */
+  private setupLaunchSequence(vaultPath: string): void {
+    this.teardownLaunchSequence();
+    const registry = new LaunchRegistry();
+    const runner = new LaunchRunner(registry);
+    this.launchRegistry = registry;
+    this.launchRunner = runner;
+    this.launch = createLaunchApi(registry);
+
+    registry.registerStep({
+      id: "core:community-updates",
+      title: "Checking plugin updates",
+      description: "Installing updates before plugins start",
+      phase: "before-plugins",
+      order: 100,
+      optional: true,
+      timeoutMs: COMMUNITY_UPDATE_LAUNCH_TIMEOUT_MS,
+      run: async (ctx) => {
+        // e2e/headless must not depend on the network.
+        if (this.isHeadlessHost()) return "skipped";
+        const sum = await this.checkCommunityUpdates(false, {
+          reload: false,
+          signal: ctx.signal,
+          onProgress: (text) => ctx.setProgress(text),
+        });
+        if (!sum) throw new Error("update check failed");
+        if (sum.failed.length && !sum.updated.length) {
+          throw new Error(`${sum.failed.length} update check(s) failed`);
+        }
+        if (!sum.checked) return "skipped";
+      },
+    });
+
+    // A plugin that forgot to dispose its steps still loses them when it is disabled.
+    this.launchUnsubscribePlugins = this.pluginManager.onChange(() => {
+      for (const owner of new Set(registry.list().map((s) => s.ownerId))) {
+        if (owner !== "core" && !this.pluginManager.isEnabled(owner)) runner.unregisterOwner(owner);
+      }
+    });
+
+    const name = vaultPath.split(/[\\/]/).filter(Boolean).pop();
+    this.launchOverlay = new LaunchOverlay(runner, {
+      brandChipHtml: this.brandChipHtml(),
+      vaultName: name,
+    });
+    this.launchOverlay.start();
+  }
+
+  private async runLaunchPhase(phase: LaunchPhase): Promise<void> {
+    await this.launchRunner?.runPhase(phase);
+  }
+
+  /** Dismiss the launch screen; failures never block the vault, they only produce a notice. */
+  private finishLaunchSequence(): void {
+    const runner = this.launchRunner;
+    if (!runner) return;
+    runner.finish();
+    this.launchOverlay?.dismiss();
+    const summary = summarizeLaunchFailures(runner.getSnapshot());
+    if (summary) this.notify(summary);
+  }
+
+  private teardownLaunchSequence(): void {
+    this.launchUnsubscribePlugins?.();
+    this.launchUnsubscribePlugins = undefined;
+    this.launchOverlay?.dismiss();
+    this.launchOverlay = undefined;
+    this.launchRegistry?.clear();
+    this.launchRegistry = undefined;
+    this.launchRunner = undefined;
+    this.launch = undefined;
   }
 
   /**

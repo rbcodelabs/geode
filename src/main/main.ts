@@ -14,6 +14,7 @@ import type { DataWriteOptions } from "../renderer/vault";
 import { withPathLock, withVaultMutation } from "./path-lock";
 import { SenderRequests } from "./network";
 import { applyGuardedMutation } from "./sync-apply";
+import { registerHubSyncIpc } from "./hub-sync-ipc";
 import { SyncPrivateStorage } from "./sync-private-storage";
 import { PrivateKeyStore } from "./private-key-store";
 import { applyPortableMutation } from "./sync-config-apply";
@@ -127,8 +128,8 @@ import {
   GithubAuthError,
   GithubAuthService,
   GithubTokenStore,
-  resolveGithubAppSlug,
-  resolveGithubClientId,
+  resolveGithubAppSettings,
+  type GithubAppSettings,
 } from "./github-auth";
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation by default.
@@ -192,7 +193,9 @@ const guestHints = guestClientHints(process.versions.chrome, process.platform);
 const guestHighEntropy = guestHighEntropyHints({
   chromeVersion: process.versions.chrome,
   arch: process.arch,
-  systemVersion: process.getSystemVersion(),
+  // Chromium reports an empty platformVersion on Linux; getSystemVersion() there is
+  // the kernel version, which would contradict the JS surface.
+  systemVersion: process.platform === "linux" ? "" : process.getSystemVersion(),
 });
 app.on("session-created", (created) => {
   // A fresh negotiator per session: separate partitions are separate
@@ -263,6 +266,10 @@ crashReporter.start({ uploadToServer: false, companyName: "RBCodelabs", productN
 const isHeadless =
   process.env.GEODE_HEADLESS === "1" ||
   process.argv.includes("--headless");
+
+// Headless on Linux means "no visible desktop" (Xvfb), where mapping a window
+// is invisible to everyone; on macOS and Windows it must stay hidden.
+const headlessNeedsMappedWindow = isHeadless && process.platform === "linux" && !!process.env.DISPLAY;
 
 // Opt-in "screenshot mode": on non-macOS hosts (e.g. the Linux devbox used for
 // headless E2E/QA capture), draw a fake macOS-style titlebar in the renderer
@@ -427,6 +434,8 @@ function appConfigPath(): string {
 interface GlobalConfig {
   recentVaults: string[];
   lastVault?: string;
+  /** GitHub App overrides (see github-auth/config.ts): clientId, appSlug, allowedOwners, allowedRepos. */
+  github?: unknown;
 }
 
 function loadConfig(): GlobalConfig {
@@ -505,18 +514,37 @@ function getSecretStore(): SecretStore {
  * same `app.getPath("userData")`-timing reason as `getSecretStore`.
  */
 let githubAuth: GithubAuthService | undefined;
-function getGithubAuth(): GithubAuthService {
+/** Vault whose `.geode/app.json` is layered over geode.json: the window that made the current call. */
+let githubVaultRoot: string | undefined;
+
+function readVaultAppConfig(root: string | undefined): unknown {
+  if (!root) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, ".geode", "app.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function currentGithubSettings(): GithubAppSettings {
+  return resolveGithubAppSettings({ global: loadConfig().github, vault: readVaultAppConfig(githubVaultRoot) });
+}
+
+function getGithubAuth(sender?: Electron.WebContents): GithubAuthService {
+  if (sender) {
+    const win = BrowserWindow.fromWebContents(sender);
+    githubVaultRoot = win ? sessions.get(win.id)?.root : undefined;
+  }
   githubAuth ??= new GithubAuthService({
     http: fetchGithubHttp,
     store: new GithubTokenStore(new SecretStore(path.join(app.getPath("userData"), "github-auth.json"), safeStorage)),
-    clientId: resolveGithubClientId(),
-    appSlug: resolveGithubAppSlug(),
+    settings: currentGithubSettings,
   });
   return githubAuth;
 }
 
 /** Errors cross IPC as plain data so the renderer can render them without a stack trace. */
-async function githubIpc<T>(run: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; code: string; message: string }> {
+async function githubIpc<T>(run: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; code: string; message: string; url?: string }> {
   try {
     return { ok: true, value: await run() };
   } catch (error) {
@@ -524,6 +552,7 @@ async function githubIpc<T>(run: () => Promise<T>): Promise<{ ok: true; value: T
       ok: false,
       code: error instanceof GithubAuthError ? error.code : "unexpected",
       message: (error as Error).message,
+      url: error instanceof GithubAuthError ? error.url : undefined,
     };
   }
 }
@@ -962,6 +991,7 @@ function registerIpc() {
   ipcMain.on("sync-editor-result", (e, token: string, phase: string, reason: unknown) => {
     syncEditorWaiters.get(`${e.sender.id}:${token}:${phase}`)?.(reason === null ? null : typeof reason === "string" ? reason : "Invalid editor guard response");
   });
+  registerHubSyncIpc(ipcMain);
   ipcMain.handle("sync-owner-claim", async e => {
     const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
@@ -988,6 +1018,7 @@ function registerIpc() {
       case "save-operation": result = await storage.saveOperation(request.key, request.value); break;
       case "load-operations": result = await storage.loadOperations(); break;
       case "release": result = await storage.release(request.key); break;
+      case "release-bytes": result = await storage.releaseBytes(request.key); break;
       case "gc": if (!Array.isArray(request.retain) || request.retain.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await storage.gc(request.retain); break;
       case "sweep": if (!Array.isArray(request.keep) || request.keep.some(id => typeof id !== "string")) throw new Error("Invalid sync storage request"); result = await SyncPrivateStorage.sweepBindings(vaultPrivateRoot, request.keep, request.force === true); break;
       default: throw new Error("Invalid sync storage request");
@@ -1055,6 +1086,18 @@ function registerIpc() {
     const entries = await listVaultFiles(session.root, { strictSync: true });
     if (sessions.get(win.id) !== session) throw new Error("Vault changed during sync scan");
     return entries;
+  });
+
+  // Same strict scan, but iCloud placeholders come back as blocked paths (untouchable by the engine) instead of
+  // failing the whole scan. Used by the desktop sync host; `vault-sync-scan` stays for older callers.
+  ipcMain.handle("vault-sync-scan-blocked", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const session = sessions.get(win.id);
+    if (!session) throw new Error("No vault open");
+    const blocked: Array<{ path: string; reason: string }> = [];
+    const entries = await listVaultFiles(session.root, { strictSync: true, onBlocked: issue => blocked.push(issue) });
+    if (sessions.get(win.id) !== session) throw new Error("Vault changed during sync scan");
+    return { entries, blocked };
   });
 
   ipcMain.handle("vault-list", async (e) => {
@@ -1181,6 +1224,24 @@ function registerIpc() {
     await secretStore.write(secretKey(namespace, key), safeStorage.encryptString(value));
   });
   ipcMain.handle("secret-remove", async (e, capability: string, key: string) => secretStore.remove(secretKey(secretOwner(e.sender.id, capability), key)));
+  // Geode's own secrets (the HTTPS hub token). The namespace starts with "@", which no plugin id can (ids are [a-z0-9][a-z0-9-]*), so
+  // a plugin capability can never address it; keys are restricted to a small grammar instead of being trusted.
+  const APP_SECRET_NAMESPACE = "@geode";
+  const appSecretKey = (key: unknown) => {
+    if (typeof key !== "string" || !/^[A-Za-z0-9._:\/-]{1,300}$/.test(key)) throw new Error("Invalid app secret key");
+    return secretKey(APP_SECRET_NAMESPACE, key);
+  };
+  ipcMain.handle("app-secret-read", async (_e, key: string) => {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const encrypted = await secretStore.read(appSecretKey(key));
+    return encrypted ? safeStorage.decryptString(encrypted) : null;
+  });
+  ipcMain.handle("app-secret-write", async (_e, key: string, value: string) => {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure secret storage is unavailable");
+    if (typeof value !== "string" || !value || value.length > 8192) throw new Error("Invalid app secret value");
+    await secretStore.write(appSecretKey(key), safeStorage.encryptString(value));
+  });
+  ipcMain.handle("app-secret-remove", async (_e, key: string) => secretStore.remove(appSecretKey(key)));
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
@@ -1555,19 +1616,24 @@ function registerIpc() {
 
   // GitHub App auth (see github-auth/). Opening the verification URL is a
   // browser launch, not a window, but is still skipped under GEODE_HEADLESS.
-  ipcMain.handle("github-auth-status", () => getGithubAuth().getStatus());
-  ipcMain.handle("github-auth-start", () => githubIpc(async () => {
-    const device = await getGithubAuth().startSignIn();
+  ipcMain.handle("github-auth-status", (e) => getGithubAuth(e.sender).getStatus());
+  ipcMain.handle("github-auth-app-info", (e) => githubIpc(() => getGithubAuth(e.sender).getAppReport()));
+  ipcMain.handle("github-auth-start", (e, opts: unknown) => githubIpc(async () => {
+    const confirmExtraPermissions = (opts as { confirmExtraPermissions?: unknown } | null)?.confirmExtraPermissions === true;
+    const device = await getGithubAuth(e.sender).startSignIn({ confirmExtraPermissions });
     if (!isHeadless) void shell.openExternal(device.verificationUri);
     return { userCode: device.userCode, verificationUri: device.verificationUri };
   }));
-  ipcMain.handle("github-auth-list-access", () => githubIpc(() => getGithubAuth().listAccess()));
-  ipcMain.handle("github-auth-check-repo", (_e, repo: unknown) => githubIpc(() => {
+  ipcMain.handle("github-auth-list-access", (e) => githubIpc(() => getGithubAuth(e.sender).listAccess()));
+  ipcMain.handle("github-auth-check-repo", (e, repo: unknown) => githubIpc(() => {
     if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("Expected owner/name");
-    return getGithubAuth().checkRepo(repo);
+    return getGithubAuth(e.sender).checkRepo(repo);
   }));
-  ipcMain.handle("github-auth-get-token", () => githubIpc(() => getGithubAuth().getAccessToken()));
-  ipcMain.handle("github-auth-disconnect", () => githubIpc(() => getGithubAuth().disconnect()));
+  ipcMain.handle("github-auth-get-token", (e, repo: unknown) => githubIpc(() => {
+    if (repo !== undefined && (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo))) throw new Error("Expected owner/name");
+    return getGithubAuth(e.sender).getAccessToken(repo);
+  }));
+  ipcMain.handle("github-auth-disconnect", (e) => githubIpc(() => getGithubAuth(e.sender).disconnect()));
   ipcMain.handle("github-auth-open-url", (_e, url: unknown) => {
     if (typeof url === "string" && /^https:\/\/github\.com\//.test(url) && !isHeadless) void shell.openExternal(url);
   });
@@ -2137,7 +2203,11 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   const indexPath = path.join(__dirname, "..", "src", "renderer", "index.html");
   const indexUrl = pathToFileURL(indexPath).href;
   const win = new BrowserWindow({
-    show: !isHeadless,
+    // On Linux/X11 an unmapped window gets no compositor frames, so
+    // requestAnimationFrame never fires and screenshots, scroll-into-view
+    // stability checks and rAF-driven views (Canvas, graph) hang. Headless
+    // Linux runs (Xvfb) therefore map the window, without taking focus.
+    show: !isHeadless || headlessNeedsMappedWindow,
     width: 1280,
     height: 840,
     minWidth: 640,
@@ -2198,6 +2268,9 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   crashStates.set(win.id, state);
   void listCrashDumps(app.getPath("crashDumps")).then((dumps) => { state.knownDumps = dumps; }).catch(() => {});
   recordDiagnostic(state, { at: Date.now(), category: "lifecycle", message: "window-created", metadata: { suppressPlugins } });
+  // Xvfb has no window manager, so nothing ever gives a mapped window input focus.
+  // Hover cards, focus-dependent menus and modals behave as in an inactive window.
+  if (headlessNeedsMappedWindow) win.once("ready-to-show", () => win.focus());
   win.loadFile(indexPath);
 
   win.webContents.on("will-attach-webview", (event, webPreferences, params) => {
@@ -2482,6 +2555,14 @@ app.whenReady().then(() => {
     if (shouldClaimObsidianProtocol(app.getApplicationNameForProtocol("obsidian://"), claimObsidian)) {
       app.setAsDefaultProtocolClient("obsidian");
     }
+  }
+  if (isHeadless && process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text") {
+    // Automated runs on a Linux box have no desktop keyring (no libsecret/kwallet),
+    // so safeStorage reports encryption as unavailable and every secret-backed
+    // flow fails for reasons unrelated to what is under test. Opt in to
+    // Chromium's plain-text backend for those runs only; a real session, headless
+    // or not on a machine with a keyring, still uses the real backend.
+    safeStorage.setUsePlainTextEncryption(true);
   }
   if (isHeadless && process.platform === "darwin") {
     // `dock.hide()` removes the Dock tile but leaves the app a "regular"
