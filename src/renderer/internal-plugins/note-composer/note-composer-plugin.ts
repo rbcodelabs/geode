@@ -45,7 +45,9 @@ export class NoteComposerPlugin extends GeodePlugin {
 
   onload(): void {
     this.registerEvent(
-      this.app.workspace.on("file-menu", (menu: any, file: unknown) => {
+      this.app.workspace.on("file-menu", (menu: any, file: unknown, origin?: string) => {
+        // File explorer only (the documented entry point); tab/more-options menus stay unchanged.
+        if (origin !== "file-explorer-context-menu") return;
         if (!isTFile(file as TAbstractFile) || !isMarkdown(file as TFile)) return;
         const source = file as TFile;
         menu.addItem((item: any) =>
@@ -123,8 +125,15 @@ export class NoteComposerPlugin extends GeodePlugin {
         const updated = rewriteWikilinksForRename(text, source.basename, oldNoExt, source.path, linkTarget);
         if (updated !== text) await vault.modify(ref, updated);
       }
-      await vault.trash(source);
       await this.app.openFile(destination, false);
+      try {
+        await vault.trash(source);
+      } catch (error) {
+        // Content and links already moved, so nothing is lost; the source just stays put.
+        console.error("Note composer could not trash the source note", error);
+        this.app.notify(`Merged into "${destination.basename}", but "${source.basename}" could not be moved to the trash.`);
+        return;
+      }
       this.app.notify(`Merged "${source.basename}" into "${destination.basename}"`);
     } catch (error) {
       console.error("Note composer merge failed", error);

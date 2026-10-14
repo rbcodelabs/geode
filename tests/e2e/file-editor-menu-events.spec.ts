@@ -331,7 +331,8 @@ test.describe("editor-menu", () => {
 
       await win.locator(".cm-line", { hasText: "Plain paragraph" }).click({ button: "right" });
       const titles = await win.locator(".menu .menu-item-title").allTextContents();
-      expect(titles).toEqual(["Add comment", "Plugin Editor Item"]);
+      // Note composer (a default-on core plugin) contributes "Extract current selection…" for any selection.
+      expect(titles).toEqual(["Add comment", "Extract current selection…", "Plugin Editor Item"]);
     } finally {
       await cleanup();
     }

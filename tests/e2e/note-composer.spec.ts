@@ -4,6 +4,9 @@ import * as path from "node:path";
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
+// Trashing the merged source goes through the OS trash service, which a headless
+// Linux box lacks (shell.trashItem fails there; macOS covers removal).
+const canTrash = process.platform === "darwin";
 
 interface Harness {
   app: ElectronApplication;
@@ -85,8 +88,8 @@ test("Merge appends via Enter, rewrites links on disk, and asks for confirmation
 
     await mergeFromExplorer(win, "Dest", "Enter");
     await win.locator(".note-composer-confirm-merge").click();
-
-    await expect.poll(() => h.exists("Src.md")).toBe(false);
+    await expect.poll(() => h.read("Dest.md")).toBe("Dest body\n\nSource body\n");
+    if (canTrash) await expect.poll(() => h.exists("Src.md")).toBe(false);
     expect(h.read("Dest.md")).toBe("Dest body\n\nSource body\n");
     expect(h.read("Linker.md")).toBe("see [[Dest]] and ![[Dest]] and [[Dest#H]] and [[Dest|alias]] and [[Other]]\n");
     expect(h.read("Other.md")).toBe("other\n");
@@ -115,7 +118,8 @@ test("Merge with Shift+Enter prepends, and the command opens the same picker", a
     await input.fill("Dest");
     await input.press("Shift+Enter");
     // Ask before merging is off: no confirmation modal.
-    await expect.poll(() => h.exists("Src.md")).toBe(false);
+    await expect.poll(() => h.read("Dest.md")).toBe("Source body\n\nDest body\n");
+    if (canTrash) await expect.poll(() => h.exists("Src.md")).toBe(false);
     await expect(win.locator(".note-composer-confirm")).toHaveCount(0);
     expect(h.read("Dest.md")).toBe("Source body\n\nDest body\n");
     expect(h.read("Linker.md")).toContain("[[Dest]] and ![[Dest]]");
@@ -137,7 +141,8 @@ test("Merge with Ctrl/Cmd+Enter creates a new note using the template and rewrit
     });
     await mergeFromExplorer(win, "Brand New", "Control+Enter");
     await expect.poll(() => h.exists("Brand New.md")).toBe(true);
-    await expect.poll(() => h.exists("Src.md")).toBe(false);
+    await expect.poll(() => h.read("Linker.md")).toContain("[[Brand New]]");
+    if (canTrash) await expect.poll(() => h.exists("Src.md")).toBe(false);
     expect(h.read("Brand New.md")).toBe(`# Brand New from Src (${new Date().getFullYear()})\n\nSource body\n`);
     expect(h.read("Linker.md")).toBe("see [[Brand New]] and ![[Brand New]] and [[Brand New#H]] and [[Brand New|alias]] and [[Other]]\n");
     expect(h.read("Dest.md")).toBe("Dest body\n");
