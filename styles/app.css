@@ -431,6 +431,24 @@ body.is-mobile .app-shell {
   min-height: 100svh;
 }
 
+/* While the software keyboard is up, iOS pans the page instead of resizing it. Pin the shell to the
+   visual viewport (published by trackMobileVisualViewport) so the header stays at the top of the
+   visible area and the bottom navigation sits above the keyboard. */
+body.is-mobile .app-shell {
+  position: fixed;
+  top: var(--geode-visual-viewport-top, 0px);
+  left: 0;
+  right: 0;
+  height: var(--geode-visual-viewport-height, 100dvh);
+  min-height: 0;
+}
+
+/* The keyboard covers the home indicator, so its safe-area padding would only waste space. */
+body.is-mobile.is-keyboard-open .mobile-navigation {
+  min-height: 52px;
+  padding-bottom: 0;
+}
+
 body.is-mobile .mobile-navigation {
   display: grid;
   grid-template-columns: repeat(5, minmax(44px, 1fr));
@@ -1433,7 +1451,6 @@ body.is-mobile .workspace-ribbon {
   body.is-mobile .workspace-center {
     width: 100%;
     padding-top: max(env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px));
-    transform: translateY(var(--geode-visual-viewport-top, 0px));
   }
 
   body.is-mobile .workspace-center .workspace-tabs {

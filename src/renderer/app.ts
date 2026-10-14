@@ -183,6 +183,9 @@ export type PickerItem =
   | { kind: "plugin"; item: QuickSwitcherPluginItem };
 
 /** Most plugin-provided rows a single query may add to the quick switcher. */
+/** Minimum shortfall between the layout and visual viewports that we treat as the software keyboard. */
+const KEYBOARD_MIN_COVER_PX = 100;
+
 const MAX_PLUGIN_ROWS = 20;
 /** Whole-budget cap for the launch-time community update check; network trouble must not hang launch. */
 const COMMUNITY_UPDATE_LAUNCH_TIMEOUT_MS = 15_000;
@@ -5527,18 +5530,35 @@ export class App {
     return navigation;
   }
 
+  /**
+   * iOS WKWebView does not resize the layout viewport for the software keyboard. It scrolls the page to
+   * reveal the focused field and reports the visible region through the visual viewport. Publish that
+   * region so the shell can pin itself to it (fixed, offset by `offsetTop`, sized to `height`) instead
+   * of riding the document scroll, which used to leave a blank band above the header.
+   */
   private trackMobileVisualViewport(): void {
     const viewport = window.visualViewport;
     if (!viewport) return;
+    const root = document.documentElement;
     const update = () => {
-      const offset = document.body.classList.contains("is-mobile")
-        ? Math.max(0, viewport.offsetTop + window.scrollY)
-        : 0;
-      document.documentElement.style.setProperty("--geode-visual-viewport-top", `${offset}px`);
+      // The layout viewport keeps its full height under the keyboard, so a visual viewport much shorter
+      // than it (without pinch zoom, which also shrinks it) means the keyboard is covering the bottom.
+      // Outside that state the shell sizes itself with plain CSS (100dvh), which tracks ordinary window
+      // resizes and rotation without waiting on a script round trip.
+      const covered = window.innerHeight - viewport.height - viewport.offsetTop;
+      const keyboardOpen = document.body.classList.contains("is-mobile")
+        && viewport.scale <= 1.01 && covered > KEYBOARD_MIN_COVER_PX;
+      document.body.classList.toggle("is-keyboard-open", keyboardOpen);
+      if (keyboardOpen) {
+        root.style.setProperty("--geode-visual-viewport-top", `${Math.max(0, viewport.offsetTop)}px`);
+        root.style.setProperty("--geode-visual-viewport-height", `${Math.max(0, viewport.height)}px`);
+      } else {
+        root.style.removeProperty("--geode-visual-viewport-top");
+        root.style.removeProperty("--geode-visual-viewport-height");
+      }
     };
     viewport.addEventListener("resize", update, { passive: true });
     viewport.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("scroll", update, { passive: true });
     update();
   }
 

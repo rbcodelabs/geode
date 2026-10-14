@@ -203,6 +203,71 @@ test("@phone provides an accessible daily workspace with dismissible drawers", a
   expect(errors).toEqual([]);
 });
 
+/**
+ * iOS WKWebView does not resize the layout viewport for the software keyboard and instead scrolls the
+ * page to reveal the focused field, reporting that through `visualViewport.offsetTop`/`height`. Chromium
+ * cannot raise a real keyboard, so the visual viewport is replaced by a controllable stand-in.
+ */
+async function installFakeVisualViewport(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    let offsetTop = 0;
+    let height: number | null = null; // null follows the layout viewport, like a closed keyboard
+    const fake = Object.assign(new EventTarget(), { offsetLeft: 0, pageTop: 0, pageLeft: 0, scale: 1 });
+    Object.defineProperties(fake, {
+      offsetTop: { get: () => offsetTop },
+      width: { get: () => window.innerWidth },
+      height: { get: () => height ?? window.innerHeight },
+    });
+    Object.defineProperty(window, "visualViewport", { value: fake, configurable: true });
+    (window as any).__setVisualViewport = (top: number, nextHeight: number | null) => {
+      offsetTop = top;
+      height = nextHeight;
+      fake.dispatchEvent(new Event("resize"));
+      fake.dispatchEvent(new Event("scroll"));
+    };
+  });
+}
+
+test("@phone pins the app shell to the visual viewport while the software keyboard is up", async ({ page }) => {
+  await installFakeVisualViewport(page);
+  await emulatePhoneSafeArea(page);
+  await resetProofVault(page);
+  const viewportHeight = page.viewportSize()!.height;
+  const nav = page.getByRole("navigation", { name: "Mobile navigation" });
+  await nav.getByRole("button", { name: "Files" }).click();
+  await page.locator('.nav-file-title[data-path="Welcome.md"]').click();
+  await expect(page.locator(".cm-content")).toBeVisible();
+
+  const shell = page.locator(".app-shell");
+  const header = page.locator(".workspace-center .view-header").first();
+  const expectInside = async (target: Locator, top: number, bottom: number) => {
+    const box = (await target.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(top - 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(bottom + 1);
+  };
+
+  // iOS keeps the layout viewport full height, pans it by 64pt and reports a 440pt-tall visual viewport.
+  await page.evaluate(() => (window as any).__setVisualViewport(64, 440));
+  await expect.poll(async () => Math.round((await shell.boundingBox())!.y)).toBe(64);
+  expect(Math.round((await shell.boundingBox())!.height)).toBe(440);
+  await expectInside(header, 64, 504);
+  await expectInside(nav, 64, 504);
+  // The keyboard covers the home indicator, so the bar drops its bottom safe-area padding while it is up.
+  await expect(page.locator("body")).toHaveClass(/is-keyboard-open/);
+  expect((await nav.boundingBox())!.height).toBeLessThanOrEqual(60);
+  await page.locator(".cm-content").focus();
+  await expectInside(page.locator(".cm-content"), 64, 504);
+  await expectInside(page.locator(".view-header-title").first(), 64, 504);
+  // The header must hug the top of the visible area: only the device safe-area inset may precede it.
+  expect(Math.round((await header.boundingBox())!.y)).toBeLessThanOrEqual(64 + 47);
+
+  await page.evaluate(() => (window as any).__setVisualViewport(0, null));
+  await expect.poll(async () => Math.round((await shell.boundingBox())!.y)).toBe(0);
+  expect(Math.round((await shell.boundingBox())!.height)).toBe(viewportHeight);
+  await expect(page.locator("body")).not.toHaveClass(/is-keyboard-open/);
+  expect((await nav.boundingBox())!.height).toBeGreaterThanOrEqual(80);
+});
+
 test("@phone keeps drawers and settings inside the device safe area", async ({ page }, testInfo) => {
   await emulatePhoneSafeArea(page);
   await resetProofVault(page);
