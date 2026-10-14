@@ -730,6 +730,10 @@ const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes",
 /** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
 const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
+interface SettingsNavItem { id: string; label: string }
+/** `title` is null for the untitled built-in list at the top of the sidebar. */
+interface SettingsNavGroup { title: string | null; items: SettingsNavItem[] }
+
 class SettingsModal extends Modal {
   private navEl!: HTMLElement;
   private contentContainerEl!: HTMLElement;
@@ -752,6 +756,18 @@ class SettingsModal extends Modal {
   private hubConfigSettle?: () => Promise<void>;
   private stopExternalRootsTab: (() => void) | null = null;
   private stopGithubTab: (() => void) | null = null;
+  /** Phone-only section selector (a button that opens `sectionSheetEl`); hidden by CSS wherever the sidebar fits. */
+  private sectionSelectorEl!: HTMLButtonElement;
+  private sectionSelectorLabelEl!: HTMLElement;
+  /** Bottom sheet listing every section; lives beside `modalEl` in the modal container so it can anchor to the screen bottom. */
+  private sectionSheetLayerEl: HTMLElement | null = null;
+  private sectionSheetListEl: HTMLElement | null = null;
+  private sectionSheetOpen = false;
+  private removeSectionSheetKeys: (() => void) | null = null;
+  /** The nav as last rendered; both the sidebar and the phone sheet draw from it so they cannot disagree. */
+  private navGroups: SettingsNavGroup[] = [];
+  private phoneWidthQuery: MediaQueryList | null = null;
+  private readonly onPhoneWidthChange = (event: MediaQueryListEvent) => { if (!event.matches) this.closeSectionSheet(false); };
 
   constructor(private geodeApp: App) {
     super(geodeApp);
@@ -777,7 +793,22 @@ class SettingsModal extends Modal {
     this.navEl.setAttribute("aria-label", "Settings categories");
     this.contentContainerEl = document.createElement("div");
     this.contentContainerEl.className = "vertical-tab-content-container";
-    this.contentEl.append(this.navEl, this.contentContainerEl);
+    this.sectionSelectorEl = document.createElement("button");
+    this.sectionSelectorEl.type = "button";
+    this.sectionSelectorEl.className = "settings-section-selector";
+    this.sectionSelectorEl.setAttribute("aria-haspopup", "dialog");
+    this.sectionSelectorEl.setAttribute("aria-expanded", "false");
+    this.sectionSelectorLabelEl = document.createElement("span");
+    this.sectionSelectorLabelEl.className = "settings-section-selector-label";
+    const selectorChevron = document.createElement("span");
+    selectorChevron.className = "settings-section-selector-chevron";
+    selectorChevron.setAttribute("aria-hidden", "true");
+    setIcon(selectorChevron, "chevron-down");
+    this.sectionSelectorEl.append(this.sectionSelectorLabelEl, selectorChevron);
+    this.sectionSelectorEl.addEventListener("click", () => (this.sectionSheetOpen ? this.closeSectionSheet(true) : this.openSectionSheet()));
+    this.contentEl.append(this.sectionSelectorEl, this.navEl, this.contentContainerEl);
+    this.phoneWidthQuery = window.matchMedia("(max-width: 700px)");
+    this.phoneWidthQuery.addEventListener("change", this.onPhoneWidthChange);
 
     // A plugin being enabled/disabled while the modal is open must update the
     // nav immediately, and bounce back to Appearance if the currently active
@@ -888,38 +919,24 @@ class SettingsModal extends Modal {
     }
   }
 
-  /** Rebuild the left nav column: built-in tabs, then an alphabetized "Plugin options" group. */
-  private renderNav(): void {
-    // Rebuilding the list resets its scroll; keep the user's place across tab switches.
-    const scrollTop = this.navEl.scrollTop;
-    this.navEl.empty();
-
-    const addNavItem = (id: string, label: string, container: HTMLElement) => {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "vertical-tab-nav-item";
-      item.textContent = label;
-      item.setAttribute("role", "tab");
-      item.setAttribute("aria-selected", String(id === this.activeTabId));
-      item.classList.toggle("is-active", id === this.activeTabId);
-      item.addEventListener("click", () => this.activateTab(id));
-      container.appendChild(item);
-    };
-
-    addNavItem("appearance", "Appearance", this.navEl);
-    addNavItem("hotkeys", "Hotkeys", this.navEl);
-    addNavItem("daily-notes", "Daily Notes", this.navEl);
-    addNavItem("unique-notes", "Unique note creator", this.navEl);
-    addNavItem("templates", "Templates", this.navEl);
-    addNavItem("core-plugins", "Core plugins", this.navEl);
-    addNavItem("community-plugins", "Community plugins & themes", this.navEl);
-    addNavItem("sync", "Sync", this.navEl);
-    addNavItem("advanced", "Advanced", this.navEl);
-    if (this.geodeApp.host.externalRoots?.listGrants) addNavItem("project-folders", "Project folders", this.navEl);
-    if (window.geode.githubAuth) addNavItem("github", "GitHub", this.navEl);
-    if (this.geodeApp.host.capabilities.processDiagnostics) {
-      addNavItem("performance", "Performance", this.navEl);
-    }
+  /** The sections the nav offers, in display order. The first group is the untitled built-in list; the rest are titled plugin groups. */
+  private collectNavGroups(): SettingsNavGroup[] {
+    const groups: SettingsNavGroup[] = [];
+    const builtin: SettingsNavItem[] = [
+      { id: "appearance", label: "Appearance" },
+      { id: "hotkeys", label: "Hotkeys" },
+      { id: "daily-notes", label: "Daily Notes" },
+      { id: "unique-notes", label: "Unique note creator" },
+      { id: "templates", label: "Templates" },
+      { id: "core-plugins", label: "Core plugins" },
+      { id: "community-plugins", label: "Community plugins & themes" },
+      { id: "sync", label: "Sync" },
+      { id: "advanced", label: "Advanced" },
+    ];
+    if (this.geodeApp.host.externalRoots?.listGrants) builtin.push({ id: "project-folders", label: "Project folders" });
+    if (window.geode.githubAuth) builtin.push({ id: "github", label: "GitHub" });
+    if (this.geodeApp.host.capabilities.processDiagnostics) builtin.push({ id: "performance", label: "Performance" });
+    groups.push({ title: null, items: builtin });
 
     const manifestName = (pluginId: string) => this.geodeApp.pluginManager?.getManifest(pluginId)?.name ?? pluginId;
     const meta = this.geodeApp.settingTabMeta;
@@ -933,38 +950,184 @@ class SettingsModal extends Modal {
       list.push({ id, label: m.label });
       sectionsByPlugin.set(m.pluginId, list);
     }
-    const makeGroup = (titleText: string): HTMLElement => {
-      const group = document.createElement("div");
-      group.className = "vertical-tab-header-group";
-      const title = document.createElement("div");
-      title.className = "vertical-tab-header-group-title";
-      title.textContent = titleText;
-      group.appendChild(title);
-      this.navEl.appendChild(group);
-      return group;
-    };
 
     const pluginTabs = [...this.geodeApp.settingTabs.keys()]
       .filter((id) => !meta.has(id) && !sectionsByPlugin.has(id))
       .map((id) => ({ id, name: manifestName(id) }))
       .sort((a, b) => a.name.localeCompare(b.name));
-
-    if (pluginTabs.length) {
-      const group = makeGroup("Plugin options");
-      for (const { id, name } of pluginTabs) addNavItem(id, name, group);
-    }
+    if (pluginTabs.length) groups.push({ title: "Plugin options", items: pluginTabs.map(({ id, name }) => ({ id, label: name })) });
 
     const sectioned = [...sectionsByPlugin.keys()]
       .map((pluginId) => ({ pluginId, name: manifestName(pluginId) }))
       .sort((a, b) => a.name.localeCompare(b.name));
     for (const { pluginId, name } of sectioned) {
-      const group = makeGroup(name);
-      if (this.geodeApp.settingTabs.has(pluginId)) addNavItem(pluginId, "General", group);
-      for (const { id, label } of sectionsByPlugin.get(pluginId)!) addNavItem(id, label, group);
+      const items: SettingsNavItem[] = [];
+      if (this.geodeApp.settingTabs.has(pluginId)) items.push({ id: pluginId, label: "General" });
+      for (const { id, label } of sectionsByPlugin.get(pluginId)!) items.push({ id, label });
+      groups.push({ title: name, items });
+    }
+    return groups;
+  }
+
+  /** Rebuild the left nav column: built-in tabs, then an alphabetized "Plugin options" group. */
+  private renderNav(): void {
+    // Rebuilding the list resets its scroll; keep the user's place across tab switches.
+    const scrollTop = this.navEl.scrollTop;
+    this.navEl.empty();
+    this.navGroups = this.collectNavGroups();
+
+    const addNavItem = ({ id, label }: SettingsNavItem, container: HTMLElement) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "vertical-tab-nav-item";
+      item.textContent = label;
+      item.setAttribute("role", "tab");
+      item.setAttribute("aria-selected", String(id === this.activeTabId));
+      item.classList.toggle("is-active", id === this.activeTabId);
+      item.addEventListener("click", () => this.activateTab(id));
+      container.appendChild(item);
+    };
+
+    for (const { title, items } of this.navGroups) {
+      let container: HTMLElement = this.navEl;
+      if (title !== null) {
+        container = document.createElement("div");
+        container.className = "vertical-tab-header-group";
+        const titleEl = document.createElement("div");
+        titleEl.className = "vertical-tab-header-group-title";
+        titleEl.textContent = title;
+        container.appendChild(titleEl);
+        this.navEl.appendChild(container);
+      }
+      for (const item of items) addNavItem(item, container);
     }
     this.navEl.scrollTop = scrollTop;
-    // On phones the tab strip scrolls sideways and is rebuilt on every activation, which resets it: bring the active tab back into view.
-    if (document.body.classList.contains("is-mobile")) this.navEl.querySelector<HTMLElement>(".vertical-tab-nav-item.is-active")?.scrollIntoView({ block: "nearest", inline: "center" });
+    this.syncSectionSelector();
+  }
+
+  /** Keep the phone selector's label (and an open sheet's rows) in step with the nav. */
+  private syncSectionSelector(): void {
+    const active = this.navGroups.flatMap((group) => group.items).find((item) => item.id === this.activeTabId);
+    this.sectionSelectorLabelEl.textContent = active?.label ?? "";
+    this.sectionSelectorEl.setAttribute("aria-label", `Settings section: ${active?.label ?? ""}`);
+    if (this.sectionSheetOpen) this.renderSectionSheetRows();
+  }
+
+  private renderSectionSheetRows(): void {
+    const list = this.sectionSheetListEl;
+    if (!list) return;
+    list.empty();
+    this.navGroups.forEach((group, index) => {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settings-section-group";
+      groupEl.setAttribute("role", "group");
+      const titleEl = document.createElement("div");
+      titleEl.className = "settings-section-group-title";
+      titleEl.id = `settings-section-group-${index}`;
+      titleEl.textContent = group.title ?? "Options";
+      groupEl.setAttribute("aria-labelledby", titleEl.id);
+      groupEl.appendChild(titleEl);
+      for (const { id, label } of group.items) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "settings-section-row";
+        const text = document.createElement("span");
+        text.className = "settings-section-row-label";
+        text.textContent = label;
+        row.appendChild(text);
+        if (id === this.activeTabId) {
+          row.setAttribute("aria-current", "true");
+          row.classList.add("is-current");
+          const check = document.createElement("span");
+          check.className = "settings-section-row-check";
+          check.setAttribute("aria-hidden", "true");
+          setIcon(check, "check");
+          row.appendChild(check);
+        }
+        row.addEventListener("click", () => {
+          this.closeSectionSheet(true);
+          if (id !== this.activeTabId) this.activateTab(id);
+        });
+        groupEl.appendChild(row);
+      }
+      list.appendChild(groupEl);
+    });
+  }
+
+  private openSectionSheet(): void {
+    if (this.sectionSheetOpen) return;
+    const layer = document.createElement("div");
+    layer.className = "settings-section-sheet-layer";
+    const backdrop = document.createElement("div");
+    backdrop.className = "settings-section-backdrop";
+    backdrop.addEventListener("click", () => this.closeSectionSheet(true));
+    const sheet = document.createElement("div");
+    sheet.className = "settings-section-sheet";
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.setAttribute("aria-label", "Settings sections");
+    sheet.tabIndex = -1;
+    const handle = document.createElement("div");
+    handle.className = "settings-section-sheet-handle";
+    handle.setAttribute("aria-hidden", "true");
+    const header = document.createElement("div");
+    header.className = "settings-section-sheet-header";
+    const title = document.createElement("div");
+    title.className = "settings-section-sheet-title";
+    title.textContent = "Sections";
+    const done = document.createElement("button");
+    done.type = "button";
+    done.className = "settings-section-sheet-done";
+    done.textContent = "Done";
+    done.addEventListener("click", () => this.closeSectionSheet(true));
+    header.append(title, done);
+    const body = document.createElement("div");
+    body.className = "settings-section-sheet-body";
+    sheet.append(handle, header, body);
+    layer.append(backdrop, sheet);
+    this.containerEl.appendChild(layer);
+    this.sectionSheetLayerEl = layer;
+    this.sectionSheetListEl = body;
+    this.sectionSheetOpen = true;
+    this.renderSectionSheetRows();
+    this.sectionSelectorEl.setAttribute("aria-expanded", "true");
+    // Everything behind the sheet is inert, so focus and assistive tech stay inside it.
+    this.modalEl.inert = true;
+    (body.querySelector<HTMLElement>(".settings-section-row.is-current") ?? sheet).focus({ preventScroll: true });
+    body.querySelector(".settings-section-row.is-current")?.scrollIntoView({ block: "center" });
+
+    // Escape and Tab are handled in the capture phase on window, ahead of the app keymap, so Escape closes just the sheet.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeSectionSheet(true);
+      } else if (event.key === "Tab") {
+        const focusable = [...sheet.querySelectorAll<HTMLElement>("button")];
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement;
+        if (!sheet.contains(active)) { event.preventDefault(); first?.focus(); }
+        else if (event.shiftKey && active === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && active === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    this.removeSectionSheetKeys = () => window.removeEventListener("keydown", onKeyDown, true);
+  }
+
+  /** Dismiss the sheet. `restoreFocus` returns focus to the selector row (skipped when the whole modal is going away). */
+  private closeSectionSheet(restoreFocus: boolean): void {
+    if (!this.sectionSheetOpen) return;
+    this.sectionSheetOpen = false;
+    this.removeSectionSheetKeys?.();
+    this.removeSectionSheetKeys = null;
+    this.sectionSheetLayerEl?.remove();
+    this.sectionSheetLayerEl = null;
+    this.sectionSheetListEl = null;
+    this.modalEl.inert = false;
+    this.sectionSelectorEl.setAttribute("aria-expanded", "false");
+    if (restoreFocus) this.sectionSelectorEl.focus({ preventScroll: true });
   }
 
   private renderAppearanceTab(container: HTMLElement): void {
@@ -2372,6 +2535,9 @@ class SettingsModal extends Modal {
     this.unsubscribeHotkeys = null;
     this.stopHotkeyRecorder?.();
     this.stopHotkeyRecorder = null;
+    this.closeSectionSheet(false);
+    this.phoneWidthQuery?.removeEventListener("change", this.onPhoneWidthChange);
+    this.phoneWidthQuery = null;
     this.geodeApp.activeSettingsModal = null;
     this.geodeApp.saveSettings();
   }

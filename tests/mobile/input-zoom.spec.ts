@@ -114,7 +114,8 @@ test("@phone every editable control in every Settings tab is at least 16px", asy
   await freshMobile(page);
   await page.evaluate(() => (window as any).app.setting.open());
   const navItems = page.locator(".modal .vertical-tab-nav-item");
-  await expect(navItems.first()).toBeVisible();
+  // On mobile the tab strip is hidden behind the section selector but stays in the DOM.
+  await expect(navItems.first()).toBeAttached();
   const labels = await navItems.allInnerTexts();
   expect(labels.length, "settings tabs found").toBeGreaterThan(3);
   const offenders: string[] = [];

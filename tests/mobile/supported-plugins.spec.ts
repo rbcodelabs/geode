@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
+import { chooseSettingsSection } from "./settings-nav";
 
 const mobileUrl = pathToFileURL(path.resolve(__dirname, "../../dist/mobile/index.html")).href;
 const externalVaultProofUrl = `${mobileUrl}?external-vault-proof=1`;
@@ -86,7 +87,7 @@ async function openCommunitySettings(page: Page): Promise<void> {
 async function openSettingsTab(page: Page): Promise<void> {
   await page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("button", { name: "More" }).click();
   await page.locator(".menu.mod-mobile-more").getByText("Settings", { exact: true }).click();
-  await page.getByText("Community plugins & themes", { exact: true }).click();
+  await chooseSettingsSection(page, "Community plugins & themes");
 }
 
 test("@phone @tablet lists supported plugins honestly and installs the tested release without enabling it", async ({ page }) => {
