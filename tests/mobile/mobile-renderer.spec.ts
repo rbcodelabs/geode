@@ -293,10 +293,11 @@ test("@phone keeps modals inside the visual viewport while the software keyboard
   expect(Math.round((await page.locator(".modal-container").boundingBox())!.height)).toBe(440);
   await expectInside(settings, 64, 504);
   await expectInside(settings.locator(".settings-close-button"), 64, 504);
-  await expectInside(settings.locator(".vertical-tab-header"), 64, 504);
+  await expectInside(settings.locator(".settings-section-selector"), 64, 504);
   // iOS zooms the page when a field under 16px takes focus; zoom (scale > 1) disables the keyboard tracking
   // above and pans the modal off screen, so every focusable text control must be at least 16px.
-  await settings.locator(".vertical-tab-header").getByText("Daily Notes", { exact: true }).click();
+  await settings.locator(".settings-section-selector").click();
+  await page.getByRole("dialog", { name: "Settings sections" }).locator(".settings-section-row", { hasText: "Daily Notes" }).click();
   const fieldSizes = await settings.locator("input[type=text], input[type=number], textarea, select")
     .evaluateAll((els) => els.filter((el) => (el as HTMLElement).offsetParent).map((el) => parseFloat(getComputedStyle(el).fontSize)));
   expect(fieldSizes.length).toBeGreaterThan(0);
