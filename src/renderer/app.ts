@@ -33,6 +33,7 @@ import { MarkdownRenderer } from "./markdown/render";
 import { AudioRecorderPlugin } from "./internal-plugins/audio-recorder/audio-recorder-plugin";
 import { FormatConverterPlugin } from "./internal-plugins/format-converter/format-converter-plugin";
 import { SlashCommandsPlugin } from "./internal-plugins/slash-commands/slash-commands-plugin";
+import { SlidesPlugin } from "./internal-plugins/slides/slides-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
 import {
@@ -162,6 +163,8 @@ interface AppSettings {
   formatConverterEnabled: boolean;
   /** Slash commands core plugin (enabled by default, as in Obsidian). */
   slashCommandsEnabled: boolean;
+  /** Slides core plugin; off by default, as in Obsidian. */
+  slidesEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -1354,6 +1357,12 @@ class SettingsModal extends Modal {
     this.addToggle(container, "Enable Slash commands", this.geodeApp.settings.slashCommandsEnabled, (enabled) => {
       this.geodeApp.settings.slashCommandsEnabled = enabled;
       this.geodeApp.syncSlashCommandsPlugin();
+      this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Slides</h3>`);
+    this.addToggle(container, "Enable Slides", this.geodeApp.settings.slidesEnabled, (enabled) => {
+      this.geodeApp.settings.slidesEnabled = enabled;
+      this.geodeApp.syncSlidesPlugin();
       this.geodeApp.saveSettings();
     });
     container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
@@ -2683,6 +2692,8 @@ export class App {
   private formatConverterPlugin?: FormatConverterPlugin;
   /** Live Slash commands plugin, or undefined while the core plugin is off. */
   slashCommandsPlugin?: SlashCommandsPlugin;
+  /** Live Slides plugin, or undefined while the core plugin is off. */
+  slidesPlugin?: SlidesPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2698,6 +2709,7 @@ export class App {
     audioRecorderEnabled: false,
     formatConverterEnabled: false,
     slashCommandsEnabled: true,
+    slidesEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -3360,6 +3372,7 @@ export class App {
         audioRecorderEnabled: saved.audioRecorderEnabled === true,
         formatConverterEnabled: saved.formatConverterEnabled === true,
         slashCommandsEnabled: saved.slashCommandsEnabled !== false,
+        slidesEnabled: saved.slidesEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -3574,6 +3587,7 @@ export class App {
     this.syncAudioRecorderPlugin();
     this.syncFormatConverterPlugin();
     this.syncSlashCommandsPlugin();
+    this.syncSlidesPlugin();
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
     // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
     await this.hubSyncUnregister?.(); this.hubSyncUnregister = undefined; this.hubSyncProvider = undefined;
@@ -4301,6 +4315,8 @@ export class App {
     this.formatConverterPlugin = undefined;
     this.slashCommandsPlugin?.unload();
     this.slashCommandsPlugin = undefined;
+    this.slidesPlugin?.unload();
+    this.slidesPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
     await this.vault.close();
@@ -6193,6 +6209,15 @@ export class App {
     if (!this.settings.slashCommandsEnabled) return;
     this.slashCommandsPlugin = new SlashCommandsPlugin(this);
     this.slashCommandsPlugin.load();
+  }
+
+  /** Load or unload the Slides core plugin to match `settings.slidesEnabled`. */
+  syncSlidesPlugin(): void {
+    this.slidesPlugin?.unload();
+    this.slidesPlugin = undefined;
+    if (!this.settings.slidesEnabled) return;
+    this.slidesPlugin = new SlidesPlugin(this);
+    this.slidesPlugin.load();
   }
 
   /** Load or unload the Audio recorder core plugin to match `settings.audioRecorderEnabled`. */

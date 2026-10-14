@@ -7233,3 +7233,41 @@ body.is-mobile .cm-editor .cm-content,
 body.is-mobile .cm-editor .cm-scroller {
   font-size: max(16px, 1em);
 }
+
+/* Slides core plugin: full-window presentation overlay. */
+.slides-presentation {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+.slides-presentation .slides-slide {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1100px;
+  max-height: 100%;
+  overflow: auto;
+  padding: 64px 72px 96px;
+  font-size: calc(var(--font-text-size, 16px) * 1.75);
+}
+.slides-presentation .slides-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+.slides-presentation .slides-nav {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 8px;
+}
+.slides-presentation .slides-nav-button:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
