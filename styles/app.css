@@ -7004,3 +7004,34 @@ body.is-macos:not(.is-native-fullscreen) .workspace.is-focus-pane .workspace-tab
 .is-mobile .community-item { flex-wrap: wrap; }
 .is-mobile .community-item-controls { flex-shrink: 1; flex-wrap: wrap; min-width: 0; }
 .is-mobile .supported-plugin-install { min-height: 44px; }
+
+/* Software keyboard up (see trackMobileVisualViewport). The modal container is fixed to the layout
+   viewport, which keeps its full height under the keyboard, so a centred or full-height modal ran behind
+   the keyboard and, once iOS panned the page, had its header and Done button above the visible top.
+   Confine the container to the visual viewport using the same variables that pin the app shell; the modal
+   then centres, sizes and scrolls inside the region the user can actually see. */
+body.is-keyboard-open .modal-container {
+  inset: auto 0 auto 0;
+  top: var(--geode-visual-viewport-top, 0px);
+  height: var(--geode-visual-viewport-height, 100%);
+}
+
+/* The keyboard covers the home indicator, so the full-height Settings modal needs no bottom safe-area gap. */
+body.is-keyboard-open .modal-container:has(.mod-settings) {
+  padding-bottom: 8px;
+}
+
+/* A prompt hangs 80px below the container top; under the keyboard keep it compact and let it shrink so its
+   results list scrolls inside what remains instead of past the keyboard. */
+body.is-keyboard-open .modal.prompt {
+  top: max(8px, env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px));
+  max-height: calc(100% - max(8px, env(safe-area-inset-top), var(--geode-native-safe-area-top, 0px)) - 8px);
+}
+
+/* iOS Safari/WKWebView zooms the whole page when a text field under 16px takes focus. The zoom pans the
+   page, defeats the visual-viewport tracking above (it deliberately ignores scale > 1, which is how a
+   real pinch looks) and left Settings text fields with the modal scrolled off screen. Keep every
+   focusable text control at 16px on mobile so focusing a field never zooms. */
+body.is-mobile :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [type="color"], [type="file"]), textarea, select) {
+  font-size: 16px;
+}

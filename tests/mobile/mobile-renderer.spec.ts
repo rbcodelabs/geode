@@ -268,6 +268,57 @@ test("@phone pins the app shell to the visual viewport while the software keyboa
   expect((await nav.boundingBox())!.height).toBeGreaterThanOrEqual(80);
 });
 
+test("@phone keeps modals inside the visual viewport while the software keyboard is up", async ({ page }) => {
+  await installFakeVisualViewport(page);
+  await emulatePhoneSafeArea(page);
+  await resetProofVault(page);
+  const nav = page.getByRole("navigation", { name: "Mobile navigation" });
+  const expectInside = async (target: Locator, top: number, bottom: number) => {
+    const box = (await target.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(top - 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(bottom + 1);
+  };
+
+  // Settings is sized to the whole container, so a layout-viewport container runs behind the keyboard and
+  // pans its Done button above the visible top.
+  await nav.getByRole("button", { name: "More" }).click();
+  await page.locator(".menu.mod-mobile-more").getByText("Settings", { exact: true }).click();
+  const settings = page.locator(".modal.mod-settings");
+  await expect(settings).toBeVisible();
+  const closedBox = (await settings.boundingBox())!;
+  await page.evaluate(() => (window as any).__setVisualViewport(64, 440));
+  await expect(page.locator("body")).toHaveClass(/is-keyboard-open/);
+  await expect.poll(async () => Math.round((await page.locator(".modal-container").boundingBox())!.y)).toBe(64);
+  expect(Math.round((await page.locator(".modal-container").boundingBox())!.height)).toBe(440);
+  await expectInside(settings, 64, 504);
+  await expectInside(settings.locator(".settings-close-button"), 64, 504);
+  await expectInside(settings.locator(".vertical-tab-header"), 64, 504);
+  // iOS zooms the page when a field under 16px takes focus; zoom (scale > 1) disables the keyboard tracking
+  // above and pans the modal off screen, so every focusable text control must be at least 16px.
+  await settings.locator(".vertical-tab-header").getByText("Daily Notes", { exact: true }).click();
+  const fieldSizes = await settings.locator("input[type=text], input[type=number], textarea, select")
+    .evaluateAll((els) => els.filter((el) => (el as HTMLElement).offsetParent).map((el) => parseFloat(getComputedStyle(el).fontSize)));
+  expect(fieldSizes.length).toBeGreaterThan(0);
+  for (const size of fieldSizes) expect(size).toBeGreaterThanOrEqual(16);
+  await page.evaluate(() => (window as any).__setVisualViewport(0, null));
+  await expect.poll(async () => Math.round((await settings.boundingBox())!.height)).toBe(Math.round(closedBox.height));
+  expect(Math.round((await settings.boundingBox())!.y)).toBe(Math.round(closedBox.y));
+  await page.keyboard.press("Escape");
+  await expect(settings).toBeHidden();
+
+  // A single-line prompt is placed 80px below the container top, so it must follow the container too.
+  await page.evaluate(() => (window as any).app.promptReplyComment({}));
+  const prompt = page.locator(".modal.prompt");
+  await expect(prompt.locator(".prompt-input")).toBeFocused();
+  await page.evaluate(() => (window as any).__setVisualViewport(64, 300));
+  await expect.poll(async () => Math.round((await page.locator(".modal-container").boundingBox())!.y)).toBe(64);
+  await expectInside(prompt, 64, 364);
+  await expectInside(prompt.locator(".prompt-input"), 64, 364);
+  await page.evaluate(() => (window as any).__setVisualViewport(0, null));
+  await expect.poll(async () => Math.round((await page.locator(".modal-container").boundingBox())!.y)).toBe(0);
+  expect(Math.round((await prompt.boundingBox())!.y)).toBe(80);
+});
+
 test("@phone keeps drawers and settings inside the device safe area", async ({ page }, testInfo) => {
   await emulatePhoneSafeArea(page);
   await resetProofVault(page);
