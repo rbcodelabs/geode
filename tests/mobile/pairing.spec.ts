@@ -3,6 +3,8 @@ import { pathToFileURL } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 import { PairingService } from "../../src/main/pairing-service";
 import { PAIRING_PROVIDER_HUB, type PairingBundle } from "../../src/shared/pairing/bundle";
+import { redeemInvitation } from "../../src/shared/pairing/client";
+import { parseInvitation } from "../../src/shared/pairing/invitation";
 
 const mobileUrl = pathToFileURL(path.resolve(__dirname, "../../dist/mobile/index.html")).href;
 const bundle = (): PairingBundle => ({
@@ -126,4 +128,59 @@ test("@phone a malformed or foreign code is rejected with nothing sent", async (
   await panel.getByRole("button", { name: "Set up", exact: true }).click();
   await expect(page.locator("[data-pairing-phone-status]")).toContainText("isn't a valid Geode pairing code");
   expect(requests).toEqual([]);
+});
+
+// ---- Desktop side ("Pair mobile device") ------------------------------------------------------------------------------
+// The real desktop card, bundle builder and session server run here; only the Electron IPC hop is replaced by exposed functions,
+// because the harness page is the mobile bundle in Chromium. (The preload/ipcMain wiring is covered by typecheck + unit tests.)
+async function desktopCardPage(page: Page) {
+  await phoneHost(page, { keychain: true });
+  const service = new PairingService({ addresses: () => ["127.0.0.1"], bindHost: "127.0.0.1", onEvent: (_o, event) => { void page.evaluate(e => (window as unknown as { __pairingHandler?: (e: unknown) => void }).__pairingHandler?.(e), event); } });
+  await page.exposeFunction("__pairingStart", async (b: PairingBundle) => { try { return { ok: true, value: await service.start("w", b) }; } catch (e) { return { ok: false, error: { code: "x", message: (e as Error).message } }; } });
+  await page.exposeFunction("__pairingCancel", () => service.cancel("w"));
+  await page.waitForFunction(() => Boolean((window as unknown as { geode?: unknown }).geode));
+  await page.evaluate(() => {
+    const w = window as unknown as { geode: Record<string, unknown>; __pairingHandler?: (e: unknown) => void; __pairingStart: (b: unknown) => Promise<unknown>; __pairingCancel: () => Promise<void> };
+    w.geode.pairing = { start: (b: unknown) => w.__pairingStart(b), cancel: () => w.__pairingCancel(), onEvent: (h: (e: unknown) => void) => { w.__pairingHandler = h; return () => { w.__pairingHandler = undefined; }; } };
+  });
+  await openSync(page);
+  await page.getByRole("combobox", { name: "Sync provider" }).selectOption("geode.hub");
+  await page.getByRole("textbox", { name: "Hub URL" }).fill("https://claude-box.example.ts.net");
+  const token = page.getByLabel("Hub token"); await token.fill("desktop-hub-token-555"); await token.blur();
+  await expect(page.locator("[data-hub-result]")).toContainText("Hub settings saved");
+  return service;
+}
+
+test("@phone the desktop card shows a single-use code that carries no secret, and reports when it was redeemed", async ({ page }) => {
+  const service = await desktopCardPage(page);
+  const card = page.locator("[data-pairing-card]");
+  await expect(card).toContainText("Pair mobile device");
+  await card.getByRole("button", { name: "Show pairing code" }).click();
+  await expect(card.locator("[data-pairing-qr] svg")).toBeVisible();
+  await expect(card.locator("[data-pairing-countdown]")).toContainText(/Expires in [0-3]:\d\d/);
+  const code = (await card.locator("[data-pairing-code]").textContent())!;
+  const invite = parseInvitation(code);
+  expect(invite.addresses[0]).toMatch(/^127\.0\.0\.1:\d+$/);
+  expect(code + JSON.stringify(invite)).not.toMatch(/desktop-hub-token-555|claude-box/); // the code holds neither the token nor the hub URL
+  expect(service.liveCount).toBe(1);
+
+  const { bundle: delivered } = await redeemInvitation(code);
+  expect(delivered.provider.config.url).toBe("https://claude-box.example.ts.net/");
+  expect(delivered.credential).toEqual({ scheme: "bearer", value: "desktop-hub-token-555" });
+  expect(Object.keys(delivered.portable).sort()).toEqual(["appearance", "dailyNotes", "editor", "hotkeys"]);
+  await expect(page.locator("[data-pairing-status]")).toContainText("Paired");
+  await expect(card.locator("[data-pairing-qr]")).toHaveCount(0);
+  expect(service.liveCount).toBe(0);
+});
+
+test("@phone cancelling the desktop code revokes it immediately", async ({ page }) => {
+  const service = await desktopCardPage(page);
+  const card = page.locator("[data-pairing-card]");
+  await card.getByRole("button", { name: "Show pairing code" }).click();
+  const code = (await card.locator("[data-pairing-code]").textContent())!;
+  await card.getByRole("button", { name: "Cancel code" }).click();
+  await expect(card.locator("[data-pairing-qr]")).toHaveCount(0);
+  await expect(page.locator("[data-pairing-status]")).toContainText("cancelled");
+  expect(service.liveCount).toBe(0);
+  await expect(redeemInvitation(code, { timeoutMs: 1500 })).rejects.toMatchObject({ code: "unreachable" });
 });
