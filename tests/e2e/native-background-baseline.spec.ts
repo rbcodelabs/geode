@@ -15,6 +15,8 @@ async function record(page: Page, vault: string, info: TestInfo, phase: string) 
     const p = (window as any).__backgroundProbe;
     const native = p.owner.view.renderOwner.writers().find((writer: any) => writer.containerEl === p.root);
     return {
+      mode: p.view.mode, distinctLeaves: p.owner !== (window as any).__backgroundTabs.other,
+      basePersists: p.base.sourcePersistsInFlight.size, basePending: p.base.renderOwner.pending.size,
       sameOwner: p.owner.view === p.view, sameRoot: p.root === p.input.closest(".canvas-embed-view"), rootConnected: p.root.isConnected,
       sameParent: p.root.parentElement === p.parent, inputConnected: p.input.isConnected, sameInput: p.cell.querySelector("input") === p.input,
       inputValue: p.input.value, focused: document.activeElement === p.input, ownerHidden: p.owner.leafEl.getBoundingClientRect().height === 0,
@@ -49,6 +51,16 @@ async function fixture(mode: Mode, info: TestInfo, run: (page: Page, vault: stri
       app.workspace.setActiveLeaf(owner, { focus: false });
     });
     const table = page.locator(".canvas-embed-view:visible .bases-table"); await expect(table).toBeVisible();
+    // Move the card with a real trusted Canvas pan before editing so Reading's
+    // stationary Canvas toolbar does not intercept the priority cell.
+    const surface = page.locator(".canvas-embed-view:visible .canvas-surface");
+    const box = await surface.boundingBox(); expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width - 40, box!.y + box!.height - 160);
+    await page.mouse.down({ button: "middle" });
+    await page.mouse.move(box!.x + box!.width - 40, box!.y + box!.height - 60, { steps: 8 });
+    await page.mouse.up({ button: "middle" });
+    expect(await page.evaluate(() => (window as any).__backgroundTabs.owner.view.mode)).toBe(mode === "Reading" ? "reading" : "live");
+    expect(await page.evaluate(() => (window as any).__backgroundTabs.owner !== (window as any).__backgroundTabs.other)).toBe(true);
     const column = (await table.locator("thead th").allTextContents()).indexOf("note.priority"); expect(column).toBeGreaterThan(-1);
     const cell = table.locator(".bases-data-row", { hasText: "Source" }).locator("td.bases-cell").nth(column);
     await expect(cell).toHaveText("2"); await cell.click(); await page.keyboard.press("Enter");
@@ -58,6 +70,7 @@ async function fixture(mode: Mode, info: TestInfo, run: (page: Page, vault: stri
       const root = input.closest(".canvas-embed-view")!;
       const native = owner.view.renderOwner.writers().find((writer: any) => writer.containerEl === root);
       const p = (window as any).__backgroundProbe = { owner, view: owner.view, root, parent: root.parentElement, input, cell: input.parentElement,
+        base: owner.view.renderOwner.writers().find((writer: any) => writer.viewType === "base" && writer.file?.path === "Tasks.base"),
         source: owner.view.getText(), camera: { pan: { ...native.pan }, scale: native.scale }, writes: [] as unknown[], events: [] as unknown[] };
       const modify = app.vault.modify;
       app.vault.modify = (...args: any[]) => { p.writes.push({ path: args[0].path, text: args[1] }); return Reflect.apply(modify, app.vault, args); };
@@ -74,6 +87,14 @@ async function fixture(mode: Mode, info: TestInfo, run: (page: Page, vault: stri
     await app.close(); fs.rmSync(directory, { recursive: true, force: true });
   }
 }
+async function settled(page: Page) {
+  // Observe actual nested writer admission/settlement, never drain or replace a
+  // handler. Two animation frames alone can precede async read -> modify.
+  await expect.poll(() => page.evaluate(() => {
+    const base = (window as any).__backgroundProbe.base;
+    return { persists: base.sourcePersistsInFlight.size, pending: base.renderOwner.pending.size };
+  })).toEqual({ persists: 0, pending: 0 });
+}
 async function returned(page: Page) {
   await page.evaluate(() => { const app = (window as any).app; app.workspace.setActiveLeaf((window as any).__backgroundTabs.owner, { focus: false }); });
   await expect(page.locator(".canvas-embed-view:visible")).toBeVisible();
@@ -84,13 +105,14 @@ for (const mode of ["Reading", "Live Preview"] as const) {
       await page.evaluate(() => { const app = (window as any).app; app.workspace.setActiveLeaf((window as any).__backgroundTabs.other, { focus: false }); });
       await expect.poll(() => page.evaluate(() => (window as any).__backgroundTabs.owner.leafEl.getBoundingClientRect().height)).toBe(0);
       await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await settled(page);
       const hidden = await record(page, vault, info, "hidden"); await page.screenshot({ path: info.outputPath("hidden.png") });
-      await returned(page); const back = await record(page, vault, info, "returned");
+      await returned(page); await settled(page); const back = await record(page, vault, info, "returned");
       // Browser blur is recorded separately and is allowed. Application writes,
       // input/root/parent loss and changed draft/provider are NOT waived.
       for (const witness of [hidden, back]) {
         expect(witness.provider).toBe(original); expect(witness.otherProvider).toBe(otherOriginal); expect(witness.state.writes).toEqual([]);
-        expect(witness.state).toMatchObject({ sameOwner: true, sameRoot: true, rootConnected: true, sameParent: true, inputConnected: true, sameInput: true, inputValue: "9" });
+        expect(witness.state).toMatchObject({ mode: mode === "Reading" ? "reading" : "live", distinctLeaves: true, basePersists: 0, basePending: 0, sameOwner: true, sameRoot: true, rootConnected: true, sameParent: true, inputConnected: true, sameInput: true, inputValue: "9" });
         expect(witness.state.camera).toEqual(witness.state.initialCamera); expect(witness.state.sourceText).toBe(witness.state.initialSource);
       }
     });
