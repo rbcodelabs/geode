@@ -62,4 +62,4 @@ remain separate acceptance work. Original edit-induced clipping and the five-row
 Canvas toolbar overlap remain open; the focused two-row selection fixture is not
 layout approval. Toolbar follow-up Task `bcf8cdcc-7ffe-47c5-974b-5e60b0fc877c`
 requires actual trusted accessibility evidence before a source correction. No
-complete parity, production wiring, merge or release is claimed here.
+persistent Live Preview layer/Lightbox wiring or complete parity is claimed here.
