@@ -51,14 +51,35 @@ async function fixture(mode: Mode, info: TestInfo, run: (page: Page, vault: stri
       app.workspace.setActiveLeaf(owner, { focus: false });
     });
     const table = page.locator(".canvas-embed-view:visible .bases-table"); await expect(table).toBeVisible();
-    // Move the card with a real trusted Canvas pan before editing so Reading's
-    // stationary Canvas toolbar does not intercept the priority cell.
+    // Real pre-edit wheel pan; sample the actual visible clip and prove this
+    // exact Canvas camera moved before attempting the obscured cell.
     const surface = page.locator(".canvas-embed-view:visible .canvas-surface");
-    const box = await surface.boundingBox(); expect(box).not.toBeNull();
-    await page.mouse.move(box!.x + box!.width - 40, box!.y + box!.height - 160);
-    await page.mouse.down({ button: "middle" });
-    await page.mouse.move(box!.x + box!.width - 40, box!.y + box!.height - 60, { steps: 8 });
-    await page.mouse.up({ button: "middle" });
+    const wheel = await surface.evaluate(el => {
+      const r = el.getBoundingClientRect(); let left = Math.max(0, r.left), top = Math.max(0, r.top), right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
+      for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent), clip = parent.getBoundingClientRect();
+        if (style.overflowX !== "visible") { left = Math.max(left, clip.left); right = Math.min(right, clip.right); }
+        if (style.overflowY !== "visible") { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); }
+      }
+      const samples = [];
+      for (const y of [0.1, 0.3, 0.5, 0.7, 0.9]) for (const x of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+        const point = { x: left + (right - left) * x, y: top + (bottom - top) * y }, hit = document.elementFromPoint(point.x, point.y);
+        samples.push({ ...point, owned: right > left && bottom > top && hit?.closest(".canvas-surface") === el, target: (hit as HTMLElement)?.className });
+      }
+      const app = (window as any).app, owner = (window as any).__backgroundTabs.owner;
+      const canvas = owner.view.renderOwner.writers().find((writer: any) => writer.viewType === "canvas" && writer.surfaceEl === el);
+      if (!canvas) throw Error("Exact production Canvas writer required");
+      const probe = (window as any).__backgroundPan = { canvas, surface: el, before: { pan: { ...canvas.pan }, scale: canvas.scale }, events: [] as unknown[] };
+      el.addEventListener("wheel", event => { probe.events.push({ trusted: event.isTrusted, deltaY: (event as WheelEvent).deltaY, sameSurface: (event.target as HTMLElement)?.closest(".canvas-surface") === el }); }, { capture: true, once: true });
+      return { rect: r.toJSON(), clipped: { left, top, right, bottom }, samples, chosen: samples.find(sample => sample.owned) ?? null, before: probe.before };
+    });
+    fs.writeFileSync(info.outputPath("pan-before.json"), JSON.stringify(wheel, null, 2)); expect(wheel.chosen).not.toBeNull();
+    await page.mouse.move(wheel.chosen!.x, wheel.chosen!.y); await page.mouse.wheel(0, -100);
+    await expect.poll(() => page.evaluate(() => (window as any).__backgroundPan.canvas.pan.y)).not.toBe(wheel.before.pan.y);
+    const pan = await page.evaluate(() => { const p = (window as any).__backgroundPan; return { pan: { ...p.canvas.pan }, scale: p.canvas.scale, events: p.events }; });
+    fs.writeFileSync(info.outputPath("pan-after.json"), JSON.stringify(pan, null, 2));
+    expect(pan.pan.x).toBe(wheel.before.pan.x); expect(pan.scale).toBe(wheel.before.scale);
+    expect(pan.events).toEqual([{ trusted: true, deltaY: -100, sameSurface: true }]);
     expect(await page.evaluate(() => (window as any).__backgroundTabs.owner.view.mode)).toBe(mode === "Reading" ? "reading" : "live");
     expect(await page.evaluate(() => (window as any).__backgroundTabs.owner !== (window as any).__backgroundTabs.other)).toBe(true);
     const column = (await table.locator("thead th").allTextContents()).indexOf("note.priority"); expect(column).toBeGreaterThan(-1);
