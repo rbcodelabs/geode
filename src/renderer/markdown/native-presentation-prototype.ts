@@ -75,6 +75,7 @@ interface PresentationRecord {
   mounted: boolean;
   seenAnchor: boolean;
   retryRetirement: boolean;
+  retirementTask?: Promise<void>;
   state: "inline" | "retained" | "removed";
 }
 export interface NativeLayerOptions {
@@ -118,7 +119,12 @@ export class NativePresentationPrototype {
     for (const record of this.records.values()) {
       const current = this.sources.get(record.occurrence.id);
       if (current) record.occurrence = current;
-      else record.retryRetirement = true;
+      else {
+        record.retryRetirement = true;
+        // Source invalidation is an admission boundary, not a geometry update.
+        // Start preflight/freeze now so a pending read cannot publish before RAF.
+        this.retireRecord(record);
+      }
     }
     this.requestGeometry();
   }
@@ -167,6 +173,18 @@ export class NativePresentationPrototype {
       record.mounted = true; this.requestGeometry();
     });
   }
+  private retireRecord(record: PresentationRecord): void {
+    if (!canAllocateNative(this.options.owner, this.disposed) || record.retirementTask || record.lifetime.failedClosed) return;
+    record.retryRetirement = false;
+    record.retirementTask = record.lifetime.retire().then(retired => {
+      if (!retired) { if (record.lifetime.failedClosed) this.requestGeometry(); return; }
+      if (this.records.get(record.occurrence.id) !== record) return;
+      record.observer.disconnect(); this.resize.unobserve(record.root); record.root.remove(); this.records.delete(record.occurrence.id); this.retirements++;
+      const current = this.sources.get(record.occurrence.id);
+      if (canAllocateNative(this.options.owner, this.disposed) && current && this.anchors.get(current.id)?.isConnected) this.ensureRecord(current);
+      this.requestGeometry();
+    }).finally(() => { record.retirementTask = undefined; });
+  }
   readonly requestGeometry = (): void => {
     if (this.disposed || this.scheduled || !this.view) return;
     this.scheduled = true;
@@ -204,14 +222,7 @@ export class NativePresentationPrototype {
         if (record.label.textContent !== text) record.label.textContent = text;
         if (anchor && Math.abs(anchor.height - height) > 1) this.options.onHeight?.(record.occurrence.id, height);
         if (canAllocateNative(this.options.owner, this.disposed) && offscreen && (record.seenAnchor || !valid) && record.retryRetirement && !record.lifetime.failedClosed) {
-          record.retryRetirement = false;
-          void record.lifetime.retire().then(retired => {
-            if (!retired) { if (record.lifetime.failedClosed) this.requestGeometry(); return; }
-            record.observer.disconnect(); this.resize.unobserve(record.root); record.root.remove(); this.records.delete(record.occurrence.id); this.retirements++;
-            const current = this.sources.get(record.occurrence.id);
-            if (canAllocateNative(this.options.owner, this.disposed) && current && this.anchors.get(current.id)?.isConnected) this.ensureRecord(current);
-            this.requestGeometry();
-          });
+          this.retireRecord(record);
         }
       }
       const failed = [...this.records.values()].some(record => record.lifetime.failedClosed);

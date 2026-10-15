@@ -87,3 +87,35 @@ it("waits for an externally closing scope before deciding whether its refusal ca
   finish(); await expect(closing).rejects.toThrow("read refused"); expect(await retirement).toBe(false); expect(record.failedClosed).toBe(false); expect(scope.admissionAllowed).toBe(true);
   readable = true; expect(await record.retire()).toBe(true);
 });
+
+it("source reconciliation closes removed mount admission before the next geometry frame", async () => {
+  const { NativePresentationPrototype } = await import("../../src/renderer/markdown/native-presentation-prototype");
+  const owner = new RenderOwnership().create({}); const scope = owner.child();
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); let published = false;
+  const mounting = scope.run(async token => { await gate; token.check(); published = true; }); void mounting.catch(() => {});
+  await Promise.resolve();
+  const occurrence = { id: 1, from: 0, to: 17, target: "Board.canvas" };
+  const record = { occurrence, lifetime: new OwnedOccurrence(scope), retryRetirement: false, observer: { disconnect() {} }, root: { remove() {} } };
+  const layer = Object.assign(Object.create(NativePresentationPrototype.prototype), {
+    options: { owner }, disposed: false, sources: new Map([[1, occurrence]]), records: new Map([[1, record]]),
+    anchors: new AnchorLeases(), resize: { unobserve() {} }, retirements: 0, requestGeometry() {},
+  }) as InstanceType<typeof NativePresentationPrototype>;
+  layer.reconcile([]); release(); await mounting.catch(() => {});
+  expect(published).toBe(false);
+  expect(await record.lifetime.retire()).toBe(true);
+});
+
+it("source removal preflights the original draft without closing its usable scope", async () => {
+  const { NativePresentationPrototype } = await import("../../src/renderer/markdown/native-presentation-prototype");
+  const owner = new RenderOwnership().create({}); let draft = true; let closes = 0;
+  const scope = owner.child({ preflightClose: () => { if (draft) throw new Error("finish draft"); }, close: async () => { closes++; } });
+  const occurrence = { id: 1, from: 0, to: 17, target: "Board.canvas" };
+  const record = { occurrence, lifetime: new OwnedOccurrence(scope), retryRetirement: false, observer: { disconnect() {} }, root: { remove() {} } };
+  const layer = Object.assign(Object.create(NativePresentationPrototype.prototype), {
+    options: { owner }, disposed: false, sources: new Map([[1, occurrence]]), records: new Map([[1, record]]),
+    anchors: new AnchorLeases(), resize: { unobserve() {} }, retirements: 0, requestGeometry() {},
+  }) as InstanceType<typeof NativePresentationPrototype>;
+  layer.reconcile([]); expect(await record.lifetime.retire()).toBe(false);
+  expect(scope.admissionAllowed).toBe(true); expect(closes).toBe(0);
+  draft = false; expect(await record.lifetime.retire()).toBe(true); expect(closes).toBe(1);
+});

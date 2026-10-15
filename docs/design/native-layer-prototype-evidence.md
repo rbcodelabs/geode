@@ -90,3 +90,31 @@ Before broad wiring, a trusted Return-button pointer proof and actual duplicate
 shelf hit testing are still mandatory: private Return calls, `isConnected` and
 `toBeVisible` alone do not establish correct browser focus order or occlusion-free
 pointer reachability. No product-safety claim is inferred from this correction.
+
+## First actual matrix and pending-mount correction
+
+At frozen `5dfd9e5` (private module source `84fc1d7`), six unique real Electron
+42.10.0 cases ran with retries disabled: **five passed, one failed**. Single native
+scroll/save, resize/zoom, removed-source Cancel, failed-save Retry and duplicate
+native-chain identity passed. The inspected retained-before-save capture shows the
+original focused `9` in the shelf; the file-name column is clipped by the fixed
+experimental frame, so this is not complete layout/accessibility clearance.
+
+The pending real Canvas read case failed: source removal updated the occurrence
+map but waited for a geometry frame to start retirement. Releasing the read in
+that gap allowed `Canvas.file` to become `Board.canvas`; the resource subsequently
+closed once and disconnected. The exact assertion, including `file === null`, is
+retained. Full first-case and remaining-five archives (spec, source/bundle hashes,
+JSON, screenshots and results) are held by the coordinator at
+`/private/tmp/geode-native-layer-prototype-first-artifacts` and
+`/private/tmp/geode-native-layer-prototype-five-artifacts`.
+
+A new controlled reconciliation regression reproduced late publication before the
+fix. Reconciliation now starts removed-record retirement synchronously, using the
+same preflight/prepare path as geometry retirement. Existing draft refusal leaves
+the original scope usable; it never bypasses preflight or invokes an immediate
+destructor. A shared coalesced retirement continuation prevents duplicate cleanup.
+The focused three-file matrix passes **46 tests**, including 16 prototype cases;
+repository and fixture typechecks, private bundle and normal app build pass.
+The actual pending-mount regression has **not yet been rerun** on this correction.
+No change was made to production entry points or the known production viewport RED.
