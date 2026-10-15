@@ -4972,6 +4972,15 @@ export class App {
     return leaf.runDocumentNavigation(open);
   }
 
+  private async initializeDocumentView<T extends View & { setFile(file: TFile): Promise<void> }>(view: T, file: TFile, leaf: WorkspaceLeaf): Promise<void> {
+    try { await view.setFile(file); await leaf.setView(view); }
+    catch (error) {
+      try { if (leaf.view !== view) await view.onClose(); }
+      catch (closeError) { throw new AggregateError([error, closeError], "Could not initialize or close the new document view."); }
+      throw error;
+    }
+  }
+
   private async mountDocumentInLeaf(leaf: WorkspaceLeaf, file: TFile, recordHistory: boolean): Promise<void> {
     const previousNavigation = recordHistory ? leaf.captureDocumentNavigation() : null;
     if (file.extension === "canvas") {
@@ -4980,9 +4989,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new CanvasView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new CanvasView(this), file, leaf);
       }
     } else if (file.extension === "base") {
       if (leaf.view instanceof BaseView) {
@@ -4990,9 +4997,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new BaseView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new BaseView(this), file, leaf);
       }
     } else if (file.extension === "md") {
       if (leaf.view instanceof MarkdownView) {
@@ -5000,9 +5005,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new MarkdownView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new MarkdownView(this), file, leaf);
       }
     } else if (IMAGE_EXTENSIONS.has(file.extension)) {
       if (leaf.view instanceof ImageView) {
@@ -5022,9 +5025,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new MarkdownView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new MarkdownView(this), file, leaf);
       }
     }
     if (recordHistory) {

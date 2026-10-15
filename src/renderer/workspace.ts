@@ -574,6 +574,11 @@ export class WorkspaceLeaf {
   }
 }
 
+/** Internal event boundary: lifecycle rejection keeps the pane and reports why. */
+export function closeLeafFromUI(leaf: WorkspaceLeaf): void {
+  void leaf.detach().catch(error => leaf.app.notify(`Could not close tab: ${error instanceof Error ? error.message : String(error)}`));
+}
+
 /**
  * `.view-header-nav-buttons` (back/forward), shared by `ItemView`
  * (api/obsidian.ts) and `MarkdownView` (views/markdown-view.ts). Geode's
@@ -637,7 +642,7 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
   close.addEventListener("mousedown", (e) => e.stopPropagation());
   close.addEventListener("click", (e) => {
     e.stopPropagation();
-    leaf.detach();
+    closeLeafFromUI(leaf);
   });
 
   const status = document.createElement("div");
@@ -1434,7 +1439,7 @@ export class TabGroup implements LeafContainer {
         this.workspace.toggleFocusPane(this);
       };
       tab.onmousedown = (e) => {
-        if (e.button === 1) leaf.detach();
+        if (e.button === 1) closeLeafFromUI(leaf);
         else this.setActiveLeaf(leaf);
       };
       tab.oncontextmenu = (e) => this.app.showTabContextMenu(e, leaf);

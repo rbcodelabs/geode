@@ -2,7 +2,8 @@
 export class ScopeCancelled extends Error {
   constructor() { super("The render owner changed before initialization completed."); }
 }
-interface ScopeOptions { writer?: unknown; preflightClose?(): void; prepareClose?(): Promise<void>; failureKey?: string; close?(): Promise<void>; resume?(): void }
+export interface RenderFailure { error: unknown; key: string }
+interface ScopeOptions { writer?: unknown; preflightClose?(): void; prepareClose?(): Promise<void>; failureKey?: string; close?(): Promise<void>; resume?(): void; recover?(failures: readonly RenderFailure[]): void }
 export interface RenderToken { current(): boolean; check(): void }
 function raise(errors: unknown[]): void {
   if (errors.length === 1) throw errors[0];
@@ -13,7 +14,7 @@ export class RenderScope {
   private generation = 0;
   private readonly children = new Set<RenderScope>();
   private readonly pending = new Set<Promise<unknown>>();
-  private failures: { error: unknown; key?: string }[] = [];
+  private failures: RenderFailure[] = [];
   private closing: Promise<void> | undefined;
   constructor(private readonly registry: RenderOwnership, private readonly options: ScopeOptions = {}, private readonly parent?: RenderScope, private readonly owner?: object) {}
   get closed(): boolean { return this.state === "closed"; }
@@ -31,7 +32,15 @@ export class RenderScope {
     // Register synchronously before invoking any asynchronous initializer.
     const task = Promise.resolve().then(() => { token.check(); return operation(token); });
     this.pending.add(task);
-    void task.then(() => this.pending.delete(task), error => { this.pending.delete(task); if (key !== undefined || !(error instanceof ScopeCancelled)) this.failures.push({ error, key }); });
+    // Read/render failures are reported to their caller. Only writes require a
+    // retained acknowledgment before another barrier may discard their drafts.
+    void task.then(() => this.pending.delete(task), error => {
+      this.pending.delete(task);
+      if (key !== undefined) {
+        this.failures.push({ error, key });
+        try { this.recoverTree(); } catch (recoveryError) { this.failures.push({ error: recoveryError, key }); }
+      }
+    });
     return task;
   }
   /** Only the successful explicit retry of an operation acknowledges its failures. */
@@ -67,8 +76,14 @@ export class RenderScope {
     this.state = "active"; this.generation++;
     const errors: unknown[] = [];
     for (const child of this.children) { try { child.resume(); } catch (error) { errors.push(error); } }
-    try { this.options.resume?.(); } catch (error) { errors.push(error); }
+    try { if (!this.hasRetainedFailures()) this.options.resume?.(); this.recoverTree(); } catch (error) { errors.push(error); }
     raise(errors);
+  }
+  private hasRetainedFailures(): boolean { return this.failures.length > 0 || [...this.children].some(child => child.hasRetainedFailures()); }
+  private recoverTree(): void {
+    if (!this.admissionAllowed) return;
+    this.options.recover?.([...this.failures]);
+    for (const child of this.children) child.recoverTree();
   }
   private async prepareCloseTree(): Promise<void> {
     await this.drainTasks();
@@ -89,7 +104,9 @@ export class RenderScope {
       if (errors.length) {
         // No destructor has run: preserve the entire subtree and usable retry
         // controls. Ancestor admission still prevents detached children reopening.
-        this.state = previous; this.closing = undefined; raise(errors);
+        this.state = previous; this.closing = undefined;
+        try { this.recoverTree(); } catch (error) { errors.push(error); }
+        raise(errors);
       }
       if (!errors.length) for (const child of [...this.children]) {
         try { await child.startClose(true); } catch (error) { errors.push(error); break; }
