@@ -404,7 +404,7 @@ export class CanvasView implements View {
     const snapshot = serializeCanvas(model);
     const selection = JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]);
     const conflict = this.conflictGeneration;
-    const isCurrent = () => current() && conflict === this.conflictGeneration && this.file === file && this.document === model && serializeCanvas(model) === snapshot && JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]) === selection && (!this.renderOwner || this.renderOwner.admissionAllowed);
+    const isCurrent = () => current() && conflict === this.conflictGeneration && this.file === file && this.document === model && serializeCanvas(model) === snapshot && JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]) === selection && (!this.renderOwner || this.renderOwner.admissionAllowed) && !this.geometryGestures.size && !this.transientGestureCancel && !this.touchDragSnapshot && !this.touchGesture.pointerIds().length;
     let retirement: { commit(): Promise<void>; abort(): void } | undefined;
     let destructorsStarted = false;
     const interaction = wrappers.map(el => ({ el, inert: el.inert }));
@@ -2644,7 +2644,7 @@ export class CanvasView implements View {
   private installTouchControls(): void {
     const point = (event: PointerEvent) => ({ pointerId: event.pointerId, x: event.clientX, y: event.clientY });
     this.surfaceEl.addEventListener("pointerdown", (event) => {
-      if (this.isEmbeddedInteraction(event.target)) return;
+      if (this.interactionBlocked() || this.isEmbeddedInteraction(event.target)) return;
       if (event.pointerType !== "touch" || (event.target as HTMLElement).closest(
         "button, textarea, input, .canvas-edge-hit, .canvas-edge-endpoint-handle, .canvas-edge-endpoint-touch-hit, .canvas-node-connection-handle, .canvas-node-connection-touch-hit, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge"
       )) return;
@@ -2657,6 +2657,7 @@ export class CanvasView implements View {
       this.containerEl.dataset.canvasGesture = "touch";
     }, { capture: true, passive: false });
     this.surfaceEl.addEventListener("pointermove", (event) => {
+      if (this.interactionBlocked()) return;
       if (event.pointerType !== "touch" || !this.capturedTouchPointers.has(event.pointerId)) return;
       event.preventDefault();
       this.touchGesture.move(point(event));
