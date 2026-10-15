@@ -187,6 +187,8 @@ export class BasesTableView {
       td.dataset.rowIndex = String(rowIndex);
       td.dataset.colIndex = String(colIndex);
       td.addEventListener("mousedown", (e) => {
+        // A preserved unfinished input must accept the user's native focus.
+        if (this.editSession?.cell === td && this.editSession.input === e.target) return;
         if (performance.now() < this.suppressMouseSelectionUntil) return;
         e.preventDefault();
         this.selectCell(rowIndex, colIndex);

@@ -7,7 +7,7 @@ afterEach(() => vi.unstubAllGlobals());
 class Element {
   parentElement: Element | null = null; children: Element[] = []; handlers = new Map<string, Set<(event: any) => void>>();
   value = "2"; disabled = false; textContent = "2"; innerHTML = ""; dataset = {}; className = "";
-  active = true; classList = { contains: (name: string) => name === "mod-active" && this.active };
+  active = true; classList = { contains: (name: string) => name === "mod-active" && this.active, add() {}, remove() {} };
   get isConnected(): boolean { return this === document.body || !!this.parentElement?.isConnected; }
   append(...items: Element[]) { items.forEach(item => this.appendChild(item)); }
   appendChild(item: Element) { item.parentElement = this; this.children.push(item); return item; }
@@ -131,4 +131,20 @@ it.each(["frozen", "registry-paused"] as const)("optional source capture decline
   expect(() => f.base.renderOwner.captureToken()).toThrow(/admission is paused/);
   expect(f.save).not.toHaveBeenCalled(); expect(f.input.focus).not.toHaveBeenCalled();
   if (held) registry.release(held);
+});
+
+it.each(["current-input", "ordinary-cell", "stale-input", "unrelated-input"])("actual appendDataRow mousedown preserves native default only for %s", kind => {
+  const f = fixture();
+  Object.assign(f.table, { dataRows: [], dataRowEls: [], cellEls: [], tbodyEl: new Element(), applySelectionClasses: vi.fn(), renderMobileActions: vi.fn() });
+  f.table.appendDataRow({ file: f.source, properties: {} });
+  const cell = f.table.cellEls[0][0]; f.table.startEdit({ row: 0, col: 0 });
+  const input = cell.children.at(-1);
+  let target = input;
+  if (kind === "ordinary-cell") target = cell;
+  if (kind === "stale-input") f.table.startEdit({ row: 0, col: 0 });
+  if (kind === "unrelated-input") target = new Element();
+  const preventDefault = vi.fn(); f.grid.focus.mockClear();
+  cell.emit("mousedown", { target, preventDefault });
+  if (kind === "current-input") { expect(preventDefault).not.toHaveBeenCalled(); expect(f.grid.focus).not.toHaveBeenCalled(); }
+  else { expect(preventDefault).toHaveBeenCalledOnce(); expect(f.grid.focus).toHaveBeenCalledOnce(); }
 });
