@@ -76,6 +76,11 @@ export interface ManagedVaultPlugin extends Plugin {
 
 export const GeodeManagedVault = registerPlugin<ManagedVaultPlugin>("GeodeManagedVault");
 
+function decodeBase64(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer;
+}
+
 function managedVaultPath(path: string): string {
   if (path.includes("\0") || path.includes("\\") || /^[A-Za-z]:[\\/]/.test(path)) {
     throw new Error(`Expected a vault-relative path: ${path}`);
@@ -226,7 +231,6 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     ...portable,
     ...(syncSafety ? { syncSafety } : {}),
     ...(hashCache && syncSafety ? { hashCache } : {}),
-    ...(appSecrets ? { secrets: { ...portable.secrets, appAvailable: true, app: appSecrets } } : {}),
     capabilities: Object.freeze({ ...portable.capabilities, externalVaultFolder: true }),
     runtime: {
       runtime: "ios",
@@ -363,7 +367,7 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
         }
       },
     },
-    secrets,
+    secrets: appSecrets ? { ...secrets, appAvailable: true, app: appSecrets } : secrets,
     ...(network ? { network } : {}),
     navigation: {
       ...portable.navigation,
