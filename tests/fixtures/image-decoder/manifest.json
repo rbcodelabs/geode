@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "generator": {
+    "pillow": "12.2.0",
+    "webp": "1.6.0",
+    "avif": "1.4.1",
+    "source": "scripts/image-decoder-proof/generate-fixtures.py",
+    "sourceSha256": "af03c6562d29c374cc0da940610d79d2bd9d0f0848154fa9523aeb8a6b30a70e",
+    "rgbAlgorithm": "row-major RGB(x*31,y*31,(x+y)*15), x,y in [0,7]",
+    "rgbSha256": "7ff24a80959ea920b6918051cbfeb569fb9b65d5099b15d9057c19f5335d1295"
+  },
+  "fixtures": [
+    {
+      "family": "png",
+      "mime": "image/png",
+      "path": "tests/fixtures/image-decoder/synthetic.png",
+      "bytes": 84,
+      "sha256": "49784d26f9f08e4844a1ac526a168441063aae950e1a61e0cdd6617bf377e489",
+      "width": 8,
+      "height": 8
+    },
+    {
+      "family": "jpeg",
+      "mime": "image/jpeg",
+      "path": "tests/fixtures/image-decoder/synthetic.jpeg",
+      "bytes": 649,
+      "sha256": "934acc8149c7e4034ac6536f9b6e7107ac065280e126d5d83481ce251f2fa311",
+      "width": 8,
+      "height": 8
+    },
+    {
+      "family": "gif",
+      "mime": "image/gif",
+      "path": "tests/fixtures/image-decoder/synthetic.gif",
+      "bytes": 294,
+      "sha256": "98ad7ce5e73dd1da5739111c547e77269c02eea6fb040f840e3c5a551464b55d",
+      "width": 8,
+      "height": 8
+    },
+    {
+      "family": "webp",
+      "mime": "image/webp",
+      "path": "tests/fixtures/image-decoder/synthetic.webp",
+      "bytes": 52,
+      "sha256": "0c964bdcbfd5034e965565e821f655afc44081a0c7fdc93e6fb8e35e42f599a3",
+      "width": 8,
+      "height": 8
+    },
+    {
+      "family": "bmp",
+      "mime": "image/bmp",
+      "path": "tests/fixtures/image-decoder/synthetic.bmp",
+      "bytes": 246,
+      "sha256": "54a4b0e7f7e0e72e616e6480c527fe4cbcfa480eac1395f62af0aca58ba3bb1b",
+      "width": 8,
+      "height": 8
+    },
+    {
+      "family": "avif",
+      "mime": "image/avif",
+      "path": "tests/fixtures/image-decoder/synthetic.avif",
+      "bytes": 331,
+      "sha256": "c86c2ec4076d33421955a1c4e85631e1b5f8be63450221242f008ddf0b096a63",
+      "width": 8,
+      "height": 8
+    }
+  ],
+  "corruptPNG": {
+    "path": "tests/fixtures/image-decoder/corrupt.png",
+    "mime": "image/png",
+    "bytes": 33,
+    "sha256": "7a62e481c41f555352930feb61d703eb7b6225a82815d9aadf3dcc1e5f34b2ac"
+  },
+  "limits": "Tiny static family positives only; no animated, expensive-middecode, memory, OS or GC claim."
+}
