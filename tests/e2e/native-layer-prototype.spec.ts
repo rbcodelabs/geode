@@ -25,7 +25,21 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
   } finally {
     const probe = await page.evaluate(() => { const p = (window as any).__layerProbe; return p ? { inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected, parentStable: p.root.parentElement === p.parent, focused: document.activeElement === p.input, blurCount: p.blur } : null; }).catch(error => String(error));
     const retainedInputs = await page.evaluate(() => [(window as any).__firstFailedLayerInput, (window as any).__layerProbe?.input].filter(Boolean).map(input => ({ connected: input.isConnected, value: input.value, focused: document.activeElement === input, occurrence: input.closest(".native-prototype-record")?.dataset.occurrence }))).catch(error => String(error));
-    const evidence = { probe, retainedInputs, provider: fs.readFileSync(path.join(vault, "Source.md"), "utf8"), other: fs.readFileSync(path.join(vault, "Other.md"), "utf8"), state: await page.evaluate(() => (window as any).nativeLayerHarness?.snapshot()).catch(error => String(error)) };
+    const geometry = await page.evaluate(() => ({
+      validationCalls: (window as any).__layerValidationCalls,
+      retirementAttempts: (window as any).__layerRetirementAttempts,
+      resumes: (window as any).__layerResumeCounts,
+      childMutations: (window as any).__layerChildMutations,
+      cameras: (window as any).nativeLayerHarness?.native.map((view: any) => ({ pan: view.pan, scale: view.scale })),
+      records: [...document.querySelectorAll<HTMLElement>(".native-prototype-record")].map(root => ({
+        id: root.dataset.occurrence, rect: root.getBoundingClientRect().toJSON(), clip: getComputedStyle(root).clipPath, zIndex: getComputedStyle(root).zIndex,
+        buttons: [...root.querySelectorAll("button")].filter(button => /Retry Base save|Return to embed/.test(button.textContent ?? "")).map(button => {
+          const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return { text: button.textContent, rect: rect.toJSON(), hit: hit ? { tag: hit.tagName, className: hit.className, occurrence: hit.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence } : null };
+        }),
+      })),
+    })).catch(error => String(error));
+    const evidence = { probe, retainedInputs, geometry, provider: fs.readFileSync(path.join(vault, "Source.md"), "utf8"), other: fs.readFileSync(path.join(vault, "Other.md"), "utf8"), state: await page.evaluate(() => (window as any).nativeLayerHarness?.snapshot()).catch(error => String(error)) };
     fs.writeFileSync(info.outputPath("final-state.json"), JSON.stringify(evidence, null, 2));
     await page.screenshot({ path: info.outputPath("prototype.png") }).catch(() => {});
     await app.close(); fs.rmSync(directory, { recursive: true, force: true });
@@ -274,6 +288,14 @@ test("read-only native close validation refusal preserves real controls until ex
     await expect(record(page).locator(".bases-table")).toBeVisible();
     await page.evaluate(() => {
       const h = (window as any).nativeLayerHarness;
+      (window as any).__layerResumeCounts = {};
+      for (const writer of h.scope.writers()) {
+        const options = writer.renderOwner.options; const resume = options.resume;
+        options.resume = () => { const counts = (window as any).__layerResumeCounts; counts[writer.viewType] = (counts[writer.viewType] ?? 0) + 1; return resume?.(); };
+      }
+      const lifetime = h.layer.records.get(1).lifetime; const retire = lifetime.retire.bind(lifetime);
+      lifetime.retire = () => { (window as any).__layerRetirementAttempts = ((window as any).__layerRetirementAttempts ?? 0) + 1; return retire(); };
+      new MutationObserver(records => { (window as any).__layerChildMutations = ((window as any).__layerChildMutations ?? 0) + records.length; }).observe(h.layer.layer.querySelector(".native-prototype-content"), { subtree: true, childList: true });
       h.native[0].renderOwner.options.validateClose = async () => { (window as any).__layerValidationCalls = ((window as any).__layerValidationCalls ?? 0) + 1; if (!(window as any).__layerValidationRecovered) throw new Error("synthetic read-only validation failure"); };
       h.remove(1);
     });
