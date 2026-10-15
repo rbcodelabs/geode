@@ -1401,7 +1401,7 @@ class SettingsModal extends Modal {
     container.insertAdjacentHTML("beforeend", `<h3>Footnotes</h3>`);
     this.addToggle(container, "Enable Footnotes", this.geodeApp.settings.footnotesEnabled, (enabled) => {
       this.geodeApp.settings.footnotesEnabled = enabled;
-      void this.geodeApp.syncFootnotesPlugin().then(() => this.geodeApp.saveSettings()).catch(() => this.geodeApp.notify("Could not update Footnotes"));
+      void this.geodeApp.syncFootnotesPlugin().then(() => this.geodeApp.host.config.write("app", this.geodeApp.settings)).catch(() => this.geodeApp.notify("Could not update Footnotes"));
     });
     this.renderNoteComposerSettings(container);
     container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
