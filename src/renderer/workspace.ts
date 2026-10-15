@@ -1,4 +1,5 @@
 import { Events } from "./events";
+import { PDF_LIMITS, parsePdfFragment } from "../shared/pdf";
 import type { App } from "./app";
 import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
@@ -375,7 +376,7 @@ export class WorkspaceLeaf {
       const requestedPath = file.path;
       const subpath = state?.eState?.subpath;
       if (typeof subpath === "string" && subpath && file.extension === "pdf") {
-        const page = (await import("../shared/pdf")).parsePdfFragment(subpath).page;
+        const page = parsePdfFragment(subpath).page;
         if (this.view === loaded && file.path === requestedPath && loaded?.getFile?.() === loadedFile && loadedFile?.path === loadedPath) {
           const pdf = loaded as View & { setPage?(page: number): void };
           pdf?.setPage?.(page);
@@ -390,6 +391,7 @@ export class WorkspaceLeaf {
       }
     } finally {
       if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) focusBefore.focus({ preventScroll: true });
+
 
     }
   }
@@ -3746,8 +3748,15 @@ export class Workspace extends Events {
       if (file) {
         const view = this.app.createPdfView();
         const state = ls.state as { page?: unknown } | undefined;
-        await view.setFile(file, typeof state?.page === "number" ? state.page : 1);
-        await leaf.setView(view);
+        const page = typeof state?.page === "number" && Number.isSafeInteger(state.page) && state.page >= 1 && state.page <= PDF_LIMITS.pages ? state.page : 1;
+        try {
+          await view.setFile(file, page);
+          await leaf.setView(view);
+        } catch (error) {
+          try { if (leaf.view !== view) await view.onClose(); }
+          catch (closeError) { throw new AggregateError([error, closeError], "Could not restore or close the PDF view."); }
+          throw error;
+        }
       } else await leaf.setView(this.app.createEmptyView());
     } else if (ls.type === "image" && ls.file) {
       const file = this.app.vault.getFileByPath(ls.file);

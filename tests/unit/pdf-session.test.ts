@@ -43,3 +43,12 @@ it("does not publish stale text extraction after a newer page has rendered",asyn
  const first=session.render(1,canvas,layer,1,500),obsolete=expect(first).rejects.toMatchObject({name:"AbortError"});await vi.waitFor(()=>expect(f.page.getTextContent).toHaveBeenCalledTimes(1));
  await session.render(3,canvas,layer,1,500);const count=layer.replaceChildren.mock.calls.length;extraction.resolve({items:[]});await obsolete;expect(layer.replaceChildren).toHaveBeenCalledTimes(count);await session.close();
 });
+it("retires an unresolved text layer before replacing its DOM",async()=>{
+ const f=fixture(),textDone=deferred<void>(),textCancel=vi.fn(),started=vi.fn();let layers=0;
+ f.runtime.TextLayer=class{render(){started();return layers++===0?textDone.promise:Promise.resolve();}cancel=textCancel;};
+ const session=new api.PdfSession(f.runtime as any,()=>f.worker as any);await session.load(new Uint8Array(8),1);
+ const canvas={getContext:()=>({}),style:{}} as any,layer={replaceChildren:vi.fn(),style:{setProperty:vi.fn()}} as any;
+ const first=session.render(1,canvas,layer,1,500),obsolete=expect(first).rejects.toMatchObject({name:"AbortError"});await vi.waitFor(()=>expect(started).toHaveBeenCalledOnce());
+ const second=session.render(2,canvas,layer,1,500);await Promise.resolve();await Promise.resolve();expect(layer.replaceChildren).toHaveBeenCalledOnce();expect(textCancel).toHaveBeenCalled();
+ textDone.resolve();await obsolete;await second;expect(layer.replaceChildren).toHaveBeenCalledTimes(2);await session.close();
+});

@@ -42,5 +42,9 @@ it("mounts with an exact-origin private port, accepts current state, and dispose
  await vi.waitFor(()=>expect(changed).toHaveBeenCalledWith(2));expect(loads).toHaveBeenCalledOnce();expect(frame.page).toBe(2);
  expect(()=>frame.navigate(99)).toThrow(/page/i);expect(frame.page).toBe(2);
  frame.navigate(3);expect(frame.page).toBe(2);
+ await f.owner.freezeAndDrain();childPort!.postMessage({kind:"state",version:1,generation:1,page:3,count:3,zoom:1});await new Promise(done=>setTimeout(done,15));expect(frame.page).toBe(2);
+ f.owner.resume();childPort!.postMessage({kind:"state",version:1,generation:1,page:1,count:3,zoom:1});await vi.waitFor(()=>expect(frame.page).toBe(1));
+ childPort!.postMessage({kind:"state",version:1,generation:99,page:3,count:3,zoom:1});await new Promise(done=>setTimeout(done,15));expect(frame.page).toBe(1);
+ childPort!.postMessage({kind:"error",version:1,generation:1,message:"Synthetic render failure"});await vi.waitFor(()=>expect(frame.containerEl.textContent).toContain("Synthetic render failure"));
  await frame.close();expect(dispose).toHaveBeenCalledOnce();expect(dispose.mock.calls[0][0].generation).toBe(1);expect(pdfDocumentCapacity(f.app).size).toBe(0);childPort?.close();await f.owner.close();
 });

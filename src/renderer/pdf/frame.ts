@@ -88,7 +88,7 @@ export class PdfFrame {
       });frame.addEventListener("error",()=>reject(new Error("PDF viewer could not start. Retry this document.")));
     });
     channel.port1.addEventListener("message",event=>{
-      if(!this.valid(token)||generation!==this.generation||this.iframe!==frame||!isPdfViewerMessage(event.data)||event.data.generation!==generation)return;
+      if(!this.valid()||!this.renderOwner.admissionAllowed||generation!==this.generation||this.iframe!==frame||!isPdfViewerMessage(event.data)||event.data.generation!==generation)return;
       if(event.data.kind==="state"){this.status.hidden=true;this.status.style.display="none";frame.style.visibility="visible";this.pageCount=event.data.count;this.currentPage=event.data.page;this.requestedPage=this.currentPage;this.options.onPage?.(this.currentPage);}
       if(event.data.kind==="error"){if(this.pageCount===undefined){this.currentPage=1;this.requestedPage=1;this.options.onPage?.(1);}this.show(event.data.message,true);void this.disposeTransport();}
     });channel.port1.start();frame.src=PDF_VIEWER_URL;this.containerEl.append(frame);
