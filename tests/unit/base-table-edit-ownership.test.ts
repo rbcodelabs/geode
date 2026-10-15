@@ -42,3 +42,21 @@ it("finishes old mobile controls before an acknowledgment callback opens another
   table.acknowledgeEdit(table.editIdentity);
   expect(old.remove).toHaveBeenCalledOnce(); expect(newer.remove).not.toHaveBeenCalled(); expect(table.mobileEditorActionsEl).toBe(newer);
 });
+it.each(["Enter", "Escape"])("ignores stale %s focus changes after a newer editor starts", key => {
+  const { table, a } = fixture(); table.startEdit({ row: 0, col: 0 }); const old = a.children[0];
+  table.startEdit({ row: 1, col: 0 }); const current = table.editIdentity;
+  old.handlers.keydown(event(key)); expect(table.containerEl.focus).not.toHaveBeenCalled(); expect(table.editIdentity).toBe(current);
+});
+it("ignores stale blur before consulting replaced rows", () => {
+  const { table, a } = fixture(); table.startEdit({ row: 0, col: 0 }); const old = a.children[0]; table.resetForFile(); table.dataRows = [];
+  const owner = {}; table.containerEl.closest = () => owner;
+  const retry = { closest: () => owner, dataset: { baseRowRetry: JSON.stringify(["A.md", "note.priority"]) } };
+  expect(() => old.handlers.blur({ relatedTarget: { closest: () => retry } })).not.toThrow();
+});
+it("does not reenable or refocus a failed input after the table becomes read-only", async () => {
+  const { table, a, callbacks } = fixture(); let reject!: (error: Error) => void;
+  callbacks.onEditCell.mockImplementation(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  table.startEdit({ row: 0, col: 0 }); const input = a.children[0]; input.handlers.keydown(event("Enter"));
+  table.readOnly = true; reject(new Error("rejected after conflict")); await new Promise(resolve => setImmediate(resolve));
+  expect(input.disabled).toBe(true); expect(input.focus).toHaveBeenCalledOnce();
+});
