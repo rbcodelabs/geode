@@ -14,13 +14,14 @@ import {
   completionKeymap,
 } from "@codemirror/autocomplete";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
+import { foldEffect, foldedRanges, unfoldEffect, syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { App, ContextMenuItemSpec } from "../app";
 import { buildViewHeaderNavButtons, type View, type WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import type { HeadingCache, TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
+import { foldingExtensions, foldRanges, foldCommand, multipleSelectionExtensions, restoreFolds, savedFolds, type FoldAction } from "../markdown/folding";
 import { resolveBlockBoundary } from "../block-boundary";
 import { PagePreviewController } from "../page-preview";
 import { commentDecorations, commentInteractions } from "../comments/editor-extension";
@@ -71,6 +72,8 @@ export class MarkdownView implements View {
   mode: MarkdownMode = "live";
   private lastEditingMode: "live" | "source" = "live";
   private editingCompartment = new Compartment();
+  private foldingCompartment = new Compartment();
+  private foldingSettings = "";
   editor: EditorView | null = null;
   private headerEl: HTMLElement;
   private titleParentEl: HTMLElement;
@@ -273,6 +276,8 @@ export class MarkdownView implements View {
       selection: EditorSelection.cursor(initialCursorOffset ?? 0),
       extensions: [
         history(),
+        multipleSelectionExtensions(),
+        this.foldingCompartment.of(foldingExtensions(this.app.settings)),
         drawSelection(),
         highlightSelectionMatches(),
         // `geodeCommentMarkerSyntax` keeps a marker sitting on a line's first
@@ -305,6 +310,9 @@ export class MarkdownView implements View {
           if (update.docChanged) {
             this.scheduleSave();
             this.app.workspace.trigger("editor-change", this);
+          }
+          if ((update.docChanged && foldedRanges(update.state).size > 0) || update.transactions.some(transaction => transaction.effects.some(effect => effect.is(foldEffect) || effect.is(unfoldEffect)))) {
+            this.app.workspace?.trigger("layout-change");
           }
           if (update.docChanged || update.selectionSet) this.updateCommentButton();
         }),
@@ -374,10 +382,40 @@ export class MarkdownView implements View {
         }),
       ],
     });
+    this.foldingSettings = `${this.app.settings.foldHeading}:${this.app.settings.foldIndent}`;
     this.editor = new EditorView({ state, parent: this.editorHostEl });
     this.editor.contentDOM.setAttribute("role", "textbox");
     this.editor.contentDOM.setAttribute("aria-label", "Note editor");
     this.editor.contentDOM.setAttribute("aria-multiline", "true");
+  }
+
+  applyEditorSettings(): void {
+    if (!this.editor) return;
+    const settings = this.app.settings;
+    const key = `${settings.foldHeading}:${settings.foldIndent}`;
+    if (key === this.foldingSettings) return;
+    this.foldingSettings = key;
+    const enabled = foldRanges(this.editor.state, settings);
+    const effects = [this.foldingCompartment.reconfigure(foldingExtensions(settings))];
+    foldedRanges(this.editor.state).between(0, this.editor.state.doc.length, (from, to) => {
+      if (!enabled.some(range => range.from === from && range.to === to)) effects.push(unfoldEffect.of({ from, to }));
+    });
+    this.editor.dispatch({ effects });
+  }
+
+  fold(action: FoldAction): boolean {
+    return this.editor && this.mode !== "reading" ? foldCommand(this.editor, action, this.app.settings) : false;
+  }
+
+  getState(): unknown {
+    return this.editor ? { folding: savedFolds(this.editor.state) } : {};
+  }
+
+  restoreEditorState(saved: unknown): void {
+    if (!this.editor || !saved || typeof saved !== "object") return;
+    const effects = restoreFolds(this.editor.state, (saved as { folding?: unknown }).folding);
+    const enabled = foldRanges(this.editor.state, this.app.settings);
+    this.editor.dispatch({ effects: effects.filter(effect => enabled.some(range => range.from === effect.value.from && range.to === effect.value.to)) });
   }
 
   private updateCommentButton(): void {
@@ -456,12 +494,10 @@ export class MarkdownView implements View {
   }
 
   private wrapSelection(v: EditorView, marker: string) {
-    const { from, to } = v.state.selection.main;
-    const selected = v.state.sliceDoc(from, to);
-    v.dispatch({
-      changes: { from, to, insert: `${marker}${selected}${marker}` },
-      selection: { anchor: from + marker.length, head: to + marker.length },
-    });
+    v.dispatch(v.state.changeByRange(range => ({
+      changes: { from: range.from, to: range.to, insert: `${marker}${v.state.sliceDoc(range.from, range.to)}${marker}` },
+      range: EditorSelection.range(range.anchor + marker.length, range.head + marker.length),
+    })));
   }
 
   private scheduleSave() {

@@ -7325,3 +7325,15 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
   .metadata-property:has(input[type="date"]) .metadata-property-remove, .metadata-property:has(input[type="datetime-local"]) .metadata-property-remove { grid-column: 2; grid-row: 1; }
 }
 .metadata-property-value input[type="date"], .metadata-property-value input[type="datetime-local"] { min-width: 0; max-width: 100%; }
+
+/* Editing gutters: collapsed sections retain their arrow away from hover. */
+.geode-fold-gutter { background: transparent; color: var(--text-muted); }
+.geode-fold-gutter .cm-gutterElement { padding: 0 3px; }
+.geode-fold-toggle {
+  appearance: none; border: 0; box-shadow: none; background: transparent;
+  color: inherit; width: 18px; min-height: 0; height: 1.4em; padding: 0;
+  line-height: inherit; cursor: pointer; font: inherit;
+}
+.geode-fold-toggle[aria-expanded="true"] { opacity: 0; }
+.cm-editor:hover .geode-fold-toggle, .geode-fold-toggle:focus-visible { opacity: 1; }
+.geode-fold-toggle:focus-visible { outline: 2px solid var(--interactive-accent); }
