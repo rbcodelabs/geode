@@ -22,6 +22,17 @@ import { BUILTIN_BASES_VIEW_NAMES, BUILTIN_BASES_VIEW_TYPES } from "../api/bases
 import { parseExpression } from "../bases/parser";
 import type { Expr } from "../bases/ast";
 
+interface FailedBaseRow {
+  file: TFile;
+  filePath: string;
+  ownerFile: TFile | null;
+  ownerPath: string | null;
+  vault: unknown;
+  columnPath: string;
+  rawText: string;
+  sequence: number;
+}
+
 const DEFAULT_CARD_ASPECT_RATIO = 16 / 9;
 const DEFAULT_CARD_SIZE = 240;
 
@@ -140,6 +151,10 @@ export class BaseView implements View {
   private sourceEdit: { file: TFile; columnPath: string; rawText: string; originalText: Promise<string> } | null = null;
   private readonly sourcePersistsInFlight = new Set<Promise<void>>();
   private readonly sourcePersistPaths = new Map<Promise<void>, string>();
+  private readonly rowFailures = new Map<string, FailedBaseRow>();
+  private retainedNativeFailures: readonly RenderFailure[] = [];
+  private rowSubmissionSequence = 0;
+  private rowRefreshFailed = false;
   private definitionWritesPending = 0;
   private sourceConflictReadOnly = false;
   private readonly saveStatusEl: HTMLElement;
@@ -670,11 +685,26 @@ export class BaseView implements View {
   private persistQueue: Promise<void> = Promise.resolve();
 
   private recoverNativeWrites(failures: readonly RenderFailure[]): void {
-    if (failures.some(failure => failure.key === "definition")) this.setSaveStatus("Base save failed", true, () => this.persist(true));
-    else if (this.sourceEdit && failures.some(failure => failure.key.startsWith('["row",'))) {
-      const { file, columnPath, rawText } = this.sourceEdit;
-      this.setSaveStatus("Base save failed", true, () => this.retryRowEdit(file, columnPath, rawText), { file, columnPath });
-    }
+    this.retainedNativeFailures = failures;
+    // Recovery is presentation only. A broken projection must not reclassify
+    // bytes already acknowledged by the vault as another failed mutation.
+    try {
+      if (failures.some(failure => failure.key === "definition")) this.setSaveStatus("Base save failed", true, () => this.persist(true));
+      else {
+        const record = [...this.rowFailures.values()].find(row => this.rowTargetCurrent(row));
+        if (record) this.setSaveStatus("Base save failed", true, () => this.retryFailedRow(record), { file: record.file, columnPath: record.columnPath });
+        else if (!failures.length && !this.sourceEdit && !this.rowRefreshFailed) this.setSaveStatus("Base saved", false);
+      }
+    } catch { this.app.notify("Base save recovery could not refresh its controls."); }
+  }
+
+  private rowTargetCurrent(row: FailedBaseRow): boolean {
+    return this.app.vault === row.vault && this.file === row.ownerFile && (this.file?.path ?? null) === row.ownerPath && row.file.path === row.filePath;
+  }
+
+  private async retryFailedRow(row: FailedBaseRow): Promise<void> {
+    if (!this.rowTargetCurrent(row)) return;
+    await this.retryRowEdit(row.file, row.columnPath, row.rawText);
   }
 
   /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `lastKnownText`'s doc comment for why the resulting "modify" event(s) must not trigger a second, object-identity-breaking reload). */
@@ -942,12 +972,35 @@ export class BaseView implements View {
 
   // --- Cell editing ---------------------------------------------------------
 
-  private editCell(file: TFile, columnPath: string, rawText: string, retry = false): Promise<void> {
+  private editCell(file: TFile, columnPath: string, rawText: string, _retry = false): Promise<void> {
     if (this.vaultSwitching) return Promise.reject(new Error("Base edits are paused during a workspace operation."));
+    if (this.sourceConflictReadOnly) return Promise.reject(new Error("Resolve Base source conflict before editing its rows."));
     const edit = this.sourceEdit;
-    const write = async (token: RenderToken) => { token.check(); await this.commitCellEdit(file, columnPath, rawText, token, edit); };
     const key = JSON.stringify(["row", file.path, columnPath]);
-    const operation = retry ? this.renderOwner.retry(write, key) : this.renderOwner.run(write, key);
+    const previous = this.rowFailures.get(key);
+    const record: FailedBaseRow = { file, filePath: file.path, ownerFile: this.file, ownerPath: this.file?.path ?? null, vault: this.app.vault, columnPath, rawText, sequence: ++this.rowSubmissionSequence };
+    const write = async (token: RenderToken) => {
+      token.check();
+      if (!this.rowTargetCurrent(record)) throw new Error("The Base row target changed before its save.");
+      const guardedToken: RenderToken = {
+        current: () => token.current() && this.rowTargetCurrent(record) && !this.sourceConflictReadOnly,
+        check: () => {
+          token.check();
+          if (!this.rowTargetCurrent(record) || this.sourceConflictReadOnly) throw new Error("The Base row target or conflict state changed before its save.");
+        },
+      };
+      await this.commitCellEdit(file, columnPath, rawText, guardedToken, edit);
+    };
+    // Every user submission supersedes only failures captured for its exact key.
+    const operation = this.renderOwner.retry(write, key).then(() => {
+      if (this.rowFailures.get(key) === previous) this.rowFailures.delete(key);
+      this.recoverNativeWrites(this.retainedNativeFailures);
+    }, error => {
+      const retained = this.rowFailures.get(key);
+      if (!retained || retained.sequence < record.sequence) this.rowFailures.set(key, record);
+      if (this.renderOwner.admissionAllowed) this.recoverNativeWrites(this.retainedNativeFailures);
+      throw error;
+    });
     this.sourcePersistsInFlight.add(operation);
     this.sourcePersistPaths.set(operation, file.path);
     operation.then(
@@ -961,21 +1014,16 @@ export class BaseView implements View {
     const key = frontmatterKeyForColumn(columnPath);
     if (!key) return;
     if (this.sourceEdit === edit) this.setSaveStatus("Saving Base…", false);
-    try {
-      await patchFrontmatter(this.app.vault, file, (fm) => {
-        const value = parseEditedValue(rawText);
-        if (value === undefined) delete fm[key];
-        else fm[key] = value;
-      }, undefined, () => token.check());
-    } catch (error) {
-      if (this.sourceEdit === edit) this.setSaveStatus("Base save failed", true, () => this.retryRowEdit(file, columnPath, rawText), { file, columnPath });
-      throw error;
-    }
+    await patchFrontmatter(this.app.vault, file, (fm) => {
+      const value = parseEditedValue(rawText);
+      if (value === undefined) delete fm[key];
+      else fm[key] = value;
+    }, undefined, () => token.check());
     if (this.sourceEdit !== edit) return;
     this.sourceEdit = null;
-    this.setSaveStatus("Base saved", false);
-    try { this.runAndRender(); }
-    catch { this.setSaveStatus("Base saved, but its view refresh failed.", true); }
+    this.rowRefreshFailed = false;
+    try { this.setSaveStatus("Base saved", false); this.runAndRender(); }
+    catch { this.rowRefreshFailed = true; try { this.setSaveStatus("Base saved, but its view refresh failed.", true); } catch { this.app.notify("Base saved, but its view refresh failed."); } }
   }
 
   private async retryRowEdit(file: TFile, columnPath: string, failedText: string): Promise<void> {
