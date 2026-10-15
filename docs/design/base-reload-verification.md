@@ -64,3 +64,7 @@ independently verified when this patch is carried onto that baseline. No new
 visual surface was introduced, so this evidence uses exact data/trace oracles
 rather than new screenshots. Shared reporting-provider publication remains the
 coordinator's separate handoff requirement.
+
+## Morning delivery compute routing correction
+
+The repository PM configuration has no compute-offload entry. That absence does not remove the shared proxmox-devbox requirement to use the test-worker pool. The historical local runs above remain actual local evidence; their routing rationale was incomplete. Morning delivery recovery verified both active workers and reachable homelab and routes subsequent heavy gates through the pool.
