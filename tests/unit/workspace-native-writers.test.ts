@@ -1,7 +1,23 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { BaseView } from "../../src/renderer/views/base-view";
 import { CanvasView } from "../../src/renderer/views/canvas-view";
 import { MarkdownView } from "../../src/renderer/views/markdown-view";
+afterEach(() => vi.unstubAllGlobals());
+it("disposes every Canvas text render root on repeated redraws", async () => {
+  const element = (): any => ({ dataset: {}, style: {}, classList: { toggle() {}, contains: () => false }, appendChild() {}, addEventListener() {}, setAttribute() {} });
+  vi.stubGlobal("document", { createElement: element, body: element() });
+  const dispose = vi.fn(); const render = vi.fn(async () => {});
+  const view = Object.create(CanvasView.prototype) as any;
+  const node = { id: "text", type: "text", text: "![[Nested.base]]", x: 0, y: 0, width: 100, height: 100 };
+  Object.assign(view, { selectedIds: new Set(), document: { nodes: [node] }, markdownContentEls: new Set(), app: { markdownRenderer: { render, dispose } }, file: { path: "Board.canvas" } });
+  for (let version = 1; version <= 3; version++) {
+    view.renderNode(node, version);
+    expect(view.markdownContentEls.size).toBe(1);
+    view.disposeMarkdownContents();
+    expect(view.markdownContentEls.size).toBe(0);
+  }
+  expect(dispose.mock.calls.map(([root]) => root)).toEqual(render.mock.calls.map(([, root]) => root));
+});
 it("refuses an active Base cell draft before flushing its definition or row target", () => {
   const view = Object.create(BaseView.prototype) as any;
   Object.assign(view, { sourceEdit: { file: { path: "Note.md" } }, sourceConflictReadOnly: false });
