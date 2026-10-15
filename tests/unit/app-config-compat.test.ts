@@ -59,6 +59,18 @@ describe("Obsidian app config compatibility", () => {
     expect(applyEditorSettings).toHaveBeenCalled();
   });
 
+  it("restores the folding preference and every editor when persistence fails", async () => {
+    const { app } = makeApp([], async () => { throw new Error("disk full"); });
+    const applyEditorSettings = vi.fn();
+    const view = Object.create(MarkdownView.prototype);
+    view.applyEditorSettings = applyEditorSettings;
+    (app.workspace as any).getLeavesOfType = vi.fn(() => [{ view }]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await app.vault.setConfig("foldIndent", false);
+    expect(app.settings.foldIndent).toBe(true);
+    expect(applyEditorSettings).toHaveBeenCalledTimes(2);
+  });
+
   it("maps theme names and performs mutate/apply/persist/events once", async () => {
     const order: string[] = [];
     const { app, write } = makeApp(order);
