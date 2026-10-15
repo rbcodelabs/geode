@@ -271,3 +271,31 @@ for (const mode of ["Reading", "Live Preview"] as const) {
     });
   });
 }
+
+for (const mode of ["Reading", "Live Preview"] as const) {
+  test(`${mode} nested activation listeners cannot clear a newer hidden owner interval`, async ({}, info) => {
+    await fixture(mode, info, async (page, vault) => {
+      const transitions = await page.evaluate(() => {
+        const workspace = (window as any).app.workspace, tabs = (window as any).__backgroundTabs;
+        const calls: string[] = []; let nested = false;
+        const ref = workspace.on("active-leaf-change", (leaf: any) => {
+          calls.push(leaf === tabs.owner ? "owner" : "other");
+          if (!nested && leaf === tabs.other) {
+            nested = true;
+            workspace.setActiveLeaf(tabs.owner, { focus: false });
+            workspace.setActiveLeaf(tabs.other, { focus: false });
+          }
+        });
+        try { workspace.setActiveLeaf(tabs.other, { focus: false }); }
+        finally { workspace.offref(ref); }
+        return calls;
+      });
+      expect(transitions).toEqual(["other", "owner", "other"]);
+      await preserved(page, vault, info, "nested-activation-hidden");
+      await returned(page); await preserved(page, vault, info, "nested-activation-returned");
+      const input = page.locator(".canvas-embed-view:visible .bases-cell-input");
+      await input.click(); await page.keyboard.press("Tab");
+      await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+    });
+  });
+}

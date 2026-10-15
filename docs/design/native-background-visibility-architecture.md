@@ -131,3 +131,8 @@ No source, tests, queue jobs, merge, release or external communication was perfo
 **C1a deliverable is narrower than the complete design inventory:** Base editor preservation through explicitly audited actual tab activation/host-hide routes, including the actual compact center-group host-hide caller when included in the final caller table. It does not establish sidebar/drawer/collapse behavior, general adaptive breakpoint transitions, Canvas text/edge-label writers or every native editor. Those remain explicit gaps until separately scoped meaningful REDs and positive controls pass. The final caller table names each covered route and each deferred route before freeze; no general “all-native background parity” claim from Base evidence.
 
 Production implementation remains held until combined `0a6a9e199fe07a66f2bea3ed3e7f5efcf629e6b3` full gate is accepted and exact implementation scope/base recorded. Meaningful real-seam C1a RED tests may be prepared after this clarification. No C1 production implementation is authorized by this artifact before that sequencing condition.
+
+
+## C1a sequencing clarification accepted by coordinator
+
+The first implementation slice is **desktop tab focus:false Base preservation plus strict dirty cross-container move guard**. Compact/mobile center-group behavior remains unchanged and explicitly unverified in this slice. The actual mobile renderer/Table semantics differ and require a later real-host package. All sidebar, general adaptive breakpoint, Canvas text/edge and persistent LP gaps remain. This clarification narrows sequencing; it does not declare broader ADR inventory delivered.
