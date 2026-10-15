@@ -31,8 +31,9 @@ test("property types share plugin/UI state, preserve local seconds and dirty bod
     await expect(pane.getByLabel("Value: Due", { exact: true })).toHaveValue("2026-10-14T22:49:31");
     await pane.getByLabel("Value: Due", { exact: true }).fill("2026-10-15T08:30:42"); await pane.getByLabel("Value: Due", { exact: true }).press("Enter");
     expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toContain("Dirty body");
-    await page.locator(".cm-content").click(); await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
+    await page.locator(".cm-line").filter({ hasText: /^Body$/ }).click(); await expect(page.locator(".cm-content")).toBeFocused(); await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
     await expect(pane.getByLabel("Value: Due", { exact: true })).toHaveValue("2026-10-14T22:49:31");
+    expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toContain("2026-10-14T22:49:31");
     expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toContain("Dirty body");
     await page.evaluate(() => (window as any).app.propertyTypes.flush());
     await expect.poll(() => fs.readFileSync(path.join(data.vault, "Note.md"), "utf8")).toContain("Dirty body");
