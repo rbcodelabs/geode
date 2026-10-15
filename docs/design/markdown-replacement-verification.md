@@ -56,16 +56,30 @@ Their RED logs are retained in the coordinator's local run archive.
 
 ## Current checks and remaining gates
 
-Focused scope, renderer, Markdown, Canvas, external-change, navigation, conflict
-and preview tests pass; exact counts and checked commit are recorded by the
-coordinator after source freeze. Typecheck and build run on local locked dependency
+On source `c0e7e5e`, the focused scope, renderer, Markdown, Canvas, external-change,
+navigation, conflict and preview matrix passed 202 tests in 17 files. Typecheck and build run on local locked dependency
 versions (Electron 42.10.0, Vitest 4.1.11); no compute offload is configured.
 
 The default Electron regression file `markdown-owned-replacement.spec.ts` preserves
 both original connected-draft assertions and adds actual Enter submission with
-exact saved Source bytes. It requires the coordinator's serialized Electron slot.
-Actual durable-copy ordinary close, changed-after-receipt refusal, independent
-review and full unit/Electron gates remain required before a tested PR.
+exact saved Source bytes and actual grid refresh to `9`. On the frozen source,
+ten focused Electron flows passed without retries: both lifetimes, the real
+source-header pointer, exact-copy ordinary close, invalid-copy repair/retry,
+newer-local refusal, existing memory-only/provider protection, actual public
+clean reconcile, nested outer sync hold and prepare-timeout release. The unchanged
+old recovery expectation was archived before its policy adaptation; no provider
+byte assertion was removed. See [inspected captures](../screenshots/markdown-replacement/README.md).
+
+Independent review of the first source found autosave pause being confused with
+vault retirement. The separate `autosavePaused` flag and three controlled
+regressions fix that blocker while preserving automatic-save/image/comment
+suppression and genuine vault-switch refusal. The actual clean-reconcile flow
+records that replacement executes while autosave is paused, then requires the
+exact remote buffer/provider bytes and resumed flags.
+
+Full unit/Electron gates and review of the final evidence remain required before
+a tested PR. A superseded full unit attempt overlapped an authorized review fix
+and is excluded entirely; it is not passing-gate evidence.
 
 This package does not provide persistent presentations across CodeMirror viewport
 virtualization, solve the separate double-click entry defect, implement named

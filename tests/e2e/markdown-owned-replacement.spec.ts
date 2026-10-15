@@ -115,8 +115,10 @@ test("nested lifetime: Reading refresh preserves a valid connected Base draft", 
     fs.writeFileSync(info.outputPath("post-action.json"), JSON.stringify(after, null, 2));
     expect(after.source).toBe(originalSource);
     expect(after.controls).toEqual({ connected: true, value: "9" });
+    await page.screenshot({ path: info.outputPath("retained-draft-before-submit.png") });
     await page.locator('[data-nested-witness-cell] .bases-cell-input').press("Enter");
     await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(originalSource.replace("priority: 2", "priority: 9"));
+    await expect(page.locator(".canvas-embed-view:visible .bases-table .bases-data-row", { hasText: "Source" }).locator("td.bases-cell").nth(1)).toHaveText("9");
   });
 });
 
@@ -136,8 +138,23 @@ test("nested lifetime: Live Preview reconfiguration preserves a valid connected 
     fs.writeFileSync(info.outputPath("post-action.json"), JSON.stringify(after, null, 2));
     expect(after.source).toBe(originalSource);
     expect(after.controls).toEqual({ connected: true, value: "9" });
+    await page.screenshot({ path: info.outputPath("retained-draft-before-submit.png") });
     await page.locator('[data-nested-witness-cell] .bases-cell-input').press("Enter");
     await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(originalSource.replace("priority: 2", "priority: 9"));
+    await expect(page.locator(".canvas-embed-view:visible .bases-table .bases-data-row", { hasText: "Source" }).locator("td.bases-cell").nth(1)).toHaveText("9");
   });
 });
 
+
+test("nested lifetime: source header pointer preserves the focused Base draft before mode replacement", async ({}, info) => {
+  await withEntry("Live Preview", "selected-cell Enter", info, async (page, vault) => {
+    await page.getByRole("button", { name: "Toggle Live Preview / Source mode" }).click();
+    const input = page.locator('[data-nested-witness-cell] .bases-cell-input');
+    await expect(input).toBeFocused(); await expect(input).toHaveValue("9");
+    expect(await page.evaluate(() => (window as any).app.workspace.getActiveLeaf().view.mode)).toBe("live");
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(originalSource);
+    await input.press("Enter");
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(originalSource.replace("priority: 2", "priority: 9"));
+    await expect(page.locator(".canvas-embed-view:visible .bases-table .bases-data-row", { hasText: "Source" }).locator("td.bases-cell").nth(1)).toHaveText("9");
+  });
+});
