@@ -1,5 +1,6 @@
 import * as api from "./display-entry";
 import { PdfSession } from "./session";
+import { observePdfFitWidth } from "./fit-width";
 import { createPdfFrameInitializer, PDF_FRAME_NODE_KEYS, pdfFrameRealm } from "./handshake";
 import { isPdfHostMessage, type PdfViewerMessage } from "../../shared/pdf-viewer-protocol";
 const realm = pdfFrameRealm(globalThis);
@@ -17,13 +18,14 @@ async function render():Promise<void> {
 }
 function navigate(value:number):void { if(!session||!Number.isSafeInteger(value)||value<1||value>session.count){pageInput.setAttribute("aria-invalid","true");status.hidden=false;status.className="error";status.textContent=`Choose a page from 1 to ${session?.count??1}.`;return;}pageInput.removeAttribute("aria-invalid");page=value;viewport.scrollTop=0;void render(); }
 previous.addEventListener("click",()=>navigate(page-1));next.addEventListener("click",()=>navigate(page+1));pageInput.addEventListener("change",()=>navigate(Number(pageInput.value)));pageInput.addEventListener("keydown",event=>{if(event.key==="Enter")navigate(Number(pageInput.value));});zoomInput.addEventListener("change",()=>{zoom=zoomInput.value==="fit"?"fit":Number(zoomInput.value);void render();});fit.addEventListener("click",()=>{zoom="fit";zoomInput.value="fit";void render();});
-let resizeTimer:ReturnType<typeof setTimeout>|undefined;
-const resize=new ResizeObserver(()=>{if(zoom!=="fit"||!loaded)return;clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>void render(),120);});resize.observe(viewport);
+// Loading status changes viewport height. Only width changes affect fit,
+// otherwise each successful render schedules another and starves layout save.
+const stopResize=observePdfFitWidth(viewport,()=>{if(zoom==="fit"&&loaded&&!disposed)void render();});
 addEventListener("message",createPdfFrameInitializer(parent,({init,port:accepted})=>{
   port=accepted;generation=init.generation;port.postMessage({...init,kind:"geode-pdf-ready",realm});
   port.addEventListener("message",async event=>{
     if(!isPdfHostMessage(event.data)||event.data.generation!==generation||disposed)return;
-    if(event.data.kind==="dispose") { disposed=true;renderGeneration++;resize.disconnect();clearTimeout(resizeTimer);try{await session?.close();}finally{port?.postMessage({kind:"disposed",version:1,generation});port?.close();}return; }
+    if(event.data.kind==="dispose") { disposed=true;renderGeneration++;stopResize();try{await session?.close();}finally{port?.postMessage({kind:"disposed",version:1,generation});port?.close();}return; }
     if(event.data.kind==="appearance"){document.documentElement.dataset.theme=event.data.theme;return;}
     if(event.data.kind==="navigate"){if(session?.count)navigate(event.data.page);else page=event.data.page;return;}
     if(loaded)return;loaded=true;page=event.data.page;document.title=event.data.label;document.documentElement.dataset.theme=event.data.theme??"light";session=new PdfSession(api);
@@ -31,4 +33,4 @@ addEventListener("message",createPdfFrameInitializer(parent,({init,port:accepted
     catch(error){if(disposed)return;status.className="error";status.textContent=errorMessage(error);send({kind:"error",version:1,generation,message:errorMessage(error)});}
   });port.start();
 }));
-addEventListener("pagehide",()=>{disposed=true;resize.disconnect();clearTimeout(resizeTimer);void session?.close();port?.close();});
+addEventListener("pagehide",()=>{disposed=true;stopResize();void session?.close();port?.close();});
