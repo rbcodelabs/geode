@@ -10,7 +10,7 @@ function fixture() {
   vi.stubGlobal("document", { createElement: () => editor });
   const wrapper = { contains: () => true, querySelector: (selector: string) => selector === ".canvas-node-text" ? sourceRoot : null, inert: false };
   const contents = {};
-  Object.assign(view, { containerEl: { classList: { remove() {} } }, document: { nodes: [node], edges: [] }, file: { path: "Board.canvas" }, recoveryError: null, nodePresentations: new Map([["a", { node, el: wrapper }]]), markdownContentEls: new Set([contents]), selectedIds: new Set(["a"]), selectedEdgeIds: new Set(), undoStack: ["undo"], redoStack: [], lastKnownText: "original", render: vi.fn(), persist: vi.fn(), app: { notify: vi.fn(), markdownRenderer: { preflightDisposal() {}, prepareDisposal: vi.fn(async () => { throw new Error("Finish the Base cell draft first."); }) } } });
+  Object.assign(view, { containerEl: { classList: { remove() {} } }, document: { nodes: [node], edges: [] }, file: { path: "Board.canvas" }, recoveryError: null, transientGestureCancel: null, touchDragSnapshot: null, touchGesture: { pointerIds: () => [] }, conflictGeneration: 0, geometryGestures: new Set(), nodePresentations: new Map([["a", { node, el: wrapper }]]), markdownContentEls: new Set([contents]), selectedIds: new Set(["a"]), selectedEdgeIds: new Set(), undoStack: ["undo"], redoStack: [], lastKnownText: "original", render: vi.fn(), persist: vi.fn(), app: { notify: vi.fn(), markdownRenderer: { preflightDisposal() {}, prepareDisposal: vi.fn(async () => { throw new Error("Finish the Base cell draft first."); }) } } });
   return { view, node, wrapper, sourceRoot };
 }
 it("refuses deletion before changing model, selection, history or writes when an embedded draft cannot retire", async () => {
@@ -72,7 +72,7 @@ it("refuses conversion before creating a note or changing its source presentatio
 it("keeps refused conflict controls interactive instead of blurring a nested draft", async () => {
   const { view } = fixture();
   view.surfaceEl = { inert: false }; view.containerEl = { dataset: {}, querySelector: () => null, appendChild() {} };
-  vi.stubGlobal("document", { createElement: () => ({ setAttribute() {}, appendChild() {} }) });
+  vi.stubGlobal("document", { createElement: () => ({ setAttribute() {}, appendChild() {}, addEventListener() {} }) });
   view.app.markdownRenderer.preflightDisposal = () => { throw new Error("Finish the Base cell draft first."); };
   view.presentConflict(null, null, true);
   await new Promise(resolve => setImmediate(resolve));
@@ -95,4 +95,76 @@ it("refuses native owner retirement while its own Canvas source editor still has
   Object.assign(view, { conflictReadOnly: false, transientGestureCancel: null, touchDragSnapshot: null, touchGesture: { pointerIds: () => [] }, persistRequestedWhileSuspended: false });
   wrapper.querySelector = () => ({});
   expect(() => view.assertWorkspaceLoadReady()).toThrow(/text draft/);
+});
+
+it("does not let an older prepared external projection unlock or replace a newer conflict", async () => {
+  const { view, node } = fixture(); let finish!: () => void;
+  view.surfaceEl = { inert: false }; view.containerEl = { dataset: {}, querySelector: () => null, appendChild() {}, classList: { remove() {} } };
+  vi.stubGlobal("document", { createElement: () => ({ setAttribute() {}, appendChild() {}, addEventListener() {} }) });
+  const commit = vi.fn(); const abort = vi.fn();
+  view.app.markdownRenderer.prepareDisposal.mockImplementation(() => new Promise(resolve => { finish = () => resolve({ commit, abort }); }));
+  view.presentConflict('{"nodes":[],"edges":[]}', "Old.canvas", false);
+  view.presentConflict(null, "New.canvas", true);
+  finish(); await new Promise(resolve => setImmediate(resolve));
+  expect(view.conflictReadOnly).toBe(true); expect(view.containerEl.dataset.canvasConflictPath).toBe("New.canvas");
+  expect(view.document.nodes).toEqual([node]); expect(view.lastKnownText).toBe("original"); expect(commit).not.toHaveBeenCalled();
+  expect(abort).toHaveBeenCalled();
+});
+
+
+it("refuses a delayed delete whose intended selection changed before retirement", async () => {
+  const { view, node } = fixture(); let finish!: () => void;
+  const commit = vi.fn(); const abort = vi.fn();
+  view.app.markdownRenderer.prepareDisposal.mockImplementation(() => new Promise(resolve => { finish = () => resolve({ commit, abort }); }));
+  const deleting = view.deleteSelection(); view.selectedIds.clear();
+  finish(); await deleting;
+  expect(view.document.nodes).toEqual([node]); expect(commit).not.toHaveBeenCalled(); expect(abort).toHaveBeenCalled();
+  expect(view.persist).not.toHaveBeenCalled();
+});
+
+it("keeps the current history model until its new bytes are acknowledged and blocks new drafts during the write", async () => {
+  const { view, node } = fixture(); let finish!: () => void;
+  view.containerEl = { dataset: {}, inert: false }; view.setSaveStatus = vi.fn();
+  view.lastKnownText = JSON.stringify(view.document); view.undoStack = ['{"nodes":[],"edges":[]}']; view.persistQueue = Promise.resolve();
+  view.app.markdownRenderer.prepareDisposal.mockResolvedValue({ commit: async () => {}, abort() {} });
+  view.app.vault = { modify: vi.fn(() => new Promise<void>(resolve => { finish = resolve; })) };
+  const undoing = view.restoreHistory("undo"); await new Promise(resolve => setImmediate(resolve));
+  expect(view.document.nodes).toEqual([node]); expect(view.containerEl.inert).toBe(true);
+  finish(); await undoing;
+  expect(view.document.nodes).toEqual([]); expect(view.containerEl.inert).toBe(false); expect(view.undoStack).toEqual([]);
+});
+
+it("does not publish history into a newer conflict after its already-started write settles", async () => {
+  const { view, node } = fixture(); let finish!: () => void;
+  view.containerEl = { dataset: {}, inert: false, querySelector: () => null, appendChild() {} }; view.surfaceEl = { inert: false }; view.setSaveStatus = vi.fn();
+  vi.stubGlobal("document", { createElement: () => ({ setAttribute() {}, appendChild() {}, addEventListener() {} }) });
+  view.lastKnownText = JSON.stringify(view.document); view.undoStack = ['{"nodes":[],"edges":[]}']; view.persistQueue = Promise.resolve();
+  view.app.markdownRenderer.prepareDisposal.mockResolvedValue({ commit: async () => {}, abort() {} });
+  view.app.vault = { modify: vi.fn(() => new Promise<void>(resolve => { finish = resolve; })) };
+  const undoing = view.restoreHistory("undo"); await new Promise(resolve => setImmediate(resolve));
+  view.presentConflict(null, "New.canvas", true); finish();
+  await expect(undoing).resolves.toBeUndefined();
+  expect(view.document.nodes).toEqual([node]); expect(view.conflictReadOnly).toBe(true); expect(view.undoStack).toHaveLength(1);
+});
+
+
+it.each(["drag", "resize", "duplicate"])("refuses native replacement during an admitted mouse %s and releases it on pointer cancellation", async kind => {
+  const { view, node } = fixture(); const listeners = new Map<string, (...args: any[]) => void>();
+  vi.stubGlobal("window", { addEventListener: (name: string, action: (...args: any[]) => void) => listeners.set(name, action), removeEventListener: (name: string) => listeners.delete(name) });
+  Object.assign(view, { surfaceEl: { focus() {} }, scale: 1, alignmentTargets: () => ({ x: [], y: [] }), trackGestureSpaceBypass: () => ({ pressed: () => false, dispose() {} }), updateSelectionClasses() {} });
+  const event = { button: 0, pointerType: "mouse", clientX: 0, clientY: 0, target: { closest: () => null }, stopPropagation() {}, preventDefault() {} };
+  if (kind === "drag") view.beginNodeDrag(event, node);
+  else if (kind === "resize") view.beginResize(event, node);
+  else view.beginNodeDuplication(event, node);
+  expect(view.geometryGestures.size).toBe(1);
+  await view.deleteSelection(); expect(view.app.markdownRenderer.prepareDisposal).not.toHaveBeenCalled();
+  listeners.get("pointercancel")!(); expect(view.geometryGestures.size).toBe(0); expect(listeners.size).toBe(0);
+});
+
+it("blocks ordinary selection changes during preparation while checking direct mutation before retirement", async () => {
+  const { view } = fixture(); let finish!: () => void;
+  view.app.markdownRenderer.prepareDisposal.mockImplementation(() => new Promise(resolve => { finish = () => resolve({ commit: async () => {}, abort() {} }); }));
+  const deleting = view.deleteSelection(); view.clearSelection();
+  expect([...view.selectedIds]).toEqual(["a"]);
+  finish(); await deleting; expect(view.document.nodes).toEqual([]);
 });
