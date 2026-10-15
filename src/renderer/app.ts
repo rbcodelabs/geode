@@ -59,6 +59,9 @@ import { FileExplorerView } from "./views/file-explorer";
 import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
 import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
+import { OutgoingLinksView } from "./views/outgoing-links-view";
+import { ExcludedFiles } from "./excluded-files";
+import { renderFilesAndLinksTab } from "./settings/files-and-links-tab";
 import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
@@ -730,8 +733,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
+type BuiltinTabId = "files-and-links" | "appearance" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["files-and-links", "appearance", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
 /** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
 const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
@@ -873,6 +876,8 @@ class SettingsModal extends Modal {
 
     if (id === "appearance") {
       this.renderAppearanceTab(this.contentContainerEl);
+    } else if (id === "files-and-links") {
+      renderFilesAndLinksTab(this.contentContainerEl, this.geodeApp.excludedFiles);
     } else if (id === "hotkeys") {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "daily-notes") {
@@ -930,6 +935,7 @@ class SettingsModal extends Modal {
     const builtin: SettingsNavItem[] = [
       { id: "appearance", label: "Appearance" },
       { id: "hotkeys", label: "Hotkeys" },
+      { id: "files-and-links", label: "Files and links" },
       { id: "daily-notes", label: "Daily Notes" },
       { id: "unique-notes", label: "Unique note creator" },
       { id: "templates", label: "Templates" },
@@ -2629,6 +2635,7 @@ export class App {
   /** Screenshot mode's fake macOS titlebar overlay, created once — see `ensureDrawnMacTitlebar`. */
   private drawnTitlebarEl: HTMLElement | null = null;
   readonly host: HostServices;
+  excludedFiles!: ExcludedFiles;
   readonly dailyNotes: DailyNotesService;
   readonly templates: TemplatesService;
   readonly uniqueNotes: UniqueNotesService;
@@ -3553,7 +3560,9 @@ export class App {
     // Sidebar views
     this.workspace.leftSidebar.addView(new FileExplorerView(this));
     this.workspace.leftSidebar.addView(new SearchView(this));
+    this.excludedFiles = new ExcludedFiles(this.host.deviceState, this.vault.root);
     this.workspace.rightSidebar.addView(new BacklinksView(this));
+    this.workspace.rightSidebar.addView(new OutgoingLinksView(this));
     this.workspace.rightSidebar.addView(new OutlineView(this));
     this.workspace.rightSidebar.addView(new TagPaneView(this));
     this.commentsView = new CommentsView(this);
@@ -4628,6 +4637,10 @@ export class App {
       this.commands.add({ id, name, hotkey, callback });
 
     c("command-palette", "Open command palette", "Mod+P", () => this.openCommandPalette());
+    c("outgoing-links:open", "Show outgoing links", undefined, () => {
+      const view = this.workspace.getLeavesOfType("outgoing-links")[0]?.view;
+      if (view) this.workspace.rightSidebar.show(view);
+    });
     c("quick-switcher", "Quick switcher: Open", "Mod+O", () => this.openQuickSwitcher());
     c("new-note", "Create new note", "Mod+N", () => this.createNewNote());
     for (const [id, name, needsEditor, run] of [
