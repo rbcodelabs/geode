@@ -50,3 +50,40 @@ it("settles a pending mount before retirement and prevents its late publication"
   const task = scope.run(async token => { await gate; token.check(); published = true; }); void task.catch(() => {}); await Promise.resolve();
   const retirement = record.retire(); expect(record.retired).toBe(false); finish(); expect(await retirement).toBe(true); expect(published).toBe(false);
 });
+
+import { canAllocateNative, nativePresentationLabel } from "../../src/renderer/markdown/native-presentation-prototype";
+it("refuses record allocation while its current owner is frozen or permanently closed", async () => {
+  const owner = new RenderOwnership().create({}); expect(canAllocateNative(owner, false)).toBe(true);
+  owner.freezeAdmission(); expect(canAllocateNative(owner, false)).toBe(false); owner.resume(); expect(canAllocateNative(owner, true)).toBe(false);
+  await owner.close(); expect(canAllocateNative(owner, false)).toBe(false);
+});
+it("keeps a mount failure visible across repeated geometry-label projections", () => {
+  const occurrence = { id: 1, from: 0, to: 17, target: "Board.canvas" };
+  expect(nativePresentationLabel(occurrence, true, "read rejected", false)).toContain("read rejected");
+  expect(nativePresentationLabel(occurrence, false, "read rejected", false)).toContain("read rejected");
+});
+it("marks partial destruction fail-closed and never retries or resumes the closed native scope", async () => {
+  const root = new RenderOwnership().create({}); let calls = 0;
+  const scope = root.child({ close: async () => { calls++; throw new Error("partial native close"); } }); const record = new OwnedOccurrence(scope);
+  expect(await record.retire()).toBe(false); expect(record.failedClosed).toBe(true); expect(scope.admissionAllowed).toBe(false);
+  expect(await record.retire()).toBe(false); expect(calls).toBe(1);
+});
+it("a pre-destructor refusal remains usable and can retire after the original draft finishes", async () => {
+  const root = new RenderOwnership().create({}); let refuse = true;
+  const scope = root.child({ preflightClose: () => { if (refuse) throw new Error("finish original edit"); } }); const record = new OwnedOccurrence(scope);
+  expect(await record.retire()).toBe(false); expect(record.failedClosed).toBe(false); expect(scope.admissionAllowed).toBe(true);
+  refuse = false; expect(await record.retire()).toBe(true);
+});
+it("classifies an already rejected external destructor as closed instead of retryable", async () => {
+  const root = new RenderOwnership().create({}); const scope = root.child({ close: async () => { throw new Error("external destructor failed"); } });
+  await expect(scope.close()).rejects.toThrow("external destructor failed"); const record = new OwnedOccurrence(scope);
+  expect(await record.retire()).toBe(false); expect(record.failedClosed).toBe(true);
+});
+it("waits for an externally closing scope before deciding whether its refusal can resume", async () => {
+  const root = new RenderOwnership().create({}); let finish!: () => void; const gate = new Promise<void>(resolve => { finish = resolve; }); let readable = false;
+  const scope = root.child({ validateClose: async () => { await gate; if (!readable) throw new Error("read refused"); } });
+  const closing = scope.close(); void closing.catch(() => {}); const record = new OwnedOccurrence(scope); let settled = false;
+  const retirement = record.retire().finally(() => { settled = true; }); await new Promise(resolve => setImmediate(resolve)); expect(settled).toBe(false);
+  finish(); await expect(closing).rejects.toThrow("read refused"); expect(await retirement).toBe(false); expect(record.failedClosed).toBe(false); expect(scope.admissionAllowed).toBe(true);
+  readable = true; expect(await record.retire()).toBe(true);
+});

@@ -23,7 +23,8 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
     await page.evaluate(source => { (window as any).mountNativeLayerPrototype(source); }, document);
     await run(page, vault, app);
   } finally {
-    const evidence = { provider: fs.readFileSync(path.join(vault, "Source.md"), "utf8"), other: fs.readFileSync(path.join(vault, "Other.md"), "utf8"), state: await page.evaluate(() => (window as any).nativeLayerHarness?.snapshot()).catch(error => String(error)) };
+    const probe = await page.evaluate(() => { const p = (window as any).__layerProbe; return p ? { inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected, parentStable: p.root.parentElement === p.parent, focused: document.activeElement === p.input, blurCount: p.blur } : null; }).catch(error => String(error));
+    const evidence = { probe, provider: fs.readFileSync(path.join(vault, "Source.md"), "utf8"), other: fs.readFileSync(path.join(vault, "Other.md"), "utf8"), state: await page.evaluate(() => (window as any).nativeLayerHarness?.snapshot()).catch(error => String(error)) };
     fs.writeFileSync(info.outputPath("final-state.json"), JSON.stringify(evidence, null, 2));
     await page.screenshot({ path: info.outputPath("prototype.png") }).catch(() => {});
     await app.close(); fs.rmSync(directory, { recursive: true, force: true });

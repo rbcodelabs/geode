@@ -66,3 +66,27 @@ focus transfer, multiple retained failures, narrow/dark layouts, pointer/text
 editing and clean viewport churn remain additional acceptance work. No claim that
 the prototype fixes production LP, preserves an active draft across a deliberate
 user blur, or completes Workspaces/Obsidian parity follows from this checkpoint.
+
+## First review correction batch
+
+The coordinator read the complete initial module, fixture, tests and evidence.
+Corrections preserve mount-error text through geometry, refuse allocation when
+the current owner is frozen/closed, and prevent a retirement continuation from
+allocating a replacement under a closing owner. Partial destructor failure is
+retained as a terminal failed-closed record: no automatic retry/remount, inert
+native root, Return hidden and a visible alert. A pre-destructor refusal retains
+admission and can retry after the original draft finishes. If an external ordinary
+close is still preparing, the record observes its completed drain result before
+classifying it; a failed read that restores admission is not partial destruction.
+
+Six new controlled regressions establish these classifications and preserve the
+original genuine-preflight retry case. The focused matrix now passes 44 tests in
+three files, including 14 prototype tests. Repository/fixture typechecks and the
+private test bundle pass. Final actual-test JSON now includes captured input
+connection/value/focus/blur and stable-parent metrics even on assertion failure.
+The six prototype Electron tests remain unrun at this second review freeze.
+
+Before broad wiring, a trusted Return-button pointer proof and actual duplicate
+shelf hit testing are still mandatory: private Return calls, `isConnected` and
+`toBeVisible` alone do not establish correct browser focus order or occlusion-free
+pointer reachability. No product-safety claim is inferred from this correction.

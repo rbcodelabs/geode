@@ -32,11 +32,13 @@ export class AnchorLeases<T> {
 }
 export class OwnedOccurrence {
   retired = false;
+  failedClosed = false;
   error: unknown;
   private retiring: Promise<boolean> | null = null;
   constructor(readonly scope: RenderScope) {}
   retire(): Promise<boolean> {
     if (this.retired) return Promise.resolve(true);
+    if (this.failedClosed) return Promise.resolve(false);
     return this.retiring ??= this.prepare().finally(() => { this.retiring = null; });
   }
   private async prepare(): Promise<boolean> {
@@ -46,6 +48,13 @@ export class OwnedOccurrence {
       await prepared.commit(); this.retired = true; return true;
     } catch (error) {
       this.error = error;
+      this.failedClosed = prepared?.destructionStarted ?? false;
+      if (!prepared && this.scope.closed) {
+        // An ordinary owner close may still be preparing. Observe its completed
+        // result before treating temporary closed admission as partial teardown.
+        try { await this.scope.drain(); this.retired = true; return true; }
+        catch (settlementError) { this.error = settlementError; this.failedClosed = this.scope.closed; }
+      }
       if (!prepared?.destructionStarted) prepared?.abort();
       return false;
     }
@@ -62,6 +71,7 @@ interface PresentationRecord {
   returnButton: HTMLButtonElement;
   lifetime: OwnedOccurrence;
   observer: MutationObserver;
+  mountError: string | null;
   mounted: boolean;
   seenAnchor: boolean;
   retryRetirement: boolean;
@@ -133,7 +143,7 @@ export class NativePresentationPrototype {
     return { allocations: this.allocations, retirements: this.retirements, measurements: this.measurements, records: [...this.records.values()].map(record => ({ id: record.occurrence.id, target: record.occurrence.target, state: record.state, connected: record.root.isConnected, parentStable: record.root.parentElement === this.layer, mounted: record.mounted, admission: record.lifetime.scope.admissionAllowed, returnAvailable: !record.returnButton.hidden, sourceValid: this.sources.has(record.occurrence.id) })) };
   }
   private ensureRecord(occurrence: NativeOccurrence): void {
-    if (this.disposed || this.records.has(occurrence.id)) return;
+    if (!canAllocateNative(this.options.owner, this.disposed) || this.records.has(occurrence.id)) return;
     // Prototype admission is bounded; existing unfinished work is never removed.
     if (this.records.size >= 8) { this.shelf.textContent = "Finish an embedded edit before opening more prototype records."; return; }
     const scope = this.options.owner.child();
@@ -144,7 +154,7 @@ export class NativePresentationPrototype {
     const returnButton = document.createElement("button"); returnButton.textContent = "Return to embed"; returnButton.addEventListener("click", () => this.returnToOccurrence(occurrence.id));
     header.append(label, returnButton); const content = document.createElement("div"); content.className = "native-prototype-content"; Object.assign(content.style, { flex: "1", minHeight: "0", overflow: "hidden" });
     root.append(header, content); this.layer.appendChild(root);
-    const record: PresentationRecord = { occurrence, root, content, label, returnButton, lifetime: new OwnedOccurrence(scope), observer: new MutationObserver(() => { record.retryRetirement = true; this.requestGeometry(); }), mounted: false, seenAnchor: false, retryRetirement: true, state: "inline" };
+    const record: PresentationRecord = { occurrence, root, content, label, returnButton, lifetime: new OwnedOccurrence(scope), observer: new MutationObserver(() => { record.retryRetirement = true; this.requestGeometry(); }), mountError: null, mounted: false, seenAnchor: false, retryRetirement: true, state: "inline" };
     this.records.set(occurrence.id, record); this.allocations++;
     record.observer.observe(content, { childList: true, subtree: true, characterData: true });
     for (const event of ["input", "keydown", "focusout", "click"]) content.addEventListener(event, () => { record.retryRetirement = true; this.requestGeometry(); });
@@ -153,7 +163,7 @@ export class NativePresentationPrototype {
     const mounting = scope.run(token => this.options.mount(content, scope, occurrence, token));
     void mounting.then(() => { record.mounted = true; this.requestGeometry(); }, error => {
       if (!scope.admissionAllowed || record.lifetime.retired) return;
-      record.label.textContent = `${occurrence.target}: ${error instanceof Error ? error.message : "mount failed"}`;
+      record.mountError = error instanceof Error ? error.message : String(error ?? "mount failed");
       record.mounted = true; this.requestGeometry();
     });
   }
@@ -188,22 +198,26 @@ export class NativePresentationPrototype {
         record.state = offscreen ? valid ? "retained" : "removed" : "inline";
         const top = offscreen ? shelfTop + 24 + retained++ * (height + 8) - offset : placement.top;
         Object.assign(record.root.style, { left: `${offscreen ? 8 : placement.left}px`, top: `${top}px`, width: `${offscreen ? measured.pane.width - 32 : placement.width}px`, clipPath: offscreen ? `inset(${Math.max(0, shelfTop + 24 - top)}px 0 ${Math.max(0, top + height - measured.pane.height)}px 0)` : "none" });
-        record.returnButton.hidden = record.state === "inline" || !valid;
-        const text = `${record.occurrence.target} · occurrence ${record.occurrence.id}${valid ? "" : " · source removed"}`;
+        record.root.inert = record.lifetime.failedClosed;
+        record.returnButton.hidden = record.lifetime.failedClosed || record.state === "inline" || !valid;
+        const text = nativePresentationLabel(record.occurrence, valid, record.mountError, record.lifetime.failedClosed);
         if (record.label.textContent !== text) record.label.textContent = text;
         if (anchor && Math.abs(anchor.height - height) > 1) this.options.onHeight?.(record.occurrence.id, height);
-        if (offscreen && (record.seenAnchor || !valid) && record.retryRetirement) {
+        if (canAllocateNative(this.options.owner, this.disposed) && offscreen && (record.seenAnchor || !valid) && record.retryRetirement && !record.lifetime.failedClosed) {
           record.retryRetirement = false;
           void record.lifetime.retire().then(retired => {
-            if (!retired) return;
+            if (!retired) { if (record.lifetime.failedClosed) this.requestGeometry(); return; }
             record.observer.disconnect(); this.resize.unobserve(record.root); record.root.remove(); this.records.delete(record.occurrence.id); this.retirements++;
             const current = this.sources.get(record.occurrence.id);
-            if (current && this.anchors.get(current.id)?.isConnected) this.ensureRecord(current);
+            if (canAllocateNative(this.options.owner, this.disposed) && current && this.anchors.get(current.id)?.isConnected) this.ensureRecord(current);
             this.requestGeometry();
           });
         }
       }
-      this.shelf.hidden = retained === 0; this.rail.hidden = retained === 0;
+      const failed = [...this.records.values()].some(record => record.lifetime.failedClosed);
+      this.shelf.textContent = failed ? "Native embed teardown failed. Controls are disabled; recovery is required." : "Unfinished embedded edits";
+      this.shelf.setAttribute("role", failed ? "alert" : "status");
+      this.shelf.hidden = retained === 0 && !failed; this.rail.hidden = retained === 0;
       Object.assign(this.shelf.style, { top: `${shelfTop}px`, height: `${shelfHeight}px` });
       Object.assign(this.rail.style, { top: `${shelfTop + 24}px`, height: `${shelfHeight - 24}px` }); this.railContent.style.height = `${retained * 328}px`;
     } });
@@ -219,4 +233,9 @@ export class NativePresentationPrototype {
     this.disposed = true; this.resize.disconnect(); this.view?.scrollDOM.removeEventListener("scroll", this.requestGeometry);
     for (const record of this.records.values()) record.observer.disconnect(); this.records.clear(); this.layer.remove();
   }
+}
+
+export function canAllocateNative(owner: Pick<RenderScope, "admissionAllowed">, disposed: boolean): boolean { return !disposed && owner.admissionAllowed; }
+export function nativePresentationLabel(occurrence: NativeOccurrence, valid: boolean, mountError: string | null, failedClosed: boolean): string {
+  return `${occurrence.target} · occurrence ${occurrence.id}${valid ? "" : " · source removed"}${mountError ? ` · ${mountError}` : ""}${failedClosed ? " · teardown failed; controls disabled" : ""}`;
 }
