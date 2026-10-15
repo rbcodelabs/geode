@@ -38,12 +38,12 @@
       "api-member": 1014
     },
     "byStatus": {
-      "verified": 328,
-      "partial": 55,
-      "missing": 0,
-      "intentionally-equivalent": 0,
-      "blocked": 1,
-      "unknown": 2479
+      "verified": 331,
+      "partial": 124,
+      "missing": 54,
+      "intentionally-equivalent": 5,
+      "blocked": 79,
+      "unknown": 2270
     }
   },
   "requirements": [
@@ -55,8 +55,15 @@
       "title": "Bases syntax",
       "sourcePath": "obsidian-help/en/Bases/Bases syntax.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Bases%20syntax.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/bases/base-file.test.ts",
+        "tests/unit/bases/filter-parser.test.ts",
+        "tests/unit/bases/filter-groups.test.ts",
+        "tests/unit/bases/embed-block.test.ts",
+        "tests/e2e/bases.spec.ts"
+      ],
+      "notes": "Unit tests assert .base YAML parsing (filters, formulas, displayName, summaries, views, cards options), filter groups and ```base block detection; e2e asserts embedded base + ![[File.base]] render. Not asserted: every documented view option, this/file-namespace edge cases end to end."
     },
     {
       "id": "HELP-9f1cbe3c3862",
@@ -66,8 +73,12 @@
       "title": "Create a base",
       "sourcePath": "obsidian-help/en/Bases/Create a base.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Create%20a%20base.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases.spec.ts",
+        "tests/unit/bases/embed-block.test.ts"
+      ],
+      "notes": "e2e creates a base via folder-menu New base and renders embeds. Not asserted: Bases: Create new base / Insert new base / Add view commands, ribbon action."
     },
     {
       "id": "HELP-a87d558db1d7",
@@ -77,8 +88,14 @@
       "title": "Formulas",
       "sourcePath": "obsidian-help/en/Bases/Formulas.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Formulas.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/bases/formula-engine.test.ts",
+        "tests/unit/bases/evaluator.test.ts",
+        "tests/unit/bases/property-path.test.ts",
+        "tests/e2e/bases-plugin-view.spec.ts"
+      ],
+      "notes": "Formula evaluation, memoization, cycle detection, formula.* property paths and grouping by a formula (plugin view e2e) asserted. Not asserted: UI for creating/editing formulas in Properties menu."
     },
     {
       "id": "HELP-3101efd08e2f",
@@ -88,8 +105,13 @@
       "title": "Functions",
       "sourcePath": "obsidian-help/en/Bases/Functions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Functions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/bases/evaluator.test.ts",
+        "tests/unit/bases/date-math.test.ts",
+        "tests/unit/bases/coerce.test.ts"
+      ],
+      "notes": "evaluator.test.ts asserts global, any, string, number, date, list, link, file, object and regexp functions plus date arithmetic; every function heading on the page has a matching assertion."
     },
     {
       "id": "HELP-b8af5770f86a",
@@ -99,8 +121,12 @@
       "title": "Introduction to Bases",
       "sourcePath": "obsidian-help/en/Bases/Introduction to Bases.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Introduction%20to%20Bases.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases.spec.ts",
+        "tests/unit/bases/base-file.test.ts"
+      ],
+      "notes": "e2e covers create, table filter/sort, cell edit writing frontmatter, cards, embeds, TSV copy. Not covered: CSV export UI, Properties/Search/New toolbar items, built-in List/Map/Kanban layouts."
     },
     {
       "id": "HELP-0b295d02a8ac",
@@ -110,8 +136,13 @@
       "title": "Cards view",
       "sourcePath": "obsidian-help/en/Bases/Layouts/Cards view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Layouts/Cards%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases.spec.ts",
+        "tests/unit/base-file-passthrough.test.ts",
+        "tests/unit/bases/base-file.test.ts"
+      ],
+      "notes": "e2e switches to Cards, renders cards and persists type; unit parses image/imageFit/imageAspectRatio/cardSize. Not asserted: cover image rendering, fit/aspect/size visual effect, UI controls."
     },
     {
       "id": "HELP-cd06d684e91a",
@@ -121,8 +152,13 @@
       "title": "Kanban view",
       "sourcePath": "obsidian-help/en/Bases/Layouts/Kanban view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Layouts/Kanban%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases-plugin-view.spec.ts",
+        "tests/e2e/bases-kanban-interaction.spec.ts",
+        "tests/unit/bases-view-registry.test.ts"
+      ],
+      "notes": "Kanban is only provided by a third-party plugin via registerBasesView (e2e drag updates frontmatter, quick-add). No built-in Kanban layout; None column, column reorder, group menu not covered. Searched src/renderer/views/bases for kanban: none."
     },
     {
       "id": "HELP-7ca13a31b6db",
@@ -132,8 +168,11 @@
       "title": "List view",
       "sourcePath": "obsidian-help/en/Bases/Layouts/List view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Layouts/List%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "No built-in List layout: base-view.ts dispatches only table/cards/plugin types. Searched src/renderer/views/bases and base-view.ts for list layout, markers, indent properties; searched tests for list view: nothing."
     },
     {
       "id": "HELP-f067e7098577",
@@ -143,8 +182,12 @@
       "title": "Map view",
       "sourcePath": "obsidian-help/en/Bases/Layouts/Map view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Layouts/Map%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md",
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "No Map layout or Maps plugin integration; grepped src and tests for map view, coordinates, marker: nothing. Page requires separate Maps plugin, so a plugin-hosted route may be intended."
     },
     {
       "id": "HELP-86f15061a63b",
@@ -154,8 +197,14 @@
       "title": "Table view",
       "sourcePath": "obsidian-help/en/Bases/Layouts/Table view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Layouts/Table%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases.spec.ts",
+        "tests/unit/bases/summary-engine.test.ts",
+        "tests/unit/bases/query-engine.test.ts",
+        "tests/unit/bases/table-nav.test.ts"
+      ],
+      "notes": "e2e covers table render, filter/sort, cell edit, TSV copy; unit covers summaries engine, custom summaries, grouping, keyboard nav. Not asserted: row height options, Summarize menu UI and built-in summaries per type."
     },
     {
       "id": "HELP-cb320429ffad",
@@ -165,8 +214,14 @@
       "title": "Views",
       "sourcePath": "obsidian-help/en/Bases/Views.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Bases/Views.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bases.spec.ts",
+        "tests/unit/bases/query-engine.test.ts",
+        "tests/unit/bases/filter-groups.test.ts",
+        "tests/unit/bases-property-id.test.ts"
+      ],
+      "notes": "Filtering, sorting, grouping, limit, view switching asserted (unit + e2e). Not asserted: view reorder by drag, duplicate/delete, group order/hide, results limit UI, copy/export CSV."
     },
     {
       "id": "HELP-08bd0014c12a",
@@ -176,8 +231,11 @@
       "title": "Developers",
       "sourcePath": "obsidian-help/en/Contributing to Obsidian/Developers.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Contributing%20to%20Obsidian/Developers.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-d3fe4933ba92",
@@ -187,8 +245,11 @@
       "title": "Financial contributions",
       "sourcePath": "obsidian-help/en/Contributing to Obsidian/Financial contributions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Contributing%20to%20Obsidian/Financial%20contributions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-269b948dd8fc",
@@ -198,8 +259,11 @@
       "title": "Style guide",
       "sourcePath": "obsidian-help/en/Contributing to Obsidian/Style guide.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Contributing%20to%20Obsidian/Style%20guide.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-be3ef53397db",
@@ -209,8 +273,11 @@
       "title": "Translations",
       "sourcePath": "obsidian-help/en/Contributing to Obsidian/Translations.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Contributing%20to%20Obsidian/Translations.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-c423322a978d",
@@ -220,8 +287,15 @@
       "title": "Advanced formatting syntax",
       "sourcePath": "obsidian-help/en/Editing and formatting/Advanced formatting syntax.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Advanced%20formatting%20syntax.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/live-preview-table.spec.ts",
+        "tests/e2e/live-preview-table-inline.spec.ts",
+        "tests/unit/table.test.ts",
+        "tests/e2e/mermaid.spec.ts",
+        "tests/e2e/math.spec.ts"
+      ],
+      "notes": "Tables (parse, alignment, escaped pipes, inline formatting in cells), Mermaid in both views with internal-link nodes and LaTeX in both views are asserted. Reading View table rendering and table-cell links not separately asserted."
     },
     {
       "id": "HELP-8001bece33fe",
@@ -231,8 +305,12 @@
       "title": "Attachments",
       "sourcePath": "obsidian-help/en/Editing and formatting/Attachments.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Attachments.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/attachments.test.ts",
+        "tests/e2e/image-paste-drop.spec.ts"
+      ],
+      "notes": "Pasted/dropped images saved to configured location, unique naming and embedding asserted. Only images; non-image attachments, location settings UI and Files-and-links options not covered."
     },
     {
       "id": "HELP-6b3f00a87c91",
@@ -242,8 +320,15 @@
       "title": "Basic formatting syntax",
       "sourcePath": "obsidian-help/en/Editing and formatting/Basic formatting syntax.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Basic%20formatting%20syntax.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/render-inline.test.ts",
+        "tests/unit/list-items.test.ts",
+        "tests/e2e/footnotes.spec.ts",
+        "tests/e2e/markdown-comments.spec.ts",
+        "tests/e2e/callouts.spec.ts"
+      ],
+      "notes": "Inline emphasis, code, highlight, wikilinks, tags, task/list parsing, footnotes and comments are asserted. Not asserted: paragraphs/line breaks, headings, strikethrough, quotes, horizontal rules, code blocks, escaping, external images."
     },
     {
       "id": "HELP-3b05eed66494",
@@ -253,8 +338,12 @@
       "title": "Callouts",
       "sourcePath": "obsidian-help/en/Editing and formatting/Callouts.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Callouts.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/callouts.spec.ts",
+        "tests/unit/callout.test.ts"
+      ],
+      "notes": "e2e asserts Live Preview and Reading View callout icon, title, default title, type styling; unit asserts header parsing, fold marker, aliases, icons. Not asserted: foldable toggling behavior, nested callouts, custom callout CSS."
     },
     {
       "id": "HELP-37b44b79930f",
@@ -265,7 +354,8 @@
       "sourcePath": "obsidian-help/en/Editing and formatting/Editing shortcuts.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Editing%20shortcuts.md",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): Editor binds CodeMirror defaultKeymap, historyKeymap, searchKeymap, indentWithTab, but no test asserts any shortcut on the page (grepped tests for Bold toggle, delete line, shortcuts: none relevant). Bold/italic shortcuts not found in src."
     },
     {
       "id": "HELP-5c9a9b00d336",
@@ -275,8 +365,11 @@
       "title": "Embed web pages",
       "sourcePath": "obsidian-help/en/Editing and formatting/Embed web pages.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Embed%20web%20pages.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Raw HTML/iframe is not rendered: render.ts has no HTML handling and sanitize tests assert iframe is stripped. Searched src/renderer/markdown and tests for iframe, youtube, embed web: only sanitizer tests."
     },
     {
       "id": "HELP-bae939ca629f",
@@ -287,7 +380,8 @@
       "sourcePath": "obsidian-help/en/Editing and formatting/Find and replace.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Find%20and%20replace.md",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): markdown-view binds CodeMirror searchKeymap (default find/replace panel) but no unit or e2e test covers find, replace, or replace all. Grepped tests for replaceAll/find and replace: no editor-level hits."
     },
     {
       "id": "HELP-7ada99e267bd",
@@ -297,8 +391,11 @@
       "title": "Folding",
       "sourcePath": "obsidian-help/en/Editing and formatting/Folding.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Folding.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Spec section 4 lists folding but no fold gutter exists: grepped src for foldGutter, foldService, codeFolding, foldKeymap: only callout fold marker. No tests for heading/list folding."
     },
     {
       "id": "HELP-b47562055c69",
@@ -308,8 +405,11 @@
       "title": "HTML content",
       "sourcePath": "obsidian-help/en/Editing and formatting/HTML content.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/HTML%20content.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Spec section 5 says inline HTML allowed but Markdown inside not processed. Grepped render.ts for html: nothing; tests only cover sanitizeHTMLToDom plugin API, not note rendering of HTML blocks."
     },
     {
       "id": "HELP-6fe9c0ba52bd",
@@ -319,8 +419,11 @@
       "title": "Multiple cursors",
       "sourcePath": "obsidian-help/en/Editing and formatting/Multiple cursors.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Multiple%20cursors.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Spec section 4 lists Alt+click multiple cursors and rectangular selection; grepped src and tests for allowMultipleSelections, rectangularSelection, addCursor, multiple cursor: nothing."
     },
     {
       "id": "HELP-2c035cca4cfb",
@@ -330,8 +433,15 @@
       "title": "Obsidian Flavored Markdown",
       "sourcePath": "obsidian-help/en/Editing and formatting/Obsidian Flavored Markdown.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Obsidian%20Flavored%20Markdown.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/render-inline.test.ts",
+        "tests/e2e/callouts.spec.ts",
+        "tests/e2e/footnotes.spec.ts",
+        "tests/e2e/markdown-comments.spec.ts",
+        "tests/e2e/math.spec.ts"
+      ],
+      "notes": "Wikilinks, highlights, callouts, footnotes, comments, math, mermaid covered individually; no test of the combined OFM syntax list, block IDs or embed syntax. Raw HTML rendering absent."
     },
     {
       "id": "HELP-4df0a02a2c6e",
@@ -341,8 +451,14 @@
       "title": "Properties",
       "sourcePath": "obsidian-help/en/Editing and formatting/Properties.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Properties.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/frontmatter-io.test.ts",
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/format-converter.test.ts",
+        "src/renderer/views/markdown-view.ts"
+      ],
+      "notes": "Frontmatter parse/write, alias/tag/cssclass handling and legacy key migration asserted in unit. In-note properties UI is a read-only table (renderProperties): no typed editor, add property, types, or display setting; untested."
     },
     {
       "id": "HELP-bd4f0f0a0c74",
@@ -352,8 +468,13 @@
       "title": "Tags",
       "sourcePath": "obsidian-help/en/Editing and formatting/Tags.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Tags.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/frontmatter-tags.test.ts",
+        "tests/unit/render-inline.test.ts"
+      ],
+      "notes": "Inline and nested tag parsing, numeric-only rejection, code exclusion, frontmatter tags and tag anchors asserted. Tags view, click-to-search and tag autocomplete not covered by tests."
     },
     {
       "id": "HELP-f24d48df04dd",
@@ -363,8 +484,13 @@
       "title": "Views and editing mode",
       "sourcePath": "obsidian-help/en/Editing and formatting/Views and editing mode.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Editing%20and%20formatting/Views%20and%20editing%20mode.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/live-preview-markdown-image.spec.ts",
+        "tests/e2e/plugin-editor-commands.spec.ts",
+        "tests/e2e/callouts.spec.ts"
+      ],
+      "notes": "e2e toggles Live Preview/Source and checks Reading and Live Preview render. Not asserted: Cmd+E toggle, split reading+editing, default view settings, status bar mode indicator."
     },
     {
       "id": "HELP-eebcb15eaef3",
@@ -374,8 +500,11 @@
       "title": "Community directory",
       "sourcePath": "obsidian-help/en/Extending Obsidian/Community directory.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/Community%20directory.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/03-plugin-api.md"
+      ],
+      "notes": "Web listing pages (header, Overview, Scorecard, Add to Obsidian) have no Geode equivalent. Grepped src/ and tests/ for scorecard/community.obsidian/listing page: no in-app listing surface found; only community.json-style browse modal."
     },
     {
       "id": "HELP-1b0867830757",
@@ -385,8 +514,13 @@
       "title": "Community plugins",
       "sourcePath": "obsidian-help/en/Extending Obsidian/Community plugins.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/Community%20plugins.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/community-install.spec.ts",
+        "tests/e2e/community-manage.spec.ts",
+        "tests/e2e/community-update.spec.ts"
+      ],
+      "notes": "E2E cover install from GitHub, enable/disable, toggle auto-update, uninstall, check-for-updates hot reload. Not covered: Restricted Mode, Browse filter box, funding icon, reload/open-folder icons, hotkey shortcut icon."
     },
     {
       "id": "HELP-cfd1b4579749",
@@ -396,8 +530,11 @@
       "title": "CSS snippets",
       "sourcePath": "obsidian-help/en/Extending Obsidian/CSS snippets.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/CSS%20snippets.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Spec 01-core-app.md:560 requires snippets. Grep 'snippets' in src/ finds only sync scope (portable-assets, sync-core) and search snippets; no loader, no Appearance CSS snippets section, no tests. Not implemented."
     },
     {
       "id": "HELP-47bffbd7e355",
@@ -407,8 +544,11 @@
       "title": "Obsidian CLI",
       "sourcePath": "obsidian-help/en/Extending Obsidian/Obsidian CLI.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/Obsidian%20CLI.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "No app-controlling 'obsidian' CLI/TUI. Only geode-wiki CLI (vault wiki/sync, different scope). Grepped src/ and tests/ for 'Command line interface', obsidian cli: nothing. Spec 04 lists CLI as n/a."
     },
     {
       "id": "HELP-b3c4f11e6cbf",
@@ -418,8 +558,13 @@
       "title": "Obsidian Headless",
       "sourcePath": "obsidian-help/en/Extending Obsidian/Obsidian Headless.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/Obsidian%20Headless.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "intentionally-equivalent",
+      "evidence": [
+        "docs/adr/0025-geode-wiki-sync-cli.md",
+        "tests/unit/sync-cli.test.ts",
+        "docs/design/headless-wiki-sync.md"
+      ],
+      "notes": "Geode-owned equivalent: 'geode-wiki sync' unattended headless sync CLI (ADR 0025) instead of Obsidian Sync client 'ob'; no ob login/Obsidian account flow by design."
     },
     {
       "id": "HELP-a909e072358d",
@@ -429,8 +574,11 @@
       "title": "Obsidian URI",
       "sourcePath": "obsidian-help/en/Extending Obsidian/Obsidian URI.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/Obsidian%20URI.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/deep-link.test.ts"
+      ],
+      "notes": "Unit-only: obsidian:// parsing, protocol claim gating, cold-start queueing for plugin protocol handlers. Built-in actions open/new/daily/unique/search/choose-vault/hook-get-address and x-callback not implemented or tested (no e2e)."
     },
     {
       "id": "HELP-b35b4ed150ff",
@@ -440,8 +588,14 @@
       "title": "Plugin security",
       "sourcePath": "obsidian-help/en/Extending Obsidian/Plugin security.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/Plugin%20security.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/plugin-policy.spec.ts",
+        "tests/unit/policy.test.ts",
+        "tests/unit/community-install-admission.test.ts",
+        "docs/adr/0002-enterprise-plugin-policy.md"
+      ],
+      "notes": "Covers enterprise block/allow policy and install admission/artifact integrity. Restricted Mode toggle (default-on, turn on/off in Settings) is absent: grep restricted/safeMode in src found nothing relevant."
     },
     {
       "id": "HELP-472af3b11645",
@@ -451,8 +605,13 @@
       "title": "Themes",
       "sourcePath": "obsidian-help/en/Extending Obsidian/Themes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Extending%20Obsidian/Themes.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/community-theme-install.spec.ts",
+        "tests/e2e/community-theme.spec.ts",
+        "tests/e2e/builtin-theme.spec.ts"
+      ],
+      "notes": "E2E: install from GitHub and apply, apply/clear (stop using), persistence across relaunch. Not covered: theme Check for updates/Update all, Uninstall, browse Manage list details."
     },
     {
       "id": "HELP-a57aeb54bdfd",
@@ -462,8 +621,12 @@
       "title": "Accepted file formats",
       "sourcePath": "obsidian-help/en/Files and folders/Accepted file formats.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Files%20and%20folders/Accepted%20file%20formats.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/embed.test.ts",
+        "tests/e2e/image-file-view.spec.ts"
+      ],
+      "notes": "Embed classification of image/audio/video/md/other and image file views asserted. PDF has no viewer; full format list and open-in-default-app behavior not covered."
     },
     {
       "id": "HELP-c0779b1697c9",
@@ -473,8 +636,12 @@
       "title": "Configuration folder",
       "sourcePath": "obsidian-help/en/Files and folders/Configuration folder.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Files%20and%20folders/Configuration%20folder.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/obsidian-import.spec.ts",
+        "tests/unit/obsidian-import.test.ts"
+      ],
+      "notes": "Importing plugins/themes from an existing .obsidian folder asserted. Config folder contents and Override config folder not implemented or tested (grepped src for overrideConfig: nothing; configDir only in sidebar-views)."
     },
     {
       "id": "HELP-14afb18687a7",
@@ -484,8 +651,12 @@
       "title": "How Obsidian stores data",
       "sourcePath": "obsidian-help/en/Files and folders/How Obsidian stores data.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Files%20and%20folders/How%20Obsidian%20stores%20data.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/vault-files.test.ts",
+        "tests/unit/sync-scope.test.ts"
+      ],
+      "notes": "Vault as plain files with hidden entries excluded and config included in sync scans asserted. Global settings/system folder storage not asserted."
     },
     {
       "id": "HELP-a11d9a7fc207",
@@ -495,8 +666,13 @@
       "title": "Manage notes",
       "sourcePath": "obsidian-help/en/Files and folders/Manage notes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Files%20and%20folders/Manage%20notes.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/file-explorer-move.spec.ts",
+        "tests/unit/rename.test.ts",
+        "tests/unit/unique-notes.test.ts"
+      ],
+      "notes": "File/folder drag move and link rewrite on rename asserted. Create, delete to trash, duplicate, Move file to menu, new-note location settings not covered."
     },
     {
       "id": "HELP-f79a2410db50",
@@ -506,8 +682,13 @@
       "title": "Manage vaults",
       "sourcePath": "obsidian-help/en/Files and folders/Manage vaults.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Files%20and%20folders/Manage%20vaults.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/vault-switcher.spec.ts",
+        "tests/e2e/create-vault.spec.ts",
+        "tests/unit/create-vault.test.ts"
+      ],
+      "notes": "Manage vaults opens/focuses isolated windows and Create new vault with collision errors asserted. Per spec, rename, move, remove-from-list are not implemented."
     },
     {
       "id": "HELP-6670235e2ad5",
@@ -517,8 +698,12 @@
       "title": "Symbolic links and junctions",
       "sourcePath": "obsidian-help/en/Files and folders/Symbolic links and junctions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Files%20and%20folders/Symbolic%20links%20and%20junctions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/vault-refresh-troubleshooting.md",
+        "tests/e2e/vault-refresh-errors.spec.ts"
+      ],
+      "notes": "Geode refuses vault symlinks with SYMLINK_UNSUPPORTED (asserted) rather than following folder symlinks as Obsidian does; no Geode-owned equivalence doc under spec/adr/design. Grepped docs/spec for symlink: nothing."
     },
     {
       "id": "HELP-5e29d38c62f3",
@@ -529,7 +714,8 @@
       "sourcePath": "obsidian-help/en/Getting started/Back up your Obsidian files.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Back%20up%20your%20Obsidian%20files.md",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Documentation-only guidance (backup strategy, third-party tools); no app behavior to test or implement."
     },
     {
       "id": "HELP-b2a6e7233057",
@@ -539,8 +725,13 @@
       "title": "Create a vault",
       "sourcePath": "obsidian-help/en/Getting started/Create a vault.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Create%20a%20vault.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/create-vault.spec.ts",
+        "tests/e2e/vault-switcher.spec.ts",
+        "tests/unit/create-vault.test.ts"
+      ],
+      "notes": "E2E create-new-vault dialog (name, validation, collision, opens vault) and Open folder as vault (picker, cancel, invalid folder, opens window). Native Browse location chooser not asserted separately."
     },
     {
       "id": "HELP-37aa10df11b5",
@@ -550,8 +741,12 @@
       "title": "Create your first note",
       "sourcePath": "obsidian-help/en/Getting started/Create your first note.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Create%20your%20first%20note.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/document-actions.spec.ts",
+        "tests/e2e/new-tab-picker.spec.ts"
+      ],
+      "notes": "New note command selects Untitled for rename and New Tab 'Create new note' exist. Not asserted: Ctrl/Cmd+N keystroke naming flow, pasting content, Ctrl+B bold."
     },
     {
       "id": "HELP-edde92e5d308",
@@ -562,7 +757,8 @@
       "sourcePath": "obsidian-help/en/Getting started/Download and install Obsidian.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Download%20and%20install%20Obsidian.md",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Installer/download instructions for external platforms; not testable app behavior. Geode packaging tests (release-signing-config) do not map to the page."
     },
     {
       "id": "HELP-c765eb112564",
@@ -573,7 +769,8 @@
       "sourcePath": "obsidian-help/en/Getting started/Glossary.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Glossary.md",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Glossary is reference text only; no testable behavior."
     },
     {
       "id": "HELP-54c715dbf604",
@@ -583,8 +780,11 @@
       "title": "Import notes",
       "sourcePath": "obsidian-help/en/Getting started/Import notes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Import%20notes.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "No importers for Notion/Evernote/Roam/Logseq/etc. Spec 02:1067 treats Importer as non-core companion. Only Obsidian-folder import (ADR 0004) and Format converter exist. Grepped src/tests for notion|evernote|importer: nothing."
     },
     {
       "id": "HELP-8f0d1a29a831",
@@ -594,8 +794,13 @@
       "title": "Link notes",
       "sourcePath": "obsidian-help/en/Getting started/Link notes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Link%20notes.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/smoke.spec.ts",
+        "tests/e2e/graph-view.spec.ts",
+        "tests/unit/link-click-target-pane.test.ts"
+      ],
+      "notes": "Covered: backlinks linked/unlinked mentions, graph view click-to-open, link click targeting (unit). [[ autocomplete exists in markdown-view.ts but no test found; Ctrl-click to create unresolved note and More options > Open local graph not asserted."
     },
     {
       "id": "HELP-06149f5bc237",
@@ -605,8 +810,12 @@
       "title": "Mobile app",
       "sourcePath": "obsidian-help/en/Getting started/Mobile app.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Mobile%20app.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "tests/mobile/layout-polish.spec.ts"
+      ],
+      "notes": "Mobile layout (bottom navigation, drawer) has mobile e2e. Mobile toolbar customization/configure, quick actions: grep 'mobile toolbar' in src/styles found nothing."
     },
     {
       "id": "HELP-3e00e8be37ee",
@@ -616,8 +825,12 @@
       "title": "Sandbox vault",
       "sourcePath": "obsidian-help/en/Getting started/Sandbox vault.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Sandbox%20vault.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/starter-vault-explore.spec.ts",
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "E2E covers 'Try the sample vault' from the vault picker (bundled starter vault copy). Not the Help icon > Sandbox vault Open, nor 'Open sandbox vault' command (grep found none)."
     },
     {
       "id": "HELP-a3ad17c4aa6d",
@@ -627,8 +840,13 @@
       "title": "Sync your notes across devices",
       "sourcePath": "obsidian-help/en/Getting started/Sync your notes across devices.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Sync%20your%20notes%20across%20devices.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "intentionally-equivalent",
+      "evidence": [
+        "docs/adr/0016-causal-append-only-vault-history.md",
+        "docs/design/app-hub-sync-provider.md",
+        "tests/e2e/hub-sync-provider.spec.ts"
+      ],
+      "notes": "Geode-owned sync (hub provider, append-only history) replaces Obsidian Sync; third-party folder sync methods are filesystem-level. E2E asserts multi-instance hub sync."
     },
     {
       "id": "HELP-1d4c4c81d072",
@@ -638,8 +856,14 @@
       "title": "Update Obsidian",
       "sourcePath": "obsidian-help/en/Getting started/Update Obsidian.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Getting%20started/Update%20Obsidian.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/update-config.test.ts",
+        "tests/unit/update-scheduler.test.ts",
+        "tests/unit/application-menu.test.ts",
+        "docs/adr/0003-auto-update-mechanism.md"
+      ],
+      "notes": "Unit-only: auto-update gate, scheduler, menu Check for updates. No e2e of Settings > General version display, Check for updates/Relaunch, or Automatic updates toggle."
     },
     {
       "id": "HELP-db2b997aee35",
@@ -649,8 +873,11 @@
       "title": "Help and support",
       "sourcePath": "obsidian-help/en/Help and support.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Help%20and%20support.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Spec section 17 describes Help icon, Sandbox vault. Grepped src, tests for debug info, Show debug info, startup time, sandbox vault: nothing (starter vault exists only for onboarding)."
     },
     {
       "id": "HELP-70264e2bf266",
@@ -661,7 +888,8 @@
       "sourcePath": "obsidian-help/en/Home.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Home.md",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Help site landing page: an index of links to other help pages with no testable app behavior of its own; nothing to assess beyond those pages' rows."
     },
     {
       "id": "HELP-d52efa5ef56e",
@@ -671,8 +899,11 @@
       "title": "Import CSV files",
       "sourcePath": "obsidian-help/en/Import notes/Import CSV files.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20CSV%20files.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-8832b2241c81",
@@ -682,8 +913,11 @@
       "title": "Import from Airtable",
       "sourcePath": "obsidian-help/en/Import notes/Import from Airtable.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Airtable.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-30823de9f6b4",
@@ -693,8 +927,11 @@
       "title": "Import from Apple Journal",
       "sourcePath": "obsidian-help/en/Import notes/Import from Apple Journal.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Apple%20Journal.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-69a33c40bdb3",
@@ -704,8 +941,11 @@
       "title": "Import from Apple Notes",
       "sourcePath": "obsidian-help/en/Import notes/Import from Apple Notes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Apple%20Notes.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-a6ec750c8dfd",
@@ -715,8 +955,11 @@
       "title": "Import from Bear",
       "sourcePath": "obsidian-help/en/Import notes/Import from Bear.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Bear.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-71d18ec4de43",
@@ -726,8 +969,11 @@
       "title": "Import from Craft",
       "sourcePath": "obsidian-help/en/Import notes/Import from Craft.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Craft.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-ae6a5ecb9b4f",
@@ -737,8 +983,11 @@
       "title": "Import from Evernote",
       "sourcePath": "obsidian-help/en/Import notes/Import from Evernote.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Evernote.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-1c72d9c1978b",
@@ -748,8 +997,11 @@
       "title": "Import from Google Keep",
       "sourcePath": "obsidian-help/en/Import notes/Import from Google Keep.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Google%20Keep.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-980f2ed7afa7",
@@ -759,8 +1011,11 @@
       "title": "Import from Logseq",
       "sourcePath": "obsidian-help/en/Import notes/Import from Logseq.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Logseq.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-b5bb352519d1",
@@ -770,8 +1025,11 @@
       "title": "Import from Microsoft OneNote",
       "sourcePath": "obsidian-help/en/Import notes/Import from Microsoft OneNote.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Microsoft%20OneNote.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-1674af632759",
@@ -781,8 +1039,11 @@
       "title": "Import from Notion",
       "sourcePath": "obsidian-help/en/Import notes/Import from Notion.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Notion.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-ccd09d4d3992",
@@ -792,8 +1053,11 @@
       "title": "Import from Roam Research",
       "sourcePath": "obsidian-help/en/Import notes/Import from Roam Research.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Roam%20Research.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-51aaa60e232e",
@@ -803,8 +1067,11 @@
       "title": "Import from Tomboy and Gnote",
       "sourcePath": "obsidian-help/en/Import notes/Import from Tomboy and Gnote.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20from%20Tomboy%20and%20Gnote.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-ad7431d1dd72",
@@ -814,8 +1081,11 @@
       "title": "Import HTML files",
       "sourcePath": "obsidian-help/en/Import notes/Import HTML files.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20HTML%20files.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-1a8db2596028",
@@ -825,8 +1095,11 @@
       "title": "Import Markdown files",
       "sourcePath": "obsidian-help/en/Import notes/Import Markdown files.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20Markdown%20files.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-f939ee183963",
@@ -836,8 +1109,11 @@
       "title": "Import Textbundle files",
       "sourcePath": "obsidian-help/en/Import notes/Import Textbundle files.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Import%20Textbundle%20files.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-bf2ce81f9f1e",
@@ -847,8 +1123,11 @@
       "title": "Importer templates",
       "sourcePath": "obsidian-help/en/Import notes/Importer templates.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Importer%20templates.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-a7cb4be3a7e7",
@@ -858,8 +1137,11 @@
       "title": "Importer",
       "sourcePath": "obsidian-help/en/Import notes/Importer.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Import%20notes/Importer.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: importer, 'import from', evernote, notion, textbundle, csv import (ADR 0004 imports plugins/themes from .obsidian, not notes)"
     },
     {
       "id": "HELP-30dff8d016ee",
@@ -869,8 +1151,11 @@
       "title": "Catalyst license",
       "sourcePath": "obsidian-help/en/Licenses and payment/Catalyst license.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Licenses%20and%20payment/Catalyst%20license.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-5f43f29448cc",
@@ -880,8 +1165,11 @@
       "title": "Education and non-profit discount",
       "sourcePath": "obsidian-help/en/Licenses and payment/Education and non-profit discount.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Licenses%20and%20payment/Education%20and%20non-profit%20discount.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-2bd42631d43c",
@@ -891,8 +1179,11 @@
       "title": "Introduction to licenses and payment",
       "sourcePath": "obsidian-help/en/Licenses and payment/Introduction to licenses and payment.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Licenses%20and%20payment/Introduction%20to%20licenses%20and%20payment.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-8c77bb2d4b42",
@@ -902,8 +1193,11 @@
       "title": "Obsidian Credit",
       "sourcePath": "obsidian-help/en/Licenses and payment/Obsidian Credit.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Licenses%20and%20payment/Obsidian%20Credit.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-8318169892c5",
@@ -913,8 +1207,11 @@
       "title": "Refund policy",
       "sourcePath": "obsidian-help/en/Licenses and payment/Refund policy.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Licenses%20and%20payment/Refund%20policy.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-b4bc818b38b3",
@@ -924,8 +1221,11 @@
       "title": "Sales tax",
       "sourcePath": "obsidian-help/en/Licenses and payment/Sales tax.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Licenses%20and%20payment/Sales%20tax.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-32da8f2003a5",
@@ -935,8 +1235,13 @@
       "title": "Aliases",
       "sourcePath": "obsidian-help/en/Linking notes and files/Aliases.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Linking%20notes%20and%20files/Aliases.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "tests/e2e/shared-link-navigation.spec.ts",
+        "tests/unit/shared-link-resolution.test.ts"
+      ],
+      "notes": "Alias frontmatter parsing and link resolution via alias (unit, plus Reading View navigation e2e) asserted. Alias suggestions in link autocomplete, Quick switcher alias match and the Aliases property UI not covered here."
     },
     {
       "id": "HELP-bbdab2fba109",
@@ -949,9 +1254,10 @@
       "status": "partial",
       "evidence": [
         "tests/e2e/live-preview-markdown-image.spec.ts",
-        "tests/e2e/smoke.spec.ts"
+        "tests/e2e/smoke.spec.ts",
+        "tests/unit/embed.test.ts"
       ],
-      "notes": "Observed same-vault standard Markdown images and existing wiki image embeds as real Live Preview images away from the cursor; exact note-relative, parent-relative, dot-segment, and vault-root paths with above-root rejection; percent-encoded spaces and literal # filenames; angle-bracket paths; semantic plain alt/title text with CommonMark punctuation escapes and character references decoded and inline formatting marks excluded; explicit rejection of remote, protocol-relative, encoded/escaped scheme, data, file, malformed-percent, NUL, and traversal destinations; source reveal on the active line; missing/load-error fallbacks; distinct standard-versus-wiki sizing; blob URL teardown; and unchanged Reading View rendering. The broader help page also covers unsupported PDF/block embeds, remote images, and interactive image resizing, so the row remains partial."
+      "notes": "Image embeds in Live Preview/Reading, sizing, path resolution, fallbacks asserted. PDF embeds, block/heading note embed breadth, remote images and interactive resize remain unasserted."
     },
     {
       "id": "HELP-b38cb786725c",
@@ -961,8 +1267,15 @@
       "title": "Internal links",
       "sourcePath": "obsidian-help/en/Linking notes and files/Internal links.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Linking%20notes%20and%20files/Internal%20links.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/rename.test.ts",
+        "tests/unit/link-click-target-pane.test.ts",
+        "tests/e2e/page-preview.spec.ts",
+        "tests/e2e/shared-link-navigation.spec.ts"
+      ],
+      "notes": "Wikilink parse, resolution (path/basename/alias/heading), rename rewrites, click target pane, and hover previews asserted. Block-ref rename (known limitation), heading/block autocomplete, link format settings, Markdown-link generation untested."
     },
     {
       "id": "HELP-8b73cda39c01",
@@ -972,8 +1285,11 @@
       "title": "PDFs",
       "sourcePath": "obsidian-help/en/Linking notes and files/PDFs.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Linking%20notes%20and%20files/PDFs.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "No PDF viewer or ![[x.pdf#page=3]] support: grepped src/renderer for pdf found only attachments.ts and app.ts file-type handling; tests only classify pdf as an extension."
     },
     {
       "id": "HELP-a542ac9298c0",
@@ -983,8 +1299,11 @@
       "title": "Analytics",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Analytics.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Analytics.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-7474a7aee159",
@@ -994,8 +1313,11 @@
       "title": "Collaborate on a Publish site",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Collaborate on a Publish site.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Collaborate%20on%20a%20Publish%20site.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-baedbb0e2e00",
@@ -1005,8 +1327,11 @@
       "title": "Custom domains",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Custom domains.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Custom%20domains.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-f090e5613871",
@@ -1016,8 +1341,11 @@
       "title": "Customize your site",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Customize your site.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Customize%20your%20site.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-5b6e4296b41f",
@@ -1027,8 +1355,11 @@
       "title": "Headless Publish",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Headless Publish.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Headless%20Publish.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-1488a95ca64b",
@@ -1038,8 +1369,11 @@
       "title": "Introduction to Obsidian Publish",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Introduction to Obsidian Publish.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Introduction%20to%20Obsidian%20Publish.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-8944c512fd6e",
@@ -1049,8 +1383,11 @@
       "title": "Manage sites",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Manage sites.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Manage%20sites.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-c59947c32f45",
@@ -1060,8 +1397,11 @@
       "title": "Media files",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Media files.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Media%20files.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-8baf933f5159",
@@ -1071,8 +1411,11 @@
       "title": "Permalinks",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Permalinks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Permalinks.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-a60f397143e5",
@@ -1082,8 +1425,11 @@
       "title": "Publish limitations",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Publish limitations.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Publish%20limitations.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-ca6145fd0b56",
@@ -1093,8 +1439,11 @@
       "title": "Publish your content",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Publish your content.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Publish%20your%20content.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-bf0c00debd56",
@@ -1104,8 +1453,11 @@
       "title": "Security and privacy",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Security and privacy.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Security%20and%20privacy.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-98a43a911255",
@@ -1115,8 +1467,11 @@
       "title": "SEO",
       "sourcePath": "obsidian-help/en/Obsidian Publish/SEO.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/SEO.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-b3f12e078369",
@@ -1126,8 +1481,11 @@
       "title": "Set up Obsidian Publish",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Set up Obsidian Publish.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Set%20up%20Obsidian%20Publish.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-b5b6d93995b7",
@@ -1137,8 +1495,11 @@
       "title": "Social media link previews",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Social media link previews.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Social%20media%20link%20previews.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-fec278e8ca41",
@@ -1148,8 +1509,11 @@
       "title": "Troubleshoot Obsidian Publish",
       "sourcePath": "obsidian-help/en/Obsidian Publish/Troubleshoot Obsidian Publish.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Publish/Troubleshoot%20Obsidian%20Publish.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: publish, 'Obsidian Publish', permalink, custom domain (src/cli catalog-publish is vault-catalog, unrelated)"
     },
     {
       "id": "HELP-f3d309882121",
@@ -1159,8 +1523,11 @@
       "title": "Collaborate on a shared vault",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Collaborate on a shared vault.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Collaborate%20on%20a%20shared%20vault.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "No invite/remove-user, Manage sharing or 20-collaborator limit UI. grep -i 'invite|manage sharing' src/ found nothing relevant. Multi-device convergence and explicit conflicts exist (immutable-sync-multiclient e2e) but nothing for collaborator management; not documented as equivalent."
     },
     {
       "id": "HELP-c4ec99da7a83",
@@ -1170,8 +1537,12 @@
       "title": "Frequently asked questions",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Frequently asked questions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Frequently%20asked%20questions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/hub-sync-provider.spec.ts",
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "FAQ covers service facts: OS support, synced data types, plans/storage/vault/file-size limits, retention, third-party sync. Geode: hub sync across desktop (e2e) and scope exclusions; no plans, quotas or retention (self-hosted hub). Third-party coexistence guidance not asserted."
     },
     {
       "id": "HELP-36c134c9ac06",
@@ -1181,8 +1552,13 @@
       "title": "Headless Sync",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Headless Sync.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Headless%20Sync.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "intentionally-equivalent",
+      "evidence": [
+        "docs/adr/0025-geode-wiki-sync-cli.md",
+        "docs/design/headless-wiki-sync.md",
+        "tests/unit/sync-cli.test.ts"
+      ],
+      "notes": "Geode-owned equivalent: 'geode-wiki sync' CLI (init/preview/run/status/conflicts/resolve/serve/schedule) documented in ADR 0025 and headless-wiki-sync.md; unit-tested init, approval, convergence, conflicts, delete rails. Not the 'ob' command set, Obsidian account or E2EE."
     },
     {
       "id": "HELP-2a8631dad0f1",
@@ -1192,8 +1568,13 @@
       "title": "Introduction to Obsidian Sync",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Introduction to Obsidian Sync.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Introduction%20to%20Obsidian%20Sync.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/hub-sync-provider.spec.ts",
+        "tests/e2e/sync-status-card.spec.ts",
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Index page for the Sync service. Geode has its own sync (Settings > Sync, status card, hub provider, conflict compare) but not Obsidian's account service, version history, collaboration, regions or plans; Lockdown Mode/status-page notes N/A."
     },
     {
       "id": "HELP-09cef23e65b8",
@@ -1203,8 +1584,13 @@
       "title": "Local and remote vaults",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Local and remote vaults.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Local%20and%20remote%20vaults.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/hub-sync-provider.spec.ts",
+        "tests/e2e/immutable-sync-multiclient.spec.ts",
+        "docs/adr/0016-causal-append-only-vault-history.md"
+      ],
+      "notes": "Local vault plus shared remote store model: two app instances converge through a hub; offline concurrent edits stay explicit and queued publication survives restart. Not covered: Obsidian remote-vault terminology/management, file-level transfer claims, recommended vault locations guidance."
     },
     {
       "id": "HELP-4546a3baccd4",
@@ -1214,8 +1600,12 @@
       "title": "Plans and storage limits",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Plans and storage limits.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Plans%20and%20storage%20limits.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "intentionally-equivalent",
+      "evidence": [
+        "docs/adr/0029-https-websocket-hub-transport.md",
+        "docs/adr/0007-mobile-runtime-and-platform-boundary.md"
+      ],
+      "notes": "Plans, storage quotas and 5/200 MB limits belong to Obsidian's paid service. Geode documents a self-hosted hub it does not run (ADR 0029: 'Geode does not run one'; ADR 0007 leaves a hosted backend undecided), so no plans/pricing/prune flow exists by design."
     },
     {
       "id": "HELP-7c74210aa7ae",
@@ -1225,8 +1615,13 @@
       "title": "Security and privacy",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Security and privacy.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Security%20and%20privacy.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/hub-sync-provider.spec.ts",
+        "docs/adr/0015-plugin-provided-vault-sync.md",
+        "docs/adr/0029-https-websocket-hub-transport.md"
+      ],
+      "notes": "Covered: HTTPS hub refuses hostile URLs and never offers plaintext transport (e2e); secrets via safeStorage, SHA-256 checks. Not covered: end-to-end encrypted remote vault (ADR 0015 defers core E2EE), AES-GCM/scrypt, encryption password, Obsidian hosting regions, audit."
     },
     {
       "id": "HELP-75dcc5eaf1e9",
@@ -1236,8 +1631,13 @@
       "title": "Set up Obsidian Sync",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Set up Obsidian Sync.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Set%20up%20Obsidian%20Sync.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/immutable-sync-setup.spec.ts",
+        "tests/e2e/hub-sync-provider.spec.ts",
+        "tests/e2e/sync-status-card.spec.ts"
+      ],
+      "notes": "Covered end to end: Settings > Sync guided setup (create or join shared vault), explicit preview before first sync, second-device connect, exclusions/scope section. Not covered: Obsidian account login, Core plugins Sync toggle, encryption password, region, Start syncing flow as specified."
     },
     {
       "id": "HELP-53275b05d7fc",
@@ -1247,8 +1647,13 @@
       "title": "Status icon and messages",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Status icon and messages.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Status%20icon%20and%20messages.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/sync-status-card.spec.ts",
+        "tests/e2e/sync-progress-panel.spec.ts",
+        "tests/unit/sync-progress.test.ts"
+      ],
+      "notes": "Covered: Sync tab status card (idle/setup/preview chips) and live progress, stall naming. Not covered: status-bar sync icon states, activity log of file messages, error/skipped/account/network message catalogue (no status-bar sync item found in src/renderer/sync)."
     },
     {
       "id": "HELP-2cde397ae503",
@@ -1258,8 +1663,11 @@
       "title": "Switch to Obsidian Sync",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Switch to Obsidian Sync.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Switch%20to%20Obsidian%20Sync.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Guidance for migrating a vault out of third-party sync before using Obsidian Sync (recommended locations, moving vault on mobile). No equivalent Geode doc or flow found; grep 'Switch to|move your vault' in docs/ and src/ empty. Related rails exist in ADR 0025 (unmounted/evicted volume) but are not this guidance."
     },
     {
       "id": "HELP-24bbe77f81f2",
@@ -1269,8 +1677,12 @@
       "title": "Sync regions",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Sync regions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Sync%20regions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "intentionally-equivalent",
+      "evidence": [
+        "docs/adr/0029-https-websocket-hub-transport.md",
+        "docs/design/app-hub-sync-provider.md"
+      ],
+      "notes": "Server regions exist only for Obsidian's hosted service. Geode's hub is a user-owned directory (folder/ssh/HTTPS); location is chosen by where the user hosts it (ADR 0029, app-hub-sync-provider.md), so there is no region picker or migration."
     },
     {
       "id": "HELP-e1b4a6e72831",
@@ -1280,8 +1692,14 @@
       "title": "Sync settings and selective syncing",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Sync settings and selective syncing.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Sync%20settings%20and%20selective%20syncing.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/sync-scope.test.ts",
+        "tests/unit/sync-portable-config.test.ts",
+        "tests/unit/sync-local-only.test.ts",
+        "tests/e2e/sync-status-card.spec.ts"
+      ],
+      "notes": "Covered (unit): file-type and folder exclusions, hidden/trash/cache exclusion, portable config categories (editor, appearance, hotkeys, daily notes). e2e: 'What syncs' summary section. Not covered: exact Obsidian categories/defaults, conflict-resolution choice, hot-reload/restart behavior, settings profiles, full e2e of toggles."
     },
     {
       "id": "HELP-2b5cecd785a3",
@@ -1291,8 +1709,12 @@
       "title": "Troubleshoot Obsidian Sync",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Troubleshoot Obsidian Sync.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Troubleshoot%20Obsidian%20Sync.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/immutable-sync-multiclient.spec.ts",
+        "tests/unit/sync-conflict-ux.test.ts"
+      ],
+      "notes": "Covered: concurrent edits stay explicit conflicts with banner, read-only Compare & resolve dialog and keep-local/synced resolution (e2e + unit). Differs from help: no automatic diff-match-patch merge or last-modified-wins, no conflict-resolution setting; plugin/settings and Android troubleshooting not covered."
     },
     {
       "id": "HELP-2db6bdd5a3e8",
@@ -1302,8 +1724,12 @@
       "title": "Upgrade Sync encryption",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Upgrade Sync encryption.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Upgrade%20Sync%20encryption.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md",
+        "docs/adr/0015-plugin-provided-vault-sync.md"
+      ],
+      "notes": "Encryption-version migration assistant has no Geode counterpart; ADR 0015 defers core E2EE so there are no encryption versions to upgrade. Searched src/ for 'Upgrade vault|migration assistant|AES-SIV' with no sync hits."
     },
     {
       "id": "HELP-d0b639894c6f",
@@ -1313,8 +1739,12 @@
       "title": "Version history",
       "sourcePath": "obsidian-help/en/Obsidian Sync/Version history.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Sync/Version%20history.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md",
+        "docs/adr/0015-plugin-provided-vault-sync.md"
+      ],
+      "notes": "No Sync history view, Open version history, Deleted files restore or retention in app. Searched src/ for 'version history|Open version history|Show Sync history': no hits. ADR 0015 defers version browsing. Only the conflict compare dialog lists divergent heads."
     },
     {
       "id": "HELP-89b44e3bf36d",
@@ -1324,8 +1754,11 @@
       "title": "Clip web pages",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Clip web pages.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Clip%20web%20pages.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-5b5692fceef0",
@@ -1335,8 +1768,11 @@
       "title": "Filters",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Filters.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Filters.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-529d228585e9",
@@ -1346,8 +1782,11 @@
       "title": "Highlighter",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Highlighter.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Highlighter.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-02743e539630",
@@ -1357,8 +1796,11 @@
       "title": "Interpreter",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Interpreter.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Interpreter.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-24e007b1c56d",
@@ -1368,8 +1810,11 @@
       "title": "Introduction to Obsidian Web Clipper",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Introduction to Obsidian Web Clipper.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Introduction%20to%20Obsidian%20Web%20Clipper.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-e09560a1af75",
@@ -1379,8 +1824,11 @@
       "title": "Logic",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Logic.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Logic.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-fd216a5ca22f",
@@ -1390,8 +1838,11 @@
       "title": "Reader",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Reader.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Reader.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-80bf74f36a2e",
@@ -1401,8 +1852,11 @@
       "title": "Templates",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Templates.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Templates.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-fd84db9455f7",
@@ -1412,8 +1866,11 @@
       "title": "Troubleshoot Web Clipper",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Troubleshoot Web Clipper.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Troubleshoot%20Web%20Clipper.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-066214379628",
@@ -1423,8 +1880,11 @@
       "title": "Variables",
       "sourcePath": "obsidian-help/en/Obsidian Web Clipper/Variables.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian%20Web%20Clipper/Variables.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: clipper, 'web clip' (only mentions are spec exclusions)"
     },
     {
       "id": "HELP-147cad49a618",
@@ -1434,8 +1894,11 @@
       "title": "2-factor authentication",
       "sourcePath": "obsidian-help/en/Obsidian/2-factor authentication.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/2-factor%20authentication.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-cab0e4804316",
@@ -1445,8 +1908,11 @@
       "title": "About Obsidian",
       "sourcePath": "obsidian-help/en/Obsidian/About Obsidian.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/About%20Obsidian.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-b5ead7ce1109",
@@ -1456,8 +1922,11 @@
       "title": "Community code of conduct",
       "sourcePath": "obsidian-help/en/Obsidian/Community code of conduct.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/Community%20code%20of%20conduct.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-5e1d01013679",
@@ -1467,8 +1936,11 @@
       "title": "Credits",
       "sourcePath": "obsidian-help/en/Obsidian/Credits.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/Credits.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-49c59846327e",
@@ -1478,8 +1950,11 @@
       "title": "Early access versions",
       "sourcePath": "obsidian-help/en/Obsidian/Early access versions.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/Early%20access%20versions.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-0fbb1a747f8a",
@@ -1489,8 +1964,12 @@
       "title": "Obsidian for Android",
       "sourcePath": "obsidian-help/en/Obsidian/Obsidian for Android.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/Obsidian%20for%20Android.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/mobile/mobile-renderer.spec.ts",
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Geode has a mobile renderer with phone/tablet e2e (drawers, safe area, vault switching), but the store-listing/app-page facts (distribution, platform features) are not asserted. Not read in depth; conservative partial."
     },
     {
       "id": "HELP-576b68aa5f3e",
@@ -1500,8 +1979,12 @@
       "title": "Obsidian for iOS and iPadOS",
       "sourcePath": "obsidian-help/en/Obsidian/Obsidian for iOS and iPadOS.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/Obsidian%20for%20iOS%20and%20iPadOS.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/mobile/mobile-renderer.spec.ts",
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Geode has a mobile renderer with phone/tablet e2e (drawers, safe area, vault switching), but the store-listing/app-page facts (distribution, platform features) are not asserted. Not read in depth; conservative partial."
     },
     {
       "id": "HELP-a93d9b760c26",
@@ -1511,8 +1994,11 @@
       "title": "Official website",
       "sourcePath": "obsidian-help/en/Obsidian/Official website.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Obsidian/Official%20website.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/00-overview.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: about obsidian, credits, code of conduct, contributing, translations, 2fa, early access"
     },
     {
       "id": "HELP-eab17f7eff0f",
@@ -1524,9 +2010,11 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Audio%20recorder.md",
       "status": "partial",
       "evidence": [
-        "tests/unit/audio-recorder.test.ts"
+        "tests/unit/audio-recorder.test.ts",
+        "docs/design/packaged-audio-capture.md",
+        "tests/e2e/audio-worklet.spec.ts"
       ],
-      "notes": "Unit-tested: Recording YYYYMMDDHHmmss.webm naming, attachment-folder placement and collision handling, end-of-note embed append, start/stop state machine, microphone release, and permission/no-device classification. Ribbon mic icon, single toggle command and a Core plugins toggle (off by default) are wired; recordings embed as an audio player. Real microphone capture and the macOS permission prompt were not observed headlessly, so the row remains partial."
+      "notes": "Unit-tested YYYYMMDDHHmmss.webm naming, attachment-folder placement, collisions, embed append, start/stop state machine, mic release, permission classification. No e2e of ribbon/command/embed player or real capture; unit-only for UI-ish behavior."
     },
     {
       "id": "HELP-d6b3f1f19c87",
@@ -1536,8 +2024,13 @@
       "title": "Backlinks",
       "sourcePath": "obsidian-help/en/Plugins/Backlinks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Backlinks.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/backlinks-visibility.spec.ts",
+        "tests/unit/backlinks-view-cancellation.test.ts",
+        "tests/unit/sidebar-active-leaf.test.ts"
+      ],
+      "notes": "Covered: pane defers scans while hidden and refreshes on reveal (e2e), scan cancellation on target change/close, follows active file. Not asserted: linked/unlinked mention lists, collapse/sort/context toggles, search-in-backlinks, backlink in document."
     },
     {
       "id": "HELP-59b4d64f6e0d",
@@ -1547,8 +2040,12 @@
       "title": "Bookmarks",
       "sourcePath": "obsidian-help/en/Plugins/Bookmarks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Bookmarks.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/bookmarks.spec.ts",
+        "tests/unit/bookmarks-data.test.ts"
+      ],
+      "notes": "Strong e2e: file/group round trip, search bookmark re-runs query, heading and block bookmarks, web page link, tab-group bookmarking, multi-select, edit title/group, drag into group. Not asserted: folder bookmarks, Bookmarks search (v1.13), sort, remaining item types/ commands as a whole page."
     },
     {
       "id": "HELP-bb4781a4c7d5",
@@ -1564,59 +2061,13 @@
         "tests/e2e/canvas.spec.ts",
         "tests/e2e/canvas-create.spec.ts",
         "tests/e2e/canvas-text-card.spec.ts",
-        "tests/e2e/canvas-text-edit-context.spec.ts",
-        "tests/e2e/canvas-card-scroll.spec.ts",
-        "tests/e2e/canvas-file-card.spec.ts",
-        "tests/e2e/canvas-swap-file.spec.ts",
-        "tests/e2e/canvas-media-swap-file.spec.ts",
-        "tests/e2e/canvas-web-card.spec.ts",
-        "tests/e2e/canvas-live-web-preview.spec.ts",
         "tests/e2e/canvas-connections.spec.ts",
-        "tests/e2e/canvas-connection-empty-drop.spec.ts",
-        "tests/e2e/canvas-connection-chooser.spec.ts",
-        "tests/e2e/canvas-edge-actions.spec.ts",
-        "tests/e2e/canvas-edge-inline-label.spec.ts",
-        "tests/e2e/canvas-edge-reconnect.spec.ts",
         "tests/e2e/canvas-group-authoring.spec.ts",
-        "tests/e2e/canvas-group-membership.spec.ts",
-        "tests/e2e/canvas-group-auto-expand.spec.ts",
-        "tests/e2e/canvas-group-resize-expand.spec.ts",
-        "tests/e2e/canvas-group-background.spec.ts",
-        "tests/e2e/canvas-group-background-authoring.spec.ts",
-        "tests/e2e/canvas-group-action-surface.spec.ts",
-        "tests/e2e/canvas-node-action-surface.spec.ts",
-        "tests/e2e/canvas-selection-create-group.spec.ts",
         "tests/e2e/canvas-history.spec.ts",
-        "tests/e2e/canvas-recovery.spec.ts",
-        "tests/e2e/canvas-marquee-selection.spec.ts",
-        "tests/e2e/canvas-alt-duplicate.spec.ts",
-        "tests/e2e/canvas-selected-drag.spec.ts",
-        "tests/e2e/canvas-alignment-snapping.spec.ts",
-        "tests/e2e/canvas-aspect-resize.spec.ts",
-        "tests/e2e/canvas-edge-resize.spec.ts",
-        "tests/e2e/canvas-camera-shortcuts.spec.ts",
-        "tests/e2e/canvas-node-context-zoom.spec.ts",
-        "tests/e2e/canvas-empty-context-authoring.spec.ts",
-        "tests/e2e/canvas-node-context-actions.spec.ts",
-        "tests/e2e/canvas-convert-text-file.spec.ts",
-        "tests/e2e/canvas-selection-colors.spec.ts",
-        "tests/e2e/canvas-selection-remove.spec.ts",
-        "tests/e2e/canvas-context-group-selection.spec.ts",
-        "tests/e2e/canvas-selection-edit-label.spec.ts",
-        "tests/e2e/canvas-file-explorer-drop.spec.ts",
-        "tests/e2e/canvas-folder-drop.spec.ts",
-        "tests/e2e/canvas-url-drop.spec.ts",
-        "tests/e2e/canvas-multi-edge-selection.spec.ts",
-        "tests/e2e/canvas-group-connections.spec.ts",
-        "tests/e2e/canvas-nested-group-movement.spec.ts",
-        "tests/e2e/canvas-markdown-embed.spec.ts",
-        "tests/unit/canvas-search.test.ts",
         "tests/e2e/canvas-search.spec.ts",
-        "tests/unit/canvas-backlinks.test.ts",
-        "tests/unit/canvas-backlinks-metadata.test.ts",
         "tests/e2e/canvas-backlinks.spec.ts"
       ],
-      "notes": "Observed collision-safe canonical empty-canvas creation and opening through the exact command, File Explorer folder menu, and singleton built-in ribbon entry points; double-click and bottom-toolbar text-card authoring with pan/zoom-aware placement, stable IDs, safe Markdown editing/rendering, commit/cancel, persistence/reload, and extension-field preservation; exact text-card context Edit immediately after Zoom to selection with current-value textarea focus/select, byte-identical Escape rollback, one-write Ctrl/Cmd+Enter and blur commits, safe Markdown rerender, retained sole selection/camera, order/color/edge/extension preservation, and reload; selected overflowing rendered text and resolved-note bodies consume plain wheel through native content scrolling with camera/data immutability, while unselected/non-scrollable content and media/web/fallback/group targets retain Canvas pan, Ctrl/Cmd/Space zoom and Shift horizontal-pan precedence remain exact, active textareas retain native scrolling, and scroll state is zero-write and reload-ephemeral; exact text-only Convert to file context authoring with cancel/validation safety, sibling-folder collision naming, exact Markdown bytes, in-place node schema conversion, field/order/edge/selection/camera preservation, rendered persistence/reload, and double-click opening; filtered note/media vault pickers with centered file-card placement, safe note Markdown/subpath rendering and new-tab opening, image/audio blob rendering, other-file fallback, stable file IDs, persistence/reload, and direct-media URL cleanup on rerender; File Explorer TFile and recursive non-root TFolder drag authoring onto transformed true-empty Canvas space with private vault-path MIME, collapsed-descendant discovery, open-Canvas exclusion, lexical path ordering, deterministic three-column world grid, canonical kind sizing/rendering including PDF fallback, collision-safe IDs, exclusive batch selection, one-render/one-write persistence, empty/root/malformed/missing/nonempty-target rejection safety, camera/order/extension preservation, and reload; standard browser URL drag authoring onto transformed true-empty Canvas space with URI-list comment/unsafe-line filtering, strict single-line plain fallback, http(s) canonicalization, private-file priority, safe rendering, stable IDs, exclusive selection, one-write persistence, nonempty/invalid rejection, camera/order/extension preservation, and reload; resolved Markdown, image, audio, and video file cards expose an exact Swap file context action with note-only or exact-media-kind filtered pickers, cancel-safe byte identity, stale-subpath removal, one-write node/edge/order/color/extension and selection/camera preservation, safe note/native-media rerender, blob URL revocation, reload, and retained note double-click opening, while missing, generic-other, and non-file cards exclude it; true empty-surface context authoring exposes exact ordered note, media, web-page, and group actions with captured transformed placement, cancellation-safe disk/selection/camera state, preserved node/edge menus, stable IDs/order/extensions, reload, and unchanged centered toolbar entry points; validated/canonical persistent web-link authoring with visible invalid-input feedback, centered stable link cards, safe hostname/URL rendering, Web Viewer and modifier-OS routing, keyboard activation, reload, and renderer-navigation protection; valid canonical http(s) link cards render one real isolated persist:webviewer Electron guest with canonical source and loaded page DOM/title while retaining a distinct accessible hostname/URL activation label, plain Web Viewer and Ctrl/Cmd/context OS routing, invalid zero-guest fallback, pointer-inert Canvas interaction ownership, rerender/reload singleton lifecycle, and byte/camera/selection/order/extension safety; directed handle-to-handle connection authoring at transformed coordinates with four accessible card-side handles, stable explicit edge schema, live canceled-drag preview, self-edge rejection, wide pointer selection, selected styling, edge-only keyboard deletion, persistence/reload, and extension preservation; transformed true-empty connection drops open an exact text/note/media/web chooser at the captured point with menu/picker/prompt cancellation safety and exact filters; the text choice transactionally appends a collision-safe text card and opposite-side directed edge with inline commit/blur persistence, Escape rollback, source/body/group no-op safety, in-memory source selection, extension/order preservation, and camera-stable reload, while note/media/web choices append canonical rendered cards plus opposite-side directed edges in a single render/write with stable IDs, exact URL validation/canonicalization, selection/camera/order/extension preservation, and reload; inline-on-path edge-label create/edit/trim/clear/cancel on edge double-click with selected/focused current value at the transformed rendered midpoint, transient typing, single-write Enter/blur commits, duplicate-editor cancellation, safe render/view teardown, retained edge selection/endpoint controls/camera, schema/order/color/extension preservation, and reload; exact context action and selected-edge floating control retain modal-backed prefilled edit/trim/clear/cancel with one-write submission, plus context navigation that exclusively selects and visibly centers either endpoint without persistence and edge-only context removal; selected-edge source/target endpoint handles with transformed endpoint reconnection that preserves edge identity and non-endpoint fields, safe unchanged self/group rejection, empty-drop edge removal, camera stability, persistence, and reload; basic group authoring through exact toolbar and eligible non-group node-context actions with cancel-safe optional labels, collision-safe IDs, selected-group filtering, padded selected-card bounds or transformed viewport-centered default geometry, sole-unselected-card fallback, behind-card insertion, exclusive selection, one-write persistence/reload, camera stability, extension preservation, and inherited label edit/drag/resize/delete; inclusive geometric membership snapshots on group drag with identical transformed movement for fully contained cards, stable in-drag membership, partial/outside/nested-group exclusion, live incident-edge redraw without metadata mutation, drop-only persistence, membership recalculation, array-order/camera preservation, and reload; stable geometric containment snapshots auto-expand only original containing groups around a transformed dragged non-group selected-card union with exact 40-world-unit padding, monotonic left/top/right/bottom growth, entered-mid-drag exclusion, preserved Shift/snapping/dynamic Space bypass, live incident-edge redraw, drag-time byte identity, one drop write, selection/camera/order/extension preservation, and reload; pointer-down geometric containment snapshots monotonically expand every original containing group around directional or southeast resizing of a non-group card with exact 40-world-unit padding, dynamic Space bypass/re-enable, entered-mid-gesture and group-resize exclusion, live incident group-edge redraw, resize-time byte identity, one drop write, selection/camera/order/extension preservation, and reload; JSON Canvas parsing/rendering, resize, single/Shift/all selection, persisted ascending z-order promotion, keyboard node deletion with incident-edge removal, vertical/horizontal wheel pan, modifier/cursor-anchored zoom, middle/Space drag pan, and zoom in/out/fit/reset controls; transformed forward/reverse marquee selection across all node types with plain replacement, Shift union, edge clearing, visible lifecycle, click-threshold behavior, and disk/camera/order/extension immutability; thresholded transformed Alt-drag duplication of a selected non-group set or one unselected card with stable collision-safe IDs, deep field preservation, internal-only remapped edge clones, live identical-delta movement, clone-only selection, drop-only persistence, camera stability, and exact reload; transformed selected-set movement for non-group cards with group exclusion, unselected-card fallback, live incident-edge redraw, dynamic dominant-axis Shift constraint, drop-only persistence, order/metadata/camera preservation, and exact reload; zoom-stable six-screen-pixel peer alignment compares selected moving bounds and directional/southeast active resize edges with unselected peer left/center/right and top/center/bottom anchors, chooses the closest candidate per active axis, dynamically bypasses/restores snapping with Space, preserves Shift axis/aspect and minimum/fixed-boundary geometry, redraws edges live, persists once on drop, and preserves offsets/order/extensions/camera through reload; dynamic Shift-preserved aspect-ratio resizing for text, file, link, and group cards with proportional dominant drivers, shared minimum-scale clamping, fixed origin, live incident-edge redraw, drop-only persistence, order/metadata/camera preservation, and exact reload; physical Shift+Digit1 exact Zoom-to-Fit parity and Shift+Digit2 fitting of selected node bounds or edge endpoint nodes with no-selection/input guards, selection/data immutability, and ephemeral reload reset; exact node-context Zoom to selection for every node type with selected-set preservation, sole in-memory unselected-node selection, shared shortcut geometry, disk/order/extension immutability, and reload reset; exact trailing node-context Delete with selected-set or sole-node semantics, incident-edge cleanup, unaffected order/extension preservation, camera stability, persistence/reload, and shared keyboard deletion; valid canonical web cards expose exact OS-external Open in browser routing without Web Viewer, Canvas, selection, camera, or renderer-navigation mutation, while invalid web cards omit it; fixed selection-only color controls with six accessible presets and browser-validated custom CSS colors for multi-selected nodes or one selected edge, cancel/invalid safety, immediate rendering, single-write persistence, selection/camera/order/extension preservation, and reload; icon-only floating Remove for selected node sets or one selected edge with shared keyboard/context node deletion semantics, incident-edge cleanup, one-write persistence, selection/control teardown, unaffected order/color/extension preservation, camera stability, and reload; four directional border resize handles across all node types with transformed plain and dynamic Shift geometry, fixed opposite boundaries or symmetric cross-axis aspect adjustment, shared minimum clamping, sole selection, live edge redraw, drop-only persistence, and camera/order/color/extension-preserving reload; mutually exclusive Set-based multi-edge selection with Shift toggling, selected styling, sole-edge endpoint/label controls, multi-edge color and removal controls, atomic preset/custom color and keyboard/control deletion persistence, multi-endpoint Shift+2 fitting, single-edge context/double-click normalization, extension/order/camera preservation, and reload; first-class group edge endpoints with four accessible side handles, explicit card-to-group/group-to-card/group-to-group authoring, stable sole-edge selection and one-write persistence, group-source empty-drop chooser transactions, handle-targeted source/target reconnection with edge-field preservation, self/unchanged/body rejection, live move redraw, camera/order/extension preservation, and reload; inclusive stable group-drag snapshots that carry every fully-contained card and nested group exactly once under transformed movement, exclude self/partial/outside nodes, redraw incident group/card edges live, persist once on drop, recalculate membership for later nested-group drags, and preserve selection/order/fields/extensions/camera through reload; explicit cover, ratio, and repeat group background styles resolve real vault images to managed blob URLs with exact sizing/position/repeat behavior, missing/non-image safety, stale-render guards, rerender/view-close cleanup, direct/embedded Canvas parity, and zero-write selection/camera/order/JSON preservation; exact group-only context Set background authoring with an image-only vault picker and explicit Cover/Ratio/Repeat staging, byte-identical picker/style cancellation, atomic background plus backgroundStyle one-write commits, existing-background style replacement and Remove background, exact non-group menu exclusion, managed blob rerender cleanup, selection/camera/order/extension preservation, and reload; exact group context Edit label plus sole-group floating Set color, Edit label, Set background, conditional Set background style/Remove background, and icon-only Remove action surfaces with group-specific closure rebuilding, safe screen placement, shared cancel/one-write behavior, non-group/multi-selection exclusion, and preserved selection/camera/order/extensions/render/reload; exact sole non-group floating actions for text Edit/Convert to file, resolved note/image/audio/video Swap file, and canonical link Open in browser with generic missing/other/invalid exclusions, node-identity/capability closure rebuilding across selection and resolution changes, shared cancel/one-write/OS-routing behavior, unchanged group/edge/multi surfaces, and selection/camera/order/extension/reload preservation; exact eligible multi-card floating Set color/Create group/Remove controls with group-containing selection exclusion and eligibility-key rebuilding, transformed marquee/Shift selection coverage, cancel-safe byte identity, trimmed optional labels, collision-safe 40-unit padded behind-card insertion, sole-group controls after creation, one-write persistence, and selection/camera/order/edge/extension-preserving reload; capped 100-step view-session exact-document Canvas undo/redo for authoring, transformed geometry, deletion with incident-edge restoration, no-op deduplication, redo invalidation, input guarding, selection/editor clearing, camera/order/extension preservation, one-write restores, and genuine external-modify/reload resets. Explicit malformed-JSON and schema-invalid Canvas recovery preserves exact source bytes/last-known text and camera while clearing stale nodes, edges, selection, editors, controls, and object lifecycles; deterministic accessible Retry and generation-ordered rereads remain zero-write on repeated failure, representative toolbar/surface/drop/context/keyboard/history mutation routes are inert, direct-disk Retry and valid external vault modification recover exact documents with reset history, and reload remains exact/error-free. Real relative-path Canvas embeds in Markdown Reading view and Live Preview through bounded headerless CanvasView lifecycles with rendered nodes/edges/nested note and media cards, interactive ephemeral camera/selection, external Canvas reload, unresolved/direct-nested-cycle guards, host-note byte identity, and listener/blob-URL teardown across widget destruction and reading rerender; Strict semantic Canvas search projects ordered text, file/subpath, URL, group label/background, and edge-label content without indexing JSON syntax/geometry/IDs/colors/vendor fields or fabricating tags; ordinary/content/line/regex/negation and filename/path operators, safe malformed-file exclusion, readable snippets, Markdown regression, and Canvas result opening are observed; Renderer-only strict Canvas file-card metadata projection contributes duplicate-counted resolved Markdown-note backlinks with subpath base resolution and readable per-card contexts while excluding text-card wikilinks, non-note files, raw JSON, tags, headings, aliases, and unlinked mentions; cold initialization, malformed safety, unresolved-to-resolved note creation, Canvas modify/create/delete/rename and target rename/delete re-resolution, Backlinks UI counts/context, and source-Canvas opening are observed without changing persisted/background Markdown indexing or Canvas per-file public events; inline note editing, PDF preview, broader card context menus and broader floating action-bar workflows, explicit membership metadata remains incomplete."
+      "notes": "Extensive e2e: create/open, text/file/web cards, edges and labels, groups, selection, undo/redo, recovery, search, backlinks. Existing note keeps remaining gaps: inline note editing, PDF preview, broader card context menus/floating actions, explicit group membership metadata. Prior evidence list trimmed to representative specs; originals remain valid."
     },
     {
       "id": "HELP-cef11dca6f64",
@@ -1626,8 +2077,13 @@
       "title": "Command palette",
       "sourcePath": "obsidian-help/en/Plugins/Command palette.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Command%20palette.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/commands.test.ts",
+        "tests/e2e/templates.spec.ts",
+        "tests/e2e/new-tab-picker.spec.ts"
+      ],
+      "notes": "Command registry (list/execute/availability/hotkeys) unit-tested; e2e templates flow opens the palette with Mod+P, filters and runs a command. Not asserted: pinned commands, recent-first ordering, settings, hotkey display in palette."
     },
     {
       "id": "HELP-9dd80d32dbd0",
@@ -1637,8 +2093,13 @@
       "title": "Core plugins",
       "sourcePath": "obsidian-help/en/Plugins/Core plugins.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Core%20plugins.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/format-converter.spec.ts",
+        "tests/e2e/web-viewer-settings.spec.ts",
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Settings > Core plugins tab exists and e2e toggles Format converter and Web Viewer on from it. The page lists ~30 core plugins; Geode lacks File recovery, Properties view, Outgoing links, Random note (test-less), Workspaces, Footnotes view, Sync as Obsidian defines them, and no e2e checks the full list."
     },
     {
       "id": "HELP-f2d70e909a99",
@@ -1648,8 +2109,13 @@
       "title": "Daily notes",
       "sourcePath": "obsidian-help/en/Plugins/Daily notes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Daily%20notes.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/daily-notes-settings.spec.ts",
+        "tests/unit/daily-notes.test.ts",
+        "tests/e2e/templates.spec.ts"
+      ],
+      "notes": "Covered: settings persistence (folder/format/template), Open daily note command creates/opens, nested folder date formats and date-index unit-tested, template applied to new daily note and missing template error. Not asserted: ribbon icon, date-property linking, {{date:FORMAT}} variants in daily templates end to end."
     },
     {
       "id": "HELP-0d0984a3b9a6",
@@ -1659,8 +2125,13 @@
       "title": "File explorer",
       "sourcePath": "obsidian-help/en/Plugins/File explorer.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/File%20explorer.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/file-explorer-move.spec.ts",
+        "tests/unit/file-explorer-sort.test.ts",
+        "tests/e2e/canvas-file-explorer-drop.spec.ts"
+      ],
+      "notes": "Covered: drag-move of files/folders with unsafe-drop rejection (e2e) and sort ordering (unit). Not asserted: new note/folder, rename, delete, collapse-all, reveal active file, auto-reveal, sort menu, context menu items as a page."
     },
     {
       "id": "HELP-8c92e46364f4",
@@ -1670,8 +2141,12 @@
       "title": "File recovery",
       "sourcePath": "obsidian-help/en/Plugins/File recovery.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/File%20recovery.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md",
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "No File recovery plugin: no snapshots, no restore modal. Searched src/ for 'file-recovery|File recovery|snapshot' (renderer hits unrelated: mobile, actions, secret-storage). Note composer notes also state the system trash stands in for it."
     },
     {
       "id": "HELP-bf850d16a524",
@@ -1681,8 +2156,11 @@
       "title": "Footnotes view",
       "sourcePath": "obsidian-help/en/Plugins/Footnotes view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Footnotes%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "No Footnotes view pane. Footnote rendering exists (unit footnotes.test.ts, e2e footnotes.spec.ts for Live Preview/Reading) but searched src/ for 'FootnotesView|footnotes-view' and found no sidebar view or command."
     },
     {
       "id": "HELP-d5b5268c30ff",
@@ -1697,7 +2175,7 @@
         "tests/unit/format-converter.test.ts",
         "tests/e2e/format-converter.spec.ts"
       ],
-      "notes": "Unit-tested conversions (Roam tags/highlights/TODOs, Bear highlights, Zettelkasten full/pretty links, alias/tag/cssclass to list properties; code, inline code and frontmatter protected) and driven end to end in Electron: Core plugins toggle (off by default), ribbon binary icon, Open format converter command, modal with per-conversion checkboxes, backup warning and Start conversion rewriting a fixture vault. Partial: the spec does not define how a Zettelkasten UID is recognised, so Geode assumes a 12-14 digit filename prefix; the Help page was not diffed line by line for edge cases."
+      "notes": "Unit-tested Roam, Bear, Zettelkasten and property conversions with code/frontmatter protected; e2e drives toggle, ribbon, command, modal checkboxes, backup warning and Start conversion. Gap: Zettelkasten UID recognition is assumed (12-14 digit prefix), not spec-defined."
     },
     {
       "id": "HELP-b7bcdb79c9d3",
@@ -1707,8 +2185,13 @@
       "title": "Graph view",
       "sourcePath": "obsidian-help/en/Plugins/Graph view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Graph%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/graph-view.spec.ts",
+        "tests/unit/graph-data.test.ts",
+        "tests/unit/graph-layout.test.ts"
+      ],
+      "notes": "Covered: graph in right sidebar, node/edge counts from vault, click opens note, force layout and data building unit-tested. Not implemented/asserted: filters, groups, display and force panels, local graph/depth, tag/attachment nodes (source comment lists them as follow-up)."
     },
     {
       "id": "HELP-a4da9ebb4208",
@@ -1723,7 +2206,7 @@
         "tests/unit/note-composer.test.ts",
         "tests/e2e/note-composer.spec.ts"
       ],
-      "notes": "Observed in Electron: file-explorer 'Merge entire file with...' and the 'Note composer: Merge current file with another file...' command open a target picker where Enter appends, Shift+Enter prepends and Ctrl/Cmd+Enter creates a new note; the source is moved to the system trash and wikilinks/embeds/aliases/heading links to it are rewritten on disk (reusing the rename rewriter); 'Ask before merging' (default on) shows a confirmation modal that Cancel respects. Editor context-menu and command 'Extract current selection...' use the same keys and leave a link, embed or nothing per 'Text after extraction'; template variables {{content}} (appended at the bottom when omitted), {{fromTitle}}, {{newTitle}} and {{date:FORMAT}} are applied to new notes. Partial: heading-scoped extraction is not implemented; only wikilinks (not Markdown-style links) are rewritten, as with rename; source frontmatter is carried verbatim into the destination (no property merging); the Help page was not diffed line by line and the system trash stands in for File recovery, which Geode lacks."
+      "notes": "Observed in Electron: merge entire file (append/prepend/new), confirmation modal, link rewrites, extract selection with link/embed/none, template variables. Gaps: heading-scoped extraction, Markdown-style link rewriting, property merging, File recovery backing."
     },
     {
       "id": "HELP-71a13098c749",
@@ -1733,8 +2216,11 @@
       "title": "Outgoing links",
       "sourcePath": "obsidian-help/en/Plugins/Outgoing links.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Outgoing%20links.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "No Outgoing links pane/command. Searched src/ for 'outgoing links|outgoing-link' (only metadata-cache internals) and src/renderer/views for a pane; Outline/Tags/Backlinks exist but not this."
     },
     {
       "id": "HELP-90e23f298486",
@@ -1744,8 +2230,13 @@
       "title": "Outline",
       "sourcePath": "obsidian-help/en/Plugins/Outline.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Outline.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/sidebar-active-leaf.test.ts",
+        "tests/e2e/backlinks-visibility.spec.ts",
+        "tests/e2e/sidebar-active-leaf.spec.ts"
+      ],
+      "notes": "Outline pane lists headings of the active note and follows/blanks with the active file (unit + e2e switch to Outline). Not asserted: click-to-heading navigation, collapse, search/filter, sort, heading level nesting beyond indent."
     },
     {
       "id": "HELP-503fd860c440",
@@ -1755,8 +2246,13 @@
       "title": "Page preview",
       "sourcePath": "obsidian-help/en/Plugins/Page preview.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Page%20preview.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/page-preview.spec.ts",
+        "tests/unit/page-preview.test.ts",
+        "docs/design/page-preview.md"
+      ],
+      "notes": "Strong e2e: Reading view previews of wikilinks/headings, Live Preview needs Mod, stale/cancel/teardown, resize/scroll. Spec calls this a subset (Geode implementation subset); editable previews, settings toggles and graph/file-explorer/outline hover not asserted."
     },
     {
       "id": "HELP-eb3c5079b6e7",
@@ -1766,8 +2262,11 @@
       "title": "Properties view",
       "sourcePath": "obsidian-help/en/Plugins/Properties view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Properties%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "No Properties view (all properties pane / file properties). Searched src/ for 'all-properties|Properties view|file-properties' in views/app: none; tests grep empty. Properties editing in notes is separate."
     },
     {
       "id": "HELP-b876a11dc698",
@@ -1777,8 +2276,13 @@
       "title": "Quick switcher",
       "sourcePath": "obsidian-help/en/Plugins/Quick switcher.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Quick%20switcher.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/quick-switcher.spec.ts",
+        "tests/unit/quick-switcher-providers.test.ts",
+        "tests/unit/fuzzy-match.test.ts"
+      ],
+      "notes": "e2e finds/opens non-Markdown files and nested/untitled website bookmarks; providers and fuzzy matching unit-tested. Not asserted: create note on Enter variants, Shift/Mod open modes, alias/heading search, settings."
     },
     {
       "id": "HELP-c58257f77a68",
@@ -1788,8 +2292,12 @@
       "title": "Random note",
       "sourcePath": "obsidian-help/en/Plugins/Random note.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Random%20note.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "docs/spec/02-core-plugins.md",
+        "src/renderer/app.ts"
+      ],
+      "notes": "A random-note command exists (src/renderer/app.ts opens a random vault file) but no test references it (tests grep empty). Folder filter/ribbon/new-tab settings per spec not seen; includes non-note files."
     },
     {
       "id": "HELP-deed3cc349a3",
@@ -1799,8 +2307,13 @@
       "title": "Search",
       "sourcePath": "obsidian-help/en/Plugins/Search.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Search.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/search-view.test.ts",
+        "tests/e2e/canvas-search.spec.ts",
+        "tests/e2e/bookmarks.spec.ts"
+      ],
+      "notes": "Query parser and matching unit-tested (terms, phrases, negation, regex, file:/path:/tag:/content:/line:); e2e only for Canvas search and bookmarking a query. No e2e of the Search pane itself; operators like section:, task:, match-case, property search, sort and context toggles not asserted."
     },
     {
       "id": "HELP-229876d87d7b",
@@ -1815,7 +2328,7 @@
         "tests/unit/slash-commands.test.ts",
         "tests/e2e/slash-commands.spec.ts"
       ],
-      "notes": "Observed in Electron: typing / opens a menu over the Command palette registry, fuzzy filtering uses the palette scorer, Enter removes the typed trigger text and runs the command, a space cancels the menu, and a mid-word slash does not open it. Core plugins toggle (on by default) wired. Arrow-key navigation and Esc cancel rely on CodeMirror's stock completion keymap and were not separately asserted, so the row remains partial."
+      "notes": "Observed in Electron: / opens menu, fuzzy filter, Enter removes trigger and runs, space cancels, mid-word slash ignored. Arrow navigation and Esc rely on stock CodeMirror keymap and are not asserted."
     },
     {
       "id": "HELP-37f3d8a96fc8",
@@ -1830,7 +2343,7 @@
         "tests/unit/slides.test.ts",
         "tests/e2e/slides.spec.ts"
       ],
-      "notes": "Unit-tested slide splitting (--- with blank lines around it; frontmatter, fenced code, math blocks, table rules and setext headings are not split points) and driven end to end in Electron: Core plugins toggle (off by default), Slides: Start presentation command and the note tab context menu entry, full-window view rendering each slide through the reading-view renderer (wikilink, code, table, callout, embed observed), Right/Left/Space navigation, bottom-right arrow buttons with disabled edge states, upper-right close button, Esc to end, light and dark themes. Partial: Obsidian own slide chrome (transitions, exact typography and sizing, behaviour for notes without a separator) is not specified by the Help page and was not compared against the real app."
+      "notes": "Unit-tested slide splitting; e2e covers toggle, start command, tab menu, rendering, Right/Left/Space nav, arrow buttons, close and Esc, light/dark themes. Gap: Obsidian chrome details (transitions, behavior without separator) not compared."
     },
     {
       "id": "HELP-18e8ec0345df",
@@ -1840,8 +2353,12 @@
       "title": "Tags view",
       "sourcePath": "obsidian-help/en/Plugins/Tags view.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Tags%20view.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/workspace-deferred-views.test.ts",
+        "src/renderer/views/sidebar-views.ts"
+      ],
+      "notes": "A Tags pane lists vault tags with counts and click opens a tag: search (src). Only deferred-view restore is tested; no test asserts the list, nested tag hierarchy, sort, expand/collapse or commands."
     },
     {
       "id": "HELP-32c81f8a0b33",
@@ -1851,8 +2368,13 @@
       "title": "Templates",
       "sourcePath": "obsidian-help/en/Plugins/Templates.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Templates.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/templates.spec.ts",
+        "tests/unit/templates.test.ts",
+        "docs/templates.md"
+      ],
+      "notes": "e2e: create note from template, insert at saved selection, configured date/time formats, settings persistence, daily-note template. Unit: {{title}}/{{date}}/{{time}} with :FORMAT, folder listing. Not asserted: ribbon Insert template, template properties merging into existing frontmatter."
     },
     {
       "id": "HELP-63abe8319cd5",
@@ -1867,7 +2389,7 @@
         "tests/unit/unique-notes.test.ts",
         "tests/e2e/unique-note-creator.spec.ts"
       ],
-      "notes": "Observed: the 'Create new unique note' command and ribbon icon create an empty YYYYMMDDHHmm-named note by default (and open it); a configured folder, Moment date format (same tokens as Daily notes) and template (with {{title}}/{{date}} expanded) are applied; a name collision takes the next available timestamp; settings persist per vault with an enable toggle. The ribbon uses Lucide file-stack as the nearest match to the sheets-in-box icon, and a missing template reports an error notice rather than linking to the plugin's settings, so the row remains partial."
+      "notes": "Command and ribbon create YYYYMMDDHHmm notes; folder, format, template ({{title}}/{{date}}) applied, collisions bump timestamp, settings persist. Gaps: ribbon icon differs (file-stack), missing template shows notice not settings link."
     },
     {
       "id": "HELP-140b011d4105",
@@ -1877,8 +2399,13 @@
       "title": "Web viewer",
       "sourcePath": "obsidian-help/en/Plugins/Web viewer.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Web%20viewer.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/web-viewer.spec.ts",
+        "tests/e2e/web-viewer-settings.spec.ts",
+        "tests/e2e/bookmarks.spec.ts"
+      ],
+      "notes": "Large e2e: guest navigation and history, crash recovery, popups open tabs, vault HTML loads, settings gating, page bookmarking. Not asserted: Save to vault, search-engine settings, reader-mode/ page-info features as a whole page."
     },
     {
       "id": "HELP-a4302b7f3f48",
@@ -1888,8 +2415,12 @@
       "title": "Word count",
       "sourcePath": "obsidian-help/en/Plugins/Word count.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Word%20count.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "docs/spec/02-core-plugins.md",
+        "src/renderer/app.ts"
+      ],
+      "notes": "Status bar shows words and characters for the active note (src/renderer/app.ts); no test asserts it (tests grep 'word count' only hits obsidian-compat/calendar fixtures). Selection-aware counts and settings not implemented."
     },
     {
       "id": "HELP-334ff7cf3b4d",
@@ -1899,8 +2430,11 @@
       "title": "Workspaces",
       "sourcePath": "obsidian-help/en/Plugins/Workspaces.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Workspaces.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "No Workspaces core plugin (save/load/manage named layouts). Searched src/ for 'workspaces|Load workspace|Save workspace': only unrelated workspace layout code; tests grep empty. Tab collections exist separately."
     },
     {
       "id": "HELP-f18a8b59001a",
@@ -1910,8 +2444,11 @@
       "title": "Commercial license",
       "sourcePath": "obsidian-help/en/Teams/Commercial license.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Teams/Commercial%20license.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-3c669c21133c",
@@ -1921,8 +2458,11 @@
       "title": "Deploy Obsidian across your team",
       "sourcePath": "obsidian-help/en/Teams/Deploy Obsidian across your team.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Teams/Deploy%20Obsidian%20across%20your%20team.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-a14e681fd501",
@@ -1932,8 +2472,11 @@
       "title": "Obsidian for teams",
       "sourcePath": "obsidian-help/en/Teams/Obsidian for teams.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Teams/Obsidian%20for%20teams.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-45b0e9a9f55f",
@@ -1943,8 +2486,11 @@
       "title": "Publishing for teams",
       "sourcePath": "obsidian-help/en/Teams/Publishing for teams.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Teams/Publishing%20for%20teams.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-3aab2e4dded4",
@@ -1954,8 +2500,11 @@
       "title": "Security considerations for teams",
       "sourcePath": "obsidian-help/en/Teams/Security considerations for teams.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Teams/Security%20considerations%20for%20teams.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-b1a5b73ead32",
@@ -1965,8 +2514,11 @@
       "title": "Syncing for teams",
       "sourcePath": "obsidian-help/en/Teams/Syncing for teams.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Teams/Syncing%20for%20teams.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "out-of-scope service/product decision: Greps over src/ tests/ docs/ found no implementation. Terms: license, catalyst, commercial, team, payment, 2fa"
     },
     {
       "id": "HELP-488454b5ae14",
@@ -1976,8 +2528,14 @@
       "title": "Appearance",
       "sourcePath": "obsidian-help/en/User interface/Appearance.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Appearance.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/theme.spec.ts",
+        "tests/e2e/auto-theme.spec.ts",
+        "tests/e2e/builtin-theme.spec.ts",
+        "tests/e2e/community-theme-font.spec.ts"
+      ],
+      "notes": "E2E: base color scheme light/dark/auto, theme picker/apply, theme-provided font. Ribbon/status bar toggles covered in obsidian-compat. Not covered: accent color, CSS snippets (not implemented), font size/zoom, translucency."
     },
     {
       "id": "HELP-d672352c6196",
@@ -1987,8 +2545,14 @@
       "title": "Drag and drop",
       "sourcePath": "obsidian-help/en/User interface/Drag and drop.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Drag%20and%20drop.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/file-explorer-move.spec.ts",
+        "tests/e2e/image-paste-drop.spec.ts",
+        "tests/e2e/flexible-workspace.spec.ts",
+        "tests/e2e/workspace-persist-dnd.spec.ts"
+      ],
+      "notes": "E2E: drag files/folders in explorer, tab/pane drags, external image drop into note. Not covered: drops from search/backlinks, bookmarks drop, drop as link in editor, HTML drag conversion, dragging out as obsidian:// URL."
     },
     {
       "id": "HELP-f89cf9382a18",
@@ -1998,8 +2562,12 @@
       "title": "Hotkeys",
       "sourcePath": "obsidian-help/en/User interface/Hotkeys.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Hotkeys.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/e2e/hotkey-management.spec.ts",
+        "tests/unit/hotkey-manager.test.ts"
+      ],
+      "notes": "E2E in Settings > Hotkeys: search, assigned-only filter, add via recording, multiple bindings, remove, reset, conflict reassign, persistence per vault across relaunch; unit covers manager. Non-US layout display not specifically asserted."
     },
     {
       "id": "HELP-69ff11f6c552",
@@ -2009,8 +2577,11 @@
       "title": "Language settings",
       "sourcePath": "obsidian-help/en/User interface/Language settings.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Language%20settings.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Interface language selection (spec 01:517) absent. Grepped src for 'Interface language', i18n, setLanguage, locale settings: nothing."
     },
     {
       "id": "HELP-f31eaed77863",
@@ -2020,8 +2591,13 @@
       "title": "More options menu",
       "sourcePath": "obsidian-help/en/User interface/More options menu.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/More%20options%20menu.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/document-actions.spec.ts",
+        "tests/e2e/file-editor-menu-events.spec.ts",
+        "tests/e2e/bookmarks.spec.ts"
+      ],
+      "notes": "E2E exercises More options menu existence/leaf, tab-header menu with pin/close, plugin item append, bookmark. Full item list (split, rename, move, merge, export PDF, copy path, reveal, find/replace) not asserted; Open in new window unavailable."
     },
     {
       "id": "HELP-afc455bc1127",
@@ -2031,8 +2607,12 @@
       "title": "Pop-out windows",
       "sourcePath": "obsidian-help/en/User interface/Pop-out windows.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Pop-out%20windows.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "tests/unit/workspace-public-contracts.test.ts"
+      ],
+      "notes": "Geode has no pop-out windows; unit test asserts getLeaf('window') throws 'has no pop-out windows'. Grepped src for popout/pop-out/Open in new window: only that throw."
     },
     {
       "id": "HELP-fac893a1ddb7",
@@ -2042,8 +2622,11 @@
       "title": "Ribbon",
       "sourcePath": "obsidian-help/en/User interface/Ribbon.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Ribbon.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/obsidian-compat.spec.ts"
+      ],
+      "notes": "E2E: Show ribbon toggle in Settings, hide/restore persists across relaunch, plugin actions stay loaded. Not covered: drag reorder, per-action hide via right-click, vault switcher/help/settings actions, mobile ribbon."
     },
     {
       "id": "HELP-c23cb838430b",
@@ -2053,8 +2636,13 @@
       "title": "Settings",
       "sourcePath": "obsidian-help/en/User interface/Settings.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Settings.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/plugin-settings-sections.spec.ts",
+        "tests/e2e/hotkey-management.spec.ts",
+        "tests/e2e/obsidian-compat.spec.ts"
+      ],
+      "notes": "Settings modal covered incidentally: nav tabs, plugin sections order/open by id, Hotkeys and Appearance tabs, Show ribbon/status bar. No dedicated test of the full settings structure or opening via ribbon/shortcut."
     },
     {
       "id": "HELP-2275277f7c92",
@@ -2064,8 +2652,14 @@
       "title": "Sidebar",
       "sourcePath": "obsidian-help/en/User interface/Sidebar.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Sidebar.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/flexible-workspace.spec.ts",
+        "tests/e2e/sidebar-empty-group.spec.ts",
+        "tests/e2e/sidebar-active-leaf.spec.ts",
+        "tests/e2e/center-pane-resize.spec.ts"
+      ],
+      "notes": "E2E: split sidebar tab groups, move built-in tabs between groups/center, resize with clamping, empty group removal, collapse/expand control. Not covered: tab pinning in sidebar, mobile swipe, Toggle left/right commands."
     },
     {
       "id": "HELP-a6ba83b499a0",
@@ -2075,8 +2669,12 @@
       "title": "Status bar",
       "sourcePath": "obsidian-help/en/User interface/Status bar.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Status%20bar.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/obsidian-compat.spec.ts",
+        "tests/e2e/sidebar-active-leaf.spec.ts"
+      ],
+      "notes": "E2E: Show status bar toggle persists, plugin items survive hide, status bar blanks for non-file views. Core item content (backlinks count, word count, editor mode) not asserted."
     },
     {
       "id": "HELP-12191d1676ab",
@@ -2086,8 +2684,15 @@
       "title": "Tabs",
       "sourcePath": "obsidian-help/en/User interface/Tabs.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Tabs.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/pinned-tabs.spec.ts",
+        "tests/e2e/tab-overflow.spec.ts",
+        "tests/e2e/new-tab-picker.spec.ts",
+        "tests/e2e/workspace-nested-splits.spec.ts",
+        "tests/e2e/tab-collections.spec.ts"
+      ],
+      "notes": "E2E: new tab, pin/protect navigation, overflow sizing, drag splits, tab collections, resize. Not covered: modifier-click link opening table, tab switching shortcuts (Ctrl+Tab/1-8), stacked tabs, linked views, move to new window (no pop-outs)."
     },
     {
       "id": "HELP-1737f4ce3a15",
@@ -2097,8 +2702,14 @@
       "title": "Workspace",
       "sourcePath": "obsidian-help/en/User interface/Workspace.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/User%20interface/Workspace.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/workspace-persist-dnd.spec.ts",
+        "tests/e2e/flexible-workspace.spec.ts",
+        "tests/e2e/workspace-nested-splits.spec.ts",
+        "tests/e2e/builtin-workspace-persistence.spec.ts"
+      ],
+      "notes": "E2E: layout persists across relaunch, nested splits, sidebar/center drags, placeholder restore. Not covered: pop-out windows, Workspaces plugin-style saved layouts, stacked tabs, mobile layout."
     },
     {
       "id": "DEV-b71507ef2236",
@@ -17122,8 +17733,12 @@
       "title": "New image lightbox for viewing images fullscreen. Click the image in reading mode to open it. Or in live preview, with an image selected, click or press Space to open it in the lightbox. Use arrow keys to navigate between all the images embedded in the current file.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L11",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L11",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: lightbox. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-7d773bb28540",
@@ -17133,8 +17748,12 @@
       "title": "Live Preview: Added keyboard interactions when an image is selected. Press + or - to resize the selected image, and 0 to reset the image size. Press Enter to edit the image, or Tab to manually edit the image size.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L12",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L12",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: +/-/0/Enter/Tab image keys. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-e794b2d10950",
@@ -17144,8 +17763,11 @@
       "title": "Vim: Added a new :image Ex command to interact with the selected image. Use :image grow and :image shrink to resize the image, and :image reset to reset the image size. It also supports a count, so :5image grow will grow the image 5 times.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L13",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L13",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. src has no Vim mode at all (grep -i vim in src/: no hits; spec 01-core-app.md:127 lists Vim bindings), no :image Ex command or image selection. No tests."
     },
     {
       "id": "CHANGE-505fc16bc721",
@@ -17155,8 +17777,12 @@
       "title": "Live Preview: Clicking outside a selected image now deselects it.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L17",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L17",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: image deselect on outside click. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-c031d15ffdda",
@@ -17166,8 +17792,11 @@
       "title": "Reading mode now supports external images with an image size and no alt text (e.g. !200).",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L18",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L18",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Absent. Spec 01-core-app.md L182/L343 documents ![250](url). src: render.ts only parses sizes for wikilink embeds (parseEmbedDims); standard images go through marked unsized; LP standard-image widget rejects remote URLs. No test covers it."
     },
     {
       "id": "CHANGE-0f61076b086a",
@@ -17177,8 +17806,11 @@
       "title": "File Explorer: Added support for dragging links from a Base into the File Explorer to move the file to a new location.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L19",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L19",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. src searched (views/bases/*.ts, views/base-view.ts, views/file-explorer.ts): no dragstart on Base links; explorer only accepts VAULT_FILE_DRAG_MIME from its own rows. Only canvas-file-explorer-drop e2e exists."
     },
     {
       "id": "CHANGE-65351d44d7e3",
@@ -17188,8 +17820,11 @@
       "title": "Added file-level context menu items to the Sync view.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L23",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L23",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. Obsidian Sync History/Sync view (spec 04 s5.3) not implemented; Geode has own hub sync (src/renderer/sync/*, status card in settings) with no file list, file context menu, multi-select or Delete key. src searched: sync/, app.ts. No test."
     },
     {
       "id": "CHANGE-c7ba0a163f96",
@@ -17199,8 +17834,11 @@
       "title": "The Sync view now supports multi-selection with the keyboard (Shift-arrow keys) or the mouse (Alt-click).",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L24",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L24",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. Obsidian Sync History/Sync view (spec 04 s5.3) not implemented; Geode has own hub sync (src/renderer/sync/*, status card in settings) with no file list, file context menu, multi-select or Delete key. src searched: sync/, app.ts. No test."
     },
     {
       "id": "CHANGE-cb53b6a2f818",
@@ -17210,8 +17848,11 @@
       "title": "The Sync view now supports deleting files with the Delete or Backspace key.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L25",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L25",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. Obsidian Sync History/Sync view (spec 04 s5.3) not implemented; Geode has own hub sync (src/renderer/sync/*, status card in settings) with no file list, file context menu, multi-select or Delete key. src searched: sync/, app.ts. No test."
     },
     {
       "id": "CHANGE-f1bf3680336b",
@@ -17221,8 +17862,11 @@
       "title": "Editor: Fixed regression where \"Toggle bold\" would not remove the bold () markers when the cursor was inside bold text.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L29",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L29",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. src/renderer/views/markdown-view.ts Mod-b uses wrapSelection(), which only inserts markers and never removes them; no toggle-off logic (grep toggleBold/toggle-bold in src: none). No test of Mod-b."
     },
     {
       "id": "CHANGE-579929ffba24",
@@ -17232,8 +17876,11 @@
       "title": "desktop",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L3",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L3",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "not a behavior: section heading"
     },
     {
       "id": "CHANGE-a8516f98caa9",
@@ -17244,7 +17891,8 @@
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L30",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L30",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): Implemented, untested: LP handles EmphasisMark reveal (live-preview.ts) and math widgets (math-live.ts), but no test puts math/image inside bold and moves the cursor. src searched."
     },
     {
       "id": "CHANGE-9444de609070",
@@ -17255,7 +17903,8 @@
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L31",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L31",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): Implemented, untested: render.ts strips with /%%[\\s\\S]*?%%/g so %%%% is an empty terminated comment; comments/model.ts ObsidianComment likewise. render-inline.test.ts and comments.test.ts only cover %%x%%, none cover %%%%."
     },
     {
       "id": "CHANGE-2cc98daf3897",
@@ -17265,8 +17914,11 @@
       "title": "Fixed the \"Copy\" button not appearing on very large code blocks.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L32",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L32",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Absent. src searched (markdown/*.ts, views/markdown-view.ts, styles for copy-code/clipboard): no code-block Copy button exists at all (only error-details/conflict copy buttons). No test."
     },
     {
       "id": "CHANGE-d196a470fd7e",
@@ -17276,8 +17928,11 @@
       "title": "Properties: Fixed an error when rendering []() inside a list property.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L33",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L33",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Absent. markdown-view.ts renderProperties() renders properties as plain text (join(', ')), no link rendering in list properties, so the error scenario/feature has no implementation. No test."
     },
     {
       "id": "CHANGE-cfbdab85bb1e",
@@ -17287,8 +17942,11 @@
       "title": "Bookmarks: Fixed keyboard navigation in the Bookmarks view sometimes getting stuck due to missing bookmarked files.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L34",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L34",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Absent. views/bookmarks-view.ts has no keydown/arrow handling (grep keydown|Arrow: none); e2e bookmarks.spec.ts has no keyboard nav assertions."
     },
     {
       "id": "CHANGE-35c85ae9b2d7",
@@ -17298,8 +17956,11 @@
       "title": "Bookmarks: Fixed middle-click inside the Bookmarks view activating AutoScroll on Windows.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L35",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L35",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Not applicable: Windows-only middle-click AutoScroll behavior; Geode has no AutoScroll implementation (grep autoscroll in src: none) and Linux CI cannot observe it."
     },
     {
       "id": "CHANGE-587c4a7283d7",
@@ -17309,8 +17970,11 @@
       "title": "Bases: Fixed the formula editor not working for Bases in pop-out windows.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L36",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L36",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Blocked on pop-out windows: Geode has none (workspace.ts getLeaf('window') throws, src/renderer/workspace.ts ~L3112; spec 01-core L472 documents them). Formula authoring is only a basic '+ New formula' button (views/bases/properties-menu.ts)."
     },
     {
       "id": "CHANGE-1b6576c3a05d",
@@ -17320,8 +17984,11 @@
       "title": "Bases: Fixed sort filters showing an incorrect background color.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L37",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L37",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Visual CSS defect (background colour of sort filters in Obsidian's Bases UI); no behavioral assertion possible. src searched views/bases/filter-editor.ts, styles/app.css; no test."
     },
     {
       "id": "CHANGE-869679621cfb",
@@ -17331,8 +17998,11 @@
       "title": "Bases: \"File links\" no longer show the image size as the image display name.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L38",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L38",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/bases/coerce.test.ts"
+      ],
+      "notes": "Test asserts link display falls back to display ?? raw (valueToDisplayString) but nothing covers image-size aliases like '|200' being excluded from file-link display names. src: bases/coerce.ts."
     },
     {
       "id": "CHANGE-1a2ec804d7f0",
@@ -17342,8 +18012,11 @@
       "title": "Sync: Fixed a bug where clicking the status bar icon would not always open the menu.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L39",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L39",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. No Sync status-bar icon/menu: src searched (app.ts, sync/*, status-bar); Geode sync status lives in the Settings Sync tab (sync-status-card.spec.ts covers the card, not a status-bar menu)."
     },
     {
       "id": "CHANGE-f4eef27ae54e",
@@ -17353,8 +18026,11 @@
       "title": "insider",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L4",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L4",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "not a behavior: section heading"
     },
     {
       "id": "CHANGE-92fb0993e406",
@@ -17364,8 +18040,11 @@
       "title": "Settings: Fixed page preview settings not saving.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L40",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L40",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Absent. spec 02-core-plugins.md L675 lists Page Preview settings as follow-up; src searched (page-preview.ts, app.ts): no per-surface settings to save. No test."
     },
     {
       "id": "CHANGE-0791ad4453e3",
@@ -17375,8 +18054,11 @@
       "title": "Settings: Fixed pinned commands not showing commands from community plugins.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L41",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L41",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Absent. src searched (commands.ts, actions.ts, modals/modals.ts, app.ts): no pinned-commands feature; 'pinned' hits are tabs/community pins. pinned-tabs.spec covers tabs only."
     },
     {
       "id": "CHANGE-0cc603f98dce",
@@ -17386,8 +18068,11 @@
       "title": "Settings: Fixed a minor memory leak with \"action\" buttons in settings.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L42",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L42",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Not a testable behavior: minor memory leak with settings action buttons (Obsidian-internal). No test or src counterpart identified."
     },
     {
       "id": "CHANGE-1603ded9b652",
@@ -17397,8 +18082,11 @@
       "title": "Vim: A white \"ghost\" character no longer appears when the Vim cursor overlaps with a widget in the editor.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L43",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L43",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Absent. Geode has no Vim mode (grep -i vim in src/: no hits), so the ghost-cursor bug cannot occur and nothing implements it. Spec 01-core-app.md:127 lists Vim bindings. No test."
     },
     {
       "id": "CHANGE-49b44e230a3f",
@@ -17408,8 +18096,11 @@
       "title": "Fixed how SettingGroup renders when used outside of a SettingTab.",
       "sourcePath": "obsidian-help/Release notes/v1.13.2.md#L47",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.2.md#L47",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/03-plugin-api.md"
+      ],
+      "notes": "Absent. grep SettingGroup in src/, tests/, docs/spec (non-ledger): no hits; the API class is not implemented."
     },
     {
       "id": "CHANGE-fa8b8e154a41",
@@ -17420,7 +18111,8 @@
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L11",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L11",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): Implemented, untested: LP image widgets are inline-block, vertical-align middle (styles/app.css ~L2769) with no height-preserving rule; no test measures line height. live-preview-markdown-image.spec.ts doesn't assert it."
     },
     {
       "id": "CHANGE-93bd0a1d0bf8",
@@ -17430,8 +18122,12 @@
       "title": "Live Preview: Added a new selection state to image embeds.",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L12",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L12",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: image selection state. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-23d9514a3a65",
@@ -17441,8 +18137,12 @@
       "title": "Added a \"zoom\" button to image embeds.",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L13",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L13",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: zoom button. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-bf0107c02d96",
@@ -17452,8 +18152,12 @@
       "title": "The image lightbox now supports click and drag to pan within an image.",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L14",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L14",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: lightbox pan. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-64af4e3b08dd",
@@ -17463,8 +18167,11 @@
       "title": "File Recovery: Added keyboard navigation to the file history records. Use arrow keys to navigate through the list.",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L15",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L15",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Absent. src searched (grep file.?recovery|snapshot in src/renderer): no File Recovery plugin/history list; only conflict-recovery localStorage in app.ts. No test."
     },
     {
       "id": "CHANGE-5998129ff3b1",
@@ -17474,8 +18181,11 @@
       "title": "Unique Note Creator plugin now links to its own settings when it fails to find a template.",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L16",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L16",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Absent link. app.ts createUniqueNote() only notifies 'Could not create unique note: <err>' with no settings link. unique-notes.test.ts covers path/config resolution only."
     },
     {
       "id": "CHANGE-51604152f7dc",
@@ -17485,8 +18195,12 @@
       "title": "Fixed image resizing when an image is inside a Markdown table.",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L20",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L20",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: LP image resize in tables. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-b0c2a82af7e6",
@@ -17496,8 +18210,11 @@
       "title": "Fixed unique URI action not opening the new note in the correct tab when the paneType option is provided.",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L21",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L21",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/04-formats-and-platform.md"
+      ],
+      "notes": "Absent. grep paneType in src: no hits; shared/deep-link-parse.ts and app.ts dispatchProtocolLink have no built-in 'unique' URI action. Only workspace-public-contracts unit test mentions panes."
     },
     {
       "id": "CHANGE-cec7bfd5cc07",
@@ -17507,8 +18224,11 @@
       "title": "desktop",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L3",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L3",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "not a behavior: section heading"
     },
     {
       "id": "CHANGE-bb9cc0b9158d",
@@ -17518,8 +18238,11 @@
       "title": "insider",
       "sourcePath": "obsidian-help/Release notes/v1.13.3.md#L4",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.3.md#L4",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "not a behavior: section heading"
     },
     {
       "id": "CHANGE-d9d9991c4a7e",
@@ -17529,8 +18252,12 @@
       "title": "The image lightbox now displays the file name of the current image.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L11",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L11",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md",
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Absent: lightbox filename. src searched (src/renderer/markdown/live-preview.ts, embed.ts, render.ts, views/markdown-view.ts, styles/app.css; terms image/zoom/pan/resize/selection/lightbox/widget): only plain img widgets, no such feature. No test covers it; ledger scope in 05-parity-ledger.md."
     },
     {
       "id": "CHANGE-91c2110654dc",
@@ -17540,8 +18267,11 @@
       "title": "Improved layout of Page Preview settings.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L12",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L12",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Absent. spec 02-core-plugins.md L675: Page Preview settings are a follow-up; src (page-preview.ts, app.ts) has no settings layout. No test."
     },
     {
       "id": "CHANGE-d5faaa6cd0f7",
@@ -17551,8 +18281,11 @@
       "title": "Settings: Download counts are now abbreviated for plugins and themes.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L13",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L13",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Absent. src searched (community/community-list-view.ts, community-manager.ts): no download counts shown for plugins/themes (install is from GitHub, ADR 0001). No test."
     },
     {
       "id": "CHANGE-55cd74faadd9",
@@ -17563,7 +18296,8 @@
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L14",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L14",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): Implemented, untested: inline LP image widgets use vertical-align: middle (styles/app.css ~L2769, 2780); no test asserts inline alignment with text."
     },
     {
       "id": "CHANGE-1a6d6d64f69f",
@@ -17574,7 +18308,8 @@
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L15",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L15",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): Implemented, untested: no padding rules on .cm-embed-widget img (styles/app.css ~L2769-2785); no test asserts absence of extra padding."
     },
     {
       "id": "CHANGE-f62c454da50c",
@@ -17584,8 +18319,11 @@
       "title": "Fixed a rare race condition where a file could get stuck and fail to save until the app was restarted.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L19",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L19",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Obsidian-internal rare save race; not a specified observable behavior. Geode has its own save path (markdown-view.ts scheduleSave/flush with flushInFlight) but no test named for this; not claimed."
     },
     {
       "id": "CHANGE-007c4d1fcbf9",
@@ -17595,8 +18333,11 @@
       "title": "Fixed appearance of image action buttons on older installers.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L20",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L20",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "Not applicable: older Obsidian installer packaging; also Geode has no image action buttons (src searched image/zoom/action)."
     },
     {
       "id": "CHANGE-a18c9005c0c1",
@@ -17606,8 +18347,11 @@
       "title": "Settings: Fixed Page Preview settings not showing entries from community plugins.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L21",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L21",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/02-core-plugins.md"
+      ],
+      "notes": "Absent. spec 02-core-plugins.md L675: plugin hover-link sources/settings entries are a follow-up; src (page-preview.ts) has no settings entries. No test."
     },
     {
       "id": "CHANGE-673449ba6c22",
@@ -17617,8 +18361,11 @@
       "title": "Live Preview: Fixed appearance of non-image embed actions.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L22",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L22",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "docs/spec/01-core-app.md"
+      ],
+      "notes": "Absent. src searched (live-preview.ts embed widgets, embed.ts, styles): no embed action buttons for any embed type, so appearance cannot be asserted. No test."
     },
     {
       "id": "CHANGE-949079634bad",
@@ -17628,8 +18375,11 @@
       "title": "Live Preview: Fixed image disappearing when editing a Markdown embed and scrolling.",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L23",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L23",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/e2e/live-preview-markdown-image.spec.ts"
+      ],
+      "notes": "E2E covers image widget hide/restore on cursor move and widget teardown, but not editing a Markdown embed while scrolling. src: live-preview.ts widgets."
     },
     {
       "id": "CHANGE-eaca7908f0f1",
@@ -17640,7 +18390,8 @@
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L24",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L24",
       "status": "unknown",
-      "evidence": []
+      "evidence": [],
+      "notes": "Implemented, untested (needs e2e): Implemented, untested: no line-height preservation rule for image widgets (styles/app.css ~L2769); nothing tests an indented image-only line while editing."
     },
     {
       "id": "CHANGE-40c68a1704a7",
@@ -17650,8 +18401,11 @@
       "title": "desktop",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L3",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L3",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "not a behavior: section heading"
     },
     {
       "id": "CHANGE-faec018bfadf",
@@ -17661,8 +18415,11 @@
       "title": "insider",
       "sourcePath": "obsidian-help/Release notes/v1.13.4.md#L4",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/Release%20notes/v1.13.4.md#L4",
-      "status": "unknown",
-      "evidence": []
+      "status": "blocked",
+      "evidence": [
+        "docs/spec/05-parity-ledger.md"
+      ],
+      "notes": "not a behavior: section heading"
     },
     {
       "id": "API-913b8290a977",
