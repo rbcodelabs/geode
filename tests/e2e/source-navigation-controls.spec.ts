@@ -8,7 +8,7 @@ async function isolated(info: TestInfo, kind: "link" | "base" | "recovery", link
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "geode-navigation-controls-"));
   const vault = path.join(directory, "vault"), profile = path.join(directory, "profile"); fs.mkdirSync(vault); fs.mkdirSync(profile);
   const board = JSON.stringify({ nodes: kind === "recovery" ? [] : [{ id: "owned", type: "file", x: 0, y: 0, width: kind === "base" ? 760 : 500, height: kind === "base" ? 600 : 200, file: "Host.md" }], edges: [] });
-  const files = { "Source.md": provider, "Other.md": "# Heading\n\nDestination\n", "Unrelated.md": "# Unrelated\n", "Outer.md": "# Outer\n\n![[Board.canvas]]\n", "Host.md": kind === "base" ? "![[Tasks.base]]\n" : `An authored child link.\n\n[[${linktext}]]\n`, "Tasks.base": "views:\n  - type: table\n    name: Table\n    order:\n      - file.name\n      - note.priority\n", "Board.canvas": board, "Recovery.canvas": board };
+  const files = { "Source.md": provider, "Other.md": "# Heading\n\nDestination\n", "Unrelated.md": "# Unrelated\n", "Outer.md": "# Outer\n\n![[Board.canvas]]\n", "Host.md": kind === "base" ? "![[Tasks.base]]\n" : `An authored child link.\n\n[[${linktext}]]\n`, "Tasks.base": 'filters: file.name == "Source.md" || file.name == "Other.md"\nviews:\n  - type: table\n    name: Table\n    order:\n      - file.name\n      - note.priority\n', "Board.canvas": board, "Recovery.canvas": board };
   for (const [name, value] of Object.entries(files)) fs.writeFileSync(path.join(vault, name), value);
   fs.writeFileSync(path.join(profile, "geode.json"), JSON.stringify({ recentVaults: [vault], lastVault: vault }));
   const application = await electron.launch({ args: [repoRoot, `--user-data-dir=${profile}`], cwd: repoRoot }); const page = await application.firstWindow();
@@ -18,7 +18,12 @@ async function isolated(info: TestInfo, kind: "link" | "base" | "recovery", link
       const app = (window as any).app, leaf = app.workspace.getLeaf(true);
       await app.openFileInLeaf(leaf, app.vault.getFileByPath("Other.md")); (window as any).__reusedDestination = leaf;
     });
-    await page.locator(`.nav-file-title[data-path="${kind === "recovery" ? "Board.canvas" : "Outer.md"}"]`).click();
+    if (reused) await page.evaluate(async () => {
+      const app = (window as any).app, source = app.workspace.getLeaf(true);
+      await app.openFileInLeaf(source, app.vault.getFileByPath("Outer.md")); source.group.setActiveLeaf(source);
+      if (source === (window as any).__reusedDestination || (window as any).__reusedDestination.view.getFile().path !== "Other.md") throw new Error("Expected distinct source and existing destination leaves");
+    });
+    else await page.locator(`.nav-file-title[data-path="${kind === "recovery" ? "Board.canvas" : "Outer.md"}"]`).click();
     if (kind !== "recovery") await page.getByRole("button", { name: "Toggle reading view (Cmd/Ctrl+E)" }).click();
     await page.waitForFunction(() => {
       const app = (window as any).app, leaf = app.workspace.getActiveLeaf();
@@ -80,8 +85,10 @@ for (const scenario of [
 test("Base filename selection deliberately saves before a separate clean double-click navigation", async ({}, info) => {
   await isolated(info, "base", "", false, async (page, vault) => {
     const table = page.locator(".canvas-embed-view:visible .bases-table"); await expect(table).toBeVisible();
+    await expect(table.locator(".bases-data-row")).toHaveCount(2);
     const column = (await table.locator("thead th").allTextContents()).indexOf("note.priority"); expect(column).toBeGreaterThan(-1);
     const source = table.locator(".bases-data-row", { hasText: "Source" }).locator("td.bases-cell").nth(column);
+    expect(await source.evaluate(el => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })).toBe(true);
     await source.click(); await page.keyboard.press("Enter"); await source.locator("input").fill("9");
     const other = table.locator(".bases-data-row", { hasText: "Other" }).locator("td.bases-cell").first();
     await other.click();
