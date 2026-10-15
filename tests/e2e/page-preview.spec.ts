@@ -80,7 +80,8 @@ function fixture(withLifecyclePlugin = false): { vaultDir: string; userDataDir: 
             const child = new class extends MarkdownRenderChild {
               onload() {
                 record.loads++; ledger.active.add(record);
-                record.url = URL.createObjectURL(new Blob(['synthetic preview resource']));
+                const pixel = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='), value => value.charCodeAt(0));
+                record.url = URL.createObjectURL(new Blob([pixel], { type: 'image/png' }));
                 this.registerDomEvent(window, 'preview-lifecycle-ping', () => record.pings++);
                 this.register(() => { record.cleanups++; URL.revokeObjectURL(record.url); record.revoked = true; ledger.active.delete(record); });
               }
@@ -394,7 +395,8 @@ test("unloads real preview children and resources on dismissal, replacement, sta
         const activeListeners = ledger.children.filter((row: any, i: number) => ledger.active.has(row) && row.pings === before[i] + 1).length;
         const released = ledger.children.filter((row: any) => row.unloads);
         const blobStillReadable = await Promise.all(released.map(async (row: any) => {
-          try { await fetch(row.url); return true; } catch { return false; }
+          const image = new Image(); image.src = row.url;
+          try { await image.decode(); return true; } catch { return false; }
         }));
         return { staleListeners, activeListeners, blobStillReadable };
       })).toEqual({ staleListeners: 0, activeListeners: (await active()).length, blobStillReadable: (await children()).filter((row: any) => row.unloads).map(() => false) });
@@ -411,8 +413,10 @@ test("unloads real preview children and resources on dismissal, replacement, sta
     await expect.poll(active).toEqual(["sibling"]);
     expect(await window.evaluate(async () => {
       const row = (window as any).previewLifecycle.children[0];
-      return (await fetch(row.url)).text();
-    })).toBe("synthetic preview resource");
+      // Renderer CSP permits blob images, but intentionally disallows blob fetch.
+      const image = new Image(); image.src = row.url; await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    })).toEqual({ width: 1, height: 1 });
     await window.keyboard.press("Escape");
     await expect(preview).toHaveCount(0);
     await expect.poll(children).toEqual([{ kind: "sibling", loads: 1, unloads: 1, cleanups: 1, revoked: true }]);
