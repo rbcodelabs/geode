@@ -26,6 +26,7 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
     const probe = await page.evaluate(() => { const p = (window as any).__layerProbe; return p ? { inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected, parentStable: p.root.parentElement === p.parent, focused: document.activeElement === p.input, blurCount: p.blur } : null; }).catch(error => String(error));
     const retainedInputs = await page.evaluate(() => [(window as any).__firstFailedLayerInput, (window as any).__layerProbe?.input].filter(Boolean).map(input => ({ connected: input.isConnected, value: input.value, focused: document.activeElement === input, occurrence: input.closest(".native-prototype-record")?.dataset.occurrence }))).catch(error => String(error));
     const geometry = await page.evaluate(() => ({
+      heightMeasurements: (window as any).__heightMeasurements,
       validationCalls: (window as any).__layerValidationCalls,
       retirementAttempts: (window as any).__layerRetirementAttempts,
       resumes: (window as any).__layerResumeCounts,
@@ -340,10 +341,14 @@ test("measured native frame height converges with its CM placeholder after delay
         const measure = () => page.evaluate(() => {
           const root = (window as any).__heightRoot as HTMLElement;
           const anchor = document.querySelector<HTMLElement>('.native-layer-placeholder[data-occurrence="1"]')!;
-          return { root: root.getBoundingClientRect().toJSON(), anchor: anchor.getBoundingClientRect().toJSON(),
+          const geometry = { root: root.getBoundingClientRect().toJSON(), anchor: anchor.getBoundingClientRect().toJSON(),
             sameRoot: root === (window as any).__layerProbe.root,
             source: (window as any).nativeLayerHarness.editor.state.doc.toString(),
             measurements: (window as any).nativeLayerHarness.layer.measurements };
+          const observations = ((window as any).__heightMeasurements ??= []);
+          observations.push({ root: geometry.root, anchor: geometry.anchor, measurements: geometry.measurements });
+          if (observations.length > 12) observations.shift();
+          return geometry;
         });
         await expect.poll(async () => {
           const geometry = await measure();
