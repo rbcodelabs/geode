@@ -45,7 +45,7 @@ export interface TFolder extends TAbstractFile {
   children: TAbstractFile[];
 }
 
-export type { Pos, Loc, LinkCache, TagCache, HeadingCache, SectionCache, ListItemCache, CachedMetadata, FootnoteRefCache, ReferenceLinkCache } from "../wiki/types";
+export type { BlockCache, FootnoteCache, FrontmatterLinkCache, Pos, Loc, LinkCache, TagCache, HeadingCache, SectionCache, ListItemCache, CachedMetadata, FootnoteRefCache, ReferenceLinkCache } from "../wiki/types";
 
 export const MARKDOWN_EXTENSIONS = new Set(["md"]);
 export const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);

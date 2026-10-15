@@ -21,36 +21,44 @@ export const METADATA_DB_RELATIVE_PATH = path.join(".geode", "metadata-cache", "
 export function initializeMetadataSchema(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
-  db.exec(`PRAGMA user_version = ${METADATA_INDEX_SCHEMA_VERSION}`);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS metadata_entries (
-      path              TEXT PRIMARY KEY,
-      mtime_ms          REAL    NOT NULL,
-      size              INTEGER NOT NULL,
-      metadata_json     TEXT    NOT NULL,
-      mention_keys_json TEXT
-    )
-  `);
-  // Same vault, same file, same session lifecycle as metadata_entries above —
-  // a second table on the shared per-vault handle rather than a second sqlite
-  // file, so main.ts's session bookkeeping (open/close/generation) doesn't
-  // have to be duplicated for a cache that is operationally identical, just
-  // logically distinct (a file's content hash rather than its parsed
-  // frontmatter/links). See HashCacheEntry's doc comment for what this backs.
-  // exclude_reason/provider_id back HashCacheEntry's exclude-verdict caching and
-  // provider scoping (see its doc comment below for why both exist) — this
-  // table has never shipped in a release, so these are plain columns on the
-  // initial CREATE TABLE, not an ALTER TABLE migration.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS hash_cache_entries (
-      path          TEXT PRIMARY KEY,
-      mtime_ms      REAL    NOT NULL,
-      size          INTEGER NOT NULL,
-      sha256        TEXT    NOT NULL,
-      exclude_reason TEXT,
-      provider_id   TEXT    NOT NULL
-    )
-  `);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const previousVersion = db.prepare("PRAGMA user_version").get()?.user_version;
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS metadata_entries (
+        path              TEXT PRIMARY KEY,
+        mtime_ms          REAL    NOT NULL,
+        size              INTEGER NOT NULL,
+        metadata_json     TEXT    NOT NULL,
+        mention_keys_json TEXT
+      )
+    `);
+    // Same vault, same file, same session lifecycle as metadata_entries above —
+    // a second table on the shared per-vault handle rather than a second sqlite
+    // file, so main.ts's session bookkeeping (open/close/generation) doesn't
+    // have to be duplicated for a cache that is operationally identical, just
+    // logically distinct (a file's content hash rather than its parsed
+    // frontmatter/links). See HashCacheEntry's doc comment for what this backs.
+    // exclude_reason/provider_id back HashCacheEntry's exclude-verdict caching and
+    // provider scoping (see its doc comment below for why both exist) — this
+    // table has never shipped in a release, so these are plain columns on the
+    // initial CREATE TABLE, not an ALTER TABLE migration.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS hash_cache_entries (
+        path          TEXT PRIMARY KEY,
+        mtime_ms      REAL    NOT NULL,
+        size          INTEGER NOT NULL,
+        sha256        TEXT    NOT NULL,
+        exclude_reason TEXT,
+        provider_id   TEXT    NOT NULL
+      )
+    `);
+    // Matching file timestamps do not make rows from an older parser valid.
+    // Only derived metadata is rebuilt; synchronization hashes remain intact.
+    if (previousVersion !== METADATA_INDEX_SCHEMA_VERSION) db.exec("DELETE FROM metadata_entries");
+    db.exec(`PRAGMA user_version = ${METADATA_INDEX_SCHEMA_VERSION}`);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
 /**

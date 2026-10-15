@@ -1,15 +1,20 @@
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, parseDocument, isMap, isSeq, isScalar } from "yaml";
+import { markdownReferences } from "./markdown-references";
+import { scanFootnotes } from "./footnote-scan";
 import { maskCommentMetadata, stripCommentMarkerSyntax } from "../renderer/comments/model";
 import { DEFAULT_METADATA_SCAN_CAP_BYTES, FRONTMATTER_BLOCK_RE } from "./constants";
-import type { CachedMetadata, FootnoteRefCache, LinkCache, ListItemCache, Loc, Pos, ReferenceLinkCache, SectionCache } from "./types";
+import type { CachedMetadata, FrontmatterLinkCache, FootnoteRefCache, LinkCache, ListItemCache, Loc, Pos, ReferenceLinkCache, SectionCache } from "./types";
+
+function isEscaped(text: string, position: number): boolean {
+  let slashes = 0;
+  for (let index = position - 1; index >= 0 && text[index] === "\\"; index--) slashes++;
+  return slashes % 2 === 1;
+}
 
 const WIKILINK_RE = /(!)?\[\[([^\[\]\n]+)\]\]/g;
 // `[^id]` NOT followed by `:` — that would make it a footnote definition
 // rather than a reference to one.
 const FOOTNOTE_REF_RE = /\[\^([^\]\s]+)\](?!:)/g;
-// `[text][id]` (full) and `[text][]` (collapsed) markdown reference links.
-// The `!` lookbehind keeps image references out.
-const REFERENCE_LINK_RE = /(?<!!)\[([^\[\]\n]+)\]\[([^\[\]\n]*)\]/g;
 const TAG_RE = /(^|[\s(])#([\p{L}\p{N}_\/-]*[\p{L}_\/-][\p{L}\p{N}_\/-]*)/gu;
 const HEADING_RE = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?$/;
 // A list item: leading indent, a bullet (-,*,+) or ordered marker (1. / 1)),
@@ -68,8 +73,15 @@ export function offsetToLoc(lineStarts: number[], start: number, end: number): L
 
 /** Strip code fences and inline code so links/tags inside code are ignored. */
 export function maskCode(text: string): string {
-  let masked = text.replace(/```[\s\S]*?(```|$)/g, (m) => m.replace(/[^\n]/g, " "));
-  masked = masked.replace(/`[^`\n]*`/g, (m) => " ".repeat(m.length));
+  let masked = text.replace(/```[\s\S]*?(```|$)/g, m => m.replace(/[^\n]/g, " "));
+  masked = masked.replace(/`[^`\n]*`/g, m => " ".repeat(m.length));
+  return masked;
+}
+
+/** Metadata extraction recognizes tilde fences and variable-width code spans. */
+function maskMetadataCode(text: string): string {
+  let masked = text.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1[`~]*[ \t]*\r?$|(?![\s\S]))/gm, m => m.replace(/[^\n\r]/g, " "));
+  masked = masked.replace(/(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?[^`]\1(?!`)/g, m => m.replace(/[^\n\r]/g, " "));
   return masked;
 }
 
@@ -119,6 +131,26 @@ export function parseMetadata(
         meta.frontmatterEndOffset = fmMatch[0].length;
         bodyOffset = fmMatch[0].length;
         body = text.slice(bodyOffset);
+        meta.frontmatterPosition = offsetToLoc(lineStarts, 0, fmMatch[0].trimEnd().length);
+        const frontmatterLinks: FrontmatterLinkCache[] = [];
+        const yamlStart = fmMatch[0].indexOf(fmMatch[1]);
+        const visit = (node: unknown, key: string) => {
+          if (isMap(node)) {
+            for (const pair of node.items) if (isScalar(pair.key)) visit(pair.value, key ? `${key}.${String(pair.key.value)}` : String(pair.key.value));
+          } else if (isSeq(node)) {
+            node.items.forEach((item, index) => visit(item, `${key}.${index}`));
+          } else if (isScalar(node) && typeof node.value === "string" && node.range) {
+            for (const match of node.value.matchAll(WIKILINK_RE)) {
+              if (isEscaped(node.value, match.index!)) continue;
+              const [target, ...alias] = match[2].split("|");
+              if (!target.trim()) continue;
+              frontmatterLinks.push({ key, link: target.trim(), original: match[0], displayText: alias.length ? alias.join("|").trim() : target.trim(),
+                position: offsetToLoc(lineStarts, yamlStart + node.range[0], yamlStart + node.range[1]) });
+            }
+          }
+        };
+        visit(parseDocument(fmMatch[1]).contents, "");
+        if (frontmatterLinks.length) meta.frontmatterLinks = frontmatterLinks;
       }
     } catch {
       // Malformed YAML: treat as body text.
@@ -158,9 +190,20 @@ export function parseMetadata(
   // matching this function's normal "present only when computed" contract.
   if (body.length > maxBodyBytesForScan) return meta;
 
-  const masked = maskCode(body);
+  const codeSafe = maskMetadataCode(body);
+  const comments = [...codeSafe.matchAll(/(?<!\\)%%[\s\S]*?(?<!\\)%%/g)];
+  let commentEnd = 0;
+  const uncommented: string[] = [];
+  for (const comment of comments) {
+    uncommented.push(body.slice(commentEnd, comment.index), comment[0].replace(/[^\n\r]/g, " "));
+    commentEnd = comment.index! + comment[0].length;
+  }
+  uncommented.push(body.slice(commentEnd));
+  body = uncommented.join("");
+  const masked = maskMetadataCode(body);
 
   for (const m of masked.matchAll(WIKILINK_RE)) {
+    if (isEscaped(masked, m.index!)) continue;
     const isEmbed = m[1] === "!";
     const inner = m[2];
     const pipe = inner.indexOf("|");
@@ -194,20 +237,18 @@ export function parseMetadata(
   }
   if (footnoteRefs.length) meta.footnoteRefs = footnoteRefs;
 
-  // Markdown reference links — `[text][id]` (full) and `[id][]` (collapsed),
-  // where an empty id means the link text doubles as the id.
-  const referenceLinks: ReferenceLinkCache[] = [];
-  for (const m of masked.matchAll(REFERENCE_LINK_RE)) {
-    if (m[1].startsWith("^")) continue; // a footnote ref, handled above
-    const id = m[2] || m[1];
-    if (!id) continue;
-    const start = bodyOffset + m.index!;
-    referenceLinks.push({ id, link: m[1], position: offsetToLoc(lineStarts, start, start + m[0].length) });
-  }
-  if (referenceLinks.length) meta.referenceLinks = referenceLinks;
+  const authored = markdownReferences(body, (start, end) => offsetToLoc(lineStarts, bodyOffset + start, bodyOffset + end));
+  meta.links.push(...authored.links);
+  meta.embeds.push(...authored.embeds);
+  meta.links.sort((a, b) => a.position.start.offset - b.position.start.offset);
+  meta.embeds.sort((a, b) => a.position.start.offset - b.position.start.offset);
+  if (authored.references.length) meta.referenceLinks = authored.references;
+  const definitions = scanFootnotes(text.slice(0, bodyOffset) + body, bodyOffset).definitions;
+  if (definitions.length) meta.footnotes = definitions.map(definition => ({ id: definition.id, position: offsetToLoc(lineStarts, definition.from, definition.to) }));
 
   let offset = bodyOffset;
   let inFence = false;
+  let listRoot: number | null = null;
   const listItems: ListItemCache[] = [];
   const sections: SectionCache[] = [];
   // Ancestor stack for resolving list nesting by indentation: each entry is a
@@ -249,12 +290,14 @@ export function parseMetadata(
     } else if (isFence) {
       flush();
       stack.length = 0;
+      listRoot = null;
       inFence = true;
       cur = { type: "code", start: lineStart, end: lineEnd };
     } else if (line.trim() === "") {
       // Blank line ends the current block/section and any list context.
       flush();
       stack.length = 0;
+      listRoot = null;
     } else {
       const h = line.match(HEADING_RE);
       const li = h ? null : line.match(LIST_ITEM_RE);
@@ -263,6 +306,7 @@ export function parseMetadata(
       if (type === "heading") {
         flush();
         stack.length = 0;
+      listRoot = null;
         const cleanHeading = stripCommentMarkerSyntax(rawText.slice(lineStart, lineEnd)).match(HEADING_RE);
         meta.headings.push({
           heading: (cleanHeading?.[2] ?? h![2]).trim(),
@@ -284,7 +328,8 @@ export function parseMetadata(
           const lineNo = pos.start.line;
           // Discard ancestors at this indent or deeper — they can't be parents.
           while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
-          const parent = stack.length ? stack[stack.length - 1].line : -1 - lineNo;
+          if (listRoot === null) listRoot = lineNo;
+          const parent = stack.length ? stack[stack.length - 1].line : -listRoot;
           const item: ListItemCache = { position: pos, parent };
           // li[2] is the checkbox char (only for `[x]`-style task items).
           if (li![2] !== undefined) item.task = li![2];
@@ -295,6 +340,7 @@ export function parseMetadata(
         } else {
           // A paragraph line ends any list nesting context.
           stack.length = 0;
+      listRoot = null;
         }
       }
     }
@@ -305,6 +351,27 @@ export function parseMetadata(
   // Obsidian-faithful: present only when the note actually has content.
   if (listItems.length) meta.listItems = listItems;
   if (sections.length) meta.sections = sections;
+  const blocks: NonNullable<CachedMetadata["blocks"]> = Object.create(null);
+  for (const section of sections) {
+    if (section.type === "code" || section.type === "yaml") continue;
+    const content = masked.slice(section.position.start.offset - bodyOffset, section.position.end.offset - bodyOffset);
+    if (section.type === "list") {
+      for (const item of listItems) if (item.id && item.position.start.offset >= section.position.start.offset && item.position.end.offset <= section.position.end.offset) blocks[item.id] = { id: item.id, position: item.position };
+    } else {
+      const id = content.match(BLOCK_ID_RE)?.[1];
+      if (id) { section.id = id; blocks[id] = { id, position: section.position }; }
+    }
+  }
+  if (Object.keys(blocks).length) meta.blocks = blocks;
 
   return meta;
+}
+
+/** Internal graph projection; property positions are actual YAML source spans. */
+export function metadataReferences(metadata: CachedMetadata): LinkCache[] {
+  return [...metadata.links, ...metadata.embeds, ...(metadata.frontmatterLinks ?? []).flatMap(link => link.position ? [{ link: link.link, displayText: link.displayText ?? link.link, position: link.position, isEmbed: false }] : [])]
+    .sort((a, b) => a.position.start.offset - b.position.start.offset);
+}
+export function isExternalReference(target: string): boolean {
+  return /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target);
 }
