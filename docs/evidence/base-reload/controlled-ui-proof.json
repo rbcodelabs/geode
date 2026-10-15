@@ -1,0 +1,205 @@
+{
+  "environment": "Local macOS Electron, synthetic throwaway vaults, 2026-10-15",
+  "fixedSourceAndUnitCommit": "3d8a53c",
+  "baselineSourceCommit": "c4ac07b",
+  "baselineProductionDiffEmpty": true,
+  "baselineResult": "Controlled original-source run failed the unchanged exact ordered-eight-row assertion; persisted priority sort acknowledged before releasing old read.",
+  "baselineTrace": [
+    {
+      "kind": "doPersist:end",
+      "time": 496.19999998807907,
+      "def": 1,
+      "views": [
+        {
+          "identity": 2,
+          "name": "Table",
+          "sort": [
+            {
+              "property": "file.name",
+              "direction": "ASC"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "select:after",
+      "time": 511.60000002384186,
+      "def": 1,
+      "views": [
+        {
+          "identity": 2,
+          "name": "Table",
+          "sort": [
+            {
+              "property": "note.priority",
+              "direction": "ASC"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "doPersist:end",
+      "time": 512.8000000119209,
+      "def": 1,
+      "views": [
+        {
+          "identity": 2,
+          "name": "Table",
+          "sort": [
+            {
+              "property": "note.priority",
+              "direction": "ASC"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "applyText:start",
+      "time": 513.9000000357628,
+      "def": 1,
+      "views": [
+        {
+          "identity": 2,
+          "name": "Table",
+          "sort": [
+            {
+              "property": "note.priority",
+              "direction": "ASC"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "applyText:end",
+      "time": 514.4000000357628,
+      "def": 3,
+      "views": [
+        {
+          "identity": 4,
+          "name": "Table",
+          "sort": [
+            {
+              "property": "file.name",
+              "direction": "ASC"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "baselineFinalSort": [
+    {
+      "property": "file.name",
+      "direction": "ASC"
+    }
+  ],
+  "baselineFinalRows": [
+    "Alpha Task.md",
+    "Beta Task.md",
+    "Daily Plan.md",
+    "Gamma Task.md",
+    "Mermaid.md",
+    "Roadmap.md",
+    "Scratch.md",
+    "Welcome.md"
+  ],
+  "fixedResults": [
+    {
+      "case": "original sort/filter/edit",
+      "verifiedSort": {
+        "rows": [
+          "Daily Plan.md",
+          "Mermaid.md",
+          "Scratch.md",
+          "Roadmap.md",
+          "Welcome.md",
+          "Alpha Task.md",
+          "Beta Task.md",
+          "Gamma Task.md"
+        ],
+        "yaml": "views:\n  - type: table\n    name: Table\n    sort:\n      - property: note.priority\n        direction: ASC\n",
+        "path": "Tasks/Untitled.base"
+      },
+      "finalDisk": {
+        "baseYaml": "views:\n  - type: table\n    name: Table\n    filters:\n      and:\n        - note.status == \"Done\"\n    sort:\n      - property: note.priority\n        direction: ASC\n",
+        "gammaMarkdown": "---\nstatus: Done\npriority: 5\ndone: true\n---\n\n# Gamma Task\n\nThird task, already finished.\n"
+      },
+      "finalDefinition": {
+        "formulas": {},
+        "properties": {},
+        "summaries": {},
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "sort": [
+              {
+                "property": "note.priority",
+                "direction": "ASC"
+              }
+            ],
+            "filters": {
+              "and": [
+                "note.status == \"Done\""
+              ]
+            }
+          }
+        ]
+      },
+      "finalRows": [
+        "Gamma Task.md"
+      ]
+    },
+    {
+      "case": "controlled delayed read",
+      "verifiedSort": {
+        "rows": [
+          "Daily Plan.md",
+          "Mermaid.md",
+          "Scratch.md",
+          "Roadmap.md",
+          "Welcome.md",
+          "Alpha Task.md",
+          "Beta Task.md",
+          "Gamma Task.md"
+        ],
+        "yaml": "views:\n  - type: table\n    name: Table\n    sort:\n      - property: note.priority\n        direction: ASC\n",
+        "path": "Tasks/Untitled.base"
+      },
+      "finalDisk": {
+        "baseYaml": "views:\n  - type: table\n    name: Table\n    filters:\n      and:\n        - note.status == \"Done\"\n    sort:\n      - property: note.priority\n        direction: ASC\n",
+        "gammaMarkdown": "---\nstatus: Done\npriority: 5\ndone: true\n---\n\n# Gamma Task\n\nThird task, already finished.\n"
+      },
+      "finalDefinition": {
+        "formulas": {},
+        "properties": {},
+        "summaries": {},
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "sort": [
+              {
+                "property": "note.priority",
+                "direction": "ASC"
+              }
+            ],
+            "filters": {
+              "and": [
+                "note.status == \"Done\""
+              ]
+            }
+          }
+        ]
+      },
+      "finalRows": [
+        "Gamma Task.md"
+      ]
+    }
+  ],
+  "limits": "This controlled schedule establishes the race class; it does not establish the exact schedule of the earlier full-suite failure. Native ownership integration and combined full gates remain separate."
+}

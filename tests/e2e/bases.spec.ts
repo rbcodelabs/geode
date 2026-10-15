@@ -52,6 +52,8 @@ async function runSortCase(info: TestInfo, controlledRead = false): Promise<void
   });
 
   const window = await app.firstWindow();
+  let verifiedSort: { rows: string[]; yaml: string; path: string } | undefined;
+  let finalDisk: { baseYaml: string; gammaMarkdown: string } | undefined;
   try {
     const consoleErrors: string[] = [];
     window.on("console", (msg) => {
@@ -132,6 +134,9 @@ async function runSortCase(info: TestInfo, controlledRead = false): Promise<void
       "Daily Plan.md", "Mermaid.md", "Scratch.md", "Roadmap.md", "Welcome.md",
       "Alpha Task.md", "Beta Task.md", "Gamma Task.md",
     ]);
+    const sortedBasePath = await window.evaluate(() => (window as any).app.workspace.getActiveLeaf().view.file.path);
+    verifiedSort = { rows: await fileNameCells.allTextContents(), yaml: fs.readFileSync(path.join(vaultDir, sortedBasePath), "utf8"), path: sortedBasePath };
+    expect(verifiedSort.yaml).toContain("property: note.priority");
 
     // --- Filter (this view) to note.status == "Done": only Gamma Task ---
     await window.locator(".bases-toolbar-btn", { hasText: "Filter" }).click();
@@ -167,6 +172,10 @@ async function runSortCase(info: TestInfo, controlledRead = false): Promise<void
 
     const gammaTaskOnDisk = fs.readFileSync(path.join(vaultDir, "Tasks", "Gamma Task.md"), "utf8");
     expect(gammaTaskOnDisk).toMatch(/priority:\s*5/);
+    finalDisk = { baseYaml: fs.readFileSync(path.join(vaultDir, verifiedSort.path), "utf8"), gammaMarkdown: gammaTaskOnDisk };
+    expect(finalDisk.baseYaml).toContain("property: note.priority");
+    expect(finalDisk.baseYaml).toContain('note.status == "Done"');
+    expect(finalDisk.gammaMarkdown).toMatch(/priority:\s*5/);
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
@@ -175,7 +184,7 @@ async function runSortCase(info: TestInfo, controlledRead = false): Promise<void
       return { trace: (window as any).__baseSortTrace, definition: view?.def, path: view?.file?.path, cached: view?.file && app.vault.getCachedContent(view.file.path), rows: Array.from(document.querySelectorAll(".bases-data-row td:first-child")).map(el => el.textContent) };
     }).catch(error => ({ error: String(error) }));
     const tracePath = info.outputPath("base-sort-trace.json");
-    fs.mkdirSync(path.dirname(tracePath), { recursive: true }); fs.writeFileSync(tracePath, JSON.stringify(probe, null, 2));
+    fs.mkdirSync(path.dirname(tracePath), { recursive: true }); fs.writeFileSync(tracePath, JSON.stringify({ ...probe, verifiedSort, finalDisk }, null, 2));
     await info.attach("base-sort-trace", { path: tracePath, contentType: "application/json" });
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
