@@ -21,9 +21,9 @@ describe("headless extraction compatibility baseline", () => {
     expect(metadata.listItems?.[0]).toMatchObject({ task: "x", id: "done" });
   });
 
-  it("characterizes code masking and the existing tilde-fence gap", () => {
+  it("excludes code references consistently across backtick and tilde fences", () => {
     const metadata = parseMetadata("`[[inline]]`\n```md\n[[backticks]]\n```\n~~~md\n[[tilde]]\n~~~\n[[visible]]");
-    expect(metadata.links.map(({ link }) => link)).toEqual(["tilde", "visible"]);
+    expect(metadata.links.map(({ link }) => link)).toEqual(["visible"]);
   });
 
   it("characterizes inline Markdown links and malformed YAML without rewriting bytes", () => {
@@ -31,7 +31,9 @@ describe("headless extraction compatibility baseline", () => {
     const metadata = parseMetadata(source);
     expect(metadata.frontmatter).toBeUndefined();
     expect(metadata.frontmatterEndOffset).toBe(0);
-    expect(metadata.links.map(({ link }) => link)).toEqual(["Wiki"]);
+    expect(metadata.links.map(({ link }) => link)).toEqual(["Target.md", "Wiki"]);
+    const markdown = metadata.links[0];
+    expect(source.slice(markdown.position.start.offset, markdown.position.end.offset)).toBe("[local](Target.md)");
   });
 
   it("retains frontmatter but omits body metadata above the string-length scan cap", () => {

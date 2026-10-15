@@ -30,13 +30,14 @@ export function incrementalDeletionIndex(options: Options): number {
 export const attachmentPath = "Attachments/pixel.png";
 const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 export interface Reference {
+    syntax?: "markdown"; // Absent for authored wikilinks/embeds.
     link: string;
     target: string | null;
     embed: boolean;
 }
 export function referencesFor(i: number, options: Options): Reference[] {
     const count = options.profile === "dense" ? 96 : 24;
-    return Array.from({ length: count }, (_, slot) => {
+    const wiki: Reference[] = Array.from({ length: count }, (_, slot) => {
         const targetIndex = slot === 0 ? (i + 1) % options.notes : slot % 6 === 0 ? 0 : ((Math.imul(i + 1, 1664525) >>> 0) + slot * 97 + options.seed) % options.notes;
         const target = notePath(targetIndex);
         if (slot === count - 1)
@@ -60,6 +61,8 @@ export function referencesFor(i: number, options: Options): Reference[] {
         }
         return { link: target.slice(0, -3) + (slot % 7 === 2 ? "#Section" : slot % 7 === 3 ? "#^anchor" : ""), target, embed: false };
     });
+    const next = notePath((i + 1) % options.notes);
+    return [...wiki, { link: next, target: next, embed: false, syntax: "markdown" }];
 }
 export function syntheticNote(i: number, options: Options): {
     path: string;
@@ -70,7 +73,7 @@ export function syntheticNote(i: number, options: Options): {
         throw Error("invalid note index");
     const references = referencesFor(i, options);
     let content = `---\naliases: ["Alias ${i}", "Shared alias ${Math.floor(i / 32)}"]\ntags: [synthetic, area-${i % 16}]\nfixture: {index: ${i}, seed: ${options.seed}, active: true}\n---\n# Synthetic note ${i}\n\n## Section\n- Fixture marker ${i}. ^anchor\n\n`;
-    content += references.map((r, slot) => `${r.embed ? "!" : ""}[[${r.link}|${slot === 0 ? "Next synthetic note" : `Reference ${slot}`}]]`).join("\n");
+    content += references.filter(r => r.syntax !== "markdown").map((r, slot) => `${r.embed ? "!" : ""}[[${r.link}|${slot === 0 ? "Next synthetic note" : `Reference ${slot}`}]]`).join("\n");
     content += `\n\n[Markdown example](${encodeURI(notePath((i + 1) % options.notes))})\n\n#synthetic/tag\n`;
     content += `\n## Leaf\nShallow synthetic transclusion ${i}, with no links.\n\n## Filler\n`;
     // Reference-bearing content comes before filler and below the metadata scan cap.
@@ -156,7 +159,7 @@ export async function generateSyntheticVault(output: string, input: Partial<Opti
             await write(join(root, note.path), bytes);
             addDigest(note.path, bytes);
             stats.notes++;
-            stats.wikiReferences += note.references.length;
+            stats.wikiReferences += note.references.filter(reference => reference.syntax !== "markdown").length;
             stats.markdownLinks++;
             stats.missingReferences++;
             if (bytes.length >= 128 * 1024)
@@ -174,7 +177,7 @@ export async function generateSyntheticVault(output: string, input: Partial<Opti
             collisions: { basenameBuckets: Object.values(basenames).filter(n => n > 1).sort((a, b) => a - b), sharedAliasBucketMaximum: Math.min(32, options.notes) },
             queries: queryCases(options),
             navigation: Array.from({ length: 100 }, (_, step) => { const i = (options.seed + step) % options.notes; return { source: notePath(i), target: notePath((i + 1) % options.notes), marker: `Synthetic note ${(i + 1) % options.notes}` }; }),
-            coverage: { markdownLinks: "present but not included in current wiki-only graph", missing: "one deliberate missing wiki target per note", ambiguities: "query cases only; generated graph uses exact targets", longNotes: "every 100th note at least 128KiB" },
+            coverage: { markdownLinks: "included in the graph; one authored next-note path per note", missing: "one deliberate missing wiki target per note", ambiguities: "query cases only; generated graph uses exact targets", longNotes: "every 100th note at least 128KiB" },
         };
         await write(join(root, "synthetic-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
         await unlink(join(root, "GENERATION-INCOMPLETE.txt"));
