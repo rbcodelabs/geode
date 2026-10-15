@@ -71,3 +71,5 @@ Mouse drag, resize, duplication, marquee and pan remain registered through point
 Undo/redo keeps the old model until the new disk bytes are acknowledged and gates Canvas interaction for the complete write. A rejected write remounts the retained model after preparation invalidated its retired projection; it cannot detach a newly entered user draft during rollback. A newer conflict suppresses stale publication after an already-started successful write, without falsely retaining it as a failed write. Interaction restoration waits for owner admission and preserves a separate workspace pause.
 
 This correction batch passes 126 targeted tests across eight files, typecheck, build and diff checks locally with locked dependencies. Real-app proof, full gates and re-review remain pending. The earlier 118-test result describes the prior checkpoint only.
+
+The touch admission follow-up adds an actual capture-handler regression plus file-card native double-click/context-menu coverage. The final targeted batch is 128 passing tests across the same eight files; typecheck, build and diff checks pass. No real-app rerun has been credited yet.
