@@ -9,6 +9,7 @@ import type { QueryRow } from "../bases/query-engine";
 import { enumerateFrontmatterKeys, frontmatterKeyForColumn, parseEditedValue, resolveColumns } from "../bases/columns";
 import { PromptModal } from "../modals/modals";
 import type { TFile } from "../types";
+import type { Vault } from "../vault";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
 import { openFilterEditor, type FilterEditorScope } from "./bases/filter-editor";
 import { patchFrontmatter, patchFrontmatterText } from "../frontmatter-io";
@@ -27,7 +28,7 @@ interface FailedBaseRow {
   filePath: string;
   ownerFile: TFile | null;
   ownerPath: string | null;
-  vault: unknown;
+  vault: Vault;
   columnPath: string;
   rawText: string;
   sequence: number;
@@ -644,7 +645,9 @@ export class BaseView implements View {
   }
 
   private rowTargetCurrent(row: FailedBaseRow): boolean {
-    return this.app.vault === row.vault && this.file === row.ownerFile && (this.file?.path ?? null) === row.ownerPath && row.file.path === row.filePath;
+    return this.app.vault === row.vault && this.file === row.ownerFile && (this.file?.path ?? null) === row.ownerPath && row.file.path === row.filePath
+      && row.vault.getAbstractFileByPath(row.filePath) === row.file
+      && (row.ownerFile === null || (row.ownerPath !== null && row.vault.getAbstractFileByPath(row.ownerPath) === row.ownerFile));
   }
 
   private async retryFailedRow(row: FailedBaseRow): Promise<void> {
@@ -931,7 +934,7 @@ export class BaseView implements View {
           if (!this.rowTargetCurrent(record) || this.sourceConflictReadOnly) throw new Error("The Base row target or conflict state changed before its save.");
         },
       };
-      await this.commitCellEdit(file, columnPath, rawText, guardedToken, edit);
+      await this.commitCellEdit(file, columnPath, rawText, guardedToken, edit, record.vault);
     };
     // Every user submission supersedes only failures captured for its exact key.
     const operation = this.renderOwner.retry(write, key).then(() => {
@@ -952,11 +955,11 @@ export class BaseView implements View {
     return operation;
   }
 
-  private async commitCellEdit(file: TFile, columnPath: string, rawText: string, token: RenderToken, edit = this.sourceEdit): Promise<void> {
+  private async commitCellEdit(file: TFile, columnPath: string, rawText: string, token: RenderToken, edit = this.sourceEdit, vault = this.app.vault): Promise<void> {
     const key = frontmatterKeyForColumn(columnPath);
     if (!key) return;
     if (this.sourceEdit === edit) this.setSaveStatus("Saving Base…", false);
-    await patchFrontmatter(this.app.vault, file, (fm) => {
+    await patchFrontmatter(vault, file, (fm) => {
       const value = parseEditedValue(rawText);
       if (value === undefined) delete fm[key];
       else fm[key] = value;

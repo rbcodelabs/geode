@@ -24,7 +24,9 @@ it("keeps mouse Retry focus from triggering an ordinary blur submission and retr
   const { view } = fixture();
   Object.assign(view, { file: null, renderOwner: new RenderOwnership().create(view), rowFailures: new Map(), retainedNativeFailures: [], rowSubmissionSequence: 0, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map() });
   view.editCell = (BaseView.prototype as any).editCell.bind(view);
-  await expect(view.editCell({ path: "Note.md" }, "note.priority", "9")).rejects.toThrow("disk rejected");
+  const file = view.sourceEdit.file;
+  view.app.vault.getAbstractFileByPath = (path: string) => path === file.path ? file : null;
+  await expect(view.editCell(file, "note.priority", "9")).rejects.toThrow("disk rejected");
   view.editCell = vi.fn(async () => {});
   const button = view.saveStatusEl.children.find((el: Element) => el.textContent === "Retry Base save");
   expect(button.handlers.pointerdown).toBeTypeOf("function");

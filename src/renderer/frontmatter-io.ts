@@ -74,7 +74,13 @@ export function patchFrontmatterText(text: string, mutate: (fm: Record<string, u
   return text;
 }
 
-/** Read `file`, apply `mutate` to its frontmatter, and write the result back if it changed. */
+const frontmatterLanes = new WeakMap<VaultWriter, Map<string, Promise<void>>>();
+
+/**
+ * Serialize participating read/transform/write operations for one captured Vault
+ * and path. Direct Vault writes and other runtimes remain outside this lane.
+ * The optional caller guard runs at dequeue, after read, and before modify.
+ */
 export async function patchFrontmatter(
   vault: VaultWriter,
   file: TFile,
@@ -82,8 +88,29 @@ export async function patchFrontmatter(
   options?: DataWriteOptions,
   beforeMutate?: () => void,
 ): Promise<void> {
-  const text = await vault.read(file);
-  beforeMutate?.();
-  const updated = patchFrontmatterText(text, mutate);
-  if (updated !== text) await vault.modify(file, updated, options);
+  const path = file.path;
+  let lanes = frontmatterLanes.get(vault);
+  if (!lanes) {
+    lanes = new Map();
+    frontmatterLanes.set(vault, lanes);
+  }
+  const check = () => {
+    if (file.path !== path) throw new Error(`Cannot patch frontmatter because the file path changed from ${path}`);
+    beforeMutate?.();
+  };
+  const operation = (lanes.get(path) ?? Promise.resolve()).then(async () => {
+    check();
+    const text = await vault.read(file);
+    check();
+    const updated = patchFrontmatterText(text, mutate);
+    check();
+    if (updated !== text) await vault.modify(file, updated, options);
+  });
+  // Keep scheduling recovery separate from the rejection returned to the caller.
+  const tail = operation.then(() => undefined, () => undefined);
+  lanes.set(path, tail);
+  void tail.then(() => {
+    if (lanes.get(path) === tail) lanes.delete(path);
+  });
+  return operation;
 }

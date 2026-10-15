@@ -7,7 +7,9 @@ function fixture() {
   const owner = new RenderOwnership().create(view, { recover: failures => view.recoverNativeWrites(failures) });
   Object.assign(view, { file: { path: "Tasks.base" }, renderOwner: owner, rowFailures: new Map(), retainedNativeFailures: [], rowSubmissionSequence: 0, sourceEdit: null, vaultSwitching: false, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), tableView: { editIdentity: null, acknowledgeEdit: vi.fn() }, setSaveStatus: vi.fn(), runAndRender: vi.fn(), app: { notify: vi.fn(), vault: { read: async () => "---\npriority: 2\n---\nOriginal source\n", modify: vi.fn(() => new Promise<void>((resolve, reject) => writes.push({ resolve, reject }))) } } });
   const file = { path: "A.md" };
-  async function start(path = file, column = "note.priority", text = "9") { const saving = view.editCell(path, column, text); await new Promise(resolve => setImmediate(resolve)); return { saving, write: writes.at(-1)! }; }
+  const files = new Map([[file.path, file], [view.file.path, view.file]]);
+  view.app.vault.getAbstractFileByPath = (path: string) => files.get(path) ?? null;
+  async function start(path = file, column = "note.priority", text = "9") { files.set(path.path, path); const saving = view.editCell(path, column, text); await new Promise(resolve => setImmediate(resolve)); return { saving, get write() { return writes.at(-1)!; } }; }
   async function fail(path = file, column = "note.priority") { const pending = await start(path, column); pending.write.reject(new Error("disk rejected")); await expect(pending.saving).rejects.toThrow("disk rejected"); }
   return { view, owner, file, start, fail };
 }
@@ -33,7 +35,9 @@ it("a successful A resubmission preserves other-column, other-file and definitio
 });
 it("a failure arriving after same-key retry admission survives that successful retry", async () => {
   const { view, owner, start, fail } = fixture(); await fail(); const retry = await start(); const later = await start(undefined, undefined, "11");
-  later.write.reject(new Error("later rejected")); await expect(later.saving).rejects.toThrow(); retry.write.resolve(); await retry.saving;
+  expect(view.app.vault.modify).toHaveBeenCalledTimes(2);
+  retry.write.resolve(); await retry.saving; await new Promise(resolve => setImmediate(resolve));
+  later.write.reject(new Error("later rejected")); await expect(later.saving).rejects.toThrow();
   expect(owner.hasUnacknowledgedWrites).toBe(true); expect([...view.rowFailures.values()][0].rawText).toBe("11");
 });
 it("a retained recovery callback cannot write after its Base file identity changes", async () => {
@@ -55,14 +59,15 @@ it("cancel and unrelated success do not acknowledge an earlier failed row", asyn
 it.each(["rename", "conflict"])("refuses a %s introduced during the row read before any mutation", async change => {
   const { view, owner, file } = fixture(); let finish!: (text: string) => void;
   view.app.vault.read = () => new Promise<string>(resolve => { finish = resolve; });
-  const saving = view.editCell(file, "note.priority", "9"); await Promise.resolve();
+  const saving = view.editCell(file, "note.priority", "9"); await new Promise(resolve => setImmediate(resolve));
   if (change === "rename") file.path = "Renamed.md"; else view.sourceConflictReadOnly = true;
   finish("---\npriority: 2\n---\nOriginal source\n");
   await expect(saving).rejects.toThrow(/changed/); expect(view.app.vault.modify).not.toHaveBeenCalled(); expect(owner.hasUnacknowledgedWrites).toBe(true);
 });
-it("retains the newest failed value when an older same-key write fails later", async () => {
+it("retains the newest failed value after serialized same-key failures", async () => {
   const { view, start } = fixture(); const older = await start(); const newer = await start(undefined, undefined, "11");
-  newer.write.reject(new Error("new rejected")); await expect(newer.saving).rejects.toThrow();
   older.write.reject(new Error("old rejected")); await expect(older.saving).rejects.toThrow();
+  await new Promise(resolve => setImmediate(resolve));
+  newer.write.reject(new Error("new rejected")); await expect(newer.saving).rejects.toThrow();
   expect([...view.rowFailures.values()][0].rawText).toBe("11");
 });

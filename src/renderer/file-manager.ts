@@ -3,17 +3,6 @@ import { patchFrontmatter } from "./frontmatter-io";
 import { isTFile, type TAbstractFile, type TFile, type TFolder } from "./types";
 import type { DataWriteOptions, Vault } from "./vault";
 
-const frontmatterQueues = new WeakMap<Vault, Map<string, Promise<void>>>();
-
-function queueFor(vault: Vault): Map<string, Promise<void>> {
-  let queue = frontmatterQueues.get(vault);
-  if (!queue) {
-    queue = new Map();
-    frontmatterQueues.set(vault, queue);
-  }
-  return queue;
-}
-
 /**
  * Non-visual file operations exposed to hosted plugins. Preference-dependent
  * attachment placement remains intentionally outside this bounded
@@ -38,8 +27,8 @@ export class FileManager {
 
   /**
    * Mutate a Markdown file's YAML frontmatter without losing concurrent
-   * processFrontMatter updates in this renderer runtime. The queue is shared
-   * by all FileManager instances for the same Vault, but it does not lock out
+   * frontmatter helper updates in this renderer runtime. The lane is shared
+   * by all helper callers for the same Vault, but it does not lock out
    * direct Vault.modify calls or external filesystem writers.
    */
   async processFrontMatter(
@@ -47,32 +36,23 @@ export class FileManager {
     fn: (frontmatter: any) => void,
     options?: DataWriteOptions,
   ): Promise<void> {
-    this.validateFrontmatterFile(file);
-    const path = file.path;
-    const queue = queueFor(this.app.vault);
-    const previous = queue.get(path) ?? Promise.resolve();
-    const operation = previous.catch(() => undefined).then(async () => {
-      this.validateFrontmatterFile(file, path);
-      await patchFrontmatter(this.app.vault, file, fn, options, () => {
-        this.validateFrontmatterFile(file, path);
-      });
+    const vault = this.app.vault;
+    const path = file?.path;
+    this.validateFrontmatterFile(vault, file, path);
+    return patchFrontmatter(vault, file, fn, options, () => {
+      this.validateFrontmatterFile(vault, file, path);
     });
-    const recoveredTail = operation.then(() => undefined, () => undefined);
-    queue.set(path, recoveredTail);
-    void recoveredTail.then(() => {
-      if (queue.get(path) === recoveredTail) queue.delete(path);
-    });
-    return operation;
   }
 
-  private validateFrontmatterFile(file: TFile, expectedPath = file?.path): void {
+  private validateFrontmatterFile(vault: Vault, file: TFile, expectedPath: string): void {
+    if (this.app.vault !== vault) throw new Error("Cannot process frontmatter because the current vault changed");
     if (!isTFile(file)) {
       throw new Error("FileManager.processFrontMatter requires a Markdown TFile");
     }
     if (file.path !== expectedPath) {
       throw new Error(`Cannot process frontmatter because the file path changed from ${expectedPath}`);
     }
-    const current = this.app.vault.getAbstractFileByPath(expectedPath);
+    const current = vault.getAbstractFileByPath(expectedPath);
     if (!current) {
       throw new Error(`Cannot process frontmatter because the file does not exist in the current vault: ${expectedPath}`);
     }

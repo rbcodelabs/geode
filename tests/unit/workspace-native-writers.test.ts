@@ -13,7 +13,9 @@ it("keeps the actual Base retry control usable after a pre-destructor close abor
   const registry = new RenderOwnership(); const owner = registry.create(view, { writer: view, close });
   const modify = vi.fn().mockRejectedValueOnce(new Error("disk unavailable")).mockResolvedValue(undefined);
   Object.assign(view, { vaultSwitching: false, renderOwner: owner, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { file: { path: "Note.md" }, columnPath: "note.priority", rawText: "9" }, saveStatusEl: element(), app: { vault: { read: async () => "---\npriority: 2\n---\n", modify } }, runAndRender: vi.fn(), tableView: { acknowledgeEdit: vi.fn() } });
-  await expect(view.editCell({ path: "Note.md" }, "note.priority", "9")).rejects.toThrow("disk unavailable");
+  const file = view.sourceEdit.file;
+  view.app.vault.getAbstractFileByPath = (path: string) => path === file.path ? file : null;
+  await expect(view.editCell(file, "note.priority", "9")).rejects.toThrow("disk unavailable");
   const retry = view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Base save");
   await expect(owner.close()).rejects.toThrow("disk unavailable"); expect(close).not.toHaveBeenCalled();
   retry.handlers.click(); await new Promise(resolve => setImmediate(resolve));
@@ -40,7 +42,9 @@ it("refuses a stale Base row write after an awaited read when its owner begins c
   const view = Object.assign(Object.create(BaseView.prototype), { file: null, rowFailures: new Map(), retainedNativeFailures: [], rowSubmissionSequence: 0, app: { notify: vi.fn(), vault: {} } }) as any; let finish!: (text: string) => void;
   const modify = vi.fn(); const close = vi.fn(async () => {}); const owner = new RenderOwnership().create(view, { close });
   Object.assign(view, { renderOwner: owner, vaultSwitching: false, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { file: { path: "Note.md" }, columnPath: "note.priority", rawText: "9" }, setSaveStatus: vi.fn(), app: { vault: { read: () => new Promise<string>(resolve => { finish = resolve; }), modify } } });
-  const writing = view.editCell({ path: "Note.md" }, "note.priority", "9"); await Promise.resolve();
+  const file = view.sourceEdit.file;
+  view.app.vault.getAbstractFileByPath = (path: string) => path === file.path ? file : null;
+  const writing = view.editCell(file, "note.priority", "9"); await new Promise(resolve => setImmediate(resolve));
   const closing = owner.close(); finish("---\npriority: 2\n---\n");
   await expect(writing).rejects.toThrow(/owner changed/); await expect(closing).rejects.toThrow(/owner changed/);
   expect(modify).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled(); expect(view.sourceEdit.rawText).toBe("9");
@@ -120,6 +124,7 @@ it("keeps a row failure and its actual retry control after a successful definiti
   const owner = new RenderOwnership().create(view, { recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
   const file = { path: "Source.md" }; const row = vi.fn().mockRejectedValueOnce(new Error("row failed")).mockImplementation(async () => { view.sourceEdit = null; });
   Object.assign(view, { renderOwner: owner, vaultSwitching: false, sourceEdit: { file, columnPath: "note.priority", rawText: "9" }, definitionWritesPending: 0, persistQueue: Promise.resolve(), doPersist: vi.fn(async () => {}), sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), commitCellEdit: row, tableView: { acknowledgeEdit: vi.fn() }, saveStatusEl: element() });
+  view.app.vault.getAbstractFileByPath = (path: string) => path === file.path ? file : null;
   await expect(view.editCell(file, "note.priority", "9")).rejects.toThrow("row failed");
   await expect(owner.run(async () => { throw new Error("definition failed"); }, "definition")).rejects.toThrow("definition failed");
   await view.persist(true);
@@ -196,8 +201,11 @@ it("retains a Base row target until every concurrent write to that note settles"
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
   const view = Object.assign(Object.create(BaseView.prototype), { file: null, rowFailures: new Map(), retainedNativeFailures: [], rowSubmissionSequence: 0, app: { notify: vi.fn(), vault: {} } }) as any; const finishes: (() => void)[] = [];
   Object.assign(view, { vaultSwitching: false, file: { path: "Tasks.base" }, definitionWritesPending: 0, pendingKnownText: null, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), renderOwner: new RenderOwnership().create({}), commitCellEdit: () => new Promise<void>(resolve => { finishes.push(resolve); }) });
-  const first = view.editCell({ path: "Source.md" }, "note.priority", "9");
-  const second = view.editCell({ path: "Source.md" }, "note.priority", "10"); await Promise.resolve();
+  const file = { path: "Source.md" };
+  const files = new Map([[file.path, file], [view.file.path, view.file]]);
+  view.app.vault.getAbstractFileByPath = (path: string) => files.get(path) ?? null;
+  const first = view.editCell(file, "note.priority", "9");
+  const second = view.editCell(file, "note.priority", "10"); await Promise.resolve();
   finishes[0](); await first; expect(view.workspaceWritePaths()).toEqual(["Source.md"]);
   finishes[1](); await second; expect(view.workspaceWritePaths()).toEqual([]);
 });

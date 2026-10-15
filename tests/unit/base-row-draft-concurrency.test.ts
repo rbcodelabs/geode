@@ -6,8 +6,10 @@ it.each([["B.md", false], ["A.md", false], ["B.md", true], ["A.md", true]] as co
   const owner = new RenderOwnership().create(view, { writer: view, preflightClose: () => view.assertWorkspaceLoadReady() });
   let finish!: () => void;
   Object.assign(view, { file: null, rowFailures: new Map(), retainedNativeFailures: [], rowSubmissionSequence: 0, renderOwner: owner, vaultSwitching: false, sourceConflictReadOnly: false, persistRequestedWhileSuspended: false, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), tableView: { editIdentity: null }, setSaveStatus: vi.fn(), runAndRender: vi.fn(), app: { vault: { read: async () => "---\npriority: 2\n---\n", modify: vi.fn(() => new Promise<void>((resolve, reject) => { finish = () => rejected ? reject(new Error("old save rejected")) : resolve(); })) } } });
-  view.beginSourceEdit({ path: "A.md" }, "note.priority", "9");
-  const saving = view.editCell({ path: "A.md" }, "note.priority", "9");
+  const file = { path: "A.md" };
+  view.app.vault.getAbstractFileByPath = (path: string) => path === file.path ? file : null;
+  view.beginSourceEdit(file, "note.priority", "9");
+  const saving = view.editCell(file, "note.priority", "9");
   await new Promise(resolve => setImmediate(resolve)); expect(view.app.vault.modify).toHaveBeenCalledOnce();
   view.beginSourceEdit({ path: newerPath }, "note.priority", "10"); const newer = view.sourceEdit;
   finish(); if (rejected) await expect(saving).rejects.toThrow("old save rejected"); else await saving;
@@ -19,7 +21,9 @@ it("acknowledges persisted row bytes when only the subsequent projection refresh
   const view = Object.create(BaseView.prototype) as any;
   const owner = new RenderOwnership().create(view); const modify = vi.fn(async () => {});
   Object.assign(view, { file: null, rowFailures: new Map(), retainedNativeFailures: [], rowSubmissionSequence: 0, renderOwner: owner, vaultSwitching: false, sourceEdit: null, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), tableView: { editIdentity: null }, setSaveStatus: vi.fn(), runAndRender: () => { throw new Error("query failed"); }, app: { notify: vi.fn(), vault: { read: async () => "---\npriority: 2\n---\n", modify } } });
-  await expect(view.editCell({ path: "A.md" }, "note.priority", "9")).resolves.toBeUndefined();
+  const file = { path: "A.md" };
+  view.app.vault.getAbstractFileByPath = (path: string) => path === file.path ? file : null;
+  await expect(view.editCell(file, "note.priority", "9")).resolves.toBeUndefined();
   expect(modify).toHaveBeenCalledOnce(); expect(owner.hasUnacknowledgedWrites).toBe(false);
   expect(view.setSaveStatus).toHaveBeenLastCalledWith(expect.stringMatching(/saved.*refresh/i), true);
 });
