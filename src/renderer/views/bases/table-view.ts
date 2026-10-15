@@ -274,8 +274,8 @@ export class BasesTableView {
       } catch {
         if (this.editSession !== session) return;
         committing = false;
-        input.disabled = false;
-        input.focus();
+        input.disabled = this.readOnly;
+        if (!this.readOnly) input.focus();
       }
     };
     const cancel = () => {
@@ -288,12 +288,14 @@ export class BasesTableView {
       this.callbacks.onEditEnd(session.token);
     };
     if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", event => {
+      if (this.editSession !== session) return;
       const retry = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>("button[data-base-row-retry]");
       const owner = this.containerEl.closest(".base-view");
-      if (owner && retry?.closest(".base-view") === owner && retry.dataset.baseRowRetry === JSON.stringify([this.currentFile(pos).path, path])) return;
+      if (owner && retry?.closest(".base-view") === owner && retry.dataset.baseRowRetry === JSON.stringify([file.path, path])) return;
       void commit();
     });
     input.addEventListener("keydown", (e) => {
+      if (this.editSession !== session) { e.stopPropagation(); return; }
       if (e.key === "Enter") {
         e.preventDefault();
         void commit();
