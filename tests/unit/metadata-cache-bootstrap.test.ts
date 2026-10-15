@@ -38,7 +38,7 @@ describe("metadata database startup ownership", () => {
     });
     try {
       expect(sawWal).toBe(true); expect(result.value).toBe(ready);
-      expect(result.db.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
+      expect(result.db.prepare("PRAGMA user_version").get()?.user_version).toBe(2);
     } finally { utility?.exec("ROLLBACK"); utility?.close(); result.db.close(); }
   });
   it("closes an allocated database if schema initialization fails", async () => {
