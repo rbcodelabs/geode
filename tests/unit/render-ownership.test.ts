@@ -57,3 +57,15 @@ it("reports failure from an earlier fire-and-forget child close during the owner
   await expect(child.close()).rejects.toThrow("nested flush failed");
   await expect(root.freezeAndDrain()).rejects.toThrow("nested flush failed");
 });
+it("retains a failed root teardown so a later barrier cannot overlook its writer", async () => {
+  const registry = new RenderOwnership(); const owner = {}; const scope = registry.create(owner, { writer: owner, close: async () => { throw new Error("root row write failed"); } });
+  await expect(scope.close()).rejects.toThrow("root row write failed");
+  await expect(registry.hold(new Set([owner]))).rejects.toThrow("root row write failed");
+  expect(() => registry.select(new Set())).toThrow(/outside/i);
+});
+it("rejects overlapping barriers and a release from a different hold", async () => {
+  const registry = new RenderOwnership(); const owner = {}; registry.create(owner); const held = await registry.hold(new Set([owner]));
+  await expect(registry.hold(new Set([owner]))).rejects.toThrow(/busy|progress/i);
+  expect(() => registry.release([])).toThrow(/hold/i); expect(registry.admissionOpen).toBe(false);
+  registry.release(held); expect(registry.admissionOpen).toBe(true);
+});
