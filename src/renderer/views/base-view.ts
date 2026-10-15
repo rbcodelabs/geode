@@ -102,6 +102,7 @@ export class BaseView implements View {
   private lastColumns: string[] = [];
   private lastResult: QueryResult | null = null;
   private renderScheduled = false;
+  private projectionRefreshPending = false;
   /**
    * The exact text we last knew to be on disk for this file — set both
    * right before `persist()` writes it (predicting the write's outcome)
@@ -137,7 +138,6 @@ export class BaseView implements View {
   private persistRequestedWhileSuspended = false;
   private suppressReconcileModify = false;
   private sourceEdit: { file: TFile; columnPath: string; rawText: string; originalText: Promise<string> } | null = null;
-  private sourceWritePath: string | null = null;
   private readonly sourcePersistsInFlight = new Set<Promise<void>>();
   private readonly sourcePersistPaths = new Map<Promise<void>, string>();
   private definitionWritesPending = 0;
@@ -169,7 +169,7 @@ export class BaseView implements View {
       void this.reloadIfChangedExternally().catch(error => { if (!(error instanceof ScopeCancelled)) this.app.notify(`Could not reload Base: ${error instanceof Error ? error.message : String(error)}`); });
       return;
     }
-    if (changedFile && changedFile.path === this.sourceWritePath) return;
+    if (changedFile && [...this.sourcePersistPaths.values()].includes(changedFile.path)) return;
     // Some other file changed (a row's frontmatter was edited, a note was
     // created/deleted, etc.) — re-run the query against the current
     // (unchanged) `.base` definition, no need to re-parse it from disk.
@@ -278,7 +278,7 @@ export class BaseView implements View {
       onEditCell: (file, columnPath, rawText) => this.editCell(file, columnPath, rawText),
       onEditStart: (file, columnPath, rawText) => this.beginSourceEdit(file, columnPath, rawText),
       onEditDraft: (rawText) => { if (this.sourceEdit) this.sourceEdit.rawText = rawText; },
-      onEditEnd: () => { this.sourceEdit = null; },
+      onEditEnd: identity => this.endSourceEdit(identity),
     });
 
     this.cardsView = new BasesCardsView(app, {
@@ -375,7 +375,6 @@ export class BaseView implements View {
     this.cardsView.destroy();
     this.pluginViewHost.destroy();
     this.sourceEdit = null;
-    this.sourceWritePath = null;
     this.sourceConflictReadOnly = false;
     this.vaultSwitching = false;
     this.persistRequestedWhileSuspended = false;
@@ -552,7 +551,14 @@ export class BaseView implements View {
     ];
   }
 
+  private canRefreshProjection(): boolean {
+    if (this.sourceEdit || this.tableView.editIdentity) { this.projectionRefreshPending = true; return false; }
+    this.projectionRefreshPending = false;
+    return true;
+  }
+
   private runAndRender(): void {
+    if (!this.canRefreshProjection()) return;
     if (!this.def || !this.file) return;
     const view = this.currentView();
     if (!view) return;
@@ -602,6 +608,7 @@ export class BaseView implements View {
    * render it.
    */
   private renderActiveView(view: BaseViewDefinition, result: QueryResult, columns: string[]): void {
+    if (!this.canRefreshProjection()) return;
     if (!this.def) return;
 
     const registration = this.pluginViewHost.registrationFor(view.type);
@@ -713,7 +720,7 @@ export class BaseView implements View {
 
   assertWorkspaceLoadReady(): void {
     if (this.sourceConflictReadOnly) throw new Error("Resolve Base source conflict or recovery before loading a workspace.");
-    if (this.sourceEdit) throw new Error("Finish or cancel the active Base cell draft before loading a workspace.");
+    if (this.sourceEdit || this.tableView.editIdentity) throw new Error("Finish or cancel the active Base cell draft before loading a workspace.");
     if (this.persistRequestedWhileSuspended) throw new Error("The Base changed during the workspace operation. Retry after its edits are saved.");
   }
 
@@ -937,7 +944,8 @@ export class BaseView implements View {
 
   private editCell(file: TFile, columnPath: string, rawText: string, retry = false): Promise<void> {
     if (this.vaultSwitching) return Promise.reject(new Error("Base edits are paused during a workspace operation."));
-    const write = async (token: RenderToken) => { token.check(); await this.commitCellEdit(file, columnPath, rawText, token); };
+    const edit = this.sourceEdit;
+    const write = async (token: RenderToken) => { token.check(); await this.commitCellEdit(file, columnPath, rawText, token, edit); };
     const key = JSON.stringify(["row", file.path, columnPath]);
     const operation = retry ? this.renderOwner.retry(write, key) : this.renderOwner.run(write, key);
     this.sourcePersistsInFlight.add(operation);
@@ -949,26 +957,25 @@ export class BaseView implements View {
     return operation;
   }
 
-  private async commitCellEdit(file: TFile, columnPath: string, rawText: string, token: RenderToken): Promise<void> {
+  private async commitCellEdit(file: TFile, columnPath: string, rawText: string, token: RenderToken, edit = this.sourceEdit): Promise<void> {
     const key = frontmatterKeyForColumn(columnPath);
     if (!key) return;
-    this.setSaveStatus("Saving Base…", false);
-    this.sourceWritePath = file.path;
+    if (this.sourceEdit === edit) this.setSaveStatus("Saving Base…", false);
     try {
       await patchFrontmatter(this.app.vault, file, (fm) => {
         const value = parseEditedValue(rawText);
         if (value === undefined) delete fm[key];
         else fm[key] = value;
       }, undefined, () => token.check());
-      this.sourceEdit = null;
-      this.setSaveStatus("Base saved", false);
-      this.runAndRender();
     } catch (error) {
-      this.setSaveStatus("Base save failed", true, () => this.retryRowEdit(file, columnPath, rawText), { file, columnPath });
+      if (this.sourceEdit === edit) this.setSaveStatus("Base save failed", true, () => this.retryRowEdit(file, columnPath, rawText), { file, columnPath });
       throw error;
-    } finally {
-      this.sourceWritePath = null;
     }
+    if (this.sourceEdit !== edit) return;
+    this.sourceEdit = null;
+    this.setSaveStatus("Base saved", false);
+    try { this.runAndRender(); }
+    catch { this.setSaveStatus("Base saved, but its view refresh failed.", true); }
   }
 
   private async retryRowEdit(file: TFile, columnPath: string, failedText: string): Promise<void> {
@@ -977,12 +984,23 @@ export class BaseView implements View {
       this.app.notify("Finish or cancel the current cell draft before retrying another row.");
       return;
     }
+    const tableEdit = this.tableView.editIdentity;
     await this.editCell(file, columnPath, draft?.rawText ?? failedText, true);
-    this.tableView.acknowledgeEdit();
+    this.tableView.acknowledgeEdit(tableEdit);
   }
 
-  private beginSourceEdit(file: TFile, columnPath: string, rawText: string): void {
+  private beginSourceEdit(file: TFile, columnPath: string, rawText: string): object {
     this.sourceEdit = { file, columnPath, rawText, originalText: this.app.vault.read(file) };
+    return this.sourceEdit;
+  }
+
+  private endSourceEdit(identity: object | void): void {
+    if (this.sourceEdit && this.sourceEdit !== identity) return;
+    this.sourceEdit = null;
+    if (this.projectionRefreshPending) {
+      try { this.runAndRender(); }
+      catch { this.setSaveStatus("Base view refresh failed.", true); }
+    }
   }
 
   async getDirtySourceConflict(path: string, folder = false): Promise<{ file: TFile; text: string } | null> {

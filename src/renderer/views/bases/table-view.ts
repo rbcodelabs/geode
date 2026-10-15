@@ -22,9 +22,9 @@ export interface TableViewCallbacks {
   onOpenFile(file: TFile, newTab: boolean): void;
   /** Commit an edited cell's raw text back to the file's frontmatter. */
   onEditCell(file: TFile, columnPath: string, rawText: string): Promise<void>;
-  onEditStart(file: TFile, columnPath: string, rawText: string): void;
+  onEditStart(file: TFile, columnPath: string, rawText: string): object | void;
   onEditDraft(rawText: string): void;
-  onEditEnd(): void;
+  onEditEnd(identity?: object | void): void;
 }
 
 function cellValue(row: QueryRow, path: string): BaseValue | undefined {
@@ -59,6 +59,7 @@ export class BasesTableView {
   private activeCell: GridPos | null = null;
   private selection: Selection = { type: "none" };
   private editing: GridPos | null = null;
+  private editSession: { pos: GridPos; token: object | void } | null = null;
   private mobileActionsEl: HTMLElement | null = null;
   private mobileEditorActionsEl: HTMLElement | null = null;
   private readonly resultLimitEl: HTMLElement | null;
@@ -249,35 +250,42 @@ export class BasesTableView {
     input.className = "bases-cell-input";
     input.value = currentText;
     td.appendChild(input);
-    this.callbacks.onEditStart(this.currentFile(pos), path, currentText);
-    input.addEventListener("input", () => this.callbacks.onEditDraft(input.value));
+    const file = this.currentFile(pos);
+    const session = { pos, token: this.callbacks.onEditStart(file, path, currentText) };
+    this.editSession = session;
+    input.addEventListener("input", () => { if (this.editSession === session) this.callbacks.onEditDraft(input.value); });
     input.focus();
     input.select();
 
     let committing = false;
     const commit = async () => {
-      if (this.editing !== pos) return;
+      if (this.editSession !== session) return;
       if (committing) return;
       committing = true;
       input.disabled = true;
       try {
-        await this.callbacks.onEditCell(this.currentFile(pos), path, input.value);
+        await this.callbacks.onEditCell(file, path, input.value);
+        if (this.editSession !== session) return;
         this.editing = null;
-        this.callbacks.onEditEnd();
+        this.editSession = null;
         this.mobileEditorActionsEl?.remove();
         this.mobileEditorActionsEl = null;
+        this.callbacks.onEditEnd(session.token);
       } catch {
+        if (this.editSession !== session) return;
         committing = false;
         input.disabled = false;
         input.focus();
       }
     };
     const cancel = () => {
+      if (this.editSession !== session) return;
       this.editing = null;
-      this.callbacks.onEditEnd();
+      this.editSession = null;
       td.textContent = currentText;
       this.mobileEditorActionsEl?.remove();
       this.mobileEditorActionsEl = null;
+      this.callbacks.onEditEnd(session.token);
     };
     if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", event => {
       const retry = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>("button[data-base-row-retry]");
@@ -325,16 +333,21 @@ export class BasesTableView {
     if (readOnly) this.mobileEditorActionsEl?.querySelectorAll("button").forEach((button) => { button.disabled = true; });
   }
 
-  acknowledgeEdit(): void {
-    if (!this.editing) return;
+  get editIdentity(): object | null { return this.editSession; }
+
+  acknowledgeEdit(expected: object | null = this.editSession): void {
+    if (!this.editSession || this.editSession !== expected) return;
+    const token = this.editSession.token;
     this.editing = null;
-    this.callbacks.onEditEnd();
+    this.editSession = null;
     this.mobileEditorActionsEl?.remove();
     this.mobileEditorActionsEl = null;
+    this.callbacks.onEditEnd(token);
   }
 
   resetForFile(): void {
     this.editing = null;
+    this.editSession = null;
     this.activeCell = null;
     this.selection = { type: "none" };
     this.mobileActionsEl?.remove();
