@@ -1,4 +1,4 @@
-import { decodeMarkdownDestination } from "../../wiki/markdown-references";
+import { decodeMarkdownDestination } from "../../wiki/markdown-destination";
 import { ABSENT_SPAN, IMAGE_FLAGS, validatePackedImages } from "./packed";
 import type { ImageSourceContext, ImageSourceFile, ImageProjectionResult, OwnedImageOccurrence, OwnedImageProjection } from "./source";
 export interface AsyncImageSourceContext<T extends ImageSourceFile> extends ImageSourceContext<T> {

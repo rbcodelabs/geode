@@ -1,3 +1,5 @@
+import { decodeMarkdownDestination, unescapeMarkdownPunctuation as unescape } from "./markdown-destination";
+export { decodeMarkdownDestination } from "./markdown-destination";
 import { parser } from "@lezer/markdown";
 import type { LinkCache, ReferenceLinkCache, Loc } from "./types";
 
@@ -20,12 +22,6 @@ export const metadataMarkdownParser = parser.configure({ parseInline: [{
 }] });
 
 export const normalizeMarkdownReferenceLabel = (label: string) => label.replace(/\s+/g, " ").trim().toLowerCase();
-const unescape = (text: string) => text.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
-export function decodeMarkdownDestination(raw: string): string {
-  const value = unescape(raw.replace(/^<([\s\S]*)>$/, "$1"));
-  try { return decodeURI(value); } catch { return value; }
-}
-
 /** Uses the installed CommonMark grammar; it never treats text inside code as a link. */
 export function markdownReferences(body: string, locate: (start: number, end: number) => Loc): { links: LinkCache[]; embeds: LinkCache[]; references: ReferenceLinkCache[] } {
   const tree = metadataMarkdownParser.parse(body);
