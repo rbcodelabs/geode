@@ -59,6 +59,7 @@ import { FileExplorerView } from "./views/file-explorer";
 import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
 import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
+import { FootnotesPlugin } from "./internal-plugins/footnotes-plugin";
 import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
@@ -167,6 +168,8 @@ interface AppSettings {
   slashCommandsEnabled: boolean;
   /** Slides core plugin; off by default, as in Obsidian. */
   slidesEnabled: boolean;
+  /** Footnotes core plugin; optional sidebar, off by default. */
+  footnotesEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -1394,6 +1397,11 @@ class SettingsModal extends Modal {
       this.geodeApp.settings.slidesEnabled = enabled;
       this.geodeApp.syncSlidesPlugin();
       this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Footnotes</h3>`);
+    this.addToggle(container, "Enable Footnotes", this.geodeApp.settings.footnotesEnabled, (enabled) => {
+      this.geodeApp.settings.footnotesEnabled = enabled;
+      void this.geodeApp.syncFootnotesPlugin().then(() => this.geodeApp.saveSettings()).catch(() => this.geodeApp.notify("Could not update Footnotes"));
     });
     this.renderNoteComposerSettings(container);
     container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
@@ -2744,6 +2752,7 @@ export class App {
     formatConverterEnabled: false,
     slashCommandsEnabled: true,
     slidesEnabled: false,
+    footnotesEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -2764,6 +2773,8 @@ export class App {
   private externalModifyInFlight = new Map<string, Promise<void>>();
   private webViewerLifecycleEnabled = false;
   private commentsView?: CommentsView;
+  private footnotesPlugin?: FootnotesPlugin;
+  private footnotesLifecycle: Promise<void> = Promise.resolve();
   private syncConflictBanners: SyncConflictBannerController | null = null;
   private openConflictModal: ConflictCompareModal | null = null;
   private refreshDetailsModal: ErrorDetailsModal | null = null;
@@ -3408,6 +3419,7 @@ export class App {
         formatConverterEnabled: saved.formatConverterEnabled === true,
         slashCommandsEnabled: saved.slashCommandsEnabled !== false,
         slidesEnabled: saved.slidesEnabled === true,
+        footnotesEnabled: saved.footnotesEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -3624,6 +3636,7 @@ export class App {
     this.syncFormatConverterPlugin();
     this.syncSlashCommandsPlugin();
     this.syncSlidesPlugin();
+    await this.syncFootnotesPlugin();
     this.syncNoteComposerPlugin();
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
     // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
@@ -4325,6 +4338,8 @@ export class App {
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
+    await this.footnotesLifecycle.catch(() => undefined);
+    await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.vault.close();
     this.metadataCache.dispose();
     this.workspace?.dispose();
@@ -4341,6 +4356,8 @@ export class App {
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
     this.activeSettingsModal?.close();
+    await this.footnotesLifecycle.catch(() => undefined);
+    await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.workspace?.closeAllLeaves();
     await this.pluginManager?.dispose();
     this.mermaidPlugin?.unload();
@@ -6257,6 +6274,19 @@ export class App {
     if (!this.settings.slashCommandsEnabled) return;
     this.slashCommandsPlugin = new SlashCommandsPlugin(this);
     this.slashCommandsPlugin.load();
+  }
+
+  /** Core-plugin lifecycle is serialized so fast disable/re-enable cannot race pane creation. */
+  syncFootnotesPlugin(): Promise<void> {
+    const enabled = this.settings.footnotesEnabled, workspace = this.workspace;
+    const operation = this.footnotesLifecycle.catch(() => undefined).then(async () => {
+      if (workspace !== this.workspace) return;
+      if (enabled && this.footnotesPlugin) return;
+      if (this.footnotesPlugin) { await this.footnotesPlugin.stop(); this.footnotesPlugin = undefined; }
+      if (enabled) { this.footnotesPlugin = new FootnotesPlugin(this); this.footnotesPlugin.load(); }
+    });
+    this.footnotesLifecycle = operation;
+    return operation;
   }
 
   /** Load or unload the Slides core plugin to match `settings.slidesEnabled`. */

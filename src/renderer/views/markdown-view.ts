@@ -300,7 +300,7 @@ export class MarkdownView implements View {
         ),
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...completionKeymap, indentWithTab]),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) this.scheduleSave();
+          if (update.docChanged) { this.scheduleSave(); this.app.workspace.trigger("editor-change", this); }
           if (update.docChanged || update.selectionSet) this.updateCommentButton();
         }),
         imageAttachmentHandlers({
