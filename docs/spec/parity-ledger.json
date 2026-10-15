@@ -6103,7 +6103,7 @@
         "tests/unit/parity-metadata-audit.test.ts",
         "docs/spec/parity-api-audit-2026-10.md"
       ],
-      "notes": "Full and collapsed references with IDs, link text and positions are observed. The pinned API example uses shortcut syntax, which is absent; the desired contract is an expected-failure diagnostic."
+      "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
     },
     {
       "id": "DEV-2fee06feccfa",
@@ -23763,7 +23763,7 @@
         "tests/unit/parity-metadata-audit.test.ts",
         "docs/spec/parity-api-audit-2026-10.md"
       ],
-      "notes": "Full and collapsed references with IDs, link text and positions are observed. The pinned API example uses shortcut syntax, which is absent; the desired contract is an expected-failure diagnostic."
+      "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
     },
     {
       "id": "API-MEMBER-c6e74ea52a82",

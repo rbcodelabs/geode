@@ -16,13 +16,11 @@ describe("CachedMetadata parity audit", () => {
     expect(parseMetadata("No references.").footnoteRefs).toBeUndefined();
   });
 
-  it("returns positioned full and collapsed reference links", () => {
-    const text = "[label][target] [collapsed][] ` [ignored][code] `\n";
-    const refs = parseMetadata(text).referenceLinks!;
-    expect(refs.map(({ id, link }) => ({ id, link }))).toEqual([
-      { id: "target", link: "label" }, { id: "collapsed", link: "collapsed" },
+  it.fails("returns reference definition destinations rather than displayed labels", () => {
+    const text = "[label][target]\n\n[target]: https://example.com\n";
+    expect(parseMetadata(text).referenceLinks).toEqual([
+      expect.objectContaining({ id: "target", link: "https://example.com" }),
     ]);
-    expect(text.slice(refs[0].position.start.offset, refs[0].position.end.offset)).toBe("[label][target]");
   });
 
   it.fails("includes Markdown links in addition to wikilinks", () => {
