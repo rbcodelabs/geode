@@ -136,3 +136,19 @@ it("validates recovery bytes after projection writes before replacing the buffer
   await expect(view.acceptExternalText("provider replacement")).rejects.toThrow(/recovery copy/);
   expect(editor.dispatch).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled(); expect(view.lpProjection.admissionAllowed).toBe(true);
 });
+it("accepts clean provider replacement while only autosave is paused", async () => {
+  const { view, allow } = fixture(); allow();
+  await view.pauseAutosave(); await view.acceptExternalText("provider replacement");
+  expect(view.buildEditor).toHaveBeenCalledWith("provider replacement"); expect(view.file.path).toBe("Outer.md");
+});
+it("does not turn a real vault switch into an ordinary autosave resume", async () => {
+  const { view, allow } = fixture(); allow();
+  vi.stubGlobal("window", { clearTimeout() {}, setTimeout: vi.fn() }); view.app.statusBar = { update: vi.fn() };
+  await view.pauseAutosave(); await view.prepareVaultSwitch(); view.resumeAutosave();
+  await expect(view.acceptExternalText("provider replacement")).rejects.toThrow(/paused/); expect(view.buildEditor).not.toHaveBeenCalled();
+});
+it("keeps automatic saves suppressed during an autosave-only hold", async () => {
+  const { view } = fixture(); const setTimeout = vi.fn(); vi.stubGlobal("window", { clearTimeout() {}, setTimeout }); view.app.statusBar = { update: vi.fn() };
+  await view.pauseAutosave(); view.scheduleSave(); expect(setTimeout).not.toHaveBeenCalled();
+  view.resumeAutosave(); expect(setTimeout).toHaveBeenCalledOnce();
+});
