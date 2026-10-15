@@ -157,7 +157,11 @@ export class NativePresentationPrototype {
     Object.assign(root.style, { position: "absolute", top: "0", left: "8px", width: "calc(100% - 32px)", height: "320px", display: "flex", flexDirection: "column", pointerEvents: "auto", background: "var(--background-primary)", border: "1px solid var(--background-modifier-border)", borderRadius: "6px" });
     const header = document.createElement("div"); Object.assign(header.style, { flex: "0 0 38px", display: "flex", gap: "8px", alignItems: "center", padding: "4px 8px", background: "var(--background-secondary)" });
     const label = document.createElement("span"); label.style.flex = "1";
-    const returnButton = document.createElement("button"); returnButton.textContent = "Return to embed"; returnButton.addEventListener("click", () => this.returnToOccurrence(occurrence.id));
+    const returnButton = document.createElement("button"); returnButton.textContent = "Return to embed";
+    // Returning changes only the anchor viewport; pointer focus must not submit
+    // the unfinished native editor before the click handler gets to run.
+    returnButton.addEventListener("pointerdown", event => { if (event.button === 0) event.preventDefault(); });
+    returnButton.addEventListener("click", () => this.returnToOccurrence(occurrence.id));
     header.append(label, returnButton); const content = document.createElement("div"); content.className = "native-prototype-content"; Object.assign(content.style, { flex: "1", minHeight: "0", overflow: "hidden" });
     root.append(header, content); this.layer.appendChild(root);
     const record: PresentationRecord = { occurrence, root, content, label, returnButton, lifetime: new OwnedOccurrence(scope), observer: new MutationObserver(() => { record.retryRetirement = true; this.requestGeometry(); }), mountError: null, mounted: false, seenAnchor: false, retryRetirement: true, state: "inline" };

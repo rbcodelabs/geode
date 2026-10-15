@@ -150,3 +150,20 @@ test("a retained native Return remains pointer reachable when a later occurrence
     await unchanged(page, vault);
   }, doc);
 });
+
+test("keyboard Return activation remains available after deliberate focus transfer", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    const input = await edit(page); await capture(page, input);
+    await page.evaluate(() => { const app = (window as any).app; const modify = app.vault.modify.bind(app.vault); app.vault.modify = (file: any, text: string) => file.path === "Source.md" ? Promise.reject(new Error("synthetic keyboard recovery failure")) : modify(file, text); });
+    await input.press("Enter"); await expect(record(page).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await scrollAway(page);
+    const button = record(page).getByRole("button", { name: "Return to embed" });
+    // Explicit focus transfer is allowed to blur the editor. It is not the
+    // scroll/Return pointer invariant; the injected write failure retains it.
+    await button.focus(); await expect(button).toBeFocused(); await page.keyboard.press("Enter");
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records[0]?.state)).toBe("inline");
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+    expect(await page.evaluate(() => { const p = (window as any).__layerProbe; return { connected: p.input.isConnected, value: p.input.value }; })).toEqual({ connected: true, value: "9" });
+    await expect(record(page).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+  });
+});

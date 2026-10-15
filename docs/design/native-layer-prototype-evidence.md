@@ -118,3 +118,21 @@ The focused three-file matrix passes **46 tests**, including 16 prototype cases;
 repository and fixture typechecks, private bundle and normal app build pass.
 The actual pending-mount regression has **not yet been rerun** on this correction.
 No change was made to production entry points or the known production viewport RED.
+
+## Trusted Return focus regression
+
+At `e17fcc1` / corrected source `e080946`, the original six actual cases all pass
+with retries disabled, including pending Canvas cancellation. Both new trusted
+Return cases fail: the browser's pointer default focuses Return, blurs the original
+native editor and persists priority `9` before the viewport-only handler runs.
+The later-inline center hit test itself passes; its subsequent click exposes the
+same focus defect. Provider body bytes remain intact. Exact JSON/screens/spec and
+bundle hashes are archived at `/private/tmp/geode-native-layer-prototype-eight-artifacts`.
+
+The bounded correction prevents only primary pointerdown's default focus on
+Return. Click still invokes the ordinary viewport action; keyboard activation and
+intentional focus transfers remain available. Existing two actual RED assertions
+are unchanged. An additional keyboard-activation case explicitly transfers focus
+with a retained failed native write and presses Enter; that deliberate blur is
+not represented as the no-blur pointer invariant. Actual corrected Return results
+remain pending coordinator review and an Electron slot.
