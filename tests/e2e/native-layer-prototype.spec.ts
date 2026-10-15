@@ -451,7 +451,10 @@ test("unequal retained native frames preserve spacing, focused exposure and real
         const x = left + (right - left) * column / 6, y = top + (bottom - top) * row / 6;
         const hit = document.elementFromPoint(x, y);
         if (right > left && bottom > top && hit && note.contains(hit) && hit.closest(".native-prototype-record") === owner) {
-          const point = { x, y, hit: { tag: hit.tagName, className: hit.className }, bounds: { left, top, right, bottom } };
+          const canvas = (window as any).nativeLayerHarness.native[1];
+          const point = { x, y, hit: { tag: hit.tagName, className: hit.className }, bounds: { left, top, right, bottom },
+            nodeId: note.closest<HTMLElement>(".canvas-node")?.dataset.nodeId, selectedIds: [...canvas.selectedIds],
+            scrollTop: note.scrollTop, scrollLeft: note.scrollLeft, scrollHeight: note.scrollHeight, clientHeight: note.clientHeight };
           (window as any).__mixedHeightGeometry.wheelPoint = point; return point;
         }
       }
