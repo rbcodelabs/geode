@@ -9,7 +9,7 @@ function fake(){
  const calls:{source:string;signal:AbortSignal;aborted:boolean;resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
  let closes=0;
  return {calls,get closes(){return closes;},transport:{
-  parse:(source:string,signal:AbortSignal)=>new Promise((resolve,reject)=>{const call={source,signal,aborted:signal.aborted,resolve,reject};signal.addEventListener("abort",()=>{call.aborted=true;},{once:true});calls.push(call);}),
+  parse:(source:string,signal:AbortSignal=new AbortController().signal)=>new Promise((resolve,reject)=>{const call={source,signal,aborted:signal.aborted,resolve,reject};signal.addEventListener("abort",()=>{call.aborted=true;},{once:true});calls.push(call);}),
   close:async()=>{closes++;for(const call of calls)call.reject(aborted());},
  }};
 }

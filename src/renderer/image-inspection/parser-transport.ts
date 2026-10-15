@@ -111,7 +111,10 @@ export class ImageParserTransport implements OwnedImageParseTransport {
   }
   private finish(error?: Error, value?: unknown): void {
     const active = this.active;if (!active) return;
-    this.active = undefined;clearTimeout(this.timer);active.detach();
+    this.active = undefined;
+    // Cancelling work before readiness must not erase the broker handshake deadline.
+    if (active.phase !== "waiting") clearTimeout(this.timer);
+    active.detach();
     if (error) active.reject(error);else active.resolve(value);
   }
   private dispose(): void {

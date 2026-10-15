@@ -41,3 +41,52 @@ it("does not publish a late parsed result after cancellation has started",async(
  b.reply({kind:"cancelled",request:1,released:true});await rejected;
  const close=transport.close();await vi.waitFor(()=>expect(b.messages.some(message=>message.kind==="close")).toBe(true));b.reply({kind:"closed"});await close;
 });
+it("retains the broker readiness deadline after cancelling a request before handshake",async()=>{
+ vi.useFakeTimers();
+ try {
+  const b=browser(),transport=new ImageParserTransport(b.doc),controller=new AbortController();
+  const first=transport.parse("",controller.signal),cancelled=expect(first).rejects.toMatchObject({name:"AbortError"});
+  b.load();controller.abort();await cancelled;expect(b.messages).toHaveLength(0);
+  const next=transport.parse(""),failed=expect(next).rejects.toThrow(/readiness deadline/i);
+  await vi.advanceTimersByTimeAsync(8000);expect(b.frame.removed).toBe(true);await failed;expect(vi.getTimerCount()).toBe(0);
+  await expect(transport.parse("")).rejects.toThrow(/unavailable|closed/i);await expect(transport.close()).rejects.toThrow(/readiness deadline/i);
+ } finally { vi.useRealTimers(); }
+});
+it.each(["parse","cancellation","close"] as const)("bounds %s settlement and removes timers when the broker withholds acknowledgement",async phase=>{
+ vi.useFakeTimers();
+ const timer=vi.spyOn(globalThis,"setTimeout");
+ try {
+  const b=browser(),transport=new ImageParserTransport(b.doc),controller=new AbortController();
+  const parsed=transport.parse("",controller.signal),failed=expect(parsed).rejects.toThrow(new RegExp(`${phase} deadline`,"i"));
+  await b.ready();await vi.waitFor(()=>expect(b.messages.some(message=>message.kind==="parse")).toBe(true));
+  b.reply({kind:"worker-ready",request:1});await vi.waitFor(()=>expect(timer.mock.calls.some(call=>call[1]===30000)).toBe(true));
+  let closed:Promise<void>|undefined;
+  if(phase==="cancellation")controller.abort();
+  if(phase==="close")closed=expect(transport.close()).rejects.toThrow(/close deadline/i);
+  await vi.advanceTimersByTimeAsync(phase==="parse"?30000:8000);
+  expect(b.frame.removed).toBe(true);await failed;if(closed)await closed;expect(vi.getTimerCount()).toBe(0);
+  await expect(transport.close()).rejects.toThrow(new RegExp(`${phase} deadline`,"i"));
+ } finally { timer.mockRestore();vi.useRealTimers(); }
+});
+it("bounds worker startup when the broker never acknowledges worker readiness",async()=>{
+ vi.useFakeTimers();
+ try {
+  const b=browser(),transport=new ImageParserTransport(b.doc),parsed=transport.parse("");
+  const failed=expect(parsed).rejects.toThrow(/worker readiness deadline/i);
+  await b.ready();await vi.waitFor(()=>expect(b.messages.some(message=>message.kind==="parse")).toBe(true));
+  await vi.advanceTimersByTimeAsync(8000);expect(b.frame.removed).toBe(true);await failed;expect(vi.getTimerCount()).toBe(0);
+  await expect(transport.close()).rejects.toThrow(/worker readiness deadline/i);
+ } finally { vi.useRealTimers(); }
+});
+it("starts the thirty-second parse budget after worker readiness without charging worker startup time",async()=>{
+ vi.useFakeTimers();const timer=vi.spyOn(globalThis,"setTimeout");
+ try {
+  const b=browser(),transport=new ImageParserTransport(b.doc),parsed=transport.parse("");const failed=expect(parsed).rejects.toThrow(/parse deadline/i);
+  await b.ready();await vi.waitFor(()=>expect(b.messages.some(message=>message.kind==="parse")).toBe(true));
+  await vi.advanceTimersByTimeAsync(7000);expect(b.frame.removed).toBe(false);
+  b.reply({kind:"worker-ready",request:1});await vi.waitFor(()=>expect(timer.mock.calls.some(call=>call[1]===30000)).toBe(true));
+  await vi.advanceTimersByTimeAsync(29000);expect(b.frame.removed).toBe(false);
+  await vi.advanceTimersByTimeAsync(1000);expect(b.frame.removed).toBe(true);await failed;expect(vi.getTimerCount()).toBe(0);
+  await expect(transport.close()).rejects.toThrow(/parse deadline/i);
+ } finally {timer.mockRestore();vi.useRealTimers();}
+});

@@ -1,6 +1,6 @@
 import { expect,it } from "vitest";
-import { BUILD,isParserInit,isParserRequest,isParserReply } from "../../src/renderer/image-inspection/parser-protocol";
-const session={version:1 as const,build:BUILD,epoch:7,nonce:"a".repeat(64)};
+import { BUILD,isParserInit,isParserRequest,isParserReply,type ParserSession } from "../../src/renderer/image-inspection/parser-protocol";
+const session:ParserSession={version:1,build:BUILD,epoch:7,nonce:"a".repeat(64)};
 it("admits only exact session initialization without host capabilities",()=>{
  const init={kind:"initialize",...session};expect(isParserInit(init)).toBe(true);
  for(const value of [{...init,epoch:0},{...init,nonce:"x"},{...init,build:"old"},{...init,owner:{}},{...init,url:"file:///synthetic"}])expect(isParserInit(value)).toBe(false);
