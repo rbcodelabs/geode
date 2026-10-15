@@ -4,6 +4,18 @@ import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 const repoRoot = path.resolve(__dirname, "..", "..");
 const NOTE = "---\ntitle: Footnotes\n---\n# Footnotes\n\nA[^a], again[^a], inline^[Inline note], missing[^lost].\n\n[^a]: First note\n    continued\n\n[^unused]: Unreferenced note\n";
+function readPersistedJson(file: string): any {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (error) {
+    if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+function hasFootnotesLeaf(node: any): boolean {
+  if (!node) return false;
+  if (node.type === "tabs") return node.leaves.some((leaf: any) => leaf.type === "footnotes");
+  return node.children.some(hasFootnotesLeaf);
+}
 async function fixture() {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-footnotes-pane-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-footnotes-pane-ud-"));
@@ -65,7 +77,8 @@ test("Footnotes core toggle survives restart and fast disable/re-enable leaves o
     expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
     await window.evaluate(async () => { const app = (window as any).app; app.settings.footnotesEnabled = true; await app.syncFootnotesPlugin(); await app.host.config.write("app", app.settings); app.commands.execute("footnotes:open"); });
     await expect(window.locator(".footnotes-view")).toBeVisible();
-    await window.waitForTimeout(600); // Existing layout persistence debounce is 400ms.
+    // Wait for the actual pane to reach disk before destroying the renderer.
+    await expect.poll(() => hasFootnotesLeaf(readPersistedJson(path.join(data.vaultDir, ".geode/workspace.json"))?.right?.root)).toBe(true);
     await app.close(); ({ app, window } = await data.launch());
     await expect(window.locator(".footnotes-view")).toBeVisible();
     await window.evaluate(async () => { const app = (window as any).app; app.settings.footnotesEnabled = false; const off = app.syncFootnotesPlugin(); app.settings.footnotesEnabled = true; const on = app.syncFootnotesPlugin(); await Promise.all([off, on]); app.commands.execute("footnotes:open"); });
@@ -75,7 +88,11 @@ test("Footnotes core toggle survives restart and fast disable/re-enable leaves o
     expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
     // saveSettings() is deliberately fire-and-forget. Establish the actual disk
     // barrier before destroying the renderer, rather than awaiting its void result.
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(data.vaultDir, ".geode/app.json"), "utf8")).footnotesEnabled).toBe(false);
+    await expect.poll(() => readPersistedJson(path.join(data.vaultDir, ".geode/app.json"))?.footnotesEnabled).toBe(false);
+    await expect.poll(() => {
+      const saved = readPersistedJson(path.join(data.vaultDir, ".geode/workspace.json"));
+      return saved ? hasFootnotesLeaf(saved.right?.root) : undefined;
+    }).toBe(false);
     await app.close(); ({ app, window } = await data.launch());
     await expect(window.locator(".footnotes-view")).toHaveCount(0);
     expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
@@ -106,10 +123,7 @@ test("Footnotes settings report a rejected asynchronous write and acknowledge de
       };
     });
     await toggle.uncheck();
-    await expect.poll(() => {
-      try { return JSON.parse(fs.readFileSync(path.join(data.vaultDir, ".geode/app.json"), "utf8")).footnotesEnabled; }
-      catch { return undefined; }
-    }).toBe(false);
+    await expect.poll(() => readPersistedJson(path.join(data.vaultDir, ".geode/app.json"))?.footnotesEnabled).toBe(false);
     expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
   } finally { await app.close(); data.cleanup(); }
 });
