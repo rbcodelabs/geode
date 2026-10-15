@@ -47,8 +47,8 @@ interface ConnectionPreview {
   bytes: string;
   edge?: CanvasEdge;
   node: CanvasNode;
-  preview: SVGPathElement;
-  parent: SVGSVGElement;
+  preview: Element;
+  parent: Element;
   cancel: () => void;
   dispose: () => void;
   finished: boolean;
