@@ -7307,3 +7307,19 @@ body.is-mobile .cm-editor .cm-scroller {
 .geode-fold-toggle[aria-expanded="true"] { opacity: 0; }
 .cm-editor:hover .geode-fold-toggle, .geode-fold-toggle:focus-visible { opacity: 1; }
 .geode-fold-toggle:focus-visible { outline: 2px solid var(--interactive-accent); }
+
+/* Shared note/sidebar properties controls. */
+.metadata-property-error { color: var(--text-error, #d55); font-size: var(--font-ui-small); padding: 8px 0; }
+.file-properties-name { color: var(--text-muted); margin-bottom: 12px; overflow-wrap: anywhere; }
+.file-properties-view .metadata-properties { padding: 0; margin: 0; }
+.file-properties-view .metadata-properties-inner { width: 100%; max-width: none; }
+.metadata-property-list { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.metadata-list-item { display: flex; gap: 4px; min-width: 0; }
+.metadata-list-item input { flex: 1; min-width: 0; }
+.metadata-property button.metadata-property-remove { background: transparent; border: 0; box-shadow: none; }
+button.metadata-add-button { width: 100%; text-align: left; background: transparent; border: 0; box-shadow: none; color: var(--text-muted); }
+.metadata-property.is-new { flex-wrap: wrap; }
+.metadata-property.is-new input { min-width: 0; flex: 1; }
+.file-properties-view .metadata-property-key { width: 38%; min-width: 72px; max-width: 140px; }
+.metadata-property-key .metadata-key-input, .metadata-property-value { min-width: 0; }
+.metadata-property-remove:focus-visible { opacity: 1; }

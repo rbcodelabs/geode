@@ -59,6 +59,7 @@ import { FileExplorerView } from "./views/file-explorer";
 import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
 import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
+import { FilePropertiesView } from "./views/file-properties-view";
 import { OutgoingLinksView } from "./views/outgoing-links-view";
 import { ExcludedFiles } from "./excluded-files";
 import { renderFilesAndLinksTab } from "./settings/files-and-links-tab";
@@ -3582,6 +3583,7 @@ export class App {
     this.excludedFiles = new ExcludedFiles(this.host.deviceState, this.vault.root);
     this.workspace.rightSidebar.addView(new BacklinksView(this));
     this.workspace.rightSidebar.addView(new OutgoingLinksView(this));
+    this.workspace.rightSidebar.addView(new FilePropertiesView(this));
     this.workspace.rightSidebar.addView(new OutlineView(this));
     this.workspace.rightSidebar.addView(new TagPaneView(this));
     this.commentsView = new CommentsView(this);
@@ -4669,6 +4671,10 @@ export class App {
       } });
     }
     c("command-palette", "Open command palette", "Mod+P", () => this.openCommandPalette());
+    c("file-properties:open", "Show file properties", undefined, () => {
+      const view = this.workspace.getLeavesOfType("file-properties")[0]?.view;
+      if (view) this.workspace.rightSidebar.show(view);
+    });
     c("outgoing-links:open", "Show outgoing links", undefined, () => {
       const view = this.workspace.getLeavesOfType("outgoing-links")[0]?.view;
       if (view) this.workspace.rightSidebar.show(view);

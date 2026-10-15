@@ -706,14 +706,15 @@ export class MarkdownView implements View {
   }
 
   /** Internal sidebar mutation seam; all edits use the normal editor undo/autosave. */
-  canApplySourceEdit(): boolean {
-    return !!this.editor && !this.vaultSwitching && !this.conflictReadOnly && this.mode !== "reading";
+  canApplySourceEdit(options: { allowReading?: boolean } = {}): boolean {
+    return !!this.editor && !this.vaultSwitching && !this.conflictReadOnly && (this.mode !== "reading" || options.allowReading === true);
   }
 
-  applySourceEdit(snapshot: string, from: number, to: number, insert: string): boolean {
-    if (!this.canApplySourceEdit() || !this.editor || this.getText() !== snapshot ||
+  applySourceEdit(snapshot: string, from: number, to: number, insert: string, options: { allowReading?: boolean } = {}): boolean {
+    if (!this.canApplySourceEdit(options) || !this.editor || this.getText() !== snapshot ||
         from < 0 || to < from || to > snapshot.length) return false;
     this.editor.dispatch({ changes: { from, to, insert }, annotations: isolateHistory.of("full") });
+    if (this.mode === "reading") void this.renderReading().catch(() => this.app.notify("Could not refresh Reading view."));
     return true;
   }
 
