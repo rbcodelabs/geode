@@ -177,12 +177,13 @@ test('uncommitted Base source-cell draft blocks the underlying note write', asyn
     const cell = row.locator('td.bases-cell').nth(column);
     await cell.dblclick();
     await cell.locator('.bases-cell-input').fill('9');
+    await expect(cell.locator('.bases-cell-input')).toHaveValue('9');
     expect(await second.evaluate(async () => Boolean(await (window as any).app.workspace.activeLeaf.view.getDirtySourceConflict('Source.md')))).toBe(true);
     await expect(apply('Source.md', sourceText, '---\npriority: 2\n---\nRemote source\n')).rejects.toThrow(/Base|unsaved/i);
-    // Release can leave the draft open or blur-commit it. If still open,
-    // verify it survived before explicitly committing as the user would.
-    const draft = cell.locator('.bases-cell-input');
-    if (await draft.isVisible()) { await expect(draft).toHaveValue('9'); await draft.press('Enter'); }
+    // Releasing inert can blur-commit and remove the editor. Send the user's
+    // Enter to the current focus, then verify the saved draft bytes below.
+    await expect.poll(() => second.evaluate(() => document.body.inert)).toBe(false);
+    await second.keyboard.press('Enter');
     await expect.poll(() => fs.readFileSync(path.join(vault, 'Source.md'), 'utf8')).toContain('priority: 9');
     expect(fs.readFileSync(path.join(vault, 'Source.md'), 'utf8')).toContain('Original source');
   });
