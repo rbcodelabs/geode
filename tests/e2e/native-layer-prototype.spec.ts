@@ -28,6 +28,7 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
     const geometry = await page.evaluate(() => ({
       secondRetryAtomic: (window as any).__secondRetryAtomic,
       scrollPhases: (window as any).__nativeScrollPhases,
+      focusCalls: (window as any).__nativeFocusCalls,
       validationCalls: (window as any).__layerValidationCalls,
       retirementAttempts: (window as any).__layerRetirementAttempts,
       resumes: (window as any).__layerResumeCounts,
@@ -48,10 +49,10 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
   }
 }
 const record = (page: Page, id = 1) => page.locator(`.native-prototype-record[data-occurrence="${id}"]`);
-async function edit(page: Page, id = 1, file = "Source", value = "9"): Promise<Locator> {
+async function edit(page: Page, id = 1, file = "Source", value = "9", phase?: (name: string) => Promise<void>): Promise<Locator> {
   const cell = record(page, id).locator(".bases-data-row", { hasText: `${file}.md` }).locator("td.bases-cell").nth(1);
-  await expect(cell).toBeVisible(); await cell.click(); await page.keyboard.press("Enter");
-  const input = cell.locator(".bases-cell-input"); await expect(input).toBeVisible(); await input.fill(value);
+  await expect(cell).toBeVisible(); if (phase) await phase(`before-cell-click-${id}`); await cell.click(); if (phase) await phase(`after-cell-click-${id}`); await page.keyboard.press("Enter"); if (phase) await phase(`after-edit-enter-${id}`);
+  const input = cell.locator(".bases-cell-input"); await expect(input).toBeVisible(); await input.fill(value); if (phase) await phase(`after-fill-${id}`);
   return input;
 }
 async function capture(page: Page, input: Locator) {
@@ -239,14 +240,28 @@ test("two failed retained native chains recover their original files through rea
       });
     }, name);
     await page.evaluate(() => {
+      const focus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function(options?: FocusOptions) {
+        const record = this.closest<HTMLElement>(".native-prototype-record");
+        const snapshot = () => [...document.querySelectorAll<HTMLElement>(".native-prototype-record .canvas-surface, .native-prototype-record .canvas-node-note")].map(element => ({
+          className: element.className, occurrence: element.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence,
+          left: element.scrollLeft, top: element.scrollTop,
+        }));
+        const before = snapshot();
+        try { return focus.call(this, options); }
+        finally { if (record) ((window as any).__nativeFocusCalls ??= []).push({
+          occurrence: record.dataset.occurrence, tag: this.tagName, className: this.className,
+          options, before, after: snapshot(), stack: new Error().stack?.split("\n").slice(1, 5),
+        }); }
+      };
       const app = (window as any).app; const modify = app.vault.modify.bind(app.vault);
       (window as any).__failedLayerFiles = new Set(["Source.md", "Other.md"]);
       app.vault.modify = (file: any, text: string) => (window as any).__failedLayerFiles.has(file.path) ? Promise.reject(new Error(`synthetic ${file.path} failure`)) : modify(file, text);
     });
-    const first = await edit(page); await phase("first-edit"); await first.evaluate(input => { (window as any).__firstFailedLayerInput = input; });
+    const first = await edit(page, 1, "Source", "9", phase); await phase("first-edit"); await first.evaluate(input => { (window as any).__firstFailedLayerInput = input; });
     await first.press("Enter"); await expect(record(page, 1).getByRole("button", { name: "Retry Base save" })).toBeVisible(); await phase("first-failure");
     await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]", 100)).top; });
-    const second = await edit(page, 2, "Other", "8"); await capture(page, second); await phase("before-second-enter");
+    const second = await edit(page, 2, "Other", "8", phase); await capture(page, second); await phase("before-second-enter");
     await second.press("Enter"); await phase("after-second-enter"); await expect(record(page, 2).getByRole("button", { name: "Retry Base save" })).toBeVisible(); await phase("second-failure");
     await scrollAway(page); await phase("scroll-away");
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
