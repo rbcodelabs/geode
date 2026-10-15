@@ -277,6 +277,16 @@
       "original": "f232bc7b7fb35ff32633f4382a1aebce34777999",
       "integrated": "962742e5a0168790aa86e87ee9a5fe4ad763cdbd",
       "subject": "test: retain failures arriving after retry admission"
+    },
+    {
+      "original": "3d8a53c956890f556cc8fdc749a23dc343372bc3",
+      "integrated": "eef7c62485256c1edbb3a986c70700c4e2ce8ec2",
+      "subject": "fix(bases): discard superseded definition reloads and reread latest intent"
+    },
+    {
+      "original": "396739c826e09352a1a5cc3ff77fc1f383f92bb1",
+      "integrated": "18d7a5af3e9da16e7c83d0694b35cbf1ed3c654c",
+      "subject": "test(bases): assert actual saved sort bytes and preserve race proof"
     }
   ]
 }

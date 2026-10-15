@@ -16,7 +16,9 @@ integration cherry-pick. Inputs are native entry `0bd0d5d`, shared lane `5c1dff2
 within that ancestry, Markdown `db4009d` / `982f85d` / `c0e7e5e`, its subsequent
 E2E/docs-only `49a29e0`, PDF `cf75d62`, private Editor preparation through
 `0c8f4d7`, preview test corrections `8fcbbaa` / `c4ac07b`, and failure snapshot
-`f232bc7`. Base reload source is deliberately excluded until independently reviewed.
+`f232bc7`. After coordinator review, the separately frozen Base reload correction `3d8a53c`
+and its test/evidence followup `396739c` are also included, with native guards
+explicitly ported as described below.
 
 PDF's native status/banner changes `019a769` and `2a3d76d` are already carried
 through patch-equivalent `6e09dd6` and `2d9c984`. PDF's common startup harness
@@ -50,6 +52,18 @@ Auto-merged shared App, Workspace, live-preview and Markdown code also requires
 independent semantic review. A source-byte comparison confirmed all 24 PDF-private
 source/build/dependency files match frozen `cf75d62`, including the lockfile.
 Private Editor core has no production imports or export/acquisition wiring.
+
+- `3d8a53c` → `eef7c62`: port the definition revision/coalesced reload algorithm
+  inside a root-tracked native operation. Keep token checks before each iteration
+  and after persistence/read/apply awaits, suppress only ScopeCancelled, and avoid
+  restarting a canceled drain under a held/retired owner. Lifecycle revision changes
+  are placed inside native setFile/mount/close methods; normal Scope close still
+  preflights/prepares before closeNative. Keep the full native persistence pipeline,
+  captured failure acknowledgments, row controls and canRefreshProjection guard.
+  Definition read errors remain visible with their original messages. The proposal
+  document introduced by the source branch's earlier docs-only `411159d` is retained
+  from the reviewed `3d8a53c` version. The baseline close fixture gains the native
+  source-write set rather than weakening its stale-owner assertion.
 
 ## Joint regression and minimum guard correction
 
@@ -89,6 +103,21 @@ assigning those gates. Further targeted results are recorded on the same Task.
 Original native viewport/return failure witnesses remain present. Explicit
 replacement fixes do not establish CM virtualization safety; persistent native
 presentations need the separate accepted layout prototype. Base reload ordering
-has a separate confirmed race and pending correction. Neither is waived here.
+has its separately proven correction carried here; its native interleavings and
+combined real UI/full-suite gates still require verification. Nothing is waived.
 Screenshot publication/display verification through the shared reporting provider
 remains incomplete; committed synthetic local captures do not satisfy that gate.
+
+
+## Native reload interleavings
+
+Before the port, six real-method/Scope cases passed on combined `0afe8b7`: no new
+read under held/retired ownership; no apply after ownership changes during read;
+active source/table edit identity remains while actual projection refresh defers;
+and source conflict plus unrelated retained row failure remain unacknowledged.
+These are preservation witnesses, not claims that the old reload race was fixed.
+Two additional cases check cancellation immediately after awaiting an own-write
+tail, before any read. All run again after port alongside the original ordering,
+notification, exact row recovery and shared frontmatter regressions. The tests use
+controlled method/CM-state harnesses; actual connected nested controls remain the
+separate prepared Electron witnesses and full-suite requirement.

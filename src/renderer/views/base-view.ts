@@ -182,7 +182,7 @@ export class BaseView implements View {
       // and our own persist writes back to that same host note (ignoring it
       // here also avoids a write→modify→reload loop).
       if (this.inlinePersist) return;
-      void this.reloadIfChangedExternally().catch(error => { if (!(error instanceof ScopeCancelled)) this.app.notify("Could not reload Base."); });
+      void this.reloadIfChangedExternally().catch(error => { if (!(error instanceof ScopeCancelled)) this.app.notify(`Could not reload Base: ${error instanceof Error ? error.message : String(error)}`); });
       return;
     }
     if (changedFile && [...this.sourcePersistPaths.values()].includes(changedFile.path)) return;
