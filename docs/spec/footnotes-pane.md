@@ -27,11 +27,13 @@ Frontmatter and code do not contribute footnotes. The chosen editing interaction
 is in the note's Source editor; this feature does not add an independent inline
 sidebar text editor.
 
-Screenshots from the synthetic Footnotes fixture, captured locally on macOS at
-commit bf3a8f0 on 2026-10-14. Both show the Source editor after a normal footnote
-edit, including a repeated reference, inline footnote, unreferenced definition,
-and missing-definition state. The compact capture retains legible controls and
-wraps note text within the editor.
+Screenshots from the synthetic Footnotes fixture, captured on Linux with
+Electron42.10.0 at tested source commit `31e5deb` on2026-10-15. Both show the
+Source editor after a normal footnote edit, including repeated references, an
+inline footnote, an unreferenced definition and a missing-definition state. The
+1440×900 desktop and960×760 compact captures were visually inspected; controls
+remain legible and source text wraps within the editor. They come from the fresh
+passing full worker gate, not the earlier historical captures.
 
 ![Footnotes pane at 1440 × 900](../screenshots/footnotes-pane-desktop.png)
 ![Footnotes pane at 960 × 760](../screenshots/footnotes-pane-compact.png)

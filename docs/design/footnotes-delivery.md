@@ -28,3 +28,25 @@ and fresh synthetic desktop/compact captures are required for this delivery.
 Limits remain explicit: first 8,192 UTF-16 source units, at most 200 rows,
 partial-definition editing refusal, and the shared scanner grammar. This is a
 bounded feature package, not complete Footnotes or Obsidian parity.
+
+## Final verification
+
+The exact candidate `31e5deba84fcc0f92adfd6270d5fd1ad7b72f106` passed full
+worker job `01M4ZZPJXYTSSYA61T51K1XSMJ`: install/types/build;324unit files,
+4758 ordinary passes, one documented expected failure and three existing skips;
+full394Electron accounted379ordinary passes and15existing conditional/fixture
+skips, with no failed attempts/retries. Fresh synthetic desktop/compact captures
+were inspected and delivered in the repository and authorized vault QA report.
+Artifact manifest SHA256:
+`e72588dad09f9cc91cc363bad3bdb27741f843327f03c4dee4ee75022cd76702`.
+
+The prior exactcc1653 full run failed twice at NoteComposer's immediate rewritten
+Linker.md assertion. Production merge awaits destination first, then referencer
+writes; the destination alone was an insufficient test completion barrier on
+Linux, where source-trash completion is unsupported. A controlled real
+Vault.modify gate now proves that intermediate state, releases in finally, then
+awaits the original exact rewritten-byte assertion. The analogous prepend
+assertion also polls its original contains oracle. No production merge behavior,
+assertion content, timeout, retry or skip changed. The failed full run remains
+archived; the corrected full run passed without retries. These screenshot/docs
+updates leave source and tests identical to that exact passing candidate.
