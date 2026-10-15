@@ -42,7 +42,7 @@ does not establish complete Outgoing links or linking parity.
 
 The screenshots below use a synthetic temporary vault with aliases and duplicate
 basenames. Captured 2026-10-14 on macOS in local Electron from source commit
-`96dbb21` (branch `feat/overnight-outgoing-links`), at 1950×1314 and 960×760
+`96dbb21` (branch `feat/overnight-outgoing-links`), at 1950×1280 and 960×760
 pixels. They show the real Electron pane after converting an alias from an
 unsaved editor buffer; no user vault data is included.
 
