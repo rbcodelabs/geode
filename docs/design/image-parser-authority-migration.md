@@ -104,3 +104,15 @@ it("compares installed stock grammar against private projection on bounded neste
   }
 });
 ```
+
+## Accepted stock-comparison placement correction
+
+The initial migration retained the historical four-size stock comparison in the existing five-second unit test. Its exact body passed locally and in controlled focused/one-worker full runs (4,757ms), but failed full c4 at5,114ms and hosted PR392 verify run38771409587 at5,946ms. The failures and original source above remain evidence. Hosted338other files passed; mobilepassed, no hostedbuild/Electron ran.
+
+Coordinator and independent architecture review accepted an explicit placement change: remove that old five-second unit execution and execute the exact four-size comparison in a separate owned Node child of the existing unskipped330s aggregate E2E (360s test). This is NOT unchanged five-second coverage or a grammar speedup. No global/default timeout changes, fixture reduction, skip/quarantine, parser-production/resource changes or altered shipping per-request8s/30s budgets.
+
+The entire old/new loop is normalized only for the Node assertion adapter, captured observation variable and additional report-only assertions/hashes; its exact SHA256 is e11fc4debe357a1e3fc3a2bf082df76a347ab973bef5bb1d2acd6b66db96ad40. Lightweight fixture/body pins retain all four sizes, source hashes and frozenbaseline identity without running the slow comparison inside unit scheduling. The comparison remains nonshipping baseline/installedgrammar characterization, separate from actual new-parser host responsiveness/cancellation proof.
+
+The wrapper validates the unchanged fresh canonical native report, then runs actual Node with the existing installed grammar and frozen synchronous baseline. It waits for child exit and a fresh stock report with commit/run/runtime/baseline/four-row/source/bundle identity before writing terminalsuccess. Stocknonzero, missing/partial/stale report fails closed; a hanging real Node descendant remains under the same aggregate owner/deadline with observed identity-group cleanup. No detached child, phase reset or global kill. Both report paths/digests and current source inventories are checked; native19source inventory stays separate from stock direct harness/baseline source inventory (including the fixture helper) and bundle hash; this inventory is not an exhaustive transitive dependency graph.
+
+Validator regression-first controls failed16 assertions with one positive against a permissive scaffold, then passed17; three source/bundle inventory controls separately failed then passed. Actual wrapper CLI tests use clearly synthetic child boundaries and a real hanging Node child under the existing owner; they are not native isolation evidence. Fresh native focused/full/hosted gates remain required on the final corrected source.

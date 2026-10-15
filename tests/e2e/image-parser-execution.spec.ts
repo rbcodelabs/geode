@@ -23,6 +23,13 @@ test("parses all complete ceiling fixtures with owned asynchronous Reading autho
   expect(report.failure).toBeNull();expect(report.validated).toBe(true);
   expect(Object.keys(report.modes).sort()).toEqual(["canonical","fault-error","fault-malformed","instrumented"]);
   expect(validation).not.toHaveProperty("phaseStartedAt");
+  const stockBytes=await readFile(resolve("test-results/image-parser-packed-proof",validation.stock.report));
+  const stock=JSON.parse(stockBytes.toString("utf8"));
+  expect(createHash("sha256").update(stockBytes).digest("hex")).toBe(validation.stock.reportSha256);
+  expect(stock.commit).toBe(validation.commit);expect(stock.runId).toBe(validation.runId);
+  expect(stock.validated).toBe(true);expect(stock.failure).toBeNull();
+  expect(stock.rows.map((row:{sourceUnits:number})=>row.sourceUnits)).toEqual([10000,20000,40000,80000]);
+  expect(stock.rows.every((row:{status:string;sourceEqual:boolean})=>row.status==="ready"&&row.sourceEqual)).toBe(true);
   const guard=JSON.parse(await readFile(terminal+".guard.json","utf8"));
   expect(guard.cleanupUncertainty).toBe(false);
   // Check only identity-verified observed groups. Polling cannot establish
