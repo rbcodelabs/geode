@@ -9,6 +9,12 @@ const isMac = process.platform === "darwin";
 const MOD = isMac ? "meta" : "control";
 const MOD_R = isMac ? "Meta+r" : "Control+r";
 
+async function waitForStartup(window: Page): Promise<void> {
+  await expect(window.locator(".workspace")).toBeVisible();
+  // The shell mounts before the asynchronous saved-layout restore finishes.
+  await expect.poll(() => window.evaluate(() => (window as any).app?.workspace?.layoutReady === true)).toBe(true);
+}
+
 /**
  * Cmd+R used to reload the whole Geode renderer from inside a Web Viewer tab,
  * destroying every open pane and every unsaved buffer, because the stock
@@ -40,7 +46,7 @@ async function launch(files: Record<string, string> = {}) {
   );
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   const window = await app.firstWindow();
-  await expect(window.locator(".workspace")).toBeVisible();
+  await waitForStartup(window);
   const cleanup = () => {
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -420,7 +426,7 @@ test("an artifact tab reloads from its toolbar button and from Mod+R", async () 
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   const window = await app.firstWindow();
   try {
-    await expect(window.locator(".workspace")).toBeVisible();
+    await waitForStartup(window);
     await window.evaluate((root) => (window as unknown as { app: { openArtifact(r: string): void } }).app.openArtifact(root), artifactRoot);
     await expect(window.locator(".artifact-view-error")).toBeVisible();
     await expect(window.locator(".artifact-view-frame")).toHaveCount(0);

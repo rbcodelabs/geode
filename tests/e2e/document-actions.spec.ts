@@ -1,12 +1,18 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron, expect, test, type Page } from "@playwright/test";
 
 // The app labels this action per platform (src/renderer/app.ts).
 const REVEAL_LABEL = process.platform === "darwin" ? "Reveal in Finder" : "Show in system explorer";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
+
+async function waitForStartup(win: Page): Promise<void> {
+  await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+  // Explorer visibility precedes the final startup layout restoration.
+  await expect.poll(() => win.evaluate(() => (window as any).app?.workspace?.layoutReady === true)).toBe(true);
+}
 
 const THREAD_HISTORY_PROBE_MANIFEST = {
   id: "thread-history-probe",
@@ -72,7 +78,7 @@ test("a file picked from a stateful plugin view can navigate back to that view",
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const win = await app.firstWindow();
-    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await waitForStartup(win);
     await win.evaluate(async () => {
       const geode = (window as any).app;
       // Explorer entries render before plugins load and layout restore can
@@ -113,7 +119,7 @@ test("same-type document navigation preserves view identity and lifecycle", asyn
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const win = await app.firstWindow();
-    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await waitForStartup(win);
     const result = await win.evaluate(async () => {
       const a = (window as any).app;
       const cases = [
@@ -154,7 +160,7 @@ test("document tabs keep independent navigation with working back and forward co
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const win = await app.firstWindow();
-    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await waitForStartup(win);
     const leafIds = await win.evaluate(async () => {
       const a = (window as any).app;
       for (const path of ["A.md", "Board.canvas", "Data.base"]) await a.openFile(a.vault.getFileByPath(path), false);
@@ -215,7 +221,7 @@ test("document navigation serializes races and leaves the mounted file unchanged
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const win = await app.firstWindow();
-    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await waitForStartup(win);
     await win.evaluate(async () => {
       const a = (window as any).app;
       await a.openFile(a.vault.getFileByPath("A.md"), false);
@@ -271,7 +277,7 @@ test("new note selects Untitled for immediate rename and exposes shared document
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const win = await app.firstWindow();
-    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await waitForStartup(win);
     await win.evaluate(() => (window as any).app.commands.execute("new-note"));
     const title = win.locator(".workspace-leaf.mod-active .view-header-title");
     await expect(title).toHaveText("Untitled");
@@ -317,7 +323,7 @@ test("Markdown More options supplies the exact duplicate-open view leaf", async 
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const win = await app.firstWindow();
-    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await waitForStartup(win);
     const expectedLeafId = await win.evaluate(async () => {
       const a = (window as any).app;
       const file = a.vault.getFileByPath("A.md");
@@ -347,7 +353,7 @@ test("background tab bulk close stays in its group and preserves pinned siblings
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const win = await app.firstWindow();
-    await expect(win.locator('.nav-file-title[data-path="A.md"]')).toBeVisible();
+    await waitForStartup(win);
     await win.evaluate(async () => {
       const a = (window as any).app;
       for (const name of ["A.md", "B.md", "C.md", "D.md"]) await a.openFile(a.vault.getFileByPath(name), true);

@@ -6,6 +6,15 @@ import { _electron as electron, expect, test } from "@playwright/test";
 const repoRoot = path.resolve(__dirname, "..", "..");
 const fixtureDir = path.join(repoRoot, "tests", "fixtures", "plugins", "minimal-settings-compat");
 
+function persistedJson(file: string): Record<string, unknown> | undefined {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (error) {
+    // Plugin saveData writes directly: a poll may observe creation or truncation.
+    if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 function installFixture(vaultDir: string, id: string, sourceDir: string) {
   const dest = path.join(vaultDir, ".geode", "plugins", id);
   fs.mkdirSync(dest, { recursive: true });
@@ -82,8 +91,8 @@ test("certified Minimal Settings slice renders, persists, and drives theme/font 
     await expect.poll(() => window.evaluate(() => (window as any).app.vault.getConfig("theme"))).toBe("system");
     await expect.poll(() => window.evaluate(() => getComputedStyle(document.body).getPropertyValue("--font-text-size").trim())).toBe("16.5px");
     await expect.poll(() => window.evaluate(() => (window as any).app.vault.getConfig("baseFontSize"))).toBe(16.5);
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "plugins", "obsidian-minimal-settings", "data.json"), "utf8")).textSmall).toBe(17);
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "plugins", "obsidian-minimal-settings", "data.json"), "utf8")).textNormal).toBe(16.5);
+    await expect.poll(() => persistedJson(path.join(vaultDir, ".geode", "plugins", "obsidian-minimal-settings", "data.json"))?.textSmall).toBe(17);
+    await expect.poll(() => persistedJson(path.join(vaultDir, ".geode", "plugins", "obsidian-minimal-settings", "data.json"))?.textNormal).toBe(16.5);
 
     await window.locator(".mod-settings").screenshot({ path: path.join(repoRoot, "docs", "screenshots", "minimal-settings-compat.png") });
 
@@ -92,10 +101,10 @@ test("certified Minimal Settings slice renders, persists, and drives theme/font 
     await expect(window.locator("body.theme-light.minimal-light-white")).toHaveCount(1);
     await dropdownRow.locator("select.dropdown").selectOption("minimal-light-tonal");
     await expect(window.locator("body.minimal-light-tonal")).toHaveCount(1);
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "plugins", "obsidian-minimal-settings", "data.json"), "utf8"))).toMatchObject({
+    await expect.poll(() => persistedJson(path.join(vaultDir, ".geode", "plugins", "obsidian-minimal-settings", "data.json"))).toMatchObject({
       labeledNav: true, lightStyle: "minimal-light-tonal", darkStyle: "minimal-dark-black", textSmall: 17, textNormal: 16.5,
     });
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "app.json"), "utf8"))).toMatchObject({
+    await expect.poll(() => persistedJson(path.join(vaultDir, ".geode", "app.json"))).toMatchObject({
       theme: "auto", baseFontSize: 16.5,
     });
 
