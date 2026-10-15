@@ -23,7 +23,7 @@ import type {
   SyncWriteInput,
 } from "../../../src/renderer/sync/types";
 
-import { ICLOUD_DRIVE_DIR, DEFAULT_APP_FOLDER, TRASH_DIR, STATE_DIR, MARKER_FILE, TMP_PREFIX, isJunkName, resolveFolderName } from "./folders";
+import { icloudDriveDir, DEFAULT_APP_FOLDER, TRASH_DIR, STATE_DIR, MARKER_FILE, TMP_PREFIX, isJunkName, resolveFolderName } from "./folders";
 
 export { ICLOUD_DRIVE_DIR, TRASH_DIR, STATE_DIR, vaultFolderName } from "./folders";
 export const DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024;
@@ -137,7 +137,7 @@ class IcloudSession implements SyncSession {
   private readonly PreconditionError: new (message?: string) => Error;
 
   constructor(private readonly vaultId: string, folder: string, private readonly options: IcloudProviderOptions, private readonly maxFileSize: number) {
-    this.base = options.icloudDrive ?? ICLOUD_DRIVE_DIR;
+    this.base = options.icloudDrive ?? icloudDriveDir();
     this.root = path.join(this.base, options.appFolder ?? DEFAULT_APP_FOLDER, folder);
     this.PreconditionError = options.PreconditionError ?? LocalPreconditionError;
   }

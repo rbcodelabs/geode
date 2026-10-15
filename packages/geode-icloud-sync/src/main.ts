@@ -1,7 +1,7 @@
 import { Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { SyncPreconditionError } from "geode";
-import { FolderSelection, foldersRoot, inspectFolder } from "./folders";
-import { createIcloudProvider, ICLOUD_DRIVE_DIR, type IcloudDiagnostics } from "./provider";
+import { FolderSelection, foldersRoot, icloudDriveDir, inspectFolder } from "./folders";
+import { createIcloudProvider, type IcloudDiagnostics } from "./provider";
 
 /**
  * Registers the iCloud Drive sync provider. Mac only: the "remote" is a folder
@@ -55,7 +55,7 @@ class IcloudSettingTab extends PluginSettingTab {
     const status = containerEl.createEl("p", { cls: "setting-item-description" });
     const showStatus = async (name: string) => {
       const state = await inspectFolder({}, name);
-      status.setText(`Remote: ${foldersRoot({}).replace(ICLOUD_DRIVE_DIR, "iCloud Drive")}/${name} (${state === "missing" ? "will be created on first sync" : state === "marked" ? "existing Geode folder" : state === "empty" ? "empty" : "NOT a Geode folder"})`);
+      status.setText(`Remote: ${foldersRoot({}).replace(icloudDriveDir(), "iCloud Drive")}/${name} (${state === "missing" ? "will be created on first sync" : state === "marked" ? "existing Geode folder" : state === "empty" ? "empty" : "NOT a Geode folder"})`);
     };
     await showStatus(effective);
 

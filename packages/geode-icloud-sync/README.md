@@ -18,6 +18,10 @@ node packages/geode-icloud-sync/build.mjs      # -> packages/geode-icloud-sync/d
 
 Copy `dist/main.js` and `dist/manifest.json` to `<vault>/.geode/plugins/geode-icloud-sync/` and add `"geode-icloud-sync"` to `<vault>/.geode/plugins.json`, then choose **iCloud Drive** under Settings → Sync and preview/approve as usual. (The Google Docs provider is packaged the same way, as a standalone plugin directory with `manifest.json` + `main.js`.) On other platforms the plugin loads but registers nothing.
 
+## Test override
+
+`GEODE_ICLOUD_BASE=<dir>` replaces the iCloud Drive root (`~/Library/Mobile Documents/com~apple~CloudDocs`) so the provider, folder listing and settings tab operate under `<dir>/Geode/` instead. It exists only so E2E tests (`tests/e2e/icloud-sync-settings.spec.ts`) never touch a real iCloud account; leave it unset in normal use.
+
 ## Choosing the remote folder
 
 Settings → **iCloud Drive** has:

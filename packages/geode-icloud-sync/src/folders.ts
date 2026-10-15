@@ -14,6 +14,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 export const ICLOUD_DRIVE_DIR = path.join(os.homedir(), "Library", "Mobile Documents", "com~apple~CloudDocs");
+/**
+ * Test hook: `GEODE_ICLOUD_BASE` replaces the iCloud Drive root (never the real one) so
+ * E2E runs cannot touch a user's iCloud. Unset or blank means the real iCloud Drive.
+ */
+export function icloudDriveDir(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.GEODE_ICLOUD_BASE?.trim();
+  return override ? path.resolve(override) : ICLOUD_DRIVE_DIR;
+}
 export const DEFAULT_APP_FOLDER = "Geode";
 export const TRASH_DIR = ".geode-trash";
 export const STATE_DIR = ".geode-sync";
@@ -33,7 +41,7 @@ export interface FolderLocation {
 }
 
 export function foldersRoot(loc: FolderLocation): string {
-  return path.join(loc.icloudDrive ?? ICLOUD_DRIVE_DIR, loc.appFolder ?? DEFAULT_APP_FOLDER);
+  return path.join(loc.icloudDrive ?? icloudDriveDir(), loc.appFolder ?? DEFAULT_APP_FOLDER);
 }
 
 /**

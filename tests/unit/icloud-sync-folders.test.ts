@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   defaultFolderName,
   FolderSelection,
+  ICLOUD_DRIVE_DIR,
+  icloudDriveDir,
+  foldersRoot,
   inspectFolder,
   legacyFolderName,
   listRemoteFolders,
@@ -195,5 +198,23 @@ describe("provider.open uses the resolved folder", () => {
     const session = await open("/x/V", "Docs");
     expect(await session.scan(undefined, signal())).toMatchObject({ status: "partial", entries: [], errorCode: "icloud-marker-missing" });
     expect(fs.existsSync(path.join(geodeDir("Docs"), ".geode-sync/marker.json"))).toBe(false);
+  });
+});
+
+describe("GEODE_ICLOUD_BASE test override", () => {
+  it("uses the real iCloud Drive when unset or blank", () => {
+    expect(icloudDriveDir({})).toBe(ICLOUD_DRIVE_DIR);
+    expect(icloudDriveDir({ GEODE_ICLOUD_BASE: "  " })).toBe(ICLOUD_DRIVE_DIR);
+  });
+  it("redirects the base path (and so the Geode folders root) to the override", () => {
+    expect(icloudDriveDir({ GEODE_ICLOUD_BASE: drive })).toBe(path.resolve(drive));
+    const prev = process.env.GEODE_ICLOUD_BASE;
+    process.env.GEODE_ICLOUD_BASE = drive;
+    try {
+      expect(foldersRoot({})).toBe(path.join(path.resolve(drive), "Geode"));
+    } finally {
+      if (prev === undefined) delete process.env.GEODE_ICLOUD_BASE;
+      else process.env.GEODE_ICLOUD_BASE = prev;
+    }
   });
 });
