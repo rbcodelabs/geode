@@ -551,11 +551,12 @@ export class CanvasView implements View {
       el.appendChild(text);
       this.markdownContentEls.add(text);
       void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
-      el.addEventListener("dblclick", (event) => { event.stopPropagation(); this.editTextNode(el, node); });
+      el.addEventListener("dblclick", (event) => { if (this.isEmbeddedInteraction(event.target)) return; event.stopPropagation(); this.editTextNode(el, node); });
     } else if (node.type === "file") {
       el.dataset.filePath = node.file;
       this.renderFileNode(el, node, version);
-      el.addEventListener("dblclick", () => {
+      el.addEventListener("dblclick", (event) => {
+        if (this.isEmbeddedInteraction(event.target)) return;
         const file = this.app.vault.getFileByPath(node.file);
         if (file) void this.app.openFile(file, true);
       });
@@ -564,6 +565,7 @@ export class CanvasView implements View {
     }
     el.addEventListener("pointerdown", (event) => this.beginNodeDrag(event, node));
     el.addEventListener("contextmenu", (event) => {
+      if (this.isEmbeddedInteraction(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       if (!this.selectedIds.has(node.id)) {
@@ -1911,8 +1913,14 @@ export class CanvasView implements View {
     }
   }
 
+  private isEmbeddedInteraction(target: EventTarget | null): boolean {
+    const owner = (target as HTMLElement | null)?.closest?.(".base-view, .canvas-view");
+    return !!owner && owner !== this.containerEl;
+  }
+
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
     if (this.recoveryError !== null) return;
+    if (this.isEmbeddedInteraction(event.target)) return;
     if (event.pointerType === "touch") return;
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge, .canvas-node-connection-handle, .canvas-node-connection-touch-hit")) return;
     event.stopPropagation();
@@ -2435,6 +2443,7 @@ export class CanvasView implements View {
   private installTouchControls(): void {
     const point = (event: PointerEvent) => ({ pointerId: event.pointerId, x: event.clientX, y: event.clientY });
     this.surfaceEl.addEventListener("pointerdown", (event) => {
+      if (this.isEmbeddedInteraction(event.target)) return;
       if (event.pointerType !== "touch" || (event.target as HTMLElement).closest(
         "button, textarea, input, .canvas-edge-hit, .canvas-edge-endpoint-handle, .canvas-edge-endpoint-touch-hit, .canvas-node-connection-handle, .canvas-node-connection-touch-hit, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge"
       )) return;
