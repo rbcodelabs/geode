@@ -627,6 +627,7 @@ export class BaseView implements View {
     const write = async (token?: RenderToken) => { await previous.catch(() => {}); token?.check(); await this.doPersist(token); };
     const task = this.renderOwner ? retry ? this.renderOwner.retry(write, "definition") : this.renderOwner.run(write, "definition") : write();
     this.persistQueue = task.finally(() => { this.definitionWritesPending--; });
+    void task.then(() => { if (this.renderOwner?.admissionAllowed && !this.renderOwner.hasUnacknowledgedWrites) this.setSaveStatus("Base saved", false); }, () => {});
     void task.catch(() => { if (this.renderOwner?.admissionAllowed) this.setSaveStatus("Base save failed", true, () => this.persist(true)); });
     // UI callbacks are fire-and-forget; retain rejection for pause/load callers.
     void this.persistQueue.catch(() => {});
