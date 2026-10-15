@@ -107,7 +107,13 @@ test("Canvas file picker preserves normal blur commit before replacing the selec
     await page.evaluate(() => (window as any).__canvasOwned.canvas.openSwapFilePicker("owned", "note"));
     await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(source.replace("priority: 2", "priority: 9"));
     await page.locator(".modal").getByText("Replacement.md", { exact: true }).click();
-    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(vault, "Board.canvas"), "utf8")).nodes[0].file).toBe("Replacement.md");
+    await expect.poll(() => {
+      try { return JSON.parse(fs.readFileSync(path.join(vault, "Board.canvas"), "utf8")).nodes[0].file; }
+      catch (error) {
+        if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+    }).toBe("Replacement.md");
     await expect(page.locator(".canvas-node-note")).toContainText("Replacement note");
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(source.replace("priority: 2", "priority: 9"));
   });
