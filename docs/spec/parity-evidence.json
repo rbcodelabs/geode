@@ -2828,5 +2828,13 @@
       "tests/e2e/format-converter.spec.ts"
     ],
     "notes": "Unit-tested conversions (Roam tags/highlights/TODOs, Bear highlights, Zettelkasten full/pretty links, alias/tag/cssclass to list properties; code, inline code and frontmatter protected) and driven end to end in Electron: Core plugins toggle (off by default), ribbon binary icon, Open format converter command, modal with per-conversion checkboxes, backup warning and Start conversion rewriting a fixture vault. Partial: the spec does not define how a Zettelkasten UID is recognised, so Geode assumes a 12-14 digit filename prefix; the Help page was not diffed line by line for edge cases."
+  },
+  "HELP-37f3d8a96fc8": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/slides.test.ts",
+      "tests/e2e/slides.spec.ts"
+    ],
+    "notes": "Unit-tested slide splitting (--- with blank lines around it; frontmatter, fenced code, math blocks, table rules and setext headings are not split points) and driven end to end in Electron: Core plugins toggle (off by default), Slides: Start presentation command and the note tab context menu entry, full-window view rendering each slide through the reading-view renderer (wikilink, code, table, callout, embed observed), Right/Left/Space navigation, bottom-right arrow buttons with disabled edge states, upper-right close button, Esc to end, light and dark themes. Partial: Obsidian own slide chrome (transitions, exact typography and sizing, behaviour for notes without a separator) is not specified by the Help page and was not compared against the real app."
   }
 }
