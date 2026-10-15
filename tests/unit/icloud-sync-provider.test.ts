@@ -80,7 +80,8 @@ describe("scan", () => {
     await session.scan(undefined, signal()); // creates the folder + marker
     put("a.md", "a");
     put("Folder/b.md", "b");
-    put(`café.md`, "nfd");
+    // APFS (the only real target) folds NFD/NFC names together; Linux does not, so only decompose the name on macOS.
+    put(process.platform === "darwin" ? "cafe\u0301.md" : "caf\u00e9.md", "nfd");
     put(".DS_Store", "junk");
     put("Folder/.DS_Store", "junk");
     put("._a.md", "appledouble");
@@ -90,7 +91,7 @@ describe("scan", () => {
     expect(result.status).toBe("complete");
     expect(result.mode).toBe("snapshot");
     expect(result.cursor).toBeTruthy();
-    expect([...byPath.keys()].sort()).toEqual(["Folder", "Folder/b.md", "a.md", "café.md"]);
+    expect([...byPath.keys()].sort()).toEqual(["Folder", "Folder/b.md", "a.md", "caf\u00e9.md"]);
     expect(byPath.get("Folder")?.kind).toBe("folder");
     expect(byPath.get("a.md")).toMatchObject({ kind: "file", size: 1 });
     expect(byPath.get("a.md")?.hash).toMatch(/^[0-9a-f]{64}$/);
