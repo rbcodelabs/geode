@@ -1,6 +1,8 @@
 import { registerPlugin, type Plugin, type PluginListenerHandle } from "@capacitor/core";
 import { VaultAccessError, type HashCacheService, type HostServices, type VaultAccessState, type VaultEvent, type VaultFileEntry } from "./contracts";
 import type { PluginFileSet } from "./contracts";
+import { parseGeodeDeepLink } from "../../shared/deep-link-parse";
+import { createMobilePluginSecretService, pluginIdFromEntryPath } from "./plugin-secrets";
 import { assertValidThemeId } from "../../shared/theme-id";
 import type { SyncVaultPathIssue } from "../../sync-core/ports";
 import { SyncBlockedError } from "../../sync-core/ports";
@@ -59,10 +61,25 @@ export interface ManagedVaultPlugin extends Plugin {
   appSecretGet?(options: { key: string }): Promise<{ found: boolean; value?: string }>;
   appSecretSet?(options: { key: string; value: string }): Promise<EmptyResult>;
   appSecretRemove?(options: { key: string }): Promise<EmptyResult>;
+  /** Keychain-backed (device-only) secrets, namespaced by plugin id. */
+  getSecret?(options: { namespace: string; key: string }): Promise<{ value: string | null }>;
+  setSecret?(options: { namespace: string; key: string; value: string }): Promise<EmptyResult>;
+  removeSecret?(options: { namespace: string; key: string }): Promise<EmptyResult>;
+  /** Native URLSession request (the WebView CSP blocks plugin network access). */
+  httpRequest?(options: { id: string; url: string; method?: string; headers?: Record<string, string>; bodyBase64?: string; timeoutMs?: number }): Promise<{ status: number; headers: Record<string, string>; bodyBase64: string }>;
+  cancelHttpRequest?(options: { id: string }): Promise<EmptyResult>;
+  /** Hands an http(s) URL to the system browser. */
+  openExternal?(options: { url: string }): Promise<EmptyResult>;
   addListener(eventName: "change", listenerFunc: (event: VaultEvent) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: "deepLink", listenerFunc: (event: { url: string }) => void): Promise<PluginListenerHandle>;
 }
 
 export const GeodeManagedVault = registerPlugin<ManagedVaultPlugin>("GeodeManagedVault");
+
+function decodeBase64(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer;
+}
 
 function managedVaultPath(path: string): string {
   if (path.includes("\0") || path.includes("\\") || /^[A-Za-z]:[\\/]/.test(path)) {
@@ -175,6 +192,31 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
   const requireOpen = () => {
     if (!opened) throw new Error("No managed vault is open");
   };
+  const secrets = createMobilePluginSecretService(plugin.getSecret && plugin.setSecret && plugin.removeSecret ? {
+    get: async (namespace, key) => (await plugin.getSecret!({ namespace, key })).value,
+    set: async (namespace, key, value) => { await plugin.setSecret!({ namespace, key, value }); },
+    remove: async (namespace, key) => { await plugin.removeSecret!({ namespace, key }); },
+  } : undefined);
+  const toBase64 = (data: ArrayBuffer | string | undefined): string | undefined => {
+    if (data === undefined) return undefined;
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data);
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  };
+  const network: HostServices["network"] = plugin.httpRequest ? {
+    request: async (input, signal) => {
+      if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+      const id = crypto.randomUUID();
+      const cancel = () => { void plugin.cancelHttpRequest?.({ id }); };
+      signal?.addEventListener("abort", cancel, { once: true });
+      try {
+        const result = await plugin.httpRequest!({ id, url: input.url, method: input.method, headers: input.headers, bodyBase64: toBase64(input.body) });
+        if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+        return { status: result.status, headers: result.headers, body: decodeBase64(result.bodyBase64) };
+      } finally { signal?.removeEventListener("abort", cancel); }
+    },
+  } : undefined;
   const formFactor = typeof window !== "undefined" && window.matchMedia?.("(min-width: 701px)").matches
     ? "tablet" as const
     : "phone" as const;
@@ -189,7 +231,6 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     ...portable,
     ...(syncSafety ? { syncSafety } : {}),
     ...(hashCache && syncSafety ? { hashCache } : {}),
-    ...(appSecrets ? { secrets: { ...portable.secrets, appAvailable: true, app: appSecrets } } : {}),
     capabilities: Object.freeze({ ...portable.capabilities, externalVaultFolder: true }),
     runtime: {
       runtime: "ios",
@@ -197,7 +238,23 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
       formFactor,
       getWindowChromeState: async () => ({ platform: "ios", isFullScreen: true, macChrome: "none" }),
       onWindowChromeState: () => () => {},
-      onDeepLink: portable.runtime.onDeepLink,
+      onDeepLink: (callback) => {
+        let disposed = false;
+        let handle: PluginListenerHandle | undefined;
+        void plugin.addListener("deepLink", ({ url }) => {
+          const link = parseGeodeDeepLink(url);
+          if (link) callback(link);
+        }).then((registered) => {
+          handle = registered;
+          if (disposed) void handle.remove();
+        }).catch(() => {
+          // A failed native registration leaves a valid, inert disposer.
+        });
+        return () => {
+          disposed = true;
+          if (handle) void handle.remove();
+        };
+      },
       onForeground: portable.runtime.onForeground,
     },
     vaultRegistry: {
@@ -310,6 +367,17 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
         }
       },
     },
+    secrets: appSecrets ? { ...secrets, appAvailable: true, app: appSecrets } : secrets,
+    ...(network ? { network } : {}),
+    navigation: {
+      ...portable.navigation,
+      openExternal: async (url) => {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error(`Unsupported URL scheme: ${parsed.protocol}`);
+        if (!plugin.openExternal) return portable.navigation.openExternal(url);
+        await plugin.openExternal({ url: parsed.href });
+      },
+    },
     plugins: {
       listPluginIds: async () => (await plugin.listPluginIds()).ids,
       listThemes: async () => (await plugin.listThemes()).ids,
@@ -321,7 +389,8 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
         const started = Date.now();
         try {
           const { content } = await plugin.readPluginFile({ path, maxBytes: 16 * 1024 * 1024 });
-          return { ok: true, content, mainReceivedAt: rendererSentAt, fsStartedAt: started, fsFinishedAt: Date.now() };
+          const pluginId = pluginIdFromEntryPath(path);
+          return { ok: true, content, secretCapability: pluginId ? secrets.capabilityFor(pluginId) : undefined, mainReceivedAt: rendererSentAt, fsStartedAt: started, fsFinishedAt: Date.now() };
         } catch (error) {
           return {
             ok: false,

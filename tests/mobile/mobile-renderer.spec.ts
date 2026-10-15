@@ -2334,3 +2334,87 @@ test("@phone @tablet mobile plugins enforce admission, resolver, lifecycle, and 
   await expect.poll(() => page.evaluate(() => (window as any).app?.vault?.root)).toBe("external://browser-provider-proof");
   await expect.poll(() => page.evaluate(() => Object.keys((window as any).app.commands.commands).filter((id) => id === "mobile-dom:probe-v2").length)).toBe(1);
 });
+
+test("@phone @tablet mobile plugins use main.mobile.js, Platform flags, Keychain secrets, deep links, and the system browser", async ({ page }) => {
+  await openExternalProofNote(page);
+  await page.evaluate(async () => {
+    const host = window.hostServices!.vaultFiles;
+    const install = async (id: string, files: Record<string, string>) => {
+      await host.mkdir(`.geode/plugins/${id}`);
+      await host.write(`.geode/plugins/${id}/manifest.json`, JSON.stringify({ id, name: id, version: "1.0.0", minAppVersion: "1.0.0", description: "fixture", author: "Geode", isDesktopOnly: false }));
+      for (const [file, code] of Object.entries(files)) await host.write(`.geode/plugins/${id}/${file}`, code);
+    };
+    // Shaped like Google Docs Sync: open the OAuth start page in the system
+    // browser, receive the geode:// callback, keep the tokens in secure storage.
+    await install("oauth-fixture", {
+      "main.js": `globalThis.__desktopEntryEvaluated = true; throw new Error("desktop entrypoint must not run on mobile");`,
+      "main.mobile.js": `
+        const { Plugin, Platform } = require("obsidian");
+        module.exports = class extends Plugin {
+          async onload() {
+            this.flags = { mobile: Platform.isMobile, mobileApp: Platform.isMobileApp, desktop: Platform.isDesktop, desktopApp: Platform.isDesktopApp, phone: Platform.isPhone, tablet: Platform.isTablet };
+            this.registerObsidianProtocolHandler("oauth-fixture", async (params) => {
+              if (params.state !== this.pending) return;
+              this.pending = null;
+              await this.saveSecret("tokens", JSON.stringify({ access: params.access_token, refresh: params.refresh_token }));
+              this.connected = true;
+            });
+            this.addCommand({ id: "connect", name: "Connect", callback: () => {
+              this.pending = "state-" + Math.random().toString(36).slice(2);
+              window.open("https://accounts.example.com/start?state=" + this.pending, "_blank");
+            }});
+          }
+        };`,
+    });
+    // A second plugin must never see the first plugin's secret.
+    await install("other-fixture", {
+      "main.js": `const { Plugin } = require("obsidian"); module.exports = class extends Plugin { async onload() { this.leak = await this.loadSecret("tokens"); } };`,
+    });
+    await (window as any).app.pluginManager.rescan();
+    await (window as any).app.pluginManager.enable("oauth-fixture");
+    await (window as any).app.pluginManager.enable("other-fixture");
+  });
+
+  expect(await page.evaluate(() => (globalThis as any).__desktopEntryEvaluated)).toBeUndefined();
+  expect(await page.evaluate(() => {
+    const plugin = (window as any).app.pluginManager.getPlugin("oauth-fixture");
+    return plugin.flags;
+  })).toEqual({ mobile: true, mobileApp: true, desktop: false, desktopApp: false, phone: await page.evaluate(() => window.hostServices!.runtime.formFactor !== "tablet"), tablet: await page.evaluate(() => window.hostServices!.runtime.formFactor === "tablet") });
+  // The desktop entry is never even read when a mobile entry exists.
+  expect(await page.evaluate(() => (window as any).__geodeMobileTest.pluginReads.filter((path: string) => path.endsWith("oauth-fixture/main.js")))).toEqual([]);
+
+  // window.open reaches the system browser, never a webview navigation.
+  expect(await page.evaluate(() => (window as any).app.commands.execute("oauth-fixture:connect"))).toBe(true);
+  const opened = await page.evaluate(() => (window as any).__geodeMobileTest.externalOpens as string[]);
+  expect(opened).toHaveLength(1);
+  const startUrl = new URL(opened[0]);
+  expect(startUrl.origin).toBe("https://accounts.example.com");
+  const state = startUrl.searchParams.get("state")!;
+
+  // A callback with the wrong state is ignored; the right one stores secrets.
+  await page.evaluate(() => (window as any).__geodeMobileTest.deepLink("geode://oauth-fixture?state=forged&access_token=bad&refresh_token=bad"));
+  await page.evaluate((s) => (window as any).__geodeMobileTest.deepLink(`geode://oauth-fixture?state=${s}&access_token=ya29.token&refresh_token=1%2Frefresh`), state);
+  await expect.poll(() => page.evaluate(() => (window as any).app.pluginManager.getPlugin("oauth-fixture").connected)).toBe(true);
+  expect(await page.evaluate(() => (window as any).app.pluginManager.getPlugin("oauth-fixture").loadSecret("tokens"))).toBe(JSON.stringify({ access: "ya29.token", refresh: "1/refresh" }));
+  expect(await page.evaluate(() => (window as any).app.pluginManager.getPlugin("other-fixture").leak)).toBeNull();
+  // Secrets live outside the vault: nothing under .geode/plugins/<id>/data.json.
+  expect(await page.evaluate(() => Array.from((window as any).__geodeMobileTest.secrets.keys()))).toEqual(["oauth-fixture/tokens"]);
+  expect(await page.evaluate(() => window.hostServices!.vaultFiles.list().then((entries) => entries.some((entry) => /ya29\.token/.test(entry.path))))).toBe(false);
+
+  // A cold-start link that arrives before the plugin registers is delivered on registration.
+  await page.evaluate(() => (window as any).__geodeMobileTest.deepLink("geode://late-handler?code=early"));
+  await page.evaluate(() => {
+    (window as any).__lateParams = null;
+    (window as any).app.registerProtocolHandler("late-handler", (params: unknown) => { (window as any).__lateParams = params; });
+  });
+  expect(await page.evaluate(() => (window as any).__lateParams)).toMatchObject({ code: "early", action: "late-handler" });
+
+  // Updating the mobile entry rolls back to the last known-good mobile bundle when it is unsupported.
+  await page.evaluate(async () => {
+    await window.hostServices!.vaultFiles.write(".geode/plugins/oauth-fixture/main.mobile.js", `require("child_process"); module.exports = class {};`);
+    await (window as any).app.pluginManager.reload("oauth-fixture").catch(() => {});
+  });
+  expect(await page.evaluate(() => (window as any).app.commands.has("oauth-fixture:connect"))).toBe(true);
+  expect(await page.evaluate(() => window.hostServices!.vaultFiles.read(".geode/plugins/oauth-fixture/main.mobile.js"))).toContain("registerObsidianProtocolHandler");
+  expect(await page.evaluate(() => (globalThis as any).__desktopEntryEvaluated)).toBeUndefined();
+});

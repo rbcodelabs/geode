@@ -2,6 +2,7 @@ import Foundation
 import Capacitor
 import UIKit
 import UniformTypeIdentifiers
+import Security
 
 private struct ManagedVaultFailure: Error {
     let code: String
@@ -106,7 +107,13 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             CAPPluginMethod(name: "syncPrivateAvailableBytes", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "appSecretGet", returnType: CAPPluginReturnPromise),
             CAPPluginMethod(name: "appSecretSet", returnType: CAPPluginReturnPromise),
-            CAPPluginMethod(name: "appSecretRemove", returnType: CAPPluginReturnPromise)
+            CAPPluginMethod(name: "appSecretRemove", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "getSecret", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "setSecret", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "removeSecret", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "openExternal", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "httpRequest", returnType: CAPPluginReturnPromise),
+            CAPPluginMethod(name: "cancelHttpRequest", returnType: CAPPluginReturnPromise)
         ]
 #if DEBUG
         methods.append(CAPPluginMethod(name: "debugProbe", returnType: CAPPluginReturnPromise))
@@ -388,6 +395,7 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
         perform(call) {
             let path = try self.requiredPluginPath(call)
             let url = try self.validatedURL(path)
+            guard self.fileManager.fileExists(atPath: url.path) else { throw ManagedVaultFailure.notFound }
             let requestedLimit = call.getInt("maxBytes") ?? self.pluginBridgeLimit
             let limit = min(max(requestedLimit, 1), self.pluginBridgeLimit)
             let values = try url.resourceValues(forKeys: [.fileSizeKey])
@@ -412,6 +420,8 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                 throw ManagedVaultFailure.invalidPath
             }
             let styles = replacement["styles"] as? String
+            let entry = (replacement["entry"] as? String) ?? "main.js"
+            guard entry == "main.js" || entry == "main.mobile.js" else { throw ManagedVaultFailure.invalidPath }
             for value in [manifest, main] + (styles.map { [$0] } ?? []) {
                 guard value.lengthOfBytes(using: .utf8) <= self.pluginBridgeLimit else {
                     throw ManagedVaultFailure(code: "PLUGIN_PAYLOAD_TOO_LARGE", message: "Plugin file exceeds the mobile bridge limit")
@@ -422,10 +432,177 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                 expectedManifest: expectedManifest,
                 manifest: manifest,
                 main: main,
+                entry: entry,
                 styles: styles
             )
             return [:]
         }
+    }
+
+    // MARK: Plugin secrets (Keychain, this device only)
+
+    private static let secretService = "com.rbcodelabs.geode.plugin-secrets"
+    private static let secretValueLimit = 64 * 1024
+
+    private func secretAccount(_ call: CAPPluginCall) throws -> String {
+        guard let namespace = call.getString("namespace"),
+              namespace.range(of: "^[a-z0-9][a-z0-9-]*$", options: .regularExpression) != nil,
+              let key = call.getString("key"), !key.isEmpty, key.count <= 200 else {
+            throw ManagedVaultFailure(code: "INVALID_SECRET", message: "Invalid secret namespace or key")
+        }
+        return "\(namespace)/\(key)"
+    }
+
+    private func secretQuery(_ account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.secretService,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    @objc func getSecret(_ call: CAPPluginCall) {
+        perform(call) {
+            var query = self.secretQuery(try self.secretAccount(call))
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            var item: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &item)
+            if status == errSecItemNotFound { return ["value": NSNull()] }
+            guard status == errSecSuccess, let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
+                throw ManagedVaultFailure(code: "SECRET_UNAVAILABLE", message: "Secure storage could not be read")
+            }
+            return ["value": value]
+        }
+    }
+
+    @objc func setSecret(_ call: CAPPluginCall) {
+        perform(call) {
+            let account = try self.secretAccount(call)
+            guard let value = call.getString("value"), value.lengthOfBytes(using: .utf8) <= Self.secretValueLimit else {
+                throw ManagedVaultFailure(code: "INVALID_SECRET", message: "Secret value is missing or too large")
+            }
+            let data = Data(value.utf8)
+            let query = self.secretQuery(account)
+            let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if update == errSecItemNotFound {
+                var add = query
+                add[kSecValueData as String] = data
+                add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                let status = SecItemAdd(add as CFDictionary, nil)
+                guard status == errSecSuccess else {
+                    throw ManagedVaultFailure(code: "SECRET_UNAVAILABLE", message: "Secure storage could not be written")
+                }
+            } else if update != errSecSuccess {
+                throw ManagedVaultFailure(code: "SECRET_UNAVAILABLE", message: "Secure storage could not be written")
+            }
+            return [:]
+        }
+    }
+
+    @objc func removeSecret(_ call: CAPPluginCall) {
+        perform(call) {
+            let status = SecItemDelete(self.secretQuery(try self.secretAccount(call)) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw ManagedVaultFailure(code: "SECRET_UNAVAILABLE", message: "Secure storage could not be updated")
+            }
+            return [:]
+        }
+    }
+
+    // MARK: Plugin network (URLSession; the WebView CSP blocks direct plugin fetches)
+
+    private static let httpResponseLimit = 32 * 1024 * 1024
+    private static let httpDefaultTimeout: TimeInterval = 30
+    private static let httpMaxTimeout: TimeInterval = 120
+    private let httpTasksLock = NSLock()
+    private var httpTasks: [String: URLSessionTask] = [:]
+
+    @objc func httpRequest(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), !id.isEmpty, id.count <= 100,
+              let value = call.getString("url"), let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
+            call.reject("Only http(s) requests are supported", "INVALID_URL")
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = (call.getString("method") ?? "GET").uppercased()
+        let requestedTimeout = TimeInterval(call.getInt("timeoutMs") ?? 0) / 1000
+        request.timeoutInterval = requestedTimeout > 0 ? min(requestedTimeout, Self.httpMaxTimeout) : Self.httpDefaultTimeout
+        for (name, headerValue) in call.getObject("headers") ?? [:] {
+            guard let text = headerValue as? String else { continue }
+            request.setValue(text, forHTTPHeaderField: name)
+        }
+        if let base64 = call.getString("bodyBase64") {
+            guard let body = Data(base64Encoded: base64), body.count <= Self.httpResponseLimit else {
+                call.reject("Request body is invalid or too large", "INVALID_BODY")
+                return
+            }
+            request.httpBody = body
+        }
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            self?.httpTasksLock.lock(); self?.httpTasks[id] = nil; self?.httpTasksLock.unlock()
+            if let error = error as NSError? {
+                call.reject(error.code == NSURLErrorCancelled ? "Request cancelled" : "Network request failed", error.code == NSURLErrorCancelled ? "CANCELLED" : "NETWORK_ERROR")
+                return
+            }
+            guard let http = response as? HTTPURLResponse, let data else {
+                call.reject("Network request failed", "NETWORK_ERROR")
+                return
+            }
+            guard data.count <= Self.httpResponseLimit else {
+                call.reject("Response exceeds the mobile limit", "RESPONSE_TOO_LARGE")
+                return
+            }
+            var headers: JSObject = [:]
+            for (key, headerValue) in http.allHeaderFields {
+                if let key = key as? String, let headerValue = headerValue as? String { headers[key.lowercased()] = headerValue }
+            }
+            call.resolve(["status": http.statusCode, "headers": headers, "bodyBase64": data.base64EncodedString()])
+        }
+        httpTasksLock.lock(); httpTasks[id] = task; httpTasksLock.unlock()
+        task.resume()
+    }
+
+    @objc func cancelHttpRequest(_ call: CAPPluginCall) {
+        if let id = call.getString("id") {
+            httpTasksLock.lock(); let task = httpTasks[id]; httpTasksLock.unlock()
+            task?.cancel()
+        }
+        call.resolve()
+    }
+
+    // MARK: System browser and deep links
+
+    @objc func openExternal(_ call: CAPPluginCall) {
+        guard let value = call.getString("url"), let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
+            call.reject("Only http(s) URLs can be opened", "INVALID_URL")
+            return
+        }
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url, options: [:]) { opened in
+                if opened { call.resolve() } else { call.reject("The URL could not be opened", "OPEN_FAILED") }
+            }
+        }
+    }
+
+    private var openURLObserver: NSObjectProtocol?
+
+    override func load() {
+        // Capacitor posts every URL the app is opened with. Forward only
+        // Geode's own scheme (and the obsidian:// alias plugins mint) to JS;
+        // retainUntilConsumed covers a cold-start link that arrives before the
+        // renderer has attached its listener.
+        openURLObserver = NotificationCenter.default.addObserver(forName: .capacitorOpenURL, object: nil, queue: .main) { [weak self] notification in
+            guard let info = notification.object as? [String: Any], let url = info["url"] as? URL,
+                  let scheme = url.scheme?.lowercased(), scheme == "geode" || scheme == "obsidian" else { return }
+            self?.notifyListeners("deepLink", data: ["url": url.absoluteString], retainUntilConsumed: true)
+        }
+    }
+
+    deinit {
+        if let observer = openURLObserver { NotificationCenter.default.removeObserver(observer) }
     }
 
     // MARK: Guarded sync support (binary writes, stat, sync-private storage) and app secrets
@@ -704,7 +881,7 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
 
     private func requiredPluginPath(_ call: CAPPluginCall) throws -> String {
         guard let path = call.getString("path"),
-              path.range(of: "^\\.geode/plugins/[a-z0-9][a-z0-9-]*/(manifest\\.json|main\\.js|styles\\.css)$", options: .regularExpression) != nil else {
+              path.range(of: "^\\.geode/plugins/[a-z0-9][a-z0-9-]*/(manifest\\.json|main\\.js|main\\.mobile\\.js|styles\\.css)$", options: .regularExpression) != nil else {
             throw ManagedVaultFailure(code: "INVALID_PLUGIN_PATH", message: "Expected a scoped plugin file")
         }
         return path
@@ -739,6 +916,7 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
         expectedManifest: String,
         manifest: String,
         main: String,
+        entry: String = "main.js",
         styles: String?,
         injectBeforeSwapFailure: Bool = false
     ) throws {
@@ -761,7 +939,7 @@ final class GeodeManagedVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                 }
                 try self.fileManager.copyItem(at: coordinated, to: staging)
                 try Data(manifest.utf8).write(to: staging.appendingPathComponent("manifest.json"), options: .atomic)
-                try Data(main.utf8).write(to: staging.appendingPathComponent("main.js"), options: .atomic)
+                try Data(main.utf8).write(to: staging.appendingPathComponent(entry), options: .atomic)
                 let styleURL = staging.appendingPathComponent("styles.css")
                 if let styles { try Data(styles.utf8).write(to: styleURL, options: .atomic) }
                 else if self.fileManager.fileExists(atPath: styleURL.path) { try self.fileManager.removeItem(at: styleURL) }

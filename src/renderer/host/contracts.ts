@@ -240,6 +240,8 @@ export interface PluginHostService {
     mainReceivedAt: number;
     fsStartedAt: number;
     fsFinishedAt: number;
+    /** Opaque per-plugin secret namespace token, returned with a plugin entrypoint read. */
+    secretCapability?: string;
   }>;
   replacePluginFiles(id: string, expectedManifest: string, replacement: PluginFileSet): Promise<void>;
   getPolicy(): Promise<unknown | null>;
@@ -251,9 +253,15 @@ export interface PluginHostService {
 
 export interface PluginFileSet {
   manifest: string;
+  /** Entrypoint source; written to `entry` (default `main.js`). */
   main: string;
+  /** Mobile hosts only: which entrypoint file `main` replaces. */
+  entry?: PluginEntryFile;
   styles: string | null;
 }
+
+/** A plugin may ship a smaller browser-only entrypoint that mobile hosts prefer. */
+export type PluginEntryFile = "main.js" | "main.mobile.js";
 
 /** Desktop-only APIs are absent on mobile; callers gate on capabilities first. */
 export interface DesktopHostService {

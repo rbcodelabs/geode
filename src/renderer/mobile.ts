@@ -6,6 +6,7 @@ import { installHostServices } from "./host/registry";
 import { VaultAccessError } from "./host/contracts";
 import { withDurableMobileStorage } from "./host/mobile-storage";
 import { createMobileArtifactTransport } from "./host/mobile-http-transport";
+import { installMobileWindowOpen } from "./host/mobile-window-open";
 
 const state = createBrowserHostState({ storage: window.localStorage });
 const externalProofEnabled = new URLSearchParams(location.search).get("external-vault-proof") === "1";
@@ -54,6 +55,11 @@ const mobileTest = {
   failConflictCopy: false,
   reconcileTrace: [] as string[],
   pluginReads: [] as string[],
+  externalOpens: [] as string[],
+  secrets: new Map<string, string>(),
+  deepLinkListeners: new Set<(url: string) => void>(),
+  /** Simulates the OS delivering a `geode://` link to the app. */
+  deepLink: (url: string) => { for (const listener of mobileTest.deepLinkListeners) listener(url); },
   listenerCount: () => mobileTest.activeListeners,
   externalWrite: (path: string, data: string) => {
     if (!externalState) return;
@@ -108,6 +114,18 @@ const browserHost = createBrowserHost(state, {
     mobileTest.reconcileTrace.push(`write:${path}`);
   },
   onPluginFileRead: (path) => mobileTest.pluginReads.push(path),
+  // The browser has no Keychain or system browser, so these seams exist only
+  // for the external-vault proof harness; production browser builds keep
+  // secrets unavailable and window.open untouched by tests.
+  ...(externalProofEnabled ? {
+    openExternal: (url: string) => { mobileTest.externalOpens.push(url); },
+    secretBackend: {
+      get: async (ns: string, key: string) => mobileTest.secrets.get(`${ns}/${key}`) ?? null,
+      set: async (ns: string, key: string, value: string) => { mobileTest.secrets.set(`${ns}/${key}`, value); },
+      remove: async (ns: string, key: string) => { mobileTest.secrets.delete(`${ns}/${key}`); },
+    },
+    deepLinks: { subscribe: (cb: (url: string) => void) => { mobileTest.deepLinkListeners.add(cb); return () => { mobileTest.deepLinkListeners.delete(cb); }; } },
+  } : {}),
   checkVault: async (id) => {
     if (id.startsWith("external://") && mobileTest.externalAccess === "missing") {
       throw new VaultAccessError("Provider Vault is missing", "VAULT_MISSING", id, "Provider Vault", "missing");
@@ -144,6 +162,7 @@ const host = installHostServices({
 // shared code consumes HostServices; legacy plugin/renderer paths can migrate
 // incrementally without pretending that mobile has desktop capabilities.
 window.geode = createLegacyGeodeFacade(host);
+installMobileWindowOpen(host);
 document.body.classList.add("is-mobile");
 
 void import("./app");
