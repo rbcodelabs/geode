@@ -41,3 +41,9 @@ describe("footnote pane projection", () => {
     }
   });
 });
+
+it("does not select a definition whose continuation may follow blank lines beyond the scan limit", async () => {
+  const result = await api.projectFootnotes("[^a]: Text\n" + "\n".repeat(9_000) + "    continued\n");
+  expect(result.limited).toBe(true);
+  expect(result.items[0].editable).toBe(false);
+});
