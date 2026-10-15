@@ -1,4 +1,5 @@
 import { rejectPausedBaseEdit, type BaseSyncFocusReceipt } from "./bases/paused-edit";
+import { SourceOwnedNavigation, captureNavigationOrigin } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { parseBaseFile, runQuery, type BaseDefinition, type BaseViewDefinition, type QueryResult } from "../bases";
@@ -250,9 +251,26 @@ export class BaseView implements View {
   }
 
   readonly renderOwner: RenderScope;
-  constructor(private app: App, parentOwner?: RenderScope) {
+  readonly sourceNavigation: SourceOwnedNavigation;
+  constructor(private app: App, parentOwner?: RenderScope, sourceNavigation?: SourceOwnedNavigation) {
     const options = this.nativeRenderOptions();
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
+    this.sourceNavigation = sourceNavigation ?? new SourceOwnedNavigation({
+      capture: () => {
+        const leaf = app.workspace.findLeafForView(this), file = this.file, vault = app.vault, root = vault.root, token = this.renderOwner.captureToken();
+        if (!leaf) throw new ScopeCancelled();
+        return () => {
+          if (app.workspace.findLeafForView(this) !== leaf || leaf.view !== this || this.file !== file || app.vault !== vault || vault.root !== root) throw new ScopeCancelled();
+          token.check();
+        };
+      },
+      preflight: () => this.renderOwner.assertRetirementReady(),
+      execute: (request, validate) => {
+        const leaf = app.workspace.findLeafForView(this); if (!leaf) throw new ScopeCancelled();
+        return app.navigateFromSource(request, leaf, validate);
+      },
+      notify: message => app.notify(message),
+    });
     this.containerEl = document.createElement("div");
     this.containerEl.className = "base-view";
 
@@ -291,16 +309,16 @@ export class BaseView implements View {
     this.errorEl.style.display = "none";
 
     this.tableView = new BasesTableView(app, {
-      onOpenFile: (file, newTab) => void this.app.openFile(file, newTab),
+      onOpenFile: (file, newTab) => { void this.sourceNavigation.prepareNavigation({ kind: "file", file, newTab }, captureNavigationOrigin(this.renderOwner)).dispatch(); },
       onEditCell: (file, columnPath, rawText) => this.editCell(file, columnPath, rawText),
       onEditStart: (file, columnPath, rawText) => this.beginSourceEdit(file, columnPath, rawText),
       onEditDraft: (rawText) => { if (this.sourceEdit) this.sourceEdit.rawText = rawText; },
       onEditEnd: identity => this.endSourceEdit(identity),
-    });
+    }, this.sourceNavigation, this.renderOwner);
 
     this.cardsView = new BasesCardsView(app, {
-      onOpenFile: (file, newTab) => void this.app.openFile(file, newTab),
-    });
+      onOpenFile: (file, newTab) => { void this.sourceNavigation.prepareNavigation({ kind: "file", file, newTab }, captureNavigationOrigin(this.renderOwner)).dispatch(); },
+    }, this.sourceNavigation, this.renderOwner);
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "base-view-body";
@@ -389,6 +407,7 @@ export class BaseView implements View {
     const parsed = parseBaseFile(text);
     if (requireValid && "error" in parsed) throw new Error(`Couldn't parse base: ${parsed.error}`);
     this.tableView.resetForFile();
+    this.tableView.cancelNavigation();
     this.cardsView.destroy();
     this.pluginViewHost.destroy();
     this.sourceEdit = null;
@@ -502,6 +521,7 @@ export class BaseView implements View {
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
+    this.tableView.cancelNavigation();
     this.cardsView.destroy();
     this.pluginViewHost.destroy();
     this.sourceEdit = null;

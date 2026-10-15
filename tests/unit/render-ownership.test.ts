@@ -139,3 +139,21 @@ it("preflights every affected subtree before invalidating pending work or blurri
   await expect(RenderScope.prepareRetirement([a, b])).rejects.toThrow("Finish cell");
   gate.resolve(); await task; expect(valid).toBe(true); expect(a.admissionAllowed).toBe(true);
 });
+
+
+it("capturing a lifetime token alone does not hold draining or retirement", async () => {
+  const scope = new RenderOwnership().create({}); const token = scope.captureToken();
+  await scope.drain(); expect(token.current()).toBe(true);
+  await scope.close(); expect(token.current()).toBe(false); expect(() => token.check()).toThrow();
+});
+it("captured descendant tokens follow ancestor generation and fresh resumed capture", () => {
+  const root = new RenderOwnership().create({}), child = root.child({}), token = child.captureToken();
+  root.freezeAdmission(); expect(token.current()).toBe(false); expect(() => child.captureToken()).toThrow();
+  root.resume(); expect(token.current()).toBe(false); expect(child.captureToken().current()).toBe(true);
+});
+it("paused registry admission rejects capture without changing existing token current semantics", () => {
+  const registry = new RenderOwnership(), scope = registry.create({}), token = scope.captureToken();
+  registry.admissionOpen = false;
+  expect(() => scope.captureToken()).toThrow(); expect(token.current()).toBe(true);
+  registry.admissionOpen = true; expect(scope.captureToken().current()).toBe(true);
+});

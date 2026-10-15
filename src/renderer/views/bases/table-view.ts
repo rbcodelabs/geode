@@ -1,4 +1,6 @@
 import { isPausedBaseEditAttempt, isPausedBaseEditError, type BaseSyncFocusReceipt } from "./paused-edit";
+import type { RenderScope } from "../../workspaces/render-ownership";
+import { bindSourceControlNavigation, type SourceOwnedNavigation } from "../../markdown/source-owned-navigation";
 import type { App } from "../../app";
 import { valueToDisplayString } from "../../bases/coerce";
 import type { BaseDefinition } from "../../bases/base-file";
@@ -63,6 +65,7 @@ export class BasesTableView {
   private editSession: { pos: GridPos; token: object | void; input: HTMLInputElement; cell: HTMLTableCellElement } | null = null;
   private guardFocus: { mark(event: FocusEvent): void; attempt(promise: Promise<void>): ((error: unknown) => void) | undefined } | null = null;
   private mobileActionsEl: HTMLElement | null = null;
+  private mobileNavigationCleanup?: () => void;
   private mobileEditorActionsEl: HTMLElement | null = null;
   private readonly resultLimitEl: HTMLElement | null;
   private readOnly = false;
@@ -70,7 +73,9 @@ export class BasesTableView {
 
   constructor(
     private app: App,
-    private callbacks: TableViewCallbacks
+    private callbacks: TableViewCallbacks,
+    private navigation?: SourceOwnedNavigation,
+    private navigationOrigin?: RenderScope
   ) {
     this.containerEl = document.createElement("div");
     this.containerEl.className = "bases-table-container";
@@ -351,7 +356,8 @@ export class BasesTableView {
       e.stopPropagation();
     });
     if (document.body.classList.contains("is-mobile")) {
-      this.mobileActionsEl?.remove();
+      this.cancelNavigation();
+    this.mobileActionsEl?.remove();
       const actions = document.createElement("div");
       actions.className = "bases-mobile-editor-actions";
       const save = document.createElement("button");
@@ -395,6 +401,7 @@ export class BasesTableView {
     this.editSession = null;
     this.activeCell = null;
     this.selection = { type: "none" };
+    this.cancelNavigation();
     this.mobileActionsEl?.remove();
     this.mobileActionsEl = null;
     this.mobileEditorActionsEl?.remove();
@@ -402,8 +409,11 @@ export class BasesTableView {
     this.readOnly = false;
   }
 
+  cancelNavigation(): void { this.mobileNavigationCleanup?.(); this.mobileNavigationCleanup = undefined; }
+
   private renderMobileActions(): void {
     if (!document.body.classList.contains("is-mobile") || !this.activeCell || this.editing) return;
+    this.cancelNavigation();
     this.mobileActionsEl?.remove();
     const actions = document.createElement("div");
     actions.className = "bases-mobile-cell-actions";
@@ -417,6 +427,7 @@ export class BasesTableView {
     open.type = "button";
     open.textContent = "Open row";
     open.setAttribute("aria-label", "Open selected row");
+    if (this.navigation) this.mobileNavigationCleanup = bindSourceControlNavigation(open, this.navigation, () => ({ kind: "file", file: this.currentFile(this.activeCell!), newTab: false }), this.navigationOrigin);
     open.addEventListener("click", () => this.activeCell && this.callbacks.onOpenFile(this.currentFile(this.activeCell), false));
     actions.append(edit, open);
     this.containerEl.appendChild(actions);

@@ -1,4 +1,5 @@
 import type { BaseSyncFocusReceipt } from "./views/bases/paused-edit";
+import { SourceNavigationEffectFailure, type SourceNavigationRequest } from "./markdown/source-owned-navigation";
 import { ScopeCancelled } from "./workspaces/render-ownership";
 import { Vault } from "./vault";
 import { PostApplyRefresh } from "./sync/post-apply-refresh";
@@ -5262,6 +5263,65 @@ export class App {
     }
   }
 
+  /** Private native-origin route. The source queue owns the intent, never its child render scope. */
+  async navigateFromSource(request: SourceNavigationRequest, sourceLeaf: WorkspaceLeaf, validate: () => void): Promise<void> {
+    const vault = this.vault, root = vault.root;
+    const current = () => {
+      if (this.vault !== vault || vault.root !== root) throw new ScopeCancelled();
+      validate();
+    };
+    return sourceLeaf.runDocumentNavigation(async () => {
+      let effectsStarted = false;
+      try {
+        current();
+        let file: TFile | null;
+        let subpath = "";
+        if (request.kind === "file") file = request.file;
+        else {
+          file = this.metadataCache.getFirstLinkpathDest(request.linktext, request.sourcePath);
+          const hash = request.linktext.indexOf("#");
+          if (hash !== -1) subpath = request.linktext.slice(hash);
+          if (!file) {
+            const name = request.linktext.split("#")[0].trim();
+            if (!name) return;
+            current();
+            effectsStarted = true;
+            file = await vault.create(vault.availablePath("", name, "md"), "");
+            current();
+          }
+        }
+        if (vault.getFileByPath(file.path) !== file) throw new ScopeCancelled();
+        const offset = subpath ? await this.resolveSubpathOffset(file, subpath) : null;
+        current();
+        if (vault.getFileByPath(file.path) !== file) throw new ScopeCancelled();
+        const supported = file.extension === "canvas" || file.extension === "base" || file.extension === "md" || IMAGE_EXTENSIONS.has(file.extension);
+        if (!supported) {
+          // HTML and unsupported types retain their existing behavior after source validation.
+          effectsStarted = true;
+          await this.openFile(file, request.newTab, sourceLeaf);
+          return;
+        }
+        const existing = !request.newTab ? this.workspace.findLeafForFile(file.path) : null;
+        effectsStarted = true;
+        const destination = existing ?? this.workspace.getLeaf(request.newTab, undefined, sourceLeaf);
+        if (existing) existing.group.setActiveLeaf(existing);
+        else await this.openFileInLeaf(destination, file, true, destination === sourceLeaf);
+        // Source replacement is now intentional; subsequent checks belong to the destination.
+        if (this.vault !== vault || vault.root !== root || destination.view?.getFile?.() !== file) throw new ScopeCancelled();
+        const destinationView = destination.view;
+        if (!existing && this.workspace.getActiveLeaf() !== destination) destination.group.setActiveLeaf(destination);
+        if (this.vault !== vault || destination.view !== destinationView || destination.view?.getFile?.() !== file) throw new ScopeCancelled();
+        if (offset !== null && destination.view instanceof MarkdownView) {
+          const view = destination.view;
+          await view.scrollToOffsetAsync(offset);
+          if (this.vault !== vault || destination.view !== view || view.file !== file) throw new ScopeCancelled();
+        }
+      } catch (error) {
+        if (effectsStarted && !(error instanceof SourceNavigationEffectFailure)) throw new SourceNavigationEffectFailure(error);
+        throw error;
+      }
+    });
+  }
   /**
    * `sourceLeaf` is the pane holding the document the link was clicked in.
    * Every in-app link handler that knows its own leaf passes it, so the

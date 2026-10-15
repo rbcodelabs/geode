@@ -1,3 +1,4 @@
+import { SourceOwnedNavigation } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, RenderScope, type RenderToken } from "../workspaces/render-ownership";
 import { Compartment, EditorSelection, EditorState, Prec } from "@codemirror/state";
 import {
@@ -118,9 +119,27 @@ export class MarkdownView implements View {
   private readingRefreshInFlight: Promise<void> | null = null;
   private retiredProjectionPending = false;
   readonly renderOwner: RenderScope;
+  readonly sourceNavigation: SourceOwnedNavigation;
   constructor(private app: App, parentOwner?: RenderScope) {
     const options = { writer: this, preflightClose: () => this.assertNativeCloseReady(), prepareClose: () => this.prepareCloseNative(), validateClose: () => this.validateRecoveryReceipt(), failureKey: "markdown-save", close: () => this.closeNative(), resume: () => this.resumeOwnedRendering() };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
+    this.sourceNavigation = new SourceOwnedNavigation({
+      capture: () => {
+        const leaf = this.ownLeaf(), file = this.file, editor = this.editor, mode = this.mode;
+        const vault = app.vault, root = vault.root, generation = this.transitionGeneration, text = this.getText();
+        if (!leaf) throw new ScopeCancelled();
+        return () => {
+          if (this.ownLeaf() !== leaf || leaf.view !== this || app.vault !== vault || vault.root !== root || this.file !== file ||
+            this.editor !== editor || this.mode !== mode || this.transitionGeneration !== generation || this.getText() !== text) throw new ScopeCancelled();
+        };
+      },
+      preflight: () => this.preflightReplacement(),
+      execute: (request, validate) => {
+        const leaf = this.ownLeaf(); if (!leaf) throw new ScopeCancelled();
+        return app.navigateFromSource(request, leaf, validate);
+      },
+      notify: message => app.notify(message),
+    });
     this.containerEl = document.createElement("div");
     this.containerEl.className = "markdown-view";
     this.headerEl = document.createElement("div");
@@ -363,7 +382,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
+            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
@@ -821,7 +840,7 @@ export class MarkdownView implements View {
   }
 
   private editingExtensions(mode: MarkdownMode) {
-    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
+    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
   }
 
   private changeMode(desired: MarkdownMode): Promise<void> {
@@ -880,7 +899,7 @@ export class MarkdownView implements View {
       if (props && Object.keys(props).length) inner.appendChild(renderProperties(props));
     }
     const contentEl = document.createElement("div"); this.readingContentEl = contentEl; inner.appendChild(contentEl);
-    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf(), this.readingProjection ?? undefined);
+    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf(), this.readingProjection ?? undefined, this.sourceNavigation);
   }
 
   /** Public-compatible adapter; native callers await the internal promise. */
