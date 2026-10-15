@@ -16,7 +16,7 @@ test("production native child navigation refuses before incidental draft blur", 
     "Source.md": source,
     "Other.md": "# Destination\n",
     "Outer.md": outer,
-    "Host.md": "# Native child navigation\n\nAn authored paragraph separates this link from the Canvas controls.\n\n[[Other]]\n\n![[Tasks.base]]\n",
+    "Host.md": "# Native child navigation\n\n![[Tasks.base]]\n\nAn authored paragraph separates this link from the table controls.\n\n[[Other]]\n",
     "Tasks.base": "views:\n  - type: table\n    name: Table\n    order:\n      - file.name\n      - note.priority\n",
     "Board.canvas": JSON.stringify({ nodes: [{ id: "owned", type: "file", x: 0, y: 0, width: 760, height: 600, file: "Host.md" }], edges: [] }),
   };
