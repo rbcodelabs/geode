@@ -823,7 +823,9 @@ export class MarkdownView implements View {
 
   /** Internal sidebar mutation seam; all edits use the normal editor undo/autosave. */
   canApplySourceEdit(options: { allowReading?: boolean } = {}): boolean {
-    return !!this.editor && !this.vaultSwitching && !this.conflictReadOnly && (this.mode !== "reading" || options.allowReading === true);
+    return !!this.editor && !this.vaultSwitching && !this.autosavePaused && !this.transitionClosing &&
+      !this.bodyEl?.inert && (!this.renderOwner || this.renderOwner.admissionAllowed) &&
+      !this.conflictReadOnly && (this.mode !== "reading" || options.allowReading === true);
   }
 
   applySourceEdit(snapshot: string, from: number, to: number, insert: string, options: { allowReading?: boolean } = {}): boolean {

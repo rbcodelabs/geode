@@ -1,0 +1,282 @@
+{
+  "baseline": "fe659b18d36245d23137c054d16a935cf2503f4f",
+  "preparation": "2e1b066f7231e08f5f6acb9d329f99e6284d17ac",
+  "notice": "Explicit cherry-pick provenance; not a test or parity claim. Original refs unchanged.",
+  "commits": [
+    {
+      "original": "27fea598d49151c67ada858f3284128cab63c9bf",
+      "integrated": "a736d67c4a115cd97a35b740f48b5637daf8b483",
+      "subject": "feat: add bounded named-layout storage and manager components"
+    },
+    {
+      "original": "733c31cff988d99deb5df65a513c7767b8e8cec0",
+      "integrated": "8caddd4ca24612c1bb0f7d970537665a233378a7",
+      "subject": "fix: bound named workspace storage by UTF-8 bytes"
+    },
+    {
+      "original": "46b9649c87aef5e621230297827ee300640ef349",
+      "integrated": "65ff06b2a4856d193330904dbdb3d00cde151536",
+      "subject": "feat: track native render ownership and awaited close barriers"
+    },
+    {
+      "original": "2209ddd34bae7ff012d972e02b22cb79fd999940",
+      "integrated": "bda4cbff9601820cbae1fa8ba1fd9ed181f2af25",
+      "subject": "fix: retain failed root teardown and serialize ownership holds"
+    },
+    {
+      "original": "ce1e1b0c70bdc6bcaceccb789324227e383ab6f5",
+      "integrated": "0e74d020806b7dd5f3bfdf28c019b3c27644a472",
+      "subject": "fix: preserve failed teardown state and resume every retained owner"
+    },
+    {
+      "original": "a5cfb352ca18c6f3b5aecb09e836b6b0bac02261",
+      "integrated": "44b9f4596099b2d7a7ca0de864b50077bc17a49e",
+      "subject": "feat: register native embedded writers with awaited ownership scopes"
+    },
+    {
+      "original": "038a3f53a835728ca3c31ef52c74b400fedf9b1e",
+      "integrated": "c26c9067d99b7b9e4bfc664250fc2b99e32b6be9",
+      "subject": "fix: dispose Canvas text render ownership on redraw"
+    },
+    {
+      "original": "1fec0de45b249f0f261ea8c234ae8c5a4fd2f8d4",
+      "integrated": "e0660b531741930bb9c19fc700723029a8b91bd3",
+      "subject": "fix: preserve recoverable native write failures until explicit retry"
+    },
+    {
+      "original": "8aba29165f69d60e0b901374f9e56dc2b7594772",
+      "integrated": "e5e78bbe98f3826e09c3d91347bcda5982dc38fa",
+      "subject": "fix: prepare native writers before teardown and track every mutation path"
+    },
+    {
+      "original": "89de61cd3ca4125716ed7b0b582c1202aa9433d7",
+      "integrated": "95bd94ae5ceb983bbec06cbbc965be86515cce65",
+      "subject": "fix: restore reachable native recovery controls after close aborts"
+    },
+    {
+      "original": "6e09dd6e4e0c20881e85af92bed5799224ebae13",
+      "integrated": "c4b5c293ec68bf7fa55491f563a72f43dd6f85f2",
+      "subject": "fix: update Base status after acknowledged definition retry"
+    },
+    {
+      "original": "2d9c984564abbf0b1e76e99523d591f75bb25818",
+      "integrated": "e6df2c9c6f1caa32e95817f7ef674255253f5cbf",
+      "subject": "test: exercise Markdown conflict banner through native lifecycle methods"
+    },
+    {
+      "original": "eff2920c6b92ee6dfb43ebdaf92fa92b74c33155",
+      "integrated": "efd0a50428c5597af7d734e82c3955ecb8459a30",
+      "subject": "fix: preserve native embedded input events inside Canvas nodes"
+    },
+    {
+      "original": "7b72ea5d1b3c33358082de6eacdc0233b31e45ad",
+      "integrated": "da4218efd0db189acbd1b2e906fb9686701771e6",
+      "subject": "fix(canvas): retain whole node presentations during geometry redraws"
+    },
+    {
+      "original": "05ed4a2f05a282ba573498aab3916154492e812b",
+      "integrated": "23281b2c48de6e622cee48fa449b789c46380b23",
+      "subject": "fix(render): prepare affected native subtrees before retirement"
+    },
+    {
+      "original": "8c64f71b84b85ff8d5000ea80a307b872e81a2ba",
+      "integrated": "993915dd2bc032ad4d3285a59d6fc9d2cd51ed21",
+      "subject": "fix(canvas): stage native card replacement before model mutations"
+    },
+    {
+      "original": "b2912a546049858bd59afe1764a5f2a352a93739",
+      "integrated": "c560d33a735b9b27eb7806b16bcaec9fae2cb1ba",
+      "subject": "fix(canvas): bind staged requests and history to current interaction state"
+    },
+    {
+      "original": "2a0c6f437964e59de4b3e43aaa022956bf9ac99f",
+      "integrated": "91a28e3ee4ac416eef75547eedac4fa5d7dca528",
+      "subject": "fix(canvas): gate touch admission during native retirement"
+    },
+    {
+      "original": "0812f0cdf00e60224dc83e72c836e057646429c8",
+      "integrated": "227b21a241f2d4e8cdcced43bcc136c1605784d8",
+      "subject": "fix(bases): preserve explicit row retry across focus transfer"
+    },
+    {
+      "original": "7e66f7b5bdeca278786853af7955d05c36a2ff52",
+      "integrated": "cc41e1406f9b0fe91f9ba34cfca4c55e3fd63d49",
+      "subject": "fix(canvas): keep superseded history projections inert"
+    },
+    {
+      "original": "6a09a349f7dc02cc13ac4ff043b706e7cf81da2d",
+      "integrated": "06f023263dded2e03c73a8f4034e5a2e39f976f9",
+      "subject": "fix(bases): preserve edit sessions across async writes and refreshes"
+    },
+    {
+      "original": "5bc0ac14036a821de95784d42b9b9393d8f7042e",
+      "integrated": "79a425e637206a92ff4a354749a4c06198522b5c",
+      "subject": "fix(bases): reject stale input events and preserve read-only state"
+    },
+    {
+      "original": "1dc7e0a79ec9397ecf047cb74663a49434f31969",
+      "integrated": "7ddb84c6d5b358ed96ae449848aadba49be71b15",
+      "subject": "fix(bases): recover row saves by exact target and failure snapshot"
+    },
+    {
+      "original": "5c1dff270e8dfafcf7e2db898060bfa5b4bafc2e",
+      "integrated": "5c268fc9eb5cc7e9f185ec94fe77389b752a583e",
+      "subject": "fix: serialize shared frontmatter read-modify-write operations"
+    },
+    {
+      "original": "190ef7e0c2859b81f27fc359901ab19e9ba267fc",
+      "integrated": "8cec264c674fd6724f42081efc342a647667a040",
+      "subject": "fix: preserve nested Base pointer target during table focus"
+    },
+    {
+      "original": "8295f6af5e2ded4aac302eac7e0975af76ea3eee",
+      "integrated": "886b32db02170e2379d6dfdc276e2a67f80e120a",
+      "subject": "docs: record real pointer evidence for Base entry correction"
+    },
+    {
+      "original": "0bd0d5dc81949793206eb8c3f776b4fa4deddd00",
+      "integrated": "4ca2245f3dd4fa73f6ef023b30eeebc446d19058",
+      "subject": "docs: preserve inspected Base recovery UI evidence"
+    },
+    {
+      "original": "db4009d870b0c3e4c9f3483c4f662f4ae2d3e1cc",
+      "integrated": "939049da8ed87630bd2c2b93e6fd56aac27f3536",
+      "subject": "fix: validate complete native retirement before destruction"
+    },
+    {
+      "original": "982f85d97014869724c44ebfa24f8e3114458c43",
+      "integrated": "c9c35b112939fc6dc398253e49901c32ad0a9179",
+      "subject": "fix: preserve native drafts across explicit Markdown replacement"
+    },
+    {
+      "original": "c0e7e5eb9c9d89ba0a0d61e95bada38ba0d56ffb",
+      "integrated": "377809ffdd19e9a46ad86c74256ac8ff2d878b60",
+      "subject": "fix: distinguish autosave holds from vault retirement"
+    },
+    {
+      "original": "49a29e05cb0e4554fcb56b5d800c4921c06a9c15",
+      "integrated": "645ef977d6f32329ed42ca521cdb7d263e68b0ff",
+      "subject": "test: verify Markdown draft and recovery retirement in Electron"
+    },
+    {
+      "original": "f3d790e9ee71a893797392b63ac3611312710335",
+      "integrated": "18a14c39f2f5bfa50fc58342e07b0a68e8a80f55",
+      "subject": "feat: add bounded PDF parsing and isolation foundations"
+    },
+    {
+      "original": "b39963bbfbe7b0236e50d0e184b2b02eefe0bc70",
+      "integrated": "aac3a5bdc790c39c47001a0b532d52a99f2b2764",
+      "subject": "test: validate PDF handshake and prepare real isolation proof"
+    },
+    {
+      "original": "7022b6c3f21bdf980c7c1e4d8b08fdd871ea6eba",
+      "integrated": "6a17fbd4ac07e7cb0575f7afb0fea3e265f469e4",
+      "subject": "feat: bound PDF admission and native read capability"
+    },
+    {
+      "original": "3167e6892bfbc0a7db0df22251b8af4d5be91aca",
+      "integrated": "1e85d4dae1a08565d24c166c09affee18b677bad",
+      "subject": "test: bind PDF codec proof to independent color oracle"
+    },
+    {
+      "original": "56399167a33549473de75dc8a2297b96a1e99518",
+      "integrated": "6e110b85920a9ac422c6a8c12e998273824e6f70",
+      "subject": "docs: capture verified isolated PDF engine output"
+    },
+    {
+      "original": "4dcb605fd2a128b10af9dbbc9f8342fcf975575c",
+      "integrated": "56ce604f3b4ca8cfba6ada97303f866ca93e0557",
+      "subject": "feat: connect authorized desktop PDF resources"
+    },
+    {
+      "original": "f1dd5fe507300664a6c60586885f4c9ac3db3fce",
+      "integrated": "724bc967ab78a79ab83c0753f1403f795b6493b6",
+      "subject": "feat(pdf): add isolated read-only PDF tabs and owned cancellation"
+    },
+    {
+      "original": "32fdebd69f26bada43de502b96da3363381528db",
+      "integrated": "9b8eab30be3595b9993c088b738c3d84b27d5009",
+      "subject": "fix(pdf): recover restored views and resumed ownership state"
+    },
+    {
+      "original": "b19190a1372f53d683cc4bbeb95cc0897d5663fe",
+      "integrated": "e59b9f96b90a42f54c97206965f60930cec0aed2",
+      "subject": "fix(pdf): start frames after tab mount and observe vault event failures"
+    },
+    {
+      "original": "0a82b663c807eed72a5e5e02e0f8f4f794cdba98",
+      "integrated": "04d581d188dcf539c29885f1b3f5544158675f9c",
+      "subject": "fix(pdf): resume only interrupted owned initialization"
+    },
+    {
+      "original": "1980cc3e966d34c348585f8b31c77c0c013fef0c",
+      "integrated": "36ea220242684188f0935a08ff499394e2730653",
+      "subject": "fix(pdf): retire undecoded frames on resume and follow theme changes"
+    },
+    {
+      "original": "d40ba354a05bea982475fb7c2293f6e84321aa35",
+      "integrated": "5901c1a9edaa1f53bdf3289fecf66492c396fdca",
+      "subject": "docs(pdf): record actual tab selection evidence and pending restoration"
+    },
+    {
+      "original": "73e340ad32f2316918837faced196b9a13f71709",
+      "integrated": "928fd4f0c54d9de415c4b1b91193a5f4db8eb07a",
+      "subject": "fix(pdf): ignore height-only viewport changes during fit rendering"
+    },
+    {
+      "original": "5e236314f108589623c275f800a67589e83c3421",
+      "integrated": "2331842ad897e7f3652bbf4ab315b9f15dd8dcf7",
+      "subject": "test(pdf): use supported app theme identifier"
+    },
+    {
+      "original": "e20dc081db026ba3a7f75d28312730689638c98f",
+      "integrated": "6459e07e0132c4795dee44fa95a9ddb8e1b98780",
+      "subject": "test(pdf): pin desktop-only CSP and actual lifecycle evidence"
+    },
+    {
+      "original": "4a45db21759264fcf95307e54f698a8d2a4398ba",
+      "integrated": "19d9db7720694a340656e833263852a462ab43c4",
+      "subject": "docs(pdf): preserve actual product captures and narrow-input finding"
+    },
+    {
+      "original": "398693cab2a1f52fb6aa53cbeabdbb9a8b8785f4",
+      "integrated": "fc5adb39a6d591f2e0a02cf0187f5b0748ddf00f",
+      "subject": "fix(pdf): keep narrow page input visible and witness held messages"
+    },
+    {
+      "original": "cf75d6271887128fd773caa82467001fe8c941a4",
+      "integrated": "8c4126f07e108e349e577d74235bd15778c83d83",
+      "subject": "docs(pdf): record final tab UI verification and scoped limits"
+    },
+    {
+      "original": "a0adc2b3fe5809c3b792fb4896645eae27311abd",
+      "integrated": "0bf8f2565d5d86d0e1310acc2e7360a80d694f11",
+      "subject": "docs(editor): carry accepted core preparation boundaries"
+    },
+    {
+      "original": "10e703aeb8b072c71a7672d34e5b8b5b9b5dcf0c",
+      "integrated": "dbdbfe0829315b96b6449d7655205207571aa9f7",
+      "subject": "feat(editor): prepare unwired owned core adapter with state tests"
+    },
+    {
+      "original": "0c8f4d7985c94a99bbbb243598f80674a13cd1c2",
+      "integrated": "a079cb28cf8541463f6b1a09cc58a4bc130a0fe7",
+      "subject": "docs: clarify Editor preparation and legacy dispatch boundaries"
+    },
+    {
+      "original": "8fcbbaa22130a6fc6515559a9cabf4d36d29d033",
+      "integrated": "71e6081eb0a81fc8b13507f09f1121980c785834",
+      "subject": "test: prove preview cleanup through actual renderer child lifetimes"
+    },
+    {
+      "original": "c4ac07b656e07b3f8db4a6d54de2c41d4974998b",
+      "integrated": "d1f77a8e0b96bf5e7756445d3647519bf3cdd640",
+      "subject": "test: probe preview blob resources through permitted image decoding"
+    },
+    {
+      "original": "f232bc7b7fb35ff32633f4382a1aebce34777999",
+      "integrated": "962742e5a0168790aa86e87ee9a5fe4ad763cdbd",
+      "subject": "test: retain failures arriving after retry admission"
+    }
+  ]
+}
