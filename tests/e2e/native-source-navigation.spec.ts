@@ -64,6 +64,26 @@ test("production native child navigation refuses before incidental draft blur", 
       };
     });
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(source);
+    const wheelPoint = await input.evaluate(el => {
+      const rect = el.getBoundingClientRect(), point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      const owned = document.elementFromPoint(point.x, point.y) === el;
+      (window as any).__sourceNavigation.wheel = { point, owned }; return { point, owned };
+    });
+    expect(wheelPoint.owned, "The one ordinary wheel must target the actual visible native input").toBe(true);
+    await phase("before-trusted-wheel");
+    const panBefore = await page.evaluate(() => (window as any).__sourceNavigationPhases.at(-1).camera.pan.y);
+    await page.mouse.move(wheelPoint.point.x, wheelPoint.point.y);
+    await page.mouse.wheel(0, 120);
+    await expect.poll(() => page.evaluate(() => {
+      const owner = (window as any).__sourceNavigation.owner;
+      return owner.view.renderOwner.writers().find((writer: any) => writer.viewType === "canvas").pan.y;
+    })).not.toBe(panBefore);
+    await phase("after-trusted-wheel");
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(source);
+    expect(await page.evaluate(() => {
+      const p = (window as any).__sourceNavigation;
+      return { connected: p.input.isConnected, value: p.input.value, blur: p.blur, focused: document.activeElement === p.input };
+    })).toEqual({ connected: true, value: "9", blur: 0, focused: true });
     const link = root.locator('a.internal-link[data-href="Other"]');
     await expect(link).toHaveCount(1);
     const hit = await link.evaluate(el => {
@@ -91,7 +111,7 @@ test("production native child navigation refuses before incidental draft blur", 
   } finally {
     const state = await page.evaluate(() => {
       const p = (window as any).__sourceNavigation; if (!p) return null;
-      return { phases: (window as any).__sourceNavigationPhases, hit: p.hit, actualClick: p.actualClick, attempted: p.attempted, settled: p.settled, sourceLeafId: p.sourceLeafId, blur: p.blur,
+      return { phases: (window as any).__sourceNavigationPhases, wheel: p.wheel, hit: p.hit, actualClick: p.actualClick, attempted: p.attempted, settled: p.settled, sourceLeafId: p.sourceLeafId, blur: p.blur,
         inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected,
         sameParent: p.root.parentElement === p.parent, ownerFile: p.owner.view.getFile()?.path };
     }).catch(() => null);
