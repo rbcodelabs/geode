@@ -158,3 +158,112 @@ Markdown→Canvas→Markdown→Base and direct Live Preview Canvas; widget destr
 plus owner drain closing once; active drafts/conflicting buffers/recovery refusing
 before teardown; abort resuming retained controls only; real Electron nested edits
 surviving load with no obsolete subsequent writes.
+
+## Addendum: Canvas redraw must preserve connected embedded editors
+
+**Date:** 2026-10-15
+**Status:** Proposed for root acceptance before redesign
+
+### Evidence and problem
+
+At native checkpoint 8aba291, Canvas `render()` starts asynchronous Markdown
+disposal, clears its tracking collection, and immediately replaces the viewport
+DOM. It runs during each node-drag frame as well as ordinary edits. An embedded
+Base's close preflight can refuse an active cell draft, but that refusal occurs
+after its controls have disappeared. Retaining a failed scope in memory does not
+preserve a usable editor or Retry button. Blur might instead commit an edit during
+removal, which is not a valid substitute for checking readiness.
+
+Related paths also need the boundary: editing a Canvas text node replaces its
+Markdown container with a textarea; deleteSelection mutates the document before
+rendering; load and history restoration replace the document before redraw.
+Fixing only final view close or adding an await after those mutations is too late.
+Constructor-double renderer tests do not establish this real interaction.
+
+### Options considered
+
+| Option | Benefit | Tradeoff |
+|---|---|---|
+| Retain unchanged node presentations; prepare destructive changes before commit (recommended) | Keeps focused nested editors, drafts and gesture responsiveness | Keyed reconciliation plus a bounded destructive-change transaction |
+| Await teardown before every complete redraw | Straightforward ownership sequence | Turns synchronous drag rendering into repeated asynchronous save/teardown; risks gesture, ordering and performance regressions |
+| Refuse redraw and expose recovery | Safe only if checked before model mutation | A check inside render after callers mutate the document leaves model/UI/history inconsistent; not sufficient alone |
+
+### Recommended contract
+
+Keep the existing connected node wrapper, Markdown render root and owned scope
+when the same node object/ID and presentation inputs remain valid. Update geometry,
+selection, layering and edges without destroying or detaching that subtree. Do not
+move focused editor DOM through a detached fragment: focus/blur and native state
+must remain intact. Rebuild edge geometry separately from owned Markdown content.
+This preserves current synchronous pointer/touch preview behavior and avoids
+creating native render scopes on every drag frame.
+
+A presentation identity includes Canvas owner/file context, node kind, source
+text or target file/subpath, and any input affecting the embedded document. Do not
+reuse event handlers that capture an obsolete node object after document reload or
+undo replaces objects; treat that as a destructive replacement unless handlers are
+explicitly rebound to the current node. Keep pending mounts registered under the
+presentation from allocation, including detached initial mount.
+
+Changing/removing a presentation, entering Canvas text-source editing, changing
+file/target, document reload/recovery, history replacement and owner retirement
+use an internal staged transaction. Before changing authoritative document state,
+undo/redo stacks, selection, persisted bytes or connected DOM:
+
+1. Capture owner/generation, the intended change and affected presentation scopes.
+   Preflight all affected descendants before any blur/inert change can commit or
+   discard a draft. An active embedded draft/recovery refuses the action with its
+   original controls connected and a visible Finish/Cancel/Retry explanation.
+2. Stop new affected operations and settle pending mounts/writes. Prepare every
+   affected subtree before running any destructor across the set. Reuse the
+   accepted internal preparation contract; do not close one sibling and discover
+   another sibling's draft afterwards. Ordinary selection/geometry changes do not
+   need this transaction when they preserve the presentation.
+3. On pre-destructor failure, retain the entire original document/UI/undo state,
+   restore allowed admission and publish reachable recovery controls. Existing
+   authorized writes may have completed; keep their acknowledgements and never
+   revert a file by writing a stale preimage. Do not clear an error merely because
+   a scope or DOM element was removed from an inventory.
+4. Once preparation succeeds, close retired presentations exactly once, then
+   commit the staged document/render/history operation through its existing save
+   path. A partial destructor failure remains explicitly fail-closed with visible
+   recovery; do not falsely restore admission or claim an atomic rollback of
+   destroyed descendants. Retained presentations remain connected.
+
+Serialize destructive transactions per Canvas owner and reject or coalesce stale
+requests without executing their captured callbacks later. Capture file identity
+and generations across awaits. For drag operations that can remove/change source,
+preflight before the gesture mutates the model; ordinary move/resize stays an
+in-place preview with its original one-save/undo boundary. Preserve conversion's
+created-note recovery path rather than repeating or deleting a successful create.
+
+`MarkdownRenderer.dispose()` can remain a synchronous compatibility entry point
+that starts tracked teardown. Native Canvas code must use an internal awaitable
+owned-presentation boundary before detaching DOM. Do not infer success from the
+void compatibility method, remove a failed scope from tracking, or duplicate
+independent onClose calls. No new plugin-facing API is required.
+
+### Acceptance and limits
+
+- Real Electron: Canvas text node and file-note node each contain a Base. Type an
+  uncommitted cell draft, then trigger a geometry-only redraw. The same embedded
+  editor remains connected with the exact draft; redraw itself causes no blur or
+  source write. Exercise node move/resize too, preserving ordinary user-initiated
+  focus/blur semantics rather than requiring focus to stay in two controls.
+- Delete/edit/replace the affected node, reload the Canvas or invoke undo while
+  that draft/recovery is active. The action refuses before model/selection/undo/
+  disk mutation; the draft's real Finish/Cancel/Retry control remains reachable.
+- Delay and reject Base definition/row writes during a destructive operation.
+  Old DOM remains until preparation succeeds; failure retains usable controls;
+  explicit retry succeeds without duplicate writes or clearing unrelated errors.
+- Race a late note/Base/Canvas mount against deletion, text editing and close.
+  No late publication, detached retained owner, double close or leaked scope.
+- Verify the whole Markdown→Canvas→Markdown→Base chain, repeated redraw counts,
+  pointer/touch/group/edge behavior, text edit cancel, conversions, history and
+  exact serialized bytes/undo boundaries with existing Canvas regression suites.
+
+The riskiest assumption is complete classification of presentation-changing
+paths among Canvas's many synchronous mutations. Review an explicit call-site
+inventory before claiming this boundary complete. If one path cannot stage safely,
+refuse that operation before mutation and document the partial support. This is a
+native lifecycle prerequisite, not completed named-workspace parity.

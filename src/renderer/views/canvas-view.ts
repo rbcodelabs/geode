@@ -108,6 +108,9 @@ export class CanvasView implements View {
   private readonly pendingConversionNames = new Map<string, string>();
   private pendingHistory: "undo" | "redo" | null = null;
   private renderVersion = 0;
+  private readonly nodePresentations = new Map<string, { node: CanvasNode; signature: string; el: HTMLElement; version: number }>();
+  private readonly presentationUrls = new Map<HTMLElement, Set<string>>();
+  private edgesEl: SVGSVGElement | null = null;
   private selectionControlsEl: HTMLElement | null = null;
   private colorPaletteEl: HTMLElement | null = null;
   private edgeLabelEditorEl: HTMLInputElement | null = null;
@@ -227,6 +230,8 @@ export class CanvasView implements View {
     this.loadGeneration += 1;
     this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
+    this.nodePresentations.clear();
+    this.edgesEl = null;
     this.disposeMarkdownContents();
     this.revokeObjectUrls();
     for (const cleanup of this.touchCleanups.splice(0)) cleanup();
@@ -315,6 +320,8 @@ export class CanvasView implements View {
     this.spacePressed = false;
     this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
+    this.nodePresentations.clear();
+    this.edgesEl = null;
     this.disposeMarkdownContents();
     this.revokeObjectUrls();
     this.selectionControlsEl?.remove();
@@ -345,9 +352,16 @@ export class CanvasView implements View {
     if (this.recoveryError !== null) return;
     this.edgeLabelEditorCancel?.();
     const version = ++this.renderVersion;
-    this.disposeMarkdownContents();
-    this.revokeObjectUrls();
-    this.viewportEl.innerHTML = "";
+    // Keep unchanged wrappers connected: moving them through a fragment or
+    // appending them again can blur an embedded native editor.
+    const nodesById = new Map(this.document.nodes.map(node => [node.id, node]));
+    for (const [id, presentation] of this.nodePresentations) {
+      const node = nodesById.get(id);
+      if (node === presentation.node && this.presentationSignature(node) === presentation.signature) continue;
+      this.retirePresentation(presentation.el);
+      this.nodePresentations.delete(id);
+    }
+    this.edgesEl?.remove();
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("canvas-edges");
     svg.setAttribute("viewBox", "-100000 -100000 200000 200000");
@@ -367,9 +381,57 @@ export class CanvasView implements View {
     svg.appendChild(defs);
     for (const edge of this.document.edges) this.renderEdge(svg, edge);
 
+    this.edgesEl = svg;
     this.viewportEl.appendChild(svg);
-    for (const node of this.document.nodes) this.viewportEl.appendChild(this.renderNode(node, version));
+    for (const [index, node] of this.document.nodes.entries()) {
+      let presentation = this.nodePresentations.get(node.id);
+      if (!presentation) {
+        const el = this.renderNode(node, version);
+        presentation = { node, signature: this.presentationSignature(node), el, version };
+        this.nodePresentations.set(node.id, presentation);
+        this.viewportEl.appendChild(el);
+      }
+      const el = presentation.el;
+      Object.assign(el.style, { left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px`, height: `${node.height}px`, zIndex: String(index + 1) });
+      el.dataset.width = String(node.width);
+      el.dataset.height = String(node.height);
+      el.classList.toggle("is-selected", this.selectedIds.has(node.id));
+      delete el.dataset.canvasColor;
+      el.style.removeProperty("--canvas-node-color");
+      if (node.color && /^[1-6]$/.test(node.color)) el.dataset.canvasColor = node.color;
+      else if (node.color) el.style.setProperty("--canvas-node-color", node.color);
+    }
     this.updateSelectionControls();
+  }
+
+  private presentationSignature(node: CanvasNode): string {
+    const { x, y, width, height, color, ...source } = node;
+    return JSON.stringify([this.file?.path ?? "", source]);
+  }
+
+  private retirePresentation(el: HTMLElement): void {
+    for (const content of this.markdownContentEls) {
+      if (!el.contains(content)) continue;
+      this.app.markdownRenderer.dispose(content);
+      this.markdownContentEls.delete(content);
+    }
+    for (const url of this.presentationUrls.get(el) ?? []) {
+      URL.revokeObjectURL(url);
+      this.objectUrls.delete(url);
+    }
+    this.presentationUrls.delete(el);
+    el.remove();
+  }
+
+  private retainPresentationUrl(el: Element, url: string): void {
+    this.objectUrls.add(url);
+    for (const presentation of this.nodePresentations.values()) {
+      if (!presentation.el.contains(el)) continue;
+      let urls = this.presentationUrls.get(presentation.el);
+      if (!urls) this.presentationUrls.set(presentation.el, urls = new Set());
+      urls.add(url);
+      break;
+    }
   }
 
   private renderEdge(svg: SVGSVGElement, edge: CanvasEdge): void {
@@ -665,7 +727,7 @@ export class CanvasView implements View {
         URL.revokeObjectURL(url);
         return;
       }
-      this.objectUrls.add(url);
+      this.retainPresentationUrl(el, url);
       el.style.backgroundImage = `url(${JSON.stringify(url)})`;
       if (node.backgroundStyle === "repeat") {
         el.style.backgroundPosition = "left top";
@@ -738,13 +800,12 @@ export class CanvasView implements View {
    * even though nothing is connected yet, and nothing re-renders once the view
    * is finally attached, so dropping it left the card permanently blank.
    *
-   * Containment in the live viewport is the accurate test instead: every
-   * render replaces the viewport's children wholesale, so an element still
-   * inside it belongs to the current generation whether or not the view has
-   * reached the document.
+   * Containment plus the owning presentation generation remains accurate
+   * before the view is attached. Geometry redraws retain that generation;
+   * replaced presentations cannot publish through an old asynchronous callback.
    */
   private isLiveNodeRender(version: number, el: Element): boolean {
-    return version === this.renderVersion && this.viewportEl.contains(el);
+    return this.viewportEl.contains(el) && [...this.nodePresentations.values()].some(presentation => presentation.version === version && presentation.el.contains(el));
   }
 
   private renderFileNode(el: HTMLElement, node: Extract<CanvasNode, { type: "file" }>, version: number): void {
@@ -826,7 +887,7 @@ export class CanvasView implements View {
       URL.revokeObjectURL(url);
       return;
     }
-    this.objectUrls.add(url);
+    this.retainPresentationUrl(media, url);
     media.src = url;
   }
 
@@ -838,6 +899,7 @@ export class CanvasView implements View {
     }
     for (const url of this.objectUrls) URL.revokeObjectURL(url);
     this.objectUrls.clear();
+    this.presentationUrls.clear();
   }
 
   private editTextNode(el: HTMLElement, node: CanvasTextNode, isNew = false, rollbackNew?: () => void): void {
