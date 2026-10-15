@@ -3,7 +3,8 @@ export class ScopeCancelled extends Error {
   constructor() { super("The render owner changed before initialization completed."); }
 }
 export interface RenderFailure { error: unknown; key: string }
-interface ScopeOptions { writer?: unknown; preflightClose?(): void; prepareClose?(): Promise<void>; failureKey?: string; close?(): Promise<void>; resume?(): void; recover?(failures: readonly RenderFailure[]): void }
+interface ScopeOptions { writer?: unknown; preflightClose?(): void; prepareClose?(): Promise<void>; validateClose?(): Promise<void>; failureKey?: string; close?(): Promise<void>; resume?(): void; recover?(failures: readonly RenderFailure[]): void }
+export interface PreparedRetirement { readonly destructionStarted: boolean; commit(): Promise<void>; abort(): void }
 export interface RenderToken { current(): boolean; check(): void }
 function raise(errors: unknown[]): void {
   if (errors.length === 1) throw errors[0];
@@ -87,15 +88,30 @@ export class RenderScope {
     for (const child of this.children) child.recoverTree();
   }
   private async prepareCloseTree(): Promise<void> {
-    await this.drainTasks();
-    for (const child of this.children) await child.drain();
+    const drained = await Promise.allSettled([this.drainTasks(), ...[...this.children].map(child => child.drain())]);
+    raise(drained.flatMap(result => result.status === "rejected" ? [result.reason] : []));
     try { await this.options.prepareClose?.(); }
     catch (error) { if (this.options.failureKey) this.failures.push({ error, key: this.options.failureKey }); throw error; }
-    for (const child of this.children) await child.prepareCloseTree();
+    const prepared = await Promise.allSettled([...this.children].map(child => child.prepareCloseTree()));
+    raise(prepared.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+  }
+  private async validateCloseTree(): Promise<void> {
+    const validated = await Promise.allSettled([
+      Promise.resolve().then(() => this.options.validateClose?.()),
+      ...[...this.children].map(child => child.validateCloseTree()),
+    ]);
+    raise(validated.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+  }
+  private static async prepareForest(scopes: readonly RenderScope[]): Promise<void> {
+    const prepared = await Promise.allSettled(scopes.map(scope => scope.prepareCloseTree()));
+    raise(prepared.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+    const validated = await Promise.allSettled(scopes.map(scope => scope.validateCloseTree()));
+    raise(validated.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+    for (const scope of scopes) scope.preflightCloseTree();
   }
   private preflightCloseTree(): void { this.options.preflightClose?.(); for (const child of this.children) child.preflightCloseTree(); }
   /** Prepare the complete affected set before permitting its first destructor. */
-  static async prepareRetirement(affected: readonly RenderScope[]): Promise<{ commit(): Promise<void>; abort(): void }> {
+  static async prepareRetirement(affected: readonly RenderScope[]): Promise<PreparedRetirement> {
     const unique = new Set(affected);
     const scopes = [...unique].filter(scope => {
       for (let parent = scope.parent; parent; parent = parent.parent) if (unique.has(parent)) return false;
@@ -109,19 +125,24 @@ export class RenderScope {
       raise(errors);
     };
     try {
-      const results = await Promise.allSettled(scopes.map(scope => scope.prepareCloseTree()));
-      raise(results.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+      await RenderScope.prepareForest(scopes);
     } catch (error) {
       try { resume(); } catch (recoveryError) { throw new AggregateError([error, recoveryError], "Native retirement preparation and recovery failed."); }
       throw error;
     }
     let completion: Promise<void> | undefined;
     let aborted = false;
+    let destructionStarted = false;
     return {
-      abort: () => { if (!completion && !aborted) { aborted = true; resume(); } },
+      get destructionStarted() { return destructionStarted; },
+      abort: () => { if (!destructionStarted && !aborted) { aborted = true; resume(); } },
       commit: () => {
         if (aborted) return Promise.reject(new Error("This native retirement was canceled."));
-        return completion ??= (async () => { for (const scope of scopes) await scope.startClose(true); })();
+        return completion ??= (async () => {
+          for (const scope of scopes) scope.preflightCloseTree();
+          destructionStarted = true;
+          for (const scope of scopes) await scope.startClose(true);
+        })();
       },
     };
   }
@@ -130,15 +151,19 @@ export class RenderScope {
   private startClose(prepared: boolean): Promise<void> {
     if (this.closing) return this.closing;
     const previous = this.state;
+    if (!prepared) {
+      try { this.preflightCloseTree(); } catch (error) { return Promise.reject(error); }
+      this.freeze();
+    }
     this.state = "closed"; this.generation++;
     this.closing = Promise.resolve().then(async () => {
       const errors: unknown[] = [];
-      try { if (!prepared) { this.preflightCloseTree(); await this.prepareCloseTree(); } } catch (error) { errors.push(error); }
+      try { if (!prepared) await RenderScope.prepareForest([this]); } catch (error) { errors.push(error); }
       if (errors.length) {
         // No destructor has run: preserve the entire subtree and usable retry
         // controls. Ancestor admission still prevents detached children reopening.
-        this.state = previous; this.closing = undefined;
-        try { this.recoverTree(); } catch (error) { errors.push(error); }
+        this.state = "frozen"; this.closing = undefined;
+        try { if (previous === "active") this.resume(); else this.recoverTree(); } catch (error) { errors.push(error); }
         raise(errors);
       }
       if (!errors.length) for (const child of [...this.children]) {
