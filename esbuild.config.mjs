@@ -1,6 +1,6 @@
 import esbuild from "esbuild";
-import { copyFile, mkdir } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -68,7 +68,21 @@ const mobileBoundaryPlugin = {
   },
 };
 
+function pdfAssets() {
+  const root = path.dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));
+  return Object.fromEntries(Object.entries({ cMapUrl: "cmaps", standardFontDataUrl: "standard_fonts", wasmUrl: "wasm", iccUrl: "iccs" }).map(([kind, folder]) => [kind,
+    Object.fromEntries(readdirSync(path.join(root, folder)).filter(name => /\.(bcmap|pfb|ttf|wasm|icc)$/.test(name) && !name.includes("quickjs")).map(name => [name, readFileSync(path.join(root, folder, name)).toString("base64")]))
+  ]));
+}
 const builds = [
+  {
+    ...common, entryPoints: ["src/renderer/pdf/display-entry.ts"], outfile: "dist/pdf-display.mjs", platform: "browser", format: "esm",
+    define: { process: "undefined" },
+  },
+  {
+    ...common, entryPoints: ["src/renderer/pdf/worker-entry.ts"], outfile: "dist/pdf-worker.mjs", platform: "browser", format: "esm",
+    define: { __GEODE_PDF_ASSETS__: JSON.stringify(pdfAssets()) },
+  },
   {
     ...common,
     entryPoints: ["src/renderer/audio/pcm-capture-worklet.js"],
@@ -153,6 +167,14 @@ const builds = [
     format: "iife",
   },
 ];
+
+// The parser's binary/font data licenses ship alongside its private chunks.
+if (!process.argv.includes("--mobile-only")) {
+  const pdfRoot = path.dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));
+  const names = ["LICENSE", "cmaps/LICENSE", "standard_fonts/LICENSE_FOXIT", "standard_fonts/LICENSE_LIBERATION", "iccs/LICENSE", ...readdirSync(path.join(pdfRoot, "wasm")).filter(name => name.startsWith("LICENSE")).map(name => "wasm/" + name)];
+  await mkdir("dist", { recursive: true });
+  await writeFile("dist/pdf-licenses.txt", names.map(name => `=== pdfjs-dist/${name} ===\n${readFileSync(path.join(pdfRoot, name), "utf8")}`).join("\n\n"));
+}
 
 const selectedBuilds = process.argv.includes("--mobile-only")
   ? builds.filter((build) => build.entryPoints?.includes("src/renderer/mobile.ts"))
