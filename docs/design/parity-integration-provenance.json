@@ -1,0 +1,170 @@
+{
+  "notice": "Read-only object-database merge simulations; no source/index/ref integration performed. Pairwise only, not a jointly resolved or tested tree.",
+  "heads": {
+    "daily": "fe659b18d36245d23137c054d16a935cf2503f4f",
+    "entry": "0bd0d5dc81949793206eb8c3f776b4fa4deddd00",
+    "pdf": "cf75d6271887128fd773caa82467001fe8c941a4",
+    "editor": "10e703aeb8b072c71a7672d34e5b8b5b9b5dcf0c",
+    "preview": "c4ac07b656e07b3f8db4a6d54de2c41d4974998b",
+    "scope": "f232bc7b7fb35ff32633f4382a1aebce34777999"
+  },
+  "pairs": {
+    "daily+entry": {
+      "mergeBase": "b939adf1ac098c06ddb831e2e4102f01aef179f2",
+      "exitStatus": 1,
+      "output": "a79d13f986f103a128e506e7bbc2d93eef075976\nsrc/renderer/views/markdown-view.ts\n\nAuto-merging src/renderer/app.ts\nAuto-merging src/renderer/markdown/live-preview.ts\nAuto-merging src/renderer/views/markdown-view.ts\nCONFLICT (content): Merge conflict in src/renderer/views/markdown-view.ts\nAuto-merging src/renderer/workspace.ts\n",
+      "sharedChangedFiles": [
+        "src/renderer/app.ts",
+        "src/renderer/markdown/live-preview.ts",
+        "src/renderer/views/markdown-view.ts",
+        "src/renderer/workspace.ts"
+      ]
+    },
+    "daily+pdf": {
+      "mergeBase": "b939adf1ac098c06ddb831e2e4102f01aef179f2",
+      "exitStatus": 1,
+      "output": "bd21a7f2dcad89b6f02ee607828cef0ef8d959fb\nsrc/renderer/app.ts\nsrc/renderer/views/markdown-view.ts\n\nAuto-merging src/renderer/app.ts\nCONFLICT (content): Merge conflict in src/renderer/app.ts\nAuto-merging src/renderer/markdown/live-preview.ts\nAuto-merging src/renderer/views/markdown-view.ts\nCONFLICT (content): Merge conflict in src/renderer/views/markdown-view.ts\nAuto-merging src/renderer/workspace.ts\n",
+      "sharedChangedFiles": [
+        "src/renderer/app.ts",
+        "src/renderer/markdown/live-preview.ts",
+        "src/renderer/views/markdown-view.ts",
+        "src/renderer/workspace.ts",
+        "tests/e2e/document-actions.spec.ts",
+        "tests/e2e/minimal-settings-compat.spec.ts",
+        "tests/e2e/web-reload.spec.ts"
+      ]
+    },
+    "entry+pdf": {
+      "mergeBase": "89de61cd3ca4125716ed7b0b582c1202aa9433d7",
+      "exitStatus": 1,
+      "output": "7b2e9747213bdbd9e234ca8af7229d6a153e7674\ntests/unit/workspace-native-writers.test.ts\n\nAuto-merging src/renderer/views/base-view.ts\nAuto-merging src/renderer/workspaces/render-ownership.ts\nAuto-merging tests/unit/workspace-native-writers.test.ts\nCONFLICT (content): Merge conflict in tests/unit/workspace-native-writers.test.ts\n",
+      "sharedChangedFiles": [
+        "src/renderer/views/base-view.ts",
+        "src/renderer/workspaces/render-ownership.ts",
+        "tests/unit/sync-conflict-ux.test.ts",
+        "tests/unit/workspace-native-writers.test.ts"
+      ]
+    },
+    "daily+editor": {
+      "mergeBase": "fe659b18d36245d23137c054d16a935cf2503f4f",
+      "exitStatus": 0,
+      "output": "04e0dd93b1abd4517ea53efbc20d3d8f7f2b58e6\n",
+      "sharedChangedFiles": []
+    },
+    "entry+preview": {
+      "mergeBase": "b939adf1ac098c06ddb831e2e4102f01aef179f2",
+      "exitStatus": 0,
+      "output": "165e7435a6300795f1cc66a4b7cf0ffd25ab096e\n",
+      "sharedChangedFiles": []
+    },
+    "entry+scope": {
+      "mergeBase": "5c1dff270e8dfafcf7e2db898060bfa5b4bafc2e",
+      "exitStatus": 0,
+      "output": "af750d2882980939e941350faffe95750683f350\n",
+      "sharedChangedFiles": []
+    }
+  },
+  "stablePatchFamilies": [
+    {
+      "patchId": "ecd676d73077fb3cbfec58f8ece597b568fc14fe",
+      "branches": {
+        "fe659b1": [
+          "1f6f56dceb43720c3b372a20bb78ef7ca1e1a18f"
+        ],
+        "10e703a": [
+          "1f6f56dceb43720c3b372a20bb78ef7ca1e1a18f"
+        ],
+        "c4ac07b": [
+          "6f325874bc3e06624087e50a88c1279c3cad1506"
+        ]
+      }
+    },
+    {
+      "patchId": "047883232cada5a1794c28e86e05faa334c19b51",
+      "branches": {
+        "fe659b1": [
+          "5d5185db227da9cc97b990a18bb1c36ceedb9b09"
+        ],
+        "10e703a": [
+          "5d5185db227da9cc97b990a18bb1c36ceedb9b09"
+        ],
+        "c4ac07b": [
+          "6c97451ceb5e52964aa533f8532c45669dbd5be7"
+        ]
+      }
+    },
+    {
+      "patchId": "26e508ee44e5c61814cb4287fbf4179aba6469c4",
+      "branches": {
+        "fe659b1": [
+          "1ec6a7727bd69a4d22ece4ae5ee8468f911a71f6"
+        ],
+        "cf75d62": [
+          "597a723c2989e05cb61649d4c235cfc23707767e"
+        ],
+        "10e703a": [
+          "1ec6a7727bd69a4d22ece4ae5ee8468f911a71f6"
+        ],
+        "c4ac07b": [
+          "5e4f180558faa553a68a8743aff6802199300b44"
+        ]
+      }
+    },
+    {
+      "patchId": "9bc9608e4b56d1699e1b97581baeb7fd4bbf1ffd",
+      "branches": {
+        "fe659b1": [
+          "bf54d836057a0911c29a088c1b786df9d42658b1"
+        ],
+        "10e703a": [
+          "bf54d836057a0911c29a088c1b786df9d42658b1"
+        ],
+        "c4ac07b": [
+          "236f737f00c5d11fcc97ad3192ddcd3eafdca2c0"
+        ]
+      }
+    },
+    {
+      "patchId": "9ac20833368cc72bc12bf1d853db54be0930034a",
+      "branches": {
+        "fe659b1": [
+          "a14394a87e69204347ed18f5e9a46fb3bde5050d"
+        ],
+        "10e703a": [
+          "a14394a87e69204347ed18f5e9a46fb3bde5050d"
+        ],
+        "c4ac07b": [
+          "16ab2c894b0a7f15f8ca3dc1d317febea9794d6d"
+        ]
+      }
+    },
+    {
+      "patchId": "a2b48e8402f3d4810ee898db2691a95fa03edc57",
+      "branches": {
+        "0bd0d5d": [
+          "6e09dd6e4e0c20881e85af92bed5799224ebae13"
+        ],
+        "cf75d62": [
+          "019a7699158fb38d9b187df19367841eb8eb07a1"
+        ],
+        "f232bc7": [
+          "6e09dd6e4e0c20881e85af92bed5799224ebae13"
+        ]
+      }
+    },
+    {
+      "patchId": "52130fc187adb0ab7a01fcac8d192b22388f3e65",
+      "branches": {
+        "0bd0d5d": [
+          "2d9c984564abbf0b1e76e99523d591f75bb25818"
+        ],
+        "cf75d62": [
+          "2a3d76dc4561c90334b2d6330e12b74681193206"
+        ],
+        "f232bc7": [
+          "2d9c984564abbf0b1e76e99523d591f75bb25818"
+        ]
+      }
+    }
+  ]
+}
