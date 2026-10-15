@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { chooseSettingsSection } from "./settings-nav";
@@ -1579,7 +1580,7 @@ test("@phone @tablet Graph supports touch selection, open, pan, pinch, controls,
   await expect(page.getByRole("searchbox", { name: "Search graph nodes" })).toHaveValue("Proof");
 });
 
-test("@phone @tablet Canvas supports touch authoring, gestures, acknowledged saves, and conflict preservation", async ({ page }) => {
+test("@phone @tablet Canvas supports touch authoring, gestures, acknowledged saves, and conflict preservation", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   await openExternalProofNote(page);
   await page.evaluate(async () => {
@@ -1791,6 +1792,20 @@ test("@phone @tablet Canvas supports touch authoring, gestures, acknowledged sav
   expect(conflict.nodes.find((node: any) => node.id === conflictNodeId).x).not.toBe(provider.nodes.find((node: any) => node.id === conflictNodeId).x);
   expect(await page.evaluate(() => ({ scrollY, visualScale: visualViewport?.scale }))).toEqual({ scrollY: 0, visualScale: 1 });
 
+  await page.evaluate(() => {
+    const app = (window as any).app;
+    const view = app.workspace.getLeavesOfType("canvas")[0].view;
+    const diagnostic = (window as any).__canvasCloseDiagnostic = {
+      view, root: view.containerEl, file: view.file, model: view.document,
+      edge: view.document.edges.find((edge: any) => edge.id === "edge-1"),
+      preview: null, writes: [] as Array<{ path: string; text: string }>,
+    };
+    const modify = app.vault.modify.bind(app.vault);
+    app.vault.modify = async (file: { path: string }, text: string) => {
+      diagnostic.writes.push({ path: file.path, text });
+      return modify(file, text);
+    };
+  });
   const beforeDisposeReconnect = await page.evaluate(() => window.hostServices!.vaultFiles.read("Boards/Proof.canvas"));
   const disposeEndpoint = view.locator('.canvas-edge-endpoint-touch-hit[data-edge-id="edge-1"][data-endpoint="target"]');
   const disposeEndpointBox = (await disposeEndpoint.boundingBox())!;
@@ -1803,10 +1818,45 @@ test("@phone @tablet Canvas supports touch authoring, gestures, acknowledged sav
     clientY: disposeEndpointBox.y + disposeEndpointBox.height / 2,
   });
   await expect(view).toHaveClass(/is-connecting/);
-  await page.evaluate(async () => {
-    const leaf = (window as any).app.workspace.getLeavesOfType("canvas")[0];
-    await leaf.view.onClose();
-  });
+  const closeState = async (phase: string) => page.evaluate(async phase => {
+    const diagnostic = (window as any).__canvasCloseDiagnostic;
+    const view = diagnostic.view;
+    if (phase === "before") diagnostic.preview = view.containerEl.querySelector(".canvas-edge-preview");
+    return {
+      phase, sameView: (window as any).app.workspace.getLeavesOfType("canvas")[0]?.view === view,
+      sameRoot: view.containerEl === diagnostic.root, connected: diagnostic.root.isConnected,
+      sameFile: view.file === diagnostic.file, sameModel: view.document === diagnostic.model,
+      sameEdge: view.document.edges.find((edge: any) => edge.id === "edge-1") === diagnostic.edge,
+      serializedModel: view.getText(), provider: await window.hostServices!.vaultFiles.read("Boards/Proof.canvas"),
+      transientGesture: typeof view.transientGestureCancel === "function",
+      touchDragSnapshot: view.touchDragSnapshot, touchPointerIds: view.touchGesture.pointerIds(),
+      capturedTouchPointers: [...view.capturedTouchPointers], geometryGestures: view.geometryGestures.size,
+      previewConnected: !!diagnostic.preview?.isConnected,
+      previewPath: diagnostic.preview?.getAttribute("d") ?? null,
+      connecting: view.containerEl.classList.contains("is-connecting"),
+      scope: { state: view.renderOwner.state, admission: view.renderOwner.admissionAllowed,
+        pending: view.renderOwner.pending.size, failures: view.renderOwner.failures.map((failure: any) => ({ key: failure.key, error: String(failure.error) })) },
+      writers: view.renderOwner.writers().map((writer: any) => ({ type: writer.viewType, path: writer.getFile?.()?.path,
+        editing: writer.sourceEdit?.value ?? null, inputCount: writer.containerEl?.querySelectorAll("input,textarea").length ?? 0 })),
+      writes: [...diagnostic.writes],
+    };
+  }, phase);
+  const diagnosticStates = [await closeState("before")];
+  const recordCloseState = async (phase: string) => {
+    diagnosticStates.push(await closeState(phase));
+    fs.writeFileSync(testInfo.outputPath("canvas-close-diagnostic.json"), JSON.stringify(diagnosticStates, null, 2));
+  };
+  fs.writeFileSync(testInfo.outputPath("canvas-close-diagnostic.json"), JSON.stringify(diagnosticStates, null, 2));
+  try {
+    await page.evaluate(async () => {
+      const leaf = (window as any).app.workspace.getLeavesOfType("canvas")[0];
+      await leaf.view.onClose();
+    });
+  } catch (error) {
+    await recordCloseState("rejected");
+    throw error;
+  }
+  await recordCloseState("closed");
   await expect(view).not.toHaveClass(/is-connecting/);
   expect(await page.evaluate(() => window.hostServices!.vaultFiles.read("Boards/Proof.canvas"))).toBe(beforeDisposeReconnect);
 
