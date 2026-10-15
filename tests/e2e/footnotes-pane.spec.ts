@@ -63,18 +63,53 @@ test("Footnotes core toggle survives restart and fast disable/re-enable leaves o
   const data = await fixture(); let { app, window } = await data.launch();
   try {
     expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
-    await window.evaluate(async () => { const app = (window as any).app; app.settings.footnotesEnabled = true; await app.syncFootnotesPlugin(); await app.saveSettings(); app.commands.execute("footnotes:open"); });
+    await window.evaluate(async () => { const app = (window as any).app; app.settings.footnotesEnabled = true; await app.syncFootnotesPlugin(); await app.host.config.write("app", app.settings); app.commands.execute("footnotes:open"); });
     await expect(window.locator(".footnotes-view")).toBeVisible();
     await window.waitForTimeout(600); // Existing layout persistence debounce is 400ms.
     await app.close(); ({ app, window } = await data.launch());
     await expect(window.locator(".footnotes-view")).toBeVisible();
     await window.evaluate(async () => { const app = (window as any).app; app.settings.footnotesEnabled = false; const off = app.syncFootnotesPlugin(); app.settings.footnotesEnabled = true; const on = app.syncFootnotesPlugin(); await Promise.all([off, on]); app.commands.execute("footnotes:open"); });
     await expect(window.locator(".footnotes-view")).toHaveCount(1);
-    await window.evaluate(async () => { const app = (window as any).app; app.settings.footnotesEnabled = false; await app.syncFootnotesPlugin(); await app.saveSettings(); });
+    await window.evaluate(async () => { const app = (window as any).app; app.settings.footnotesEnabled = false; await app.syncFootnotesPlugin(); await app.host.config.write("app", app.settings); });
     await expect(window.locator(".footnotes-view")).toHaveCount(0);
     expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
+    // saveSettings() is deliberately fire-and-forget. Establish the actual disk
+    // barrier before destroying the renderer, rather than awaiting its void result.
+    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(data.vaultDir, ".geode/app.json"), "utf8")).footnotesEnabled).toBe(false);
     await app.close(); ({ app, window } = await data.launch());
     await expect(window.locator(".footnotes-view")).toHaveCount(0);
+    expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
+  } finally { await app.close(); data.cleanup(); }
+});
+
+test("Footnotes settings report a rejected asynchronous write and acknowledge delayed persistence", async () => {
+  const data = await fixture(); const { app, window } = await data.launch();
+  try {
+    await window.evaluate(() => {
+      const app = (window as any).app;
+      const write = app.host.config.write.bind(app.host.config);
+      app.host.config.write = async (name: string, value: unknown) => {
+        if (name === "app") { await new Promise(resolve => setTimeout(resolve, 150)); throw new Error("synthetic storage failure"); }
+        return write(name, value);
+      };
+      (window as any).__footnotesOriginalWrite = write;
+      app.setting.openTabById("core-plugins");
+    });
+    const toggle = window.getByLabel("Enable Footnotes", { exact: true });
+    await toggle.check();
+    await expect(window.locator(".notice", { hasText: "Could not update Footnotes" })).toBeVisible();
+    await window.evaluate(() => {
+      const app = (window as any).app, write = (window as any).__footnotesOriginalWrite;
+      app.host.config.write = async (name: string, value: unknown) => {
+        if (name === "app") await new Promise(resolve => setTimeout(resolve, 150));
+        return write(name, value);
+      };
+    });
+    await toggle.uncheck();
+    await expect.poll(() => {
+      try { return JSON.parse(fs.readFileSync(path.join(data.vaultDir, ".geode/app.json"), "utf8")).footnotesEnabled; }
+      catch { return undefined; }
+    }).toBe(false);
     expect(await window.evaluate(() => (window as any).app.commands.execute("footnotes:open"))).toBe(false);
   } finally { await app.close(); data.cleanup(); }
 });

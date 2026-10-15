@@ -3,7 +3,9 @@
 Enable **Footnotes** under **Settings → Core plugins**, then run **Footnotes:
 Show footnotes** from the command palette. The pane follows the active Markdown
 note and restores with your workspace after restart. Disable Footnotes to remove
-its pane and command.
+its pane and command. If saving the toggle fails, a **Could not update Footnotes**
+notice reports the failure; the current session may differ from the last saved
+setting until a later successful change.
 
 Each defined or inline footnote appears once. Definitions show their number in
 reference order, unreferenced definitions show their authored ID, and repeated
