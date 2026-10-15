@@ -125,7 +125,7 @@ export class OutgoingLinksView implements View {
     const editor = this.app.getActiveMarkdownView();
     const target = this.app.vault.getFileByPath(mention.targetPath);
     if (!this.visible || this.app.vault.root !== this.root || this.app.workspace.getActiveFile() !== file || editor?.file !== file || !target || this.app.vault.getFileByPath(file.path) !== file ||
-      !mentionStillCurrent(snapshot, editor.getText(), mention) || !editor.canApplySourceEdit()) { this.schedule(); return; }
+      this.app.excludedFiles.matches(mention.targetPath) || !mentionStillCurrent(snapshot, editor.getText(), mention) || !editor.canApplySourceEdit()) { this.schedule(); return; }
     const link = this.app.fileManager.generateMarkdownLink(target, file.path, "", mention.text);
     const generated = outgoingReferences(link);
     if (generated.length !== 1 || generated[0].displayText !== mention.text ||

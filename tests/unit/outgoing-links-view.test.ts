@@ -32,7 +32,7 @@ function setup(text = "Atlas") {
     applySourceEdit: vi.fn((snapshot, from, to, insert) => { if (snapshot !== liveText) return false; liveText = liveText.slice(0, from) + insert + liveText.slice(to); return true; }) };
   const app = { workspace, metadataCache, getActiveMarkdownView: () => editor,
     vault: { root: "vault", getMarkdownFiles: () => [source, target], getFileByPath: (path: string) => path === target.path ? target : source, read: vi.fn(async () => "stale disk") },
-    excludedFiles: { ready: Promise.resolve(), matches: () => false, onChange: () => () => {} },
+    excludedFiles: { ready: Promise.resolve(), matches: (_path: string) => false, onChange: (_listener: () => void) => () => {} },
     fileManager: { generateMarkdownLink: () => "[[a/Atlas|Atlas]]" }, notify: vi.fn() };
   return { app, workspace, editor, source, target, getText: () => liveText, setText: (text: string) => { liveText = text; } };
 }
@@ -58,6 +58,23 @@ describe("Outgoing links view", () => {
     const next = (view.containerEl as unknown as Element).all().find(e => e.className === "outgoing-link-convert")!;
     app.vault.getFileByPath = () => null as any; next.events.get("click")!({});
     expect(editor.applySourceEdit).not.toHaveBeenCalled(); view.onClose();
+  });
+  it("refuses an old conversion button after its target becomes excluded", async () => {
+    const { app, editor, target, getText } = setup();
+    let exclusionsChanged!: () => void;
+    app.excludedFiles.onChange = listener => { exclusionsChanged = listener; return () => {}; };
+    const view = new api.OutgoingLinksView(app as any); view.onOpen(); await drain();
+    const button = (view.containerEl as unknown as Element).all().find(e => e.className === "outgoing-link-convert")!;
+    expect(button).toBeDefined();
+    app.excludedFiles.matches = path => path === target.path;
+    exclusionsChanged();
+    // Same-subject refresh keeps the old rows until the scheduled render runs.
+    button.events.get("click")!({});
+    expect(editor.applySourceEdit).not.toHaveBeenCalled();
+    expect(getText()).toBe("Atlas");
+    await drain();
+    expect((view.containerEl as unknown as Element).all().some(e => e.className === "outgoing-link-convert")).toBe(false);
+    view.onClose();
   });
   it("shows read errors, fileless states, and stops subscriptions when closed", async () => {
     const { app, workspace } = setup(); app.getActiveMarkdownView = () => null as any;
