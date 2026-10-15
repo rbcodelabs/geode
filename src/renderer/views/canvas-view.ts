@@ -1,3 +1,4 @@
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
@@ -119,7 +120,10 @@ export class CanvasView implements View {
   private touchDragSnapshot: { id: string; x: number; y: number } | null = null;
   private readonly touchCleanups: Array<() => void> = [];
 
-  constructor(private app: App) {
+  readonly renderOwner: RenderScope;
+  constructor(private app: App, parentOwner?: RenderScope) {
+    const options = { writer: this, close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null) this.render(); } };
+    this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "canvas-view";
 
@@ -180,9 +184,15 @@ export class CanvasView implements View {
     }
   }
 
-  async setFile(file: TFile, requireValid = false): Promise<void> {
+  setFile(file: TFile, requireValid = false): Promise<void> {
+    return this.renderOwner ? this.renderOwner.run(token => this.setFileNative(file, requireValid, token)) : this.setFileNative(file, requireValid);
+  }
+
+  private async setFileNative(file: TFile, requireValid: boolean, token?: RenderToken): Promise<void> {
     await this.persistQueue;
+    token?.check();
     const text = await this.app.vault.read(file);
+    token?.check();
     // Navigation is transactional: validate before changing the live file,
     // title, recovery state, or history owned by this view.
     if (requireValid) parseCanvas(text);
@@ -204,7 +214,9 @@ export class CanvasView implements View {
   }
 
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
-  async onClose(): Promise<void> {
+  onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
+
+  private async closeNative(): Promise<void> {
     this.cancelTouchGesture();
     this.cancelTransientGesture();
     await this.persistQueue;
@@ -223,6 +235,7 @@ export class CanvasView implements View {
       this.suppressReconcileModify = false;
       return;
     }
+    if (!nativeRenderOwnership(this.app).admissionOpen) return;
     await this.reloadFromFile(true);
   };
 
@@ -260,12 +273,18 @@ export class CanvasView implements View {
   }
 
   private async reloadFromFile(resetHistory = false): Promise<void> {
+    const reload = (token?: RenderToken) => this.reloadNative(resetHistory, token);
+    try { await (this.renderOwner ? this.renderOwner.run(reload) : reload()); }
+    catch (error) { if (!(error instanceof ScopeCancelled)) throw error; }
+  }
+
+  private async reloadNative(resetHistory: boolean, token?: RenderToken): Promise<void> {
     const file = this.file;
     if (!file) return;
     const cached = this.app.vault.getCachedContent(file.path);
     if (cached !== undefined && cached === this.lastKnownText) return;
     const generation = ++this.loadGeneration;
-    const text = await this.app.vault.read(file);
+    const text = await this.app.vault.read(file); token?.check();
     if (generation !== this.loadGeneration || file !== this.file || text === (this.pendingKnownText ?? this.lastKnownText)) return;
     this.load(text, resetHistory);
   }
@@ -527,7 +546,7 @@ export class CanvasView implements View {
       const text = document.createElement("div");
       text.className = "canvas-node-text";
       el.appendChild(text);
-      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "");
+      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
       el.addEventListener("dblclick", (event) => { event.stopPropagation(); this.editTextNode(el, node); });
     } else if (node.type === "file") {
       el.dataset.filePath = node.file;
@@ -737,7 +756,7 @@ export class CanvasView implements View {
       el.appendChild(content);
       this.markdownContentEls.add(content);
       void this.app.markdownRenderer
-        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content)
+        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content, undefined, this.renderOwner)
         .then(() => {
           if (this.isLiveNodeRender(version, content)) return;
           this.app.markdownRenderer.dispose(content);
@@ -2867,6 +2886,19 @@ export class CanvasView implements View {
       button.addEventListener("click", () => { void this.persist(); });
       this.saveStatusEl.appendChild(button);
     }
+  }
+
+  /** Refuse gestures before pauseAutosave can cancel or roll them back. */
+  assertWorkspaceLoadReady(): void {
+    if (this.recoveryError !== null || this.conflictReadOnly) throw new Error("Resolve Canvas recovery or conflict before loading a workspace.");
+    if (this.transientGestureCancel || this.touchDragSnapshot || this.touchGesture.pointerIds().length) throw new Error("Finish the Canvas gesture before loading a workspace.");
+    if (this.persistRequestedWhileSuspended) throw new Error("Canvas changed during the workspace operation. Retry after its edits are saved.");
+  }
+
+  async settleWorkspaceLoad(): Promise<void> {
+    this.assertWorkspaceLoadReady(); await this.persistQueue; this.assertWorkspaceLoadReady();
+    this.persistQueue = this.persistQueue.then(() => this.doPersist());
+    await this.persistQueue; this.assertWorkspaceLoadReady();
   }
 
   async prepareVaultSwitch(): Promise<void> {

@@ -1,3 +1,4 @@
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope } from "../workspaces/render-ownership";
 import {
   Decoration,
   DecorationSet,
@@ -702,6 +703,7 @@ class TableWidget extends WidgetType {
  */
 class EmbedWidget extends WidgetType {
   private canvasView: CanvasView | null = null;
+  private scope: RenderScope | null = null;
   private destroyed = false;
 
   constructor(
@@ -714,7 +716,8 @@ class EmbedWidget extends WidgetType {
      * Not part of `eq()`: it is the same stable thunk for every widget built
      * by one editor, so comparing it would never distinguish two widgets.
      */
-    private getLeaf: () => WorkspaceLeaf | null
+    private getLeaf: () => WorkspaceLeaf | null,
+    private owner?: RenderScope
   ) {
     super();
   }
@@ -740,6 +743,7 @@ class EmbedWidget extends WidgetType {
     root.className = "cm-embed-widget";
     if (this.block) root.classList.add("cm-embed-block");
 
+    const scope = this.scope = this.owner ? this.owner.child() : nativeRenderOwnership(this.app).create(root);
     const resolved = resolveEmbed(this.target, this.sourcePath, this.app);
 
     if (resolved.kind === "unresolved") {
@@ -757,25 +761,19 @@ class EmbedWidget extends WidgetType {
         root.textContent = `Recursive Canvas embed: ${file.basename}`;
         return root;
       }
-      const canvas = new CanvasView(this.app);
+      const canvas = new CanvasView(this.app, scope);
       this.canvasView = canvas;
       canvas.markEmbedded();
       canvas.onOpen();
       root.appendChild(canvas.containerEl);
-      void canvas.setFile(file).then(() => {
-        if (this.destroyed) {
-          canvas.onClose();
-          return;
-        }
-        view.requestMeasure();
-      }).catch(() => {
-        if (this.destroyed) return;
-        canvas.onClose();
+      void scope.run(async token => {
+        try { await canvas.setFile(file); token.check(); view.requestMeasure(); }
+        catch (error) { await canvas.onClose(); if (!(error instanceof ScopeCancelled)) throw error; }
+      }).catch(error => {
+        if (this.destroyed || error instanceof ScopeCancelled) return;
         if (this.canvasView === canvas) this.canvasView = null;
-        root.replaceChildren();
-        root.classList.add("is-unresolved");
-        root.textContent = `Unable to load Canvas: ${file.basename}`;
-        view.requestMeasure();
+        root.replaceChildren(); root.classList.add("is-unresolved");
+        root.textContent = `Unable to load Canvas: ${file.basename}`; view.requestMeasure();
       });
       return root;
     }
@@ -824,8 +822,9 @@ class EmbedWidget extends WidgetType {
       root.appendChild(title);
       root.appendChild(content);
       this.app.markdownRenderer
-        .renderNoteEmbed(file, resolved.subpath, this.sourcePath, content)
-        .then(() => view.requestMeasure());
+        .renderNoteEmbed(file, resolved.subpath, this.sourcePath, content, this.getLeaf, scope)
+        .then(() => { if (!this.destroyed) view.requestMeasure(); })
+        .catch(error => { if (!this.destroyed && !(error instanceof ScopeCancelled)) content.textContent = "Unable to load note."; });
       return root;
     }
 
@@ -845,7 +844,7 @@ class EmbedWidget extends WidgetType {
 
   destroy(_dom: HTMLElement): void {
     this.destroyed = true;
-    this.canvasView?.onClose();
+    void this.scope?.close();
     this.canvasView = null;
   }
 }
@@ -1153,7 +1152,8 @@ class MermaidWidget extends WidgetType {
 export function livePreview(
   app: App,
   getPath: () => string,
-  getLeaf: () => WorkspaceLeaf | null = () => null
+  getLeaf: () => WorkspaceLeaf | null = () => null,
+  renderOwner?: RenderScope
 ): Extension {
   const hide = Decoration.replace({});
 
@@ -1461,7 +1461,7 @@ export function livePreview(
             // giving it block layout — the same technique HRWidget already
             // uses for full-line widgets in this file.
             const isBlock = (resolved.kind === "note" || resolved.kind === "canvas") && wholeLine;
-            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock, getLeaf);
+            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock, getLeaf, renderOwner);
             decos.push(
               Decoration.replace({ widget }).range(isBlock ? line.from : start, isBlock ? line.to : end)
             );
