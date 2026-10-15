@@ -21,7 +21,7 @@ const initialize = createPdfFrameInitializer(parent, async ({ init, port }) => {
         worker = new Worker("geode-pdf://viewer/worker.mjs", { type: "module" });
         await new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(Error("worker timeout")), 8000);
-          worker.onmessage = event => { packets.push(event.data); if (event.data.kind === "geode-pdf-worker-ready") { clearTimeout(timer); resolve(); } };
+          worker.onmessage = event => { packets.push(event.data); if (event.data.kind === "geode-pdf-worker-ready") { clearTimeout(timer); worker.onmessage = null; resolve(); } };
           worker.onerror = event => { clearTimeout(timer); reject(Error(event.message || "worker error")); };
         });
         engine = new PDFWorker({ port: worker });

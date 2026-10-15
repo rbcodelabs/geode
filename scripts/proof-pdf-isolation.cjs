@@ -117,7 +117,9 @@ app.whenReady().then(async () => {
       const close = (actual, expected, tolerance) => actual.slice(0,3).every((value,index) => Math.abs(value-expected[index]) <= tolerance);
       assert.ok(close(result.results[2].samples[0],[245,203,82],3)); assert.ok(close(result.results[2].samples[1],[24,118,86],3));
       assert.ok(close(result.results[3].samples[0],[0,0,0],0)); assert.ok(close(result.results[3].samples[1],[255,255,255],0));
-      assert.ok(close(result.results[1].samples[2],[197,58,124],25));
+      // Independent Pillow/LittleCMS conversion of CMYK(51,204,77,0)
+      // through the pinned CGATS001 profile yields RGB(201,87,126).
+      assert.ok(close(result.results[1].samples[2],[201,87,126],3));
     }
   } catch (error) { assertionFailure ||= String(error); }
   const captures = fs.mkdtempSync(path.join(os.tmpdir(),'geode-pdf-isolation-captures-'));
