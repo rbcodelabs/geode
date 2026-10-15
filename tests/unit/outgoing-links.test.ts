@@ -117,3 +117,10 @@ it("handles many nested closed labels without retaining growing label substrings
   const result = await api.findOutgoingMentions(text, source, targets.slice(0, 1), { yieldControl: async () => {} });
   expect(result.mentions).toEqual([]);
 });
+
+it.each(["\n", "\r\n"])("never offers YAML values when frontmatter closes beyond the source bound (%j)", async newline => {
+  const text = `---${newline}related: Atlas${newline}padding: ${" ".repeat(140_000)}${newline}---${newline}Body`;
+  const result = await api.findOutgoingMentions(text, source, targets.slice(0, 1));
+  expect(result.mentions).toEqual([]);
+  expect(result.limited).toBe(true);
+});
