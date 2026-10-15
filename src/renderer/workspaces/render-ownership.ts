@@ -13,22 +13,28 @@ export class RenderScope {
   private generation = 0;
   private readonly children = new Set<RenderScope>();
   private readonly pending = new Set<Promise<unknown>>();
-  private failures: unknown[] = [];
+  private failures: { error: unknown; key?: string }[] = [];
   private closing: Promise<void> | undefined;
   constructor(private readonly registry: RenderOwnership, private readonly options: ScopeOptions = {}, private readonly parent?: RenderScope, private readonly owner?: object) {}
   get closed(): boolean { return this.state === "closed"; }
-  private checkAdmission(): void { if (this.state !== "active" || !this.registry.admissionOpen) throw new Error("Native render admission is paused during a workspace operation."); }
+  private admits(): boolean { return this.state === "active" && !this.closing && (!this.parent || this.parent.admits()); }
+  assertAdmission(): void { if (!this.admits() || !this.registry.admissionOpen) throw new Error("Native render admission is paused during a workspace operation."); }
   child(options: ScopeOptions = {}): RenderScope {
-    this.checkAdmission(); const child = new RenderScope(this.registry, options, this); this.children.add(child); return child;
+    this.assertAdmission(); const child = new RenderScope(this.registry, options, this); this.children.add(child); return child;
   }
-  run<T>(operation: (token: RenderToken) => Promise<T>): Promise<T> {
-    this.checkAdmission(); const generation = this.generation;
-    const token: RenderToken = { current: () => this.state === "active" && this.generation === generation, check: () => { if (!token.current()) throw new ScopeCancelled(); } };
+  run<T>(operation: (token: RenderToken) => Promise<T>, key?: string): Promise<T> {
+    this.assertAdmission(); const generation = this.generation;
+    const token: RenderToken = { current: () => this.admits() && this.generation === generation, check: () => { if (!token.current()) throw new ScopeCancelled(); } };
     // Register synchronously before invoking any asynchronous initializer.
     const task = Promise.resolve().then(() => { token.check(); return operation(token); });
     this.pending.add(task);
-    void task.then(() => this.pending.delete(task), error => { this.pending.delete(task); if (!(error instanceof ScopeCancelled)) this.failures.push(error); });
+    void task.then(() => this.pending.delete(task), error => { this.pending.delete(task); if (key !== undefined || !(error instanceof ScopeCancelled)) this.failures.push({ error, key }); });
     return task;
+  }
+  /** Only the successful explicit retry of an operation acknowledges its failures. */
+  retry<T>(operation: (token: RenderToken) => Promise<T>, key: string): Promise<T> {
+    const acknowledged = new Set(this.failures.filter(failure => failure.key === key));
+    return this.run(operation, key).then(result => { this.failures = this.failures.filter(failure => !acknowledged.has(failure)); return result; });
   }
   private freeze(): void {
     if (this.state === "closed") return;
@@ -37,7 +43,7 @@ export class RenderScope {
   }
   private async drainTasks(): Promise<void> {
     while (this.pending.size) await Promise.allSettled([...this.pending]);
-    raise(this.failures.splice(0));
+    raise(this.failures.map(failure => failure.error));
   }
   async drain(): Promise<void> {
     if (this.closing) return this.closing;
@@ -63,10 +69,17 @@ export class RenderScope {
   }
   close(): Promise<void> {
     if (this.closing) return this.closing;
+    const previous = this.state;
     this.state = "closed"; this.generation++;
     this.closing = Promise.resolve().then(async () => {
       const errors: unknown[] = [];
       try { await this.drainTasks(); } catch (error) { errors.push(error); }
+      for (const child of this.children) { try { await child.drain(); } catch (error) { errors.push(error); } }
+      if (errors.length) {
+        // No destructor has run: preserve the entire subtree and usable retry
+        // controls. Ancestor admission still prevents detached children reopening.
+        this.state = previous; this.closing = undefined; raise(errors);
+      }
       if (!errors.length) for (const child of [...this.children]) {
         try { await child.close(); } catch (error) { errors.push(error); break; }
       }

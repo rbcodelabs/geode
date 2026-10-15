@@ -914,9 +914,11 @@ export class BaseView implements View {
 
   // --- Cell editing ---------------------------------------------------------
 
-  private editCell(file: TFile, columnPath: string, rawText: string): Promise<void> {
+  private editCell(file: TFile, columnPath: string, rawText: string, retry = false): Promise<void> {
     if (this.vaultSwitching) return Promise.reject(new Error("Base edits are paused during a workspace operation."));
-    const operation = this.renderOwner.run(async token => { token.check(); await this.commitCellEdit(file, columnPath, rawText); });
+    const write = async (token: RenderToken) => { token.check(); await this.commitCellEdit(file, columnPath, rawText, token); };
+    const key = JSON.stringify(["row", file.path, columnPath]);
+    const operation = retry ? this.renderOwner.retry(write, key) : this.renderOwner.run(write, key);
     this.sourcePersistsInFlight.add(operation);
     this.sourcePersistPaths.set(operation, file.path);
     operation.then(
@@ -926,7 +928,7 @@ export class BaseView implements View {
     return operation;
   }
 
-  private async commitCellEdit(file: TFile, columnPath: string, rawText: string): Promise<void> {
+  private async commitCellEdit(file: TFile, columnPath: string, rawText: string, token: RenderToken): Promise<void> {
     const key = frontmatterKeyForColumn(columnPath);
     if (!key) return;
     this.setSaveStatus("Saving Base…", false);
@@ -936,13 +938,13 @@ export class BaseView implements View {
         const value = parseEditedValue(rawText);
         if (value === undefined) delete fm[key];
         else fm[key] = value;
-      });
+      }, undefined, () => token.check());
       this.sourceEdit = null;
       this.setSaveStatus("Base saved", false);
       this.runAndRender();
     } catch (error) {
       this.setSaveStatus("Base save failed", true, async () => {
-        await this.editCell(file, columnPath, rawText);
+        await this.editCell(file, columnPath, rawText, true);
         this.tableView.acknowledgeEdit();
       });
       throw error;
