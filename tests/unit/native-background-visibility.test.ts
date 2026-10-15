@@ -116,3 +116,19 @@ it.each(["pointerdown", "keydown", "window-blur", "document-hidden"])("%s invali
   else f.doc.emit(cause, { isTrusted: true });
   expect(f.visibility.preserves(f.input as any)).toBe(false); expect(f.save).not.toHaveBeenCalled(); expect(f.input.focus).not.toHaveBeenCalled();
 });
+it.each(["frozen", "registry-paused"] as const)("optional source capture declines %s admission without changing strict scope semantics", async cause => {
+  const f = fixture(); const registry = new RenderOwnership();
+  f.base.renderOwner = registry.create(f.base);
+  f.base.app.workspace = { findLeafForView: () => ({ view: f.base }) };
+  const visibility = nativeBackgroundVisibility(f.base.app, f.base, () => []);
+  visibility.register(() => f.base.captureBackgroundEdit());
+  let held: any;
+  if (cause === "frozen") f.base.renderOwner.freezeAdmission();
+  else held = await registry.hold(new Set([f.base]));
+  expect(() => visibility.beginHide(f.host as any)).not.toThrow();
+  expect(visibility.preserves(f.input as any)).toBe(false);
+  expect(f.base.renderOwner.admissionAllowed).toBe(false);
+  expect(() => f.base.renderOwner.captureToken()).toThrow(/admission is paused/);
+  expect(f.save).not.toHaveBeenCalled(); expect(f.input.focus).not.toHaveBeenCalled();
+  if (held) registry.release(held);
+});

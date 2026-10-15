@@ -58,7 +58,12 @@ export function nativeBackgroundVisibility(app: App, view: { containerEl: HTMLEl
   return new BackgroundVisibility(() => {
     const leaf = app.workspace.findLeafForView(view as never), file = view.file, filePath = file?.path;
     const container = view.containerEl, parent = container.parentElement, vault = app.vault, root = vault.root;
-    const versions = revision(), token = view.renderOwner.captureToken();
+    const versions = revision();
+    let token: ReturnType<RenderScope["captureToken"]>;
+    // This capture is optional; a concurrent workspace barrier owns admission.
+    // Declining visibility authority must not change its ordinary activation.
+    try { token = view.renderOwner.captureToken(); }
+    catch { return null; }
     if (!leaf || leaf.view !== view || !file || !container.isConnected) return null;
     return () => {
       try {
