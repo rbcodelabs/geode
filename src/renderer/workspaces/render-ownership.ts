@@ -125,6 +125,7 @@ export class RenderScope {
       },
     };
   }
+  assertRetirementReady(): void { this.assertAdmission(); this.preflightCloseTree(); }
   close(): Promise<void> { return this.startClose(false); }
   private startClose(prepared: boolean): Promise<void> {
     if (this.closing) return this.closing;
