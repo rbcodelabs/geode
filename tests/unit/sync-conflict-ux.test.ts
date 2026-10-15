@@ -772,7 +772,7 @@ describe("markdown view wiring", () => {
     const slot = new SyncConflictBannerSlot(container, body); const destroy = vi.fn();
     const editor = { state: { doc: { toString: () => "saved" } }, destroy };
     Object.assign(pane, {
-      syncConflictSlot: slot, containerEl: container, file: { path: "Old.md", basename: "Old" }, editor,
+      transitionTail: Promise.resolve(), transitionGeneration: 0, transitionClosing: false, lpProjection: null, readingProjection: null, syncConflictSlot: slot, containerEl: container, file: { path: "Old.md", basename: "Old" }, editor,
       mode: "source", conflictReadOnly: false, lastSavedText: "saved", saveTimer: null, flushInFlight: null,
       pagePreview: { hide() {}, destroy() {} }, titleEl: el(), titleParentEl: el(), readingContentEl: null,
       clearConflictState: vi.fn(), applyMode: vi.fn(), buildEditor: (text: string) => { editor.state.doc.toString = () => text; },
