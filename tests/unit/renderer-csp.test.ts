@@ -70,7 +70,13 @@ describe.each(SHELLS)("renderer CSP (%s)", (shell) => {
   });
 });
 
-it("ships the same policy in both app shells", () => {
-  const [desktop, mobile] = SHELLS.map(readCsp);
-  expect(mobile).toBe(desktop);
+it("keeps shared policies identical while authorizing only the desktop's fixed PDF frame", () => {
+  const [desktop, mobile] = SHELLS.map(shell => parseDirectives(readCsp(shell)));
+  // PDF resource authorization and its fixed protocol are desktop capabilities.
+  // Mobile keeps its narrower original frame fallback; it gains no scheme.
+  expect(desktop.get("frame-src")).toEqual(["'self'", "geode-pdf://viewer/index.html"]);
+  expect(mobile.has("frame-src")).toBe(false);
+  expect(mobile.get("child-src") ?? mobile.get("default-src")).toEqual(["'self'"]);
+  desktop.delete("frame-src");
+  expect(mobile).toEqual(desktop);
 });
