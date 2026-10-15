@@ -1,7 +1,7 @@
 # ADR-0038 persistent native layer: bounded Electron prototype
 
 **Task:** `5ebcf1f8-5fab-421f-8ab8-1989300588b7`, parent `93f1491d-7139-4451-885c-fc34c4c30780`, Solution `ac76d20b-1183-4698-af07-21e3d0560dfe`.
-**Baseline:** `49a29e0`, source `c0e7e5e`; separate `test/overnight-native-layer-prototype` worktree. Proposal awaiting coordinator review before implementation.
+**Baseline:** `49a29e0`, source `c0e7e5e`; separate `test/overnight-native-layer-prototype` worktree. Coordinator FULLREAD and accepted proposal `7b9b46b` before implementation, under the existing overnight reversible-build authority. Deliberate user tab activation retains normal Base blur/save behavior; only background visibility changes can be a no-blur witness.
 
 ## Evidence and reference
 
