@@ -1,9 +1,9 @@
 # Editor parity evidence
 
-Captured 2026-10-14 on the local macOS Electron build from commit `bd322b4`.
+Captured 2026-10-15 on Linux test-worker-2 in Electron from commit `a47e26d`.
 Synthetic throwaway vaults contain only the fixture text from
-`tests/e2e/editor-folding-multicursor.spec.ts`. Both captures are 2560 × 1680
-physical pixels (1280 × 840 CSS pixels, 2× desktop scale). They were inspected
+`tests/e2e/editor-folding-multicursor.spec.ts`. Both captures are 1280 × 815
+physical pixels (1× desktop scale). They were inspected
 visually after the two real-input Electron tests passed. These show local test
 behavior; they are not release verification.
 

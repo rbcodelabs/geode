@@ -6,7 +6,7 @@ Compass delivery Task: f5337037-795c-4e4c-93de-2fa837226b97 → Solution 7e7d8e2
 
 ## Behavior
 
-In Source mode and Live Preview, heading and list sections fold using gutter chevrons. Heading folding and indent folding default on and have independent Editor settings. Existing explicit saved values remain respected. Fold all / Unfold all headings and lists operate on the document; Fold more selects the nearest unfolded enclosing section; Fold less unfolds the nearest folded enclosing section. Nested fold state survives parent unfolding. Folding does not change Markdown files. Open-note folds survive workspace restoration when the document still matches, and invalid or stale persisted ranges are ignored.
+In Source mode and Live Preview, heading and list sections fold using gutter chevrons. Heading folding and indent folding default on and have independent Editor settings. Existing explicit saved values remain respected. Fold all / Unfold all headings and lists operate on the document; Fold more selects the nearest unfolded enclosing section; Fold less unfolds the visible enclosing folded section. Nested fold state survives parent unfolding. Folding does not change Markdown files. Open-note folds survive workspace restoration when the document still matches, and invalid or stale persisted ranges are ignored.
 
 Alt/Option-click adds cursors; unmodified clicking and Escape clear additional selections. Shift+Alt/Option drag and middle-button drag create rectangular selections. Typing and deletion apply to all ranges, with normal undo behavior.
 
