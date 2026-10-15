@@ -319,9 +319,14 @@ test("hides and restores the ribbon without unloading plugin actions, and persis
       await window.screenshot({ path: path.join(screenshotDir, "left-ribbon-hidden-setting.png") });
     }
     await expect
-      .poll(() =>
-        JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "app.json"), "utf8")).showRibbon
-      )
+      .poll(() => {
+        try { return JSON.parse(fs.readFileSync(path.join(vaultDir, ".geode", "app.json"), "utf8")).showRibbon; }
+        catch (error) {
+          // The UI changes before the asynchronous settings write creates the file.
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+          throw error;
+        }
+      })
       .toBe(false);
 
     await app.close();
