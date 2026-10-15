@@ -1,3 +1,4 @@
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken } from "../workspaces/render-ownership";
 import { Compartment, EditorSelection, EditorState, Prec } from "@codemirror/state";
 import {
   EditorView,
@@ -97,7 +98,10 @@ export class MarkdownView implements View {
   private pagePreview: PagePreviewController;
   private commentButton: HTMLButtonElement;
 
-  constructor(private app: App) {
+  readonly renderOwner: RenderScope;
+  constructor(private app: App, parentOwner?: RenderScope) {
+    const options = { writer: this, close: () => this.closeNative(), resume: () => this.resumeOwnedRendering() };
+    this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "markdown-view";
     this.headerEl = document.createElement("div");
@@ -206,10 +210,16 @@ export class MarkdownView implements View {
     return this.app.workspace?.findLeafForView(this) ?? null;
   }
 
-  async setFile(file: TFile): Promise<void> {
+  setFile(file: TFile): Promise<void> {
+    return this.renderOwner ? this.renderOwner.run(token => this.setFileNative(file, token)) : this.setFileNative(file);
+  }
+
+  private async setFileNative(file: TFile, token?: RenderToken): Promise<void> {
     this.pagePreview.hide();
     await this.flush();
+    token?.check();
     const diskText = await this.app.vault.read(file);
+    token?.check();
     this.lineEnding = diskText.includes("\r\n") ? "\r\n" : "\n";
     const text = diskText.replace(/\r\n/g, "\n");
     this.file = file;
@@ -280,7 +290,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
+            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.renderOwner), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
@@ -430,7 +440,7 @@ export class MarkdownView implements View {
       this.mode = "live";
       this.lastEditingMode = "live";
       this.editor?.dispatch({ effects: this.editingCompartment.reconfigure([
-        livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()),
+        livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.renderOwner),
         commentDecorations,
         commentInteractions((id) => this.app.selectComment(id)),
       ]) });
@@ -504,6 +514,15 @@ export class MarkdownView implements View {
       if (this.pendingSaveText === text) this.pendingSaveText = null;
       if (this.flushInFlight === write) this.flushInFlight = null;
     }
+  }
+
+  /** Internal named-layout preflight; recovery buffers are never flushed. */
+  assertWorkspaceLoadReady(): void {
+    if (this.conflictReadOnly) throw new Error("Resolve this note's conflict or recovery before loading a workspace.");
+  }
+
+  async settleWorkspaceLoad(): Promise<void> {
+    this.assertWorkspaceLoadReady(); await this.flush(); this.assertWorkspaceLoadReady();
   }
 
   async prepareVaultSwitch(): Promise<void> {
@@ -710,7 +729,7 @@ export class MarkdownView implements View {
     this.lastEditingMode = this.mode;
     this.editor?.dispatch({
       effects: this.editingCompartment.reconfigure(
-        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()), commentDecorations, commentInteractions((id) => this.app.selectComment(id))] : []
+        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.renderOwner), commentDecorations, commentInteractions((id) => this.app.selectComment(id))] : []
       ),
     });
     this.applyMode();
@@ -723,9 +742,22 @@ export class MarkdownView implements View {
     if (editing && focusEditor) this.editor?.focus();
   }
 
-  private async renderReading() {
+  private async renderReading(): Promise<void> {
+    const render = (token?: RenderToken) => this.renderReadingNative(token);
+    try { await (this.renderOwner ? this.renderOwner.run(render) : render()); }
+    catch (error) { if (!(error instanceof ScopeCancelled)) throw error; }
+  }
+
+  private resumeOwnedRendering(): void {
+    if (!this.editor || !this.file) return;
+    if (this.mode === "reading") { void this.renderReading().catch(() => this.app.notify("Could not refresh the resumed note.")); return; }
+    this.editor.dispatch({ effects: this.editingCompartment.reconfigure(this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.renderOwner), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : []) });
+  }
+
+  private async renderReadingNative(token?: RenderToken) {
     this.pagePreview.hide();
     await this.flush();
+    token?.check();
     if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);
     this.readingContentEl = null;
     this.readingEl.innerHTML = "";
@@ -741,7 +773,7 @@ export class MarkdownView implements View {
     const contentEl = document.createElement("div");
     this.readingContentEl = contentEl;
     inner.appendChild(contentEl);
-    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf());
+    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf(), this.renderOwner);
   }
 
   /** Jump the editor to a given offset (used by outline/search). */
@@ -845,7 +877,9 @@ export class MarkdownView implements View {
     this.editor?.requestMeasure();
   }
 
-  async onClose(): Promise<void> {
+  onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
+
+  private async closeNative(): Promise<void> {
     this.pagePreview.destroy();
     this.clearSyncConflict();
     await this.flush();
