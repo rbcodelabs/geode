@@ -100,7 +100,7 @@ export class MarkdownView implements View {
 
   readonly renderOwner: RenderScope;
   constructor(private app: App, parentOwner?: RenderScope) {
-    const options = { writer: this, close: () => this.closeNative(), resume: () => this.resumeOwnedRendering() };
+    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.prepareCloseNative(), failureKey: "markdown-save", close: () => this.closeNative(), resume: () => this.resumeOwnedRendering() };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "markdown-view";
@@ -402,6 +402,7 @@ export class MarkdownView implements View {
   }
 
   async applyCommentMutation(mutator: (source: string) => string): Promise<void> {
+    this.renderOwner?.assertAdmission();
     if (this.vaultSwitching || this.conflictReadOnly) throw new Error("Comment editing is paused while the note is read-only");
     if (!this.editor) throw new Error("The note editor is not available");
     const source = this.editor.state.doc.toString();
@@ -471,13 +472,19 @@ export class MarkdownView implements View {
 
   private scheduleSave() {
     if (this.saveTimer) window.clearTimeout(this.saveTimer);
-    if (this.vaultSwitching || this.conflictReadOnly) return;
+    if (this.vaultSwitching || this.conflictReadOnly || (this.renderOwner && !this.renderOwner.admissionAllowed)) return;
     this.saveTimer = window.setTimeout(() => this.flush(), 1000);
     this.app.statusBar.update();
   }
 
   /** Persist pending edits immediately. */
   async flush(): Promise<void> {
+    if (this.renderOwner?.closed) return;
+    if (this.renderOwner?.admissionAllowed) await this.renderOwner.retry(() => this.flushNative(), "markdown-save");
+    else await this.flushNative();
+  }
+
+  private async flushNative(): Promise<void> {
     if (this.saveTimer) {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -670,7 +677,15 @@ export class MarkdownView implements View {
     this.editor?.contentDOM.removeAttribute("aria-readonly");
   }
 
-  private async commitTitleRename() {
+  private runOwnedAction(key: string, action: (token?: RenderToken) => Promise<void>): Promise<void> {
+    if (!this.renderOwner) return action();
+    if (!this.renderOwner.admissionAllowed) return Promise.resolve();
+    const task = this.renderOwner.retry(action, key); void task.catch(() => {}); return task;
+  }
+
+  private commitTitleRename(): Promise<void> { return this.runOwnedAction("rename", token => this.commitTitleRenameNative(token)); }
+
+  private async commitTitleRenameNative(token?: RenderToken) {
     const newName = this.titleEl.textContent?.trim() ?? "";
     if (!this.file) return;
     if (newName === this.file.basename) {
@@ -678,7 +693,10 @@ export class MarkdownView implements View {
       return;
     }
     const oldName = this.file.basename;
-    if (!(await this.app.renameFile(this.file, newName))) this.titleEl.textContent = oldName;
+    const file = this.file; token?.check();
+    const renamed = await this.app.renameFile(file, newName);
+    token?.check();
+    if (!renamed && this.file === file) this.titleEl.textContent = oldName;
   }
 
   getText(): string {
@@ -830,11 +848,14 @@ export class MarkdownView implements View {
    * or generates a short one and appends it to that line (persisting the file),
    * then stores a block bookmark.
    */
-  async bookmarkBlockUnderCursor(): Promise<void> {
+  bookmarkBlockUnderCursor(): Promise<void> { return this.runOwnedAction("bookmark", token => this.bookmarkBlockNative(token)); }
+
+  private async bookmarkBlockNative(token?: RenderToken): Promise<void> {
     if (!this.file || !this.editor) {
       this.app.notify("Open a note to bookmark a block");
       return;
     }
+    const file = this.file;
     const doc = this.editor.state.doc;
     const cursorLine0 = doc.lineAt(this.editor.state.selection.main.head).number - 1;
     const cache = this.app.metadataCache.getFileCache(this.file);
@@ -858,7 +879,9 @@ export class MarkdownView implements View {
       this.editor.dispatch({ changes: { from: cmLine.to, insert: `${prefix}^${blockId}` } });
       await this.flush();
     }
-    await this.app.addBlockBookmark(this.file, blockId);
+    token?.check();
+    if (this.file !== file) throw new ScopeCancelled();
+    await this.app.addBlockBookmark(file, blockId);
   }
 
   onOpen(): void {
@@ -879,10 +902,11 @@ export class MarkdownView implements View {
 
   onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
 
+  private async prepareCloseNative(): Promise<void> { await this.flushNative(); }
+
   private async closeNative(): Promise<void> {
     this.pagePreview.destroy();
     this.clearSyncConflict();
-    await this.flush();
     this.vaultSwitching = true;
     this.editor?.destroy();
     this.editor = null;

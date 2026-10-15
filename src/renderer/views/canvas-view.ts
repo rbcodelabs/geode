@@ -104,6 +104,7 @@ export class CanvasView implements View {
   private readonly redoStack: string[] = [];
   private readonly objectUrls = new Set<string>();
   private readonly markdownContentEls = new Set<HTMLElement>();
+  private readonly pendingConversions = new Map<string, string>();
   private renderVersion = 0;
   private selectionControlsEl: HTMLElement | null = null;
   private colorPaletteEl: HTMLElement | null = null;
@@ -122,7 +123,7 @@ export class CanvasView implements View {
 
   readonly renderOwner: RenderScope;
   constructor(private app: App, parentOwner?: RenderScope) {
-    const options = { writer: this, close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null) this.render(); } };
+    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null) this.render(); } };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "canvas-view";
@@ -1230,7 +1231,16 @@ export class CanvasView implements View {
     }).open();
   }
 
-  private async convertTextNodeToFile(nodeId: string, rawName: string): Promise<void> {
+  private convertTextNodeToFile(nodeId: string, rawName: string): Promise<void> {
+    const task = this.queueOwnedWrite(`conversion:${nodeId}`, token => this.convertTextNodeToFileNative(nodeId, rawName, token), true);
+    void task.catch(() => {
+      const path = this.pendingConversions.get(nodeId);
+      if (path) this.app.notify(`Conversion paused. ${path} was preserved; retry Convert to file to finish.`);
+    });
+    return task;
+  }
+
+  private async convertTextNodeToFileNative(nodeId: string, rawName: string, token?: RenderToken): Promise<void> {
     if (this.recoveryError !== null) return;
     const base = rawName.trim().replace(/\.md$/i, "").trim();
     if (!base || INVALID_MARKDOWN_FILE_NAME.test(base)) {
@@ -1238,17 +1248,23 @@ export class CanvasView implements View {
       return;
     }
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
-    if (!node || node.type !== "text") return;
-    const filePath = this.app.vault.availablePath(this.file?.parent ?? "", base, "md");
-    await this.app.vault.create(filePath, node.text);
-    if (!this.document.nodes.includes(node) || node.type !== "text") return;
+    if (!node || (node.type !== "text" && !this.pendingConversions.has(nodeId))) return;
+    const filePath = this.pendingConversions.get(nodeId) ?? this.app.vault.availablePath(this.file?.parent ?? "", base, "md");
+    token?.check();
+    if (!this.pendingConversions.has(nodeId) && node.type === "text") {
+      await this.app.vault.create(filePath, node.text);
+      this.pendingConversions.set(nodeId, filePath);
+    }
+    token?.check();
+    if (!this.document.nodes.includes(node)) return;
     const converted = node as unknown as Record<string, unknown>;
     converted.type = "file";
     converted.file = filePath;
     delete converted.text;
     delete converted.subpath;
     this.render();
-    void this.persist();
+    await this.doPersist(token);
+    this.pendingConversions.delete(nodeId);
   }
 
   private canvasColor(color: string): string {
@@ -2822,20 +2838,25 @@ export class CanvasView implements View {
     this.containerEl.dataset.panY = String(this.pan.y);
   }
 
-  private async persist(): Promise<void> {
-    if (this.conflictReadOnly) return;
+  private queueOwnedWrite(key: string, write: (token?: RenderToken) => Promise<void>, retry = false): Promise<void> {
+    if (this.renderOwner?.closed || this.conflictReadOnly) return Promise.resolve();
     if (this.vaultSwitching) {
       this.persistRequestedWhileSuspended = true;
-      return;
+      return Promise.resolve();
     }
-    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist());
+    if (this.renderOwner && !this.renderOwner.admissionAllowed) { this.persistRequestedWhileSuspended = true; return Promise.resolve(); }
+    const previous = this.persistQueue;
+    const operation = async (token?: RenderToken): Promise<void> => { await previous.catch(() => {}); token?.check(); await write(token); };
+    this.persistQueue = this.renderOwner ? retry ? this.renderOwner.retry(operation, key) : this.renderOwner.run(operation, key) : operation();
     // Most Canvas commands intentionally fire-and-forget; attach a rejection
     // observer while preserving the rejected queue for pause/switch callers.
     void this.persistQueue.catch(() => {});
     return this.persistQueue;
   }
 
-  private async doPersist(): Promise<void> {
+  private persist(retry = false): Promise<void> { return this.queueOwnedWrite("canvas-save", token => this.doPersist(token), retry); }
+
+  private async doPersist(token?: RenderToken): Promise<void> {
     if (!this.file || this.recoveryError !== null) return;
     const text = serializeCanvas(this.document);
     if (text === this.pendingKnownText || (this.pendingKnownText === null && this.matchesLastKnownDocument())) return;
@@ -2854,13 +2875,16 @@ export class CanvasView implements View {
     // just-dropped node) that hasn't itself reached disk yet.
     this.suppressReconcileModify = true;
     try {
+      token?.check();
       await this.app.vault.modify(this.file, text);
       if (prior !== null) this.pushHistory(this.undoStack, prior);
       this.redoStack.length = 0;
       this.lastKnownText = text;
-      this.containerEl.dataset.canvasDirty = "false";
-      this.containerEl.dataset.canvasSaved = text;
-      this.setSaveStatus("Canvas saved", false, false);
+      if (!token || token.current()) {
+        this.containerEl.dataset.canvasDirty = "false";
+        this.containerEl.dataset.canvasSaved = text;
+        this.setSaveStatus("Canvas saved", false, false);
+      }
     } catch (error) {
       // The write never reached the vault, so it never fired (and therefore
       // never consumed) the "modify" event that would otherwise clear this.
@@ -2884,7 +2908,7 @@ export class CanvasView implements View {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = "Retry Canvas save";
-      button.addEventListener("click", () => { void this.persist(); });
+      button.addEventListener("click", () => { void this.persist(true); });
       this.saveStatusEl.appendChild(button);
     }
   }
@@ -2941,7 +2965,11 @@ export class CanvasView implements View {
     if (stack.length > HISTORY_LIMIT) stack.splice(0, stack.length - HISTORY_LIMIT);
   }
 
-  private async restoreHistory(direction: "undo" | "redo"): Promise<void> {
+  private restoreHistory(direction: "undo" | "redo"): Promise<void> {
+    return this.queueOwnedWrite("history", token => this.restoreHistoryNative(direction, token), true);
+  }
+
+  private async restoreHistoryNative(direction: "undo" | "redo", token?: RenderToken): Promise<void> {
     if (!this.file || this.recoveryError !== null) return;
     const source = direction === "undo" ? this.undoStack : this.redoStack;
     const target = direction === "undo" ? this.redoStack : this.undoStack;
@@ -2964,18 +2992,21 @@ export class CanvasView implements View {
     // must not let its own "modify" event bounce back into a spurious reload.
     this.suppressReconcileModify = true;
     try {
+      token?.check();
       await this.app.vault.modify(this.file, snapshot);
       source.pop();
       this.pushHistory(target, current);
       this.lastKnownText = snapshot;
-      this.containerEl.dataset.canvasDirty = "false";
-      this.containerEl.dataset.canvasSaved = snapshot;
-      delete this.containerEl.dataset.canvasSaveError;
+      if (!token || token.current()) {
+        this.containerEl.dataset.canvasDirty = "false";
+        this.containerEl.dataset.canvasSaved = snapshot;
+        delete this.containerEl.dataset.canvasSaveError;
+      }
     } catch (error) {
       this.suppressReconcileModify = false;
       this.document = currentDocument;
       this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
-      this.render();
+      if (!token || token.current()) this.render();
       throw error;
     }
   }

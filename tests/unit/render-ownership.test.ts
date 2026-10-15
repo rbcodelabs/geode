@@ -84,17 +84,25 @@ it("preserves the owner and its children when failed pending work prevents safe 
 it("keeps a pre-destructor failure until its explicit retry succeeds, without retiring siblings", async () => {
   const registry = new RenderOwnership(); const owner = {}; const root = registry.create(owner);
   const close = vi.fn(async () => {}); root.child({ close }); const failed = root.child();
-  await expect(failed.run(async () => { throw new Error("row failed"); }, "row")).rejects.toThrow("row failed");
+  let oldToken!: { current(): boolean };
+  await expect(failed.run(async token => { oldToken = token; throw new Error("row failed"); }, "row")).rejects.toThrow("row failed");
   await expect(root.close()).rejects.toThrow("row failed"); expect(close).not.toHaveBeenCalled();
   await expect(failed.run(async () => {}, "unrelated")).resolves.toBeUndefined();
   await expect(root.close()).rejects.toThrow("row failed"); expect(close).not.toHaveBeenCalled();
-  await failed.retry(async () => {}, "row"); await root.close(); expect(close).toHaveBeenCalledOnce();
+  await failed.retry(async () => {}, "row"); expect(oldToken.current()).toBe(false); await root.close(); expect(close).toHaveBeenCalledOnce();
 });
 it("does not reopen a child under a failed partially destroyed parent", async () => {
   const registry = new RenderOwnership(); const root = registry.create({}); const child = root.child();
   root.child({ close: async () => { throw new Error("destructor failed"); } });
   await expect(root.close()).rejects.toThrow("destructor failed");
   expect(() => child.run(async () => {})).toThrow(/admission/i);
+});
+it("preflights every descendant before any close preparation can flush", async () => {
+  const registry = new RenderOwnership(); const flush = vi.fn(async () => {}); let draft = true;
+  const root = registry.create({}, { prepareClose: flush }); const close = vi.fn(async () => {});
+  root.child({ preflightClose: () => { if (draft) throw new Error("active draft"); }, close });
+  await expect(root.close()).rejects.toThrow("active draft"); expect(flush).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
+  draft = false; await root.close(); expect(flush).toHaveBeenCalledOnce(); expect(close).toHaveBeenCalledOnce();
 });
 it("releases every retained owner and the admission latch even if one resume callback fails", async () => {
   const registry = new RenderOwnership(); const one = {}; const two = {}; const resumed = vi.fn();
