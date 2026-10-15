@@ -1,0 +1,102 @@
+/** Internal native-render lifecycle tracking; not part of the plugin API. */
+export class ScopeCancelled extends Error {
+  constructor() { super("The render owner changed before initialization completed."); }
+}
+interface ScopeOptions { writer?: unknown; close?(): Promise<void>; resume?(): void }
+export interface RenderToken { current(): boolean; check(): void }
+function raise(errors: unknown[]): void {
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, "Native render ownership could not settle.");
+}
+export class RenderScope {
+  private state: "active" | "frozen" | "closed" = "active";
+  private generation = 0;
+  private readonly children = new Set<RenderScope>();
+  private readonly pending = new Set<Promise<unknown>>();
+  private failures: unknown[] = [];
+  private closing: Promise<void> | undefined;
+  constructor(private readonly registry: RenderOwnership, private readonly options: ScopeOptions = {}, private readonly parent?: RenderScope, private readonly owner?: object) {}
+  get closed(): boolean { return this.state === "closed"; }
+  private checkAdmission(): void { if (this.state !== "active" || !this.registry.admissionOpen) throw new Error("Native render admission is paused during a workspace operation."); }
+  child(options: ScopeOptions = {}): RenderScope {
+    this.checkAdmission(); const child = new RenderScope(this.registry, options, this); this.children.add(child); return child;
+  }
+  run<T>(operation: (token: RenderToken) => Promise<T>): Promise<T> {
+    this.checkAdmission(); const generation = this.generation;
+    const token: RenderToken = { current: () => this.state === "active" && this.generation === generation, check: () => { if (!token.current()) throw new ScopeCancelled(); } };
+    // Register synchronously before invoking any asynchronous initializer.
+    const task = Promise.resolve().then(() => { token.check(); return operation(token); });
+    this.pending.add(task);
+    void task.then(() => this.pending.delete(task), error => { this.pending.delete(task); if (!(error instanceof ScopeCancelled)) this.failures.push(error); });
+    return task;
+  }
+  private freeze(): void {
+    if (this.state === "closed") return;
+    this.state = "frozen"; this.generation++;
+    for (const child of this.children) child.freeze();
+  }
+  private async drainTasks(): Promise<void> {
+    while (this.pending.size) await Promise.allSettled([...this.pending]);
+    raise(this.failures.splice(0));
+  }
+  async drain(): Promise<void> {
+    if (this.closing) return this.closing;
+    const errors: unknown[] = [];
+    try { await this.drainTasks(); } catch (error) { errors.push(error); }
+    for (const child of this.children) { try { await child.drain(); } catch (error) { errors.push(error); } }
+    raise(errors);
+  }
+  freezeAdmission(): void { this.freeze(); }
+  async freezeAndDrain(): Promise<void> { this.freeze(); await this.drain(); }
+  writers(): unknown[] {
+    const result: unknown[] = this.options.writer === undefined ? [] : [this.options.writer];
+    for (const child of this.children) result.push(...child.writers());
+    return result;
+  }
+  resume(): void {
+    if (this.state !== "frozen") return;
+    this.state = "active"; this.generation++;
+    for (const child of this.children) child.resume(); this.options.resume?.();
+  }
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
+    this.state = "closed"; this.generation++;
+    this.closing = Promise.resolve().then(async () => {
+      const errors: unknown[] = [];
+      try { await this.drainTasks(); } catch (error) { errors.push(error); }
+      for (const child of [...this.children]) { try { await child.close(); } catch (error) { errors.push(error); } }
+      try { await this.options.close?.(); } catch (error) { errors.push(error); }
+      if (errors.length && this.parent && !this.parent.closing) this.parent.failures.push(...errors);
+      this.parent?.children.delete(this); if (this.owner) this.registry.retire(this.owner, this);
+      raise(errors);
+    });
+    // Existing widget destroy() callers may begin tracked teardown synchronously.
+    void this.closing.catch(() => {});
+    return this.closing;
+  }
+}
+export class RenderOwnership {
+  private readonly roots = new Map<object, RenderScope>();
+  admissionOpen = true;
+  create(owner: object, options: ScopeOptions = {}): RenderScope {
+    if (!this.admissionOpen) throw new Error("Native render admission is paused during a workspace operation.");
+    if (this.roots.has(owner)) throw new Error("This native render owner is already registered.");
+    const scope = new RenderScope(this, options, undefined, owner); this.roots.set(owner, scope); return scope;
+  }
+  retire(owner: object, scope: RenderScope): void { if (this.roots.get(owner) === scope) this.roots.delete(owner); }
+  select(owners: ReadonlySet<object>): RenderScope[] {
+    if ([...this.roots.keys()].some(owner => !owners.has(owner))) throw new Error("A native writer is outside the registered workspace ownership tree.");
+    return [...this.roots.values()];
+  }
+  async hold(owners: ReadonlySet<object>): Promise<RenderScope[]> {
+    const scopes = this.select(owners); this.admissionOpen = false;
+    for (const scope of scopes) scope.freezeAdmission();
+    try { const results = await Promise.allSettled(scopes.map(scope => scope.drain())); raise(results.flatMap(result => result.status === "rejected" ? [result.reason] : [])); return scopes; }
+    catch (error) { this.release(scopes); throw error; }
+  }
+  release(scopes: readonly RenderScope[]): void { this.admissionOpen = true; for (const scope of scopes) scope.resume(); }
+}
+const registries = new WeakMap<object, RenderOwnership>();
+export function nativeRenderOwnership(app: object): RenderOwnership {
+  let registry = registries.get(app); if (!registry) { registry = new RenderOwnership(); registries.set(app, registry); } return registry;
+}
