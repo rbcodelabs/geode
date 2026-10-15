@@ -83,7 +83,7 @@ it("keeps refused conflict controls interactive instead of blurring a nested dra
 
 it("keeps partially retired controls disabled with a persistent error instead of resuming them", async () => {
   const { view, node, wrapper } = fixture(); view.setSaveStatus = vi.fn();
-  view.app.markdownRenderer.prepareDisposal.mockResolvedValue({ commit: async () => { throw new Error("destructor failed"); }, abort: vi.fn() });
+  view.app.markdownRenderer.prepareDisposal.mockResolvedValue({ destructionStarted: true, commit: async () => { throw new Error("destructor failed"); }, abort: vi.fn() });
   await view.deleteSelection();
   expect(view.document.nodes).toEqual([node]); expect(view.persist).not.toHaveBeenCalled();
   expect(wrapper.inert).toBe(true); expect(view.presentationRetirementFailed).toBe(true);
@@ -168,4 +168,12 @@ it("blocks ordinary selection changes during preparation while checking direct m
   const deleting = view.deleteSelection(); view.clearSelection();
   expect([...view.selectedIds]).toEqual(["a"]);
   finish(); await deleting; expect(view.document.nodes).toEqual([]);
+});
+
+it("restores connected Canvas controls when commit refuses before its first destructor", async () => {
+  const { view, node, wrapper } = fixture(); view.setSaveStatus = vi.fn(); const abort = vi.fn();
+  view.app.markdownRenderer.prepareDisposal.mockResolvedValue({ destructionStarted: false, commit: async () => { throw new Error("late child draft"); }, abort });
+  await view.deleteSelection();
+  expect(abort).toHaveBeenCalledOnce(); expect(wrapper.inert).toBe(false); expect(view.presentationRetirementFailed).not.toBe(true);
+  expect(view.document.nodes).toEqual([node]); expect(view.persist).not.toHaveBeenCalled();
 });
