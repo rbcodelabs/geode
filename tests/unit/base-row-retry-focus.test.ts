@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { BaseView } from "../../src/renderer/views/base-view";
+import { RenderOwnership } from "../../src/renderer/workspaces/render-ownership";
 import { BasesTableView } from "../../src/renderer/views/bases/table-view";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -21,7 +22,10 @@ function fixture() {
 }
 it("keeps mouse Retry focus from triggering an ordinary blur submission and retries the latest matching draft", async () => {
   const { view } = fixture();
-  await expect(view.commitCellEdit({ path: "Note.md" }, "note.priority", "9", { check() {} })).rejects.toThrow("disk rejected");
+  Object.assign(view, { file: null, renderOwner: new RenderOwnership().create(view), rowFailures: new Map(), retainedNativeFailures: [], rowSubmissionSequence: 0, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map() });
+  view.editCell = (BaseView.prototype as any).editCell.bind(view);
+  await expect(view.editCell({ path: "Note.md" }, "note.priority", "9")).rejects.toThrow("disk rejected");
+  view.editCell = vi.fn(async () => {});
   const button = view.saveStatusEl.children.find((el: Element) => el.textContent === "Retry Base save");
   expect(button.handlers.pointerdown).toBeTypeOf("function");
   const preventDefault = vi.fn(); button.handlers.pointerdown({ preventDefault }); expect(preventDefault).toHaveBeenCalledOnce();

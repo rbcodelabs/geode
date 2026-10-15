@@ -180,3 +180,24 @@ operation, choose the explicit-only state and a retained recovery inventory.
 Concurrent writes, multiple unresolved targets, rename and conflict behavior need
 their own evidence; this ADR does not infer correctness from key equality alone.
 No complete Workspaces or Obsidian parity claim follows from this policy.
+
+## Implementation checkpoints
+
+`6a09a34` implements captured Base/table edit sessions and one coalesced Base query
+refresh gate. `5bc0ac1` additionally guards stale input keyboard/blur callbacks
+before focus/row lookup and preserves current read-only state after rejected saves.
+The following exact-target package uses the existing scope retry snapshot for every
+row submission; a Base-owned failure record retains immutable target/payload and
+admission sequence. Successful persistence removes only its captured record; later
+failures remain. Recovery callbacks validate Base/vault/file identity, and the
+read-to-write seam rechecks identity and source conflict state.
+
+Focused local verification on locked dependencies: nine files, 92 tests passed;
+typecheck and desktop/mobile build passed. The 17-flow Electron specification is
+prepared and listed, with actual execution pending the coordinator's shared slot.
+It covers the original Canvas cases plus ordinary Enter/blur/Shift-Tab recovery
+and connected-input query refresh. Mobile recovery, actual overlapping A/B saves,
+and broader Reading/Live Preview ownership remain outstanding. Concurrent
+read-modify-write operations against the same note are not serialized by this
+package and have not been proven safe. No complete native-boundary or parity
+claim follows from the focused checks.
