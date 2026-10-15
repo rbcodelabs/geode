@@ -67,7 +67,7 @@ export class RenderScope {
       for (const child of [...this.children]) { try { await child.close(); } catch (error) { errors.push(error); } }
       try { await this.options.close?.(); } catch (error) { errors.push(error); }
       if (errors.length && this.parent && !this.parent.closing) this.parent.failures.push(...errors);
-      this.parent?.children.delete(this); if (this.owner) this.registry.retire(this.owner, this);
+      this.parent?.children.delete(this); if (this.owner && !errors.length) this.registry.retire(this.owner, this);
       raise(errors);
     });
     // Existing widget destroy() callers may begin tracked teardown synchronously.
@@ -78,6 +78,7 @@ export class RenderScope {
 export class RenderOwnership {
   private readonly roots = new Map<object, RenderScope>();
   admissionOpen = true;
+  private holding: readonly RenderScope[] | null = null;
   create(owner: object, options: ScopeOptions = {}): RenderScope {
     if (!this.admissionOpen) throw new Error("Native render admission is paused during a workspace operation.");
     if (this.roots.has(owner)) throw new Error("This native render owner is already registered.");
@@ -89,12 +90,16 @@ export class RenderOwnership {
     return [...this.roots.values()];
   }
   async hold(owners: ReadonlySet<object>): Promise<RenderScope[]> {
-    const scopes = this.select(owners); this.admissionOpen = false;
+    if (this.holding) throw new Error("A native ownership barrier is already in progress.");
+    const scopes = this.select(owners); this.holding = scopes; this.admissionOpen = false;
     for (const scope of scopes) scope.freezeAdmission();
     try { const results = await Promise.allSettled(scopes.map(scope => scope.drain())); raise(results.flatMap(result => result.status === "rejected" ? [result.reason] : [])); return scopes; }
     catch (error) { this.release(scopes); throw error; }
   }
-  release(scopes: readonly RenderScope[]): void { this.admissionOpen = true; for (const scope of scopes) scope.resume(); }
+  release(scopes: readonly RenderScope[]): void {
+    if (this.holding !== scopes) throw new Error("This ownership hold is no longer current.");
+    this.holding = null; this.admissionOpen = true; for (const scope of scopes) scope.resume();
+  }
 }
 const registries = new WeakMap<object, RenderOwnership>();
 export function nativeRenderOwnership(app: object): RenderOwnership {
