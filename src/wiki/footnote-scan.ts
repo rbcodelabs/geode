@@ -164,4 +164,3 @@ export function scanFootnotes(text: string, start = 0): FootnoteScan {
   for (const def of definitions) def.number = numbers.get(def.id) ?? null;
   return { references, definitions };
 }
-

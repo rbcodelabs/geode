@@ -5969,7 +5969,7 @@
         "tests/unit/metadata-parity-extraction.test.ts",
         "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case."
+      "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
     },
     {
       "id": "DEV-ec1772bb1c78",
@@ -6078,7 +6078,7 @@
         "tests/unit/metadata-parity-extraction.test.ts",
         "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed."
+      "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
     },
     {
       "id": "DEV-1c9adcc843f7",
@@ -23636,7 +23636,7 @@
         "tests/unit/metadata-parity-extraction.test.ts",
         "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case."
+      "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
     },
     {
       "id": "API-MEMBER-307c0cc6c879",
@@ -23745,7 +23745,7 @@
         "tests/unit/metadata-parity-extraction.test.ts",
         "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed."
+      "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
     },
     {
       "id": "API-MEMBER-a316e0e6cf63",

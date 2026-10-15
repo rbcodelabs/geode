@@ -215,7 +215,7 @@ test("Extract via the editor context menu with Shift+Enter prepends; Cmd+Enter c
     await input.fill("Fresh");
     await input.press("Meta+Enter");
     await expect.poll(() => h.exists("Fresh.md")).toBe(true);
-    expect(h.read("Fresh.md")).toMatch(/^From Source to Fresh on \d{4}-\d{2}-\d{2}\n\nBefore\n$/);
+    await expect.poll(() => h.read("Fresh.md")).toMatch(/^From Source to Fresh on \d{4}-\d{2}-\d{2}\n\nBefore\n$/);
     await expect
       .poll(() => win.evaluate(() => (window as any).app.getActiveMarkdownView().editor.state.doc.toString()))
       .toBe("[[Fresh]]\n[[Dest]]\nAfter\n");

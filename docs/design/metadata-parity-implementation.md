@@ -77,3 +77,20 @@ also cover many distinct unmatched widths. List block records are populated in
 one pass rather than rescanning every item for every list section. Snapshot
 `parserLimitations` names the remaining bounded cases and no longer says Markdown
 links, tilde fences, or paragraph block records are universally unsupported.
+
+## Delivery review: additional bounded syntax gaps
+
+Independent review of the complete Metadata feature diff identified two more
+unverified cases, retained as partial coverage rather than expanded during delivery:
+
+- An escaped closing bracket in an authored label, such as `[a\]b](Note.md)`,
+  resolves the destination but the current display label extraction truncates it
+  at the first closing bracket. Do not claim exact display-text compatibility
+  for that syntax.
+- A linked image, such as `[![alt](image.png)](Note.md)`, exposes the outer link
+  but the nested image is omitted from the embed projection. Do not claim complete
+  image-reference extraction inside links.
+
+These are follow-up parser gaps; the current package does not change their behavior.
+The accepted metadata-link design is now included alongside this implementation
+report so the design reference can be reviewed without another worktree.

@@ -2663,14 +2663,14 @@
     "evidence": [
       "tests/e2e/file-editor-menu-events.spec.ts"
     ],
-    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. Also now observed firing from the tab-header right-click menu (source \"tab-header\") and the view-header \"more options\" \u22ee button (source \"more-options\"), both passing the optional fourth leaf argument; a tab with no file (e.g. Graph) still shows its built-in menu without firing the event. Remaining gap: Geode has no link/embed context menu at all yet, so the event is not fired from that Obsidian source."
+    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. Also now observed firing from the tab-header right-click menu (source \"tab-header\") and the view-header \"more options\" ⋮ button (source \"more-options\"), both passing the optional fourth leaf argument; a tab with no file (e.g. Graph) still shows its built-in menu without firing the event. Remaining gap: Geode has no link/embed context menu at all yet, so the event is not fired from that Obsidian source."
   },
   "DEV-407dfa8627cb": {
     "status": "partial",
     "evidence": [
       "tests/e2e/file-editor-menu-events.spec.ts"
     ],
-    "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror\u2019s EditorView standing in for Obsidian\u2019s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
+    "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror’s EditorView standing in for Obsidian’s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
   },
   "DEV-bc37c2dcd147": {
     "status": "partial",
@@ -4551,7 +4551,7 @@
       "tests/unit/metadata-parity-extraction.test.ts",
       "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case."
+    "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
   },
   "DEV-ec1772bb1c78": {
     "status": "verified",
@@ -4611,7 +4611,7 @@
       "tests/unit/metadata-parity-extraction.test.ts",
       "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed."
+    "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
   },
   "DEV-1c9adcc843f7": {
     "status": "partial",
@@ -4674,7 +4674,7 @@
       "tests/unit/metadata-parity-extraction.test.ts",
       "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case."
+    "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
   },
   "API-MEMBER-307c0cc6c879": {
     "status": "verified",
@@ -4734,7 +4734,7 @@
       "tests/unit/metadata-parity-extraction.test.ts",
       "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed."
+    "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
   },
   "API-MEMBER-a316e0e6cf63": {
     "status": "partial",
