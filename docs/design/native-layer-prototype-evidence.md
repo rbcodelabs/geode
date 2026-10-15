@@ -136,3 +136,22 @@ are unchanged. An additional keyboard-activation case explicitly transfers focus
 with a retained failed native write and presses Enter; that deliberate blur is
 not represented as the no-blur pointer invariant. Actual corrected Return results
 remain pending coordinator review and an Electron slot.
+
+At `b309e13`, the actual nine-case run finishes **8 PASS, 1 FAIL**, retries0.
+Both original trusted pointer Return failures are GREEN: exact priority `2` and
+Original source bytes, connected original input `9`, unchanged direct parent,
+zero viewport/Return blur events and retained focus. The keyboard case fails
+before activation: deliberate Return focus blurs the failed editor, its ordinary
+resubmission fails, and Base's existing catch focuses the original editor again.
+The final JSON records connected input `9`, same parent, two blur events and both
+provider files unchanged. Return never remained focused, so keyboard activation
+was not established. This remains a default-discovered failing regression; there
+is no full-green suite or parity claim. No Base policy change was made.
+
+The coordinator has exact final artifacts at
+`/private/tmp/geode-native-layer-prototype-nine-artifacts`, with the actual log at
+`/private/tmp/geode-native-layer-prototype-nine.log`. Selected synthetic captures
+are linked from `../screenshots/native-layer-prototype/README.md`. Multiple
+simultaneously retained failures and their actual rail reachability, tab visibility
+semantics, readonly/partial-failure UI, narrow/dark state and clean churn still
+require additional proofs before production wiring.
