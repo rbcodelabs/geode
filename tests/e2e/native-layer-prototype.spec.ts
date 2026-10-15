@@ -395,8 +395,9 @@ test("unequal retained native frames preserve spacing, focused exposure and real
     const first = await edit(page); await first.evaluate(input => { (window as any).__firstFailedLayerInput = input; (window as any).__mixedFirstRoot = input.closest(".native-prototype-record"); (window as any).__mixedFirstParent = (window as any).__mixedFirstRoot.parentElement; });
     await first.press("Enter"); await expect(record(page, 1).getByRole("button", { name: "Retry Base save" })).toBeVisible();
     await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]", 100)).top; });
-    const second = await edit(page, 2, "Other", "8"); await capture(page, second);
+    const second = await edit(page, 2, "Other", "8");
     await second.press("Enter"); await expect(record(page, 2).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await expect(second).toBeFocused(); await capture(page, second);
     await record(page, 1).evaluate(root => { root.style.height = "400px"; });
     await record(page, 2).evaluate(root => { root.style.height = "200px"; });
     await expect.poll(() => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".native-prototype-record")].map(root => root.getBoundingClientRect().height))).toEqual([400, 200]);
