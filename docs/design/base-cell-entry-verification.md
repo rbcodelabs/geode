@@ -29,6 +29,11 @@ read-only refusal, keyboard navigation without reacquiring focus, and touch tap
 versus drag arbitration. With adjacent table/retry/ownership tests, 29 tests pass.
 Typecheck and desktop/mobile build pass on the local host (no configured offload).
 
-Broader Canvas and full regression gates remain pending. The existing lifetime
+The complete existing Canvas-owned presentation set also passed all 21 tests
+without retries in 18.9 seconds at the same source/test tree (docs-only HEAD
+8295f6a). This includes normal blur/Enter/Shift-Tab saves, actual mouse/keyboard
+Retry, newer editors surviving older completions, and mobile Save.
+
+Whole-application regression gates remain pending. The existing lifetime
 witnesses remain present with their original assertions; targeted entry success
 does not establish complete nested-view lifecycle or Obsidian parity.
