@@ -194,7 +194,8 @@ export class BasesTableView {
 
   private selectCell(row: number, col: number): void {
     if (this.readOnly) return;
-    this.containerEl.focus();
+    // Keep the clicked cell under the pointer between mousedown and dblclick.
+    this.containerEl.focus({ preventScroll: true });
     this.activeCell = { row, col };
     this.selection = { type: "cell", pos: this.activeCell };
     this.applySelectionClasses();
