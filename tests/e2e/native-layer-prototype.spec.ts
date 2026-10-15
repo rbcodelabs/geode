@@ -438,7 +438,28 @@ test("unequal retained native frames preserve spacing, focused exposure and real
         sameParent: p.root.parentElement === p.parent };
     })).toEqual({ connected: true, value: "8", sameRoot: true, sameParent: true });
     await rail.focus(); await rail.hover(); await page.mouse.wheel(0, -1000);
-    const note = record(page, 2).locator(".canvas-node-note"); await note.hover(); await page.mouse.wheel(0, -1000);
+    const note = record(page, 2).locator(".canvas-node-note");
+    const wheelPoint = await note.evaluate(note => {
+      let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+      for (let ancestor: HTMLElement | null = note; ancestor; ancestor = ancestor.parentElement) {
+        const rect = ancestor.getBoundingClientRect(); const style = getComputedStyle(ancestor);
+        if (ancestor === note || style.overflowX !== "visible") { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
+        if (ancestor === note || style.overflowY !== "visible") { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
+      }
+      const owner = note.closest(".native-prototype-record");
+      for (let row = 1; row <= 5; row++) for (let column = 1; column <= 5; column++) {
+        const x = left + (right - left) * column / 6, y = top + (bottom - top) * row / 6;
+        const hit = document.elementFromPoint(x, y);
+        if (right > left && bottom > top && hit && note.contains(hit) && hit.closest(".native-prototype-record") === owner) {
+          const point = { x, y, hit: { tag: hit.tagName, className: hit.className }, bounds: { left, top, right, bottom } };
+          (window as any).__mixedHeightGeometry.wheelPoint = point; return point;
+        }
+      }
+      return null;
+    });
+    expect(wheelPoint).not.toBeNull();
+    if (!wheelPoint) throw new Error("No visible owned note region accepts trusted wheel input");
+    await page.mouse.move(wheelPoint.x, wheelPoint.y); await page.mouse.wheel(0, -1000);
     const secondRetry = record(page, 2).getByRole("button", { name: "Retry Base save" });
     expect(await secondRetry.evaluate(button => { (window as any).__mixedHeightGeometry.camerasAfterTrustedWheel = (window as any).nativeLayerHarness.native.map((view: any) => ({ pan: { ...view.pan }, scale: view.scale })); const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
     await page.evaluate(() => (window as any).__mixedFailedFiles.delete("Other.md")); await secondRetry.click();
