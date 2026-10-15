@@ -38,8 +38,8 @@
       "api-member": 1014
     },
     "byStatus": {
-      "verified": 337,
-      "partial": 138,
+      "verified": 335,
+      "partial": 140,
       "missing": 62,
       "intentionally-equivalent": 5,
       "blocked": 79,
@@ -5936,7 +5936,7 @@
         "tests/unit/metadata-cache.test.ts",
         "tests/unit/list-items.test.ts"
       ],
-      "notes": "All 13 direct properties assessed individually. Three are verified, six partial and four missing; page/declaration coverage does not imply member completeness."
+      "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
     },
     {
       "id": "DEV-dcfb7373660e",
@@ -6083,12 +6083,13 @@
       "title": "listItems",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/listItems.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/listItems.md",
-      "status": "verified",
+      "status": "partial",
       "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
         "tests/unit/list-items.test.ts",
         "docs/spec/parity-api-audit-2026-10.md"
       ],
-      "notes": "Tests observe ordered/unordered and task items, nesting parent lines, absolute source lines, task characters, block IDs, code exclusion and absence when none exist."
+      "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
     },
     {
       "id": "DEV-7869f2fc38c9",
@@ -18992,7 +18993,7 @@
         "tests/unit/metadata-cache.test.ts",
         "tests/unit/list-items.test.ts"
       ],
-      "notes": "All 13 direct properties assessed individually. Three are verified, six partial and four missing; page/declaration coverage does not imply member completeness."
+      "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
     },
     {
       "id": "API-6a68cea124f8",
@@ -23743,12 +23744,13 @@
       "title": "CachedMetadata.listItems",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "verified",
+      "status": "partial",
       "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
         "tests/unit/list-items.test.ts",
         "docs/spec/parity-api-audit-2026-10.md"
       ],
-      "notes": "Tests observe ordered/unordered and task items, nesting parent lines, absolute source lines, task characters, block IDs, code exclusion and absence when none exist."
+      "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
     },
     {
       "id": "API-MEMBER-b2bcab4c7b0b",

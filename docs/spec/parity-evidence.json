@@ -2663,14 +2663,14 @@
     "evidence": [
       "tests/e2e/file-editor-menu-events.spec.ts"
     ],
-    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. Also now observed firing from the tab-header right-click menu (source \"tab-header\") and the view-header \"more options\" ⋮ button (source \"more-options\"), both passing the optional fourth leaf argument; a tab with no file (e.g. Graph) still shows its built-in menu without firing the event. Remaining gap: Geode has no link/embed context menu at all yet, so the event is not fired from that Obsidian source."
+    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. Also now observed firing from the tab-header right-click menu (source \"tab-header\") and the view-header \"more options\" \u22ee button (source \"more-options\"), both passing the optional fourth leaf argument; a tab with no file (e.g. Graph) still shows its built-in menu without firing the event. Remaining gap: Geode has no link/embed context menu at all yet, so the event is not fired from that Obsidian source."
   },
   "DEV-407dfa8627cb": {
     "status": "partial",
     "evidence": [
       "tests/e2e/file-editor-menu-events.spec.ts"
     ],
-    "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror’s EditorView standing in for Obsidian’s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
+    "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror\u2019s EditorView standing in for Obsidian\u2019s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
   },
   "DEV-bc37c2dcd147": {
     "status": "partial",
@@ -4532,7 +4532,7 @@
       "tests/unit/metadata-cache.test.ts",
       "tests/unit/list-items.test.ts"
     ],
-    "notes": "All 13 direct properties assessed individually. Three are verified, six partial and four missing; page/declaration coverage does not imply member completeness."
+    "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
   },
   "DEV-dcfb7373660e": {
     "status": "missing",
@@ -4609,12 +4609,13 @@
     "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
   },
   "DEV-1c9adcc843f7": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
       "tests/unit/list-items.test.ts",
       "docs/spec/parity-api-audit-2026-10.md"
     ],
-    "notes": "Tests observe ordered/unordered and task items, nesting parent lines, absolute source lines, task characters, block IDs, code exclusion and absence when none exist."
+    "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
   },
   "DEV-7869f2fc38c9": {
     "status": "partial",
@@ -4648,7 +4649,7 @@
       "tests/unit/metadata-cache.test.ts",
       "tests/unit/list-items.test.ts"
     ],
-    "notes": "All 13 direct properties assessed individually. Three are verified, six partial and four missing; page/declaration coverage does not imply member completeness."
+    "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
   },
   "API-MEMBER-5044a80b7bec": {
     "status": "missing",
@@ -4725,12 +4726,13 @@
     "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
   },
   "API-MEMBER-a316e0e6cf63": {
-    "status": "verified",
+    "status": "partial",
     "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
       "tests/unit/list-items.test.ts",
       "docs/spec/parity-api-audit-2026-10.md"
     ],
-    "notes": "Tests observe ordered/unordered and task items, nesting parent lines, absolute source lines, task characters, block IDs, code exclusion and absence when none exist."
+    "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
   },
   "API-MEMBER-b2bcab4c7b0b": {
     "status": "partial",

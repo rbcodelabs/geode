@@ -16,6 +16,11 @@ describe("CachedMetadata parity audit", () => {
     expect(parseMetadata("No references.").footnoteRefs).toBeUndefined();
   });
 
+  it.fails("groups root list items using the negative first-item line", () => {
+    const items = parseMetadata("\n\n- a\n- b\n").listItems!;
+    expect(items.map(item => item.parent)).toEqual([-2, -2]);
+  });
+
   it.fails("returns reference definition destinations rather than displayed labels", () => {
     const text = "[label][target]\n\n[target]: https://example.com\n";
     expect(parseMetadata(text).referenceLinks).toEqual([

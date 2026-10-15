@@ -58,19 +58,19 @@ members being complete.
 | `frontmatterPosition` | missing | Public span absent; internal end offset is a different contract. |
 | `headings` | partial | Heading text/levels and code exclusion tested; exact HeadingCache span assertions incomplete. |
 | `links` | partial | Wiki syntax/positions work; Markdown links from upstream example absent. |
-| `listItems` | verified | Ordered/unordered/tasks, nesting, source lines, block IDs and exclusion tested. |
+| `listItems` | partial | Ordered/unordered/tasks, nesting, source lines, block IDs and exclusion tested. Root items in one list incorrectly use different negative parents; upstream requires the shared negative first-item line. |
 | `referenceLinks` | partial | Current full/collapsed entries contain display text, while upstream requires destination URLs; documented shortcut example is absent. |
 | `sections` | partial | Heading/paragraph/list/YAML/code observed; callout and other block semantics unverified. |
 | `tags` | partial | YAML/inline/nested tags and code exclusion observed; full position semantics unverified. |
 
-Three properties verified, six partial and four missing means **28 previously
-unknown rows assessed: six verified, fourteen partial, eight missing**. This is
+Two properties verified, seven partial and four missing means **28 previously
+unknown rows assessed: four verified, sixteen partial, eight missing**. This is
 one API family, not 28 independent product capabilities. No existing help/service
 status is removed or hidden; Publish, Web Clipper and other service gaps remain
 visible in the ledger.
 
 `tests/unit/parity-metadata-audit.test.ts` adds one ordinary contract check and
-eight expected-failure diagnostics. The latter assert the desired upstream
+nine expected-failure diagnostics. The latter assert the desired upstream
 behavior and pass only because the known gap still reproduces. They must lose
 `.fails` when fixed. Their green runner status is not evidence of compatibility;
 they support `missing`/`partial` findings only. Existing `metadata-cache.test.ts`
@@ -78,7 +78,7 @@ and `list-items.test.ts` provide the remaining passing behavior evidence.
 
 ## Next audit inventory
 
-1. Fix the eight reproduced cache gaps with normal regression tests, then assess
+1. Fix the nine reproduced cache gaps with normal regression tests, then assess
    related `BlockCache`, `FootnoteCache`, `FrontmatterLinkCache`, `Pos` and
    `CacheItem` contracts. Re-evaluate every affected member, not only containers.
 2. Audit `Vault` adapter/binary/process/event signatures and options against
@@ -100,7 +100,7 @@ npm run test:unit -- tests/unit/parity-metadata-audit.test.ts \
   tests/unit/list-items.test.ts tests/unit/parity-ledger.test.ts tests/unit/parity-corpus.test.ts
 ```
 
-Observed on the local host: six files, **118 ordinary passes and eight expected
+Observed on the local host: six files, **118 ordinary passes and nine expected
 failures**, no unexpected failures. `pm-config.md` has no compute-offload entry.
 Full repository gates are recorded with the PR; these targeted results alone do
 not claim full-suite verification. No UI behavior changes, so screenshots/manual
