@@ -2,12 +2,20 @@ import { describe, expect, it } from "vitest";
 import { parseMetadata } from "../../src/wiki/metadata";
 import { createWikiSnapshot } from "../../src/wiki/snapshot";
 import { FakeVault } from "../helpers/fake-vault";
+import { scanFootnotes } from "../../src/wiki/footnote-scan";
 import { resolveBlockBoundary } from "../../src/renderer/block-boundary";
 import { MetadataCache } from "../../src/renderer/metadata-cache";
 
 const span = (text: string, position: { start: { offset: number }; end: { offset: number } }) => text.slice(position.start.offset, position.end.offset);
 
 describe("metadata parity extraction", () => {
+  it("bounds delimiter-heavy parsing below the normal note scan cap", () => {
+    const text = "prefix " + "`".repeat(8_000);
+    const start = performance.now();
+    expect(parseMetadata(text).links).toEqual([]);
+    expect(scanFootnotes(text).definitions).toEqual([]);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
   it("extracts Markdown destinations with nested and escaped parentheses, titles and encoded paths", () => {
     const text = '[plain](Note%20One.md#Heading "title") [nested](folder/Note(two).md) [escaped](Note\\(one\\).md) ![alt](image.png)';
     const metadata = parseMetadata(text);

@@ -151,6 +151,7 @@ try {
     "src/sync-node/wiki-sync.ts",
     "src/wiki/catalog-contract.ts",
     "src/wiki/catalog-materialize.ts",
+    "src/wiki/code-mask.ts",
     "src/wiki/constants.ts",
     "src/wiki/folder-provider.ts",
     "src/wiki/footnote-scan.ts",
