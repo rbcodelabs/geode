@@ -39,6 +39,41 @@ type NodeActionCapability =
   | { kind: "external"; signature: string; url: string }
   | { kind: "generic"; signature: string };
 
+interface NativeEditorReveal {
+  table: HTMLElement; cell: HTMLElement; node: CanvasNode; nodeElement: HTMLElement; version: number;
+  file: TFile | null; path: string | undefined; vault: App["vault"]; vaultRoot: string; scope: RenderScope; token: RenderToken;
+  canvasScope: RenderScope; pan: Point; scale: number;
+}
+
+/** Screen-space movement only; hidden ancestor scrolling is never a camera substitute. */
+function nativeEditorVerticalReveal(input: HTMLElement, surface: HTMLElement, viewport: HTMLElement): number | null {
+  const rect = input.getBoundingClientRect(), visible = surface.getBoundingClientRect();
+  const bounds = { left: Math.max(0, visible.left), top: Math.max(0, visible.top), right: Math.min(innerWidth, visible.right), bottom: Math.min(innerHeight, visible.bottom) };
+  for (let parent = input.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent), clip = parent.getBoundingClientRect();
+    // The viewport's descendants move with the input: camera movement cannot
+    // repair clipping inside them, and their old screen bounds are not fixed.
+    if (viewport.contains(parent)) {
+      if ((style.overflowX !== "visible" && (rect.left < clip.left || rect.right > clip.right)) || (style.overflowY !== "visible" && (rect.top < clip.top || rect.bottom > clip.bottom))) return null;
+      continue;
+    }
+    if (style.overflowX !== "visible") { bounds.left = Math.max(bounds.left, clip.left); bounds.right = Math.min(bounds.right, clip.right); }
+    if (style.overflowY !== "visible") { bounds.top = Math.max(bounds.top, clip.top); bounds.bottom = Math.min(bounds.bottom, clip.bottom); }
+  }
+  if (![rect.left, rect.top, rect.right, rect.bottom, ...Object.values(bounds)].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0 || rect.left < bounds.left || rect.right > bounds.right) return null;
+  const controls = [...surface.querySelectorAll<HTMLElement>(".canvas-toolbar, .canvas-controls, .canvas-selection-controls")]
+    .filter(control => control.closest(".canvas-surface") === surface && getComputedStyle(control).visibility !== "hidden")
+    .map(control => control.getBoundingClientRect()).filter(control => control.width > 0 && control.height > 0 && control.left < rect.right && control.right > rect.left);
+  // A comfortable margin is a repair target, never a reason to move an
+  // already exposed editor or disturb an otherwise stable camera.
+  if (rect.top >= bounds.top && rect.bottom <= bounds.bottom && controls.every(control => rect.bottom <= control.top || rect.top >= control.bottom)) return 0;
+  const margin = 8, minimum = bounds.top + margin - rect.top, maximum = bounds.bottom - margin - rect.bottom;
+  if (minimum > maximum) return null;
+  const candidates = [0, minimum, maximum, ...controls.flatMap(control => [control.top - margin - rect.bottom, control.bottom + margin - rect.top])];
+  return candidates.filter(delta => Number.isFinite(delta) && delta >= minimum && delta <= maximum && controls.every(control => rect.bottom + delta <= control.top - margin || rect.top + delta >= control.bottom + margin))
+    .sort((left, right) => Math.abs(left) - Math.abs(right))[0] ?? null;
+}
+
 function normalizeWebUrl(raw: string): string | null {
   try {
     const url = new URL(raw.trim());
@@ -2732,7 +2767,54 @@ export class CanvasView implements View {
     }
   }
 
+  private readonly pendingEditorReveals = new WeakMap<HTMLElement, NativeEditorReveal>();
+  private readonly editorRevealEvents = new WeakMap<Event, NativeEditorReveal>();
+
+  /** Capture before the target handler; an existing editor is never a new reveal request. */
+  private beginNativeEditorReveal(event: KeyboardEvent | MouseEvent): void {
+    if (!event.isTrusted || !(event.target instanceof HTMLElement) || !this.renderOwner.admissionAllowed) return;
+    if (event.type === "keydown" && ((event as KeyboardEvent).key !== "Enter" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)) return;
+    const table = event.target.closest<HTMLElement>(".bases-table-container");
+    if (!table || table.closest(".canvas-surface") !== this.surfaceEl) return;
+    if (table.querySelector(".bases-cell-input")) { this.pendingEditorReveals.delete(table); return; }
+    const cell = event.type === "dblclick" ? event.target.closest<HTMLElement>(".bases-cell") : event.target === table ? table.querySelector<HTMLElement>(".bases-cell.is-active") : null;
+    const nodeElement = table.closest<HTMLElement>(".canvas-node"), presentation = nodeElement && this.nodePresentations.get(nodeElement.dataset.nodeId ?? "");
+    const baseElement = table.closest(".base-view");
+    const writer = this.renderOwner.writers().find(value => (value as { viewType?: string; containerEl?: HTMLElement } | null)?.viewType === "base" && (value as { containerEl: HTMLElement }).containerEl === baseElement) as { renderOwner: RenderScope } | undefined;
+    if (!cell || cell.closest(".bases-table-container") !== table || !nodeElement || presentation?.el !== nodeElement || !writer?.renderOwner.admissionAllowed) return;
+    const request: NativeEditorReveal = { table, cell, node: presentation.node, nodeElement, version: presentation.version, file: this.file, path: this.file?.path, vault: this.app.vault, vaultRoot: this.app.vault.root, scope: writer.renderOwner, token: writer.renderOwner.captureToken(), canvasScope: this.renderOwner, pan: { ...this.pan }, scale: this.scale };
+    this.pendingEditorReveals.set(table, request); this.editorRevealEvents.set(event, request);
+  }
+
+  /** Bubble observes the exact newly created input, before any deferred replacement. */
+  private finishNativeEditorReveal(event: Event): void {
+    const request = this.editorRevealEvents.get(event); this.editorRevealEvents.delete(event);
+    if (!request || this.pendingEditorReveals.get(request.table) !== request) return;
+    const input = request.cell.querySelector<HTMLInputElement>(".bases-cell-input");
+    if (!input || document.activeElement !== input) { this.pendingEditorReveals.delete(request.table); return; }
+    queueMicrotask(() => {
+      const current = () => {
+        const presentation = this.nodePresentations.get(request.node.id);
+        return this.pendingEditorReveals.get(request.table) === request && request.canvasScope === this.renderOwner && request.scope.admissionAllowed && request.token.current()
+          && this.file === request.file && this.file?.path === request.path && this.app.vault === request.vault && this.app.vault.root === request.vaultRoot
+          && this.document.nodes.includes(request.node) && presentation?.node === request.node && presentation.el === request.nodeElement && presentation.version === request.version && presentation.signature === this.presentationSignature(request.node)
+          && this.isLiveNodeRender(request.version, request.nodeElement) && request.table.isConnected && input.isConnected && request.cell.contains(input)
+          && request.cell.closest(".bases-table-container") === request.table && request.table.closest(".canvas-node") === request.nodeElement && request.table.closest(".canvas-surface") === this.surfaceEl && request.cell.querySelector(".bases-cell-input") === input && document.activeElement === input
+          && this.pan.x === request.pan.x && this.pan.y === request.pan.y && this.scale === request.scale && Number.isFinite(this.scale) && this.scale > 0;
+      };
+      if (current()) {
+        const delta = nativeEditorVerticalReveal(input, this.surfaceEl, this.viewportEl);
+        if (delta !== null && delta !== 0 && current() && Number.isFinite(this.pan.y + delta)) { this.pan = { x: this.pan.x, y: this.pan.y + delta }; this.updateTransform(); }
+      }
+      if (this.pendingEditorReveals.get(request.table) === request) this.pendingEditorReveals.delete(request.table);
+    });
+  }
+
   private installCameraControls(): void {
+    this.surfaceEl.addEventListener("keydown", event => this.beginNativeEditorReveal(event), true);
+    this.surfaceEl.addEventListener("dblclick", event => this.beginNativeEditorReveal(event), true);
+    this.surfaceEl.addEventListener("keydown", event => this.finishNativeEditorReveal(event));
+    this.surfaceEl.addEventListener("dblclick", event => this.finishNativeEditorReveal(event));
     const isEmptyDropTarget = (target: EventTarget | null) => target === this.surfaceEl || target === this.viewportEl;
     this.surfaceEl.addEventListener("dragover", (event) => {
       if (this.interactionBlocked()) return;
