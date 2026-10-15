@@ -65,26 +65,7 @@ export interface FootnoteItem {
   refCount: number;
 }
 
-const blank = (m: string): string => m.replace(/[^\n]/g, " ");
-
-/**
- * Same-length copy of `text` with code blanked out (newlines kept), so match
- * offsets index straight into the original. Fenced blocks (``` and ~~~) go
- * first so a backtick inside a fence cannot pair with one outside it.
- */
-function maskCode(text: string): string {
-  let masked = text.replace(
-    /^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1[`~]*[ \t]*$|(?![\s\S]))/gm,
-    blank
-  );
-  // CommonMark code span: a run of N backticks closed by a run of exactly N.
-  // May not cross a blank line.
-  masked = masked.replace(
-    /(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?[^`]\1(?!`)/g,
-    blank
-  );
-  return masked;
-}
+import { maskMarkdownCode } from "./code-mask";
 
 const DEFINITION_START_RE = /^( {0,3})\[\^([^\]\s]+)\]:/;
 const REFERENCE_RE = /\[\^([^\]\s]+)\]|\^\[((?:[^\[\]\n]|\[[^\[\]\n]*\])+)\]/g;
@@ -94,7 +75,7 @@ const REFERENCE_RE = /\[\^([^\]\s]+)\]|\^\[((?:[^\[\]\n]|\[[^\[\]\n]*\])+)\]/g;
  * Offsets in the result index into `text`.
  */
 export function scanFootnotes(text: string, start = 0): FootnoteScan {
-  const masked = maskCode(text);
+  const masked = maskMarkdownCode(text);
 
   // --- definitions -------------------------------------------------------
   const definitions: FootnoteDefinitionSpan[] = [];

@@ -193,7 +193,7 @@ export function createWikiSnapshot(captured: readonly CapturedFile[], captureInf
     exclusionPolicy: ["dot-prefixed path segments", "node_modules directories", "descendant symlinks", "special files"],
     referenceSyntax: "wikilinks" as const,
     additionalReferenceSyntax: ["markdown", "frontmatter-wikilinks"] as const,
-    parserLimitations: ["Markdown links are not in the graph", "CRLF heading coverage", "setext headings", "BOM-prefixed frontmatter", "tilde fence reference masking", "paragraph block IDs", "body scan cap in code units"],
+    parserLimitations: ["bounded Markdown link grammar (nested bracket labels)", "unscanned YAML property aliases", "CRLF heading coverage", "setext headings", "BOM-prefixed frontmatter", "standalone and other unverified block-ID forms", "body scan cap in code units"],
     parserBodyCapCodeUnits: DEFAULT_METADATA_SCAN_CAP_BYTES,
   });
 

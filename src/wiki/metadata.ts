@@ -1,4 +1,5 @@
 import { parse as parseYaml, parseDocument, isMap, isSeq, isScalar } from "yaml";
+import { maskMarkdownCode } from "./code-mask";
 import { markdownReferences } from "./markdown-references";
 import { scanFootnotes } from "./footnote-scan";
 import { maskCommentMetadata, stripCommentMarkerSyntax } from "../renderer/comments/model";
@@ -75,13 +76,6 @@ export function offsetToLoc(lineStarts: number[], start: number, end: number): L
 export function maskCode(text: string): string {
   let masked = text.replace(/```[\s\S]*?(```|$)/g, m => m.replace(/[^\n]/g, " "));
   masked = masked.replace(/`[^`\n]*`/g, m => " ".repeat(m.length));
-  return masked;
-}
-
-/** Metadata extraction recognizes tilde fences and variable-width code spans. */
-function maskMetadataCode(text: string): string {
-  let masked = text.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1[`~]*[ \t]*\r?$|(?![\s\S]))/gm, m => m.replace(/[^\n\r]/g, " "));
-  masked = masked.replace(/(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?[^`]\1(?!`)/g, m => m.replace(/[^\n\r]/g, " "));
   return masked;
 }
 
@@ -190,7 +184,7 @@ export function parseMetadata(
   // matching this function's normal "present only when computed" contract.
   if (body.length > maxBodyBytesForScan) return meta;
 
-  const codeSafe = maskMetadataCode(body);
+  const codeSafe = maskMarkdownCode(body);
   const comments = [...codeSafe.matchAll(/(?<!\\)%%[\s\S]*?(?<!\\)%%/g)];
   let commentEnd = 0;
   const uncommented: string[] = [];
@@ -200,7 +194,7 @@ export function parseMetadata(
   }
   uncommented.push(body.slice(commentEnd));
   body = uncommented.join("");
-  const masked = maskMetadataCode(body);
+  const masked = maskMarkdownCode(body);
 
   for (const m of masked.matchAll(WIKILINK_RE)) {
     if (isEscaped(masked, m.index!)) continue;
@@ -352,15 +346,12 @@ export function parseMetadata(
   if (listItems.length) meta.listItems = listItems;
   if (sections.length) meta.sections = sections;
   const blocks: NonNullable<CachedMetadata["blocks"]> = Object.create(null);
+  for (const item of listItems) if (item.id) blocks[item.id] = { id: item.id, position: item.position };
   for (const section of sections) {
-    if (section.type === "code" || section.type === "yaml") continue;
+    if (section.type === "code" || section.type === "yaml" || section.type === "list") continue;
     const content = masked.slice(section.position.start.offset - bodyOffset, section.position.end.offset - bodyOffset);
-    if (section.type === "list") {
-      for (const item of listItems) if (item.id && item.position.start.offset >= section.position.start.offset && item.position.end.offset <= section.position.end.offset) blocks[item.id] = { id: item.id, position: item.position };
-    } else {
-      const id = content.match(BLOCK_ID_RE)?.[1];
-      if (id) { section.id = id; blocks[id] = { id, position: section.position }; }
-    }
+    const id = content.match(BLOCK_ID_RE)?.[1];
+    if (id) { section.id = id; blocks[id] = { id, position: section.position }; }
   }
   if (Object.keys(blocks).length) meta.blocks = blocks;
 

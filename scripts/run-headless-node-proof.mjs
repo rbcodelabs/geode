@@ -24,7 +24,7 @@ try {
   // scan-cap constant moved to `src/wiki/constants.ts`, so the portable graph
   // no longer reaches into the desktop indexer at all.
   const permitted = new Set([
-    "src/wiki/metadata.ts", "src/wiki/markdown-references.ts", "src/wiki/footnote-scan.ts", "src/wiki/link-resolution.ts", "src/wiki/link-candidates.ts",
+    "src/wiki/metadata.ts", "src/wiki/markdown-references.ts", "src/wiki/footnote-scan.ts", "src/wiki/code-mask.ts", "src/wiki/link-resolution.ts", "src/wiki/link-candidates.ts",
     "src/wiki/constants.ts",
     "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts",
   ]);

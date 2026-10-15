@@ -63,5 +63,17 @@ tests cover escaping, titles, encoded paths, comments/code, source order, proper
 separation, external URL exclusion, graph projections and cache upgrades. All nine
 initial `.fails` diagnostics become ordinary regressions only after passing.
 The new nested-label expected failure remains a diagnostic, never compatibility
-evidence. SDK/node proof allowlists gain exactly the two new portable wiki modules;
+evidence. SDK/node proof allowlists gain exactly the three new portable wiki modules;
 existing renderer/process/provider boundary checks are retained.
+
+
+## Independent review corrections
+
+A newline-free 8,000-backtick input reproduced a 621 ms parse, exceeding the
+500 ms regression bound. Metadata and footnote extraction now share a portable
+bounded-pass code masker: fence scanning is linear, delimiter runs are indexed
+by width within a paragraph, and masks cover nonoverlapping ranges. Direct tests
+also cover many distinct unmatched widths. List block records are populated in
+one pass rather than rescanning every item for every list section. Snapshot
+`parserLimitations` names the remaining bounded cases and no longer says Markdown
+links, tilde fences, or paragraph block records are universally unsupported.

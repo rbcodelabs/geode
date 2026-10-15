@@ -22,7 +22,7 @@ try {
   // could tree-shake it away.
   const permitted = new Set([
     "src/wiki/folder-provider.ts", "src/wiki/contracts.ts", "src/wiki/search.ts",
-    "src/wiki/local-filesystem.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts", "src/wiki/markdown-references.ts", "src/wiki/footnote-scan.ts",
+    "src/wiki/local-filesystem.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts", "src/wiki/markdown-references.ts", "src/wiki/footnote-scan.ts", "src/wiki/code-mask.ts",
     "src/wiki/link-candidates.ts", "src/wiki/constants.ts",
     "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts",
   ]);
