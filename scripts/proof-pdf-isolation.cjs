@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
 const esbuild = require('esbuild');
+const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const badMode = process.argv.includes('--bad-wasm') || process.argv.includes('--blocked-wasm');
 app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'geode-pdf-isolation-proof-')));
@@ -29,10 +30,19 @@ async function hostProof(fixtures, helperUrl, badMode) {
   const rejects = [];
   for (const packet of [{ ...init, version: 2 }, { ...init, build: 'old' }, { ...init, nonce: 'short' }, { ...init, url: 'file:///not-allowed' }]) rejects.push(await ignored(packet));
   // Real MessagePorts exercise the same host readiness validator against forgery.
-  for (const packet of [{ ...init, kind: 'geode-pdf-ready', nonce: 'b'.repeat(64), realm: {} }, { ...init, kind: 'geode-pdf-ready', generation: 2, realm: {} }]) {
+  for (const packet of [{ ...init, kind: 'geode-pdf-ready', nonce: 'b'.repeat(64), realm: Object.fromEntries(helper.PDF_FRAME_NODE_KEYS.map(key => [key, 'undefined'])) }, { ...init, kind: 'geode-pdf-ready', generation: 2, realm: Object.fromEntries(helper.PDF_FRAME_NODE_KEYS.map(key => [key, 'undefined'])) }]) {
     const channel = new MessageChannel(); const ready = helper.waitForPdfFrameReady(channel.port1, init, () => true); channel.port2.postMessage(packet);
     try { await ready; rejects.push(false); } catch { rejects.push(true); } finally { channel.port2.close(); }
   }
+  const stale = new MessageChannel(); let current = true;
+  const staleReady = helper.waitForPdfFrameReady(stale.port1, init, () => current); current = false;
+  stale.port2.postMessage({ ...init, kind: 'geode-pdf-ready', realm: Object.fromEntries(helper.PDF_FRAME_NODE_KEYS.map(key => [key, 'undefined'])) });
+  try { await staleReady; rejects.push(false); } catch { rejects.push(true); } finally { stale.port2.close(); }
+  const owned = new MessageChannel(), foreign = new MessageChannel(), abort = new AbortController();
+  const ownedReady = helper.waitForPdfFrameReady(owned.port1, init, () => true, abort.signal);
+  foreign.port2.postMessage({ ...init, kind: 'geode-pdf-ready', realm: Object.fromEntries(helper.PDF_FRAME_NODE_KEYS.map(key => [key, 'undefined'])) });
+  setTimeout(() => abort.abort(),50);
+  try { await ownedReady; rejects.push(false); } catch (error) { rejects.push(error.name === 'AbortError'); } finally { owned.port2.close(); foreign.port1.close(); foreign.port2.close(); }
   const channel = new MessageChannel(); const ready = helper.waitForPdfFrameReady(channel.port1, init, () => true);
   frame.contentWindow.postMessage(init, 'geode-pdf://viewer', [channel.port2]); await ready;
   rejects.push(await ignored(init)); // A second parent init cannot replace the accepted port.
@@ -92,7 +102,9 @@ app.whenReady().then(async () => {
     assert.ok(result); assert.equal(result.parentRealm.require, 'function'); assert.equal(result.parentRealm.geode, 'object');
     assert.equal(connections, 0); assert.equal(hits, 0); assert.ok(result.rejects.every(Boolean)); assert.equal(result.disposed.kind, 'disposed'); assert.equal(result.accepted, 1);
     const frame = result.frameProbe;
-    assert.equal(frame.parentDOM, true); assert.equal(frame.parentNode, 'blocked');
+    assert.equal(frame.parentDOM, true); assert.equal(frame.parentNode, 'blocked'); assert.equal(frame.wasm,false); assert.equal(frame.subworker,false);
+    assert.equal(frame.nativeWindowForgery.sourceWasParent,false); assert.equal(frame.nativeWindowForgery.origin,'geode-pdf://viewer'); assert.equal(frame.nativeWindowForgery.reply,false);
+    assert.ok(served.every(url => ['index.html','viewer.mjs','worker.mjs','viewer.css'].some(name => url === 'geode-pdf://viewer/'+name)));
     for (const key of ['process','require','geode','electron','ipcRenderer','Buffer']) assert.equal(frame.realm[key], 'undefined', key);
     for (const key of ['eval','fetch','import','xhr','wss']) assert.equal(frame[key], true, key);
     if (badMode) { assert.equal(result.kind, 'error'); assert.match(result.message, /CompileError|WebAssembly/); }
@@ -112,6 +124,7 @@ app.whenReady().then(async () => {
   for (const fixture of result?.results ?? []) if (fixture.png) { const filename = path.join(captures,fixture.name+'.png'); fs.writeFileSync(filename,Buffer.from(fixture.png.split(',')[1],'base64')); delete fixture.png; fixture.capture = filename; }
   const hash = filename => crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
   const hashes = Object.fromEntries(['scripts/proof-pdf-isolation.cjs','scripts/pdf-isolation-proof-viewer.mjs','scripts/pdf-isolation-native-probe.mjs','dist/pdf-worker.mjs','dist/pdf-proof-host-handshake.mjs','dist/preload.js'].map(name=>[name,hash(path.join(root,name))]));
-  console.log(JSON.stringify({ electron: process.versions.electron, hashes, assertionFailure, result, served, connections, hits, consoleMessages }, null, 2));
+  const commit = execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
+  console.log(JSON.stringify({ electron: process.versions.electron, commit, hashes, assertionFailure, result, served, connections, hits, consoleMessages }, null, 2));
   server.close(); app.exit(assertionFailure ? 1 : 0);
 }).catch(error => { console.error(error); app.exit(1); });

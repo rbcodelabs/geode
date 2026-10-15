@@ -40,9 +40,21 @@ const initialize = createPdfFrameInitializer(parent, async ({ init, port }) => {
       const sample = (x,y) => Array.from(context.getImageData(x,y,1,1).data);
       const result = { name: event.data.label, pages: doc.numPages, pixels, text, selected, samples: [sample(48,84),sample(80,84),sample(50,70)], png: canvas.toDataURL("image/png") };
       await task.destroy();
-      port.postMessage({ kind: "proof-fixture", result, frameProbe: await frameProbePromise, packets, accepted });
-    } catch (error) { port.postMessage({ kind: "error", message: String(error), frameProbe: await frameProbePromise, packets, accepted }); }
+      port.postMessage({ kind: "proof-fixture", result, frameProbe: { ...await frameProbePromise, nativeWindowForgery: await nativeForgery }, packets, accepted });
+    } catch (error) { port.postMessage({ kind: "error", message: String(error), frameProbe: { ...await frameProbePromise, nativeWindowForgery: await nativeForgery }, packets, accepted }); }
   });
   port.start();
 });
 addEventListener("message", initialize);
+
+// A real window message from the viewer's own non-null origin is not its parent.
+// Unit tests isolate the source/origin predicates separately; this browser probe
+// exercises their combined rejection before legitimate parent initialization.
+const nativeForgery = new Promise(resolve => {
+  const channel = new MessageChannel(); let reply = false, observed;
+  channel.port1.onmessage = () => { reply = true; };
+  const observe = event => { if (event.source === self && event.data?.kind === "geode-pdf-init") observed = { sourceWasParent: event.source === parent, origin: event.origin }; };
+  addEventListener("message", observe);
+  self.postMessage({ kind: "geode-pdf-init", version: 1, build: "6.4.299", generation: 1, nonce: "c".repeat(64) }, location.origin, [channel.port2]);
+  setTimeout(() => { channel.port1.close(); removeEventListener("message", observe); resolve({ ...observed, reply }); },100);
+});
