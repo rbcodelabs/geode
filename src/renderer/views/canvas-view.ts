@@ -1,4 +1,4 @@
-import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure } from "../workspaces/render-ownership";
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure, type PreparedRetirement } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
@@ -297,7 +297,7 @@ export class CanvasView implements View {
       this.app.notify("Finish or recover the Canvas presentation change before locking its controls."); return;
     }
     const file = this.file; const model = this.document;
-    let retirement: { commit(): Promise<void>; abort(): void } | undefined;
+    let retirement: PreparedRetirement | undefined;
     try {
       const contents = [...this.markdownContentEls];
       for (const presentation of this.nodePresentations.values()) if (presentation.el.querySelector(".canvas-node-text-editor")) throw new Error("Finish or cancel the Canvas text draft before locking its controls.");
@@ -405,8 +405,7 @@ export class CanvasView implements View {
     const selection = JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]);
     const conflict = this.conflictGeneration;
     const isCurrent = () => current() && conflict === this.conflictGeneration && this.file === file && this.document === model && serializeCanvas(model) === snapshot && JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]) === selection && (!this.renderOwner || this.renderOwner.admissionAllowed) && !this.geometryGestures.size && !this.transientGestureCancel && !this.touchDragSnapshot && !this.touchGesture.pointerIds().length;
-    let retirement: { commit(): Promise<void>; abort(): void } | undefined;
-    let destructorsStarted = false;
+    let retirement: PreparedRetirement | undefined;
     const interaction = wrappers.map(el => ({ el, inert: el.inert }));
     try {
       for (const wrapper of wrappers) if (wrapper.querySelector(".canvas-node-text-editor")) throw new Error("Finish or cancel the Canvas text draft before changing cards.");
@@ -417,7 +416,6 @@ export class CanvasView implements View {
       if (!isCurrent()) {
         retirement.abort(); throw new Error("Canvas changed while its embedded cards were preparing. Retry the action.");
       }
-      destructorsStarted = true;
       await retirement.commit();
       if (!isCurrent()) throw new Error("The Canvas action was superseded during teardown. Its previous model is retained.");
       for (const node of nodes) {
@@ -430,7 +428,7 @@ export class CanvasView implements View {
       change();
       return true;
     } catch (error) {
-      if (!destructorsStarted) {
+      if (!retirement?.destructionStarted) {
         retirement?.abort();
         for (const { el, inert } of interaction) el.inert = inert;
       } else {
