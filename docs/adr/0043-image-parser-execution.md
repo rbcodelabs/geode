@@ -1,9 +1,9 @@
 # ADR-0043: Isolate complete Lightbox source parsing
 
-**Date:** 2026-10-15  
-**Status:** Accepted by coordinator under the reversible tested-PR authority. Runtime proof is required before implementation depends on this boundary. No Lightbox UI or production hook is authorized by this document alone.  
-**Related:** ADR-0042 Lightbox private boundaries; ADR-0034 PDF isolation  
-**Task:** `1e0e39a1-ac8d-48f6-8e41-0a7f3c98d73e`  
+**Date:** 2026-10-15
+**Status:** Accepted by coordinator under the reversible tested-PR authority. Runtime proof is required before implementation depends on this boundary. No Lightbox UI or production hook is authorized by this document alone.
+**Related:** ADR-0042 Lightbox private boundaries; ADR-0034 PDF isolation
+**Task:** `1e0e39a1-ac8d-48f6-8e41-0a7f3c98d73e`
 **Reviewed baseline:** `ef8a4891c955933e3d7e2f0ef87f56c9bb91fb16`
 
 ## Context
