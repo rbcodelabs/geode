@@ -13,7 +13,7 @@ diagnostic("main-stage", { name: "entry" });
 app.on("window-all-closed", () => {});
 app.whenReady().then(async () => {
   let window, failure = null, completed = false, result;
-  const report = { schema: 1, runId, commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+  const report = { schema: 2, runId, commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
     runtime: { electron: process.versions.electron, node: process.versions.node, platform: process.platform, processSandboxDisabled: app.commandLine.hasSwitch("no-sandbox") } };
   try {
     diagnostic("main-stage", { name: "ready" });

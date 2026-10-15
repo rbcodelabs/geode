@@ -12,17 +12,44 @@ const stage = (name: string, extra: Record<string, unknown> = {}) => trace({ kin
 globalThis.addEventListener("error", event => trace({ kind: "page-error", message: event.message, stack: event.error?.stack }));
 globalThis.addEventListener("unhandledrejection", event => trace({ kind: "page-rejection", message: String(event.reason), stack: event.reason?.stack }));
 function requireProof(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
-function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], scenario?: string) {
+export function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], scenario?: string) {
   const ownerToken = {}, file = {}, vault = {}, owned = new Map<string, { context: Context; revokes: number }>();
   const contexts = new Map<string, Context>(); let active: Context | undefined;
-  let image: HTMLImageElement | undefined, detach: (() => void) | undefined;
+  interface Decoder {
+    context: Context; url: string; target?: HTMLImageElement; native?: Promise<void>; settlement: Promise<void>;
+    settled: boolean; retired: boolean; sourceAttempted: boolean; cleanupAttempted: boolean;
+    detach?: () => void; cleanupFailure?: unknown; failed: boolean; cancellation?: Promise<void | { kind: "cleanup-uncertain"; error: unknown }>;
+  }
+  let decoder: Decoder | undefined, presentation: Decoder | undefined;
+  let failedCleanup = false, cleanupFailure: unknown;
   let onDecode: ((observation: { settled: () => boolean; outcome: () => string | undefined }) => void) | undefined;
   const emit = (context: Context, name: string, extra: Record<string, unknown> = {}) => {
     const event = { seq: events.length + 1, ...context, name, ...extra };
     events.push(event); trace({ kind: "callback", ...event });
   };
+  const rememberFailure = (record: Decoder, error: unknown) => {
+    if (!record.failed) { record.failed = true; record.cleanupFailure = error; }
+    else if (record.cleanupFailure !== error) record.cleanupFailure = new AggregateError([record.cleanupFailure, error], "Native decoder cleanup failed.");
+    if (!failedCleanup) { failedCleanup = true; cleanupFailure = record.cleanupFailure; }
+  };
+  const clearSource = (record: Decoder) => {
+    if (record.sourceAttempted) return;
+    requireProof(record.settled, "Never mutate an unsettled decoder source."); record.sourceAttempted = true;
+    try { record.target?.removeAttribute("src"); emit(record.context, "decoder-source-cleared", { url: record.url, srcAttribute: record.target?.getAttribute("src") ?? null }); }
+    catch (error) { rememberFailure(record, error); }
+  };
+  const cleanupDecoder = (record: Decoder) => {
+    if (!record.cleanupAttempted) {
+      record.cleanupAttempted = true; clearSource(record);
+      try { record.target?.remove(); } catch (error) { rememberFailure(record, error); }
+      try { record.detach?.(); emit(record.context, "decoder-listeners-released", { url: record.url }); } catch (error) { rememberFailure(record, error); }
+      if (!record.failed) { record.target = undefined; record.native = undefined; record.detach = undefined; emit(record.context, "decoder-reference-released", { url: record.url }); }
+    }
+    if (record.failed) throw record.cleanupFailure;
+  };
   const adapter: ImageSessionAdapter = {
     read: (intent, id) => {
+      if (failedCleanup) throw cleanupFailure;
       const fixture = lookup.get(intent.path); requireProof(fixture, "No synthetic fixture capability for this path.");
       const context = { id, path: intent.path, ...(scenario ? { scenario } : {}) }; active = context; contexts.set(id, context);
       emit(context, "readStart");
@@ -32,7 +59,18 @@ function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], sc
     },
     cancel: (_intent, id) => {
       const context = contexts.get(id); requireProof(context && context === active, "Cancellation must retain the exact active request ID.");
-      emit(context, "cancel"); emit(context, "cancelSettled");
+      const record = decoder?.context === context ? decoder : undefined;
+      if (record?.cancellation) return record.cancellation;
+      emit(context, "cancel");
+      if (!record) { emit(context, "cancelSettled", { decoderPresent: false }); return; }
+      record.retired = true;
+      // Native settlement only; never session.close, adapter decode or entry.done.
+      record.cancellation = record.settlement.then(() => {
+        let reply: void | { kind: "cleanup-uncertain"; error: unknown };
+        try { cleanupDecoder(record); } catch (error) { reply = { kind: "cleanup-uncertain", error }; }
+        emit(context, "cancelSettled", { decoderPresent: true, cleanupUncertain: !!reply }); return reply;
+      });
+      return record.cancellation;
     },
     createURL: value => {
       requireProof(active, "URL creation has an admitted owner.");
@@ -42,47 +80,76 @@ function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], sc
     },
     decode: url => {
       const record = owned.get(url); requireProof(record && record.revokes === 0, "Decode only owns a live URL.");
-      const context = record.context, target = document.createElement("img"); image = target;
+      const context = record.context, target = document.createElement("img");
+      const work: Decoder = { context, url, target, settlement: Promise.resolve(), settled: false, retired: false,
+        sourceAttempted: false, cleanupAttempted: false, failed: false }; decoder = work;
       const load = () => emit(context, "load", { url, width: target.naturalWidth, height: target.naturalHeight });
       const error = () => emit(context, "error", { url });
       target.addEventListener("load", load); target.addEventListener("error", error);
-      detach = () => { target.removeEventListener("load", load); target.removeEventListener("error", error); };
-      document.body.appendChild(target); target.src = url;
+      work.detach = () => { target.removeEventListener("load", load); target.removeEventListener("error", error); };
+      target.src = url;
       stage("native-decode-call", { ...context, url });
-      const native = target.decode(); let settled = false, outcome: string | undefined;
+      let native: Promise<void>;
+      try { native = target.decode(); } catch (error) { work.settled = true; throw error; }
+      work.native = native; let settled = false, outcome: string | undefined;
       stage("native-decode-return", { ...context, url });
-      emit(context, "decodeStart", { url, srcAttribute: target.getAttribute("src"), currentSrc: target.currentSrc });
+      emit(context, "decodeStart", { url, srcAttribute: target.getAttribute("src"), currentSrc: target.currentSrc, connected: target.isConnected });
       const observed = native.then(() => {
-        settled = true; outcome = "fulfilled";
+        settled = true; work.settled = true; outcome = "fulfilled";
         emit(context, "decodeSettled", { url, outcome, width: target.naturalWidth, height: target.naturalHeight, currentSrc: target.currentSrc });
         return { width: target.naturalWidth, height: target.naturalHeight };
       }, error => {
-        settled = true; outcome = "rejected";
+        settled = true; work.settled = true; outcome = "rejected";
         emit(context, "decodeSettled", { url, outcome, errorName: error?.name ?? "unknown", currentSrc: target.currentSrc });
         throw error;
       });
+      // Consume only for cancellation cleanup; the decode observer preserves rejection.
+      work.settlement = native.then(() => {}, () => {});
       onDecode?.({ settled: () => settled, outcome: () => outcome });
       return observed;
     },
-    hide: () => { requireProof(active, "Hide retains a context."); if (image) image.hidden = true; emit(active, "hide"); },
+    hide: () => { requireProof(active, "Hide retains a context."); if (presentation?.target) presentation.target.hidden = true; emit(active, "hide", { presentationPresent: !!presentation?.target }); },
     clear: () => {
-      requireProof(active, "Clear retains a context."); image?.removeAttribute("src"); image?.remove();
-      emit(active, "clear", { srcAttribute: image?.getAttribute("src") ?? null, currentSrc: image?.currentSrc ?? "" });
+      requireProof(active, "Clear retains a context."); const current = presentation; presentation = undefined;
+      if (current) { clearSource(current); try { current.target?.remove(); } catch (error) { rememberFailure(current, error); } }
+      emit(active, "clear", { presentationPresent: !!current, srcAttribute: current?.target?.getAttribute("src") ?? null, currentSrc: current?.target?.currentSrc ?? "" });
+      if (current?.failed) throw current.cleanupFailure;
     },
-    release: () => { requireProof(active, "Release retains a context."); detach?.(); detach = undefined; image = undefined; emit(active, "release"); },
+    release: () => {
+      requireProof(active, "Release retains a context."); const record = decoder?.context === active ? decoder : undefined;
+      if (record) {
+        record.retired = true;
+        if (record.settled) cleanupDecoder(record);
+        else emit(active, "decoder-source-retained", { url: record.url, srcAttribute: record.target?.getAttribute("src"), connected: record.target?.isConnected, settled: false });
+      }
+      emit(active, "release", { decoderPresent: !!record });
+    },
     revoke: url => {
       const record = owned.get(url); requireProof(record && record.revokes === 0, "Exactly one revoke attempt per exact owned URL.");
-      record.revokes++; URL.revokeObjectURL(url); emit(record.context, "urlRevoke", { url });
+      record.revokes++;
+      try { URL.revokeObjectURL(url); } catch (error) {
+        if (decoder?.url === url) rememberFailure(decoder, error);
+        else if (!failedCleanup) { failedCleanup = true; cleanupFailure = error; }
+        throw error;
+      }
+      emit(record.context, "urlRevoke", { url });
     },
     publish: (url, dimensions) => {
-      const record = owned.get(url); requireProof(record && record.revokes === 0 && image?.isConnected, "Publish only the actual current native image.");
-      emit(record.context, "publish", { url, ...dimensions, currentSrc: image.currentSrc, connected: image.isConnected });
+      const record = owned.get(url), current = decoder;
+      requireProof(record && record.revokes === 0 && current?.url === url && current.context === active && current.settled && !current.retired && current.target && !failedCleanup, "Publish only the actual settled current native decoder.");
+      const target = current.target; presentation = current;
+      document.body.appendChild(target);
+      if (current.retired || !current.target || failedCleanup) {
+        try { target.remove(); } catch (error) { rememberFailure(current, error); }
+        throw new Error("Native decoder retired during presentation promotion.");
+      }
+      emit(record.context, "publish", { url, ...dimensions, currentSrc: target.currentSrc, connected: target.isConnected });
     },
   };
   const session = new ImageInspectionSession(ownerToken, adapter);
   const intent = (path: string): ImageIntent => ({ ownerToken, file, vault, root: "/synthetic-proof-fixtures", path, snapshot: `![[${path}]]`, current: () => true });
   return {
-    session, owned, intent,
+    session, owned, intent, adapter,
     watchDecode: (callback: typeof onDecode) => { onDecode = callback; },
     close: async () => {
       requireProof(active, "Close has an admitted request context."); const context = active; emit(context, "closeStart");
@@ -138,7 +205,10 @@ export async function run(fixtures: Fixture[], corrupt: Fixture) {
       positive: { settled: true, published: true, width: published.width, height: published.height, closed: true },
       beforeDecode: { closed: true, decodeCalls: events.filter(event => event.scenario === "beforeDecode" && event.name === "decodeStart").length, urlCreates: before.owned.size, publications: 0 },
       pendingClose: { decodeStarted: true, pendingAtClose, decodeSettled: observation.settled(), closeSettled: true,
-        srcAttributeRemoved: events.filter(event => event.scenario === "pendingClose" && event.name === "clear").every(event => event.srcAttribute === null),
+        presentationSourceRemoved: events.filter(event => event.scenario === "pendingClose" && event.name === "clear").every(event => event.srcAttribute === null),
+        decoderSourceRetainedWhilePending: events.some(event => event.scenario === "pendingClose" && event.name === "decoder-source-retained" && event.srcAttribute === event.url && event.settled === false),
+        decoderSourceRemovedAfterSettlement: events.some(event => event.scenario === "pendingClose" && event.name === "decoder-source-cleared" && event.srcAttribute === null),
+        decoderDetached: events.filter(event => event.scenario === "pendingClose" && (event.name === "decodeStart" || event.name === "decoder-source-retained")).every(event => event.connected === false),
         publications: events.filter(event => event.scenario === "pendingClose" && event.name === "publish").length, outcome: observation.outcome() },
       urls: { created: 2, revoked: owned.filter(([, value]) => value.revokes === 1).length, unique: new Set(owned.map(([url]) => url)).size === owned.length, freshRevokedDecodeRejected: true },
       sourceUnchanged: false, events });

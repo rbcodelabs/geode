@@ -27,7 +27,7 @@ const failures: [string, (report: any) => void][] = [
   ["decode before admission", r => { r.families[0].beforeDecode.decodeCalls = 1; }], ["URL before admission", r => { r.families[0].beforeDecode.urlCreates = 1; }],
   ["pending observation", r => { r.families[0].pendingClose.pendingAtClose = false; }], ["unsettled decode", r => { r.families[0].pendingClose.decodeSettled = false; }],
   ["fictional close", r => { r.families[0].pendingClose.closeSettled = false; }], ["late publication", r => { r.families[0].pendingClose.publications = 1; }],
-  ["retained source", r => { r.families[0].pendingClose.srcAttributeRemoved = false; }], ["unknown settlement", r => { r.families[0].pendingClose.outcome = "timeout"; }],
+  ["retained decoder source after settlement", r => { r.families[0].pendingClose.decoderSourceRemovedAfterSettlement = false; }], ["unknown settlement", r => { r.families[0].pendingClose.outcome = "timeout"; }],
   ["unrevoked URL", r => { r.families[0].urls.revoked--; }], ["duplicate URL", r => { r.families[0].urls.unique = false; }],
   ["revocation positive missing", r => { r.families[0].urls.freshRevokedDecodeRejected = false; }], ["changed file", r => { r.families[0].sourceUnchanged = false; }],
   ["corrupt control", r => { r.controls.corruptPNG.rejected = false; }], ["recovery control", r => { r.controls.corruptPNG.recovered = false; }],
@@ -56,6 +56,28 @@ const failures: [string, (report: any) => void][] = [
   ["native published currentSrc contradicts URL owner", r => { r.families[0].events.find((e: any) => e.name === "publish").currentSrc = "blob:borrowed"; }],
   ["detached native publication", r => { r.families[0].events.find((e: any) => e.name === "publish").connected = false; }],
 ];
+const reorder = (events: any[]) => events.forEach((event, index) => { event.seq = index + 1; });
+const pendingEvent = (r: any, name: string) => r.families[0].events.find((e: any) => e.scenario === "pendingClose" && e.name === name);
+failures.push(
+  ["family read aliases another fixture path", r => { r.families[1].events.find((e: any) => e.name === "readStart").path = r.families[0].events[0].path; }],
+  ["family callback changes captured fixture path", r => { r.families[0].events.find((e: any) => e.name === "readSettled").path = "foreign.png"; }],
+  ["latest callback changes captured alias path", r => { r.controls.latest.events.find((e: any) => e.name === "decodeStart").path = "C.png"; }],
+  ["recovery callback changes captured alias path", r => { r.controls.corruptPNG.events.find((e: any) => e.name === "closeSettled").path = "corrupt.png"; }],
+  ["attached pending decoder", r => { pendingEvent(r, "decodeStart").connected = true; }],
+  ["fabricated pending presentation", r => { pendingEvent(r, "clear").presentationPresent = true; }],
+  ["vacuous published source clearing", r => { r.families[0].events.find((e: any) => e.name === "clear").presentationPresent = false; }],
+  ["wrong retained decoder source", r => { pendingEvent(r, "decoder-source-retained").srcAttribute = "blob:foreign"; }],
+  ["connected retired decoder", r => { pendingEvent(r, "decoder-source-retained").connected = true; }],
+  ["retention after claimed native settlement", r => { pendingEvent(r, "decoder-source-retained").settled = true; }],
+  ["missing retained decoder witness", r => { const all = r.families[0].events; all.splice(all.indexOf(pendingEvent(r, "decoder-source-retained")), 1); reorder(all); }],
+  ["decoder clear before native settlement", r => { const all = r.families[0].events; const [clear] = all.splice(all.indexOf(pendingEvent(r, "decoder-source-cleared")), 1); all.splice(all.indexOf(pendingEvent(r, "decodeSettled")), 0, clear); reorder(all); }],
+  ["missing decoder reference release", r => { const all = r.families[0].events; all.splice(all.indexOf(pendingEvent(r, "decoder-reference-released")), 1); reorder(all); }],
+  ["cancel ACK before decoder cleanup", r => { const all = r.families[0].events; const [ack] = all.splice(all.indexOf(pendingEvent(r, "cancelSettled")), 1); all.splice(all.indexOf(pendingEvent(r, "decoder-source-cleared")), 0, ack); reorder(all); }],
+  ["decoder source actually retained after cleanup", r => { pendingEvent(r, "decoder-source-cleared").srcAttribute = "blob:retained"; }],
+  ["C admission before decoder reference release", r => { const all = r.controls.latest.events; const [released] = all.splice(all.findIndex((e: any) => e.name === "decoder-reference-released"), 1); all.splice(all.findIndex((e: any) => e.name === "readStart" && e.path === "C.png") + 1, 0, released); reorder(all); }],
+  ["listeners release before decoder source clear", r => { const all = r.families[0].events, a = all.indexOf(pendingEvent(r, "decoder-source-cleared")), b = all.indexOf(pendingEvent(r, "decoder-listeners-released")); [all[a], all[b]] = [all[b], all[a]]; reorder(all); }],
+  ["missing actual published decoder source clear", r => { const all = r.families[0].events; all.splice(all.findIndex((e: any) => e.name === "decoder-source-cleared"), 1); reorder(all); }],
+);
 it.each(failures)("rejects %s before an outer runner may claim success", (_name, mutate) => {
   const { expected, report } = valid(); mutate(report); expect(() => validateImageDecoderReport(report, expected)).toThrow();
 });
