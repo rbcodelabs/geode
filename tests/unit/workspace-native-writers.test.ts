@@ -2,6 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { BaseView } from "../../src/renderer/views/base-view";
 import { CanvasView } from "../../src/renderer/views/canvas-view";
 import { MarkdownView } from "../../src/renderer/views/markdown-view";
+const modal = vi.hoisted(() => ({ submit: undefined as undefined | ((value: string) => void) }));
+vi.mock("../../src/renderer/modals/modals", async importOriginal => ({ ...await importOriginal<typeof import("../../src/renderer/modals/modals")>(), PromptModal: class { constructor(_app: unknown, options: { onSubmit(value: string): void }) { modal.submit = options.onSubmit; } open() {} } }));
 afterEach(() => vi.unstubAllGlobals());
 it("keeps the actual Base retry control usable after a pre-destructor close abort", async () => {
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
@@ -42,6 +44,59 @@ it("refuses a stale Base row write after an awaited read when its owner begins c
   const closing = owner.close(); finish("---\npriority: 2\n---\n");
   await expect(writing).rejects.toThrow(/owner changed/); await expect(closing).rejects.toThrow(/owner changed/);
   expect(modify).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled(); expect(view.sourceEdit.rawText).toBe("9");
+});
+it.each([["Base", BaseView], ["Canvas", CanvasView]] as const)("refuses detached persistence after %s retirement", async (_label, Type) => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const view = Object.create(Type.prototype) as any; const owner = new RenderOwnership().create(view);
+  const doPersist = vi.fn(async () => {});
+  Object.assign(view, { renderOwner: owner, vaultSwitching: false, conflictReadOnly: false, definitionWritesPending: 0, persistQueue: Promise.resolve(), doPersist });
+  await owner.close(); await view.persist(); expect(doPersist).not.toHaveBeenCalled();
+});
+it.each([["conversion", false], ["history", false], ["conversion", true], ["history", true]] as const)("tracks a delayed Canvas %s write (rejected: %s) until settlement", async (kind, rejected) => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const view = Object.create(CanvasView.prototype) as any; const registry = new RenderOwnership(); const owner = registry.create(view, { writer: view });
+  let finish!: () => void; const write = vi.fn(() => new Promise<void>((resolve, reject) => { finish = () => rejected ? reject(new Error("write rejected")) : resolve(); }));
+  const text = JSON.stringify({ nodes: [], edges: [] });
+  Object.assign(view, { renderOwner: owner, pendingConversions: new Map(), persistQueue: Promise.resolve(), recoveryError: null, conflictReadOnly: false, vaultSwitching: false, file: { path: "Board.canvas", parent: "" }, document: { nodes: [{ id: "a", type: "text", text: "draft" }], edges: [] }, undoStack: [text], redoStack: [], lastKnownText: text, selectedIds: new Set(), selectedEdgeIds: new Set(), containerEl: { dataset: {} }, render: vi.fn(), doPersist: vi.fn(async () => {}), app: { notify: vi.fn(), vault: { availablePath: () => "Note.md", create: write, modify: write } } });
+  const task = kind === "conversion" ? view.convertTextNodeToFile("a", "Note") : view.restoreHistory("undo");
+  await new Promise(resolve => setImmediate(resolve)); expect(write).toHaveBeenCalledOnce();
+  let settled = false; const held = registry.hold(new Set([view])).then(scopes => { settled = true; registry.release(scopes); });
+  await new Promise(resolve => setImmediate(resolve)); expect(settled).toBe(false);
+  finish(); const results = await Promise.allSettled([task, held]);
+  if (rejected) {
+    expect(results.every(result => result.status === "rejected")).toBe(true);
+    expect(view.document.nodes[0]).toMatchObject({ type: "text", text: "draft" });
+    await expect(owner.close()).rejects.toThrow("write rejected");
+  } else if (kind === "conversion") {
+    expect(results.every(result => result.status === "rejected")).toBe(true);
+    expect(view.document.nodes[0].type).toBe("text"); expect(view.render).not.toHaveBeenCalled();
+    await view.convertTextNodeToFile("a", "Note"); expect(write).toHaveBeenCalledOnce();
+    expect(view.document.nodes[0]).toMatchObject({ type: "file", file: "Note.md" });
+  } else { expect(results.every(result => result.status === "fulfilled")).toBe(true); }
+});
+it("refuses retired Markdown rename, bookmark and delayed autosave callbacks", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const view = Object.create(MarkdownView.prototype) as any; const owner = new RenderOwnership().create(view); await owner.close();
+  const renameFile = vi.fn(); const addBlockBookmark = vi.fn(); const modify = vi.fn();
+  Object.assign(view, { renderOwner: owner, file: { path: "Note.md", basename: "Note" }, titleEl: { textContent: "Changed" }, editor: { state: { doc: { toString: () => "unsaved" } } }, saveTimer: null, flushInFlight: null, conflictReadOnly: false, lastSavedText: "saved", serializeText: (s: string) => s, app: { renameFile, addBlockBookmark, vault: { modify }, notify: vi.fn() } });
+  await view.commitTitleRename(); expect(renameFile).not.toHaveBeenCalled(); await view.bookmarkBlockUnderCursor(); await view.flush();
+  expect(renameFile).not.toHaveBeenCalled(); expect(addBlockBookmark).not.toHaveBeenCalled(); expect(modify).not.toHaveBeenCalled();
+});
+it("prepares a Markdown save before child teardown and permits explicit flush retry after rejection", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const view = Object.create(MarkdownView.prototype) as any; const childClose = vi.fn(async () => {}); const destroy = vi.fn();
+  const owner = new RenderOwnership().create(view, { prepareClose: () => view.prepareCloseNative(), failureKey: "markdown-save", close: () => view.closeNative() } as any); owner.child({ close: childClose });
+  const modify = vi.fn().mockRejectedValueOnce(new Error("save rejected")).mockResolvedValue(undefined);
+  Object.assign(view, { renderOwner: owner, file: { path: "Note.md" }, editor: { state: { doc: { toString: () => "draft" } }, destroy }, conflictReadOnly: false, lastSavedText: "saved", saveTimer: null, flushInFlight: null, serializeText: (s: string) => s, pagePreview: { destroy: vi.fn() }, clearSyncConflict: vi.fn(), readingContentEl: null, app: { vault: { modify } } });
+  await expect(owner.close()).rejects.toThrow("save rejected"); expect(childClose).not.toHaveBeenCalled(); expect(destroy).not.toHaveBeenCalled();
+  await view.flush(); await owner.close(); expect(modify).toHaveBeenCalledTimes(2); expect(childClose).toHaveBeenCalledOnce(); expect(destroy).toHaveBeenCalledOnce();
+});
+it("rejects an actual detached Base modal submission after owner retirement", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const view = Object.create(BaseView.prototype) as any; const owner = new RenderOwnership().create(view);
+  Object.assign(view, { renderOwner: owner, def: { views: [{ name: "Original", type: "table" }] }, app: {}, persist: vi.fn() });
+  view.addView(); const submit = modal.submit!; await owner.close(); submit("Detached");
+  expect(view.def.views.map((item: any) => item.name)).toEqual(["Original"]); expect(view.persist).not.toHaveBeenCalled();
 });
 it("refuses an active Base cell draft before flushing its definition or row target", () => {
   const view = Object.create(BaseView.prototype) as any;

@@ -234,7 +234,7 @@ export class BaseView implements View {
 
   readonly renderOwner: RenderScope;
   constructor(private app: App, parentOwner?: RenderScope) {
-    const options = { writer: this, close: () => this.closeNative(), resume: () => { if (this.file && this.def) this.runAndRender(); } };
+    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), close: () => this.closeNative(), resume: () => { if (this.file && this.def) this.runAndRender(); } };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "base-view";
@@ -663,25 +663,31 @@ export class BaseView implements View {
   private persistQueue: Promise<void> = Promise.resolve();
 
   /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `lastKnownText`'s doc comment for why the resulting "modify" event(s) must not trigger a second, object-identity-breaking reload). */
-  private persist(): Promise<void> {
+  private persist(retry = false): Promise<void> {
     this.definitionRevision++;
-    if (this.vaultSwitching) {
+    if (this.renderOwner?.closed) return Promise.resolve();
+    if (this.vaultSwitching || (this.renderOwner && !this.renderOwner.admissionAllowed)) {
       this.persistRequestedWhileSuspended = true;
       return Promise.resolve();
     }
     this.definitionWritesPending++;
-    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist()).finally(() => { this.definitionWritesPending--; });
+    const previous = this.persistQueue;
+    const write = async (token?: RenderToken) => { await previous.catch(() => {}); token?.check(); await this.doPersist(token); };
+    const task = this.renderOwner ? retry ? this.renderOwner.retry(write, "definition") : this.renderOwner.run(write, "definition") : write();
+    this.persistQueue = task.finally(() => { this.definitionWritesPending--; });
+    void task.catch(() => { if (this.renderOwner?.admissionAllowed) this.setSaveStatus("Base save failed", true, () => this.persist(true)); });
     // UI callbacks are fire-and-forget; retain rejection for pause/load callers.
     void this.persistQueue.catch(() => {});
     return this.persistQueue;
   }
 
-  private async doPersist(): Promise<void> {
+  private async doPersist(token?: RenderToken): Promise<void> {
     if (!this.def || !this.file) return;
     const text = stringifyBaseFile(this.def);
     this.definitionRevision++;
     this.pendingKnownText = text;
     try {
+      token?.check();
       if (this.inlinePersist) await this.inlinePersist(text);
       else await this.app.vault.modify(this.file, text);
       this.definitionRevision++;
@@ -689,7 +695,7 @@ export class BaseView implements View {
     } finally {
       if (this.pendingKnownText === text) { this.definitionRevision++; this.pendingKnownText = null; }
     }
-    this.runAndRender();
+    if (!token || token.current()) this.runAndRender();
   }
 
   workspaceWritePaths(): string[] {
@@ -769,6 +775,7 @@ export class BaseView implements View {
     new PromptModal(this.app, {
       placeholder: "View name",
       onSubmit: (name) => {
+        if (this.renderOwner && !this.renderOwner.admissionAllowed) return;
         if (!this.def || this.def.views.some((v) => v.name === name)) return;
         this.def.views.push({ type, name });
         this.currentViewName = name;
@@ -794,6 +801,7 @@ export class BaseView implements View {
       placeholder: "New view name",
       initialValue: name,
       onSubmit: (newName) => {
+        if (this.renderOwner && !this.renderOwner.admissionAllowed) return;
         if (!this.def || newName === name || this.def.views.some((v) => v.name === newName)) return;
         const view = this.def.views.find((v) => v.name === name);
         if (!view) return;
@@ -908,8 +916,12 @@ export class BaseView implements View {
   }
 
   private createNewFileInFolder(): void {
+    if (this.renderOwner && !this.renderOwner.admissionAllowed) return;
     if (!this.file) return;
-    void this.app.createNewNote(this.file.parent);
+    const parent = this.file.parent;
+    const create = async (token?: RenderToken) => { token?.check(); await this.app.createNewNote(parent); };
+    const task = this.renderOwner ? this.renderOwner.retry(create, "create-note") : create();
+    void task.catch(() => this.app.notify("Could not create the Base note."));
   }
 
   // --- Cell editing ---------------------------------------------------------

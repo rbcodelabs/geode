@@ -2,7 +2,7 @@
 export class ScopeCancelled extends Error {
   constructor() { super("The render owner changed before initialization completed."); }
 }
-interface ScopeOptions { writer?: unknown; close?(): Promise<void>; resume?(): void }
+interface ScopeOptions { writer?: unknown; preflightClose?(): void; prepareClose?(): Promise<void>; failureKey?: string; close?(): Promise<void>; resume?(): void }
 export interface RenderToken { current(): boolean; check(): void }
 function raise(errors: unknown[]): void {
   if (errors.length === 1) throw errors[0];
@@ -17,14 +17,17 @@ export class RenderScope {
   private closing: Promise<void> | undefined;
   constructor(private readonly registry: RenderOwnership, private readonly options: ScopeOptions = {}, private readonly parent?: RenderScope, private readonly owner?: object) {}
   get closed(): boolean { return this.state === "closed"; }
+  get admissionAllowed(): boolean { return this.admits() && this.registry.admissionOpen; }
   private admits(): boolean { return this.state === "active" && !this.closing && (!this.parent || this.parent.admits()); }
   assertAdmission(): void { if (!this.admits() || !this.registry.admissionOpen) throw new Error("Native render admission is paused during a workspace operation."); }
   child(options: ScopeOptions = {}): RenderScope {
     this.assertAdmission(); const child = new RenderScope(this.registry, options, this); this.children.add(child); return child;
   }
   run<T>(operation: (token: RenderToken) => Promise<T>, key?: string): Promise<T> {
-    this.assertAdmission(); const generation = this.generation;
-    const token: RenderToken = { current: () => this.admits() && this.generation === generation, check: () => { if (!token.current()) throw new ScopeCancelled(); } };
+    this.assertAdmission();
+    const ancestry: { scope: RenderScope; generation: number }[] = [];
+    for (let scope: RenderScope | undefined = this; scope; scope = scope.parent) ancestry.push({ scope, generation: scope.generation });
+    const token: RenderToken = { current: () => this.admits() && ancestry.every(item => item.scope.generation === item.generation), check: () => { if (!token.current()) throw new ScopeCancelled(); } };
     // Register synchronously before invoking any asynchronous initializer.
     const task = Promise.resolve().then(() => { token.check(); return operation(token); });
     this.pending.add(task);
@@ -67,21 +70,29 @@ export class RenderScope {
     try { this.options.resume?.(); } catch (error) { errors.push(error); }
     raise(errors);
   }
-  close(): Promise<void> {
+  private async prepareCloseTree(): Promise<void> {
+    await this.drainTasks();
+    for (const child of this.children) await child.drain();
+    try { await this.options.prepareClose?.(); }
+    catch (error) { if (this.options.failureKey) this.failures.push({ error, key: this.options.failureKey }); throw error; }
+    for (const child of this.children) await child.prepareCloseTree();
+  }
+  private preflightCloseTree(): void { this.options.preflightClose?.(); for (const child of this.children) child.preflightCloseTree(); }
+  close(): Promise<void> { return this.startClose(false); }
+  private startClose(prepared: boolean): Promise<void> {
     if (this.closing) return this.closing;
     const previous = this.state;
     this.state = "closed"; this.generation++;
     this.closing = Promise.resolve().then(async () => {
       const errors: unknown[] = [];
-      try { await this.drainTasks(); } catch (error) { errors.push(error); }
-      for (const child of this.children) { try { await child.drain(); } catch (error) { errors.push(error); } }
+      try { if (!prepared) { this.preflightCloseTree(); await this.prepareCloseTree(); } } catch (error) { errors.push(error); }
       if (errors.length) {
         // No destructor has run: preserve the entire subtree and usable retry
         // controls. Ancestor admission still prevents detached children reopening.
         this.state = previous; this.closing = undefined; raise(errors);
       }
       if (!errors.length) for (const child of [...this.children]) {
-        try { await child.close(); } catch (error) { errors.push(error); break; }
+        try { await child.startClose(true); } catch (error) { errors.push(error); break; }
       }
       if (!errors.length) { try { await this.options.close?.(); } catch (error) { errors.push(error); } }
       if (!errors.length) {
