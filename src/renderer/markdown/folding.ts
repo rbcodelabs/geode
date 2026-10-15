@@ -1,6 +1,7 @@
 import { EditorState, type Extension, type StateEffect } from "@codemirror/state";
 import { codeFolding, ensureSyntaxTree, foldEffect, foldedRanges, syntaxTree, unfoldEffect } from "@codemirror/language";
 import { EditorView, GutterMarker, gutter, rectangularSelection } from "@codemirror/view";
+import { getFrontMatterInfo } from "../api/frontmatter";
 
 export interface FoldingSettings { foldHeading: boolean; foldIndent: boolean }
 export interface FoldRange { from: number; to: number }
@@ -9,8 +10,12 @@ export type FoldAction = "all" | "none" | "more" | "less";
 /** Parser nodes keep fenced code, escaped markers and list indentation unambiguous. */
 export function foldRanges(state: EditorState, settings: FoldingSettings): FoldRange[] {
   const tree = ensureSyntaxTree(state, state.doc.length, 50) ?? syntaxTree(state);
+  const frontmatterEnd = getFrontMatterInfo(state.doc.toString()).contentStart;
   const ranges: FoldRange[] = [];
   tree.iterate({ enter(node) {
+    // Lezer can interpret YAML keys or lists as Markdown. Continue traversing
+    // the document, but only expose folding candidates from the note body.
+    if (node.from < frontmatterEnd) return;
     const heading = /^(?:ATX|Setext)Heading([1-6])$/.exec(node.name);
     if (heading && settings.foldHeading) {
       let last = node.node;
