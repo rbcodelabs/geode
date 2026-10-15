@@ -27,6 +27,9 @@ function maskLinkedSpans(text: string, truncated: boolean): string {
   const spans: [number, number][] = [];
   const frontmatter = FRONTMATTER_BLOCK_RE.exec(text);
   if (frontmatter) spans.push([0, frontmatter[0].length]);
+  // A closing YAML delimiter may be outside the bounded prefix. Its values
+  // must never become editable suggestions merely because their context was cut.
+  else if (truncated && /^---\r?\n/.test(text)) spans.push([0, text.length]);
   for (const match of text.matchAll(/!?\[\[[^\[\]\n]+\]\]/g)) spans.push([match.index, match.index + match[0].length]);
   // One forward pass for Markdown syntax. Incomplete destinations consume their
   // tail once rather than rescanning it from every unmatched opening bracket.
