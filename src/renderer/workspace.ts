@@ -367,14 +367,23 @@ export class WorkspaceLeaf {
   async openFile(file: TFile, state?: OpenViewState): Promise<void> {
     const keepFocus = state?.active === false;
     const focusBefore = keepFocus ? (document.activeElement as HTMLElement | null) : null;
-    await this.app.openFileInLeaf(this, file);
-    const subpath = state?.eState?.subpath;
-    if (typeof subpath === "string" && subpath) {
-      const offset = await this.app.resolveSubpathOffset(file, subpath);
-      if (offset !== null) this.view?.scrollToOffset?.(offset);
-    }
-    if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) {
-      focusBefore.focus({ preventScroll: true });
+    try {
+      await this.app.openFileInLeaf(this, file);
+      const loaded = this.view;
+      const loadedFile = loaded?.getFile?.();
+      const loadedPath = loadedFile?.path;
+      const requestedPath = file.path;
+      const subpath = state?.eState?.subpath;
+      if (typeof subpath === "string" && subpath) {
+        const offset = await this.app.resolveSubpathOffset(file, subpath);
+        if (offset !== null && this.view === loaded && file.path === requestedPath && loaded?.getFile?.() === loadedFile && loadedFile?.path === loadedPath) {
+          const native = loaded as View & { scrollToOffsetAsync?(offset: number): Promise<void> };
+          if (native?.viewType === "markdown" && native.scrollToOffsetAsync) await native.scrollToOffsetAsync(offset);
+          else loaded?.scrollToOffset?.(offset);
+        }
+      }
+    } finally {
+      if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) focusBefore.focus({ preventScroll: true });
     }
   }
 
