@@ -189,3 +189,18 @@ it("stacks retained controls above inline records and keeps the shelf rail above
   expect(state.record.state).toBe("inline"); expect(state.record.root.style.zIndex).toBe("0");
   expect(state.record.root.isConnected).toBe(true); expect(state.counts.closes).toBe(0);
 });
+it("uses cumulative measured heights for retained placement, focus exposure and rail range", async () => {
+  const state = await harness(false);
+  state.layer.reconcile([{ id: 1, from: 0, to: 17, target: "Board.canvas" }, { id: 2, from: 20, to: 37, target: "Board.canvas" }]);
+  state.layer.attachAnchor(2, new Element() as unknown as HTMLElement); await state.drain();
+  const second = (state.layer as any).records.get(2);
+  state.record.root.style.height = "400px"; second.root.style.height = "200px";
+  for (const id of [1, 2]) (state.layer as any).anchors.get(id).getBoundingClientRect = () => ({ left: 0, top: -1000, width: 640, height: 320 });
+  (document as any).activeElement = second.root;
+  await state.geometryTurn();
+  expect(Number.parseFloat(second.root.style.top) - Number.parseFloat(state.record.root.style.top)).toBe(408);
+  expect((state.layer as any).railContent.style.height).toBe("616px");
+  expect((state.layer as any).rail.scrollTop).toBe(212);
+  expect(state.record.root.isConnected).toBe(true); expect(second.root.isConnected).toBe(true);
+  expect(state.counts.closes).toBe(0);
+});

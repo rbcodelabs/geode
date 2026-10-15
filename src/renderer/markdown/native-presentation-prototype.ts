@@ -224,14 +224,18 @@ export class NativePresentationPrototype {
       if (!measured.pane.width || !measured.pane.height) return; // Hidden owner remains connected.
       let retained = 0; const shelfHeight = Math.min(420, measured.pane.height - 44); const shelfTop = measured.pane.height - shelfHeight;
       const unanchored = measured.records.filter(item => !item.anchor || item.anchor.top + item.anchor.height <= measured.pane.top || item.anchor.top >= measured.pane.bottom);
+      const retainedOffsets = new Map<PresentationRecord, number>(); let retainedHeight = 0;
+      for (const item of unanchored) {
+        retainedOffsets.set(item.record, retainedHeight); retainedHeight += item.height + 8;
+      }
       let offset = measured.offset;
       const focusedIndex = unanchored.findIndex(item => item.record.root.contains(measured.active));
       if (focusedIndex >= 0) {
-        const start = focusedIndex * 328; const end = start + unanchored[focusedIndex].height;
+        const start = retainedOffsets.get(unanchored[focusedIndex].record)!; const end = start + unanchored[focusedIndex].height;
         if (start < offset) offset = start;
         else if (end > offset + shelfHeight - 24) offset = end - shelfHeight + 24;
       }
-      Object.assign(this.rail.style, { top: `${shelfTop + 24}px`, height: `${shelfHeight - 24}px` }); this.railContent.style.height = `${unanchored.length * 328}px`;
+      Object.assign(this.rail.style, { top: `${shelfTop + 24}px`, height: `${shelfHeight - 24}px` }); this.railContent.style.height = `${retainedHeight}px`;
       if (Math.abs(offset - measured.offset) > 1) this.rail.scrollTop = offset;
       for (const { record, anchor, valid, height } of measured.records) {
         if (!this.records.has(record.occurrence.id)) continue;
@@ -239,7 +243,8 @@ export class NativePresentationPrototype {
         // A valid but virtualized occurrence still has Return, unlike removed source.
         const placement = placeNativeRecord(measured.pane, anchor, retained, offset, height);
         record.state = offscreen ? valid ? "retained" : "removed" : "inline";
-        const top = offscreen ? shelfTop + 24 + retained++ * (height + 8) - offset : placement.top;
+        const top = offscreen ? shelfTop + 24 + retainedOffsets.get(record)! - offset : placement.top;
+        if (offscreen) retained++;
         Object.assign(record.root.style, { left: `${offscreen ? 8 : placement.left}px`, top: `${top}px`, width: `${offscreen ? measured.pane.width - 32 : placement.width}px`, clipPath: offscreen ? `inset(${Math.max(0, shelfTop + 24 - top)}px 0 ${Math.max(0, top + height - measured.pane.height)}px 0)` : "none" });
         // Stable roots keep their DOM order; shelf controls must paint above later inline records.
         record.root.style.zIndex = offscreen ? "2" : "0";
@@ -257,7 +262,7 @@ export class NativePresentationPrototype {
       this.shelf.setAttribute("role", failed ? "alert" : "status");
       this.shelf.hidden = retained === 0 && !failed; this.rail.hidden = retained === 0;
       Object.assign(this.shelf.style, { top: `${shelfTop}px`, height: `${shelfHeight}px` });
-      Object.assign(this.rail.style, { top: `${shelfTop + 24}px`, height: `${shelfHeight - 24}px` }); this.railContent.style.height = `${retained * 328}px`;
+      Object.assign(this.rail.style, { top: `${shelfTop + 24}px`, height: `${shelfHeight - 24}px` }); this.railContent.style.height = `${retainedHeight}px`;
     } });
   };
   async close(): Promise<void> {
