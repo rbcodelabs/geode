@@ -24,3 +24,12 @@ while reusing the shared scanner; full large-note coverage remains incomplete.
 Frontmatter and code do not contribute footnotes. The chosen editing interaction
 is in the note's Source editor; this feature does not add an independent inline
 sidebar text editor.
+
+Screenshots from the synthetic Footnotes fixture, captured locally on macOS at
+commit bf3a8f0 on 2026-10-14. Both show the Source editor after a normal footnote
+edit, including a repeated reference, inline footnote, unreferenced definition,
+and missing-definition state. The compact capture retains legible controls and
+wraps note text within the editor.
+
+![Footnotes pane at 1440 × 900](../screenshots/footnotes-pane-desktop.png)
+![Footnotes pane at 960 × 760](../screenshots/footnotes-pane-compact.png)
