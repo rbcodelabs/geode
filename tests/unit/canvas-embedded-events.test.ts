@@ -29,7 +29,7 @@ it("lets an embedded Base keep file-card double clicks and context menus", () =>
   vi.stubGlobal("document", { createElement: element, body: element() });
   const view = Object.create(CanvasView.prototype) as any; const container = element(); const base = element(); const openFile = vi.fn(); const showMenu = vi.fn();
   const node = { id: "a", type: "file", file: "Host.md", x: 0, y: 0, width: 300, height: 300 };
-  Object.assign(view, { recoveryError: null, containerEl: container, selectedIds: new Set(), document: { nodes: [node] }, renderFileNode() {}, app: { openFile, showMenu, vault: { getFileByPath: () => ({ path: "Host.md" }) } } });
+  Object.assign(view, { recoveryError: null, containerEl: container, selectedIds: new Set(), document: { nodes: [node] }, renderFileNode() {}, sourceNavigation: { prepareNavigation: () => ({ dispatch: () => openFile() }) }, app: { openFile, showMenu, vault: { getFileByPath: () => ({ path: "Host.md" }) } } });
   const wrapper = view.renderNode(node, 1); const stopPropagation = vi.fn(); const preventDefault = vi.fn();
   const event = { target: { closest: () => base }, stopPropagation, preventDefault };
   wrapper.handlers.dblclick(event); wrapper.handlers.contextmenu(event);

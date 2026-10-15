@@ -1,3 +1,4 @@
+import { SourceOwnedNavigation, captureNavigationOrigin } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure, type PreparedRetirement } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
@@ -133,9 +134,25 @@ export class CanvasView implements View {
   private readonly touchCleanups: Array<() => void> = [];
 
   readonly renderOwner: RenderScope;
-  constructor(private app: App, parentOwner?: RenderScope) {
+  readonly sourceNavigation: SourceOwnedNavigation;
+  constructor(private app: App, parentOwner?: RenderScope, sourceNavigation?: SourceOwnedNavigation) {
     const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null) this.render(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
+    this.sourceNavigation = sourceNavigation ?? new SourceOwnedNavigation({
+      capture: () => {
+        const leaf = app.workspace.findLeafForView(this), file = this.file, vault = app.vault, root = vault.root, generation = this.loadGeneration;
+        if (!leaf) throw new ScopeCancelled();
+        return () => {
+          if (app.workspace.findLeafForView(this) !== leaf || leaf.view !== this || this.file !== file || app.vault !== vault || vault.root !== root || this.loadGeneration !== generation) throw new ScopeCancelled();
+        };
+      },
+      preflight: () => this.renderOwner.assertRetirementReady(),
+      execute: (request, validate) => {
+        const leaf = app.workspace.findLeafForView(this); if (!leaf) throw new ScopeCancelled();
+        return app.navigateFromSource(request, leaf, validate);
+      },
+      notify: message => app.notify(message),
+    });
     this.containerEl = document.createElement("div");
     this.containerEl.className = "canvas-view";
 
@@ -277,6 +294,7 @@ export class CanvasView implements View {
     if (conflictPath) {
       const open = document.createElement("button");
       open.type = "button";
+      // Explicit recovery remains available even when ordinary owner retirement is refused.
       open.textContent = "Open local conflict copy";
       open.addEventListener("click", () => {
         const file = this.app.vault.getFileByPath(conflictPath);
@@ -496,6 +514,19 @@ export class CanvasView implements View {
     this.updateSelectionControls();
   }
 
+  private captureNodeNavigationOrigin(node: CanvasNode, element: HTMLElement, version: number): () => () => void {
+    return () => {
+      const currentScope = captureNavigationOrigin(this.renderOwner)(), signature = this.presentationSignature(node);
+      const validate = () => {
+        currentScope();
+        const presentation = this.nodePresentations.get(node.id);
+        if (!this.document.nodes.includes(node) || this.presentationSignature(node) !== signature || presentation?.node !== node ||
+          presentation.signature !== signature || presentation.version !== version || presentation.el !== element || !this.isLiveNodeRender(version, element)) throw new ScopeCancelled();
+      };
+      validate(); return validate;
+    };
+  }
+
   private presentationSignature(node: CanvasNode): string {
     const { x, y, width, height, color, ...source } = node;
     return JSON.stringify([this.file?.path ?? "", source]);
@@ -704,7 +735,7 @@ export class CanvasView implements View {
       text.className = "canvas-node-text";
       el.appendChild(text);
       this.markdownContentEls.add(text);
-      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
+      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner, this.sourceNavigation).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
       el.addEventListener("dblclick", (event) => { if (this.isEmbeddedInteraction(event.target)) return; event.stopPropagation(); this.editTextNode(el, node); });
     } else if (node.type === "file") {
       el.dataset.filePath = node.file;
@@ -712,7 +743,7 @@ export class CanvasView implements View {
       el.addEventListener("dblclick", (event) => {
         if (this.isEmbeddedInteraction(event.target)) return;
         const file = this.app.vault.getFileByPath(node.file);
-        if (file) void this.app.openFile(file, true);
+        if (file) void this.sourceNavigation.prepareNavigation({ kind: "file", file, newTab: true }, this.captureNodeNavigationOrigin(node, el, version)).dispatch();
       });
     } else {
       this.renderWebNode(el, node);
@@ -915,7 +946,7 @@ export class CanvasView implements View {
       el.appendChild(content);
       this.markdownContentEls.add(content);
       void this.app.markdownRenderer
-        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content, undefined, this.renderOwner)
+        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content, undefined, this.renderOwner, this.sourceNavigation)
         .then(() => {
           if (this.isLiveNodeRender(version, content)) return;
           this.app.markdownRenderer.dispose(content);
