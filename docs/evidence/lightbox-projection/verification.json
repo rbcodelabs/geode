@@ -1,0 +1,38 @@
+{
+  "base": "707699d7da841ab52bd06e669b3f57786f98d84e",
+  "date": "2026-10-15",
+  "scope": "private unwired phase 1A",
+  "red": {
+    "initialMissingBehaviorCases": 13,
+    "laterIndexedAliasAndMutablePathCases": 2
+  },
+  "targeted": {
+    "files": 4,
+    "passed": 33,
+    "expectedFailures": 1
+  },
+  "typecheck": "pass",
+  "build": "pass",
+  "ceilingCharacterization": {
+    "fixtures": 6,
+    "passed": 5,
+    "failed": 1,
+    "failure": "existing 5000ms timeout exceeded by synchronous nested brackets",
+    "sourceUnits": 300000,
+    "projectionMs": 13588.025584
+  },
+  "boundedStockVsProjection": {
+    "sizes": [
+      10000,
+      20000,
+      40000,
+      80000
+    ],
+    "passed": 1,
+    "aggregateTestMs": 2450,
+    "perSizePairedValues": "not retained by successful-test reporter; no invented values"
+  },
+  "status": "execution-cost decision required before UI wiring or completion",
+  "electron": "not run; no UI integration",
+  "fullSuite": "not run; root serialized gates; known ceiling characterization remains red"
+}

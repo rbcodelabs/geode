@@ -22,7 +22,7 @@ try {
   const permitted = new Set([
     "src/catalog/postgres-catalog-store.ts",
     "src/wiki/catalog-contract.ts", "src/wiki/folder-provider.ts", "src/wiki/contracts.ts",
-    "src/wiki/local-filesystem.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts", "src/wiki/markdown-references.ts", "src/wiki/footnote-scan.ts", "src/wiki/code-mask.ts",
+    "src/wiki/local-filesystem.ts", "src/wiki/snapshot.ts", "src/wiki/metadata.ts", "src/wiki/markdown-destination.ts", "src/wiki/markdown-references.ts", "src/wiki/footnote-scan.ts", "src/wiki/code-mask.ts",
     "src/wiki/link-candidates.ts", "src/wiki/constants.ts", "src/wiki/query-projection.ts",
     "src/renderer/comments/model.ts", "src/renderer/api/frontmatter.ts",
   ]);
