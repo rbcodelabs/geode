@@ -19,9 +19,9 @@ export const metadataMarkdownParser = parser.configure({ parseInline: [{
   },
 }] });
 
-const normalizeLabel = (label: string) => label.replace(/\s+/g, " ").trim().toLowerCase();
+export const normalizeMarkdownReferenceLabel = (label: string) => label.replace(/\s+/g, " ").trim().toLowerCase();
 const unescape = (text: string) => text.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
-function destination(raw: string): string {
+export function decodeMarkdownDestination(raw: string): string {
   const value = unescape(raw.replace(/^<([\s\S]*)>$/, "$1"));
   try { return decodeURI(value); } catch { return value; }
 }
@@ -34,8 +34,8 @@ export function markdownReferences(body: string, locate: (start: number, end: nu
     if (node.name !== "LinkReference") return;
     const label = node.node.getChild("LinkLabel"), url = node.node.getChild("URL");
     if (label && url) {
-      const key = normalizeLabel(body.slice(label.from + 1, label.to - 1));
-      if (!definitions.has(key)) definitions.set(key, destination(body.slice(url.from, url.to)));
+      const key = normalizeMarkdownReferenceLabel(body.slice(label.from + 1, label.to - 1));
+      if (!definitions.has(key)) definitions.set(key, decodeMarkdownDestination(body.slice(url.from, url.to)));
     }
   } });
   const links: LinkCache[] = [], embeds: LinkCache[] = [], references: ReferenceLinkCache[] = [];
@@ -49,7 +49,7 @@ export function markdownReferences(body: string, locate: (start: number, end: nu
     const display = unescape(raw.slice(firstMark, firstClose));
     if (display.startsWith("^")) return false;
     const id = label ? body.slice(label.from + 1, label.to - 1) || display : display;
-    const link = url ? destination(body.slice(url.from, url.to)) : definitions.get(normalizeLabel(id));
+    const link = url ? decodeMarkdownDestination(body.slice(url.from, url.to)) : definitions.get(normalizeMarkdownReferenceLabel(id));
     if (link === undefined) return false;
     const position = locate(node.from, node.to);
     if (!url) references.push({ id, link, position });
