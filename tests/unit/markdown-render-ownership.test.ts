@@ -57,3 +57,21 @@ it("does not keep completed standalone read-only render roots strongly registere
   await renderer.render("readonly", { innerHTML: "" }, "Note.md");
   expect(registry.select(new Set()).length).toBe(before);
 });
+
+it("keeps rejected disposal discoverable and prepares all containers before any child closes", async () => {
+  const { renderer, root } = setup(); const a = { innerHTML: "" }; const b = { innerHTML: "" };
+  let refuse = true; const close = vi.fn(async () => {});
+  renderer.parseDocument = async (source: string) => source;
+  renderer.postProcess = async (el: unknown, _path: string, _leaf: unknown, scope: RenderScope) => {
+    scope.child({ writer: {}, close, preflightClose: () => { if (el === b && refuse) throw new Error("Finish draft"); } });
+  };
+  await renderer.render("first", a, "Parent.md", undefined, root);
+  await renderer.render("second", b, "Parent.md", undefined, root);
+  await expect(renderer.prepareDisposal([a, b])).rejects.toThrow("Finish draft");
+  expect(close).not.toHaveBeenCalled(); expect(root.writers()).toHaveLength(2);
+  renderer.dispose(b); await renderer.renderScopes.get(b).close().catch(() => {});
+  expect(renderer.renderScopes.has(b)).toBe(true);
+  refuse = false; const retirement = await renderer.prepareDisposal([a, b]);
+  expect(close).not.toHaveBeenCalled(); await retirement.commit();
+  expect(close).toHaveBeenCalledTimes(2); expect(renderer.renderScopes.has(a)).toBe(false); expect(renderer.renderScopes.has(b)).toBe(false);
+});
