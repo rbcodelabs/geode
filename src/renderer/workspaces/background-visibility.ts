@@ -1,3 +1,4 @@
+import type { View } from "../workspace";
 import type { App } from "../app";
 import type { TFile } from "../types";
 import type { RenderScope } from "./render-ownership";
@@ -54,9 +55,9 @@ export class BackgroundVisibility {
 }
 
 /** The lazy leaf is resolved at transition time, never from the active global pane. */
-export function nativeBackgroundVisibility(app: App, view: { containerEl: HTMLElement; file: TFile | null; renderOwner: RenderScope }, revision: () => readonly unknown[]): BackgroundVisibility {
+export function nativeBackgroundVisibility(app: App, view: View & { file: TFile | null; renderOwner: RenderScope }, revision: () => readonly unknown[]): BackgroundVisibility {
   return new BackgroundVisibility(() => {
-    const leaf = app.workspace.findLeafForView(view as never), file = view.file, filePath = file?.path;
+    const leaf = app.workspace.findLeafForView(view), file = view.file, filePath = file?.path;
     const container = view.containerEl, parent = container.parentElement, vault = app.vault, root = vault.root;
     const versions = revision();
     let token: ReturnType<RenderScope["captureToken"]>;
@@ -68,7 +69,7 @@ export function nativeBackgroundVisibility(app: App, view: { containerEl: HTMLEl
     return () => {
       try {
         token.check();
-        return app.workspace.findLeafForView(view as never) === leaf && leaf.view === view && view.file === file && file.path === filePath &&
+        return app.workspace.findLeafForView(view) === leaf && leaf.view === view && view.file === file && file.path === filePath &&
           app.vault === vault && vault.root === root && view.containerEl === container && container.isConnected && container.parentElement === parent &&
           revision().every((value, index) => Object.is(value, versions[index]));
       } catch { return false; }

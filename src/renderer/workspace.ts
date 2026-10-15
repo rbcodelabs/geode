@@ -3224,7 +3224,7 @@ export class Workspace extends Events {
   ): void {
     const focus =
       typeof paramsOrPushHistory === "boolean" ? !!legacyFocus : !!paramsOrPushHistory?.focus;
-    const previous = leaf.group.active;
+    const previous = leaf.group instanceof TabGroup ? leaf.group.active : null;
     const background = previous?.view as (View & { backgroundVisibility?: BackgroundVisibility }) | null;
     const finishHide = !focus && previous && previous !== leaf && leaf.group instanceof TabGroup && !leaf.group.sidebar && !this.isCompactMobile()
       ? background?.backgroundVisibility?.beginHide(previous.leafEl) : undefined;
