@@ -11,6 +11,23 @@ function fixture() {
   return { table, a, b, callbacks, onEditEnd };
 }
 const event = (key: string) => ({ key, preventDefault() {}, stopPropagation() {} });
+it("selecting a visible cell keeps nested native scroll positions while focusing its table", () => {
+  const { table } = fixture();
+  const canvas = { scrollLeft: 7, scrollTop: 11 }, note = { scrollTop: 23 };
+  table.applySelectionClasses = vi.fn(); table.renderMobileActions = vi.fn();
+  table.containerEl.focus.mockImplementation((options?: FocusOptions) => {
+    (document as any).activeElement = table.containerEl;
+    // Model the browser's observed ancestor scrolling when ordinary focus is
+    // requested for the larger table, even though the clicked cell is visible.
+    if (!options?.preventScroll) { canvas.scrollTop = 34; note.scrollTop = 67; }
+  });
+  table.selectCell(0, 0);
+  expect(document.activeElement).toBe(table.containerEl);
+  expect(table.activeCell).toEqual({ row: 0, col: 0 });
+  expect(canvas).toEqual({ scrollLeft: 7, scrollTop: 11 });
+  expect(note.scrollTop).toBe(23);
+  expect(table.applySelectionClasses).toHaveBeenCalledOnce();
+});
 it.each(["success", "failure"])("does not let an older %s completion end or refocus a newer table editor", async outcome => {
   const { table, a, b, callbacks, onEditEnd } = fixture(); let finish!: () => void;
   callbacks.onEditCell.mockImplementation(() => new Promise<void>((resolve, reject) => { finish = () => outcome === "success" ? resolve() : reject(new Error("old row failed")); }));
