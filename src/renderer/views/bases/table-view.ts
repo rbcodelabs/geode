@@ -279,7 +279,12 @@ export class BasesTableView {
       this.mobileEditorActionsEl?.remove();
       this.mobileEditorActionsEl = null;
     };
-    if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", () => { void commit(); });
+    if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", event => {
+      const retry = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>("button[data-base-row-retry]");
+      const owner = this.containerEl.closest(".base-view");
+      if (owner && retry?.closest(".base-view") === owner && retry.dataset.baseRowRetry === JSON.stringify([this.currentFile(pos).path, path])) return;
+      void commit();
+    });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
