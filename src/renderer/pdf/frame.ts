@@ -24,13 +24,14 @@ export class PdfFrame {
   private cancelSent=false;
   private cleanup:Promise<void>|undefined;
   private closed=false;
+  private phase:"idle"|"initializing"|"ready"|"failed"|"interrupted"="idle";
   private generation=0;
   private transportGeneration=0;
   private currentPage=1;
   private requestedPage:number;
   private pageCount:number|undefined;
   constructor(private readonly app:PdfFrameApp,parent:RenderScope,private readonly options:PdfFrameOptions) {
-    this.renderOwner=parent.child({close:()=>this.closeNative()});this.root=app.vault.root;this.requestedPage=options.page;
+    this.renderOwner=parent.child({close:()=>this.closeNative(),resume:()=>{if(this.phase==="interrupted"&&this.valid())void this.open();}});this.root=app.vault.root;this.requestedPage=options.page;
     this.containerEl=document.createElement("div");this.containerEl.className="pdf-frame";
     Object.assign(this.containerEl.style,{position:"relative",height:options.height?`${options.height}px`:"100%",minHeight:"120px",width:"100%",flex:"1",overflow:"hidden"});
     this.status=document.createElement("div");this.status.className="pdf-frame-status";this.status.setAttribute("role","status");Object.assign(this.status.style,{position:"absolute",inset:"0",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"12px",padding:"16px",textAlign:"center",background:"var(--background-primary)"});
@@ -49,13 +50,13 @@ export class PdfFrame {
   }
   async open():Promise<void> {
     if(this.closed)return;
-    const generation=++this.generation;this.retry.disabled=true;this.show("Loading PDF…",false);
+    const generation=++this.generation;this.phase="initializing";this.retry.disabled=true;this.show("Loading PDF…",false);
     try {await this.renderOwner.run(async token=>{
       try {
         const resources=this.app.host.pdfResources;
-        if(!resources){this.show("PDF viewing is unsupported on this host. Use the desktop app.",false);return;}
+        if(!resources){this.phase="failed";this.show("PDF viewing is unsupported on this host. Use the desktop app.",false);return;}
         if(!this.lease)this.lease=pdfDocumentCapacity(this.app).acquire(()=>this.disposeTransport());
-        if(!this.lease){this.show("Up to four PDFs can be open at once. Close another PDF, then retry.",true);return;}
+        if(!this.lease){this.phase="failed";this.show("Up to four PDFs can be open at once. Close another PDF, then retry.",true);return;}
         await this.disposeTransport();token.check();if(!this.valid(token)||generation!==this.generation)return;
         this.abort=new AbortController();this.cancelSent=false;const id=nonce();this.readId=id;
         const read=resources.read(this.root,this.options.path,id);this.pendingRead=read;
@@ -63,7 +64,14 @@ export class PdfFrame {
         const bytes=await this.untilCancelled(read,15000);token.check();if(!this.valid(token)||generation!==this.generation)return;
         if(bytes.byteLength<5||bytes.byteLength>PDF_LIMITS.bytes)throw new Error("PDF exceeds the supported byte limit or is empty.");
         await this.mount(bytes,generation,token);
-      }catch(error){if(this.valid(token)&&generation===this.generation){this.show(error instanceof Error?error.message:String(error),true);this.cancelRead();void this.disposeTransport();}}
+      }catch(error){
+        if(this.valid()&&generation===this.generation&&!token.current()){
+          this.phase="interrupted";
+          await this.disposeTransport();
+        }else if(this.valid(token)&&generation===this.generation){
+          this.phase="failed";this.show(error instanceof Error?error.message:String(error),true);this.cancelRead();void this.disposeTransport();
+        }
+      }
     });}catch(error){if(this.valid())this.show(error instanceof Error?error.message:String(error),true);}
   }
   private untilCancelled<T>(promise:Promise<T>,milliseconds:number):Promise<T> {
@@ -89,8 +97,8 @@ export class PdfFrame {
     });
     channel.port1.addEventListener("message",event=>{
       if(!this.valid()||!this.renderOwner.admissionAllowed||generation!==this.generation||this.iframe!==frame||!isPdfViewerMessage(event.data)||event.data.generation!==generation)return;
-      if(event.data.kind==="state"){this.status.hidden=true;this.status.style.display="none";frame.style.visibility="visible";this.pageCount=event.data.count;this.currentPage=event.data.page;this.requestedPage=this.currentPage;this.options.onPage?.(this.currentPage);}
-      if(event.data.kind==="error"){if(this.pageCount===undefined){this.currentPage=1;this.requestedPage=1;this.options.onPage?.(1);}this.show(event.data.message,true);void this.disposeTransport();}
+      if(event.data.kind==="state"){this.phase="ready";this.status.hidden=true;this.status.style.display="none";frame.style.visibility="visible";this.pageCount=event.data.count;this.currentPage=event.data.page;this.requestedPage=this.currentPage;this.options.onPage?.(this.currentPage);}
+      if(event.data.kind==="error"){this.phase="failed";if(this.pageCount===undefined){this.currentPage=1;this.requestedPage=1;this.options.onPage?.(1);}this.show(event.data.message,true);void this.disposeTransport();}
     });channel.port1.start();frame.src=PDF_VIEWER_URL;this.containerEl.append(frame);
     await this.untilCancelled(ready,8000);token.check();if(!this.valid(token)||generation!==this.generation)return;
     channel.port1.postMessage({kind:"load",version:1,generation,bytes,page:this.requestedPage,height:this.options.height,label:this.options.label.slice(0,160),theme:this.app.isDarkMode?.()?"dark":"light"},[bytes]);

@@ -48,3 +48,11 @@ it("mounts with an exact-origin private port, accepts current state, and dispose
  childPort!.postMessage({kind:"error",version:1,generation:1,message:"Synthetic render failure"});await vi.waitFor(()=>expect(frame.containerEl.textContent).toContain("Synthetic render failure"));
  await frame.close();expect(dispose).toHaveBeenCalledOnce();expect(dispose.mock.calls[0][0].generation).toBe(1);expect(pdfDocumentCapacity(f.app).size).toBe(0);childPort?.close();await f.owner.close();
 });
+it("restarts only ownership-interrupted initialization after the owned read settles",async()=>{
+ let resolve!:(bytes:ArrayBuffer)=>void;const read=vi.fn(()=>new Promise<ArrayBuffer>(done=>resolve=done)),f=fixture(read),frame=new api.PdfFrame(f.app as any,f.owner,{path:"Guide.pdf",label:"Guide.pdf",page:1});
+ const opening=frame.open();await vi.waitFor(()=>expect(read).toHaveBeenCalledOnce());const holding=f.owner.freezeAndDrain();resolve(new TextEncoder().encode("%PDF-1.7").buffer);await opening;await holding;expect(f.doc.createElement).not.toHaveBeenCalledWith("iframe");expect(pdfDocumentCapacity(f.app).size).toBe(1);
+ f.owner.resume();await vi.waitFor(()=>expect(read).toHaveBeenCalledTimes(2));expect(pdfDocumentCapacity(f.app).size).toBe(1);const closing=frame.close();resolve(new TextEncoder().encode("%PDF-1.7").buffer);await closing;expect(f.doc.createElement).not.toHaveBeenCalledWith("iframe");expect(pdfDocumentCapacity(f.app).size).toBe(0);await f.owner.close();
+});
+it("does not automatically retry failed documents when ownership resumes",async()=>{
+ const read=vi.fn(async()=>{throw Error("synthetic corrupt read")}),f=fixture(read),frame=new api.PdfFrame(f.app as any,f.owner,{path:"Guide.pdf",label:"Guide.pdf",page:1});await frame.open();expect(frame.containerEl.textContent).toContain("synthetic corrupt read");await f.owner.freezeAndDrain();f.owner.resume();await settle();expect(read).toHaveBeenCalledOnce();await frame.close();expect(pdfDocumentCapacity(f.app).size).toBe(0);await f.owner.close();
+});
