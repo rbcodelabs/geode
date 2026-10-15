@@ -304,7 +304,7 @@ export class BasesTableView {
       if (e.key === "Enter") {
         e.preventDefault();
         void commit();
-        this.containerEl.focus();
+        this.containerEl.focus({ preventScroll: true });
       } else if (e.key === "Escape") {
         e.preventDefault();
         cancel();

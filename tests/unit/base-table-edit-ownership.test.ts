@@ -37,6 +37,21 @@ it.each(["success", "failure"])("does not let an older %s completion end or refo
   expect(table.editing).toBe(newer); expect(inputB.value).toBe("10"); expect(onEditEnd).not.toHaveBeenCalled();
   expect(inputA.focus).toHaveBeenCalledOnce(); expect(inputB.focus).toHaveBeenCalledOnce();
 });
+it("Enter submits the captured draft and focuses its table without scrolling native ancestors", () => {
+  const { table, a, callbacks } = fixture();
+  callbacks.onEditCell.mockImplementation(() => new Promise<void>(() => {}));
+  const canvas = { scrollTop: 0 }, note = { scrollTop: 0 };
+  table.containerEl.focus.mockImplementation((options?: FocusOptions) => {
+    (document as any).activeElement = table.containerEl;
+    if (!options?.preventScroll) { canvas.scrollTop = 34; note.scrollTop = 67; }
+  });
+  table.startEdit({ row: 0, col: 0 }); const input = a.children[0]; input.value = "9";
+  input.handlers.keydown(event("Enter"));
+  expect(callbacks.onEditCell).toHaveBeenCalledWith({ path: "A.md" }, "note.priority", "9");
+  expect(document.activeElement).toBe(table.containerEl);
+  expect(table.editIdentity).not.toBeNull(); expect(input.value).toBe("9"); expect(input.disabled).toBe(true);
+  expect(canvas.scrollTop).toBe(0); expect(note.scrollTop).toBe(0);
+});
 it("ignores an old editor's cancel and an old explicit acknowledgment after a newer session starts", () => {
   const { table, a, onEditEnd } = fixture(); const older = { row: 0, col: 0 }; table.startEdit(older);
   const inputA = a.children[0]; const newer = { row: 1, col: 0 }; table.startEdit(newer);
