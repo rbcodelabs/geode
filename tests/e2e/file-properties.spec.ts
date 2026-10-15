@@ -28,9 +28,12 @@ test("file properties share the live note buffer, preserve unsaved body, validat
     await pane.getByLabel("Value: status", { exact: true }).press("Enter");
     await expect(page.locator(".cm-editor").getByLabel("Value: status", { exact: true })).toHaveValue("new");
     expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toContain("unsaved addition");
-    await page.locator(".cm-content").click();
+    // The content container also contains property buttons; focus a real body line.
+    await page.locator(".cm-line").filter({ hasText: /^Body$/ }).click();
+    await expect(page.locator(".cm-content")).toBeFocused();
     await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
     await expect(pane.getByLabel("Value: status", { exact: true })).toHaveValue("old");
+    expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toMatch(/^status: old$/m);
     expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toContain("unsaved addition");
     const number = pane.getByLabel("Value: count", { exact: true });
     await number.fill("not a number"); await number.press("Enter");
