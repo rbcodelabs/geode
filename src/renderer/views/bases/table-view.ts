@@ -194,7 +194,7 @@ export class BasesTableView {
 
   private selectCell(row: number, col: number): void {
     if (this.readOnly) return;
-    this.containerEl.focus();
+    this.containerEl.focus({ preventScroll: true });
     this.activeCell = { row, col };
     this.selection = { type: "cell", pos: this.activeCell };
     this.applySelectionClasses();
