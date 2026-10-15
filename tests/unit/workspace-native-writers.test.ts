@@ -109,7 +109,24 @@ it("publishes a reachable Base retry after close cancels its queued definition w
   await expect(queued).rejects.toThrow(/owner changed/); await expect(closing).rejects.toThrow(/owner changed/);
   const retry = view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Base save"); expect(retry).toBeDefined();
   retry.handlers.click(); await new Promise(resolve => setImmediate(resolve));
-  expect(view.doPersist).toHaveBeenCalledOnce(); await owner.close(); expect(close).toHaveBeenCalledOnce();
+  expect(view.doPersist).toHaveBeenCalledOnce(); expect(view.saveStatusEl.children[0].textContent).toBe("Base saved");
+  await owner.close(); expect(close).toHaveBeenCalledOnce();
+});
+it("keeps a row failure and its actual retry control after a successful definition retry", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  vi.stubGlobal("document", { createElement: element });
+  const view = Object.create(BaseView.prototype) as any;
+  const owner = new RenderOwnership().create(view, { recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
+  const file = { path: "Source.md" }; const row = vi.fn(async () => { view.sourceEdit = null; });
+  Object.assign(view, { renderOwner: owner, vaultSwitching: false, sourceEdit: { file, columnPath: "note.priority", rawText: "9" }, definitionWritesPending: 0, persistQueue: Promise.resolve(), doPersist: vi.fn(async () => {}), sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), commitCellEdit: row, tableView: { acknowledgeEdit: vi.fn() }, saveStatusEl: element() });
+  await expect(owner.run(async () => { throw new Error("row failed"); }, JSON.stringify(["row", file.path, "note.priority"]))).rejects.toThrow("row failed");
+  await expect(owner.run(async () => { throw new Error("definition failed"); }, "definition")).rejects.toThrow("definition failed");
+  await view.persist(true);
+  expect(view.saveStatusEl.children[0].textContent).toBe("Base save failed"); expect(row).not.toHaveBeenCalled();
+  await expect(owner.close()).rejects.toThrow("row failed");
+  view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Base save").handlers.click(); await new Promise(resolve => setImmediate(resolve));
+  expect(row).toHaveBeenCalledOnce(); expect(view.tableView.acknowledgeEdit).toHaveBeenCalledOnce(); await owner.close();
 });
 it("lets the visible Canvas save retry finish conversion after note creation and a rejected board save", async () => {
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");

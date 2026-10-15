@@ -19,6 +19,7 @@ export class RenderScope {
   constructor(private readonly registry: RenderOwnership, private readonly options: ScopeOptions = {}, private readonly parent?: RenderScope, private readonly owner?: object) {}
   get closed(): boolean { return this.state === "closed"; }
   get admissionAllowed(): boolean { return this.admits() && this.registry.admissionOpen; }
+  get hasUnacknowledgedWrites(): boolean { return this.hasRetainedFailures(); }
   private admits(): boolean { return this.state === "active" && !this.closing && (!this.parent || this.parent.admits()); }
   assertAdmission(): void { if (!this.admits() || !this.registry.admissionOpen) throw new Error("Native render admission is paused during a workspace operation."); }
   child(options: ScopeOptions = {}): RenderScope {
@@ -46,7 +47,7 @@ export class RenderScope {
   /** Only the successful explicit retry of an operation acknowledges its failures. */
   retry<T>(operation: (token: RenderToken) => Promise<T>, key: string): Promise<T> {
     const acknowledged = new Set(this.failures.filter(failure => failure.key === key));
-    return this.run(operation, key).then(result => { this.failures = this.failures.filter(failure => !acknowledged.has(failure)); return result; });
+    return this.run(operation, key).then(result => { this.failures = this.failures.filter(failure => !acknowledged.has(failure)); this.recoverTree(); return result; });
   }
   private freeze(): void {
     if (this.state === "closed") return;
