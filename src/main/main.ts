@@ -1,5 +1,8 @@
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, protocol, safeStorage, session, shell, utilityProcess } from "electron";
 import * as path from "node:path";
+import { registerPdfReadIpc } from "./pdf-ipc";
+import { installPdfProtocol } from "./pdf-protocol-install";
+import { PDF_SCHEME } from "./pdf-protocol";
 import { createVaultFolder } from "./create-vault";
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
@@ -260,7 +263,7 @@ app.on("session-created", (created) => {
 protocol.registerSchemesAsPrivileged([{
   scheme: ARTIFACT_SCHEME,
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false },
-}]);
+}, { scheme: PDF_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false } }]);
 crashReporter.start({ uploadToServer: false, companyName: "RBCodelabs", productName: "Geode" });
 
 const isHeadless =
@@ -1174,6 +1177,12 @@ function registerIpc() {
         await fsp.rm(staging, { recursive: true, force: true });
       }
     });
+  });
+
+  registerPdfReadIpc(ipcMain, event => {
+    const sender = event.sender, win = BrowserWindow.fromWebContents(sender), captured = win && sessions.get(win.id);
+    if (!win || !captured || win.webContents !== sender || captured.externalRootsInvalidated) throw new Error("PDF vault session is unavailable.");
+    return { root: captured.root, current: () => !win.isDestroyed() && win.webContents === sender && sessions.get(win.id) === captured && !captured.externalRootsInvalidated };
   });
 
   ipcMain.handle("vault-read-binary", async (e, rel: string) => {
@@ -2234,6 +2243,8 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
       // require() shim delegates unknown specifiers to this real Node require.
       contextIsolation: false,
       nodeIntegration: true,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
       // Keep spellcheck etc. defaults; sandbox must stay off for nodeIntegration.
       sandbox: false,
       // Enables the <webview> tag, used by the Web Viewer's WebView view
@@ -2544,6 +2555,8 @@ function installApplicationMenu(): void {
 }
 
 app.whenReady().then(() => {
+  try { installPdfProtocol(protocol, __dirname); }
+  catch (error) { console.error("PDF viewer resources are unavailable:", error); }
   if (!isHeadless) {
     app.setAsDefaultProtocolClient("geode");
     // Hosted Obsidian plugins hand the OS `obsidian://` links for their own

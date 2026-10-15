@@ -17,6 +17,14 @@ describe("shared PDF document admission", () => {
     await expect(first).rejects.toThrow(/cleanup failed/); expect(capacity.size).toBe(1);
     await lease.close(); expect(capacity.size).toBe(0); expect(cleanup).toHaveBeenCalledTimes(2);
   });
+  it("closes root admission during disposal and preserves failures for a later retry", async () => {
+    expect(api.PdfDocumentCapacity).toBeTypeOf("function"); const capacity = new api.PdfDocumentCapacity(), pending = deferred();
+    const cleanup = vi.fn().mockImplementationOnce(() => pending.promise).mockRejectedValueOnce(Error("failed close")).mockResolvedValue(undefined);
+    const lease = capacity.acquire(cleanup)!; const closing = capacity.closeAll(); expect(capacity.acquire(async () => {})).toBeUndefined();
+    pending.resolve(); await closing; expect(capacity.size).toBe(0);
+    const retained = capacity.acquire(cleanup)!; await expect(capacity.closeAll()).rejects.toThrow(/could not finish/); expect(capacity.size).toBe(1);
+    await retained.close(); expect(capacity.size).toBe(0); await lease.close(); expect(cleanup).toHaveBeenCalledTimes(3);
+  });
   it("keeps all root-owned documents counted and drains each once on root close", async () => {
     expect(api.PdfDocumentCapacity).toBeTypeOf("function"); const owner = {}, other = {};
     const first = api.pdfDocumentCapacity(owner), same = api.pdfDocumentCapacity(owner), isolated = api.pdfDocumentCapacity(other);

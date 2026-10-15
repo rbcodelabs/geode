@@ -16,7 +16,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
 > & Partial<Pick<GeodeApi,
   "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "readPdf"
 >>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
@@ -41,6 +41,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       },
     },
     ...(preload.externalRoots ? { externalRoots: preload.externalRoots } : {}),
+    ...(preload.readPdf ? { pdfResources: { read: (root: string, path: string) => preload.readPdf!({ root, path }) } } : {}),
     capabilities: Object.freeze({
       multipleWindows: true,
       nodePlugins: true,

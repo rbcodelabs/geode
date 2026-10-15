@@ -28,3 +28,11 @@ it("bounds concurrent native reads and releases the slot after success or failur
   fixture.reader.mockRejectedValueOnce(Error("read failed")); await expect(fixture.handler(fixture.event, { root: "/vault", path: "Guide.pdf" })).rejects.toThrow(/read failed/);
   await fixture.handler(fixture.event, { root: "/vault", path: "Guide.pdf" }); expect(fixture.reader).toHaveBeenCalledTimes(7);
 });
+
+it("invalidates the captured read when its sender or main frame retires", async () => {
+  expect(api.registerPdfReadIpc).toBeTypeOf("function"); const fixture = setup();
+  await fixture.handler(fixture.event, { root: "/vault", path: "Guide.pdf" });
+  const captured = fixture.reader.mock.calls[0][0] as any; expect(captured.current()).toBe(true);
+  fixture.event.sender.mainFrame = {} as any; expect(captured.current()).toBe(false);
+  fixture.event.sender.mainFrame = fixture.event.senderFrame; fixture.event.sender.isDestroyed = () => true; expect(captured.current()).toBe(false);
+});
