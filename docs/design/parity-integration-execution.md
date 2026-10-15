@@ -121,3 +121,23 @@ tail, before any read. All run again after port alongside the original ordering,
 notification, exact row recovery and shared frontmatter regressions. The tests use
 controlled method/CM-state harnesses; actual connected nested controls remain the
 separate prepared Electron witnesses and full-suite requirement.
+
+## Full-unit fixture correction checkpoint
+
+The coordinator's first full-unit run on `ab2f2a0` completed with 377 passing files
+and one failing file: 5,173 ordinary passes, one expected failure, three existing
+skips, one failure and one unhandled rejection. The PDF root-disposal test used
+an `Object.create(App.prototype)` fixture without the newly integrated property
+persistence and Footnotes lifecycle dependencies. Actual `App.dispose` therefore
+rejected before reaching the held PDF lease. This was an incomplete test fixture;
+production cleanup was not made optional.
+
+The unchanged focused PDF routing file reproduced four passes, one failure and
+one unhandled rejection (`geode-combined-pdf-routing-fixture-red.log`). The narrow
+fixture supplies a no-op property persistence close and resolved Footnotes
+lifecycle, and observes disposal rejection during its readiness poll. The actual
+held PDF lease, event order, Vault close and zero remaining capacity assertions
+are unchanged. All five routing tests then passed with no unhandled error
+(`geode-combined-pdf-routing-fixture-green.log`). No production or E2E file changed.
+The coordinator must independently review this fixture and rerun the full unit
+suite; the concurrent Electron gate continues against identical production bytes.
