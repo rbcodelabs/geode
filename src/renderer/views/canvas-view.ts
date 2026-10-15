@@ -113,6 +113,10 @@ export class CanvasView implements View {
   private edgesEl: SVGSVGElement | null = null;
   private presentationChangeInProgress = false;
   private presentationRetirementFailed = false;
+  private conflictGeneration = 0;
+  private historyInProgress = false;
+  private historyPriorInert: boolean | null = null;
+  private readonly geometryGestures = new Set<() => void>();
   private selectionControlsEl: HTMLElement | null = null;
   private colorPaletteEl: HTMLElement | null = null;
   private edgeLabelEditorEl: HTMLInputElement | null = null;
@@ -259,9 +263,10 @@ export class CanvasView implements View {
   }
 
   presentConflict(externalText: string | null, conflictPath: string | null, recoveryOnly: boolean, _recoveryTier?: "memory" | "device"): void {
+    const generation = ++this.conflictGeneration;
     this.conflictReadOnly = true;
     this.persistRequestedWhileSuspended = false;
-    void this.prepareConflictPresentation(externalText);
+    void this.prepareConflictPresentation(externalText, generation);
     this.containerEl.querySelector(".canvas-conflict-state")?.remove();
     const state = document.createElement("div");
     state.className = "canvas-conflict-state";
@@ -283,12 +288,12 @@ export class CanvasView implements View {
     this.containerEl.dataset.canvasConflictPath = conflictPath ?? "recovery";
   }
 
-  private async prepareConflictPresentation(externalText: string | null): Promise<void> {
+  private async prepareConflictPresentation(externalText: string | null, generation: number): Promise<void> {
     if (externalText !== null) {
-      if (await this.load(externalText, true)) { this.conflictReadOnly = false; this.surfaceEl.inert = false; }
+      if (await this.load(externalText, true, () => generation === this.conflictGeneration) && generation === this.conflictGeneration) { this.conflictReadOnly = false; this.surfaceEl.inert = false; }
       return;
     }
-    if (this.presentationChangeInProgress || this.presentationRetirementFailed) {
+    if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.historyInProgress || this.geometryGestures.size || this.transientGestureCancel || this.touchDragSnapshot || this.touchGesture.pointerIds().length) {
       this.app.notify("Finish or recover the Canvas presentation change before locking its controls."); return;
     }
     const file = this.file; const model = this.document;
@@ -299,7 +304,7 @@ export class CanvasView implements View {
       this.app.markdownRenderer.preflightDisposal(contents);
       this.presentationChangeInProgress = true;
       retirement = await this.app.markdownRenderer.prepareDisposal(contents);
-      if (this.file !== file || this.document !== model) throw new Error("Canvas changed while its conflict state was preparing.");
+      if (this.file !== file || this.document !== model || generation !== this.conflictGeneration) throw new Error("Canvas changed while its conflict state was preparing.");
       // This path keeps the projection: preparation proves it is safe to make
       // read-only, and abort releases the temporary ownership freeze.
       retirement.abort(); retirement = undefined;
@@ -327,8 +332,8 @@ export class CanvasView implements View {
     await this.load(text, resetHistory);
   }
 
-  private load(text: string, resetHistory = false): Promise<boolean> {
-    return this.changePresentations(this.document.nodes, () => this.applyLoadedText(text, resetHistory));
+  private load(text: string, resetHistory = false, current: () => boolean = () => true): Promise<boolean> {
+    return this.changePresentations(this.document.nodes, () => this.applyLoadedText(text, resetHistory), current);
   }
 
   private applyLoadedText(text: string, resetHistory: boolean): void {
@@ -385,14 +390,21 @@ export class CanvasView implements View {
   }
 
   /** Refusal and preparation precede authoritative model, history and DOM changes. */
-  private async changePresentations(nodes: readonly CanvasNode[], change: () => void): Promise<boolean> {
-    if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.renderOwner && !this.renderOwner.admissionAllowed) {
+  private interactionBlocked(): boolean {
+    return this.recoveryError !== null || this.presentationChangeInProgress || this.historyInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.vaultSwitching || !!this.renderOwner && !this.renderOwner.admissionAllowed;
+  }
+
+  private async changePresentations(nodes: readonly CanvasNode[], change: () => void, current: () => boolean = () => true): Promise<boolean> {
+    if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.historyInProgress || this.geometryGestures.size || this.transientGestureCancel || this.touchDragSnapshot || this.touchGesture.pointerIds().length || this.renderOwner && !this.renderOwner.admissionAllowed) {
       this.app.notify("Finish the current Canvas operation before changing cards."); return false;
     }
     const wrappers = nodes.flatMap(node => { const entry = this.nodePresentations.get(node.id); return entry ? [entry.el] : []; });
     const contents = [...this.markdownContentEls].filter(content => wrappers.some(wrapper => wrapper.contains(content)));
     const file = this.file; const model = this.document;
     const snapshot = serializeCanvas(model);
+    const selection = JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]);
+    const conflict = this.conflictGeneration;
+    const isCurrent = () => current() && conflict === this.conflictGeneration && this.file === file && this.document === model && serializeCanvas(model) === snapshot && JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]) === selection && (!this.renderOwner || this.renderOwner.admissionAllowed);
     let retirement: { commit(): Promise<void>; abort(): void } | undefined;
     let destructorsStarted = false;
     const interaction = wrappers.map(el => ({ el, inert: el.inert }));
@@ -402,11 +414,16 @@ export class CanvasView implements View {
       this.presentationChangeInProgress = true;
       for (const { el } of interaction) el.inert = true;
       retirement = await this.app.markdownRenderer.prepareDisposal(contents);
-      if (this.file !== file || this.document !== model || serializeCanvas(model) !== snapshot || this.renderOwner && !this.renderOwner.admissionAllowed) {
+      if (!isCurrent()) {
         retirement.abort(); throw new Error("Canvas changed while its embedded cards were preparing. Retry the action.");
       }
       destructorsStarted = true;
       await retirement.commit();
+      if (!isCurrent()) throw new Error("The Canvas action was superseded during teardown. Its previous model is retained.");
+      for (const node of nodes) {
+        const presentation = this.nodePresentations.get(node.id);
+        if (presentation) presentation.signature = "retired-projection";
+      }
       for (const content of contents) this.markdownContentEls.delete(content);
       for (const { el, inert } of interaction) el.inert = inert;
       this.presentationChangeInProgress = false;
@@ -704,7 +721,7 @@ export class CanvasView implements View {
     }
     el.addEventListener("pointerdown", (event) => this.beginNodeDrag(event, node));
     el.addEventListener("contextmenu", (event) => {
-      if (this.isEmbeddedInteraction(event.target)) return;
+      if (this.interactionBlocked() || this.isEmbeddedInteraction(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       if (!this.selectedIds.has(node.id)) {
@@ -985,6 +1002,8 @@ export class CanvasView implements View {
   }
 
   private editTextNodePrepared(el: HTMLElement, node: CanvasTextNode, isNew: boolean, rollbackNew?: () => void): void {
+    const presentation = this.nodePresentations.get(node.id);
+    if (presentation) presentation.signature = this.presentationSignature(node);
     const originalText = node.text;
     const editor = document.createElement("textarea");
     editor.className = "canvas-node-text-editor";
@@ -1036,7 +1055,7 @@ export class CanvasView implements View {
   }
 
   private addTextCardAt(worldPoint: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const node: CanvasTextNode = {
       id: this.nextTextNodeId(),
       type: "text",
@@ -1083,7 +1102,7 @@ export class CanvasView implements View {
   }
 
   private addFileCardsAt(files: TFile[], worldPoint: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     if (files.length === 0) return;
     const nodes: CanvasNode[] = [];
     for (const [index, file] of files.entries()) {
@@ -1125,7 +1144,7 @@ export class CanvasView implements View {
   }
 
   private addLinkCardAt(canonicalUrl: string, worldPoint: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const node = this.createLinkCard(canonicalUrl, worldPoint);
     this.document.nodes.push(node);
     this.selectedEdgeIds.clear();
@@ -1143,7 +1162,7 @@ export class CanvasView implements View {
   }
 
   private openWebPagePrompt(worldPoint?: Point, choose?: (canonicalUrl: string) => void): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     new PromptModal(this.app, {
       placeholder: "Enter web page URL…",
       allowEmptySubmit: true,
@@ -1160,7 +1179,7 @@ export class CanvasView implements View {
   }
 
   private openGroupPrompt(worldPoint?: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const selectedCards = worldPoint
       ? []
       : this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id));
@@ -1172,7 +1191,7 @@ export class CanvasView implements View {
   }
 
   private addGroup(selectedCards: CanvasNode[], label: string, worldPoint?: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     let x: number;
     let y: number;
     let width: number;
@@ -1226,6 +1245,7 @@ export class CanvasView implements View {
       initialValue: group.label ?? "",
       allowEmptySubmit: true,
       onSubmit: (label) => {
+        if (this.interactionBlocked() || !this.document.nodes.includes(group)) return;
         const current = this.document.nodes.find((node) => node.id === groupId);
         if (!current || current.type !== "group") return;
         if (label) current.label = label;
@@ -1260,7 +1280,7 @@ export class CanvasView implements View {
   }
 
   private openFilePicker(kind: "note" | "media", worldPoint?: Point, choose?: (file: TFile) => void): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const onChoose = choose ?? ((file: TFile) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()));
     if (kind === "note") {
       this.openNotePicker(onChoose);
@@ -1275,7 +1295,7 @@ export class CanvasView implements View {
   }
 
   private openNotePicker(choose: (file: TFile) => void): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getMarkdownFiles(),
@@ -1285,7 +1305,7 @@ export class CanvasView implements View {
   }
 
   private openGroupBackgroundPicker(nodeId: string, menuPoint: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getFiles().filter((file) => IMAGE_EXTENSIONS.has(file.extension)),
@@ -1313,7 +1333,7 @@ export class CanvasView implements View {
     background: string,
     backgroundStyle: "cover" | "ratio" | "repeat",
   ): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
     if (!node || node.type !== "group") return;
     node.background = background;
@@ -1323,7 +1343,7 @@ export class CanvasView implements View {
   }
 
   private removeGroupBackground(nodeId: string): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
     if (!node || node.type !== "group" || !node.background) return;
     delete node.background;
@@ -1333,7 +1353,7 @@ export class CanvasView implements View {
   }
 
   private openSwapFilePicker(nodeId: string, kind: SwappableFileKind): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const files = kind === "note"
       ? this.app.vault.getMarkdownFiles()
       : this.app.vault.getFiles().filter((file) => this.fileKind(file) === kind);
@@ -1376,7 +1396,7 @@ export class CanvasView implements View {
   }
 
   private openConvertTextNodePrompt(nodeId: string): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     new PromptModal(this.app, {
       placeholder: "File name…",
       initialValue: "Untitled",
@@ -1409,7 +1429,7 @@ export class CanvasView implements View {
   }
 
   private async convertTextNodeToFileNative(nodeId: string, rawName: string, token?: RenderToken): Promise<void> {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const base = rawName.trim().replace(/\.md$/i, "").trim();
     if (!base || INVALID_MARKDOWN_FILE_NAME.test(base)) {
       this.app.notify("Enter a valid file name.");
@@ -1440,6 +1460,7 @@ export class CanvasView implements View {
   }
 
   private select(node: CanvasNode, additive = false): void {
+    if (this.interactionBlocked()) return;
     this.selectedEdgeIds.clear();
     if (additive && this.selectedIds.has(node.id)) {
       this.selectedIds.delete(node.id);
@@ -1452,6 +1473,7 @@ export class CanvasView implements View {
   }
 
   private promote(node: CanvasNode): void {
+    if (this.interactionBlocked()) return;
     const index = this.document.nodes.indexOf(node);
     if (index < 0 || index === this.document.nodes.length - 1) return;
     this.document.nodes.splice(index, 1);
@@ -1581,7 +1603,7 @@ export class CanvasView implements View {
   }
 
   private openColorPalette(): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const controls = this.selectionControlsEl;
     if (!controls) return;
     this.colorPaletteEl?.remove();
@@ -1614,7 +1636,7 @@ export class CanvasView implements View {
   }
 
   private openCustomColorPrompt(): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     this.colorPaletteEl?.remove();
     this.colorPaletteEl = null;
     new PromptModal(this.app, {
@@ -1641,7 +1663,7 @@ export class CanvasView implements View {
   }
 
   private applySelectionColor(color: string): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     if (this.selectedEdgeIds.size > 0) {
       let changed = false;
       for (const edge of this.document.edges) {
@@ -1664,12 +1686,14 @@ export class CanvasView implements View {
   }
 
   private clearSelection(): void {
+    if (this.interactionBlocked()) return;
     this.selectedIds.clear();
     this.selectedEdgeIds.clear();
     this.updateSelectionClasses();
   }
 
   private duplicateSelection(): void {
+    if (this.interactionBlocked()) return;
     const sources = this.document.nodes.filter((node) => this.selectedIds.has(node.id) && node.type !== "group");
     if (sources.length === 0) return;
     const used = new Set(this.document.nodes.map((node) => node.id));
@@ -1704,6 +1728,7 @@ export class CanvasView implements View {
   }
 
   private connectSelectedNodes(): void {
+    if (this.interactionBlocked()) return;
     const nodes = this.document.nodes.filter((node) => this.selectedIds.has(node.id));
     if (nodes.length !== 2) return;
     if (this.document.edges.some((edge) => edge.fromNode === nodes[0].id && edge.toNode === nodes[1].id)) return;
@@ -1716,6 +1741,7 @@ export class CanvasView implements View {
   }
 
   private selectEdge(edgeId: string, additive = false): void {
+    if (this.interactionBlocked()) return;
     this.selectedIds.clear();
     if (additive && this.selectedEdgeIds.has(edgeId)) this.selectedEdgeIds.delete(edgeId);
     else {
@@ -1733,6 +1759,7 @@ export class CanvasView implements View {
       initialValue: edge.label ?? "",
       allowEmptySubmit: true,
       onSubmit: (label) => {
+        if (this.interactionBlocked() || !this.document.edges.includes(edge)) return;
         const current = this.document.edges.find((candidate) => candidate.id === edgeId);
         if (!current) return;
         if (label) current.label = label;
@@ -1819,7 +1846,7 @@ export class CanvasView implements View {
   }
 
   private removeEdge(edgeId: string): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const length = this.document.edges.length;
     this.document.edges = this.document.edges.filter((edge) => edge.id !== edgeId);
     if (this.document.edges.length === length) return;
@@ -1829,7 +1856,7 @@ export class CanvasView implements View {
   }
 
   private beginEdgeReconnect(event: PointerEvent, edgeId: string, endpoint: "source" | "target"): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2078,7 +2105,7 @@ export class CanvasView implements View {
   }
 
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     if (this.isEmbeddedInteraction(event.target)) return;
     if (event.pointerType === "touch") return;
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge, .canvas-node-connection-handle, .canvas-node-connection-touch-hit")) return;
@@ -2129,6 +2156,7 @@ export class CanvasView implements View {
     const spaceBypass = this.trackGestureSpaceBypass();
     let didMove = false;
     const move = (next: PointerEvent) => {
+      if (this.interactionBlocked()) return;
       if (!didMove) {
         didMove = true;
         if (node.type !== "group" && !wasSelected) {
@@ -2181,6 +2209,8 @@ export class CanvasView implements View {
       this.render();
     };
     const up = () => {
+      this.geometryGestures.delete(up);
+      window.removeEventListener("pointercancel", up);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       spaceBypass.dispose();
@@ -2190,12 +2220,14 @@ export class CanvasView implements View {
       }
       void this.persist();
     };
+    this.geometryGestures.add(up);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   }
 
   private beginNodeDuplication(event: PointerEvent, draggedNode: CanvasNode): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     event.preventDefault();
     const sourceNodes = this.selectedIds.has(draggedNode.id)
       ? this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id))
@@ -2205,6 +2237,7 @@ export class CanvasView implements View {
     let clones: Array<{ node: CanvasNode; x: number; y: number }> | null = null;
 
     const move = (next: PointerEvent) => {
+      if (this.interactionBlocked()) return;
       const screenDx = next.clientX - start.x;
       const screenDy = next.clientY - start.y;
       if (!clones && Math.hypot(screenDx, screenDy) < 4) return;
@@ -2242,12 +2275,16 @@ export class CanvasView implements View {
       this.render();
     };
     const up = () => {
+      this.geometryGestures.delete(up);
+      window.removeEventListener("pointercancel", up);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       if (clones) void this.persist();
     };
+    this.geometryGestures.add(up);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   }
 
   private nextDuplicateNodeId(sourceId: string, usedIds: Set<string>): string {
@@ -2260,7 +2297,7 @@ export class CanvasView implements View {
   }
 
   private beginResize(event: PointerEvent, node: CanvasNode, direction: ResizeDirection = "southeast"): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
@@ -2288,6 +2325,7 @@ export class CanvasView implements View {
         : []);
     const spaceBypass = this.trackGestureSpaceBypass();
     const move = (next: PointerEvent) => {
+      if (this.interactionBlocked()) return;
       const dx = (next.clientX - start.pointerX) / this.scale;
       const dy = (next.clientY - start.pointerY) / this.scale;
       const minimumScale = Math.max(MIN_WIDTH / start.width, MIN_HEIGHT / start.height);
@@ -2341,17 +2379,21 @@ export class CanvasView implements View {
       this.render();
     };
     const up = () => {
+      this.geometryGestures.delete(up);
+      window.removeEventListener("pointercancel", up);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       spaceBypass.dispose();
       void this.persist();
     };
+    this.geometryGestures.add(up);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   }
 
   private beginConnection(event: PointerEvent, node: CanvasNode, side: CanvasSide): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2449,7 +2491,7 @@ export class CanvasView implements View {
   }
 
   private addConnectedTextCard(source: CanvasNode, sourceSide: CanvasSide, worldPoint: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const node: CanvasTextNode = {
       id: this.nextTextNodeId(),
       type: "text",
@@ -2486,17 +2528,17 @@ export class CanvasView implements View {
   }
 
   private addConnectedFileCard(source: CanvasNode, sourceSide: CanvasSide, file: TFile, worldPoint: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     this.addConnectedCard(source, sourceSide, this.createFileCard(file, worldPoint));
   }
 
   private addConnectedLinkCard(source: CanvasNode, sourceSide: CanvasSide, url: string, worldPoint: Point): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     this.addConnectedCard(source, sourceSide, this.createLinkCard(url, worldPoint));
   }
 
   private addConnectedCard(source: CanvasNode, sourceSide: CanvasSide, node: CanvasNode): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     if (!this.document.nodes.includes(source)) return;
     const edge: CanvasEdge = {
       id: this.nextEdgeId(),
@@ -2660,7 +2702,7 @@ export class CanvasView implements View {
   private installCameraControls(): void {
     const isEmptyDropTarget = (target: EventTarget | null) => target === this.surfaceEl || target === this.viewportEl;
     this.surfaceEl.addEventListener("dragover", (event) => {
-      if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+      if (this.interactionBlocked()) return;
       const types = event.dataTransfer?.types;
       if (
         !isEmptyDropTarget(event.target)
@@ -2671,7 +2713,7 @@ export class CanvasView implements View {
       event.dataTransfer.dropEffect = "copy";
     });
     this.surfaceEl.addEventListener("drop", (event) => {
-      if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+      if (this.interactionBlocked()) return;
       const transfer = event.dataTransfer;
       if (!isEmptyDropTarget(event.target) || !transfer) return;
       if (transfer.types.includes(VAULT_FILE_DRAG_MIME)) {
@@ -2702,12 +2744,12 @@ export class CanvasView implements View {
       this.addLinkCardAt(canonicalUrl, this.screenToWorld(event.clientX, event.clientY));
     });
     this.surfaceEl.addEventListener("dblclick", (event) => {
-      if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+      if (this.interactionBlocked()) return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.addTextCardAt(this.screenToWorld(event.clientX, event.clientY));
     });
     this.surfaceEl.addEventListener("contextmenu", (event) => {
-      if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+      if (this.interactionBlocked()) return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       event.preventDefault();
       event.stopPropagation();
@@ -2720,6 +2762,7 @@ export class CanvasView implements View {
       ]);
     });
     this.surfaceEl.addEventListener("pointerdown", (event) => {
+      if (this.interactionBlocked()) return;
       if (event.pointerType === "touch") return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.surfaceEl.focus({ preventScroll: true });
@@ -2733,6 +2776,7 @@ export class CanvasView implements View {
         const start = { x: event.clientX, y: event.clientY };
         let marqueeEl: HTMLElement | null = null;
         const move = (next: PointerEvent) => {
+          if (this.interactionBlocked()) return;
           if (!marqueeEl && Math.hypot(next.clientX - start.x, next.clientY - start.y) < 4) return;
           if (!marqueeEl) {
             marqueeEl = document.createElement("div");
@@ -2768,11 +2812,13 @@ export class CanvasView implements View {
           this.updateSelectionClasses();
         };
         const up = () => {
+          this.geometryGestures.delete(up);
+          window.removeEventListener("pointercancel", up);
           marqueeEl?.remove();
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
-          window.removeEventListener("pointercancel", up);
         };
+        this.geometryGestures.add(up);
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
         window.addEventListener("pointercancel", up);
@@ -2782,9 +2828,11 @@ export class CanvasView implements View {
       event.preventDefault();
       const start = { x: event.clientX, y: event.clientY, panX: this.pan.x, panY: this.pan.y };
       const move = (next: PointerEvent) => { this.pan = { x: start.panX + next.clientX - start.x, y: start.panY + next.clientY - start.y }; this.updateTransform(); };
-      const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+      const up = () => { this.geometryGestures.delete(up); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+      this.geometryGestures.add(up);
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
     });
     this.surfaceEl.addEventListener("keydown", (event) => this.handleKeyDown(event));
     this.surfaceEl.addEventListener("keyup", (event) => {
@@ -2823,7 +2871,7 @@ export class CanvasView implements View {
   }
 
   private handleKeyDown(event: KeyboardEvent): void {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    if (this.interactionBlocked()) return;
     const target = event.target as HTMLElement;
     if (target.matches("textarea, input, [contenteditable=true]")) return;
     const modifier = event.ctrlKey || event.metaKey;
@@ -2862,16 +2910,17 @@ export class CanvasView implements View {
   }
 
   private async deleteSelection(): Promise<void> {
-    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
-    const affected = this.selectedEdgeIds.size ? [] : this.document.nodes.filter(node => this.selectedIds.has(node.id));
-    await this.changePresentations(affected, () => this.deleteSelectionPrepared());
+    if (this.interactionBlocked()) return;
+    const nodes = new Set(this.selectedIds); const edges = new Set(this.selectedEdgeIds);
+    const affected = edges.size ? [] : this.document.nodes.filter(node => nodes.has(node.id));
+    await this.changePresentations(affected, () => this.deleteSelectionPrepared(nodes, edges));
   }
 
-  private deleteSelectionPrepared(): void {
-    if (this.selectedEdgeIds.size > 0) {
-      this.document.edges = this.document.edges.filter((edge) => !this.selectedEdgeIds.has(edge.id));
-    } else if (this.selectedIds.size > 0) {
-      const removedNodes = new Set(this.selectedIds);
+  private deleteSelectionPrepared(nodes: ReadonlySet<string>, edges: ReadonlySet<string>): void {
+    if (edges.size > 0) {
+      this.document.edges = this.document.edges.filter((edge) => !edges.has(edge.id));
+    } else if (nodes.size > 0) {
+      const removedNodes = nodes;
       this.document.nodes = this.document.nodes.filter((node) => !removedNodes.has(node.id));
       this.document.edges = this.document.edges.filter((edge) => !removedNodes.has(edge.fromNode) && !removedNodes.has(edge.toNode));
     } else {
@@ -2917,7 +2966,7 @@ export class CanvasView implements View {
       setIcon(icon, iconName);
       button.appendChild(icon);
       button.addEventListener("click", () => {
-        if (this.recoveryError === null) run();
+        if (!this.interactionBlocked()) run();
       });
       if (mobileOnly) button.dataset.mobileOnly = "true";
       toolbar.appendChild(button);
@@ -3076,7 +3125,14 @@ export class CanvasView implements View {
     }
   }
 
+  private restoreHistoryInteraction(): void {
+    if (this.historyInProgress || this.historyPriorInert == null || this.vaultSwitching || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    this.containerEl.inert = this.historyPriorInert;
+    this.historyPriorInert = null;
+  }
+
   private recoverNativeWrites(failures: readonly RenderFailure[]): void {
+    this.restoreHistoryInteraction();
     const conversion = failures.find(failure => failure.key.startsWith("conversion:"));
     if (conversion) {
       const id = conversion.key.slice("conversion:".length); const name = this.pendingConversionNames.get(id);
@@ -3106,7 +3162,7 @@ export class CanvasView implements View {
   /** Refuse gestures before pauseAutosave can cancel or roll them back. */
   assertWorkspaceLoadReady(): void {
     if (this.recoveryError !== null || this.conflictReadOnly) throw new Error("Resolve Canvas recovery or conflict before loading a workspace.");
-    if (this.presentationChangeInProgress || this.presentationRetirementFailed) throw new Error("Finish or recover the Canvas presentation change before loading a workspace.");
+    if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.historyInProgress || this.geometryGestures.size) throw new Error("Finish or recover the Canvas presentation change before loading a workspace.");
     for (const presentation of this.nodePresentations.values()) if (presentation.el.querySelector(".canvas-node-text-editor")) throw new Error("Finish or cancel the Canvas text draft before loading a workspace.");
     if (this.transientGestureCancel || this.touchDragSnapshot || this.touchGesture.pointerIds().length) throw new Error("Finish the Canvas gesture before loading a workspace.");
     if (this.persistRequestedWhileSuspended) throw new Error("Canvas changed during the workspace operation. Retry after its edits are saved.");
@@ -3164,7 +3220,13 @@ export class CanvasView implements View {
     let task: Promise<void> | undefined;
     const changed = await this.changePresentations(this.document.nodes, () => {
       this.pendingHistory = direction;
-      task = this.queueOwnedWrite("history", token => this.restoreHistoryNative(direction, token), true);
+      this.historyInProgress = true;
+      this.historyPriorInert = this.containerEl.inert;
+      this.containerEl.inert = true;
+      task = this.queueOwnedWrite("history", token => this.restoreHistoryNative(direction, token), true).finally(() => {
+        this.historyInProgress = false;
+        this.restoreHistoryInteraction();
+      });
       void task.then(() => { this.pendingHistory = null; }, () => {});
     });
     if (changed) await task;
@@ -3183,18 +3245,22 @@ export class CanvasView implements View {
     } catch {
       return;
     }
-    const currentDocument = this.document;
-    this.document = restored;
-    this.selectedIds.clear();
-    this.selectedEdgeIds.clear();
-    this.render();
+    const currentDocument = this.document; const file = this.file; const conflict = this.conflictGeneration;
     this.containerEl.dataset.canvasDirty = "true";
     // Same self-write echo as doPersist() (see the comment there): this write
     // must not let its own "modify" event bounce back into a spurious reload.
     this.suppressReconcileModify = true;
     try {
       token?.check();
-      await this.app.vault.modify(this.file, snapshot);
+      await this.app.vault.modify(file, snapshot);
+      // The in-flight write is acknowledged, but a newer conflict owns the
+      // projection now. Suppress stale publication without inventing a failed
+      // write that could permanently block its recovery.
+      if (this.file !== file || this.conflictGeneration !== conflict) return;
+      this.document = restored;
+      this.selectedIds.clear();
+      this.selectedEdgeIds.clear();
+      if (!token || token.current()) this.render();
       source.pop();
       this.pushHistory(target, current);
       this.lastKnownText = snapshot;
@@ -3205,9 +3271,11 @@ export class CanvasView implements View {
       }
     } catch (error) {
       this.suppressReconcileModify = false;
-      this.document = currentDocument;
-      this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
-      if (!token || token.current()) this.render();
+      if (this.file === file && this.conflictGeneration === conflict) {
+        this.document = currentDocument;
+        this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
+        if (!token || token.current()) this.render();
+      }
       throw error;
     }
   }
