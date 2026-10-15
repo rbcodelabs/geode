@@ -3,7 +3,8 @@
 Use the **Outgoing links** tab in the right sidebar, or run **Show outgoing links**
 from the command palette. The pane follows the active Markdown note.
 
-**Links** shows authored wikilinks and embeds in first-appearance order, including
+**Links** shows authored wikilinks, Markdown links/images and reference-style
+links in first-appearance order, including
 heading/block references and missing targets. Counts combine repeated authored
 targets. Activate a target to navigate; Cmd/Ctrl-click opens a new tab. Names have
 full-path hover/accessibility labels to disambiguate duplicate filenames.
@@ -30,18 +31,18 @@ They do not alter indexing, search, existing links or sync scope.
 
 ## Current coverage boundaries
 
-Links uses the shared metadata parser. On this baseline that parser indexes
-wikilinks/embeds, and does not index Markdown-style `[text](note.md)` links. The
-pane masks existing Markdown links when generating suggestions, so it does not
-nest new links inside them. The shared parser's fence/large-note coverage limits
-also apply. Shared parser improvements are a separately tracked package; this pane
-alone does not establish complete Outgoing links or linking parity.
+Links uses the shared metadata parser, including inline Markdown destinations,
+images and full/collapsed/shortcut reference forms with definitions. External URL
+schemes are omitted from internal target activation. Code does not contribute
+links. The mention limit described above applies to suggestions; Links uses the
+shared parser's normal coverage. This integrated parser coverage is tested, but
+does not establish complete Outgoing links or linking parity.
 
 ## Preview
 
 The screenshots below use a synthetic temporary vault with aliases and duplicate
 basenames. Captured 2026-10-14 on macOS in local Electron from source commit
-`a51a006` (branch `feat/overnight-outgoing-links`), at 1950×1314 and 960×760
+`96dbb21` (branch `feat/overnight-outgoing-links`), at 1950×1314 and 960×760
 pixels. They show the real Electron pane after converting an alias from an
 unsaved editor buffer; no user vault data is included.
 

@@ -9,7 +9,7 @@ const MAX_VISIBLE_MENTIONS = 500;
 
 export interface OutgoingReference { link: string; displayText: string; count: number }
 
-/** Uses the existing metadata parser; Markdown-link graph support is tracked separately. */
+/** Uses the shared metadata parser for authored wiki and Markdown references. */
 export function outgoingReferences(text: string): OutgoingReference[] {
   const metadata = parseMetadata(text);
   const entries = new Map<string, OutgoingReference>();

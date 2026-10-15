@@ -124,3 +124,11 @@ it.each(["\n", "\r\n"])("never offers YAML values when frontmatter closes beyond
   expect(result.mentions).toEqual([]);
   expect(result.limited).toBe(true);
 });
+
+
+it("uses integrated Markdown links, images and reference destinations with authored ordering/counts", () => {
+  const text = "[[Wiki]] [note](Note.md) ![image](image.png) [again][ref] [external](https://example.com)\n\n[ref]: Note.md\n\n```\n[hidden](Hidden.md)\n```";
+  expect(api.outgoingReferences(text).map(reference => [reference.link, reference.count])).toEqual([
+    ["Wiki", 1], ["Note.md", 2], ["image.png", 1],
+  ]);
+});
