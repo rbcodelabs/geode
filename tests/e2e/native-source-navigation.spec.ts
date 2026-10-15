@@ -35,9 +35,21 @@ test("production native child navigation refuses before incidental draft blur", 
     expect(column).toBeGreaterThan(-1);
     const cell = table.locator(".bases-data-row", { hasText: "Source" }).locator("td.bases-cell").nth(column);
     await expect(cell).toHaveText("2");
-    await cell.click(); await page.keyboard.press("Enter");
+    const phase = async (name: string) => page.evaluate(name => {
+      const root = document.querySelector(".canvas-embed-view")!, note = root.querySelector(".canvas-node-note")!, table = root.querySelector(".bases-table")!, link = root.querySelector('a.internal-link[data-href="Other"]')!;
+      const describe = (el: Element | null) => el && { tag: el.tagName, className: el.className, rect: el.getBoundingClientRect().toJSON(), scrollTop: el.scrollTop, scrollLeft: el.scrollLeft, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight, style: { overflow: getComputedStyle(el).overflow, overflowX: getComputedStyle(el).overflowX, overflowY: getComputedStyle(el).overflowY, height: getComputedStyle(el).height }, tabindex: el.getAttribute("tabindex") };
+      const ancestors = []; for (let parent: Element | null = link; parent && ancestors.length < 12; parent = parent.parentElement) ancestors.push(describe(parent));
+      const owner = (window as any).app.workspace.getActiveLeaf().view;
+      const canvas = owner.renderOwner.writers().find((writer: any) => writer.viewType === "canvas");
+      if (!canvas) throw new Error("Actual Canvas writer required for geometry attribution");
+      const stages = ((window as any).__sourceNavigationPhases ??= []);
+      stages.push({ name, ancestors, input: describe(root.querySelector(".bases-cell-input")), root: describe(root), note: describe(note), table: describe(table), link: describe(link), surface: describe(root.querySelector(".canvas-surface")), active: describe(document.activeElement), camera: canvas && { pan: { ...canvas.pan }, scale: canvas.scale, selectedIds: [...canvas.selectedIds] } });
+    }, name);
+    await phase("before-cell-click");
+    await cell.click(); await phase("after-cell-click");
+    await page.keyboard.press("Enter"); await phase("after-Enter");
     const input = cell.locator(".bases-cell-input");
-    await expect(input).toBeVisible(); await input.fill("9");
+    await expect(input).toBeVisible(); await input.fill("9"); await phase("after-fill");
     await input.evaluate(el => {
       const app = (window as any).app, owner = app.workspace.getActiveLeaf();
       const root = el.closest(".canvas-embed-view")!;
@@ -79,7 +91,7 @@ test("production native child navigation refuses before incidental draft blur", 
   } finally {
     const state = await page.evaluate(() => {
       const p = (window as any).__sourceNavigation; if (!p) return null;
-      return { hit: p.hit, actualClick: p.actualClick, attempted: p.attempted, settled: p.settled, sourceLeafId: p.sourceLeafId, blur: p.blur,
+      return { phases: (window as any).__sourceNavigationPhases, hit: p.hit, actualClick: p.actualClick, attempted: p.attempted, settled: p.settled, sourceLeafId: p.sourceLeafId, blur: p.blur,
         inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected,
         sameParent: p.root.parentElement === p.parent, ownerFile: p.owner.view.getFile()?.path };
     }).catch(() => null);
