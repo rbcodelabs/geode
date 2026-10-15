@@ -94,6 +94,37 @@ export class RenderScope {
     for (const child of this.children) await child.prepareCloseTree();
   }
   private preflightCloseTree(): void { this.options.preflightClose?.(); for (const child of this.children) child.preflightCloseTree(); }
+  /** Prepare the complete affected set before permitting its first destructor. */
+  static async prepareRetirement(affected: readonly RenderScope[]): Promise<{ commit(): Promise<void>; abort(): void }> {
+    const unique = new Set(affected);
+    const scopes = [...unique].filter(scope => {
+      for (let parent = scope.parent; parent; parent = parent.parent) if (unique.has(parent)) return false;
+      return true;
+    });
+    for (const scope of scopes) { scope.assertAdmission(); scope.preflightCloseTree(); }
+    for (const scope of scopes) scope.freeze();
+    const resume = () => {
+      const errors: unknown[] = [];
+      for (const scope of scopes) { try { scope.resume(); } catch (error) { errors.push(error); } }
+      raise(errors);
+    };
+    try {
+      const results = await Promise.allSettled(scopes.map(scope => scope.prepareCloseTree()));
+      raise(results.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+    } catch (error) {
+      try { resume(); } catch (recoveryError) { throw new AggregateError([error, recoveryError], "Native retirement preparation and recovery failed."); }
+      throw error;
+    }
+    let completion: Promise<void> | undefined;
+    let aborted = false;
+    return {
+      abort: () => { if (!completion && !aborted) { aborted = true; resume(); } },
+      commit: () => {
+        if (aborted) return Promise.reject(new Error("This native retirement was canceled."));
+        return completion ??= (async () => { for (const scope of scopes) await scope.startClose(true); })();
+      },
+    };
+  }
   close(): Promise<void> { return this.startClose(false); }
   private startClose(prepared: boolean): Promise<void> {
     if (this.closing) return this.closing;
