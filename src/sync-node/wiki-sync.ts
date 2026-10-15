@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { HistoryController, type HistoryConflict, type HistoryControllerState, type HistoryPathIssue, type HistoryPreview } from "../sync-core/history-controller";
 import type { AppendOnlySyncProvider, VaultDescriptor } from "../sync-core/history-types";
 import { buildHistoryPorts } from "../sync-core/ports";
+import { mergeSettleRules, type SettleRule } from "../sync-core/settle";
 import type { SyncStorageRequest } from "../shared/sync-safety";
 import { DEFAULT_SYNC_SCOPE, type SyncScope } from "../sync-core/scope";
 import { DELETE_LIMIT_FRACTION, MIN_DELETE_LIMIT, MIN_SCAN_RATIO, SyncRailError, deleteLimitFor, deleteLimitRefusal, knownFileCount, shrunkScanRefusal } from "../sync-core/rails";
@@ -70,6 +71,8 @@ export interface WikiSyncContext {
   onStderr?: (line: string) => void;
   /** Defer files modified within this window. Default (NodeHost) 5000. */
   settleMs?: number;
+  /** Per-path quiet periods that override the defaults (Claude/logs and *.jsonl: 10 min). `ms: 0` opts a path out. */
+  settleRules?: readonly SettleRule[];
   /** Test seams. */
   provider?: AppendOnlySyncProvider & { close?(): Promise<void> };
   hostOptions?: Partial<NodeHostOptions>;
@@ -201,6 +204,7 @@ async function withLive<T>(ctx: WikiSyncContext, overrides: SyncOverrides, fn: (
       const built = buildHistoryPorts(host, {
         provider: { id: provider.id }, scope: scopeFor(config), bindingVaultId: config.descriptor.vaultId, bindingKey, stateKey, lease,
         assertContext: () => {}, renameHints: new Map(), portableChanged: async () => {},
+        settleRules: mergeSettleRules(ctx.settleRules),
       });
       const innerSnapshot = built.ports.snapshot;
       built.ports.snapshot = async onProgress => {
