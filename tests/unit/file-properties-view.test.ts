@@ -45,7 +45,7 @@ function setup(source = "---\nstatus: old\n---\nUnsaved body", propertyTypes?: P
   const view = new FilePropertiesView(app as any); view.onOpen();
   const input = (label: string) => (view.containerEl as unknown as Element).all().find(element => element.attributes["aria-label"] === label)!;
   const enter = (element: Element, value: string) => { element.value = value; element.events.get("input")?.({}); element.events.get("keydown")?.({ key: "Enter", preventDefault() {} }); };
-  return { view, owner, setOwner: (next: typeof owner) => { activeOwner = next; }, workspace, metadataCache, vault, file, input, enter, getText: () => text, switchFile: (file: any) => { currentFile = file; }, setReadonly: () => { readonly = true; } };
+  return { view, owner, setOwner: (next: typeof owner) => { activeOwner = next; }, workspace, metadataCache, vault, file, input, enter, getText: () => text, switchFile: (file: any) => { currentFile = file; }, setReadonly: (value = true) => { readonly = value; } };
 }
 describe("File properties buffer ownership", () => {
   it("commits through the guarded live buffer and never writes or reads disk", () => {
@@ -142,4 +142,60 @@ it("allows an explicit unset action for a typed boolean", () => {
   const state = setup("---\ndone: true\n---\nDirty body", types);
   const clear = state.input("Unset value: done"); expect(clear).toBeDefined(); clear.events.get("click")!({});
   expect(state.getText()).toContain("done: null"); expect(state.getText()).toContain("Dirty body"); state.view.onClose();
+});
+
+
+describe("rejected property drafts on the nonnative live-buffer adapter", () => {
+  function rejected(source = "---\nstatus: old\ncount: 4\ndone: false\n---\nUnsaved body", types?: PropertyTypes) {
+    const state = setup(source, types);
+    const failed = state.input("Value: status"); failed.focus(); state.setReadonly(); state.enter(failed, "rejected"); state.setReadonly(false);
+    return { ...state, failed };
+  }
+  it("retains a refused draft after blur and metadata refresh, then retries only its field", () => {
+    const state = rejected();
+    (document as any).activeElement = document.body; state.failed.events.get("blur")!({});
+    state.metadataCache.trigger("changed", state.file);
+    expect(state.input("Value: status")).toBe(state.failed); expect(state.failed.value).toBe("rejected");
+    expect(state.owner.applySourceEdit).not.toHaveBeenCalled();
+    state.enter(state.failed, "accepted"); expect(state.getText()).toContain("status: accepted"); expect(state.getText()).toContain("Unsaved body"); state.view.onClose();
+  });
+  it("discards a refused draft only through that field's explicit Escape", () => {
+    const state = rejected(); state.failed.events.get("keydown")!({ key: "Escape", preventDefault() {} });
+    expect(state.input("Value: status").value).toBe("old"); expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); state.view.onClose();
+  });
+  it.each(["4", "5"])("does not resolve a refused status draft via sibling count Enter=%s", value => {
+    const state = rejected(); const sibling = state.input("Value: count"); sibling.focus(); state.enter(sibling, value);
+    expect(state.input("Value: status")).toBe(state.failed); expect(state.failed.value).toBe("rejected");
+    expect(state.getText()).toContain("count: 4"); expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); state.view.onClose();
+  });
+  it.each(["remove", "checkbox", "type", "add", "other Escape"])("blocks unrelated %s while the exact refused field survives", action => {
+    const types = new PropertyTypes(), state = rejected(undefined, types);
+    if (action === "remove") state.input("Remove property: count").events.get("click")!({});
+    if (action === "checkbox") { const field = state.input("Value: done"); field.checked = true; field.events.get("change")!({}); expect(field.checked).toBe(false); }
+    if (action === "type") { const field = state.input("Type: count"); field.value = "text"; field.events.get("change")!({}); }
+    if (action === "add") state.input("Add property").events.get("click")!({});
+    if (action === "other Escape") state.input("Value: count").events.get("keydown")!({ key: "Escape", preventDefault() {} });
+    expect(state.input("Value: status")).toBe(state.failed); expect(state.failed.value).toBe("rejected");
+    expect((state.view.containerEl as unknown as Element).text()).toContain("Return to the rejected field");
+    expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); expect(types.getPropertyInfo("count")).toBe(null); state.view.onClose();
+  });
+  it("restores an unrelated blocked checkbox's unset presentation", () => {
+    const types = new PropertyTypes(); types.setType("done", "checkbox");
+    const state = rejected("---\nstatus: old\ndone: null\n---\nUnsaved body", types);
+    const checkbox = state.input("Value: done"); checkbox.checked = true; (checkbox as any).indeterminate = false; checkbox.events.get("change")!({});
+    expect(checkbox.checked).toBe(false); expect((checkbox as any).indeterminate).toBe(true); expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); state.view.onClose();
+  });
+  it("allows a failed checkbox's own retry without promising text-field keys", () => {
+    const state = setup("---\ndone: false\n---\nUnsaved body"), checkbox = state.input("Value: done");
+    state.setReadonly(); checkbox.checked = true; checkbox.events.get("change")!({});
+    expect((state.view.containerEl as unknown as Element).text()).toContain("read-only"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("Press Enter");
+    state.setReadonly(false); checkbox.events.get("change")!({}); expect(state.getText()).toContain("done: true"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("read-only"); state.view.onClose();
+  });
+  it("clears a generic type-picker error through its own successful retry", () => {
+    const types = new PropertyTypes(), state = setup(undefined, types), picker = state.input("Type: status");
+    state.setReadonly(); picker.value = "number"; picker.events.get("change")!({});
+    expect((state.view.containerEl as unknown as Element).text()).toContain("read-only"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("Press Enter");
+    state.setReadonly(false); picker.events.get("change")!({}); expect(types.getPropertyInfo("status")?.type).toBe("number");
+    expect((state.view.containerEl as unknown as Element).text()).not.toContain("read-only"); state.view.onClose();
+  });
 });

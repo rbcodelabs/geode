@@ -15,6 +15,10 @@ export class PropertyEditor {
   readonly root = document.createElement("div");
   private dirty = false;
   private error = "";
+  private rejectedDraft = false;
+  private rejectedField: HTMLInputElement | null = null;
+  private actionField: HTMLInputElement | null = null;
+  private readonly wiredInputs = new WeakSet<HTMLInputElement>();
   private stopTypes?: () => void;
   private closed = false;
   constructor(private readonly options: PropertyEditorOptions) {
@@ -22,7 +26,7 @@ export class PropertyEditor {
     this.stopTypes = options.types?.onChange(() => this.refresh());
     this.refresh();
   }
-  destroy(): void { this.closed = true; this.stopTypes?.(); }
+  destroy(): void { this.closed = true; this.clearDraft(); this.stopTypes?.(); }
   private focusToken(): FocusToken | null {
     const active = document.activeElement;
     if (!(active instanceof HTMLInputElement) && !(typeof HTMLSelectElement !== "undefined" && active instanceof HTMLSelectElement)) return null;
@@ -40,7 +44,7 @@ export class PropertyEditor {
   }
   refresh(force = false, focus = this.focusToken()): void {
     if (this.closed) return;
-    if (!force && this.dirty && this.root.contains(document.activeElement)) return;
+    if (!force && this.dirty && (this.rejectedDraft || this.root.contains(document.activeElement))) return;
     const inspection = inspectProperties(this.options.getText());
     const inner = document.createElement("div"); inner.className = "metadata-properties-inner";
     const heading = document.createElement("div"); heading.className = "metadata-properties-heading"; heading.textContent = "Properties";
@@ -53,7 +57,7 @@ export class PropertyEditor {
       for (const [key, value] of Object.entries(inspection.values)) inner.append(this.row(key, value, editable));
       if (this.error) inner.append(this.message(this.error));
       const add = document.createElement("button"); add.type = "button"; add.className = "metadata-add-button"; add.textContent = "+ Add property"; add.setAttribute("aria-label", "Add property"); add.disabled = !editable;
-      add.addEventListener("click", () => { add.replaceWith(this.newRow()); });
+      add.addEventListener("click", () => { if (this.permitAction()) add.replaceWith(this.newRow()); });
       inner.append(add);
     }
     this.root.replaceChildren(inner);
@@ -67,30 +71,50 @@ export class PropertyEditor {
     const button = document.createElement("button"); button.type = "button"; button.textContent = "Edit source"; button.addEventListener("click", () => this.options.openSource()); return button;
   }
   private apply(operation: PropertyMutation, input?: HTMLInputElement): boolean {
+    if (!this.permitAction(this.actionField)) return false;
     if (this.closed || !this.options.editable()) { this.showError("This note is read-only.", input); return false; }
     if (operation.kind === "set" && this.options.types && !isPropertyTypeValue(this.options.types.getType(operation.key, operation.expected), operation.value)) {
       this.showError("This value does not match the current property type. Choose another type or edit source.", input); return false;
     }
     const result = this.options.commit(operation);
     if (!result.ok) { this.showError(result.error, input); return false; }
-    this.dirty = false; this.error = "";
+    this.clearDraft();
     let focus = this.focusToken();
     if (focus && operation.kind === "rename") focus = { ...focus, key: operation.name.trim() };
     this.refresh(true, focus);
     return true;
   }
-  private showError(text: string, input?: HTMLInputElement): void {
-    this.error = text; this.dirty = true; input?.setAttribute("aria-invalid", "true");
+  private clearDraft(): void {
+    this.dirty = false; this.error = ""; this.rejectedDraft = false; this.rejectedField = null;
+  }
+  private permitAction(field: HTMLInputElement | null = null): boolean {
+    if (this.closed) return false;
+    if (!this.rejectedField || this.rejectedField === field) return true;
     this.root.querySelector(".metadata-property-error")?.remove();
-    this.root.append(this.message(text));
+    this.root.append(this.message(`${this.error} Return to the rejected field to retry or discard it before editing another property.`));
+    return false;
+  }
+  private showError(text: string, input?: HTMLInputElement): void {
+    const field = input ?? this.actionField;
+    this.rejectedField = field && this.wiredInputs.has(field) ? field : null;
+    this.error = text + (this.rejectedField ? " Press Enter to retry or Escape to discard." : "");
+    this.dirty = true; this.rejectedDraft = true; field?.setAttribute("aria-invalid", "true");
+    this.root.querySelector(".metadata-property-error")?.remove();
+    this.root.append(this.message(this.error));
   }
   private wireInput(input: HTMLInputElement, commit: () => void): void {
+    this.wiredInputs.add(input);
+    const submit = () => {
+      if (!this.permitAction(input)) return;
+      const previous = this.actionField; this.actionField = input;
+      try { commit(); } finally { this.actionField = previous; }
+    };
     input.addEventListener("input", () => { this.dirty = true; input.removeAttribute("aria-invalid"); });
     input.addEventListener("keydown", event => {
-      if (event.key === "Enter") { event.preventDefault(); commit(); }
-      if (event.key === "Escape") { event.preventDefault(); this.dirty = false; this.error = ""; this.refresh(true); }
+      if (event.key === "Enter") { event.preventDefault(); submit(); }
+      if (event.key === "Escape") { event.preventDefault(); if (this.permitAction(input)) { this.clearDraft(); this.refresh(true); } }
     });
-    input.addEventListener("blur", () => { if (this.dirty) commit(); });
+    input.addEventListener("blur", () => { if (this.dirty && !this.rejectedDraft) submit(); });
   }
   private identity(input: HTMLInputElement | HTMLSelectElement, key: string, field: string, index?: number): void {
     input.dataset.propertyKey = key; input.dataset.propertyField = field;
@@ -113,13 +137,18 @@ export class PropertyEditor {
     this.identity(icon, key, "type");
     icon.value = type; icon.disabled = !editable || !supported || !this.options.types || choices.length === 1;
     icon.addEventListener("change", () => {
+      if (!this.permitAction()) { icon.value = type; return; }
       const current = inspectProperties(this.options.getText());
       if (this.closed || !this.options.editable() || !current.ok || !Object.hasOwn(current.values, key) || JSON.stringify(current.values[key]) !== JSON.stringify(value)) { this.showError("This property changed or is read-only. Refresh before changing its type."); return; }
-      try { this.options.types?.setType(key, icon.value); }
+      try {
+        const retrying = this.rejectedDraft;
+        this.options.types?.setType(key, icon.value);
+        if (retrying) { this.clearDraft(); this.refresh(true); }
+      }
       catch (error) { this.showError(error instanceof Error ? error.message : "Could not change property type."); }
     });
     const name = document.createElement("input"); name.className = "metadata-input metadata-key-input"; name.value = key; name.disabled = !editable || !supported; name.setAttribute("aria-label", `Property name: ${key}`); this.identity(name, key, "name");
-    this.wireInput(name, () => { if (name.value.trim() !== key) this.apply({ kind: "rename", key, name: name.value, expected: value }, name); else { this.dirty = false; this.error = ""; this.refresh(true); } });
+    this.wireInput(name, () => { if (name.value.trim() !== key) this.apply({ kind: "rename", key, name: name.value, expected: value }, name); else { this.clearDraft(); this.refresh(true); } });
     typeControl.append(glyph, icon); keyCell.append(typeControl, name);
     const valueCell = document.createElement("div"); valueCell.className = "metadata-property-value";
     if (!supported) { const warning = document.createElement("span"); warning.textContent = "Nested value — edit source"; valueCell.append(warning, this.sourceButton()); }
@@ -135,19 +164,22 @@ export class PropertyEditor {
   }
   private valueInput(key: string, value: PropertyScalar, editable: boolean, commit: (next: PropertyScalar) => boolean, index?: number, assignedType?: string): HTMLInputElement {
     const input = document.createElement("input"); input.className = "metadata-input"; input.disabled = !editable; input.setAttribute("aria-label", `Value: ${key}${index === undefined ? "" : ` item ${index + 1}`}`); this.identity(input, key, "value", index);
-    if (assignedType === "checkbox" || typeof value === "boolean") { input.type = "checkbox"; input.checked = value === true; input.indeterminate = value === null; input.addEventListener("change", () => commit(input.checked)); }
+    if (assignedType === "checkbox" || typeof value === "boolean") { input.type = "checkbox"; input.checked = value === true; input.indeterminate = value === null; input.addEventListener("change", () => {
+      if (!this.permitAction()) { input.checked = value === true; input.indeterminate = value === null; return; }
+      commit(input.checked);
+    }); }
     else {
       if (assignedType === "date" || assignedType === "datetime") { input.type = assignedType === "date" ? "date" : "datetime-local"; input.step = "any"; }
       input.value = value === null ? "" : String(value); if (value === null) input.placeholder = "Unset";
       if (typeof value === "number") input.inputMode = "decimal";
       const initialValue = input.value;
       this.wireInput(input, () => {
-        if (input.value === initialValue) { this.dirty = false; this.error = ""; this.refresh(true); return; }
+        if (input.value === initialValue) { this.clearDraft(); this.refresh(true); return; }
         let next: PropertyScalar = input.value;
         if (assignedType === "number" || typeof value === "number") { const parsed = parsePropertyNumber(input.value); if (parsed === null) { this.showError("Enter a finite number.", input); return; } next = parsed; }
         else if ((value === null || assignedType === "date" || assignedType === "datetime") && input.value === "") next = null;
         if (assignedType && !isPropertyTypeValue(assignedType, next)) { this.showError(`Enter a valid ${assignedType} value.`, input); return; }
-        if (next !== value) commit(next); else { this.dirty = false; this.error = ""; this.refresh(true); }
+        if (next !== value) commit(next); else { this.clearDraft(); this.refresh(true); }
       });
     }
     return input;
