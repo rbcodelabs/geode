@@ -29,6 +29,7 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
       heightMeasurements: (window as any).__heightMeasurements,
       mixedHeightGeometry: (window as any).__mixedHeightGeometry,
       childNavigation: (window as any).__nativeChildNavigation,
+      childLinkHit: (window as any).__nativeChildLinkHit,
       validationCalls: (window as any).__layerValidationCalls,
       retirementAttempts: (window as any).__layerRetirementAttempts,
       resumes: (window as any).__layerResumeCounts,
@@ -446,10 +447,19 @@ test("unequal retained native frames preserve spacing, focused exposure and real
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
   }, doc);
 });
+async function clickNativeChildLink(page: Page) {
+  const link = record(page).getByRole("link", { name: "Other", exact: true });
+  expect(await link.evaluate(link => {
+    const rect = link.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    (window as any).__nativeChildLinkHit = { rect: rect.toJSON(), hit: hit ? { tag: hit.tagName, className: hit.className, text: hit.textContent?.slice(0, 80) } : null };
+    return hit === link || link.contains(hit);
+  })).toBe(true);
+  await link.click();
+}
 async function addNativeChildLink(page: Page) {
   await page.evaluate(async () => {
     const app = (window as any).app;
-    await app.vault.modify(app.vault.getFileByPath("Host.md"), "[[Other]]\n\n![[Tasks.base]]\n");
+    await app.vault.modify(app.vault.getFileByPath("Host.md"), "Navigation fixture.\n\n[[Other]]\n\n![[Tasks.base]]\n");
     const openFile = app.openFile.bind(app); const ownerAtMount = app.workspace.getActiveLeaf().id;
     app.openFile = async (file: any, ...args: any[]) => {
       if (file.path !== "Other.md") return openFile(file, ...args);
@@ -470,7 +480,7 @@ test("an actual clean native child wikilink opens its target in the owning leaf"
         destinationOpen: !!app.workspace.findLeafForFile("Other.md") };
     });
     expect(origin.active).toBe(origin.other); expect(origin.other).not.toBe(origin.owner); expect(origin.destinationOpen).toBe(false);
-    await record(page).getByRole("link", { name: "Other", exact: true }).click();
+    await clickNativeChildLink(page);
     await expect.poll(() => page.evaluate(() => (window as any).__nativeChildNavigation?.settled)).toBe(true);
     expect(await page.evaluate(() => {
       const leaf = (window as any).app.workspace.getActiveLeaf(); return { id: leaf.id, path: leaf.view.getFile()?.path };
@@ -485,7 +495,7 @@ test("destructive native child navigation refuses an unfinished draft before inc
     const input = await edit(page); await capture(page, input);
     const owner = await page.evaluate(() => (window as any).app.workspace.getActiveLeaf().id);
     expect(await page.evaluate(() => !!(window as any).app.workspace.findLeafForFile("Other.md"))).toBe(false);
-    await record(page).getByRole("link", { name: "Other", exact: true }).click();
+    await clickNativeChildLink(page);
     await expect.poll(() => page.evaluate(() => (window as any).__nativeChildNavigation?.settled)).toBe(true);
     // Check post-navigation bytes before identity so incidental blur cannot turn
     // an unsafe replacement into a passing close/refusal witness.
@@ -508,7 +518,7 @@ test("an actual native child wikilink reuses its already-open destination withou
       (window as any).__childOwnerLeaf = owner;
       return { owner: owner.id, destination: destination.id };
     });
-    await record(page).getByRole("link", { name: "Other", exact: true }).click();
+    await clickNativeChildLink(page);
     await expect.poll(() => page.evaluate(() => (window as any).__nativeChildNavigation?.settled)).toBe(true);
     expect(await page.evaluate(() => {
       const app = (window as any).app; const active = app.workspace.getActiveLeaf();
