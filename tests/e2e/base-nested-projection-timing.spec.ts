@@ -42,6 +42,39 @@ for (const schedule of ["metadata-after-save", "metadata-before-save-return"] as
       const cell = (role: string, name: string) => root(role).locator(".bases-data-row").filter({ hasText: name }).locator("td.bases-cell").nth(1);
       for (const role of ["owner", "clean", "dirty"]) { await expect(root(role)).toBeVisible(); await expect(cell(role, "Source.md")).toHaveText("2"); }
       await page.waitForFunction(() => (window as any).app.metadataCache.getCache("Source.md")?.frontmatter?.priority === 2);
+      // One ordinary pre-edit navigation step; this does not claim automatic exposure.
+      const wheel = await page.locator(".canvas-embed-view .canvas-surface").evaluate(surface => {
+        const p = (window as any).__baseConvergence;
+        const canvas = p.leaves[0].view.renderOwner.writers().find((writer: any) => writer.viewType === "canvas" && writer.surfaceEl === surface);
+        if (!canvas) throw Error("Exact actual Canvas required");
+        const r = surface.getBoundingClientRect();
+        let left = Math.max(0, r.left), top = Math.max(0, r.top), right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
+        for (let ancestor = surface.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor), rect = ancestor.getBoundingClientRect();
+          if (style.overflowX !== "visible") { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
+          if (style.overflowY !== "visible") { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
+        }
+        const samples = [];
+        for (const y of [0.1, 0.3, 0.5, 0.7, 0.9]) for (const x of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+          const point = { x: left + (right - left) * x, y: top + (bottom - top) * y }, hit = document.elementFromPoint(point.x, point.y);
+          samples.push({ ...point, owned: right > left && bottom > top && hit?.closest(".canvas-surface") === surface, tag: hit?.tagName, className: (hit as HTMLElement)?.className });
+        }
+        p.wheelCanvas = canvas; p.wheelRoot = canvas.containerEl;
+        const data = p.setupWheel = { before: { pan: { ...canvas.pan }, scale: canvas.scale }, samples, chosen: samples.find(point => point.owned) ?? null, events: [] as unknown[] };
+        surface.addEventListener("wheel", event => data.events.push({ trusted: event.isTrusted, deltaY: (event as WheelEvent).deltaY }), { capture: true, once: true });
+        return data;
+      });
+      fs.writeFileSync(info.outputPath("wheel-before.json"), JSON.stringify(wheel, null, 2)); expect(wheel.chosen).not.toBeNull();
+      await page.mouse.move(wheel.chosen!.x, wheel.chosen!.y); await page.mouse.wheel(0, 120);
+      await expect.poll(() => page.evaluate(() => (window as any).__baseConvergence.wheelCanvas.pan.y)).not.toBe(wheel.before.pan.y);
+      const wheelAfter = await page.evaluate(() => {
+        const p = (window as any).__baseConvergence;
+        return p.setupWheel.after = { pan: { ...p.wheelCanvas.pan }, scale: p.wheelCanvas.scale, sameRoot: p.wheelCanvas.containerEl === p.wheelRoot && p.wheelRoot.isConnected, events: p.setupWheel.events };
+      });
+      fs.writeFileSync(info.outputPath("wheel-after.json"), JSON.stringify(wheelAfter, null, 2));
+      expect(wheelAfter.sameRoot).toBe(true); expect(wheelAfter.pan.x).toBe(wheel.before.pan.x); expect(wheelAfter.scale).toBe(wheel.before.scale);
+      expect(wheelAfter.events).toEqual([{ trusted: true, deltaY: 120 }]);
+      expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(source); expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(other);
       const clickCell = async (role: string, name: string) => {
         const hit = await cell(role, name).evaluate(el => {
           const rect = el.getBoundingClientRect(), x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
@@ -128,7 +161,7 @@ for (const schedule of ["metadata-after-save", "metadata-before-save-return"] as
               connected: d.input.isConnected, sameInput: d.session.input === d.input && d.input.parentElement === d.session.cell,
               value: d.input.value, root: p.dirty.containerEl === d.root && d.root.isConnected, parent: d.root.parentElement === d.parent },
             backgroundActive: cache.backgroundIndexerActive, workerEntry: cache.workerEntries.has("Source.md"), events: [...p.events], writes: [...p.writes],
-            gatedFlushCalls: p.gatedFlushCalls, originalGatedFlushCalls: p.originalGatedFlushCalls, sourceWriteCalls: p.sourceWriteCalls, dirtyRefusal: p.dirtyRefusal, dirtyBlurs: [...p.dirtyBlurs], hits: p.hits, trustedCells: p.trustedCells,
+            gatedFlushCalls: p.gatedFlushCalls, originalGatedFlushCalls: p.originalGatedFlushCalls, sourceWriteCalls: p.sourceWriteCalls, dirtyRefusal: p.dirtyRefusal, dirtyBlurs: [...p.dirtyBlurs], hits: p.hits, trustedCells: p.trustedCells, setupWheel: p.setupWheel,
             nested: { sameOuter: p.leaves[0].view === p.ownerCapture.outer, outerText: p.ownerCapture.outer.getText(), initialText: p.ownerCapture.text,
               root: p.owner.containerEl === p.ownerCapture.root && p.ownerCapture.root.isConnected, parent: p.ownerCapture.root.parentElement === p.ownerCapture.parent,
               sameCanvas: p.canvas === p.ownerCapture.canvas, canvasConnected: p.ownerCapture.canvasRoot.isConnected,
@@ -170,7 +203,7 @@ for (const schedule of ["metadata-after-save", "metadata-before-save-return"] as
     } finally {
       await page.evaluate(() => (window as any).__baseConvergence?.release?.()).catch(() => {});
       const diagnostic = await page.evaluate(() => {
-        const p = (window as any).__baseConvergence; return p?.snapshot ? p.snapshot("finally") : { setupIncomplete: true, dirtyRefusal: p?.dirtyRefusal, hits: p?.hits, trustedCells: p?.trustedCells };
+        const p = (window as any).__baseConvergence; return p?.snapshot ? p.snapshot("finally") : { setupIncomplete: true, dirtyRefusal: p?.dirtyRefusal, hits: p?.hits, trustedCells: p?.trustedCells, setupWheel: p?.setupWheel };
       }).catch(error => ({ observationError: String(error) }));
       fs.writeFileSync(info.outputPath("diagnostic.json"), JSON.stringify({ diagnostic, source: fs.readFileSync(path.join(vault, "Source.md"), "utf8"), other: fs.readFileSync(path.join(vault, "Other.md"), "utf8") }, null, 2));
       await page.screenshot({ path: info.outputPath("projection.png") }).catch(() => {});
