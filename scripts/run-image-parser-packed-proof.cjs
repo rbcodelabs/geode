@@ -9,5 +9,7 @@ try{
  execFileSync(require('electron'),['--no-sandbox',path.join(__dirname,'proof-image-parser-packed.cjs')],{cwd:root,stdio:'inherit',env:{...process.env,GEODE_IMAGE_PARSER_PROOF_OUTPUT:directory,GEODE_IMAGE_PARSER_PROOF_RUN_ID:runId}});
  const result=validatePackedRuntimeReport(path.join(directory,'report.json'),commit,runId);
  const validation={...result,report:path.relative(base,path.join(directory,'report.json'))};
- fs.writeFileSync(path.join(directory,'validation.json'),JSON.stringify(validation,null,2));console.log(JSON.stringify(validation,null,2));
+ fs.writeFileSync(path.join(directory,'validation.json'),JSON.stringify(validation,null,2));
+ if(process.argv[2])fs.writeFileSync(process.argv[2],JSON.stringify({status:'ok',...validation},null,2),{flag:'wx'});
+ console.log(JSON.stringify(validation,null,2));
 }catch(error){console.error(error.stack||error);process.exitCode=1;}

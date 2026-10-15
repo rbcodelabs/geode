@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { fixture } from "./helpers/image-source-fixture";
-const api = await import("../../src/renderer/image-inspection/async-source").catch(() => ({})) as any;
+const api = await import("../../src/renderer/image-inspection/async-source");
 const NONE=0xffffffff;
 const source="![[Portrait]] ![[Portrait]]";
 const candidates=new Uint32Array([0,13,3,11,3,11,NONE,NONE,NONE,1,0,0,14,27,17,25,17,25,NONE,NONE,NONE,1,0,0]);

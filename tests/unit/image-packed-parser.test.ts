@@ -1,7 +1,7 @@
 import { expect,it } from "vitest";
-import { projectOwnedImages } from "../../src/renderer/image-inspection/source";
+import { projectOwnedImages } from "./helpers/image-source-sync-baseline";
 import { fixture } from "./helpers/image-source-fixture";
-const api=await import("../../src/renderer/image-inspection/parse-source").catch(()=>({})) as any;
+const api=await import("../../src/renderer/image-inspection/parse-source");
 const NONE=0xffffffff;
 it("preserves linked/reference spans and shares the selected definition and title",()=>{
   expect(api.extractPackedImageSource).toBeTypeOf("function");

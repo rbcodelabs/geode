@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-const api = await import("../../src/renderer/image-inspection/packed").catch(() => ({})) as any;
+const api = await import("../../src/renderer/image-inspection/packed");
 const NONE = 0xffffffff;
 const source = "![x](A.png)";
 const row = [0, source.length, 2, 3, 5, 10, NONE, NONE, NONE, 2, 0, 0];

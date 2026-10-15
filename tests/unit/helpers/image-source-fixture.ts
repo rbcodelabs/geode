@@ -7,9 +7,12 @@ export function fixture(source: string) {
   let root = "/synthetic";
   let snapshot = {};
   const capturedSnapshot = snapshot;
+  let resolutionEpoch = {};
+  const capturedResolutionEpoch = resolutionEpoch;
   const indexed = new Map([owner, image, other].map(file => [file.path, file]));
   const context = {
     source, owner, vault, root, snapshot: capturedSnapshot,
+    resolutionEpoch: capturedResolutionEpoch, currentResolutionEpoch: () => resolutionEpoch,
     currentSnapshot: () => snapshot,
     currentVault: () => currentVault,
     currentRoot: () => root,
@@ -19,6 +22,6 @@ export function fixture(source: string) {
       return [...indexed.values()].find(file => file.path === path || file.path.split("/").at(-1) === path) ?? null;
     },
   };
-  return { context, owner, image, other, indexed, changeVault: () => { currentVault = {}; }, changeRoot: () => { root = "/other"; }, changeSnapshot: () => { snapshot = {}; } };
+  return { context, owner, image, other, indexed, changeVault: () => { currentVault = {}; }, changeRoot: () => { root = "/other"; }, changeSnapshot: () => { snapshot = {}; }, changeResolutionEpoch: () => { resolutionEpoch = {}; } };
 }
 

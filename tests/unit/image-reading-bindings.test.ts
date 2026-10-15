@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { extractPackedImageSource } from "../../src/renderer/image-inspection/parse-source";
+const transport = { parse: async (source: string) => extractPackedImageSource(source) };
 import { fixture } from "./helpers/image-source-fixture";
-const sourceApi = await import("../../src/renderer/image-inspection/source").catch(() => ({})) as typeof import("../../src/renderer/image-inspection/source");
-const api = await import("../../src/renderer/image-inspection/reading-bindings").catch(() => ({})) as typeof import("../../src/renderer/image-inspection/reading-bindings");
+const sourceApi = await import("../../src/renderer/image-inspection/source");
+const api = await import("../../src/renderer/image-inspection/reading-bindings");
 
 class MarkerNode {
   readonly tagName = "IMG";
@@ -11,10 +13,10 @@ class MarkerNode {
   removeAttribute(name: string) { this.attrs.delete(name); }
 }
 
-function setup(source: string) {
+async function setup(source: string) {
   expect(api.prepareOwnedImageReading).toBeTypeOf("function");
   const f = fixture(source);
-  const projection = sourceApi.projectOwnedImages(f.context);
+  const projection = await sourceApi.projectOwnedImages(f.context, transport);
   if (projection.status !== "ready") throw new Error("expected ready");
   const prepared = api.prepareOwnedImageReading(projection, source);
   return { ...f, projection, prepared };
@@ -24,9 +26,9 @@ function tokens(text: string): string[] {
 }
 
 describe("private exact Reading image markers", () => {
-  it("substitutes only exact image spans before length transforms, preserving enclosing links and source", () => {
+  it("substitutes only exact image spans before length transforms, preserving enclosing links and source", async () => {
     const source = '[![a](Photo.png)](Next.md) plus ![[Photo.png|b]]';
-    const { prepared, projection } = setup(source);
+    const { prepared, projection } = await setup(source);
     const ids = tokens(prepared.source);
     expect(ids).toHaveLength(2);
     expect(new Set(ids).size).toBe(2);
@@ -44,9 +46,9 @@ describe("private exact Reading image markers", () => {
     expect(projection.source).toBe(source);
   });
 
-  it("escapes authored alt/title instead of interpreting markup or inserting a source URL", () => {
+  it("escapes authored alt/title instead of interpreting markup or inserting a source URL", async () => {
     const source = '![<img onerror=x>](Photo.png "a & b")';
-    const { prepared } = setup(source);
+    const { prepared } = await setup(source);
     const html = prepared.materialize(prepared.source, source);
     expect(html).toContain('alt="&lt;img onerror=x&gt;"');
     expect(html).toContain('title="a &amp; b"');
@@ -54,19 +56,19 @@ describe("private exact Reading image markers", () => {
     expect(html).not.toContain('<img onerror=');
   });
 
-  it("rejects duplicate/unknown marker transforms and stale snapshots without guessing by destination", () => {
-    const a = setup('![[Photo.png]] ![[Photo.png]]');
+  it("rejects duplicate/unknown marker transforms and stale snapshots without guessing by destination", async () => {
+    const a = await setup('![[Photo.png]] ![[Photo.png]]');
     expect(() => a.prepared.materialize(a.prepared.source + a.prepared.source, a.context.source)).toThrow(/marker/i);
-    const b = setup('![[Photo.png]]');
+    const b = await setup('![[Photo.png]]');
     expect(() => b.prepared.materialize('<span data-geode-image-occurrence="' + '0'.repeat(64) + '"></span>', b.context.source)).toThrow(/marker/i);
-    const c = setup('![[Photo.png]]');
+    const c = await setup('![[Photo.png]]');
     c.changeSnapshot();
     expect(() => c.prepared.materialize(c.prepared.source, c.context.source)).toThrow(/stale/i);
   });
 
-  it("removes all attributes and rejects duplicate/forged/replayed DOM bindings", () => {
+  it("removes all attributes and rejects duplicate/forged/replayed DOM bindings", async () => {
     for (const mode of ["duplicate", "forged"] as const) {
-      const { prepared, context } = setup('![[Photo.png]]');
+      const { prepared, context } = await setup('![[Photo.png]]');
       prepared.materialize(prepared.source, context.source);
       const token = tokens(prepared.source)[0];
       const nodes = [new MarkerNode(token), new MarkerNode(mode === "duplicate" ? token : '0'.repeat(64))];
@@ -74,7 +76,7 @@ describe("private exact Reading image markers", () => {
       expect(nodes.every(node => node.attrs.size === 0)).toBe(true);
       expect(nodes.every(node => prepared.lookup(node, context.source) === null)).toBe(true);
     }
-    const { prepared, context } = setup('![[Photo.png]]');
+    const { prepared, context } = await setup('![[Photo.png]]');
     prepared.materialize(prepared.source, context.source);
     const node = new MarkerNode(tokens(prepared.source)[0]);
     expect(prepared.bind([node], context.source)).toBe(true);
@@ -84,9 +86,9 @@ describe("private exact Reading image markers", () => {
     expect(prepared.lookup(replay, context.source)).toBeNull();
   });
 
-  it("invalidates lookup after source, indexed target, vault, owner or snapshot changes", () => {
+  it("invalidates lookup after source, indexed target, vault, owner or snapshot changes", async () => {
     for (const mode of ["source", "target", "rename", "vault", "owner", "snapshot"] as const) {
-      const f = setup('![[Photo.png]]');
+      const f = await setup('![[Photo.png]]');
       f.prepared.materialize(f.prepared.source, f.context.source);
       const node = new MarkerNode(tokens(f.prepared.source)[0]);
       expect(f.prepared.bind([node], f.context.source)).toBe(true);
