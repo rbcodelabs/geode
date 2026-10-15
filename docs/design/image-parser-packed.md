@@ -94,3 +94,13 @@ call to global unescape; a parseMetadata regression for escaped punctuation and
 literal percent sequences reproduced that error before correction. This state
 was never a delivered candidate. The final affected-caller gate covers the shared
 metadata callers in addition to packed foundation and import-boundary tests.
+
+The new pure helper also changes audited dependency inventories. All twelve
+literal inventories were reviewed: ten proof scripts and two exact CLI/SDK unit
+wrappers. Only the helper path is added; existing exact equality, permitted sets,
+forbidden modules/prefixes and per-edge audits remain intact. An initial worker
+run caught script inventories and a second caught duplicated wrapper inventories;
+both failed attempts are preserved. Six real no-database Node proof wrappers
+then passed locally (20 tests), before the broader affected-caller run. Database
+catalog/DSQL harness inventories were reviewed, but their service-dependent
+publish/restore operations were not run or represented as verified here.
