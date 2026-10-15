@@ -21,7 +21,12 @@ class Element {
 function fixture(kind: "reconnect" | "connection" = "reconnect") {
   const listeners = new Map<string, Set<(event: any) => void>>();
   vi.stubGlobal("window", { addEventListener(name: string, callback: (event: any) => void) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(callback); }, removeEventListener(name: string, callback: (event: any) => void) { listeners.get(name)?.delete(callback); } });
-  vi.stubGlobal("document", { createElement: () => new Element(), createElementNS: () => new Element(), body: new Element() });
+  const documentListeners = new Map<string, Set<(event: any) => void>>();
+  vi.stubGlobal("document", {
+    createElement: () => new Element(), createElementNS: () => new Element(), body: new Element(),
+    addEventListener(name: string, callback: (event: any) => void) { if (!documentListeners.has(name)) documentListeners.set(name, new Set()); documentListeners.get(name)!.add(callback); },
+    removeEventListener(name: string, callback: (event: any) => void) { documentListeners.get(name)?.delete(callback); },
+  });
   for (const name of ["installCameraControls", "installTouchControls", "updateTransform", "updateSelectionClasses", "render", "disposeMarkdownContents", "revokeObjectUrls"]) vi.spyOn(CanvasView.prototype as any, name).mockImplementation(() => {});
   for (const name of ["buildCameraControls", "buildCanvasToolbar"]) vi.spyOn(CanvasView.prototype as any, name).mockImplementation(() => new Element());
   const modify = vi.fn(async () => {}), off = vi.fn();
