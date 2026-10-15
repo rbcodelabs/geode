@@ -7,12 +7,12 @@ vi.mock("../../src/renderer/modals/modals", async importOriginal => ({ ...await 
 afterEach(() => vi.unstubAllGlobals());
 it("keeps the actual Base retry control usable after a pre-destructor close abort", async () => {
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
-  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  const element = (): any => ({ dataset: {}, children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
   vi.stubGlobal("document", { createElement: element });
   const view = Object.create(BaseView.prototype) as any; const close = vi.fn(async () => { view.sourceEdit = null; });
   const registry = new RenderOwnership(); const owner = registry.create(view, { writer: view, close });
   const modify = vi.fn().mockRejectedValueOnce(new Error("disk unavailable")).mockResolvedValue(undefined);
-  Object.assign(view, { vaultSwitching: false, renderOwner: owner, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { rawText: "9" }, saveStatusEl: element(), app: { vault: { read: async () => "---\npriority: 2\n---\n", modify } }, runAndRender: vi.fn(), tableView: { acknowledgeEdit: vi.fn() } });
+  Object.assign(view, { vaultSwitching: false, renderOwner: owner, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { file: { path: "Note.md" }, columnPath: "note.priority", rawText: "9" }, saveStatusEl: element(), app: { vault: { read: async () => "---\npriority: 2\n---\n", modify } }, runAndRender: vi.fn(), tableView: { acknowledgeEdit: vi.fn() } });
   await expect(view.editCell({ path: "Note.md" }, "note.priority", "9")).rejects.toThrow("disk unavailable");
   const retry = view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Base save");
   await expect(owner.close()).rejects.toThrow("disk unavailable"); expect(close).not.toHaveBeenCalled();
@@ -39,7 +39,7 @@ it("refuses a stale Base row write after an awaited read when its owner begins c
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
   const view = Object.create(BaseView.prototype) as any; let finish!: (text: string) => void;
   const modify = vi.fn(); const close = vi.fn(async () => {}); const owner = new RenderOwnership().create(view, { close });
-  Object.assign(view, { renderOwner: owner, vaultSwitching: false, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { rawText: "9" }, setSaveStatus: vi.fn(), app: { vault: { read: () => new Promise<string>(resolve => { finish = resolve; }), modify } } });
+  Object.assign(view, { renderOwner: owner, vaultSwitching: false, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { file: { path: "Note.md" }, columnPath: "note.priority", rawText: "9" }, setSaveStatus: vi.fn(), app: { vault: { read: () => new Promise<string>(resolve => { finish = resolve; }), modify } } });
   const writing = view.editCell({ path: "Note.md" }, "note.priority", "9"); await Promise.resolve();
   const closing = owner.close(); finish("---\npriority: 2\n---\n");
   await expect(writing).rejects.toThrow(/owner changed/); await expect(closing).rejects.toThrow(/owner changed/);
@@ -100,7 +100,7 @@ it("rejects an actual detached Base modal submission after owner retirement", as
 });
 it("publishes a reachable Base retry after close cancels its queued definition write", async () => {
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
-  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  const element = (): any => ({ dataset: {}, children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
   vi.stubGlobal("document", { createElement: element });
   const view = Object.create(BaseView.prototype) as any; const close = vi.fn(async () => {});
   const owner = new RenderOwnership().create(view, { close, recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
@@ -114,7 +114,7 @@ it("publishes a reachable Base retry after close cancels its queued definition w
 });
 it("keeps a row failure and its actual retry control after a successful definition retry", async () => {
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
-  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  const element = (): any => ({ dataset: {}, children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
   vi.stubGlobal("document", { createElement: element });
   const view = Object.create(BaseView.prototype) as any;
   const owner = new RenderOwnership().create(view, { recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
@@ -130,7 +130,7 @@ it("keeps a row failure and its actual retry control after a successful definiti
 });
 it("lets the visible Canvas save retry finish conversion after note creation and a rejected board save", async () => {
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
-  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  const element = (): any => ({ dataset: {}, children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
   vi.stubGlobal("document", { createElement: element });
   const view = Object.create(CanvasView.prototype) as any;
   const owner = new RenderOwnership().create(view, { recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
@@ -146,7 +146,7 @@ it("lets the visible Canvas save retry finish conversion after note creation and
 });
 it("republishes rolled-back Canvas history after an aborted barrier and retries its original operation", async () => {
   const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
-  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  const element = (): any => ({ dataset: {}, children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
   vi.stubGlobal("document", { createElement: element });
   const view = Object.create(CanvasView.prototype) as any; const registry = new RenderOwnership();
   const owner = registry.create(view, { writer: view, recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);

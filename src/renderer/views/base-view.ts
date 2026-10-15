@@ -611,7 +611,7 @@ export class BaseView implements View {
     if (failures.some(failure => failure.key === "definition")) this.setSaveStatus("Base save failed", true, () => this.persist(true));
     else if (this.sourceEdit && failures.some(failure => failure.key.startsWith('["row",'))) {
       const { file, columnPath, rawText } = this.sourceEdit;
-      this.setSaveStatus("Base save failed", true, async () => { await this.editCell(file, columnPath, rawText, true); this.tableView.acknowledgeEdit(); });
+      this.setSaveStatus("Base save failed", true, () => this.retryRowEdit(file, columnPath, rawText), { file, columnPath });
     }
   }
 
@@ -906,14 +906,21 @@ export class BaseView implements View {
       this.setSaveStatus("Base saved", false);
       this.runAndRender();
     } catch (error) {
-      this.setSaveStatus("Base save failed", true, async () => {
-        await this.editCell(file, columnPath, rawText, true);
-        this.tableView.acknowledgeEdit();
-      });
+      this.setSaveStatus("Base save failed", true, () => this.retryRowEdit(file, columnPath, rawText), { file, columnPath });
       throw error;
     } finally {
       this.sourceWritePath = null;
     }
+  }
+
+  private async retryRowEdit(file: TFile, columnPath: string, failedText: string): Promise<void> {
+    const draft = this.sourceEdit;
+    if (draft && (draft.file.path !== file.path || draft.columnPath !== columnPath)) {
+      this.app.notify("Finish or cancel the current cell draft before retrying another row.");
+      return;
+    }
+    await this.editCell(file, columnPath, draft?.rawText ?? failedText, true);
+    this.tableView.acknowledgeEdit();
   }
 
   private beginSourceEdit(file: TFile, columnPath: string, rawText: string): void {
@@ -970,7 +977,7 @@ export class BaseView implements View {
     this.containerEl.dataset.basesConflictPath = conflictPath ?? "recovery";
   }
 
-  private setSaveStatus(message: string, failed: boolean, retry?: () => Promise<void>): void {
+  private setSaveStatus(message: string, failed: boolean, retry?: () => Promise<void>, row?: { file: TFile; columnPath: string }): void {
     this.saveStatusEl.replaceChildren();
     this.saveStatusEl.setAttribute("role", failed ? "alert" : "status");
     if (!message) return;
@@ -981,6 +988,11 @@ export class BaseView implements View {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = "Retry Base save";
+      if (row) {
+        button.dataset.baseRowRetry = JSON.stringify([row.file.path, row.columnPath]);
+        // Preserve the failed editor until this explicit retry owns the save.
+        button.addEventListener("pointerdown", event => event.preventDefault());
+      }
       button.addEventListener("click", () => { void retry().catch(() => {}); });
       this.saveStatusEl.appendChild(button);
     }
