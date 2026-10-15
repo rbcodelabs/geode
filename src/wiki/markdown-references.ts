@@ -1,6 +1,24 @@
 import { parser } from "@lezer/markdown";
 import type { LinkCache, ReferenceLinkCache, Loc } from "./types";
 
+// The stock rule rescans ordinary spaces from every position in the run.
+// Consuming that run once preserves source positions and all HardBreak nodes.
+export const metadataMarkdownParser = parser.configure({ parseInline: [{
+  name: "HardBreak",
+  parse(context, next, start) {
+    if (next === 92 && context.char(start + 1) === 10) {
+      return context.addElement(context.elt("HardBreak", start, start + 2));
+    }
+    if (next !== 32) return -1;
+    let end = start + 1;
+    while (context.char(end) === 32) end++;
+    if (context.char(end) === 10 && end >= start + 2) {
+      return context.addElement(context.elt("HardBreak", start, end + 1));
+    }
+    return end;
+  },
+}] });
+
 const normalizeLabel = (label: string) => label.replace(/\s+/g, " ").trim().toLowerCase();
 const unescape = (text: string) => text.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
 function destination(raw: string): string {
@@ -10,7 +28,7 @@ function destination(raw: string): string {
 
 /** Uses the installed CommonMark grammar; it never treats text inside code as a link. */
 export function markdownReferences(body: string, locate: (start: number, end: number) => Loc): { links: LinkCache[]; embeds: LinkCache[]; references: ReferenceLinkCache[] } {
-  const tree = parser.parse(body);
+  const tree = metadataMarkdownParser.parse(body);
   const definitions = new Map<string, string>();
   tree.iterate({ enter(node) {
     if (node.name !== "LinkReference") return;
