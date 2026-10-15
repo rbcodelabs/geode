@@ -1,6 +1,6 @@
 # Base external reload ordering: proposed bounded correction
 
-Status: Proposed; source remains unchanged pending coordinator and architect review.
+Status: Historical proposal; superseded by accepted [ADR0041](../adr/0041-base-external-reload-ordering.md).
 
 ## Confirmed problem and limits of evidence
 

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron, expect, test, type TestInfo } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const testVaultFixturePath = path.join(repoRoot, "test-vault");
@@ -38,7 +38,7 @@ function makeVaultCopy(): string {
   return vaultDir;
 }
 
-test("create a base, filter/sort a Table view, and edit a cell back to frontmatter", async () => {
+async function runSortCase(info: TestInfo, controlledRead = false): Promise<void> {
   const vaultDir = makeVaultCopy();
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-bases-e2e-ud-"));
   fs.writeFileSync(
@@ -51,8 +51,8 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
     cwd: repoRoot,
   });
 
+  const window = await app.firstWindow();
   try {
-    const window = await app.firstWindow();
     const consoleErrors: string[] = [];
     window.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
@@ -76,13 +76,52 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
     await expect(window.locator(".bases-data-row")).toHaveCount(8);
     await expect(window.locator(".bases-toolbar-results")).toHaveText("8 results");
 
+    await window.evaluate(() => {
+      const view = (window as any).app.workspace.getActiveLeaf().view;
+      const trace: any[] = []; (window as any).__baseSortTrace = trace;
+      const ids = new WeakMap<object, number>(); let next = 0;
+      const id = (object: object) => { if (!ids.has(object)) ids.set(object, ++next); return ids.get(object); };
+      const state = (kind: string) => trace.push({ kind, time: performance.now(), def: id(view.def), views: view.def?.views.map((v: any) => ({ identity: id(v), name: v.name, sort: structuredClone(v.sort) })), pending: view.pendingKnownText, known: view.lastKnownText });
+      for (const name of ["applyText", "doPersist", "reloadIfChangedExternally"]) {
+        const original = view[name].bind(view);
+        view[name] = (...args: any[]) => { state(name + ":start"); const result = original(...args); return result.then((value: any) => { state(name + ":end"); return value; }); };
+      }
+      document.addEventListener("change", event => {
+        if ((event.target as HTMLElement).classList?.contains("bases-sort-prop")) { state("select:" + (event.target as HTMLSelectElement).value); queueMicrotask(() => state("select:after")); }
+      }, true);
+      state("before-sort");
+    });
+
+    if (controlledRead) await window.evaluate(() => {
+      const app = (window as any).app, view = app.workspace.getActiveLeaf().view;
+      const path = view.file.path, originalRead = app.vault.read.bind(app.vault), originalCached = app.vault.getCachedContent.bind(app.vault);
+      const probe = { path, captured: false, release: null as (() => void) | null }; (window as any).__controlledBaseRead = probe;
+      // A cache miss and delayed filesystem read are valid provider schedules.
+      // Preserve the captured bytes while normal UI selection/save proceeds.
+      app.vault.getCachedContent = (candidate: string) => candidate === path ? undefined : originalCached(candidate);
+      app.vault.read = async (file: any) => {
+        const bytes = await originalRead(file);
+        if (file.path === path && !probe.captured && bytes.includes("property: file.name")) {
+          probe.captured = true;
+          return new Promise<string>(resolve => { probe.release = () => resolve(bytes); });
+        }
+        return bytes;
+      };
+    });
+
     // --- Sort by note.priority ASC: the 3 Tasks rows (the only ones with a
     // priority) should end up as the last 3 rows, in Alpha/Beta/Gamma order ---
     await window.locator(".bases-toolbar-btn", { hasText: "Sort" }).click();
     const sortPanel = window.locator(".bases-sort-panel");
     await expect(sortPanel).toBeVisible();
     await sortPanel.locator("button.bases-filter-add", { hasText: "+ Add sort" }).click();
+    if (controlledRead) await window.waitForFunction(() => !!(window as any).__controlledBaseRead?.release);
     await sortPanel.locator(".bases-sort-row .bases-sort-prop").first().selectOption("note.priority");
+    if (controlledRead) {
+      const basePath = await window.evaluate(() => (window as any).__controlledBaseRead.path);
+      await expect.poll(() => fs.readFileSync(path.join(vaultDir, basePath), "utf8")).toContain("property: note.priority");
+      await window.evaluate(() => (window as any).__controlledBaseRead.release());
+    }
     await window.keyboard.press("Escape"); // close the panel; the sort itself already persisted on selectOption's change event
 
     const fileNameCells = window.locator(".bases-data-row td.bases-cell:first-child");
@@ -131,10 +170,24 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
+    const probe = await window.evaluate(() => {
+      const app = (window as any).app, view = app.workspace.getActiveLeaf()?.view;
+      return { trace: (window as any).__baseSortTrace, definition: view?.def, path: view?.file?.path, cached: view?.file && app.vault.getCachedContent(view.file.path), rows: Array.from(document.querySelectorAll(".bases-data-row td:first-child")).map(el => el.textContent) };
+    }).catch(error => ({ error: String(error) }));
+    const tracePath = info.outputPath("base-sort-trace.json");
+    fs.mkdirSync(path.dirname(tracePath), { recursive: true }); fs.writeFileSync(tracePath, JSON.stringify(probe, null, 2));
+    await info.attach("base-sort-trace", { path: tracePath, contentType: "application/json" });
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
+}
+
+test("create a base, filter/sort a Table view, and edit a cell back to frontmatter", async ({}, info) => {
+  await runSortCase(info);
+});
+test("a delayed earlier own-write read cannot replace a newer actual user sort", async ({}, info) => {
+  await runSortCase(info, true);
 });
 
 test("switch a base view to Cards, render cards, and persist the type to disk", async () => {
