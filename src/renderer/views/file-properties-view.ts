@@ -49,11 +49,13 @@ export class FilePropertiesView implements View {
     if (!file || file.extension !== "md") { this.body.textContent = "No file is open."; return; }
     const name = document.createElement("div"); name.className = "file-properties-name"; name.textContent = file.basename; this.body.append(name);
     if (owner?.file === file) {
+      const generation = this.generation;
+      const owns = () => this.current(file) && this.generation === generation && this.owner === owner && this.app.getActiveMarkdownView() === owner && owner.file === file;
       this.controls = new PropertyEditor({
-        getText: () => owner.getText(),
-        editable: () => this.current(file) && owner.file === file && owner.canApplySourceEdit({ allowReading: true }),
-        commit: operation => this.commit(file, operation),
-        openSource: () => { if (this.current(file)) { if (owner.mode !== "source") void this.app.actions.execute("view.toggle-source", { view: owner }); else owner.editor?.focus(); } },
+        getText: () => owns() ? owner.getText() : "",
+        editable: () => owns() && owner.canApplySourceEdit({ allowReading: true }),
+        commit: operation => owns() ? this.commit(file, owner, operation) : { ok: false, error: "The active note changed. Refresh the field before editing." },
+        openSource: () => { if (owns()) { if (owner.mode !== "source") void this.app.actions.execute("view.toggle-source", { view: owner }); else owner.editor?.focus(); } },
       });
       this.body.append(this.controls.root);
     } else {
@@ -71,9 +73,8 @@ export class FilePropertiesView implements View {
   private current(file: TFile): boolean {
     return !this.closed && this.app.vault.root === this.root && this.subject === file && this.app.workspace.getActiveFile() === file && this.app.vault.getFileByPath(file.path) === file;
   }
-  private commit(file: TFile, operation: PropertyMutation): { ok: true } | { ok: false; error: string } {
-    const owner = this.app.getActiveMarkdownView();
-    if (!this.current(file) || owner?.file !== file || !owner.canApplySourceEdit({ allowReading: true })) return { ok: false, error: "The active note changed or is read-only. Refresh the field before editing." };
+  private commit(file: TFile, owner: MarkdownView, operation: PropertyMutation): { ok: true } | { ok: false; error: string } {
+    if (!this.current(file) || this.app.getActiveMarkdownView() !== owner || owner.file !== file || !owner.canApplySourceEdit({ allowReading: true })) return { ok: false, error: "The active note changed or is read-only. Refresh the field before editing." };
     const snapshot = owner.getText();
     const result = mutateProperty(snapshot, operation);
     if (!result.ok) return result;
