@@ -67,6 +67,14 @@ describe("File properties buffer ownership", () => {
     enter(input("Value: status"), "updated");
     expect(replacement.applySourceEdit).toHaveBeenCalledOnce(); expect(owner.applySourceEdit).not.toHaveBeenCalled(); view.onClose();
   });
+  it("cannot apply a detached split input to another owner with identical properties", () => {
+    const { view, owner, setOwner, workspace, input, enter } = setup();
+    const oldField = input("Value: status");
+    const replacement = { ...owner, applySourceEdit: vi.fn(() => true) };
+    setOwner(replacement); workspace.trigger("active-leaf-change");
+    enter(oldField, "wrong split");
+    expect(replacement.applySourceEdit).not.toHaveBeenCalled(); expect(owner.applySourceEdit).not.toHaveBeenCalled(); view.onClose();
+  });
   it("does no buffer work while hidden and refreshes on reveal", () => {
     const { view, owner, metadataCache, file } = setup();
     (view.containerEl as unknown as Element).hiddenHost = true; owner.getText.mockClear();

@@ -27,6 +27,7 @@ import { commentDecorations, commentInteractions } from "../comments/editor-exte
 import { CommentFormatError, narrowCommentRange, parseCommentThreads, validateCommentRange } from "../comments/model";
 import { geodeCommentMarkerSyntax } from "../comments/marker-syntax";
 import { imageAttachmentHandlers } from "../markdown/attachment-handlers";
+import { inspectProperties } from "../properties/property-source";
 import { SyncConflictBannerSlot, type SyncConflictBannerInfo } from "../sync/conflict-banner";
 
 const mdHighlight = HighlightStyle.define([
@@ -77,6 +78,7 @@ export class MarkdownView implements View {
   private bodyEl: HTMLElement;
   private readingEl: HTMLElement;
   private readingContentEl: HTMLElement | null = null;
+  private readingRenderGeneration = 0;
   private editorHostEl: HTMLElement;
   private saveTimer: number | null = null;
   private lastSavedText = "";
@@ -740,24 +742,33 @@ export class MarkdownView implements View {
   }
 
   private async renderReading() {
+    const generation = ++this.readingRenderGeneration;
+    const file = this.file;
+    const editor = this.editor;
+    const vault = this.app.vault;
+    const vaultRoot = vault.root;
+    const current = () => generation === this.readingRenderGeneration && this.file === file && this.editor === editor && this.app.vault === vault && vault.root === vaultRoot && this.mode === "reading";
     this.pagePreview.hide();
     await this.flush();
+    if (!current()) return;
+    const snapshot = this.getText();
     if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);
     this.readingContentEl = null;
     this.readingEl.innerHTML = "";
     const inner = document.createElement("div");
     inner.className = "markdown-preview-sizer";
     this.readingEl.appendChild(inner);
-    if (this.file) {
-      const props = this.app.metadataCache.getFileCache(this.file)?.frontmatter;
-      if (props && Object.keys(props).length) {
-        inner.appendChild(renderProperties(props));
-      }
-    }
+    const inspection = inspectProperties(snapshot);
+    if (inspection.ok && Object.keys(inspection.values).length) inner.appendChild(renderProperties(inspection.values));
     const contentEl = document.createElement("div");
     this.readingContentEl = contentEl;
     inner.appendChild(contentEl);
-    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf());
+    await this.app.markdownRenderer.render(snapshot, contentEl, file?.path ?? "", () => this.ownLeaf());
+    if (!current() && this.readingContentEl === contentEl) {
+      this.app.markdownRenderer.dispose(contentEl);
+      contentEl.remove();
+      this.readingContentEl = null;
+    }
   }
 
   /** Jump the editor to a given offset (used by outline/search). */
@@ -862,6 +873,7 @@ export class MarkdownView implements View {
   }
 
   async onClose(): Promise<void> {
+    this.readingRenderGeneration++;
     this.pagePreview.destroy();
     this.clearSyncConflict();
     await this.flush();
