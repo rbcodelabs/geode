@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-15
 **Status:** Accepted by coordinator on 2026-10-15 under the user's reversible tested-PR authority. Design decision only; no implementation or parity claim.
-**Related:** [ADR-0037](0037-base-row-resubmission-recovery.md), [ADR-0039](0039-shared-frontmatter-mutation-lanes.md).
+**Historical related designs:** ADR-0037 (Base row resubmission recovery) and ADR-0039 (shared frontmatter mutation lanes) were context for the original review at `3d8a53c956890f556cc8fdc749a23dc343372bc3`. Those native recovery designs and implementations are not included in this standalone delivery branch. This change addresses only external `.base` definition reload ordering; it does not claim to deliver either related design.
 **Delivery:** Parent native ownership Task `93f1491d-7139-4451-885c-fc34c4c30780`; Solution `ac76d20b-1183-4698-af07-21e3d0560dfe`.
 
 ## Context
