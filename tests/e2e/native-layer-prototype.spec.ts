@@ -445,3 +445,93 @@ test("unequal retained native frames preserve spacing, focused exposure and real
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
   }, doc);
 });
+test("actual CM retarget and undo keep the unfinished original writer until its own Cancel", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    const input = await edit(page); await capture(page, input);
+    await page.evaluate(() => (window as any).nativeLayerHarness.retarget(1, "OtherBoard.canvas"));
+    await expect(record(page, 1)).toContainText("Board.canvas");
+    await expect(record(page, 1)).toContainText("source removed");
+    await expect(record(page, 1).getByRole("button", { name: "Return to embed" })).toBeHidden();
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.some((item: any) => item.id !== 1 && item.target === "OtherBoard.canvas" && item.sourceValid && item.mounted))).toBe(true);
+    const firstTargetId = await page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.find((item: any) => item.id !== 1 && item.target === "OtherBoard.canvas" && item.sourceValid).id);
+    await unchanged(page, vault);
+    expect(await page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString())).toBe(source.replace("![[Board.canvas]]", "![[OtherBoard.canvas]]"));
+    expect(await page.evaluate(() => (window as any).nativeLayerHarness.undo())).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString())).toBe(source);
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.some((item: any) => item.id !== 1 && item.target === "Board.canvas" && item.sourceValid && item.mounted))).toBe(true);
+    await unchanged(page, vault);
+    expect(await page.evaluate(() => (window as any).nativeLayerHarness.redo())).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString())).toBe(source.replace("![[Board.canvas]]", "![[OtherBoard.canvas]]"));
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.some((item: any) => item.id !== 1 && item.target === "OtherBoard.canvas" && item.sourceValid && item.mounted))).toBe(true);
+    const redoTargetId = await page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.find((item: any) => item.id !== 1 && item.target === "OtherBoard.canvas" && item.sourceValid)?.id);
+    expect(redoTargetId).toBeDefined(); expect(redoTargetId).not.toBe(firstTargetId);
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.map((item: any) => item.id))).toEqual([1, redoTargetId]);
+    await unchanged(page, vault);
+    const beforeCancel = await page.evaluate(() => {
+      const h = (window as any).nativeLayerHarness;
+      return { oldConnected: (window as any).__layerProbe.root.isConnected, closes: h.snapshot().closes,
+        ids: h.layer.snapshot().records.map((item: any) => item.id) };
+    });
+    expect(beforeCancel.oldConnected).toBe(true); expect(beforeCancel.ids).toContain(1);
+    await input.press("Escape");
+    await expect.poll(() => page.evaluate(() => (window as any).__layerProbe.root.isConnected)).toBe(false);
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.snapshot().closes)).toBe(beforeCancel.closes + 1);
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+  }, source, async page => {
+    await page.evaluate(async () => {
+      const app = (window as any).app;
+      await app.vault.create("OtherBoard.canvas", await app.vault.read(app.vault.getFileByPath("Board.canvas")));
+    });
+  });
+});
+test("an actual returning anchor waits for held retirement and ignores the old widget release", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    await expect(record(page).locator(".bases-table")).toBeVisible();
+    await page.evaluate(() => {
+      const h = (window as any).nativeLayerHarness;
+      (window as any).__heldNativeRoot = document.querySelector('.native-prototype-record[data-occurrence="1"]');
+      (window as any).__heldNativeParent = (window as any).__heldNativeRoot.parentElement;
+      const options = h.native[0].renderOwner.options; const prepare = options.prepareClose;
+      if (typeof prepare !== "function") throw new Error("Actual Canvas prepareClose hook is required");
+      options.prepareClose = async () => {
+        (window as any).__heldNativeEntered = true;
+        await new Promise<void>(resolve => { (window as any).__releaseNativePreparation = resolve; });
+        return prepare.call(options);
+      };
+      const release = h.layer.releaseAnchor.bind(h.layer);
+      h.layer.releaseAnchor = (id: number, lease: object, element: HTMLElement) => {
+        if (!(window as any).__releaseOldWidget) {
+          (window as any).__releaseOldWidget = () => release(id, lease, element); return;
+        }
+        return release(id, lease, element);
+      };
+    });
+    try {
+      await scrollAway(page);
+      await expect.poll(() => page.evaluate(() => (window as any).__heldNativeEntered)).toBe(true);
+      await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]")).top; });
+      await expect(page.locator('.native-layer-placeholder[data-occurrence="1"]')).toBeVisible();
+      expect(await page.evaluate(() => {
+        const h = (window as any).nativeLayerHarness;
+        (window as any).__releaseOldWidget();
+        const anchor = document.querySelector('.native-layer-placeholder[data-occurrence="1"]');
+        return { allocations: h.layer.allocations, closes: h.snapshot().closes, oldConnected: (window as any).__heldNativeRoot.isConnected,
+          oldParentStable: (window as any).__heldNativeRoot.parentElement === (window as any).__heldNativeParent,
+          currentAnchor: h.layer.anchors.get(1) === anchor, anchorConnected: anchor?.isConnected };
+      })).toEqual({ allocations: 1, closes: 0, oldConnected: true, oldParentStable: true, currentAnchor: true, anchorConnected: true });
+      await page.evaluate(() => (window as any).__releaseNativePreparation());
+      await expect.poll(() => page.evaluate(() => {
+        const h = (window as any).nativeLayerHarness;
+        return { allocations: h.layer.allocations, closes: h.snapshot().closes,
+          oldConnected: (window as any).__heldNativeRoot.isConnected, freshMounted: h.layer.snapshot().records[0]?.mounted,
+          freshConnected: document.querySelector('.native-prototype-record[data-occurrence="1"]')?.isConnected,
+          freshDistinct: document.querySelector('.native-prototype-record[data-occurrence="1"]') !== (window as any).__heldNativeRoot,
+          freshParentStable: document.querySelector('.native-prototype-record[data-occurrence="1"]')?.parentElement === (window as any).__heldNativeParent };
+      })).toEqual({ allocations: 2, closes: 1, oldConnected: false, freshMounted: true, freshConnected: true, freshDistinct: true, freshParentStable: true });
+      expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+      expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+      expect(await page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString())).toBe(source);
+    } finally { await page.evaluate(() => (window as any).__releaseNativePreparation?.()); }
+  });
+});
