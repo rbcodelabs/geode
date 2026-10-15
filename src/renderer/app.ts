@@ -1,3 +1,4 @@
+import type { BaseSyncFocusReceipt } from "./views/bases/paused-edit";
 import { ScopeCancelled } from "./workspaces/render-ownership";
 import { Vault } from "./vault";
 import { PostApplyRefresh } from "./sync/post-apply-refresh";
@@ -3495,10 +3496,55 @@ export class App {
     const syncWorkspace = this.workspace;
     const syncGuards = new Set<string>(); let previousInert = false; let syncDisposed = false;
     const staleViews = new Map<HTMLElement, { original: boolean; count: number }>();
-    const finishGuard = (token: string) => { syncGuards.delete(token); this.comments.releaseMutationHold(token); syncWorkspace.releaseAutosaveHold(token); if (!syncGuards.size && this.workspace === syncWorkspace) document.body.inert = previousInert; };
+    // Focus-only eligibility expires independently of host waiter/guard timing.
+    const focusLifetimeMs = 4000;
+    let focusEpoch: { receipt: BaseSyncFocusReceipt; leaf: WorkspaceLeaf; view: BaseView; expires: number; cleanup(): void } | undefined;
+    const discardFocus = () => { const epoch = focusEpoch; focusEpoch = undefined; epoch?.receipt.discard(); epoch?.cleanup(); };
+    const captureFocus = () => {
+      discardFocus();
+      const leaf = syncWorkspace.activeLeaf, view = leaf?.view;
+      if (!leaf || !(view instanceof BaseView)) return;
+      const receipt: BaseSyncFocusReceipt | null = view.captureSyncGuardFocus(() => focusEpoch?.receipt === receipt && syncGuards.size > 0 && document.body.inert && view.containerEl.inert && !syncDisposed);
+      if (!receipt) return;
+      const superseded = () => discardFocus();
+      const focus = (event: FocusEvent) => { if (event.target !== receipt.input && event.target !== document.body) discardFocus(); };
+      const intent = (event: Event) => { if (event.target !== receipt.input || (event as KeyboardEvent).key === "Tab") discardFocus(); };
+      const hidden = () => { if (document.hidden) discardFocus(); };
+      const changed = () => { if (this.workspace !== syncWorkspace || syncWorkspace.activeLeaf !== leaf || leaf.view !== view) discardFocus(); };
+      const leafRef = syncWorkspace.on("active-leaf-change", changed);
+      const layoutRef = syncWorkspace.on("layout-change", changed);
+      document.addEventListener("focusin", focus, true);
+      document.addEventListener("pointerdown", intent, true);
+      document.addEventListener("keydown", intent, true);
+      document.addEventListener("visibilitychange", hidden, true);
+      window.addEventListener("blur", superseded);
+      const timer = setTimeout(discardFocus, focusLifetimeMs);
+      focusEpoch = { receipt, leaf, view, expires: performance.now() + focusLifetimeMs, cleanup: () => {
+        clearTimeout(timer);
+        document.removeEventListener("focusin", focus, true);
+        document.removeEventListener("pointerdown", intent, true);
+        document.removeEventListener("keydown", intent, true);
+        document.removeEventListener("visibilitychange", hidden, true);
+        window.removeEventListener("blur", superseded);
+        if (leafRef) syncWorkspace.offref(leafRef);
+        if (layoutRef) syncWorkspace.offref(layoutRef);
+      } };
+    };
+    const finishGuard = (token: string) => {
+      if (!syncGuards.delete(token)) return;
+      this.comments.releaseMutationHold(token); syncWorkspace.releaseAutosaveHold(token);
+      if (syncGuards.size) return;
+      if (this.workspace !== syncWorkspace) { discardFocus(); return; }
+      document.body.inert = previousInert;
+      const epoch = focusEpoch;
+      if (!epoch) return;
+      const eligible = () => focusEpoch === epoch && !syncDisposed && !syncGuards.size && !staleViews.size && this.workspace === syncWorkspace && syncWorkspace.activeLeaf === epoch.leaf && epoch.leaf.view === epoch.view && performance.now() < epoch.expires;
+      if (!eligible()) { discardFocus(); return; }
+      void epoch.receipt.restore(eligible).finally(() => { if (focusEpoch === epoch) discardFocus(); }).catch(() => {});
+    };
     const stopPrepare = this.host.syncSafety?.onPrepare(async (token, relative) => {
       if (syncDisposed || this.workspace !== syncWorkspace) return "Vault window changed";
-      if (!syncGuards.size) previousInert = document.body.inert;
+      if (!syncGuards.size) { previousInert = document.body.inert; captureFocus(); }
       syncGuards.add(token); document.body.inert = true;
       await this.comments.holdMutations(token);
       if (!syncGuards.has(token) || syncDisposed || this.workspace !== syncWorkspace) return "Editor guard was released";
@@ -3519,6 +3565,7 @@ export class App {
     // lifted by `recover`, which performReconcile runs after a successful refresh (or the user's Retry). Both a failed and a
     // merely slow refresh take this path; only a failed one fails the sync.
     const holdStale = (token: string) => {
+      discardFocus();
       const elements: HTMLElement[] = [];
       syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
         const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
@@ -3543,7 +3590,7 @@ export class App {
       assertLive: () => { if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed"); },
     });
     const stopRelease = this.host.syncSafety?.onRelease(async (token, outcome) => { if (syncGuards.has(token)) await postApply.release(token, outcome); });
-    this.hostDisposers.add(() => { syncDisposed = true; stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
+    this.hostDisposers.add(() => { syncDisposed = true; discardFocus(); stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
     this.statusBar = new StatusBar(this, shell);
     const mobileNavigation = this.createMobileNavigation();
     mobileNavigation.inert = true;

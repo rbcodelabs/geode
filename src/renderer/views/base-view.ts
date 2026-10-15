@@ -1,3 +1,4 @@
+import { rejectPausedBaseEdit, type BaseSyncFocusReceipt } from "./bases/paused-edit";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { parseBaseFile, runQuery, type BaseDefinition, type BaseViewDefinition, type QueryResult } from "../bases";
@@ -141,6 +142,7 @@ export class BaseView implements View {
   // file/inline/open/close lifecycle changes (see ADR0041).
   private definitionRevision = 0;
   private reloadOwnerGeneration = 0;
+  private nativeLifecycleGeneration = 0;
   private reloadRequestGeneration = 0;
   private reloadHandledGeneration = 0;
   private reloadInFlight: Promise<void> | null = null;
@@ -249,7 +251,7 @@ export class BaseView implements View {
 
   readonly renderOwner: RenderScope;
   constructor(private app: App, parentOwner?: RenderScope) {
-    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), close: () => this.closeNative(), resume: () => { if (this.file && this.def) this.runAndRender(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
+    const options = this.nativeRenderOptions();
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "base-view";
@@ -773,6 +775,26 @@ export class BaseView implements View {
     }
   }
 
+  private nativeRenderOptions() {
+    return { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), close: () => this.closeNative(), resume: () => { this.nativeLifecycleGeneration++; if (this.file && this.def) this.runAndRender(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
+  }
+
+  /** Built-in App sync guards only; no public View/SDK focus contract. */
+  captureSyncGuardFocus(active: () => boolean): BaseSyncFocusReceipt | null {
+    const file = this.file, path = file?.path, vault = this.app.vault, root = vault.root;
+    const table = this.tableView, container = this.containerEl, body = this.bodyEl;
+    const edit = this.sourceEdit, owner = this.renderOwner, generation = this.reloadOwnerGeneration, lifecycle = this.nativeLifecycleGeneration, revision = this.definitionRevision;
+    if (!file || !edit || this.vaultSwitching || document.body.inert || this.containerEl.closest("[inert]")) return null;
+    const source = edit.file, sourcePath = source.path, column = edit.columnPath, raw = edit.rawText;
+    const eligible = () => this.tableView === table && this.containerEl === container && this.bodyEl === body && this.file === file && file.path === path && this.app.vault === vault && vault.root === root && this.sourceEdit === edit && edit.file === source && source.path === sourcePath && edit.columnPath === column && edit.rawText === raw &&
+      this.reloadOwnerGeneration === generation && this.nativeLifecycleGeneration === lifecycle && this.definitionRevision === revision && !this.reloadClosed && this.renderOwner === owner && owner.admissionAllowed && !owner.hasUnacknowledgedWrites &&
+      !this.sourceConflictReadOnly && !this.retainedNativeFailures.length && !this.rowFailures.size && !this.sourcePersistsInFlight.size && !this.definitionWritesPending && !this.rowRefreshFailed;
+    if (!eligible()) return null;
+    const receipt = table.captureSyncGuardFocus(active, eligible);
+    if (!receipt) return null;
+    return { input: receipt.input, discard: () => receipt.discard(), restore: allow => receipt.restore(() => eligible() && !this.vaultSwitching && !document.body.inert && !receipt.input.closest("[inert]") && allow()) };
+  }
+
   async pauseAutosave(): Promise<void> {
     this.vaultSwitching = true;
     this.containerEl.inert = true;
@@ -973,7 +995,7 @@ export class BaseView implements View {
   // --- Cell editing ---------------------------------------------------------
 
   private editCell(file: TFile, columnPath: string, rawText: string, _retry = false): Promise<void> {
-    if (this.vaultSwitching) return Promise.reject(new Error("Base edits are paused during a workspace operation."));
+    if (this.vaultSwitching) return rejectPausedBaseEdit();
     if (this.sourceConflictReadOnly) return Promise.reject(new Error("Resolve Base source conflict before editing its rows."));
     const edit = this.sourceEdit;
     const key = JSON.stringify(["row", file.path, columnPath]);

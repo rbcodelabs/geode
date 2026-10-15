@@ -1,3 +1,4 @@
+import { isPausedBaseEditAttempt, isPausedBaseEditError, type BaseSyncFocusReceipt } from "./paused-edit";
 import type { App } from "../../app";
 import { valueToDisplayString } from "../../bases/coerce";
 import type { BaseDefinition } from "../../bases/base-file";
@@ -59,7 +60,8 @@ export class BasesTableView {
   private activeCell: GridPos | null = null;
   private selection: Selection = { type: "none" };
   private editing: GridPos | null = null;
-  private editSession: { pos: GridPos; token: object | void } | null = null;
+  private editSession: { pos: GridPos; token: object | void; input: HTMLInputElement; cell: HTMLTableCellElement } | null = null;
+  private guardFocus: { mark(event: FocusEvent): void; attempt(promise: Promise<void>): ((error: unknown) => void) | undefined } | null = null;
   private mobileActionsEl: HTMLElement | null = null;
   private mobileEditorActionsEl: HTMLElement | null = null;
   private readonly resultLimitEl: HTMLElement | null;
@@ -234,6 +236,34 @@ export class BasesTableView {
     return this.dataRows[pos.row].file;
   }
 
+  /** Internal sync guard receipt; it never submits, retries or replaces an edit. */
+  captureSyncGuardFocus(active: () => boolean, eligible: () => boolean): BaseSyncFocusReceipt | null {
+    const session = this.editSession;
+    if (!session || document.activeElement !== session.input || this.readOnly || session.input.disabled) return null;
+    const { input, cell, token, pos } = session, value = input.value, container = this.containerEl, row = pos.row, col = pos.col;
+    let live = true, displaced = false, knownPaused = false, settled = false, pausedResult = false;
+    let complete!: () => void;
+    const completion = new Promise<void>(resolve => { complete = resolve; });
+    const current = () => live && this.editSession === session && session.token === token && session.pos === pos && pos.row === row && pos.col === col && this.cellEls[row]?.[col] === cell && this.containerEl === container && session.input === input && session.cell === cell && input.parentElement === cell && input.isConnected && input.value === value && !this.readOnly && eligible();
+    const capture = {
+      mark: (event: FocusEvent) => { if (current() && active() && (event.relatedTarget === null || event.relatedTarget === document.body)) displaced = true; },
+      attempt: (promise: Promise<void>) => {
+        if (!current() || !displaced || !active() || !isPausedBaseEditAttempt(promise)) return undefined;
+        knownPaused = true;
+        return (error: unknown) => { pausedResult = isPausedBaseEditError(error); settled = true; complete(); };
+      },
+    };
+    this.guardFocus = capture;
+    const discard = () => { live = false; if (this.guardFocus === capture) this.guardFocus = null; };
+    return { input, discard, restore: async allow => {
+      try {
+        if (!current() || document.activeElement === input || !displaced || !knownPaused) return;
+        if (!settled) await completion;
+        if (pausedResult && current() && this.guardFocus === capture && !input.disabled && document.activeElement === document.body && allow()) input.focus({ preventScroll: true });
+      } finally { discard(); }
+    } };
+  }
+
   private startEdit(pos: GridPos): void {
     if (this.readOnly) return;
     const path = this.columns[pos.col];
@@ -251,7 +281,7 @@ export class BasesTableView {
     input.value = currentText;
     td.appendChild(input);
     const file = this.currentFile(pos);
-    const session = { pos, token: this.callbacks.onEditStart(file, path, currentText) };
+    const session = { pos, token: this.callbacks.onEditStart(file, path, currentText), input, cell: td };
     this.editSession = session;
     input.addEventListener("input", () => { if (this.editSession === session) this.callbacks.onEditDraft(input.value); });
     input.focus();
@@ -264,15 +294,20 @@ export class BasesTableView {
       committing = true;
       const focusAtStart = document.activeElement;
       input.disabled = true;
+      let settleGuard: ((error: unknown) => void) | undefined;
+      let guardError: unknown;
       try {
-        await this.callbacks.onEditCell(file, path, input.value);
+        const attempt = this.callbacks.onEditCell(file, path, input.value);
+        if (trigger === "blur") settleGuard = this.guardFocus?.attempt(attempt);
+        await attempt;
         if (this.editSession !== session) return;
         this.editing = null;
         this.editSession = null;
         this.mobileEditorActionsEl?.remove();
         this.mobileEditorActionsEl = null;
         this.callbacks.onEditEnd(session.token);
-      } catch {
+      } catch (error) {
+        guardError = error;
         if (this.editSession !== session) return;
         committing = false;
         input.disabled = this.readOnly;
@@ -281,6 +316,8 @@ export class BasesTableView {
         // remains current; a delayed failure must not steal another pane's focus.
         if (!this.readOnly && trigger === "explicit" &&
           (document.activeElement === input || document.activeElement === this.containerEl || document.activeElement === focusAtStart)) input.focus();
+      } finally {
+        settleGuard?.(guardError);
       }
     };
     const cancel = () => {
@@ -297,6 +334,7 @@ export class BasesTableView {
       const retry = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>("button[data-base-row-retry]");
       const owner = this.containerEl.closest(".base-view");
       if (owner && retry?.closest(".base-view") === owner && retry.dataset.baseRowRetry === JSON.stringify([file.path, path])) return;
+      this.guardFocus?.mark(event);
       void commit("blur");
     });
     input.addEventListener("keydown", (e) => {
