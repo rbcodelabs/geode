@@ -546,6 +546,7 @@ export class CanvasView implements View {
       const text = document.createElement("div");
       text.className = "canvas-node-text";
       el.appendChild(text);
+      this.markdownContentEls.add(text);
       void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
       el.addEventListener("dblclick", (event) => { event.stopPropagation(); this.editTextNode(el, node); });
     } else if (node.type === "file") {
