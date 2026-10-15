@@ -1,5 +1,7 @@
 # Safe file properties P1 implementation
 
+Historical implementation checkpoint: dates, source branches, local checks and P2 deferrals below describe original P1 work. Current delivery combines P1 and P2a; see [the delivery record](properties-delivery.md). P3 remains deferred. The original local execution checked only the repo manifest; the shared default compute policy was missed. Current full gates use the testq pool.
+
 Date: 2026-10-14. Task `e7954a61-948a-4c00-b74d-227692c1c0fc` → Solution `523dc576-9b4d-4028-a8d3-e2e5f765d45a` → KR `c3b390f0-92a8-479c-b629-2b6745d577d5`.
 
 Scope follows the accepted P1 in architect commit `b0b44d2:docs/design/properties-parity.md` and [ADR-0031](../adr/0031-sidebar-properties-parity.md). The overnight user instruction authorizes reversible implementation and tested PRs; merging and release remain excluded. This branch stacks on outgoing-links commit `96dbb21`, reusing its guarded buffer mutation seam.

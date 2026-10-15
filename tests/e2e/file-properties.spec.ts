@@ -92,3 +92,49 @@ test("file properties opens safely for the checked-in demo vault", async () => {
     expect(fs.readFileSync(path.join(vault, "Welcome.md"), "utf8")).toBe(before);
   } finally { await app.close(); fs.rmSync(vault, { recursive: true, force: true }); fs.rmSync(userData, { recursive: true, force: true }); }
 });
+
+test("controlled read-only guard retains the exact refused property draft until its own retry or discard", async ({}, testInfo) => {
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), "geode-properties-refusal-vault-"));
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "geode-properties-refusal-ud-"));
+  const source = "---\nstatus: old\ncount: 4\n---\nUnchanged body\n";
+  fs.writeFileSync(path.join(vault, "Note.md"), source);
+  fs.writeFileSync(path.join(userData, "geode.json"), JSON.stringify({ recentVaults: [vault], lastVault: vault }));
+  const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`], cwd: root });
+  try {
+    const page = await app.firstWindow();
+    await page.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
+    await page.locator('.nav-file-title[data-path="Note.md"]').click();
+    await page.evaluate(() => (window as any).app.commands.execute("file-properties:open"));
+    const pane = page.locator(".file-properties-view");
+    const status = pane.getByLabel("Value: status", { exact: true });
+    await expect(status).toHaveValue("old");
+    const original = await status.elementHandle();
+    await status.fill("refused draft");
+    // Exercise the actual adapter guard without pretending to run full sync conflict recovery.
+    await page.evaluate(() => { (window as any).app.getActiveMarkdownView().conflictReadOnly = true; });
+    await status.press("Enter");
+    await expect(pane.getByRole("alert")).toContainText("read-only");
+    await page.evaluate(() => { (window as any).app.getActiveMarkdownView().conflictReadOnly = false; });
+    await page.locator(".cm-line").filter({ hasText: /^Unchanged body$/ }).click();
+    await page.evaluate(() => { const app = (window as any).app; app.metadataCache.trigger("changed", app.workspace.getActiveFile()); });
+    await pane.getByLabel("Value: count", { exact: true }).press("Enter");
+    await expect(status).toHaveValue("refused draft");
+    expect(await status.evaluate((element, saved) => element === saved && element.isConnected, original)).toBe(true);
+    expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toBe(source);
+    expect(fs.readFileSync(path.join(vault, "Note.md"), "utf8")).toBe(source);
+    await expect(pane.getByRole("alert")).toContainText("Return to the rejected field");
+    await page.screenshot({ path: testInfo.outputPath("properties-refused-draft.png") });
+    await status.press("Enter");
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Note.md"), "utf8")).toContain("status: refused draft");
+    const accepted = await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText() as string);
+    expect(accepted).toContain("Unchanged body\n");
+    await status.fill("discard this draft");
+    await page.evaluate(() => { (window as any).app.getActiveMarkdownView().conflictReadOnly = true; });
+    await status.press("Enter");
+    await page.evaluate(() => { (window as any).app.getActiveMarkdownView().conflictReadOnly = false; });
+    await status.press("Escape");
+    await expect(status).toHaveValue("refused draft");
+    expect(await page.evaluate(() => (window as any).app.getActiveMarkdownView().getText())).toBe(accepted);
+    expect(fs.readFileSync(path.join(vault, "Note.md"), "utf8")).toBe(accepted);
+  } finally { await app.close(); fs.rmSync(vault, { recursive: true, force: true }); fs.rmSync(userData, { recursive: true, force: true }); }
+});

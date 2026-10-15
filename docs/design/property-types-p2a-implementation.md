@@ -1,5 +1,7 @@
 # Property types P2a implementation
 
+Historical implementation checkpoint: original source references and verification status below are retained as provenance. Current P1/P2a package, regression fixes and remote gates are recorded in [the delivery record](properties-delivery.md); accepted scope is accessible in [the Properties design](properties-parity.md).
+
 Accepted scope: Task c8d407d1-9e59-40ae-bb64-6b7862649752 → Solution
 523dc576-9b4d-4028-a8d3-e2e5f765d45a → KR c3b390f0-92a8-479c-b629-2b6745d577d5.
 This implements the registry/type-control portion of the accepted Properties P2
