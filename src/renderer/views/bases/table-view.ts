@@ -258,10 +258,11 @@ export class BasesTableView {
     input.select();
 
     let committing = false;
-    const commit = async () => {
+    const commit = async (trigger: "explicit" | "blur" = "explicit") => {
       if (this.editSession !== session) return;
       if (committing) return;
       committing = true;
+      const focusAtStart = document.activeElement;
       input.disabled = true;
       try {
         await this.callbacks.onEditCell(file, path, input.value);
@@ -275,7 +276,11 @@ export class BasesTableView {
         if (this.editSession !== session) return;
         committing = false;
         input.disabled = this.readOnly;
-        if (!this.readOnly) input.focus();
+        // A blur save must not reclaim the control the user deliberately left.
+        // Explicit saves may recover focus only while the same focus context
+        // remains current; a delayed failure must not steal another pane's focus.
+        if (!this.readOnly && trigger === "explicit" &&
+          (document.activeElement === input || document.activeElement === this.containerEl || document.activeElement === focusAtStart)) input.focus();
       }
     };
     const cancel = () => {
@@ -292,7 +297,7 @@ export class BasesTableView {
       const retry = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>("button[data-base-row-retry]");
       const owner = this.containerEl.closest(".base-view");
       if (owner && retry?.closest(".base-view") === owner && retry.dataset.baseRowRetry === JSON.stringify([file.path, path])) return;
-      void commit();
+      void commit("blur");
     });
     input.addEventListener("keydown", (e) => {
       if (this.editSession !== session) { e.stopPropagation(); return; }

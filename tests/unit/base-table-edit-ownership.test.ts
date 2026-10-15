@@ -1,13 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { BasesTableView } from "../../src/renderer/views/bases/table-view";
 afterEach(() => vi.unstubAllGlobals());
-function element(): any { return { children: [] as any[], handlers: {} as Record<string, (event?: any) => void>, dataset: {}, textContent: "2", classList: { contains: () => false }, focus: vi.fn(), select() {}, addEventListener(name: string, callback: (event?: any) => void) { this.handlers[name] = callback; }, appendChild(child: any) { this.children.push(child); } }; }
+function element(): any { return { children: [] as any[], handlers: {} as Record<string, (event?: any) => void>, dataset: {}, textContent: "2", setAttribute() {}, scrollIntoView() {}, remove() {}, append(...children: any[]) { this.children.push(...children); }, classList: { contains: () => false }, focus: vi.fn(), select() {}, addEventListener(name: string, callback: (event?: any) => void) { this.handlers[name] = callback; }, appendChild(child: any) { this.children.push(child); } }; }
 function fixture() {
   vi.stubGlobal("document", { createElement: element, body: element() });
   const table = Object.create(BasesTableView.prototype) as any;
   const a = element(); const b = element(); const onEditEnd = vi.fn();
   const callbacks = { onEditStart: vi.fn(() => ({})), onEditDraft: vi.fn(), onEditEnd, onEditCell: vi.fn(async () => {}) };
-  Object.assign(table, { containerEl: element(), columns: ["note.priority"], dataRows: [{ file: { path: "A.md" } }, { file: { path: "B.md" } }], cellEls: [[a], [b]], callbacks });
+  Object.assign(table, { readOnly: false, containerEl: element(), columns: ["note.priority"], dataRows: [{ file: { path: "A.md" } }, { file: { path: "B.md" } }], cellEls: [[a], [b]], callbacks });
   return { table, a, b, callbacks, onEditEnd };
 }
 const event = (key: string) => ({ key, preventDefault() {}, stopPropagation() {} });
@@ -59,4 +59,48 @@ it("does not reenable or refocus a failed input after the table becomes read-onl
   table.startEdit({ row: 0, col: 0 }); const input = a.children[0]; input.handlers.keydown(event("Enter"));
   table.readOnly = true; reject(new Error("rejected after conflict")); await new Promise(resolve => setImmediate(resolve));
   expect(input.disabled).toBe(true); expect(input.focus).toHaveBeenCalledOnce();
+});
+
+it("keeps the user's chosen control focused after a failed blur save", async () => {
+  const { table, a, callbacks, onEditEnd } = fixture(); table.containerEl.closest = () => null;
+  callbacks.onEditCell.mockRejectedValue(new Error("blur write failed"));
+  table.startEdit({ row: 0, col: 0 }); const input = a.children[0]; input.value = "9";
+  const destination = element(); destination.closest = () => null; (document as any).activeElement = destination;
+  input.handlers.blur({ relatedTarget: destination }); await new Promise(resolve => setImmediate(resolve));
+  expect(callbacks.onEditCell).toHaveBeenCalledWith({ path: "A.md" }, "note.priority", "9");
+  expect(input.focus).toHaveBeenCalledOnce(); expect(document.activeElement).toBe(destination);
+  expect(input.value).toBe("9"); expect(input.disabled).toBe(false); expect(table.editIdentity).not.toBeNull(); expect(onEditEnd).not.toHaveBeenCalled();
+});
+it("still refocuses the exact failed Enter draft while its table retains focus", async () => {
+  const { table, a, callbacks } = fixture(); callbacks.onEditCell.mockRejectedValue(new Error("Enter write failed"));
+  table.startEdit({ row: 0, col: 0 }); const input = a.children[0]; (document as any).activeElement = input;
+  input.handlers.keydown(event("Enter")); (document as any).activeElement = table.containerEl;
+  await new Promise(resolve => setImmediate(resolve)); expect(input.focus).toHaveBeenCalledTimes(2); expect(table.editIdentity).not.toBeNull();
+});
+it("does not reclaim focus when the user leaves during an explicit pending save", async () => {
+  const { table, a, callbacks } = fixture(); let reject!: (error: Error) => void;
+  callbacks.onEditCell.mockImplementation(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  table.startEdit({ row: 0, col: 0 }); const input = a.children[0]; (document as any).activeElement = input;
+  input.handlers.keydown(event("Enter")); const destination = element(); (document as any).activeElement = destination;
+  reject(new Error("late explicit failure")); await new Promise(resolve => setImmediate(resolve));
+  expect(input.focus).toHaveBeenCalledOnce(); expect(document.activeElement).toBe(destination); expect(table.editIdentity).not.toBeNull();
+});
+it("keeps explicit mobile Save focus recovery for the exact failed draft", async () => {
+  const { table, a, callbacks, onEditEnd } = fixture(); (document.body as any).classList.contains = (name: string) => name === "is-mobile";
+  callbacks.onEditCell.mockRejectedValue(new Error("mobile write failed")); table.startEdit({ row: 0, col: 0 });
+  const input = a.children[0]; input.value = "9"; const save = table.containerEl.children[0].children[0];
+  (document as any).activeElement = save; save.handlers.click(); await new Promise(resolve => setImmediate(resolve));
+  expect(input.focus).toHaveBeenCalledTimes(2); expect(input.value).toBe("9"); expect(input.disabled).toBe(false); expect(onEditEnd).not.toHaveBeenCalled();
+});
+it("finishes a successful blur save without reclaiming focus or changing its captured value", async () => {
+  const { table, a, callbacks, onEditEnd } = fixture(); table.containerEl.closest = () => null;
+  table.startEdit({ row: 0, col: 0 }); const input = a.children[0]; input.value = "9";
+  const destination = element(); destination.closest = () => null; (document as any).activeElement = destination;
+  input.handlers.blur({ relatedTarget: destination }); await new Promise(resolve => setImmediate(resolve));
+  expect(callbacks.onEditCell).toHaveBeenCalledWith({ path: "A.md" }, "note.priority", "9"); expect(onEditEnd).toHaveBeenCalledOnce();
+  expect(input.focus).toHaveBeenCalledOnce(); expect(document.activeElement).toBe(destination); expect(table.editIdentity).toBeNull();
+});
+it("does not create an editor or write from a read-only table", () => {
+  const { table, a, callbacks } = fixture(); table.readOnly = true; table.startEdit({ row: 0, col: 0 });
+  expect(a.children).toEqual([]); expect(callbacks.onEditStart).not.toHaveBeenCalled(); expect(callbacks.onEditCell).not.toHaveBeenCalled();
 });
