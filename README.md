@@ -106,8 +106,9 @@ for the latest published notes.
 - **Unfinished Base drafts in desktop tabs** — programmatic activation without
   focus preserves a nested Base cell's input and draft through hide/reveal.
   Click the preserved input to continue, press Enter to save or Escape to cancel;
-  reveal does not automatically focus it. Dirty native panes refuse moves to
-  another container until their edits are finished or canceled. See the
+  reveal does not automatically focus it. Panes with unfinished Base edits
+  refuse cross-container moves before extraction until those edits are finished
+  or canceled. See the
   [bounded behavior and captures](docs/screenshots/native-background-visibility/README.md).
 - **Command palette** (Cmd+P), **quick switcher** (Cmd+O), and Daily Notes (Cmd+D) with per-vault enable, folder, date-format, and template-path settings,
   dark/light themes via CSS variables
