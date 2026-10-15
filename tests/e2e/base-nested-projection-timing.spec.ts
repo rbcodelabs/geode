@@ -15,7 +15,7 @@ for (const schedule of ["metadata-after-save", "metadata-before-save-return"] as
     fs.writeFileSync(path.join(vault, "Tasks.base"), "views:\n  - type: table\n    name: Table\n    order:\n      - file.name\n      - note.priority\n");
     fs.writeFileSync(path.join(vault, "Host.md"), "![[Tasks.base]]\n");
     fs.writeFileSync(path.join(vault, "Outer.md"), "# Outer\n\n![[Board.canvas]]\n");
-    fs.writeFileSync(path.join(vault, "Board.canvas"), JSON.stringify({ nodes: [{ id: "nested", type: "file", file: "Host.md", x: 0, y: 0, width: 400, height: 600 }], edges: [] }));
+    fs.writeFileSync(path.join(vault, "Board.canvas"), JSON.stringify({ nodes: [{ id: "nested", type: "file", file: "Host.md", x: 0, y: 0, width: 640, height: 600 }], edges: [] }));
     fs.writeFileSync(path.join(profile, "geode.json"), JSON.stringify({ recentVaults: [vault], lastVault: vault }));
     const app = await electron.launch({ args: [path.resolve(__dirname, "../.."), `--user-data-dir=${profile}`] });
     const page = await app.firstWindow();
