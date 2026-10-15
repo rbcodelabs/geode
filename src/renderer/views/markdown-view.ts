@@ -93,6 +93,7 @@ export class MarkdownView implements View {
   private pendingSaveText: string | null = null;
   private flushInFlight: Promise<void> | null = null;
   private vaultSwitching = false;
+  private autosavePaused = false;
   private conflictReadOnly = false;
   private recoveryReceipt: RecoveryReceipt | null = null;
   private conflictBanner: HTMLElement | null = null;
@@ -389,7 +390,7 @@ export class MarkdownView implements View {
           vault: this.app.vault,
           linktext: (file, sourcePath) => this.app.metadataCache.fileToLinktext(file, sourcePath),
           sourcePath: () => this.file?.path ?? "",
-          canEdit: () => !this.vaultSwitching && !this.conflictReadOnly,
+          canEdit: () => !this.vaultSwitching && !this.autosavePaused && !this.conflictReadOnly,
           notify: (message) => this.app.notify(message),
         }),
         EditorView.domEventHandlers({
@@ -475,7 +476,7 @@ export class MarkdownView implements View {
 
   async applyCommentMutation(mutator: (source: string) => string): Promise<void> {
     this.renderOwner?.assertAdmission();
-    if (this.vaultSwitching || this.conflictReadOnly) throw new Error("Comment editing is paused while the note is read-only");
+    if (this.vaultSwitching || this.autosavePaused || this.conflictReadOnly) throw new Error("Comment editing is paused while the note is read-only");
     if (!this.editor) throw new Error("The note editor is not available");
     const source = this.editor.state.doc.toString();
     const next = mutator(source);
@@ -544,7 +545,7 @@ export class MarkdownView implements View {
 
   private scheduleSave() {
     if (this.saveTimer) window.clearTimeout(this.saveTimer);
-    if (this.vaultSwitching || this.conflictReadOnly || (this.renderOwner && !this.renderOwner.admissionAllowed)) return;
+    if (this.vaultSwitching || this.autosavePaused || this.conflictReadOnly || (this.renderOwner && !this.renderOwner.admissionAllowed)) return;
     this.saveTimer = window.setTimeout(() => this.flush(), 1000);
     this.app.statusBar.update();
   }
@@ -615,7 +616,7 @@ export class MarkdownView implements View {
   }
 
   async pauseAutosave(): Promise<void> {
-    this.vaultSwitching = true;
+    this.autosavePaused = true;
     if (this.saveTimer) {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -624,7 +625,7 @@ export class MarkdownView implements View {
   }
 
   resumeAutosave(): void {
-    this.vaultSwitching = false;
+    this.autosavePaused = false;
     if (!this.conflictReadOnly && this.hasUnacknowledgedChanges()) this.scheduleSave();
   }
 
