@@ -71,6 +71,7 @@ interface PresentationRecord {
   returnButton: HTMLButtonElement;
   lifetime: OwnedOccurrence;
   observer: MutationObserver;
+  restoreResume?(): void;
   mountError: string | null;
   mounted: boolean;
   seenAnchor: boolean;
@@ -167,6 +168,25 @@ export class NativePresentationPrototype {
     root.append(header, content); this.layer.appendChild(root);
     const record: PresentationRecord = { occurrence, root, content, label, returnButton, lifetime: new OwnedOccurrence(scope), observer: new MutationObserver(() => { record.retryRetirement = true; this.requestGeometry(); }), mountError: null, mounted: false, seenAnchor: false, retryRetirement: true, state: "inline" };
     this.records.set(occurrence.id, record); this.allocations++;
+    const resume = scope.resume;
+    const ownsObservation = () => !this.disposed && this.records.get(occurrence.id) === record && !record.lifetime.retired && !scope.closed;
+    const observedResume = () => {
+      if (!ownsObservation()) return resume.call(scope);
+      // Preserve already queued external work, but exclude only the synchronous
+      // recursive redraw performed by this scope's own resume. Async completion
+      // and explicit recovery events remain observed throughout preparation.
+      if (record.observer.takeRecords().length) record.retryRetirement = true;
+      record.observer.disconnect();
+      try { return resume.call(scope); }
+      finally {
+        if (ownsObservation()) {
+          record.observer.observe(content, { childList: true, subtree: true, characterData: true });
+          this.requestGeometry();
+        }
+      }
+    };
+    scope.resume = observedResume;
+    record.restoreResume = () => { if (scope.resume === observedResume) scope.resume = resume; };
     record.observer.observe(content, { childList: true, subtree: true, characterData: true });
     for (const event of ["input", "keydown", "focusout", "click"]) content.addEventListener(event, () => { record.retryRetirement = true; this.requestGeometry(); });
     this.resize.observe(root);
@@ -184,7 +204,7 @@ export class NativePresentationPrototype {
     record.retirementTask = record.lifetime.retire().then(retired => {
       if (!retired) { if (record.lifetime.failedClosed) this.requestGeometry(); return; }
       if (this.records.get(record.occurrence.id) !== record) return;
-      record.observer.disconnect(); this.resize.unobserve(record.root); record.root.remove(); this.records.delete(record.occurrence.id); this.retirements++;
+      record.restoreResume?.(); record.observer.disconnect(); this.resize.unobserve(record.root); record.root.remove(); this.records.delete(record.occurrence.id); this.retirements++;
       const current = this.sources.get(record.occurrence.id);
       if (canAllocateNative(this.options.owner, this.disposed) && current && this.anchors.get(current.id)?.isConnected) this.ensureRecord(current);
       this.requestGeometry();
@@ -247,7 +267,7 @@ export class NativePresentationPrototype {
   /** Called only after the harness owner has successfully closed its descendants. */
   disposeProjection(): void {
     this.disposed = true; this.resize.disconnect(); this.view?.scrollDOM.removeEventListener("scroll", this.requestGeometry);
-    for (const record of this.records.values()) record.observer.disconnect(); this.records.clear(); this.layer.remove();
+    for (const record of this.records.values()) { record.restoreResume?.(); record.observer.disconnect(); } this.records.clear(); this.layer.remove();
   }
 }
 

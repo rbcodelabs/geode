@@ -26,6 +26,7 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
     const probe = await page.evaluate(() => { const p = (window as any).__layerProbe; return p ? { inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected, parentStable: p.root.parentElement === p.parent, focused: document.activeElement === p.input, blurCount: p.blur } : null; }).catch(error => String(error));
     const retainedInputs = await page.evaluate(() => [(window as any).__firstFailedLayerInput, (window as any).__layerProbe?.input].filter(Boolean).map(input => ({ connected: input.isConnected, value: input.value, focused: document.activeElement === input, occurrence: input.closest(".native-prototype-record")?.dataset.occurrence }))).catch(error => String(error));
     const geometry = await page.evaluate(() => ({
+      secondRetryAtomic: (window as any).__secondRetryAtomic,
       validationCalls: (window as any).__layerValidationCalls,
       retirementAttempts: (window as any).__layerRetirementAttempts,
       resumes: (window as any).__layerResumeCounts,
@@ -254,7 +255,30 @@ test("two failed retained native chains recover their original files through rea
     await rail.focus(); await rail.hover(); await page.mouse.wheel(0, -1000);
     await expect.poll(() => rail.evaluate(element => element.scrollTop)).toBe(0);
     const secondRetry = record(page, 2).getByRole("button", { name: "Retry Base save" });
-    expect(await secondRetry.evaluate(button => { const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
+    expect(await secondRetry.evaluate(button => {
+      const rect = button.getBoundingClientRect();
+      const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const describe = (element: Element | null) => element ? {
+        tag: element.tagName, className: element.className,
+        occurrence: element.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence,
+        text: element.textContent?.slice(0, 160), button: element.closest("button")?.textContent,
+      } : null;
+      const ancestors = [];
+      for (let element: HTMLElement | null = button as HTMLElement; element; element = element.parentElement) {
+        const style = getComputedStyle(element);
+        ancestors.push({ ...describe(element), rect: element.getBoundingClientRect().toJSON(),
+          overflowX: style.overflowX, overflowY: style.overflowY, position: style.position, transform: style.transform,
+          clipPath: style.clipPath, scrollLeft: element.scrollLeft, scrollTop: element.scrollTop,
+          scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight,
+          clientWidth: element.clientWidth, clientHeight: element.clientHeight, offsetParent: describe(element.offsetParent),
+        });
+      }
+      // Same synchronous evaluation and unchanged hit assertion/action sequence.
+      (window as any).__secondRetryAtomic = { point: { x, y }, rect: rect.toJSON(), hit: describe(hit),
+        hitStack: document.elementsFromPoint(x, y).map(describe), ancestors };
+      return hit === button || button.contains(hit);
+    })).toBe(true);
     await page.screenshot({ path: info.outputPath("independent-failed-recovery.png") });
     await page.evaluate(() => { (window as any).__failedLayerFiles.delete("Other.md"); });
     await secondRetry.click();
