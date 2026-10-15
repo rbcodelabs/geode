@@ -1,3 +1,4 @@
+import { nativeBackgroundVisibility, type BackgroundVisibility } from "../workspaces/background-visibility";
 import { SourceOwnedNavigation, captureNavigationOrigin } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure, type PreparedRetirement } from "../workspaces/render-ownership";
 import type { App } from "../app";
@@ -190,7 +191,8 @@ export class CanvasView implements View {
 
   readonly renderOwner: RenderScope;
   readonly sourceNavigation: SourceOwnedNavigation;
-  constructor(private app: App, parentOwner?: RenderScope, sourceNavigation?: SourceOwnedNavigation) {
+  readonly backgroundVisibility: BackgroundVisibility;
+  constructor(private app: App, parentOwner?: RenderScope, sourceNavigation?: SourceOwnedNavigation, backgroundVisibility?: BackgroundVisibility) {
     const options = { writer: this, preflightClose: (context?: object) => this.assertCloseReady(context), prepareClose: (context?: object) => this.prepareClose(context), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null && !this.connectionPreview) this.render(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.sourceNavigation = sourceNavigation ?? new SourceOwnedNavigation({
@@ -208,6 +210,7 @@ export class CanvasView implements View {
       },
       notify: message => app.notify(message),
     });
+    this.backgroundVisibility = backgroundVisibility ?? nativeBackgroundVisibility(app, this, () => [this.document, this.conflictGeneration]);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "canvas-view";
 
@@ -337,7 +340,10 @@ export class CanvasView implements View {
     await this.settleWorkspaceLoad();
   }
 
+  onReveal(): void { this.backgroundVisibility?.reveal(); }
+
   private async closeNative(): Promise<void> {
+    this.backgroundVisibility?.reveal();
     this.cancelTouchGesture();
     this.cancelTransientGesture();
     await this.persistQueue;
@@ -825,7 +831,7 @@ export class CanvasView implements View {
       text.className = "canvas-node-text";
       el.appendChild(text);
       this.markdownContentEls.add(text);
-      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner, this.sourceNavigation).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
+      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner, this.sourceNavigation, this.backgroundVisibility).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
       el.addEventListener("dblclick", (event) => { if (this.isEmbeddedInteraction(event.target)) return; event.stopPropagation(); this.editTextNode(el, node); });
     } else if (node.type === "file") {
       el.dataset.filePath = node.file;
@@ -1036,7 +1042,7 @@ export class CanvasView implements View {
       el.appendChild(content);
       this.markdownContentEls.add(content);
       void this.app.markdownRenderer
-        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content, undefined, this.renderOwner, this.sourceNavigation)
+        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content, undefined, this.renderOwner, this.sourceNavigation, this.backgroundVisibility)
         .then(() => {
           if (this.isLiveNodeRender(version, content)) return;
           this.app.markdownRenderer.dispose(content);
