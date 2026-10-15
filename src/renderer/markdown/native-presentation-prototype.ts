@@ -105,7 +105,7 @@ export class NativePresentationPrototype {
     this.layer.className = "native-prototype-layer";
     Object.assign(this.layer.style, { position: "absolute", inset: "0", overflow: "hidden", pointerEvents: "none", zIndex: "5" });
     this.shelf.className = "native-prototype-shelf";
-    Object.assign(this.shelf.style, { position: "absolute", left: "0", right: "0", borderTop: "1px solid var(--background-modifier-border)", background: "var(--background-primary)", pointerEvents: "none", zIndex: "1" });
+    Object.assign(this.shelf.style, { position: "absolute", left: "0", right: "0", borderTop: "1px solid var(--background-modifier-border)", background: "var(--background-primary)", pointerEvents: "auto", zIndex: "1" });
     this.shelf.textContent = "Unfinished embedded edits";
     this.rail.tabIndex = 0; this.rail.setAttribute("aria-label", "Scroll retained embedded edits");
     Object.assign(this.rail.style, { position: "absolute", right: "0", width: "18px", overflowY: "auto", pointerEvents: "auto", zIndex: "3" });
