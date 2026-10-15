@@ -336,6 +336,7 @@ test("measured native frame height converges with its CM placeholder after delay
       await page.evaluate(() => (window as any).__releaseHeightRead());
       const input = await edit(page); await capture(page, input);
       const before = await page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString());
+      const lifetime = await page.evaluate(() => { const layer = (window as any).nativeLayerHarness.layer; return { allocations: layer.allocations, retirements: layer.retirements }; });
       for (const height of [400, 240]) {
         await record(page).evaluate((root, height) => { root.style.height = `${height}px`; }, height);
         const measure = () => page.evaluate(() => {
@@ -344,7 +345,8 @@ test("measured native frame height converges with its CM placeholder after delay
           const geometry = { root: root.getBoundingClientRect().toJSON(), anchor: anchor.getBoundingClientRect().toJSON(),
             sameRoot: root === (window as any).__layerProbe.root,
             source: (window as any).nativeLayerHarness.editor.state.doc.toString(),
-            measurements: (window as any).nativeLayerHarness.layer.measurements };
+            measurements: (window as any).nativeLayerHarness.layer.measurements,
+            allocations: (window as any).nativeLayerHarness.layer.allocations, retirements: (window as any).nativeLayerHarness.layer.retirements };
           const observations = ((window as any).__heightMeasurements ??= []);
           observations.push({ root: geometry.root, anchor: geometry.anchor, measurements: geometry.measurements });
           if (observations.length > 12) observations.shift();
@@ -362,6 +364,7 @@ test("measured native frame height converges with its CM placeholder after delay
         expect(Math.abs(geometry.anchor.top - geometry.root.top)).toBeLessThanOrEqual(1);
         expect(Math.abs(geometry.anchor.left - geometry.root.left)).toBeLessThanOrEqual(1);
         expect(geometry.source).toBe(before); expect(geometry.measurements).toBeLessThan(100);
+        expect({ allocations: geometry.allocations, retirements: geometry.retirements }).toEqual(lifetime);
         await unchanged(page, vault);
       }
       expect(await page.evaluate(() => (window as any).nativeLayerHarness.undo())).toBe(false);

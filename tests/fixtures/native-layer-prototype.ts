@@ -1,5 +1,5 @@
 /** Test-only browser entry. Never imported by a production bundle. */
-import { EditorState, StateField, type Extension } from "@codemirror/state";
+import { EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, undo, redo } from "@codemirror/commands";
 import { keymap } from "@codemirror/view";
@@ -25,13 +25,24 @@ function mount(source: string) {
   for (const element of original) element.style.display = "none";
   body.appendChild(host);
   const editorHost = document.createElement("div"); editorHost.style.height = "100%"; host.appendChild(editorHost);
+  const heights = new Map<number, number>(); const heightChanged = StateEffect.define<void>(); let heightUpdateQueued = false;
   const ledger = new OccurrenceLedger(); let occurrences = ledger.reconcile(source).active; let editor: EditorView;
   let layer: NativePresentationPrototype; const native: CanvasView[] = []; let closes = 0; let connectedBeforeMount = true;
   const scope = owner.renderOwner.child({ close: async () => {
     layer.disposeProjection(); editor.destroy(); host.remove();
     original.forEach((el, index) => { el.style.display = prior[index]; }); body.style.position = bodyPosition;
   } });
-  layer = new NativePresentationPrototype({ owner: scope, host, mount: async (content, parent, occurrence, token) => {
+  layer = new NativePresentationPrototype({ owner: scope, host,
+    onHeight: (id, height) => {
+      if (Math.abs((heights.get(id) ?? 320) - height) <= 1) return;
+      heights.set(id, height);
+      if (heightUpdateQueued) return;
+      heightUpdateQueued = true;
+      queueMicrotask(() => {
+        heightUpdateQueued = false;
+        if (!scope.closed && host.isConnected) editor.dispatch({ effects: heightChanged.of(undefined) });
+      });
+    }, mount: async (content, parent, occurrence, token) => {
     connectedBeforeMount &&= content.isConnected;
     if (!content.isConnected) throw new Error("Native startup requires a connected presentation.");
     const canvas = new CanvasView(app, parent); native.push(canvas);
@@ -46,12 +57,13 @@ function mount(source: string) {
   layer.reconcile(occurrences);
   class Placeholder extends WidgetType {
     private lease: object | null = null;
-    constructor(private readonly occurrence: NativeOccurrence) { super(); }
-    eq(other: Placeholder): boolean { return other.occurrence.id === this.occurrence.id; }
-    get estimatedHeight(): number { return 320; }
+    private readonly height: number;
+    constructor(private readonly occurrence: NativeOccurrence) { super(); this.height = heights.get(occurrence.id) ?? 320; }
+    eq(other: Placeholder): boolean { return other.occurrence.id === this.occurrence.id && other.height === this.height; }
+    get estimatedHeight(): number { return this.height; }
     toDOM(): HTMLElement {
       const element = document.createElement("div"); element.className = "native-layer-placeholder";
-      element.dataset.occurrence = String(this.occurrence.id); element.style.height = "320px";
+      element.dataset.occurrence = String(this.occurrence.id); element.style.height = `${this.height}px`;
       element.textContent = `Embedded ${this.occurrence.target}`;
       this.lease = layer.attachAnchor(this.occurrence.id, element); return element;
     }
@@ -61,7 +73,7 @@ function mount(source: string) {
   const field = StateField.define<DecorationSet>({
     create: decorations,
     update(value, transaction) {
-      if (!transaction.docChanged) return value;
+      if (!transaction.docChanged) return transaction.effects.some(effect => effect.is(heightChanged)) ? decorations() : value;
       occurrences = ledger.reconcile(transaction.newDoc.toString(), transaction.changes).active; layer.reconcile(occurrences); return decorations();
     },
     provide: value => EditorView.decorations.from(value),
