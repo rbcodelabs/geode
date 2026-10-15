@@ -104,3 +104,57 @@ coherent layout.
 
 Architect evidence: baseline b939adf and pinned local Obsidian help. This ADR
 records a reversible engineering decision, not a claim of implemented parity.
+
+## Addendum: quiescence includes rendered descendants
+
+**Status:** Accepted prerequisite for runtime layout loading
+
+Leaf enumeration misses writable Base/Canvas descendants. Live Preview directly
+constructs Canvas views; asynchronous renderer mounts can escape disposal; Base
+row-note writes and active cell drafts sit outside its definition persist queue.
+The original leaf-only inventory is insufficient.
+
+| Option | Benefit | Tradeoff |
+|---|---|---|
+| Internal render ownership scopes and awaited barrier (selected) | Covers nested writers, pending mounts and teardown | Lifecycle integration across renderer, Live Preview, Canvas and Base |
+| Refuse every unproven descendant state | Smallest safe fallback | Named layout loading remains explicitly partial |
+| Scan DOM/leaf views immediately before replacement | Small patch | Misses detached/pending mounts and separate writes; rejected |
+
+Introduce internal, owner-bound render scopes, separate from the public plugin
+API. Each scope tracks admission/generation, pending operations registered before
+their first await, child scopes/native writer views, and one memoized async close.
+Register children before initialization; every continuation checks generation
+before publishing DOM or admitting descendants. Canceled mounts close allocated
+children once through the same ownership path, including incomplete initialization.
+
+Cover MarkdownRenderer render/transclusions/Base/Canvas, Live Preview note embeds
+and direct Canvas, and Markdown inside Canvas nodes. Detached initialization is
+legitimate; DOM connectivity and post-mount scanning do not prove ownership.
+
+Before structure changes, freeze admission and interaction, invalidate pending
+render generations, and settle tracked operations without losing allocated
+children. Deduplicate writers and preflight drafts, recovery and overlapping file
+dependencies before flushing competing buffers. Base settlement includes both
+definition persistence and row-note writes; active drafts must commit through an
+existing validated path or refuse loading before teardown. Never clear drafts
+during disposal or guess between conflicting inline Base/Markdown/row writers.
+
+Retire scopes through awaited idempotent closure, propagate write failures and
+retain tracking until closure finishes. Synchronous dispose/widget callbacks may
+initiate this tracked close but cannot independently double-close children.
+Markdown/Canvas owning onClose paths await descendant drain. Abort resumes only
+retained scopes/writers; retired generations stay closed. Any native writer that
+cannot participate causes an explicit unsupported-state refusal with the current
+layout intact. Timeout is not permission to destroy unknown state.
+
+Risks remain arbitrary third-party lifecycle effects and incomplete registration
+of native creation paths. Revisit if this needs a general document-session layer.
+Saving/managing layouts can proceed independently; runtime parity cannot be
+claimed from leaf-only tests.
+
+Required tests: delayed embedded initialization racing replacement; pending Base
+definition and row writes; rejected writes preserving layout/draft/retry state;
+Markdown→Canvas→Markdown→Base and direct Live Preview Canvas; widget destruction
+plus owner drain closing once; active drafts/conflicting buffers/recovery refusing
+before teardown; abort resuming retained controls only; real Electron nested edits
+surviving load with no obsolete subsequent writes.

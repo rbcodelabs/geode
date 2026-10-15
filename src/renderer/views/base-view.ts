@@ -1,3 +1,4 @@
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { parseBaseFile, runQuery, type BaseDefinition, type BaseViewDefinition, type QueryResult } from "../bases";
 import { stringifyBaseFile } from "../bases/base-file-write";
@@ -130,6 +131,8 @@ export class BaseView implements View {
   private sourceEdit: { file: TFile; columnPath: string; rawText: string; originalText: Promise<string> } | null = null;
   private sourceWritePath: string | null = null;
   private readonly sourcePersistsInFlight = new Set<Promise<void>>();
+  private readonly sourcePersistPaths = new Map<Promise<void>, string>();
+  private definitionWritesPending = 0;
   private sourceConflictReadOnly = false;
   private readonly saveStatusEl: HTMLElement;
   private readonly mobileCleanups: Array<() => void> = [];
@@ -144,6 +147,7 @@ export class BaseView implements View {
   private inlinePersist: ((text: string) => Promise<void>) | null = null;
 
   private readonly onVaultChange = (changedFile?: TFile) => {
+    if (!nativeRenderOwnership(this.app).admissionOpen) return;
     if (changedFile && this.file && changedFile.path === this.file.path) {
       if (this.suppressReconcileModify) {
         this.suppressReconcileModify = false;
@@ -154,7 +158,7 @@ export class BaseView implements View {
       // and our own persist writes back to that same host note (ignoring it
       // here also avoids a write→modify→reload loop).
       if (this.inlinePersist) return;
-      void this.reloadIfChangedExternally();
+      void this.reloadIfChangedExternally().catch(error => { if (!(error instanceof ScopeCancelled)) this.app.notify("Could not reload Base."); });
       return;
     }
     if (changedFile && changedFile.path === this.sourceWritePath) return;
@@ -166,15 +170,24 @@ export class BaseView implements View {
 
   /** Re-parse from disk only if the file's current content differs from what we last wrote/read — see `lastKnownText`'s doc comment. */
   private async reloadIfChangedExternally(): Promise<void> {
+    const reload = (token?: RenderToken) => this.reloadExternalNative(token);
+    try { await (this.renderOwner ? this.renderOwner.run(reload) : reload()); }
+    catch (error) { if (!(error instanceof ScopeCancelled)) throw error; }
+  }
+
+  private async reloadExternalNative(token?: RenderToken): Promise<void> {
     if (!this.file) return;
     const cached = this.app.vault.getCachedContent(this.file.path);
     if (cached !== undefined && cached === this.lastKnownText) return;
-    const text = await this.app.vault.read(this.file);
+    const text = await this.app.vault.read(this.file); token?.check();
     if (text === (this.pendingKnownText ?? this.lastKnownText)) return;
     await this.applyText(text);
   }
 
-  constructor(private app: App) {
+  readonly renderOwner: RenderScope;
+  constructor(private app: App, parentOwner?: RenderScope) {
+    const options = { writer: this, close: () => this.closeNative(), resume: () => { if (this.file && this.def) this.runAndRender(); } };
+    this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "base-view";
 
@@ -297,10 +310,16 @@ export class BaseView implements View {
     await this.setFile(file);
   }
 
-  async setFile(file: TFile, requireValid = false): Promise<void> {
+  setFile(file: TFile, requireValid = false): Promise<void> {
+    return this.renderOwner ? this.renderOwner.run(token => this.setFileNative(file, requireValid, token)) : this.setFileNative(file, requireValid);
+  }
+
+  private async setFileNative(file: TFile, requireValid: boolean, token?: RenderToken): Promise<void> {
     await this.persistQueue;
     await Promise.all([...this.sourcePersistsInFlight]);
+    token?.check();
     const text = await this.app.vault.read(file);
+    token?.check();
     const parsed = parseBaseFile(text);
     if (requireValid && "error" in parsed) throw new Error(`Couldn't parse base: ${parsed.error}`);
     this.tableView.resetForFile();
@@ -336,17 +355,18 @@ export class BaseView implements View {
    * the note). Used by the Markdown renderer for embedded bases; the tab
    * header is hidden since an embed has no tab of its own.
    */
-  async mountInline(
+  mountInline(
     hostFile: TFile,
     text: string,
     persist: (text: string) => Promise<void>,
     viewName?: string
   ): Promise<void> {
-    this.inlinePersist = persist;
-    this.file = hostFile;
-    this.markEmbedded();
-    if (viewName) this.currentViewName = viewName;
-    await this.applyText(text);
+    const initialize = async (token?: RenderToken) => {
+      token?.check(); this.inlinePersist = persist; this.file = hostFile; this.markEmbedded();
+      if (viewName) this.currentViewName = viewName;
+      await this.applyText(text); token?.check();
+    };
+    return this.renderOwner ? this.renderOwner.run(initialize) : initialize();
   }
 
   /** Hide the tab-style header and mark the container as an embed — used when this view is embedded/transcluded inside a note. */
@@ -403,8 +423,10 @@ export class BaseView implements View {
     this.app.metadataCache.on("changed", this.onVaultChange);
   }
 
-  async onClose(): Promise<void> {
-    await this.persistQueue;
+  onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
+
+  private async closeNative(): Promise<void> {
+    await Promise.all([this.persistQueue, ...this.sourcePersistsInFlight]);
     this.app.vault.off("modify", this.onVaultChange);
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
@@ -591,7 +613,10 @@ export class BaseView implements View {
       this.persistRequestedWhileSuspended = true;
       return Promise.resolve();
     }
-    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist());
+    this.definitionWritesPending++;
+    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist()).finally(() => { this.definitionWritesPending--; });
+    // UI callbacks are fire-and-forget; retain rejection for pause/load callers.
+    void this.persistQueue.catch(() => {});
     return this.persistQueue;
   }
 
@@ -607,6 +632,22 @@ export class BaseView implements View {
       if (this.pendingKnownText === text) this.pendingKnownText = null;
     }
     this.runAndRender();
+  }
+
+  workspaceWritePaths(): string[] {
+    return [...new Set([...(this.definitionWritesPending || this.pendingKnownText !== null ? [this.file?.path ?? ""] : []), ...this.sourcePersistPaths.values()])].filter(Boolean);
+  }
+
+  assertWorkspaceLoadReady(): void {
+    if (this.sourceConflictReadOnly) throw new Error("Resolve Base source conflict or recovery before loading a workspace.");
+    if (this.sourceEdit) throw new Error("Finish or cancel the active Base cell draft before loading a workspace.");
+    if (this.persistRequestedWhileSuspended) throw new Error("The Base changed during the workspace operation. Retry after its edits are saved.");
+  }
+
+  async settleWorkspaceLoad(): Promise<void> {
+    this.assertWorkspaceLoadReady();
+    await Promise.all([this.persistQueue, ...this.sourcePersistsInFlight]);
+    this.assertWorkspaceLoadReady();
   }
 
   async prepareVaultSwitch(): Promise<void> {
@@ -816,11 +857,13 @@ export class BaseView implements View {
   // --- Cell editing ---------------------------------------------------------
 
   private editCell(file: TFile, columnPath: string, rawText: string): Promise<void> {
-    const operation = this.commitCellEdit(file, columnPath, rawText);
+    if (this.vaultSwitching) return Promise.reject(new Error("Base edits are paused during a workspace operation."));
+    const operation = this.renderOwner.run(async token => { token.check(); await this.commitCellEdit(file, columnPath, rawText); });
     this.sourcePersistsInFlight.add(operation);
+    this.sourcePersistPaths.set(operation, file.path);
     operation.then(
-      () => this.sourcePersistsInFlight.delete(operation),
-      () => this.sourcePersistsInFlight.delete(operation),
+      () => { this.sourcePersistsInFlight.delete(operation); this.sourcePersistPaths.delete(operation); },
+      () => { this.sourcePersistsInFlight.delete(operation); this.sourcePersistPaths.delete(operation); },
     );
     return operation;
   }
