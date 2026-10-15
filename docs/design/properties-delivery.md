@@ -46,3 +46,16 @@ configured reporting archive. No complete Properties/Obsidian parity claim.
 Global property inventory/search/rename, document presentation and remaining
 keyboard behavior remain outside this P1/P2a package. Generic config read still
 conflates absent and malformed/unreadable JSON; no stronger claim is made.
+
+
+## Completed branch verification
+
+Exact implementation `80a9d20` passed all six remote steps on test-worker-2:
+types/build, 330 unit files with 4,847 ordinary passes, one inherited expected
+failure and three opt-in benchmark skips; complete Electron 384 ordinary passes,
+one unrelated Note Composer merge retry pass and 15 existing skips, zero
+repeated failures. The five Properties/type/refusal flows pass first attempt.
+Artifacts fetched with checksum manifest verification; six fresh synthetic
+captures inspected and delivered with source/date/Linux/dimension captions.
+Later documentation/capture updates do not change source, tests or dependencies.
+This supersedes the preparation-time pending checkpoint above, not its history.

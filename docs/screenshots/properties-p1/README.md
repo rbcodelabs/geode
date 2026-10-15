@@ -1,9 +1,20 @@
 # Properties integration visual evidence
 
-Captured 2026-10-15 in local locked Electron on macOS against source commit `2bdee3f`, including the P2 shared type controls. All notes and values are synthetic. The associated test drives real controls and captures the actual app; these images were visually inspected for field alignment, focus, body preservation and overflow.
+Captured 2026-10-15 on Linux test-worker-2 in lockfile-installed Electron 42.10.0
+from source `80a9d20`. All notes and values are synthetic. Real controls drive the
+actual app; all six P1/P2 and refusal captures were inspected for alignment,
+focus, body preservation, complete datetime strings and overflow.
 
-- [Live Preview and file pane](live-preview.png): 1280 × 840 CSS pixels. Both surfaces share controls; commas remain within one list item and unsaved body text survives isolated property undo.
-- [Reading and file pane](desktop.png): 1280 × 840 CSS pixels. Reading immediately shows the buffer's updated `status: reading`, without waiting for the metadata index.
-- [Narrow window](narrow.png): 920 × 680 CSS pixels. Both sidebars remain open; property controls fit the right pane.
+- [Live Preview and file pane](live-preview.png): 1280×840. Shared controls, one comma-containing list item, unsaved body preserved after undo.
+- [Reading and file pane](desktop.png): 1280×840. Reading immediately displays buffer `status: reading`.
+- [Narrow window](narrow.png): 920×680. Both sidebars open and property controls fit.
+- [Refused draft](properties-refused-draft.png): 1280×815. Sidebar retains `refused draft` while body/source still displays `old`; sibling count focus does not discard the field. The visible message requests returning to that field to retry or discard.
 
-`tests/e2e/file-properties.spec.ts` also verifies invalid-number retention/focus, dirty-input preservation across metadata events, duplicate-name/malformed YAML refusal, active-note switching, and read-only inspection of the checked-in demo vault copied to a temporary directory. All four current P1/P2 flows passed with retries disabled. Full-suite results and independent review are tracked separately; these captures do not establish complete Properties parity.
+The new refusal test uses the actual Markdown conflict-read-only guard as a
+controlled stimulus; it does not simulate a complete sync-conflict workflow.
+It asserts exact connected input identity, draft retention, unchanged live buffer
+and disk, then own Enter retry and Escape discard. The five P1/P2/refusal flows
+all pass first attempt. Full remote suite: 384 ordinary passes, one unrelated
+Note Composer merge retry pass, 15 existing skips, zero repeated failures.
+Full report: configured archive `Products/Geode/Runs/geode-2026-10-15-properties-delivery-qa.md`.
+These captures are branch verification, not complete Properties parity or release verification.
