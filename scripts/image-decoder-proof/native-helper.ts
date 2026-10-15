@@ -6,6 +6,11 @@ interface Fixture {
 }
 interface EventRecord { seq: number; name: string; id: string; scenario?: string; path?: string; url?: string; [key: string]: unknown }
 interface Context { id: string; path: string; scenario?: string }
+// Standalone proof diagnostics only: no success authority or product hook.
+const trace = (value: Record<string, unknown>) => console.info("IMAGE_DECODER_PROOF " + JSON.stringify(value));
+const stage = (name: string, extra: Record<string, unknown> = {}) => trace({ kind: "stage", name, ...extra });
+globalThis.addEventListener("error", event => trace({ kind: "page-error", message: event.message, stack: event.error?.stack }));
+globalThis.addEventListener("unhandledrejection", event => trace({ kind: "page-rejection", message: String(event.reason), stack: event.reason?.stack }));
 function requireProof(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], scenario?: string) {
   const ownerToken = {}, file = {}, vault = {}, owned = new Map<string, { context: Context; revokes: number }>();
@@ -13,7 +18,8 @@ function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], sc
   let image: HTMLImageElement | undefined, detach: (() => void) | undefined;
   let onDecode: ((observation: { settled: () => boolean; outcome: () => string | undefined }) => void) | undefined;
   const emit = (context: Context, name: string, extra: Record<string, unknown> = {}) => {
-    events.push({ seq: events.length + 1, ...context, name, ...extra });
+    const event = { seq: events.length + 1, ...context, name, ...extra };
+    events.push(event); trace({ kind: "callback", ...event });
   };
   const adapter: ImageSessionAdapter = {
     read: (intent, id) => {
@@ -42,7 +48,9 @@ function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], sc
       target.addEventListener("load", load); target.addEventListener("error", error);
       detach = () => { target.removeEventListener("load", load); target.removeEventListener("error", error); };
       document.body.appendChild(target); target.src = url;
+      stage("native-decode-call", { ...context, url });
       const native = target.decode(); let settled = false, outcome: string | undefined;
+      stage("native-decode-return", { ...context, url });
       emit(context, "decodeStart", { url, srcAttribute: target.getAttribute("src"), currentSrc: target.currentSrc });
       const observed = native.then(() => {
         settled = true; outcome = "fulfilled";
@@ -85,8 +93,10 @@ function observedSession(lookup: Map<string, Fixture>, events: EventRecord[], sc
       requireProof(owned.size === 1, "One positive owned URL.");
       const [url, record] = [...owned][0]; const probe = document.createElement("img"); probe.src = url;
       let rejected = false;
+      stage("revoked-probe-await", { url });
       try { await probe.decode(); } catch (error) { rejected = error instanceof DOMException && error.name === "EncodingError"; }
       finally { probe.removeAttribute("src"); probe.remove(); }
+      stage("revoked-probe-settled", { url, rejected });
       requireProof(rejected, "Fresh native decode must reject the revoked positive URL.");
       emit(record.context, "revokedProbeRejected", { url });
     },
@@ -105,21 +115,22 @@ function allRevoked(state: ReturnType<typeof observedSession>) { return [...stat
 export async function run(fixtures: Fixture[], corrupt: Fixture) {
   const families = [];
   for (const fixture of fixtures) {
+    stage("family-start", { family: fixture.family });
     const events: EventRecord[] = [], lookup = new Map([[fixture.path, fixture]]);
     const positive = observedSession(lookup, events, "positive");
-    await positive.session.show(positive.intent(fixture.path));
+    stage("positive-show-await"); await positive.session.show(positive.intent(fixture.path)); stage("positive-show-settled");
     const published = events.find(event => event.name === "publish"); requireProof(published, "Actual native publication required.");
     requireProof(published.width === fixture.width && published.height === fixture.height, "Actual native natural dimensions match fixture.");
-    await positive.close(); await positive.proveRevoked();
+    await positive.close(); stage("positive-close-settled"); await positive.proveRevoked();
     const before = observedSession(lookup, events, "beforeDecode");
     const beforeShowing = errorResult(before.session.show(before.intent(fixture.path)));
-    await before.close(); requireProof(await beforeShowing instanceof Error, "Pre-admission close rejects obsolete show.");
+    stage("before-close-await"); await before.close(); stage("before-close-settled"); requireProof(await beforeShowing instanceof Error, "Pre-admission close rejects obsolete show.");
     requireProof(before.owned.size === 0, "No URL before native admission.");
     const pending = observedSession(lookup, events, "pendingClose"), admission = started(pending);
     const pendingShowing = errorResult(pending.session.show(pending.intent(fixture.path)));
-    const observation = await admission; const pendingAtClose = !observation.settled();
+    stage("pending-admission-await"); const observation = await admission; stage("pending-admission-observed"); const pendingAtClose = !observation.settled();
     requireProof(pendingAtClose, "Actual native decode Promise must be observed pending at close.");
-    await pending.close(); requireProof(await pendingShowing instanceof Error, "Pending-close show cannot publish success.");
+    stage("pending-close-await"); await pending.close(); stage("pending-close-settled"); requireProof(await pendingShowing instanceof Error, "Pending-close show cannot publish success.");
     requireProof(observation.settled(), "Native decode Promise actually settled before close completed.");
     const owned = [...positive.owned, ...pending.owned];
     requireProof(owned.length === 2 && new Set(owned.map(([url]) => url)).size === 2 && allRevoked(positive) && allRevoked(pending), "Exact once-only URL ownership.");
@@ -133,18 +144,20 @@ export async function run(fixtures: Fixture[], corrupt: Fixture) {
       sourceUnchanged: false, events });
   }
   const png = fixtures.find(fixture => fixture.family === "png"); requireProof(png, "PNG positive fixture exists.");
+  stage("corrupt-recovery-start");
   const corruptEvents: EventRecord[] = [];
   const recovery = observedSession(new Map([["corrupt.png", corrupt], ["recovery.png", png]]), corruptEvents);
-  const bad = await errorResult(recovery.session.show(recovery.intent("corrupt.png")));
+  const bad = await errorResult(recovery.session.show(recovery.intent("corrupt.png"))); stage("corrupt-show-settled");
   requireProof(bad instanceof DOMException && bad.name === "EncodingError", "Corrupt admitted PNG must produce an actual native decode error.");
-  await recovery.session.show(recovery.intent("recovery.png")); await recovery.close(); requireProof(allRevoked(recovery), "Corrupt/recovery URLs revoked once.");
+  await recovery.session.show(recovery.intent("recovery.png")); stage("recovery-show-settled"); await recovery.close(); requireProof(allRevoked(recovery), "Corrupt/recovery URLs revoked once.");
 
   const latestEvents: EventRecord[] = [], latest = observedSession(new Map([["A.png", png], ["B.png", png], ["C.png", png]]), latestEvents), admission = started(latest);
-  const a = errorResult(latest.session.show(latest.intent("A.png"))); const observation = await admission;
+  stage("latest-start");
+  const a = errorResult(latest.session.show(latest.intent("A.png"))); const observation = await admission; stage("latest-admission-observed");
   requireProof(!observation.settled(), "Latest-intent control begins at an observed pending native Promise.");
   const b = errorResult(latest.session.show(latest.intent("B.png"))), c = latest.session.show(latest.intent("C.png"));
   void c.catch(() => {}); // Preserve rejection for await below without an early unhandled event.
-  requireProof(await a instanceof Error && await b instanceof Error, "Superseded A/B do not publish success."); await c; await latest.close();
+  requireProof(await a instanceof Error && await b instanceof Error, "Superseded A/B do not publish success."); stage("latest-ab-settled"); await c; stage("latest-c-settled"); await latest.close();
   const reads = latestEvents.filter(event => event.name === "readStart"), aID = reads[0]?.id, cID = reads[1]?.id;
   requireProof(reads.length === 2 && reads[0].path === "A.png" && reads[1].path === "C.png", "Only A and latest C read.");
   const aSettled = latestEvents.find(event => event.name === "decodeSettled" && event.id === aID);
