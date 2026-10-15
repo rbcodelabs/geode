@@ -199,7 +199,7 @@ test('prepare timeout releases holds even when the prepare callback completes la
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('old');
     await second.evaluate(() => (window as any).guardContinue());
     await second.waitForFunction(() => (window as any).guardFinished);
-    await expect.poll(() => second.evaluate(() => ({ body: document.body.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: false, suspended: false });
+    await expect.poll(() => second.evaluate(() => ({ body: document.body.inert, suspended: ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused) }))).toEqual({ body: false, suspended: false });
     await second.evaluate(() => { (window as any).app.workspace.holdAutosave = (window as any).guardOriginalHold; });
     await apply();
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
@@ -243,11 +243,11 @@ test('nested reconciliation does not release the outer sync autosave hold', asyn
     const attempted = apply();
     await second.waitForFunction(() => (window as any).guardEntered);
     await second.evaluate(() => (window as any).app.reconcileVault('manual'));
-    expect(await second.evaluate(() => ({ body: document.body.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: true, suspended: true });
+    expect(await second.evaluate(() => ({ body: document.body.inert, suspended: ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused) }))).toEqual({ body: true, suspended: true });
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('old');
     await second.evaluate(() => (window as any).guardContinue());
     await attempted;
-    await expect.poll(() => second.evaluate(() => (window as any).app.workspace.activeLeaf.view.vaultSwitching)).toBe(false);
+    await expect.poll(() => second.evaluate(() => ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused))).toBe(false);
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
   });
 });
@@ -300,7 +300,7 @@ for (const failure of ['throw', 'timeout'] as const) {
       }
       if (failure === 'throw') await expect(apply('Note.md', 'remote')).rejects.toThrow(/refresh incomplete/i);
       expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
-      expect(await second.evaluate(() => ({ body: document.body.inert, editor: (window as any).app.workspace.activeLeaf.view.containerEl.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: false, editor: true, suspended: true });
+      expect(await second.evaluate(() => ({ body: document.body.inert, editor: (window as any).app.workspace.activeLeaf.view.containerEl.inert, suspended: ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused) }))).toEqual({ body: false, editor: true, suspended: true });
       await expect(second.evaluate(() => {
         const app = (window as any).app;
         return app.comments.create(app.vault.getFileByPath('Note.md'), { from: 0, to: 3 }, 'stale comment', { type: 'agent', name: 'Test agent' });
@@ -371,21 +371,25 @@ test('leaving or closing a note in external-edit recovery cannot write the local
     const state = await enterRecovery();
     expect(state.readOnly).toBe(true);
     expect(state.buffer).toBe('local edit that must not be published');
-    await open(second, 'Source.md');
+    // An unpreserved local snapshot now refuses destructive navigation.
+    await expect(open(second, 'Source.md')).rejects.toThrow(/recovery/);
     await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8'), { timeout: 4000 }).toBe('old');
 
     // 2. Nor may closing the tab.
-    await open(second);
     await enterRecovery();
-    await second.evaluate(async () => {
+    const refusal = await second.evaluate(async () => {
       const app = (window as any).app;
       const leaf = app.workspace.getLeavesOfType('markdown').find((item: any) => item.view?.file?.path === 'Note.md')!;
-      await leaf.detach?.() ?? app.workspace.detachLeaf?.(leaf);
+      try { await leaf.detach(); return null; } catch (error) { return String(error); }
     });
+    expect(refusal).toMatch(/recovery/);
+    expect(await second.evaluate(() => {
+      const view = (window as any).app.workspace.getLeavesOfType('markdown').find((item: any) => item.view?.file?.path === 'Note.md')!.view;
+      return { connected: view.editor.dom.isConnected, local: view.getText() };
+    })).toEqual({ connected: true, local: 'local edit that must not be published' });
     await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8'), { timeout: 4000 }).toBe('old');
 
     // 3. Nor may toggling reading mode, which also flushes.
-    await open(second);
     await enterRecovery();
     await second.evaluate(async () => {
       const app = (window as any).app;
