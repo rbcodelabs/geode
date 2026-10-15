@@ -18,7 +18,7 @@ collision checks, provenance and simulations against that exact commit first.
 | Daily use | `fe659b1` | Metadata source parser/cache schema and bounded whitespace fix; Outgoing links and safe live-buffer conversion; P1 Properties and shared P2 types/date controls; folding/multiple selections with YAML excluded; optional Footnotes; binary Vault copy/traversal; common test harness fixes |
 | Native entry | `0bd0d5d`, production/test change `190ef7e`, parent shared lane `5c1dff2` | Native subtree preparation, Canvas presentation retention and staged replacement; exact Base draft/failure ownership; shared frontmatter lanes; focus-scroll correction and original Canvas regression witnesses |
 | PDF tabs | `cf75d62`, final production/test change `398693c` | Fixed resource protocol; Node-free frame/worker; validated private port; authorized bounded reads/cancellation; App document leases; tab routing, restore and lifecycle handling; matching pinned dependency/assets and proof fixtures |
-| Editor Phase 0 | `a0adc2b` context then `10e703a`, based on daily `fe659b1` | Three accepted design/context files plus the private uninstantiated adapter and isolated tests only |
+| Editor Phase 0 | `a0adc2b` context, `10e703a` source/tests, `0c8f4d7` documentation clarification; based on daily `fe659b1` | Three accepted design/context files plus the private uninstantiated adapter and isolated tests only |
 | Preview tests | `8fcbbaa` + `c4ac07b` | Real render-child unload/listener/blob lifetime assertions and CSP-permitted positive/negative resource oracle; no production change |
 | Failure snapshots | `f232bc7` | Generic Scope and legitimate Base pre-helper late-guard-failure witnesses; no fake simultaneous participating RMW writes |
 | Native replacement | Pending final frozen input | Accepted replacement/draft/conflict receipt and lifecycle behavior; do not substitute an earlier mutable snapshot |
@@ -47,6 +47,10 @@ Preview corrections `d3b4980` and `c4ac07b` yield byte-identical
 are different: one sits on PDF/native, the other on Vault. Apply the two unique
 preview test commits once; do not replace an integrated tree with either parent.
 The provenance JSON records full input hashes and stable patch IDs.
+Editor documentation followup `0c8f4d7` changes only ADR0036 and the adapter
+brief; `git diff 10e703a 0c8f4d7 -- src tests` is empty. Carry that clarification
+after the original two Editor commits, preserving its explicit preparation-only
+status and narrow legacy transaction-dispatch boundary.
 
 ## Pairwise simulation results
 

@@ -166,5 +166,14 @@
         ]
       }
     }
-  ]
+  ],
+  "editorDocumentationFollowup": {
+    "head": "0c8f4d7985c94a99bbbb243598f80674a13cd1c2",
+    "base": "10e703aeb8b072c71a7672d34e5b8b5b9b5dcf0c",
+    "changedFiles": [
+      "docs/adr/0036-public-editor-core-facade.md",
+      "docs/design/editor-api-core-adapter.md"
+    ],
+    "sourceAndTestDiffEmpty": true
+  }
 }
