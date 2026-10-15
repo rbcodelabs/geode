@@ -38,8 +38,7 @@ export interface ListItemCache {
   position: Loc;
   /**
    * Line number of this item's parent list item. Negative when the item is
-   * top-level (Obsidian convention) — consumers use it purely as a key into a
-   * line→item map, where a negative value simply misses and marks a root.
+   * top-level: all roots in one list share the negative first-item line.
    */
   parent: number;
   /**
@@ -60,6 +59,10 @@ export interface CachedMetadata {
   // many existing call sites that coalesce `?? null` still type-check.
   frontmatter?: Record<string, unknown> | null;
   frontmatterEndOffset: number;
+  frontmatterPosition?: Loc;
+  frontmatterLinks?: FrontmatterLinkCache[];
+  blocks?: Record<string, BlockCache>;
+  footnotes?: FootnoteCache[];
   links: LinkCache[];
   embeds: LinkCache[];
   tags: TagCache[];
@@ -100,7 +103,18 @@ export interface FootnoteRefCache {
 
 export interface ReferenceLinkCache {
   id: string;
-  /** The link text, i.e. what is displayed. */
+  /** Destination URL or path from the referenced definition. */
   link: string;
   position: Loc;
+}
+
+export interface BlockCache { id: string; position: Loc }
+export interface FootnoteCache { id: string; position: Loc }
+export interface FrontmatterLinkCache {
+  key: string;
+  link: string;
+  original: string;
+  displayText?: string;
+  /** Actual authored YAML scalar span, retained for internal source projections. */
+  position?: Loc;
 }

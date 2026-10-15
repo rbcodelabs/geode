@@ -1,6 +1,6 @@
 import { parseDocument } from "yaml";
 import { DEFAULT_METADATA_SCAN_CAP_BYTES, FRONTMATTER_BLOCK_RE, FRONTMATTER_OPEN_RE } from "./constants";
-import { parseMetadata } from "./metadata";
+import { metadataReferences, parseMetadata } from "./metadata";
 import { normalizeWikiPath, selectLinkCandidates } from "./link-candidates";
 export { normalizeWikiPath } from "./link-candidates";
 import type { CachedMetadata, LinkCache, Loc } from "./types";
@@ -28,6 +28,7 @@ export interface CaptureInfo {
 }
 export interface ParserCoverage {
   referenceSyntax: "wikilinks";
+  additionalReferenceSyntax?: readonly ["markdown", "frontmatter-wikilinks"];
   completeMarkdownGraph: false;
   referencesCertain: boolean;
   headingsCertain: boolean;
@@ -62,7 +63,7 @@ export interface GraphResult {
   status: "ok" | "invalid" | "absent" | "unavailable";
   references: ResolvedReference[];
   coverage: {
-    referenceSyntax: "wikilinks"; completeMarkdownGraph: false;
+    referenceSyntax: "wikilinks"; additionalReferenceSyntax?: readonly ["markdown", "frontmatter-wikilinks"]; completeMarkdownGraph: false;
     discoveryComplete: boolean; noteContentComplete: boolean; referencesCertain: boolean;
   };
 }
@@ -97,7 +98,7 @@ function characterize(path: string, text: string): CapturedNote {
   try { metadata = parseMetadata(text); }
   catch { metadata = null; add("parser-failed"); }
   const coverage: ParserCoverage = {
-    referenceSyntax: "wikilinks", completeMarkdownGraph: false,
+    referenceSyntax: "wikilinks", additionalReferenceSyntax: ["markdown", "frontmatter-wikilinks"], completeMarkdownGraph: false,
     referencesCertain: metadata !== null, headingsCertain: metadata !== null,
     blocksCertain: metadata !== null, frontmatterCertain: metadata !== null,
     bodyScanned: metadata !== null,
@@ -110,11 +111,13 @@ function characterize(path: string, text: string): CapturedNote {
   if (/^.+\r?\n[ \t]*(?:=+|-+)[ \t]*\r?$/m.test(text.slice(metadata?.frontmatterEndOffset ?? 0))) {
     add("setext-headings-unsupported"); coverage.headingsCertain = false;
   }
-  if (/^\s*~~~/m.test(text)) {
-    add("tilde-fence-references"); coverage.referencesCertain = false;
-    coverage.headingsCertain = false; coverage.blocksCertain = false;
+  if (/(?:\[[^\]\n]*\]\([^\n]*|\[[^\]\n]*\]\[[^\]\n]*\]|^\s*\[[^\]\n]+\]:)/m.test(text)) add("markdown-links-bounded");
+  if (/\[[^\n]*\[[^\n]*\]\][ \t]*\(/.test(text)) {
+    add("markdown-nested-labels-unsupported"); coverage.referencesCertain = false;
   }
-  if (/(?:\[[^\]\n]*\]\([^\n]*|\[[^\]\n]*\]\[[^\]\n]*\]|^\s*\[[^\]\n]+\]:)/m.test(text)) add("markdown-links-unsupported");
+  if (/^\s*[^:\n]+:[ \t]*\*/m.test(text.slice(0, metadata?.frontmatterEndOffset ?? 0))) {
+    add("frontmatter-link-aliases-unscanned"); coverage.referencesCertain = false;
+  }
   if (FRONTMATTER_OPEN_RE.test(text) && !metadata?.frontmatter) {
     const match = text.match(FRONTMATTER_BLOCK_RE);
     if (!match) add("frontmatter-unterminated");
@@ -130,11 +133,12 @@ function characterize(path: string, text: string): CapturedNote {
     add("parser-body-cap"); coverage.bodyScanned = false;
     coverage.headingsCertain = false; coverage.blocksCertain = false; coverage.referencesCertain = false;
   }
-  // Existing sections don't capture paragraph block IDs. Keep this limitation visible.
-  const parsedBlockOffsets = new Set(metadata?.listItems?.filter(i => i.id).map(i => i.position.start.offset));
+  // Preserve an uncertainty diagnostic for block forms the bounded extractor misses.
+  const parsedBlockIds = new Set(Object.keys(metadata?.blocks ?? {}));
   let offset = 0;
   for (const line of text.split("\n")) {
-    if (/[ \t]\^[A-Za-z0-9-]+\s*$/.test(line) && !parsedBlockOffsets.has(offset)) {
+    const blockId = line.match(/[ \t]\^([A-Za-z0-9-]+)\s*$/)?.[1];
+    if (blockId && !parsedBlockIds.has(blockId)) {
       add("paragraph-block-ids-unsupported"); coverage.blocksCertain = false; break;
     }
     offset += line.length + 1;
@@ -176,7 +180,7 @@ export function createWikiSnapshot(captured: readonly CapturedFile[], captureInf
   const noteContentComplete = [...files.values()].every(file => file.kind !== "note" || notes.has(file.path));
   const aliasCoverageComplete = discoveryComplete && noteContentComplete && [...notes.values()].every(n => n.coverage.frontmatterCertain);
   const graphCoverage = freeze({
-    referenceSyntax: "wikilinks" as const, completeMarkdownGraph: false as const,
+    referenceSyntax: "wikilinks" as const, additionalReferenceSyntax: ["markdown", "frontmatter-wikilinks"] as const, completeMarkdownGraph: false as const,
     discoveryComplete, noteContentComplete,
     referencesCertain: discoveryComplete && noteContentComplete && [...notes.values()].every(n => n.coverage.referencesCertain),
   });
@@ -188,6 +192,7 @@ export function createWikiSnapshot(captured: readonly CapturedFile[], captureInf
     limits: { ...(captureInfo.limits ?? DEFAULT_SNAPSHOT_LIMITS) },
     exclusionPolicy: ["dot-prefixed path segments", "node_modules directories", "descendant symlinks", "special files"],
     referenceSyntax: "wikilinks" as const,
+    additionalReferenceSyntax: ["markdown", "frontmatter-wikilinks"] as const,
     parserLimitations: ["Markdown links are not in the graph", "CRLF heading coverage", "setext headings", "BOM-prefixed frontmatter", "tilde fence reference masking", "paragraph block IDs", "body scan cap in code units"],
     parserBodyCapCodeUnits: DEFAULT_METADATA_SCAN_CAP_BYTES,
   });
@@ -236,7 +241,7 @@ export function createWikiSnapshot(captured: readonly CapturedFile[], captureInf
   const outgoingIndex = new Map<string, ResolvedReference[]>();
   const backlinkIndex = new Map<string, ResolvedReference[]>();
   for (const note of notes.values()) {
-    const references = [...(note.metadata?.links ?? []), ...(note.metadata?.embeds ?? [])]
+    const references = (note.metadata ? metadataReferences(note.metadata) : [])
       .sort((a, b) => a.position.start.offset - b.position.start.offset)
       .map(ref => freeze({ ...ref, sourcePath: note.path, resolution: resolve(note.path, ref.link) }));
     outgoingIndex.set(note.path, references);

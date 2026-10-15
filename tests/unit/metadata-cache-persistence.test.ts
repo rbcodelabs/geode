@@ -29,6 +29,16 @@ function installCacheApi(stored: unknown): CacheApi {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("MetadataCache persistence", () => {
+  it("reparses old mobile/fallback snapshots even when file timestamps match", async () => {
+    const fake = new FakeVault({ "A.md": "[label](Target.md)", "Target.md": "" });
+    const file = fake.getFileByPath("A.md")!;
+    installCacheApi({ schemaVersion: 1, entries: { "A.md": { mtimeMs: file.mtime, size: file.size, metadata: { frontmatterEndOffset: 0, links: [], embeds: [], tags: [], headings: [], aliases: [] } } } });
+    const cache = new MetadataCache(fake.asVault());
+    await cache.initialize();
+    expect(cache.getFileCache(file)?.links.map(link => link.link)).toEqual(["Target.md"]);
+    expect(cache.resolvedLinks["A.md"]).toEqual({ "Target.md": 1 });
+  });
+
   it("hydrates the warm cache without awaiting a slow utility reconciliation", async () => {
     const fake = new FakeVault({ "A.md": "# Warm" });
     const file = fake.getFileByPath("A.md")!;
@@ -221,7 +231,7 @@ describe("MetadataCache persistence", () => {
       writeMetadataCache: vi.fn(),
       onMetadataIndexerMessage: vi.fn((cb: (message: unknown) => void) => { deliver = cb; }),
       startMetadataIndexer: vi.fn(async () => {
-        deliver({ type: "snapshot-start", schemaVersion: 1, totalEntries: 1 });
+        deliver({ type: "snapshot-start", schemaVersion: 2, totalEntries: 1 });
         deliver({ type: "snapshot-chunk", sequence: 0, entries: {
           "A.md": { mtimeMs: 1, size: 5, metadata: parseMetadata("# Old") },
         } });
