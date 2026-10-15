@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EditorSelection, EditorState } from "@codemirror/state";
+import { multipleSelectionExtensions } from "../../src/renderer/markdown/folding";
 import { App } from "../../src/renderer/app";
+import { MarkdownView } from "../../src/renderer/views/markdown-view";
 import { Events } from "../../src/renderer/events";
 
 function installDom(order: string[] = []) {
@@ -40,8 +43,20 @@ describe("Obsidian app config compatibility", () => {
   it("defaults and validates the supported persisted fields", () => {
     const { app } = makeApp();
     expect(app.settings.baseFontSize).toBe(16);
-    expect(app.settings.foldHeading).toBe(false);
+    expect(app.settings.foldHeading).toBe(true);
+    expect(app.settings.foldIndent).toBe(true);
     expect(app.settings.showLineNumber).toBe(false);
+  });
+
+  it("reconfigures every open Markdown editor when folding settings change", async () => {
+    const { app } = makeApp();
+    const applyEditorSettings = vi.fn();
+    const view = Object.create(MarkdownView.prototype);
+    view.applyEditorSettings = applyEditorSettings;
+    (app.workspace as any).getLeavesOfType = vi.fn(() => [{ view }]);
+    await (app.vault as any).setConfig("foldIndent", false);
+    expect(app.settings.foldIndent).toBe(false);
+    expect(applyEditorSettings).toHaveBeenCalled();
   });
 
   it("maps theme names and performs mutate/apply/persist/events once", async () => {
@@ -75,7 +90,8 @@ describe("Obsidian app config compatibility", () => {
   it("round-trips every allowlisted config key and rejects invalid shapes", async () => {
     const { app, write } = makeApp();
     for (const [key, value, expected] of [
-      ["foldHeading", true, true],
+      ["foldHeading", false, false],
+      ["foldIndent", false, false],
       ["showLineNumber", true, true],
       ["readableLineLength", false, false],
       ["theme", "moonstone", "moonstone"],
@@ -105,4 +121,12 @@ describe("Obsidian app config compatibility", () => {
     expect(app.settings.baseFontSize).toBe(18);
     expect(write).toHaveBeenCalledTimes(2);
   });
+});
+
+it("formats each selection without discarding extra cursors", () => {
+  let state = EditorState.create({ doc: "one two", selection: EditorSelection.create([EditorSelection.range(0, 3), EditorSelection.range(4, 7)]), extensions: multipleSelectionExtensions() });
+  const view = { get state() { return state; }, dispatch(spec: any) { state = state.update(spec).state; } };
+  (MarkdownView.prototype as any).wrapSelection(view, "**");
+  expect(state.doc.toString()).toBe("**one** **two**");
+  expect(state.selection.ranges.map(range => state.sliceDoc(range.from, range.to))).toEqual(["one", "two"]);
 });
