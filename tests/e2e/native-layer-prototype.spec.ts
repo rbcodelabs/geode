@@ -167,3 +167,40 @@ test("keyboard Return activation remains available after deliberate focus transf
     await expect(record(page).getByRole("button", { name: "Retry Base save" })).toBeVisible();
   });
 });
+
+test("actual owner close refuses an unfinished native draft then closes once after Cancel", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    const input = await edit(page); await capture(page, input); await scrollAway(page);
+    const refusal = await page.evaluate(async () => { try { await (window as any).nativeLayerHarness.close(); return null; } catch (error) { return String(error); } });
+    expect(refusal).toMatch(/draft|edit|finish/i); await unchanged(page, vault);
+    await input.press("Escape");
+    await page.evaluate(async () => { await (window as any).nativeLayerHarness.close(); });
+    expect(await page.evaluate(() => { const h = (window as any).nativeLayerHarness; return { connected: h.host.isConnected, closes: h.snapshot().closes }; })).toEqual({ connected: false, closes: 1 });
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+  });
+});
+
+test("dark narrow desktop geometry retains the original draft and exposes Return", async ({}, info) => {
+  await withPrototype(info, async (page, vault, app) => {
+    const input = await edit(page); await capture(page, input);
+    await page.evaluate(() => (window as any).app.setTheme("obsidian"));
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(760, 740); });
+    await expect(page.locator("body")).toHaveClass(/theme-dark/); await scrollAway(page); await unchanged(page, vault);
+    const button = record(page).getByRole("button", { name: "Return to embed" }); await expect(button).toBeVisible();
+    expect(await button.evaluate(button => { const rect = button.getBoundingClientRect(); return document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === button; })).toBe(true);
+    await page.screenshot({ path: info.outputPath("dark-narrow-retained.png") });
+  });
+});
+
+test("clean actual viewport churn retires old native chains before reacquiring the source", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    await expect(record(page).locator(".bases-table")).toBeVisible();
+    await page.evaluate(() => { const h = (window as any).nativeLayerHarness; (window as any).__firstLayerRoot = h.layer.layer.querySelector(".native-prototype-record"); h.editor.scrollDOM.scrollTop = h.editor.scrollDOM.scrollHeight; });
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.snapshot().closes)).toBe(1);
+    expect(await page.evaluate(() => (window as any).__firstLayerRoot.isConnected)).toBe(false);
+    await page.evaluate(() => { (window as any).nativeLayerHarness.editor.scrollDOM.scrollTop = 0; });
+    await expect(record(page).locator(".bases-table")).toBeVisible();
+    expect(await page.evaluate(() => { const h = (window as any).nativeLayerHarness; return { allocations: h.layer.allocations, canvases: h.scope.writers().filter((writer: any) => writer.viewType === "canvas").length, bases: h.scope.writers().filter((writer: any) => writer.viewType === "base").length }; })).toEqual({ allocations: 2, canvases: 1, bases: 1 });
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+  });
+});
