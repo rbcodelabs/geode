@@ -47,9 +47,9 @@ it("freezes every owner before awaiting the first pending render", async () => {
   const pending = first.run(async token => { await gate.promise; token.check(); }); await Promise.resolve();
   const held = registry.hold(new Set([one, two])); expect(() => second.child()).toThrow(/admission/i); gate.resolve(); await held; await expect(pending).rejects.toBeInstanceOf(ScopeCancelled);
 });
-it("propagates a rejected native initialization or pending row write through the barrier", async () => {
+it("propagates a rejected keyed row write through the barrier", async () => {
   const registry = new RenderOwnership(); const root = registry.create({});
-  await expect(root.run(async () => { throw new Error("source row write failed"); })).rejects.toThrow("source row write failed");
+  await expect(root.run(async () => { throw new Error("source row write failed"); }, "row")).rejects.toThrow("source row write failed");
   await expect(root.freezeAndDrain()).rejects.toThrow("source row write failed"); root.resume();
 });
 it("reports failure from an earlier fire-and-forget child close during the owner barrier", async () => {
@@ -77,9 +77,16 @@ it("includes standalone read-only renders in the barrier while rejecting unowned
 it("preserves the owner and its children when failed pending work prevents safe teardown", async () => {
   const registry = new RenderOwnership(); const owner = {}; let draft = "9"; const childClose = vi.fn(async () => {});
   const scope = registry.create(owner, { writer: owner, close: async () => { draft = ""; } }); scope.child({ close: childClose });
-  await expect(scope.run(async () => { throw new Error("pending write failed"); })).rejects.toThrow("pending write failed");
+  await expect(scope.run(async () => { throw new Error("pending write failed"); }, "write")).rejects.toThrow("pending write failed");
   await expect(scope.close()).rejects.toThrow("pending write failed");
   expect(draft).toBe("9"); expect(childClose).not.toHaveBeenCalled(); expect(registry.select(new Set([owner]))).toEqual([scope]);
+});
+it("does not retain an already reported transient read failure after successful reload or cleanup", async () => {
+  const registry = new RenderOwnership(); const scope = registry.create({});
+  await expect(scope.run(async () => { throw new Error("transient read"); })).rejects.toThrow("transient read");
+  await scope.run(async () => {}); await expect(scope.close()).resolves.toBeUndefined();
+  const failed = registry.create({}); await expect(failed.run(async () => { throw new Error("missing note"); })).rejects.toThrow("missing note");
+  await expect(failed.close()).resolves.toBeUndefined();
 });
 it("keeps a pre-destructor failure until its explicit retry succeeds, without retiring siblings", async () => {
   const registry = new RenderOwnership(); const owner = {}; const root = registry.create(owner);
