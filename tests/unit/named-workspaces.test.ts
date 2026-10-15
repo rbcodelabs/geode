@@ -52,6 +52,10 @@ describe("bounded named layout validation", () => {
   it.each(["../Private.md", "/outside.md", "Folder/../Private.md", "https://external.md", "a\\b.md", "a\u0000b.md"])("rejects non-vault file path %s", file => {
     const value = layout(); value.center.root = tabs(file); expect(() => validateNamedLayout(value)).toThrow();
   });
+  it("bounds UTF-8 bytes rather than only JavaScript character count", () => {
+    const value = layout() as any; value.center.root.leaves = [{ type: "plugin-view", state: { text: "界".repeat(700_000) } }];
+    expect(() => validateNamedLayout(value)).toThrow();
+  });
   it("rejects invalid dimensions, tab indexes, oversized plugin state and recursive layouts", () => {
     const value = layout(); value.left.width = Infinity; expect(() => validateNamedLayout(value)).toThrow();
     value.left.width = 280; value.center.root.active = 4; expect(() => validateNamedLayout(value)).toThrow();
