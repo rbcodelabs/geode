@@ -32,7 +32,7 @@ it("resumes retained scopes on abort and never admits or resumes a retired scope
   await child.close(); await root.freezeAndDrain(); root.resume(); expect(childResume).toHaveBeenCalledOnce(); expect(() => child.run(async () => {})).toThrow(/admission/i);
 });
 it("rejects unknown root owners before freezing and keeps detached owners visible until closed", () => {
-  const registry = new RenderOwnership(); const owner = {}; registry.create(owner); registry.create({});
+  const registry = new RenderOwnership(); const owner = {}; registry.create(owner, { writer: owner }); registry.create({}, { writer: {} });
   expect(() => registry.select(new Set([owner]))).toThrow(/unregistered|outside/i);
 });
 
@@ -68,4 +68,22 @@ it("rejects overlapping barriers and a release from a different hold", async () 
   await expect(registry.hold(new Set([owner]))).rejects.toThrow(/busy|progress/i);
   expect(() => registry.release([])).toThrow(/hold/i); expect(registry.admissionOpen).toBe(false);
   registry.release(held); expect(registry.admissionOpen).toBe(true);
+});
+
+it("includes standalone read-only renders in the barrier while rejecting unowned native writers", async () => {
+  const registry = new RenderOwnership(); const owner = {}; const known = registry.create(owner, { writer: owner }); const readOnly = registry.create({});
+  const scopes = await registry.hold(new Set([owner])); expect(scopes).toEqual([known, readOnly]); registry.release(scopes);
+});
+it("preserves the owner and its children when failed pending work prevents safe teardown", async () => {
+  const registry = new RenderOwnership(); const owner = {}; let draft = "9"; const childClose = vi.fn(async () => {});
+  const scope = registry.create(owner, { writer: owner, close: async () => { draft = ""; } }); scope.child({ close: childClose });
+  await expect(scope.run(async () => { throw new Error("pending write failed"); })).rejects.toThrow("pending write failed");
+  await expect(scope.close()).rejects.toThrow("pending write failed");
+  expect(draft).toBe("9"); expect(childClose).not.toHaveBeenCalled(); expect(registry.select(new Set([owner]))).toEqual([scope]);
+});
+it("releases every retained owner and the admission latch even if one resume callback fails", async () => {
+  const registry = new RenderOwnership(); const one = {}; const two = {}; const resumed = vi.fn();
+  registry.create(one, { resume: () => { throw new Error("render resume failed"); } }); registry.create(two, { resume: resumed });
+  const held = await registry.hold(new Set([one, two])); expect(() => registry.release(held)).toThrow("render resume failed");
+  expect(resumed).toHaveBeenCalledOnce(); expect(registry.admissionOpen).toBe(true);
 });
