@@ -81,3 +81,16 @@ This checkpoint does not yet provide the actual packed-worker transport or full
 one-active/latest-intent coordinator, and does not alter existing source/Reading
 bindings or the known synchronous300k characterization. Those remain explicit
 subsequent stages with independent review and actual Electron verification.
+
+## Parser-free host dependency correction
+
+Independent review found the host destination decoder import also configured the
+Lezer grammar. The decoder now lives in a parser-free utility and its old export
+is preserved by re-exporting the same function. A dependency-guard test denies
+Lezer module loading while importing the host projection. Shared punctuation
+unescaping remains explicit for both destinations and existing display labels.
+An intermediate uncommitted extraction accidentally resolved the remaining label
+call to global unescape; a parseMetadata regression for escaped punctuation and
+literal percent sequences reproduced that error before correction. This state
+was never a delivered candidate. The final affected-caller gate covers the shared
+metadata callers in addition to packed foundation and import-boundary tests.

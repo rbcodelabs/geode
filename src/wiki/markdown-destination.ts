@@ -4,4 +4,3 @@ export function decodeMarkdownDestination(raw: string): string {
   const value = unescapeMarkdownPunctuation(raw.replace(/^<([\s\S]*)>$/, "$1"));
   try { return decodeURI(value); } catch { return value; }
 }
-
