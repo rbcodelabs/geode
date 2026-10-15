@@ -1,4 +1,5 @@
 import { PropertyTypes } from "./properties/property-types";
+import { ScopeCancelled } from "./workspaces/render-ownership";
 import { Vault } from "./vault";
 import { PostApplyRefresh } from "./sync/post-apply-refresh";
 import { watchSyncStatus } from "./sync/status-refresh";
@@ -3838,11 +3839,13 @@ export class App {
   }
 
   private async restoreConflictRecovery(): Promise<void> {
+    const vault = this.vault;
     const prefix = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:`;
     for (const key of Object.keys(localStorage).filter((candidate) => candidate.startsWith(prefix))) {
       try {
-        const recovery = JSON.parse(localStorage.getItem(key) ?? "null") as { path?: string; text?: string } | null;
-        if (!recovery?.path || typeof recovery.text !== "string") continue;
+        const record = localStorage.getItem(key);
+        const recovery = JSON.parse(record ?? "null") as { vaultId?: string; path?: string; text?: string } | null;
+        if (!record || recovery?.vaultId !== vault.root || !recovery.path || typeof recovery.text !== "string") continue;
         let leaf = this.workspace.findLeafForFile(recovery.path);
         if (!leaf) {
           const file = this.vault.getFileByPath(recovery.path);
@@ -3854,9 +3857,11 @@ export class App {
         if (!(view instanceof MarkdownView)) continue;
         let externalText: string | null = null;
         try { externalText = await this.host.vaultFiles.read(recovery.path); } catch { /* provider deletion remains explicit */ }
-        view.restoreConflictRecovery(recovery.text, externalText);
-      } catch {
-        // Malformed derived recovery records are ignored without touching provider bytes.
+        if (this.vault !== vault || leaf?.view !== view || view.file?.path !== recovery.path) continue;
+        await view.restoreConflictRecovery(recovery.text, externalText);
+        if (view.file) view.confirmDeviceRecovery(vault, view.file, recovery.path, recovery.text, key, record);
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && !(error instanceof ScopeCancelled)) this.notify("Could not restore the local recovery presentation. Keep its stored record for retry.");
       }
     }
   }
@@ -4010,6 +4015,7 @@ export class App {
   }
 
   private async processExternalModify(file: TFile, suppliedText?: string): Promise<void> {
+    const vault = this.vault;
     const leaf = this.workspace.findLeafForFile(file.path);
     const view = leaf?.view;
     if (!(view instanceof MarkdownView) || !view.file) return;
@@ -4027,9 +4033,10 @@ export class App {
         if (!view.hasPendingSave() && known === view.getLastKnownText()) break;
       }
     }
+    if (this.vault !== vault || leaf?.view !== view || view.file?.path !== file.path) return;
     if (!hasExternalChange(text, view.getLastKnownText())) return;
     if (!view.hasUnacknowledgedChanges()) {
-      view.acceptExternalText(text);
+      await view.acceptExternalText(text);
       return;
     }
     await this.preserveConflict(view, file, text, file.path);
@@ -4103,21 +4110,26 @@ export class App {
     externalText: string | null,
     candidatePath: string,
   ): Promise<() => void> {
+    const vault = this.vault; const sourcePath = file.path;
     const localText = view.getText();
-    const conflictPath = buildConflictPath(
-      candidatePath,
-      formatConflictTimestamp(new Date()),
-      (path) => this.vault.getAbstractFileByPath(path) !== null,
-    );
+    const assertCurrent = () => { if (this.vault !== vault || view.file !== file || file.path !== sourcePath) throw new ScopeCancelled(); };
+    const conflictPath = buildConflictPath(candidatePath, formatConflictTimestamp(new Date()), path => vault.getAbstractFileByPath(path) !== null);
     try {
-      await this.vault.create(conflictPath, localText);
-      return () => view.presentConflict(externalText, conflictPath, false);
+      const copy = await vault.create(conflictPath, localText);
+      return () => {
+        assertCurrent(); view.presentConflict(externalText, conflictPath, false);
+        if (view instanceof MarkdownView) view.confirmRecoveryCopy(vault, file, sourcePath, localText, copy);
+      };
     } catch (writeError) {
-      const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(file.path)}`;
+      assertCurrent();
+      const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(vault.root)}:${encodeURIComponent(sourcePath)}`;
       view.presentConflict(externalText, null, true, "memory");
       try {
-        localStorage.setItem(recoveryKey, JSON.stringify({ vaultId: this.vault.root, path: file.path, text: localText }));
-        view.presentConflict(externalText, null, true, "device");
+        const record = JSON.stringify({ vaultId: vault.root, path: sourcePath, text: localText });
+        localStorage.setItem(recoveryKey, record);
+        if (localStorage.getItem(recoveryKey) !== record) throw new Error("Device recovery could not be confirmed.");
+        assertCurrent(); view.presentConflict(externalText, null, true, "device");
+        if (view instanceof MarkdownView) view.confirmDeviceRecovery(vault, file, sourcePath, localText, recoveryKey, record);
       } catch (storageError) {
         throw new AggregateError([writeError, storageError], "Conflict copy and device recovery both failed");
       }
@@ -4488,6 +4500,11 @@ export class App {
     };
   }
 
+  private async observeMarkdownAction(operation: Promise<unknown>): Promise<void> {
+    try { await operation; }
+    catch (error) { if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not change this note's presentation."); }
+  }
+
   private registerActions(): void {
     this.actions = new ActionRegistry<AppActionContext>();
     const file = (context: AppActionContext) => context.file ?? (isTFile(context.resource) ? context.resource : null);
@@ -4648,13 +4665,13 @@ export class App {
       id: "view.toggle-reading",
       label: "Toggle reading view",
       isAvailable: (context) => !!context.view,
-      run: (context) => context.view!.toggleMode(),
+      run: (context) => this.observeMarkdownAction(context.view!.toggleMode()),
     });
     this.actions.register({
       id: "view.toggle-source",
       label: "Toggle Live Preview/Source mode",
       isAvailable: (context) => !!context.view,
-      run: (context) => context.view!.toggleSource(),
+      run: (context) => this.observeMarkdownAction(context.view!.toggleSource()),
     });
     this.actions.register({
       id: "web.reload",
@@ -5199,13 +5216,12 @@ export class App {
     if (result.kind !== "vault") return result.kind;
     const file = this.vault.getAbstractFileByPath(result.path);
     if (!isTFile(file)) return "rejected";
-    await this.openFile(file, false);
-    if (file.extension === "md" && result.line !== undefined) {
-      const view = this.getActiveMarkdownView();
-      if (!view?.editor) return "vault";
-      const line = view.editor.state.doc.line(Math.min(result.line, view.editor.state.doc.lines));
-      const columnOffset = Math.min((result.column ?? 1) - 1, line.length);
-      view.scrollToOffset(line.from + columnOffset);
+    const intended = file.extension === "md" ? await this.openMarkdownForReveal(file) : null;
+    if (file.extension !== "md") await this.openFile(file, false);
+    if (intended?.editor && result.line !== undefined) {
+      const line = intended.editor.state.doc.line(Math.max(1, Math.min(result.line, intended.editor.state.doc.lines)));
+      const columnOffset = Math.max(0, Math.min((result.column ?? 1) - 1, line.length));
+      await intended.scrollToOffsetAsync(line.from + columnOffset);
     }
     return "vault";
   }
@@ -5909,7 +5925,7 @@ export class App {
     new PromptModal(this, {
       placeholder: "Add a comment…",
       onSubmit: (body) => void this.comments.create(file, range, body, { type: "user", name: "You" })
-        .then((thread) => { this.showComments(); view.revealComment(thread.id); })
+        .then(async (thread) => { if (view.file !== file) return; await view.revealCommentAsync(thread.id); this.showComments(); })
         .catch((error) => this.notify(error instanceof Error ? error.message : "Could not add comment")),
     }).open();
   }
@@ -5932,8 +5948,10 @@ export class App {
   }
 
   revealComment(thread: CommentThread): void {
-    this.selectComment(thread.id);
-    void this.openFile(thread.file, false).then(() => this.getActiveMarkdownView()?.revealComment(thread.id));
+    void this.openMarkdownForReveal(thread.file).then(async view => {
+      if (!view) return;
+      await view.revealCommentAsync(thread.id); this.selectComment(thread.id);
+    }).catch(error => { if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not reveal this comment."); });
   }
 
   selectComment(threadId: string): void {
@@ -5958,14 +5976,29 @@ export class App {
     this.workspace.rightSidebar.show(this.commentsView);
   }
 
-  revealOffsetInActiveMarkdownView(file: TFile, offset: number) {
-    this.openFile(file, false).then(() => {
-      this.getActiveMarkdownView()?.scrollToOffset(offset);
+  private async openMarkdownForReveal(file: TFile): Promise<MarkdownView | null> {
+    const vault = this.vault; const path = file.path;
+    const existing = this.workspace.findLeafForFile(path);
+    const leaf = existing ?? this.workspace.getLeaf(false);
+    if (existing) existing.group.setActiveLeaf(existing);
+    else await this.openFileInLeaf(leaf, file);
+    const view = leaf.view;
+    if (this.vault !== vault || file.path !== path || !(view instanceof MarkdownView) || view.file?.path !== path) return null;
+    return view;
+  }
+
+  revealOffsetInActiveMarkdownView(file: TFile, offset: number): void {
+    void this.openMarkdownForReveal(file).then(view => view?.scrollToOffsetAsync(offset)).catch(error => {
+      if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not reveal this note position.");
     });
   }
 
   /** Rename a file and rewrite wikilinks in all notes that reference it. */
   async renameFileWithLinkUpdate(file: TFile, newPath: string): Promise<void> {
+    this.workspace.iterateLeaves(leaf => {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file?.path === file.path && view.isConflictReadOnly()) throw new Error("Resolve this note's local recovery before renaming it.");
+    });
     const oldBasename = file.basename;
     const oldPathNoExt = file.path.replace(/\.md$/, "");
     const oldPath = file.path;
@@ -5973,6 +6006,11 @@ export class App {
       .getBacklinks(file)
       .map((b) => b.source)
       .filter((f) => f.path !== file.path);
+    const affectedPaths = new Set([file.path, ...referencers.map(ref => ref.path)]);
+    this.workspace.iterateLeaves(leaf => {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file && affectedPaths.has(view.file.path) && view.isConflictReadOnly()) throw new Error("Resolve affected notes' local recovery before renaming this file.");
+    });
     await this.vault.rename(file, newPath);
     const renamed = this.vault.getFileByPath(newPath);
     if (!renamed) return;
@@ -5985,7 +6023,8 @@ export class App {
     // Refresh any open view of the renamed file
     const leaf = this.workspace.findLeafForFile(newPath) ?? this.workspace.findLeafForFile(file.path);
     if (leaf?.view instanceof MarkdownView) {
-      await leaf.view.setFile(renamed);
+      try { await leaf.view.setFile(renamed); }
+      catch (error) { this.notify(`The file was renamed, but its pane could not refresh: ${error instanceof Error ? error.message : "presentation unavailable"}`); }
       leaf.group.renderTabs();
     }
   }
