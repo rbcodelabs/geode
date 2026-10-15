@@ -19,6 +19,8 @@ export interface PersistedMetadataIndexEntry {
 
 export interface PersistedMetadataIndexSnapshot {
   schemaVersion: number;
+  /** Renderer-written caches only; see `METADATA_PARSER_VERSION`. */
+  parserVersion?: number;
   entries: Record<string, PersistedMetadataIndexEntry>;
 }
 
