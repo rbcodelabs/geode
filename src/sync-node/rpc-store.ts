@@ -19,6 +19,10 @@ export interface StoreTransport {
 }
 
 const CHUNK = CLIENT_CHUNK_BYTES;
+// Spawned children alone can release stdin while finishing stderr after EOF.
+// Generic injected transports retain their existing immediate-close contract.
+const retireSpawnedAtEof = new WeakMap<StoreTransport, () => Promise<void>>();
+const STDERR_DRAIN_WAIT_MS = 1500;
 
 /** What the connected server said it can do in its hello reply. Absent fields mean an older server. */
 export interface ServerFeatures { putBlob: boolean; appendRecords: boolean; maxUploads: number }
@@ -41,7 +45,8 @@ class Connection {
   features: ServerFeatures = LEGACY_FEATURES;
   private seq = 0;
   private fatal: SyncStoreError | null = null;
-  constructor(readonly transport: StoreTransport, private readonly onDead: () => void) {
+  private closeTask: Promise<void> | null = null;
+  constructor(readonly transport: StoreTransport, private readonly onDead: () => void, private readonly onClosed: () => void) {
     this.writer = new FrameWriter(transport.output);
     void this.readLoop();
   }
@@ -64,19 +69,33 @@ class Connection {
         }
         if (violation) throw violation;
       }
-      this.fail(this.fatal ?? new SyncStoreError("unavailable", "Store connection closed"));
+      this.fail(this.fatal ?? new SyncStoreError("unavailable", "Store connection closed"), this.fatal === null);
     } catch (error) {
       this.fail(error instanceof SyncStoreError && error.code !== "unavailable" ? error : new SyncStoreError("unavailable", `Store connection lost: ${(error as Error).message}`));
     }
   }
 
-  fail(error: SyncStoreError): void {
+  fail(error: SyncStoreError, cleanEof = false): void {
     if (this.dead) return;
     this.dead = error;
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
     this.onDead();
-    void Promise.resolve(this.transport.close()).catch(() => {});
+    const retire = cleanEof && retireSpawnedAtEof.get(this.transport);
+    if (retire) {
+      try { void retire().then(() => this.forceClose(), () => this.forceClose()); }
+      catch { void this.forceClose(); }
+    } else void this.forceClose();
+  }
+
+  private forceClose(): Promise<void> {
+    return this.closeTask ??= Promise.resolve().then(() => this.transport.close()).catch(() => {}).finally(this.onClosed);
+  }
+
+  close(): Promise<void> {
+    this.fail(new SyncStoreError("unavailable", "Store client closed"));
+    // Explicit closure must still reach a child retired by an earlier EOF.
+    return this.forceClose();
   }
 
   async request(method: string, params: Record<string, unknown>, signal: AbortSignal | undefined, body?: Uint8Array): Promise<{ result: any; body?: Buffer }> {
@@ -109,6 +128,7 @@ class Connection {
  */
 export class RpcClient {
   private conn: Connection | null = null;
+  private readonly connections = new Set<Connection>();
   private connecting: Promise<Connection> | null = null;
   private opened: { binding: VaultDescriptor; deviceId: string } | null = null;
   private closed = false;
@@ -119,7 +139,15 @@ export class RpcClient {
   private async establish(signal?: AbortSignal): Promise<Connection> {
     let transport: StoreTransport;
     try { transport = await this.connect(); } catch (error) { throw new SyncStoreError("unavailable", `Cannot reach store: ${(error as Error).message}`, { cause: error }); }
-    const conn = new Connection(transport, () => { if (this.conn === conn) this.conn = null; });
+    // Observe optional cleanup failures without replacing the RPC error or
+    // claiming that a rejected drainage promise means the child exited.
+    void transport.drained?.catch(() => {});
+    if (this.closed) {
+      await Promise.resolve().then(() => transport.close()).catch(() => {});
+      throw new SyncStoreError("unavailable", "Store client is closed");
+    }
+    const conn = new Connection(transport, () => { if (this.conn === conn) this.conn = null; }, () => this.connections.delete(conn));
+    this.connections.add(conn);
     try {
       conn.features = parseFeatures((await conn.request("hello", { protocol: PROTOCOL_NAME, version: PROTOCOL_VERSION }, signal)).result);
       this.lastFeatures = conn.features;
@@ -131,7 +159,10 @@ export class RpcClient {
   private async ensure(signal?: AbortSignal): Promise<Connection> {
     if (this.closed) throw new SyncStoreError("unavailable", "Store client is closed");
     if (this.conn && !this.conn.dead) return this.conn;
-    this.connecting ??= this.establish(signal).then(conn => { this.conn = conn; return conn; }).finally(() => { this.connecting = null; });
+    this.connecting ??= this.establish(signal).then(async conn => {
+      if (this.closed) { await conn.close(); throw new SyncStoreError("unavailable", "Store client is closed"); }
+      this.conn = conn; return conn;
+    }).finally(() => { this.connecting = null; });
     return this.connecting;
   }
 
@@ -147,8 +178,10 @@ export class RpcClient {
 
   async close(): Promise<void> {
     this.closed = true;
-    const conn = this.conn ?? await this.connecting?.catch(() => null);
-    conn?.fail(new SyncStoreError("unavailable", "Store client closed"));
+    // Force allocated live/retiring children before awaiting their handshakes.
+    await Promise.all([...this.connections].map(conn => conn.close()));
+    await this.connecting?.catch(() => {});
+    await Promise.all([...this.connections].map(conn => conn.close()));
   }
 }
 
@@ -299,7 +332,7 @@ export function spawnTransport(command: SpawnCommand, onStderr?: (line: string) 
   child.stdin.on("error", () => { });
   child.on("error", () => { });
   let tail = "";
-  const drained = new Promise<void>(resolve => child.on("close", () => { if (tail && onStderr) onStderr(tail); tail = ""; resolve(); }));
+  const drained = new Promise<void>(resolve => child.once("close", () => { if (tail && onStderr) onStderr(tail); tail = ""; resolve(); }));
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (text: string) => {
     if (!onStderr) return;
@@ -307,7 +340,27 @@ export function spawnTransport(command: SpawnCommand, onStderr?: (line: string) 
     const lines = tail.split("\n"); tail = lines.pop() ?? "";
     for (const line of lines) onStderr(line);
   });
-  return { drained, input: child.stdout, output: child.stdin, close: () => { child.stdin.destroy(); if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); } };
+  let forced = false;
+  let finishGrace: (() => void) | undefined;
+  const close = () => {
+    if (forced) return;
+    forced = true;
+    finishGrace?.();
+    child.stdin.destroy();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+  };
+  const transport: StoreTransport = { drained, input: child.stdout, output: child.stdin, close };
+  let retirement: Promise<void> | undefined;
+  retireSpawnedAtEof.set(transport, () => {
+    child.stdin.destroy();
+    if (forced) return Promise.resolve();
+    return retirement ??= new Promise<void>(resolve => {
+      const timer = setTimeout(close, STDERR_DRAIN_WAIT_MS);
+      finishGrace = () => { clearTimeout(timer); finishGrace = undefined; resolve(); };
+      void drained.then(() => finishGrace?.(), () => finishGrace?.());
+    });
+  });
+  return transport;
 }
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
