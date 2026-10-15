@@ -18,3 +18,11 @@ do not establish final layout, accessibility, mobile or arbitrary-height support
 The nine-case run has eight passes and one open keyboard recovery focus failure.
 The original production viewport regression remains open. No complete native
 boundary, named Workspaces runtime or Obsidian parity claim follows.
+
+- [Dark narrow Return](dark-narrow-return.png): source `f08a1de`, actual Electron
+  desktop window 760×740 CSS pixels, PNG 1520×1480 at scale 2. Both sidebars remain
+  open. The responsive header keeps Return's actual center pointer reachable
+  inside the existing frame; full label text remains in its accessible text/title.
+  Captured native input `9` stays connected/focused with zero blur and source still
+  priority `2`, but the priority column is clipped. This is Return reachability
+  evidence, not a complete narrow native editing layout. Visually inspected.

@@ -180,3 +180,19 @@ full text/title preserved, and Return constrained to available width. No native
 root is moved, focused or replaced. The original dark hit assertion remains.
 Actual rerun is pending. Even if Return passes, this does not establish reachable
 Base columns or complete narrow/mobile layout support.
+
+At frozen `f08a1de`, the unchanged actual twelve-case matrix passes **12/12** with
+retries disabled, 11.8 seconds, Electron 42.10.0. The real dark/narrow Return center
+hit test now passes. Final JSON still records connected/focused `9`, unchanged
+native parent, zero blur and exact original Source bytes. The dark capture was
+visually inspected and committed with its viewport/source/environment caption;
+the Base priority column is still clipped and no complete narrow layout claim is
+made. Full results, spec, source/bundle hashes, JSON and screenshots are preserved
+at `/private/tmp/geode-native-layer-prototype-header-twelve-artifacts`, log
+`/private/tmp/geode-native-layer-prototype-header-twelve.log`.
+
+Remaining acceptance includes multiple simultaneously retained failures and rail
+pointer/keyboard reachability, normal outside-editor typing/undo, actual tab hide
+versus intentional focus transfer, retargeted old-draft recovery and readonly/
+partial-teardown UI proofs. Original production viewport failure remains open;
+private twelve-case success is not a full-suite or production wiring clearance.
