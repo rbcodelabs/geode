@@ -26,9 +26,6 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
     const probe = await page.evaluate(() => { const p = (window as any).__layerProbe; return p ? { inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected, parentStable: p.root.parentElement === p.parent, focused: document.activeElement === p.input, blurCount: p.blur } : null; }).catch(error => String(error));
     const retainedInputs = await page.evaluate(() => [(window as any).__firstFailedLayerInput, (window as any).__layerProbe?.input].filter(Boolean).map(input => ({ connected: input.isConnected, value: input.value, focused: document.activeElement === input, occurrence: input.closest(".native-prototype-record")?.dataset.occurrence }))).catch(error => String(error));
     const geometry = await page.evaluate(() => ({
-      secondRetryAtomic: (window as any).__secondRetryAtomic,
-      scrollPhases: (window as any).__nativeScrollPhases,
-      focusCalls: (window as any).__nativeFocusCalls,
       validationCalls: (window as any).__layerValidationCalls,
       retirementAttempts: (window as any).__layerRetirementAttempts,
       resumes: (window as any).__layerResumeCounts,
@@ -49,10 +46,10 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
   }
 }
 const record = (page: Page, id = 1) => page.locator(`.native-prototype-record[data-occurrence="${id}"]`);
-async function edit(page: Page, id = 1, file = "Source", value = "9", phase?: (name: string) => Promise<void>): Promise<Locator> {
+async function edit(page: Page, id = 1, file = "Source", value = "9"): Promise<Locator> {
   const cell = record(page, id).locator(".bases-data-row", { hasText: `${file}.md` }).locator("td.bases-cell").nth(1);
-  await expect(cell).toBeVisible(); if (phase) await phase(`before-cell-click-${id}`); await cell.click(); if (phase) await phase(`after-cell-click-${id}`); await page.keyboard.press("Enter"); if (phase) await phase(`after-edit-enter-${id}`);
-  const input = cell.locator(".bases-cell-input"); await expect(input).toBeVisible(); await input.fill(value); if (phase) await phase(`after-fill-${id}`);
+  await expect(cell).toBeVisible(); await cell.click(); await page.keyboard.press("Enter");
+  const input = cell.locator(".bases-cell-input"); await expect(input).toBeVisible(); await input.fill(value);
   return input;
 }
 async function capture(page: Page, input: Locator) {
@@ -226,89 +223,38 @@ test("clean actual viewport churn retires old native chains before reacquiring t
 test("two failed retained native chains recover their original files through real rail and Retry controls", async ({}, info) => {
   const doc = source.slice(0, 2000) + "\n![[Board.canvas]]\n\n" + "Tail paragraph.\n\n".repeat(400);
   await withPrototype(info, async (page, vault) => {
-    const phase = (name: string) => page.evaluate(name => {
-      const active = document.activeElement as HTMLElement | null;
-      const observations = ((window as any).__nativeScrollPhases ??= []);
-      observations.push({ name, active: active ? { tag: active.tagName, className: active.className,
-        occurrence: active.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence } : null,
-        scrollers: [...document.querySelectorAll<HTMLElement>(".native-prototype-record .canvas-surface, .native-prototype-record .canvas-node-note")].map(element => ({
-          className: element.className, occurrence: element.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence,
-          scrollTop: element.scrollTop, scrollLeft: element.scrollLeft, rect: element.getBoundingClientRect().toJSON(),
-        })),
-        retry: [...document.querySelectorAll<HTMLButtonElement>('.native-prototype-record[data-occurrence="2"] button')]
-          .filter(button => button.textContent === "Retry Base save").map(button => button.getBoundingClientRect().toJSON()),
-      });
-    }, name);
     await page.evaluate(() => {
-      const focus = HTMLElement.prototype.focus;
-      HTMLElement.prototype.focus = function(options?: FocusOptions) {
-        const record = this.closest<HTMLElement>(".native-prototype-record");
-        const snapshot = () => [...document.querySelectorAll<HTMLElement>(".native-prototype-record .canvas-surface, .native-prototype-record .canvas-node-note")].map(element => ({
-          className: element.className, occurrence: element.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence,
-          left: element.scrollLeft, top: element.scrollTop,
-        }));
-        const before = snapshot();
-        try { return focus.call(this, options); }
-        finally { if (record) ((window as any).__nativeFocusCalls ??= []).push({
-          occurrence: record.dataset.occurrence, tag: this.tagName, className: this.className,
-          options, before, after: snapshot(), stack: new Error().stack?.split("\n").slice(1, 5),
-        }); }
-      };
       const app = (window as any).app; const modify = app.vault.modify.bind(app.vault);
       (window as any).__failedLayerFiles = new Set(["Source.md", "Other.md"]);
       app.vault.modify = (file: any, text: string) => (window as any).__failedLayerFiles.has(file.path) ? Promise.reject(new Error(`synthetic ${file.path} failure`)) : modify(file, text);
     });
-    const first = await edit(page, 1, "Source", "9", phase); await phase("first-edit"); await first.evaluate(input => { (window as any).__firstFailedLayerInput = input; });
-    await first.press("Enter"); await expect(record(page, 1).getByRole("button", { name: "Retry Base save" })).toBeVisible(); await phase("first-failure");
+    const first = await edit(page); await first.evaluate(input => { (window as any).__firstFailedLayerInput = input; });
+    await first.press("Enter"); await expect(record(page, 1).getByRole("button", { name: "Retry Base save" })).toBeVisible();
     await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]", 100)).top; });
-    const second = await edit(page, 2, "Other", "8", phase); await capture(page, second); await phase("before-second-enter");
-    await second.press("Enter"); await phase("after-second-enter"); await expect(record(page, 2).getByRole("button", { name: "Retry Base save" })).toBeVisible(); await phase("second-failure");
-    await scrollAway(page); await phase("scroll-away");
+    const second = await edit(page, 2, "Other", "8"); await capture(page, second);
+    await second.press("Enter"); await expect(record(page, 2).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await scrollAway(page);
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
     expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
     expect(await page.evaluate(() => { const first = (window as any).__firstFailedLayerInput; const second = (window as any).__layerProbe.input; return { independent: first !== second, firstConnected: first.isConnected, firstValue: first.value, secondConnected: second.isConnected, secondValue: second.value }; })).toEqual({ independent: true, firstConnected: true, firstValue: "9", secondConnected: true, secondValue: "8" });
     const rail = page.getByLabel("Scroll retained embedded edits");
     // Deliberate rail focus may blur the failed editor. Scroll is still performed
     // by trusted keyboard/wheel input; no private offset or editor entry is used.
-    await rail.focus(); await phase("first-rail-focus"); await page.keyboard.press("Home"); await phase("rail-home");
+    await rail.focus(); await page.keyboard.press("Home");
     await expect.poll(() => rail.evaluate(element => element.scrollTop)).toBe(0);
     const firstReturn = record(page, 1).getByRole("button", { name: "Return to embed" });
     expect(await firstReturn.evaluate(button => { const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
-    await firstReturn.click(); await phase("first-return");
+    await firstReturn.click();
     await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.find((item: any) => item.id === 1)?.state)).toBe("inline");
     await page.evaluate(() => { (window as any).__failedLayerFiles.delete("Source.md"); });
     await record(page, 1).getByRole("button", { name: "Retry Base save" }).click();
-    await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9")); await phase("first-retry-ack");
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
     expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
     expect(await page.evaluate(() => ({ pending: (window as any).nativeLayerHarness.scope.hasUnacknowledgedWrites, connected: (window as any).__layerProbe.input.isConnected, value: (window as any).__layerProbe.input.value }))).toEqual({ pending: true, connected: true, value: "8" });
-    await rail.focus(); await phase("second-rail-focus"); await rail.hover(); await phase("rail-hover"); await page.mouse.wheel(0, -1000); await phase("rail-wheel");
+    await rail.focus(); await rail.hover(); await page.mouse.wheel(0, -1000);
     await expect.poll(() => rail.evaluate(element => element.scrollTop)).toBe(0);
-    await phase("before-second-retry-hit");
     const secondRetry = record(page, 2).getByRole("button", { name: "Retry Base save" });
-    expect(await secondRetry.evaluate(button => {
-      const rect = button.getBoundingClientRect();
-      const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-      const hit = document.elementFromPoint(x, y);
-      const describe = (element: Element | null) => element ? {
-        tag: element.tagName, className: element.className,
-        occurrence: element.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence,
-        text: element.textContent?.slice(0, 160), button: element.closest("button")?.textContent,
-      } : null;
-      const ancestors = [];
-      for (let element: HTMLElement | null = button as HTMLElement; element; element = element.parentElement) {
-        const style = getComputedStyle(element);
-        ancestors.push({ ...describe(element), rect: element.getBoundingClientRect().toJSON(),
-          overflowX: style.overflowX, overflowY: style.overflowY, position: style.position, transform: style.transform,
-          clipPath: style.clipPath, scrollLeft: element.scrollLeft, scrollTop: element.scrollTop,
-          scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight,
-          clientWidth: element.clientWidth, clientHeight: element.clientHeight, offsetParent: describe(element.offsetParent),
-        });
-      }
-      // Same synchronous evaluation and unchanged hit assertion/action sequence.
-      (window as any).__secondRetryAtomic = { point: { x, y }, rect: rect.toJSON(), hit: describe(hit),
-        hitStack: document.elementsFromPoint(x, y).map(describe), ancestors };
-      return hit === button || button.contains(hit);
-    })).toBe(true);
+    expect(await secondRetry.evaluate(button => { const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
     await page.screenshot({ path: info.outputPath("independent-failed-recovery.png") });
     await page.evaluate(() => { (window as any).__failedLayerFiles.delete("Other.md"); });
     await secondRetry.click();
