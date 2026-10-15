@@ -106,7 +106,7 @@ export async function findOutgoingMentions(
     if (target.path === sourcePath || options.excluded?.(target.path)) continue;
     const seen = new Set<string>();
     for (const name of new Set([target.basename, ...target.aliases])) {
-      if (!name || name.includes("\n") || name.length > available.length) continue;
+      if (!name.trim() || name.includes("\n") || name.length > available.length) continue;
       work += available.length;
       if (work >= 32768) { work = 0; await cooperate(); }
       const first = Array.from(name)[0], last = Array.from(name).at(-1)!;
@@ -116,8 +116,9 @@ export async function findOutgoingMentions(
         work += 1024;
         if (work >= 32768) { work = 0; await cooperate(); }
         const from = match.index, to = from + match[0].length;
-        const before = Array.from(available.slice(Math.max(0, from - 2), from)).at(-1) ?? "";
-        const after = Array.from(available.slice(to, to + 2))[0] ?? "";
+        if (source.slice(from, to) !== match[0]) continue;
+        const before = Array.from(text.slice(Math.max(0, from - 2), from)).at(-1) ?? "";
+        const after = Array.from(text.slice(to, to + 2))[0] ?? "";
         if ((word.test(first) && word.test(before)) || (word.test(last) && word.test(after))) continue;
         const key = `${from}:${to}`;
         if (seen.has(key)) continue;

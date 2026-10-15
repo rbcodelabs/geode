@@ -87,3 +87,13 @@ it("masks nested Markdown labels, parenthesized URLs, references and HTML withou
   const result = await api.findOutgoingMentions("[outer [Atlas]](note(1).md) [Atlas][id]\n[id]: Atlas.md\n<a title='Atlas'> Atlas", source, targets.slice(0, 1));
   expect(result.mentions.map(mention => mention.text)).toEqual(["Atlas"]);
 });
+
+it("does not match artificial spaces from masking or a partial word at the source limit", async () => {
+  const aliases = [{ path: "Target.md", basename: "Target", aliases: [" ", "Atlas "] }];
+  const masked = await api.findOutgoingMentions("Atlas[[Linked]]", source, aliases);
+  expect(masked.mentions).toEqual([]);
+  const text = " ".repeat(128 * 1024 - 5) + "AtlasLonger";
+  const limited = await api.findOutgoingMentions(text, source, targets.slice(0, 1));
+  expect(limited.mentions).toEqual([]);
+  expect(limited.limited).toBe(true);
+});
