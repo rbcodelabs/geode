@@ -215,7 +215,7 @@ for (const mode of ["Reading", "Live Preview"] as const) {
           const tabs = (window as any).__backgroundTabs;
           (window as any).__backgroundTrustedActivation = event.isTrusted;
           (window as any).app.workspace.setActiveLeaf(tabs.other, { focus: false });
-        }, { once: true });
+        }, { capture: true, once: true });
       });
       await page.keyboard.press("F8");
       expect(await page.evaluate(() => (window as any).__backgroundTrustedActivation)).toBe(true);
