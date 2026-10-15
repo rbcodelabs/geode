@@ -56,7 +56,10 @@ export class RenderScope {
   resume(): void {
     if (this.state !== "frozen") return;
     this.state = "active"; this.generation++;
-    for (const child of this.children) child.resume(); this.options.resume?.();
+    const errors: unknown[] = [];
+    for (const child of this.children) { try { child.resume(); } catch (error) { errors.push(error); } }
+    try { this.options.resume?.(); } catch (error) { errors.push(error); }
+    raise(errors);
   }
   close(): Promise<void> {
     if (this.closing) return this.closing;
@@ -64,10 +67,14 @@ export class RenderScope {
     this.closing = Promise.resolve().then(async () => {
       const errors: unknown[] = [];
       try { await this.drainTasks(); } catch (error) { errors.push(error); }
-      for (const child of [...this.children]) { try { await child.close(); } catch (error) { errors.push(error); } }
-      try { await this.options.close?.(); } catch (error) { errors.push(error); }
-      if (errors.length && this.parent && !this.parent.closing) this.parent.failures.push(...errors);
-      this.parent?.children.delete(this); if (this.owner && !errors.length) this.registry.retire(this.owner, this);
+      if (!errors.length) for (const child of [...this.children]) {
+        try { await child.close(); } catch (error) { errors.push(error); break; }
+      }
+      if (!errors.length) { try { await this.options.close?.(); } catch (error) { errors.push(error); } }
+      if (!errors.length) {
+        this.parent?.children.delete(this);
+        if (this.owner) this.registry.retire(this.owner, this);
+      }
       raise(errors);
     });
     // Existing widget destroy() callers may begin tracked teardown synchronously.
@@ -86,7 +93,7 @@ export class RenderOwnership {
   }
   retire(owner: object, scope: RenderScope): void { if (this.roots.get(owner) === scope) this.roots.delete(owner); }
   select(owners: ReadonlySet<object>): RenderScope[] {
-    if ([...this.roots.keys()].some(owner => !owners.has(owner))) throw new Error("A native writer is outside the registered workspace ownership tree.");
+    if ([...this.roots].some(([owner, scope]) => !owners.has(owner) && scope.writers().length > 0)) throw new Error("A native writer is outside the registered workspace ownership tree.");
     return [...this.roots.values()];
   }
   async hold(owners: ReadonlySet<object>): Promise<RenderScope[]> {
@@ -98,7 +105,10 @@ export class RenderOwnership {
   }
   release(scopes: readonly RenderScope[]): void {
     if (this.holding !== scopes) throw new Error("This ownership hold is no longer current.");
-    this.holding = null; this.admissionOpen = true; for (const scope of scopes) scope.resume();
+    this.holding = null; this.admissionOpen = true;
+    const errors: unknown[] = [];
+    for (const scope of scopes) { try { scope.resume(); } catch (error) { errors.push(error); } }
+    raise(errors);
   }
 }
 const registries = new WeakMap<object, RenderOwnership>();
