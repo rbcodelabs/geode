@@ -32,19 +32,46 @@ test("Web Viewer live lifecycle defers/restores tabs and refreshes all availabil
     await expect(enabled).toBeChecked();
     await expect(window.getByRole("button", { name: "Open browser" })).toBeVisible();
 
+    // Force the first availability observation to happen before persistence
+    // completes. A slow write must not cause the observation to execute a command.
+    await window.evaluate(() => {
+      const a = (window as any).app;
+      const original = a.host.config.write.bind(a.host.config);
+      const gate = { entered: false, released: false, firstEnabled: undefined as boolean | undefined, release: undefined as (() => void) | undefined, original };
+      (window as any).__webViewerDisableGate = gate;
+      a.host.config.write = async (name: string, value: any) => {
+        if (name === "web-viewer" && value.enabled === false && !gate.entered) {
+          gate.entered = true;
+          await new Promise<void>(resolve => { gate.release = resolve; });
+        }
+        return original(name, value);
+      };
+    });
     await enabled.uncheck();
+    await window.waitForFunction(() => (window as any).__webViewerDisableGate?.entered);
     await expect.poll(() => window.evaluate(() => {
       const a = (window as any).app;
-      return {
+      const state = {
         deferred: a.workspace.getLeavesOfType("webviewer")[0]?.view.constructor.name,
         descriptorSame: a.internalPlugins.getPluginById("webviewer") === (window as any).__webDescriptor,
         optionsSame: (window as any).__webDescriptor.instance.options === (window as any).__webOptions,
         enabled: (window as any).__webDescriptor.enabled,
         enabledLookup: a.internalPlugins.getEnabledPluginById("webviewer"),
         openCommand: a.commands.findCommand("open-web-viewer")?.checkCallback(true),
-        searchCommand: a.commands.execute("search-web"),
+        searchCommand: a.commands.findCommand("search-web")?.checkCallback(true),
       };
+      const gate = (window as any).__webViewerDisableGate;
+      if (!gate.released) {
+        gate.firstEnabled = state.enabled;
+        gate.released = true;
+        gate.release();
+      }
+      return state;
     })).toEqual({ deferred: "DeferredView", descriptorSame: true, optionsSame: true, enabled: false, enabledLookup: null, openCommand: false, searchCommand: false });
+    expect(await window.evaluate(() => (window as any).__webViewerDisableGate.firstEnabled)).toBe(true);
+    await expect(window.getByPlaceholder("Search the web…", { exact: true })).toHaveCount(0);
+    expect(await window.evaluate(() => (window as any).app.commands.execute("search-web"))).toBe(false);
+    await expect(window.locator(".modal-container")).toHaveCount(1);
     await expect(window.getByRole("button", { name: "Open browser" })).toHaveCount(0);
     await window.evaluate(() => (window as any).app.openEmptyTab((window as any).app.workspace.activeGroup));
     await expect(window.getByRole("button", { name: "Open browser" })).toHaveCount(0);
@@ -99,6 +126,13 @@ test("Web Viewer live lifecycle defers/restores tabs and refreshes all availabil
       return { external, added: a.workspace.getLeavesOfType("webviewer").length - before };
     })).toEqual({ external: [], added: 1 });
   } finally {
+    await window.evaluate(() => {
+      const gate = (window as any).__webViewerDisableGate;
+      if (!gate) return;
+      gate.release?.();
+      (window as any).app.host.config.write = gate.original;
+      delete (window as any).__webViewerDisableGate;
+    });
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
