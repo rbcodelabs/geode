@@ -27,6 +27,7 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
     const retainedInputs = await page.evaluate(() => [(window as any).__firstFailedLayerInput, (window as any).__layerProbe?.input].filter(Boolean).map(input => ({ connected: input.isConnected, value: input.value, focused: document.activeElement === input, occurrence: input.closest(".native-prototype-record")?.dataset.occurrence }))).catch(error => String(error));
     const geometry = await page.evaluate(() => ({
       heightMeasurements: (window as any).__heightMeasurements,
+      mixedHeightGeometry: (window as any).__mixedHeightGeometry,
       validationCalls: (window as any).__layerValidationCalls,
       retirementAttempts: (window as any).__layerRetirementAttempts,
       resumes: (window as any).__layerResumeCounts,
@@ -381,4 +382,66 @@ test("measured native frame height converges with its CM placeholder after delay
       };
     });
   });
+});
+test("unequal retained native frames preserve spacing, focused exposure and real recovery controls", async ({}, info) => {
+  const doc = source.slice(0, 2000) + "\n![[Board.canvas]]\n\n" + "Tail paragraph.\n\n".repeat(400);
+  await withPrototype(info, async (page, vault) => {
+    await page.evaluate(() => {
+      const app = (window as any).app; const modify = app.vault.modify.bind(app.vault);
+      (window as any).__mixedFailedFiles = new Set(["Source.md", "Other.md"]);
+      app.vault.modify = (file: any, text: string) => (window as any).__mixedFailedFiles.has(file.path)
+        ? Promise.reject(new Error(`synthetic mixed-height ${file.path} failure`)) : modify(file, text);
+    });
+    const first = await edit(page); await first.evaluate(input => { (window as any).__firstFailedLayerInput = input; (window as any).__mixedFirstRoot = input.closest(".native-prototype-record"); (window as any).__mixedFirstParent = (window as any).__mixedFirstRoot.parentElement; });
+    await first.press("Enter"); await expect(record(page, 1).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]", 100)).top; });
+    const second = await edit(page, 2, "Other", "8"); await capture(page, second);
+    await second.press("Enter"); await expect(record(page, 2).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await record(page, 1).evaluate(root => { root.style.height = "400px"; });
+    await record(page, 2).evaluate(root => { root.style.height = "200px"; });
+    await expect.poll(() => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".native-prototype-record")].map(root => root.getBoundingClientRect().height))).toEqual([400, 200]);
+    await scrollAway(page); await unchanged(page, vault, "8");
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.map((item: any) => item.state))).toEqual(["retained", "retained"]);
+    expect(await page.evaluate(() => {
+      const first = (window as any).__firstFailedLayerInput; const second = (window as any).__layerProbe;
+      return { independent: first !== second.input, firstConnected: first.isConnected, firstValue: first.value,
+        firstRoot: first.closest(".native-prototype-record") === (window as any).__mixedFirstRoot,
+        firstParent: (window as any).__mixedFirstRoot.parentElement === (window as any).__mixedFirstParent,
+        secondConnected: second.input.isConnected, secondValue: second.input.value,
+        secondRoot: second.input.closest(".native-prototype-record") === second.root, secondParent: second.root.parentElement === second.parent };
+    })).toEqual({ independent: true, firstConnected: true, firstValue: "9", firstRoot: true, firstParent: true,
+      secondConnected: true, secondValue: "8", secondRoot: true, secondParent: true });
+    const geometry = await page.evaluate(() => {
+      const roots = [...document.querySelectorAll<HTMLElement>(".native-prototype-record")].map(root => root.getBoundingClientRect().toJSON());
+      const rail = document.querySelector<HTMLElement>('[aria-label="Scroll retained embedded edits"]')!;
+      const snapshot = { roots, cameras: (window as any).nativeLayerHarness.native.map((view: any) => ({ pan: { ...view.pan }, scale: view.scale })), rail: rail.getBoundingClientRect().toJSON(), scrollHeight: rail.scrollHeight, clientHeight: rail.clientHeight };
+      (window as any).__mixedHeightGeometry = snapshot; return snapshot;
+    });
+    expect(geometry.roots.map(root => root.height)).toEqual([400, 200]);
+    expect(geometry.roots[1].top - geometry.roots[0].bottom).toBeGreaterThanOrEqual(8);
+    expect(geometry.scrollHeight).toBe(616);
+    expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
+    expect(geometry.roots[1].top).toBeGreaterThanOrEqual(geometry.rail.top);
+    expect(geometry.roots[1].bottom).toBeLessThanOrEqual(geometry.rail.bottom + 1);
+    const rail = page.getByLabel("Scroll retained embedded edits");
+    await rail.focus(); await page.keyboard.press("Home"); await expect.poll(() => rail.evaluate(element => element.scrollTop)).toBe(0);
+    const firstReturn = record(page, 1).getByRole("button", { name: "Return to embed" });
+    expect(await firstReturn.evaluate(button => { const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
+    await firstReturn.click(); await page.evaluate(() => (window as any).__mixedFailedFiles.delete("Source.md"));
+    await record(page, 1).getByRole("button", { name: "Retry Base save" }).click();
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+    expect(await page.evaluate(() => {
+      const p = (window as any).__layerProbe;
+      return { connected: p.input.isConnected, value: p.input.value, sameRoot: p.input.closest(".native-prototype-record") === p.root,
+        sameParent: p.root.parentElement === p.parent };
+    })).toEqual({ connected: true, value: "8", sameRoot: true, sameParent: true });
+    await rail.focus(); await rail.hover(); await page.mouse.wheel(0, -1000);
+    const note = record(page, 2).locator(".canvas-node-note"); await note.hover(); await page.mouse.wheel(0, -1000);
+    const secondRetry = record(page, 2).getByRole("button", { name: "Retry Base save" });
+    expect(await secondRetry.evaluate(button => { (window as any).__mixedHeightGeometry.camerasAfterTrustedWheel = (window as any).nativeLayerHarness.native.map((view: any) => ({ pan: { ...view.pan }, scale: view.scale })); const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
+    await page.evaluate(() => (window as any).__mixedFailedFiles.delete("Other.md")); await secondRetry.click();
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal.replace("priority: 4", "priority: 8"));
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+  }, doc);
 });
