@@ -7313,5 +7313,15 @@ button.metadata-add-button { width: 100%; text-align: left; background: transpar
 .metadata-property-remove:focus-visible { opacity: 1; }
 
 /* Compact native picker keeps the shared property row aligned in the sidebar. */
-select.metadata-property-type { width: 36px; min-width: 36px; padding: 2px 0; font: inherit; font-size: 12px; color: var(--text-muted); background-color: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 4px; }
+select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; font: inherit; font-size: 12px; color: transparent; background: transparent; appearance: none; position: relative; border: 1px solid var(--background-modifier-border); border-radius: 4px; }
+.metadata-type-control { position: relative; width: 28px; }
+.metadata-type-glyph { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; color: var(--text-muted); }
+.metadata-property-type option { color: var(--text-normal); background: var(--background-primary); }
+.metadata-properties { container-type: inline-size; container-name: property-editor; }
+@container property-editor (max-width: 450px) {
+  .metadata-property:has(input[type="date"]), .metadata-property:has(input[type="datetime-local"]) { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; }
+  .metadata-property:has(input[type="date"]) .metadata-property-key, .metadata-property:has(input[type="datetime-local"]) .metadata-property-key { width: auto; max-width: none; min-width: 0; }
+  .metadata-property:has(input[type="date"]) .metadata-property-value, .metadata-property:has(input[type="datetime-local"]) .metadata-property-value { grid-column: 1 / -1; }
+  .metadata-property:has(input[type="date"]) .metadata-property-remove, .metadata-property:has(input[type="datetime-local"]) .metadata-property-remove { grid-column: 2; grid-row: 1; }
+}
 .metadata-property-value input[type="date"], .metadata-property-value input[type="datetime-local"] { min-width: 0; max-width: 100%; }

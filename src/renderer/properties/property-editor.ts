@@ -102,11 +102,14 @@ export class PropertyEditor {
     const type = this.options.types?.getType(key, value) ?? (Array.isArray(value) ? "list" : typeof value === "boolean" ? "checkbox" : typeof value === "number" ? "number" : "text");
     const compatible = supported && isPropertyTypeValue(type, value);
     const keyCell = document.createElement("div"); keyCell.className = "metadata-property-key";
-    const icon = document.createElement("select"); icon.className = "metadata-property-icon metadata-property-type";
+    const typeControl = document.createElement("span"); typeControl.className = "metadata-property-icon metadata-type-control";
+    const glyphs: Record<string, string> = { text: "Aa", list: "≡", tags: "#", number: "#", checkbox: "☑", date: "▦", datetime: "◷" };
+    const glyph = document.createElement("span"); glyph.className = "metadata-type-glyph"; glyph.textContent = glyphs[type] ?? "?"; glyph.setAttribute("aria-hidden", "true");
+    const icon = document.createElement("select"); icon.className = "metadata-property-type";
     icon.setAttribute("aria-label", `Type: ${key}`); icon.title = `Property type: ${type}`;
     const choices = ["tags", "aliases", "cssclasses"].includes(key.toLowerCase()) ? [type] : [...PROPERTY_TYPES];
     if (!choices.includes(type)) choices.unshift(type as typeof PROPERTY_TYPES[number]);
-    for (const choice of choices) { const option = document.createElement("option"); option.value = choice; option.textContent = `${({ text: "Aa", list: "≡", tags: "#", number: "#", checkbox: "☑", date: "▦", datetime: "◷" } as Record<string, string>)[choice] ?? "?"} ${choice}`; icon.append(option); }
+    for (const choice of choices) { const option = document.createElement("option"); option.value = choice; option.textContent = `${glyphs[choice] ?? "?"} ${choice}`; icon.append(option); }
     this.identity(icon, key, "type");
     icon.value = type; icon.disabled = !editable || !supported || !this.options.types || choices.length === 1;
     icon.addEventListener("change", () => {
@@ -117,7 +120,7 @@ export class PropertyEditor {
     });
     const name = document.createElement("input"); name.className = "metadata-input metadata-key-input"; name.value = key; name.disabled = !editable || !supported; name.setAttribute("aria-label", `Property name: ${key}`); this.identity(name, key, "name");
     this.wireInput(name, () => { if (name.value.trim() !== key) this.apply({ kind: "rename", key, name: name.value, expected: value }, name); else { this.dirty = false; this.error = ""; this.refresh(true); } });
-    keyCell.append(icon, name);
+    typeControl.append(glyph, icon); keyCell.append(typeControl, name);
     const valueCell = document.createElement("div"); valueCell.className = "metadata-property-value";
     if (!supported) { const warning = document.createElement("span"); warning.textContent = "Nested value — edit source"; valueCell.append(warning, this.sourceButton()); }
     else if (!compatible) { const warning = document.createElement("span"); warning.textContent = `This value cannot be edited as ${type}. Choose another type or edit source.`; valueCell.append(warning, this.sourceButton()); }
