@@ -169,7 +169,7 @@ it("refuses an active Base cell draft before flushing its definition or row targ
 it("settles both Base definition and row writes and propagates row rejection", async () => {
   const view = Object.create(BaseView.prototype) as any; let finish!: () => void; let settled = false;
   const pending = new Promise<void>(resolve => { finish = resolve; });
-  Object.assign(view, { sourceEdit: null, sourceConflictReadOnly: false, persistRequestedWhileSuspended: false, persistQueue: Promise.resolve(), sourcePersistsInFlight: new Set([pending]) });
+  Object.assign(view, { tableView: { editIdentity: null }, sourceEdit: null, sourceConflictReadOnly: false, persistRequestedWhileSuspended: false, persistQueue: Promise.resolve(), sourcePersistsInFlight: new Set([pending]) });
   const settling = view.settleWorkspaceLoad().then(() => { settled = true; }); await Promise.resolve(); expect(settled).toBe(false); finish(); await settling;
   const failed = Promise.reject(new Error("row write failed")); void failed.catch(() => {}); view.sourcePersistsInFlight = new Set([failed]);
   await expect(view.settleWorkspaceLoad()).rejects.toThrow("row write failed");
@@ -203,7 +203,7 @@ it("retains a Base row target until every concurrent write to that note settles"
 });
 it("observes a fire-and-forget Base definition failure while preserving it for the barrier", async () => {
   const view = Object.create(BaseView.prototype) as any;
-  Object.assign(view, { vaultSwitching: false, definitionWritesPending: 0, persistQueue: Promise.resolve(), doPersist: async () => { throw new Error("definition write failed"); }, sourceEdit: null, sourceConflictReadOnly: false, persistRequestedWhileSuspended: false, sourcePersistsInFlight: new Set() });
+  Object.assign(view, { vaultSwitching: false, definitionWritesPending: 0, persistQueue: Promise.resolve(), doPersist: async () => { throw new Error("definition write failed"); }, sourceEdit: null, tableView: { editIdentity: null }, sourceConflictReadOnly: false, persistRequestedWhileSuspended: false, sourcePersistsInFlight: new Set() });
   void view.persist(); await new Promise(resolve => setImmediate(resolve));
   await expect(view.settleWorkspaceLoad()).rejects.toThrow("definition write failed");
 });
