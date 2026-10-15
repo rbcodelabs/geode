@@ -155,9 +155,10 @@ export class NativePresentationPrototype {
     const scope = this.options.owner.child();
     const root = document.createElement("section"); root.className = "native-prototype-record"; root.dataset.occurrence = String(occurrence.id);
     Object.assign(root.style, { position: "absolute", top: "0", left: "8px", width: "calc(100% - 32px)", height: "320px", display: "flex", flexDirection: "column", pointerEvents: "auto", background: "var(--background-primary)", border: "1px solid var(--background-modifier-border)", borderRadius: "6px" });
-    const header = document.createElement("div"); Object.assign(header.style, { flex: "0 0 38px", display: "flex", gap: "8px", alignItems: "center", padding: "4px 8px", background: "var(--background-secondary)" });
-    const label = document.createElement("span"); label.style.flex = "1";
+    const header = document.createElement("div"); Object.assign(header.style, { flex: "0 0 auto", minHeight: "38px", display: "flex", flexWrap: "wrap", gap: "4px 8px", alignItems: "center", padding: "4px 8px", boxSizing: "border-box", background: "var(--background-secondary)" });
+    const label = document.createElement("span"); Object.assign(label.style, { flex: "1 1 160px", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
     const returnButton = document.createElement("button"); returnButton.textContent = "Return to embed";
+    Object.assign(returnButton.style, { maxWidth: "100%", minWidth: "0", whiteSpace: "normal", overflowWrap: "anywhere", boxSizing: "border-box" });
     // Returning changes only the anchor viewport; pointer focus must not submit
     // the unfinished native editor before the click handler gets to run.
     returnButton.addEventListener("pointerdown", event => { if (event.button === 0) event.preventDefault(); });
@@ -223,7 +224,7 @@ export class NativePresentationPrototype {
         record.root.inert = record.lifetime.failedClosed;
         record.returnButton.hidden = record.lifetime.failedClosed || record.state === "inline" || !valid;
         const text = nativePresentationLabel(record.occurrence, valid, record.mountError, record.lifetime.failedClosed);
-        if (record.label.textContent !== text) record.label.textContent = text;
+        if (record.label.textContent !== text) { record.label.textContent = text; record.label.title = text; }
         if (anchor && Math.abs(anchor.height - height) > 1) this.options.onHeight?.(record.occurrence.id, height);
         if (canAllocateNative(this.options.owner, this.disposed) && offscreen && (record.seenAnchor || !valid) && record.retryRetirement && !record.lifetime.failedClosed) {
           this.retireRecord(record);

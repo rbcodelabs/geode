@@ -155,3 +155,28 @@ are linked from `../screenshots/native-layer-prototype/README.md`. Multiple
 simultaneously retained failures and their actual rail reachability, tab visibility
 semantics, readonly/partial-failure UI, narrow/dark state and clean churn still
 require additional proofs before production wiring.
+
+## Focus correction and narrow header boundary
+
+The independently reviewed minimal Base blur-focus correction `35f0268` was ported
+as `07eaeed`, without the unrelated integration/Entry changes. Its separate full
+unit gate passes 380 files: 5,203 ordinary passes, one expected-failure diagnostic
+and three existing skips, exit0, 247 seconds. This does not include the private
+prototype branch's actual default production viewport RED.
+
+At `07eaeed`, the actual twelve-case matrix finishes **11 PASS, 1 FAIL**, retries0.
+Keyboard Return now passes without changing the original assertion. Owner close
+refuses the original connected `9`, then actual Cancel permits one awaited close.
+Clean viewport churn retires and reacquires a fresh actual native chain. The dark
+760px desktop case keeps exact original provider bytes, focused connected `9`,
+same parent and zero blur, but Return's center hit-test fails. With both desktop
+sidebars visible, the remaining center pane is very narrow; the header's label
+pushes Return beyond its clipped right edge. The Base priority column is also
+clipped. Archive: `/private/tmp/geode-native-layer-prototype-twelve-artifacts`.
+
+The coordinator accepted a private header-only correction: wrapping rows inside
+the same fixed native frame, auto header height, shrinkable/truncated label with
+full text/title preserved, and Return constrained to available width. No native
+root is moved, focused or replaced. The original dark hit assertion remains.
+Actual rerun is pending. Even if Return passes, this does not establish reachable
+Base columns or complete narrow/mobile layout support.
