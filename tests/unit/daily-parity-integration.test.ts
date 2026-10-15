@@ -2,16 +2,17 @@ import { describe, expect, it } from "vitest";
 import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { history, undo } from "@codemirror/commands";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { MarkdownView } from "../../src/renderer/views/markdown-view";
 import { foldCommand, foldingExtensions, multipleSelectionExtensions, savedFolds } from "../../src/renderer/markdown/folding";
 import { mutateProperty } from "../../src/renderer/properties/property-source";
 import { projectFootnotes } from "../../src/renderer/footnotes-pane";
+import { geodeCommentMarkerSyntax } from "../../src/renderer/comments/marker-syntax";
 
 const source = "---\nstatus: old\n---\n# Parent\nWorld map[^a]\n\n[^a]: First note\n# Next\nalpha\nbravo\n";
 function fixture() {
   const settings = { foldHeading: true, foldIndent: true };
-  let state = EditorState.create({ doc: source, extensions: [history(), markdown(), foldingExtensions(settings), multipleSelectionExtensions()] });
+  let state = EditorState.create({ doc: source, extensions: [history(), markdown({ base: markdownLanguage, extensions: [geodeCommentMarkerSyntax] }), foldingExtensions(settings), multipleSelectionExtensions()] });
   const editor = { get state() { return state; }, dispatch(spec: TransactionSpec) { state = state.update(spec).state; } };
   const view = Object.create(MarkdownView.prototype) as MarkdownView;
   Object.assign(view, { editor, mode: "source", vaultSwitching: false, conflictReadOnly: false });
@@ -22,6 +23,7 @@ describe("combined daily editing contracts", () => {
   it("keeps a folded live buffer and preceding body edit through property, link and footnote undo", async () => {
     const { view, editor, settings } = fixture();
     expect(foldCommand(editor as unknown as EditorView, "all", settings)).toBe(true);
+    expect(savedFolds(editor.state).ranges).toHaveLength(2);
     editor.dispatch({ changes: { from: editor.state.doc.length, insert: "Dirty body\n" } });
     const dirty = view.getText();
     const property = mutateProperty(dirty, { kind: "set", key: "status", value: "new", expected: "old" });

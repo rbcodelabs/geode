@@ -1,16 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { foldEffect, foldedRanges } from "@codemirror/language";
 import { foldingExtensions, foldRanges, foldCommand, restoreFolds, savedFolds, multipleSelectionExtensions } from "../../src/renderer/markdown/folding";
+import { geodeCommentMarkerSyntax } from "../../src/renderer/comments/marker-syntax";
 
 const enabled = { foldHeading: true, foldIndent: true };
 function state(doc: string, settings = enabled) {
-  return EditorState.create({ doc, extensions: [markdown(), foldingExtensions(settings)] });
+  return EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage, extensions: [geodeCommentMarkerSyntax] }), foldingExtensions(settings)] });
 }
 function ranges(doc: string, settings = enabled) { return foldRanges(state(doc, settings), settings); }
 
 describe("Markdown folding", () => {
+  it("does not fold YAML properties as a Setext heading with the production Markdown parser", () => {
+    const doc = "---\nstatus: new\n---\n# Parent\nWorld map[^a]\n\n[^a]: First note\n# Next\nalpha\nbravo\n";
+    const current = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage, extensions: [geodeCommentMarkerSyntax] }), foldingExtensions(enabled)] });
+    expect(foldRanges(current, enabled).map(range => current.doc.lineAt(range.from).text)).toEqual(["# Parent", "# Next"]);
+  });
+  it("excludes YAML lists and code-looking values while retaining body Setext and list folds", () => {
+    const current = state('---\nitems:\n  - first\n  - second\nexample: "```"\n---\nTitle\n=====\nbody\n- parent\n  - nested\n');
+    expect(foldRanges(current, enabled).map(range => current.doc.lineAt(range.from).text)).toEqual(["Title", "- parent"]);
+  });
+  it("locates closed CRLF frontmatter in normalized CM text without hiding body headings", () => {
+    const current = state("---\r\nstatus: new\r\n---\r\n# Body\r\ncontent\r\n");
+    expect(foldRanges(current, enabled).map(range => current.doc.lineAt(range.from).text)).toEqual(["# Body"]);
+  });
+  it("keeps ordinary Markdown behavior for an unclosed leading delimiter", () => {
+    const current = state("---\ntitle: text\n# Body\ncontent\n");
+    expect(foldRanges(current, enabled).map(range => current.doc.lineAt(range.from).text)).toEqual(["# Body"]);
+  });
   it("folds nested headings to the next equal or higher heading", () => {
     const doc = "# One\nbody\n## Child\nchild body\n# Two\nend";
     expect(ranges(doc)).toEqual([

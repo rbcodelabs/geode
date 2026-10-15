@@ -65,15 +65,44 @@ New real Electron tests exercise actual Properties, Outgoing and Footnotes panes
 against one CRLF note, preserve a body edit confirmed absent from disk before
 the property commit, and require exact isolated undo and final CRLF autosave.
 A second flow checks both settings surfaces, folding and multiple-selection
-formatting without losing the property update. These tests are authored and
-listed successfully; actual Electron execution remains queued until root grants
-the serialized slot. Original feature RED evidence is retained; no new integration
-defect has yet been reproduced or fixed beyond the explicit conflict resolutions.
+formatting without losing the property update. Original feature RED evidence is
+retained. The first actual combined Electron run on `a14394a` passed 17 of 18
+flows without retries and exposed the frontmatter folding defect below.
 
-At this checkpoint, nine targeted unit files pass 59 tests, including two new
-joint tests. Typecheck and build pass locally using locked Electron 42.10.0 and
+At initial checkpoint `a68ff4d`, nine targeted unit files passed 59 tests, including
+two new joint tests. Typecheck and build passed locally using locked Electron 42.10.0 and
 Vitest 4.1.11. `pm-config.md` has no compute_offload entry. Logs are retained by
-the coordinator. Full unit and Electron gates, independent resolution review and
-shared screenshot publication remain pending. Local copied feature images do
+the coordinator. Its host full unit gate passed 332 files, 4,820 ordinary checks,
+one documented expected failure and three existing skips; the initial sandboxed
+attempt was aborted after denied local HTTP/native probes and is not evidence.
+Root independently reviewed the conflict resolutions and new tests. A subsequent
+test-only Web Viewer polling correction is carried as `a14394a`; production and
+unit source were unchanged by that carry. Full Electron and shared screenshot
+publication remain pending. Local copied feature images do
 not establish a combined UI capture or completed publication. No parity ledger
 status, production release or PR-ready claim is made here.
+
+## Integration defect: frontmatter counted as a body fold
+
+The combined Electron test expected the two authored body headings to fold and
+observed three folds. A new unit using the exact production Markdown parser
+returned heading lines `status: new`, `# Parent`, `# Next`: Lezer interprets the
+leading YAML property/closing delimiter as a Setext heading. This is a real
+cross-feature defect, not a reason to accept three folds. The original joint unit
+folded before replacing frontmatter, so that replacement removed the erroneous
+range and hid the initial availability problem.
+
+Before changing source, four unit checks failed with the old implementation:
+initial joint fold count, production-parser YAML exclusion, YAML lists/code-looking
+values with real body folds, and CRLF input. The source correction reuses the
+existing non-parsing getFrontMatterInfo helper to skip folding candidates before
+contentStart. It continues traversing the root and body descendants, preserves
+body Setext/list behavior and keeps existing unclosed-delimiter semantics. No
+syntax rewrite, dependency, note-byte or public API change is involved.
+
+Both folding and joint units now use the production parser configuration. Nine
+targeted files pass 63 checks after the correction. Fresh typecheck/build, the
+18-flow Electron rerun, full units and independent correction review must be
+recorded before this changed production source is cleared. Original failing
+artifacts and automatically regenerated screenshots were archived separately;
+the five tracked feature images were restored to their exact committed bytes.
