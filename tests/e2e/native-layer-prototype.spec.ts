@@ -204,3 +204,103 @@ test("clean actual viewport churn retires old native chains before reacquiring t
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
   });
 });
+
+test("two failed retained native chains recover their original files through real rail and Retry controls", async ({}, info) => {
+  const doc = source.slice(0, 2000) + "\n![[Board.canvas]]\n\n" + "Tail paragraph.\n\n".repeat(400);
+  await withPrototype(info, async (page, vault) => {
+    await page.evaluate(() => {
+      const app = (window as any).app; const modify = app.vault.modify.bind(app.vault);
+      (window as any).__failedLayerFiles = new Set(["Source.md", "Other.md"]);
+      app.vault.modify = (file: any, text: string) => (window as any).__failedLayerFiles.has(file.path) ? Promise.reject(new Error(`synthetic ${file.path} failure`)) : modify(file, text);
+    });
+    const first = await edit(page); await first.evaluate(input => { (window as any).__firstFailedLayerInput = input; });
+    await first.press("Enter"); await expect(record(page, 1).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]", 100)).top; });
+    const second = await edit(page, 2, "Other", "8"); await capture(page, second);
+    await second.press("Enter"); await expect(record(page, 2).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await scrollAway(page);
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+    expect(await page.evaluate(() => { const first = (window as any).__firstFailedLayerInput; const second = (window as any).__layerProbe.input; return { independent: first !== second, firstConnected: first.isConnected, firstValue: first.value, secondConnected: second.isConnected, secondValue: second.value }; })).toEqual({ independent: true, firstConnected: true, firstValue: "9", secondConnected: true, secondValue: "8" });
+    const rail = page.getByLabel("Scroll retained embedded edits");
+    // Deliberate rail focus may blur the failed editor. Scroll is still performed
+    // by trusted keyboard/wheel input; no private offset or editor entry is used.
+    await rail.focus(); await page.keyboard.press("Home");
+    await expect.poll(() => rail.evaluate(element => element.scrollTop)).toBe(0);
+    const firstReturn = record(page, 1).getByRole("button", { name: "Return to embed" });
+    expect(await firstReturn.evaluate(button => { const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
+    await firstReturn.click();
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.find((item: any) => item.id === 1)?.state)).toBe("inline");
+    await page.evaluate(() => { (window as any).__failedLayerFiles.delete("Source.md"); });
+    await record(page, 1).getByRole("button", { name: "Retry Base save" }).click();
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+    expect(await page.evaluate(() => ({ pending: (window as any).nativeLayerHarness.scope.hasUnacknowledgedWrites, connected: (window as any).__layerProbe.input.isConnected, value: (window as any).__layerProbe.input.value }))).toEqual({ pending: true, connected: true, value: "8" });
+    await rail.focus(); await rail.hover(); await page.mouse.wheel(0, -1000);
+    await expect.poll(() => rail.evaluate(element => element.scrollTop)).toBe(0);
+    const secondRetry = record(page, 2).getByRole("button", { name: "Retry Base save" });
+    expect(await secondRetry.evaluate(button => { const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return hit === button || button.contains(hit); })).toBe(true);
+    await page.screenshot({ path: info.outputPath("independent-failed-recovery.png") });
+    await page.evaluate(() => { (window as any).__failedLayerFiles.delete("Other.md"); });
+    await secondRetry.click();
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal.replace("priority: 4", "priority: 8"));
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.scope.hasUnacknowledgedWrites)).toBe(false);
+  }, doc);
+});
+
+test("actual native partial destruction stays inert and visible without Return or implicit retry", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    await expect(record(page).locator(".bases-table")).toBeVisible();
+    await page.evaluate(() => {
+      const h = (window as any).nativeLayerHarness; const options = h.native[0].renderOwner.options; const close = options.close;
+      options.close = async () => { await close(); (window as any).__actualLayerDestructorFinished = true; throw new Error("synthetic failure after actual native destructor"); };
+      h.remove(1);
+    });
+    await expect(page.getByRole("alert")).toContainText("teardown failed");
+    await expect(record(page).getByRole("button", { name: "Return to embed" })).toBeHidden();
+    expect(await record(page).evaluate(root => root.inert)).toBe(true);
+    expect(await page.evaluate(() => ({ finished: (window as any).__actualLayerDestructorFinished, closes: (window as any).nativeLayerHarness.snapshot().closes }))).toEqual({ finished: true, closes: 1 });
+    await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.scrollDOM.scrollHeight; });
+    await page.waitForFunction(() => (window as any).nativeLayerHarness.editor.scrollDOM.scrollTop > 500);
+    expect(await page.evaluate(() => ({ allocations: (window as any).nativeLayerHarness.layer.allocations, closes: (window as any).nativeLayerHarness.snapshot().closes }))).toEqual({ allocations: 1, closes: 1 });
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+  });
+});
+
+test("read-only native close validation refusal preserves real controls until explicit Cancel after recovery", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    await expect(record(page).locator(".bases-table")).toBeVisible();
+    await page.evaluate(() => {
+      const h = (window as any).nativeLayerHarness;
+      h.native[0].renderOwner.options.validateClose = async () => { (window as any).__layerValidationCalls = ((window as any).__layerValidationCalls ?? 0) + 1; if (!(window as any).__layerValidationRecovered) throw new Error("synthetic read-only validation failure"); };
+      h.remove(1);
+    });
+    await page.waitForFunction(() => (window as any).__layerValidationCalls > 0);
+    await expect(record(page)).toContainText("source removed");
+    expect(await record(page).evaluate(root => root.inert)).toBe(false);
+    expect(await page.evaluate(() => (window as any).nativeLayerHarness.snapshot().closes)).toBe(0);
+    const input = await edit(page); await capture(page, input); await unchanged(page, vault);
+    await page.evaluate(() => { (window as any).__layerValidationRecovered = true; });
+    await input.press("Escape");
+    await expect.poll(() => page.evaluate(() => (window as any).__layerProbe.root.isConnected)).toBe(false);
+    expect(await page.evaluate(() => (window as any).nativeLayerHarness.snapshot().closes)).toBe(1);
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+  });
+});
+
+test("normal outside CM typing and undo preserve source semantics after deliberate native blur", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    const input = await edit(page); await capture(page, input);
+    const doc = await page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString());
+    const introduction = page.locator(".native-layer-prototype-host .cm-line", { hasText: "Prototype introduction" });
+    await introduction.click();
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+    await page.keyboard.press("Home"); await page.keyboard.type("Outside ");
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString())).toBe(`Outside ${doc}`);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString())).toBe(doc);
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+  });
+});
