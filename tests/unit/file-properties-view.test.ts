@@ -1,3 +1,4 @@
+import { PropertyTypes } from "../../src/renderer/properties/property-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Events } from "../../src/renderer/events";
 import { FilePropertiesView } from "../../src/renderer/views/file-properties-view";
@@ -25,14 +26,14 @@ class Element {
   text(): string { return this.textContent + this.children.map(element => element.text()).join(" "); }
 }
 afterEach(() => vi.unstubAllGlobals());
-function setup() {
+function setup(source = "---\nstatus: old\n---\nUnsaved body", propertyTypes?: PropertyTypes) {
   const body = new Element("body");
   vi.stubGlobal("document", { body, activeElement: body, createElement: (tag: string) => new Element(tag) });
   vi.stubGlobal("HTMLInputElement", Element);
   const file = { path: "Note.md", basename: "Note", extension: "md" };
   const workspace = new Events() as Events & Record<string, any>;
   let currentFile: any = file;
-  let text = "---\nstatus: old\n---\nUnsaved body";
+  let text = source;
   let readonly = false;
   workspace.getActiveFile = () => currentFile;
   const vault = new Events() as Events & Record<string, any>;
@@ -40,7 +41,7 @@ function setup() {
   const owner = { file, mode: "live", getText: vi.fn(() => text), canApplySourceEdit: () => !readonly, applySourceEdit: vi.fn((snapshot: string, from: number, to: number, insert: string) => { if (readonly || snapshot !== text) return false; text = text.slice(0, from) + insert + text.slice(to); return true; }) };
   const metadataCache = new Events();
   let activeOwner = owner;
-  const app = { workspace, vault, metadataCache, getActiveMarkdownView: () => activeOwner, actions: { execute: vi.fn() }, openFile: vi.fn() };
+  const app = { propertyTypes, workspace, vault, metadataCache, getActiveMarkdownView: () => activeOwner, actions: { execute: vi.fn() }, openFile: vi.fn() };
   const view = new FilePropertiesView(app as any); view.onOpen();
   const input = (label: string) => (view.containerEl as unknown as Element).all().find(element => element.attributes["aria-label"] === label)!;
   const enter = (element: Element, value: string) => { element.value = value; element.events.get("input")?.({}); element.events.get("keydown")?.({ key: "Enter", preventDefault() {} }); };
@@ -92,4 +93,53 @@ describe("File properties buffer ownership", () => {
     view.onClose(); owner.getText.mockClear(); workspace.trigger("editor-change", owner); metadataCache.trigger("changed", file);
     expect(owner.getText).not.toHaveBeenCalled();
   });
+});
+
+
+it("uses the shared picker and preserves local datetime seconds until an explicit value edit", () => {
+  const types = new PropertyTypes(); types.setType("Due", "datetime");
+  const state = setup('---\nDue: "2026-10-14T22:49:31"\n---\nUnsaved body', types);
+  expect(state.input("Value: Due").type).toBe("datetime-local");
+  expect(state.input("Value: Due").value).toBe("2026-10-14T22:49:31");
+  state.enter(state.input("Value: Due"), "2026-10-15T08:30:42");
+  expect(state.getText()).toContain("2026-10-15T08:30:42"); expect(state.getText()).toContain("Unsaved body"); state.view.onClose();
+});
+it("changes registry interpretation without rewriting source and disables unsupported values", () => {
+  const types = new PropertyTypes(), state = setup(undefined, types);
+  const picker = state.input("Type: status"); expect(picker).toBeDefined();
+  picker.value = "date"; picker.events.get("change")!({});
+  expect(types.getType("STATUS", "old")).toBe("date"); expect(state.owner.applySourceEdit).not.toHaveBeenCalled();
+  expect((state.view.containerEl as unknown as Element).text()).toContain("cannot be edited as date"); state.view.onClose();
+});
+it("rejects stale and read-only type changes and disposes registry subscriptions", () => {
+  const types = new PropertyTypes(), state = setup(undefined, types);
+  const old = state.input("Type: status"); expect(old).toBeDefined(); state.setReadonly();
+  old.value = "date"; old.events.get("change")!({});
+  expect(types.getPropertyInfo("status")).toBe(null); state.view.onClose();
+});
+
+it("keeps tags scalar text intact, reserves its picker, and displays an unset checkbox", () => {
+  const types = new PropertyTypes(); types.setType("done", "checkbox");
+  const state = setup('---\ntags: "one,two"\ndone: null\n---\nBody', types);
+  expect(state.input("Type: tags").disabled).toBe(true);
+  expect(state.input("Value: tags item 1").value).toBe("one,two");
+  expect((state.input("Value: done") as any).indeterminate).toBe(true); state.view.onClose();
+});
+it("refuses a stale picker after active note change", () => {
+  const types = new PropertyTypes(), state = setup(undefined, types), old = state.input("Type: status");
+  state.switchFile({ path: "Other.md", extension: "md", basename: "Other" }); state.workspace.trigger("file-open");
+  old.value = "date"; old.events.get("change")!({});
+  expect(types.getPropertyInfo("status")).toBe(null); state.view.onClose();
+});
+it("does not commit a dirty old field after a plugin changes its type", () => {
+  const types = new PropertyTypes(), state = setup(undefined, types), old = state.input("Value: status");
+  old.focus(); old.value = "dirty"; old.events.get("input")!({}); types.setType("status", "number");
+  state.enter(old, "123"); expect(state.owner.applySourceEdit).not.toHaveBeenCalled();
+  expect((state.view.containerEl as unknown as Element).text()).toContain("does not match"); state.view.onClose();
+});
+it("allows an explicit unset action for a typed boolean", () => {
+  const types = new PropertyTypes(); types.setType("done", "checkbox");
+  const state = setup("---\ndone: true\n---\nDirty body", types);
+  const clear = state.input("Unset value: done"); expect(clear).toBeDefined(); clear.events.get("click")!({});
+  expect(state.getText()).toContain("done: null"); expect(state.getText()).toContain("Dirty body"); state.view.onClose();
 });

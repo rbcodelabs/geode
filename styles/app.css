@@ -7311,3 +7311,7 @@ button.metadata-add-button { width: 100%; text-align: left; background: transpar
 .file-properties-view .metadata-property-key { width: 38%; min-width: 72px; max-width: 140px; }
 .metadata-property-key .metadata-key-input, .metadata-property-value { min-width: 0; }
 .metadata-property-remove:focus-visible { opacity: 1; }
+
+/* Compact native picker keeps the shared property row aligned in the sidebar. */
+select.metadata-property-type { width: 36px; min-width: 36px; padding: 2px 0; font: inherit; font-size: 12px; color: var(--text-muted); background-color: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 4px; }
+.metadata-property-value input[type="date"], .metadata-property-value input[type="datetime-local"] { min-width: 0; max-width: 100%; }
