@@ -26,11 +26,16 @@ export class RenderScope {
   child(options: ScopeOptions = {}): RenderScope {
     this.assertAdmission(); const child = new RenderScope(this.registry, options, this); this.children.add(child); return child;
   }
-  run<T>(operation: (token: RenderToken) => Promise<T>, key?: string): Promise<T> {
+  /** Read-only lifetime receipt; capturing does not register work or hold retirement. */
+  captureToken(): RenderToken {
     this.assertAdmission();
     const ancestry: { scope: RenderScope; generation: number }[] = [];
     for (let scope: RenderScope | undefined = this; scope; scope = scope.parent) ancestry.push({ scope, generation: scope.generation });
     const token: RenderToken = { current: () => this.admits() && ancestry.every(item => item.scope.generation === item.generation), check: () => { if (!token.current()) throw new ScopeCancelled(); } };
+    return token;
+  }
+  run<T>(operation: (token: RenderToken) => Promise<T>, key?: string): Promise<T> {
+    const token = this.captureToken();
     // Register synchronously before invoking any asynchronous initializer.
     const task = Promise.resolve().then(() => { token.check(); return operation(token); });
     this.pending.add(task);
