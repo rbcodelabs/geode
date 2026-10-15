@@ -1,0 +1,39 @@
+{
+  "testedCommit": "cb41b6c9261d684a44be32e87eaf617e9ee20ab2",
+  "date": "2026-10-15",
+  "environment": "Linux Electron, synthetic isolated vault",
+  "job": "01M50GTCVEGF2N40HE6GEFDYZ3",
+  "artifactManifestSha256": "bdf0a4166ecd184b066753c76759baacac1501b92b7de26856405ba29e418b1e",
+  "captures": [
+    {
+      "path": "reading-returned.png",
+      "size": 46949,
+      "sha256": "bd7b50ceda7168ce0b09f561404c580b6cc2a8c369311a87251c9e46e8be42a6",
+      "width": 1280,
+      "height": 815,
+      "sourceArtifact": "files/test-results-background-focused/native-background-baseline-bcea5-without-an-application-save/final.png",
+      "stateArtifact": "files/test-results-background-focused/native-background-baseline-bcea5-without-an-application-save/returned.json",
+      "stateSha256": "be2ab79d0ce087ce53b2825f71427e45aaeeb6e18dbe4086922c5d652046905d"
+    },
+    {
+      "path": "live-preview-returned.png",
+      "size": 45850,
+      "sha256": "6a7f641776fffea2b379e284b1e9e4a65b715e8fca38738b1a14b678bcc92d86",
+      "width": 1280,
+      "height": 815,
+      "sourceArtifact": "files/test-results-background-focused/native-background-baseline-203b2-without-an-application-save/final.png",
+      "stateArtifact": "files/test-results-background-focused/native-background-baseline-203b2-without-an-application-save/returned.json",
+      "stateSha256": "a097b281dcce36680fea84dca851942208a6e2651cd0f2aa8ab4447a1df46489"
+    },
+    {
+      "path": "reading-explicit-cancel.png",
+      "size": 46553,
+      "sha256": "0f67ac89cc7df14a48363ccb69e0f56a324b57a1bc553078f10c615f7746b7af",
+      "width": 1280,
+      "height": 815,
+      "sourceArtifact": "files/test-results-background-focused/native-background-baseline-1763d-tly-cancelable-after-reveal/final.png",
+      "stateArtifact": "files/test-results-background-focused/native-background-baseline-1763d-tly-cancelable-after-reveal/explicit-cancel.json",
+      "stateSha256": "bcf0c188b9a30260d1ea36f6391f43c49a36e35a82617c48741089724cf0ef0a"
+    }
+  ]
+}
