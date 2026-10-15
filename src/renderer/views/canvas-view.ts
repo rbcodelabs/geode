@@ -1,4 +1,4 @@
-import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken } from "../workspaces/render-ownership";
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
@@ -105,6 +105,8 @@ export class CanvasView implements View {
   private readonly objectUrls = new Set<string>();
   private readonly markdownContentEls = new Set<HTMLElement>();
   private readonly pendingConversions = new Map<string, string>();
+  private readonly pendingConversionNames = new Map<string, string>();
+  private pendingHistory: "undo" | "redo" | null = null;
   private renderVersion = 0;
   private selectionControlsEl: HTMLElement | null = null;
   private colorPaletteEl: HTMLElement | null = null;
@@ -123,7 +125,7 @@ export class CanvasView implements View {
 
   readonly renderOwner: RenderScope;
   constructor(private app: App, parentOwner?: RenderScope) {
-    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null) this.render(); } };
+    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null) this.render(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "canvas-view";
@@ -1232,11 +1234,14 @@ export class CanvasView implements View {
   }
 
   private convertTextNodeToFile(nodeId: string, rawName: string): Promise<void> {
+    if (this.renderOwner && !this.renderOwner.admissionAllowed) return Promise.resolve();
+    this.pendingConversionNames.set(nodeId, rawName);
     const task = this.queueOwnedWrite(`conversion:${nodeId}`, token => this.convertTextNodeToFileNative(nodeId, rawName, token), true);
     void task.catch(() => {
       const path = this.pendingConversions.get(nodeId);
       if (path) this.app.notify(`Conversion paused. ${path} was preserved; retry Convert to file to finish.`);
     });
+    void task.then(() => this.pendingConversionNames.delete(nodeId), () => {});
     return task;
   }
 
@@ -2898,7 +2903,19 @@ export class CanvasView implements View {
     }
   }
 
-  private setSaveStatus(message: string, failed: boolean, retry: boolean): void {
+  private recoverNativeWrites(failures: readonly RenderFailure[]): void {
+    const conversion = failures.find(failure => failure.key.startsWith("conversion:"));
+    if (conversion) {
+      const id = conversion.key.slice("conversion:".length); const name = this.pendingConversionNames.get(id);
+      if (name !== undefined) this.setSaveStatus("Canvas conversion paused; its created note and draft are preserved.", true, () => this.convertTextNodeToFile(id, name));
+    } else if (failures.some(failure => failure.key === "history") && this.pendingHistory) {
+      const direction = this.pendingHistory;
+      this.render();
+      this.setSaveStatus("Canvas history save failed", true, () => this.restoreHistory(direction));
+    } else if (failures.some(failure => failure.key === "canvas-save")) this.setSaveStatus("Canvas save failed", true, true);
+  }
+
+  private setSaveStatus(message: string, failed: boolean, retry: boolean | (() => Promise<void>)): void {
     this.saveStatusEl.replaceChildren();
     this.saveStatusEl.setAttribute("role", failed ? "alert" : "status");
     const text = document.createElement("span");
@@ -2908,7 +2925,7 @@ export class CanvasView implements View {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = "Retry Canvas save";
-      button.addEventListener("click", () => { void this.persist(true); });
+      button.addEventListener("click", () => { const task = typeof retry === "function" ? retry() : this.persist(true); void task.catch(() => {}); });
       this.saveStatusEl.appendChild(button);
     }
   }
@@ -2966,7 +2983,10 @@ export class CanvasView implements View {
   }
 
   private restoreHistory(direction: "undo" | "redo"): Promise<void> {
-    return this.queueOwnedWrite("history", token => this.restoreHistoryNative(direction, token), true);
+    if (this.renderOwner && !this.renderOwner.admissionAllowed) return Promise.resolve();
+    this.pendingHistory = direction;
+    const task = this.queueOwnedWrite("history", token => this.restoreHistoryNative(direction, token), true);
+    void task.then(() => { this.pendingHistory = null; }, () => {}); return task;
   }
 
   private async restoreHistoryNative(direction: "undo" | "redo", token?: RenderToken): Promise<void> {

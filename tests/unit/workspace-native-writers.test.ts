@@ -57,7 +57,7 @@ it.each([["conversion", false], ["history", false], ["conversion", true], ["hist
   const view = Object.create(CanvasView.prototype) as any; const registry = new RenderOwnership(); const owner = registry.create(view, { writer: view });
   let finish!: () => void; const write = vi.fn(() => new Promise<void>((resolve, reject) => { finish = () => rejected ? reject(new Error("write rejected")) : resolve(); }));
   const text = JSON.stringify({ nodes: [], edges: [] });
-  Object.assign(view, { renderOwner: owner, pendingConversions: new Map(), persistQueue: Promise.resolve(), recoveryError: null, conflictReadOnly: false, vaultSwitching: false, file: { path: "Board.canvas", parent: "" }, document: { nodes: [{ id: "a", type: "text", text: "draft" }], edges: [] }, undoStack: [text], redoStack: [], lastKnownText: text, selectedIds: new Set(), selectedEdgeIds: new Set(), containerEl: { dataset: {} }, render: vi.fn(), doPersist: vi.fn(async () => {}), app: { notify: vi.fn(), vault: { availablePath: () => "Note.md", create: write, modify: write } } });
+  Object.assign(view, { renderOwner: owner, pendingConversions: new Map(), pendingConversionNames: new Map(), persistQueue: Promise.resolve(), recoveryError: null, conflictReadOnly: false, vaultSwitching: false, file: { path: "Board.canvas", parent: "" }, document: { nodes: [{ id: "a", type: "text", text: "draft" }], edges: [] }, undoStack: [text], redoStack: [], lastKnownText: text, selectedIds: new Set(), selectedEdgeIds: new Set(), containerEl: { dataset: {} }, render: vi.fn(), doPersist: vi.fn(async () => {}), app: { notify: vi.fn(), vault: { availablePath: () => "Note.md", create: write, modify: write } } });
   const task = kind === "conversion" ? view.convertTextNodeToFile("a", "Note") : view.restoreHistory("undo");
   await new Promise(resolve => setImmediate(resolve)); expect(write).toHaveBeenCalledOnce();
   let settled = false; const held = registry.hold(new Set([view])).then(scopes => { settled = true; registry.release(scopes); });
@@ -97,6 +97,52 @@ it("rejects an actual detached Base modal submission after owner retirement", as
   Object.assign(view, { renderOwner: owner, def: { views: [{ name: "Original", type: "table" }] }, app: {}, persist: vi.fn() });
   view.addView(); const submit = modal.submit!; await owner.close(); submit("Detached");
   expect(view.def.views.map((item: any) => item.name)).toEqual(["Original"]); expect(view.persist).not.toHaveBeenCalled();
+});
+it("publishes a reachable Base retry after close cancels its queued definition write", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  vi.stubGlobal("document", { createElement: element });
+  const view = Object.create(BaseView.prototype) as any; const close = vi.fn(async () => {});
+  const owner = new RenderOwnership().create(view, { close, recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
+  Object.assign(view, { renderOwner: owner, vaultSwitching: false, definitionWritesPending: 0, persistQueue: Promise.resolve(), doPersist: vi.fn(async () => {}), saveStatusEl: element() });
+  const queued = view.persist(); const closing = owner.close();
+  await expect(queued).rejects.toThrow(/owner changed/); await expect(closing).rejects.toThrow(/owner changed/);
+  const retry = view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Base save"); expect(retry).toBeDefined();
+  retry.handlers.click(); await new Promise(resolve => setImmediate(resolve));
+  expect(view.doPersist).toHaveBeenCalledOnce(); await owner.close(); expect(close).toHaveBeenCalledOnce();
+});
+it("lets the visible Canvas save retry finish conversion after note creation and a rejected board save", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  vi.stubGlobal("document", { createElement: element });
+  const view = Object.create(CanvasView.prototype) as any;
+  const owner = new RenderOwnership().create(view, { recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
+  const create = vi.fn(async () => {}); const modify = vi.fn().mockRejectedValueOnce(new Error("board save failed")).mockResolvedValue(undefined);
+  const original = { nodes: [{ id: "a", type: "text", text: "original draft", x: 0, y: 0, width: 100, height: 100 }], edges: [] };
+  Object.assign(view, { renderOwner: owner, persistQueue: Promise.resolve(), pendingConversions: new Map(), pendingConversionNames: new Map(), recoveryError: null, conflictReadOnly: false, vaultSwitching: false, file: { path: "Board.canvas", parent: "" }, document: structuredClone(original), lastKnownText: JSON.stringify(original), pendingKnownText: null, containerEl: { dataset: {} }, saveStatusEl: element(), render: vi.fn(), undoStack: [], redoStack: [], app: { notify: vi.fn(), vault: { availablePath: () => "Note.md", create, modify } } });
+  await expect(view.convertTextNodeToFile("a", "Note")).rejects.toThrow("board save failed");
+  expect(view.document.nodes[0]).toMatchObject({ type: "file", file: "Note.md" });
+  const retry = view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Canvas save"); expect(retry).toBeDefined();
+  retry.handlers.click(); await new Promise(resolve => setImmediate(resolve));
+  expect(create).toHaveBeenCalledOnce(); expect(create).toHaveBeenCalledWith("Note.md", "original draft"); expect(modify).toHaveBeenCalledTimes(2);
+  await expect(owner.close()).resolves.toBeUndefined(); expect(view.pendingConversions.size).toBe(0);
+});
+it("republishes rolled-back Canvas history after an aborted barrier and retries its original operation", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  vi.stubGlobal("document", { createElement: element });
+  const view = Object.create(CanvasView.prototype) as any; const registry = new RenderOwnership();
+  const owner = registry.create(view, { writer: view, recover: (failures: unknown[]) => view.recoverNativeWrites(failures) } as any);
+  const board = (text: string) => ({ nodes: [{ id: "a", type: "text", text, x: 0, y: 0, width: 100, height: 100 }], edges: [] });
+  const original = board("saved"); const before = JSON.stringify(board("before")); let reject!: (error: Error) => void; let projection = "saved";
+  const modify = vi.fn().mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; })).mockResolvedValue(undefined);
+  Object.assign(view, { renderOwner: owner, persistQueue: Promise.resolve(), pendingConversions: new Map(), pendingConversionNames: new Map(), recoveryError: null, conflictReadOnly: false, vaultSwitching: false, file: { path: "Board.canvas" }, document: original, lastKnownText: JSON.stringify(original), containerEl: { dataset: {} }, saveStatusEl: element(), render: () => { projection = view.document.nodes[0].text; }, undoStack: [before], redoStack: [], selectedIds: new Set(), selectedEdgeIds: new Set(), app: { vault: { modify } } });
+  const writing = view.restoreHistory("undo"); await new Promise(resolve => setImmediate(resolve)); expect(projection).toBe("before");
+  const holding = registry.hold(new Set([view])); reject(new Error("history save failed"));
+  await expect(writing).rejects.toThrow("history save failed"); await expect(holding).rejects.toThrow("history save failed");
+  expect(projection).toBe("saved"); expect(view.undoStack).toEqual([before]);
+  view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Canvas save").handlers.click(); await new Promise(resolve => setImmediate(resolve));
+  expect(projection).toBe("before"); expect(modify).toHaveBeenCalledTimes(2); await owner.close();
 });
 it("refuses an active Base cell draft before flushing its definition or row target", () => {
   const view = Object.create(BaseView.prototype) as any;

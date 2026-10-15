@@ -1,4 +1,4 @@
-import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken } from "../workspaces/render-ownership";
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { parseBaseFile, runQuery, type BaseDefinition, type BaseViewDefinition, type QueryResult } from "../bases";
 import { stringifyBaseFile } from "../bases/base-file-write";
@@ -186,7 +186,7 @@ export class BaseView implements View {
 
   readonly renderOwner: RenderScope;
   constructor(private app: App, parentOwner?: RenderScope) {
-    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), close: () => this.closeNative(), resume: () => { if (this.file && this.def) this.runAndRender(); } };
+    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), close: () => this.closeNative(), resume: () => { if (this.file && this.def) this.runAndRender(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "base-view";
@@ -606,6 +606,14 @@ export class BaseView implements View {
    * actually runs) rather than a stale snapshot from when it was queued.
    */
   private persistQueue: Promise<void> = Promise.resolve();
+
+  private recoverNativeWrites(failures: readonly RenderFailure[]): void {
+    if (failures.some(failure => failure.key === "definition")) this.setSaveStatus("Base save failed", true, () => this.persist(true));
+    else if (this.sourceEdit && failures.some(failure => failure.key.startsWith('["row",'))) {
+      const { file, columnPath, rawText } = this.sourceEdit;
+      this.setSaveStatus("Base save failed", true, async () => { await this.editCell(file, columnPath, rawText, true); this.tableView.acknowledgeEdit(); });
+    }
+  }
 
   /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `lastKnownText`'s doc comment for why the resulting "modify" event(s) must not trigger a second, object-identity-breaking reload). */
   private persist(retry = false): Promise<void> {
