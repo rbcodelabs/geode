@@ -3,6 +3,21 @@ import { BaseView } from "../../src/renderer/views/base-view";
 import { CanvasView } from "../../src/renderer/views/canvas-view";
 import { MarkdownView } from "../../src/renderer/views/markdown-view";
 afterEach(() => vi.unstubAllGlobals());
+it("keeps the actual Base retry control usable after a pre-destructor close abort", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const element = (): any => ({ children: [] as any[], handlers: {} as Record<string, () => void>, setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, action: () => void) { this.handlers[name] = action; } });
+  vi.stubGlobal("document", { createElement: element });
+  const view = Object.create(BaseView.prototype) as any; const close = vi.fn(async () => { view.sourceEdit = null; });
+  const registry = new RenderOwnership(); const owner = registry.create(view, { writer: view, close });
+  const modify = vi.fn().mockRejectedValueOnce(new Error("disk unavailable")).mockResolvedValue(undefined);
+  Object.assign(view, { vaultSwitching: false, renderOwner: owner, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { rawText: "9" }, saveStatusEl: element(), app: { vault: { read: async () => "---\npriority: 2\n---\n", modify } }, runAndRender: vi.fn(), tableView: { acknowledgeEdit: vi.fn() } });
+  await expect(view.editCell({ path: "Note.md" }, "note.priority", "9")).rejects.toThrow("disk unavailable");
+  const retry = view.saveStatusEl.children.find((child: any) => child.textContent === "Retry Base save");
+  await expect(owner.close()).rejects.toThrow("disk unavailable"); expect(close).not.toHaveBeenCalled();
+  retry.handlers.click(); await new Promise(resolve => setImmediate(resolve));
+  expect(modify).toHaveBeenCalledTimes(2); expect(view.sourceEdit).toBeNull(); expect(view.tableView.acknowledgeEdit).toHaveBeenCalledOnce();
+  await owner.close(); expect(close).toHaveBeenCalledOnce();
+});
 it("disposes every Canvas text render root on repeated redraws", async () => {
   const element = (): any => ({ dataset: {}, style: {}, classList: { toggle() {}, contains: () => false }, appendChild() {}, addEventListener() {}, setAttribute() {} });
   vi.stubGlobal("document", { createElement: element, body: element() });
@@ -17,6 +32,16 @@ it("disposes every Canvas text render root on repeated redraws", async () => {
     expect(view.markdownContentEls.size).toBe(0);
   }
   expect(dispose.mock.calls.map(([root]) => root)).toEqual(render.mock.calls.map(([, root]) => root));
+});
+it("refuses a stale Base row write after an awaited read when its owner begins closing", async () => {
+  const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+  const view = Object.create(BaseView.prototype) as any; let finish!: (text: string) => void;
+  const modify = vi.fn(); const close = vi.fn(async () => {}); const owner = new RenderOwnership().create(view, { close });
+  Object.assign(view, { renderOwner: owner, vaultSwitching: false, sourcePersistsInFlight: new Set(), sourcePersistPaths: new Map(), sourceEdit: { rawText: "9" }, setSaveStatus: vi.fn(), app: { vault: { read: () => new Promise<string>(resolve => { finish = resolve; }), modify } } });
+  const writing = view.editCell({ path: "Note.md" }, "note.priority", "9"); await Promise.resolve();
+  const closing = owner.close(); finish("---\npriority: 2\n---\n");
+  await expect(writing).rejects.toThrow(/owner changed/); await expect(closing).rejects.toThrow(/owner changed/);
+  expect(modify).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled(); expect(view.sourceEdit.rawText).toBe("9");
 });
 it("refuses an active Base cell draft before flushing its definition or row target", () => {
   const view = Object.create(BaseView.prototype) as any;
