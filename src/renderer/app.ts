@@ -4917,7 +4917,7 @@ export class App {
   private async initializeDocumentView<T extends View & { setFile(file: TFile): Promise<void> }>(view: T, file: TFile, leaf: WorkspaceLeaf): Promise<void> {
     try { await view.setFile(file); await leaf.setView(view); }
     catch (error) {
-      try { if (leaf.view !== view) await view.onClose(); }
+      try { if (leaf.view !== view) { if (view instanceof CanvasView) await view.closeImplicitly(); else await view.onClose(); } }
       catch (closeError) { throw new AggregateError([error, closeError], "Could not initialize or close the new document view."); }
       throw error;
     }

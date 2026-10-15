@@ -948,7 +948,7 @@ class EmbedWidget extends WidgetType {
       root.appendChild(canvas.containerEl);
       void scope.run(async token => {
         try { await canvas.setFile(file); token.check(); view.requestMeasure(); }
-        catch (error) { await canvas.onClose(); if (!(error instanceof ScopeCancelled)) throw error; }
+        catch (error) { await canvas.closeImplicitly(); if (!(error instanceof ScopeCancelled)) throw error; }
       }).catch(error => {
         if (this.destroyed || error instanceof ScopeCancelled) return;
         if (this.canvasView === canvas) this.canvasView = null;

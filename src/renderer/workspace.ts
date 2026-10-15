@@ -1,5 +1,6 @@
 import { Events } from "./events";
 import type { App } from "./app";
+import type { CanvasView } from "./views/canvas-view";
 import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
 import type { PaneType } from "./api/keymap";
@@ -211,7 +212,11 @@ export class WorkspaceLeaf {
   async setView(view: View): Promise<void> {
     markStart("view-mount");
     try {
-      if (this.view && this.opened) await this.view.onClose();
+      if (this.view && this.opened) {
+        const canvas = this.view as Partial<CanvasView>;
+        if (this.view.viewType === "canvas" && typeof canvas.closeImplicitly === "function") await canvas.closeImplicitly();
+        else await this.view.onClose();
+      }
       this.view = view;
       this.opened = false;
       this.contentEl.innerHTML = "";

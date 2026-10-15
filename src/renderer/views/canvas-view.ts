@@ -38,6 +38,23 @@ type NodeActionCapability =
   | { kind: "external"; signature: string; url: string }
   | { kind: "generic"; signature: string };
 
+interface ConnectionPreview {
+  document: CanvasDocument;
+  file: TFile | null;
+  filePath: string | null;
+  vault: App["vault"];
+  vaultRoot: string;
+  bytes: string;
+  edge?: CanvasEdge;
+  node: CanvasNode;
+  preview: SVGPathElement;
+  parent: SVGSVGElement;
+  cancel: () => void;
+  dispose: () => void;
+  finished: boolean;
+}
+interface PreviewCloseIntent { preview: ConnectionPreview | null; document: CanvasDocument; file: TFile | null; filePath: string | null; vault: App["vault"]; vaultRoot: string; bytes: string }
+
 function normalizeWebUrl(raw: string): string | null {
   try {
     const url = new URL(raw.trim());
@@ -127,6 +144,8 @@ export class CanvasView implements View {
   private suppressReconcileModify = false;
   private conflictReadOnly = false;
   private transientGestureCancel: (() => void) | null = null;
+  private connectionPreview: ConnectionPreview | null = null;
+  private readonly previewCloseIntents = new WeakMap<object, PreviewCloseIntent>();
   private readonly saveStatusEl: HTMLElement;
   private readonly touchGesture: CanvasTouchGesture;
   private readonly capturedTouchPointers = new Set<number>();
@@ -135,7 +154,7 @@ export class CanvasView implements View {
 
   readonly renderOwner: RenderScope;
   constructor(private app: App, parentOwner?: RenderScope) {
-    const options = { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null) this.render(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
+    const options = { writer: this, preflightClose: (context?: object) => this.assertCloseReady(context), prepareClose: (context?: object) => this.prepareClose(context), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null && !this.connectionPreview) this.render(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "canvas-view";
@@ -231,7 +250,40 @@ export class CanvasView implements View {
   }
 
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
-  onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
+  onClose(): Promise<void> {
+    if (!this.renderOwner) return this.closeNative();
+    const context = {};
+    this.previewCloseIntents.set(context, { preview: this.connectionPreview, document: this.document, file: this.file, filePath: this.file?.path ?? null, vault: this.app.vault, vaultRoot: this.app.vault.root, bytes: this.getText() });
+    const closing = this.renderOwner.close(context);
+    void closing.finally(() => this.previewCloseIntents.delete(context)).catch(() => {});
+    return closing;
+  }
+
+  /** Internal implicit replacement/disposal retains strict retirement guards. */
+  closeImplicitly(): Promise<void> { return this.renderOwner.close(); }
+
+  private assertCloseReady(context?: object): void {
+    const intent = context && this.previewCloseIntents.get(context);
+    if (!intent) { this.assertWorkspaceLoadReady(); return; }
+    if (this.document !== intent.document || this.file !== intent.file || (this.file?.path ?? null) !== intent.filePath || this.app.vault !== intent.vault || this.app.vault.root !== intent.vaultRoot || this.getText() !== intent.bytes) throw new Error("Canvas preview changed during close.");
+    const record = intent.preview;
+    if (record) {
+      if (record.document !== this.document || record.file !== this.file || record.filePath !== (this.file?.path ?? null) || record.vault !== this.app.vault || record.vaultRoot !== this.app.vault.root || record.bytes !== this.getText() ||
+          this.document.nodes.find(node => node.id === record.node.id) !== record.node ||
+          (record.edge && this.document.edges.find(edge => edge.id === record.edge!.id) !== record.edge)) throw new Error("Canvas preview model changed during close.");
+      if (record.finished) {
+        if (this.connectionPreview || this.transientGestureCancel || record.preview.parentElement) throw new Error("Canvas preview changed after retirement.");
+      } else if (this.connectionPreview !== record || this.transientGestureCancel !== record.cancel || record.preview.parentElement !== record.parent || this.viewportEl.querySelector(".canvas-edges") !== record.parent) throw new Error("Canvas preview changed during close.");
+    }
+    this.assertNativeCloseReady(record && !record.finished ? record.cancel : undefined);
+  }
+
+  private async prepareClose(context?: object): Promise<void> {
+    this.assertCloseReady(context);
+    const record = context && this.previewCloseIntents.get(context)?.preview;
+    if (record && !record.finished) record.dispose();
+    await this.settleWorkspaceLoad();
+  }
 
   private async closeNative(): Promise<void> {
     this.cancelTouchGesture();
@@ -1887,6 +1939,7 @@ export class CanvasView implements View {
       };
     };
     const move = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       const point = toWorld(next);
       preview.setAttribute("d", endpoint === "source"
         ? this.edgePath(point, fromSide, to, toSide)
@@ -1896,9 +1949,11 @@ export class CanvasView implements View {
     const cleanup = (rollback: boolean) => {
       if (finished) return;
       finished = true;
+      record.finished = true;
+      if (this.connectionPreview === record) this.connectionPreview = null;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("pointercancel", cancelFromPointer);
       preview.remove();
       this.containerEl.classList.remove("is-connecting");
       if (this.transientGestureCancel === cancel) this.transientGestureCancel = null;
@@ -1908,7 +1963,9 @@ export class CanvasView implements View {
       }
     };
     const cancel = () => cleanup(true);
+    const cancelFromPointer = () => { if (!finished && this.renderOwner.admissionAllowed) cancel(); };
     const up = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       cleanup(false);
       const targetHandle = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((candidate) => {
         const rect = candidate.getBoundingClientRect();
@@ -1940,9 +1997,11 @@ export class CanvasView implements View {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("pointercancel", cancelFromPointer);
     this.cancelTransientGesture();
     this.transientGestureCancel = cancel;
+    const record: ConnectionPreview = { document: this.document, file: this.file, filePath: this.file?.path ?? null, vault: this.app.vault, vaultRoot: this.app.vault.root, bytes: this.getText(), node: fromNode, edge, preview, parent: svg, cancel, dispose: () => cleanup(false), finished: false };
+    this.connectionPreview = record;
   }
 
   private closestSide(node: CanvasNode, point: Point): CanvasSide {
@@ -2419,21 +2478,26 @@ export class CanvasView implements View {
       };
     };
     const move = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       preview.setAttribute("d", this.edgePath(from, side, toWorld(next), this.oppositeSide(side)));
     };
     let finished = false;
     const cleanup = () => {
       if (finished) return;
       finished = true;
+      record.finished = true;
+      if (this.connectionPreview === record) this.connectionPreview = null;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("pointercancel", cancelFromPointer);
       preview.remove();
       this.containerEl.classList.remove("is-connecting");
       if (this.transientGestureCancel === cancel) this.transientGestureCancel = null;
     };
     const cancel = () => cleanup();
+    const cancelFromPointer = () => { if (!finished && this.renderOwner.admissionAllowed) cancel(); };
     const up = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       cleanup();
       const target = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((handle) => {
         const rect = handle.getBoundingClientRect();
@@ -2486,9 +2550,11 @@ export class CanvasView implements View {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("pointercancel", cancelFromPointer);
     this.cancelTransientGesture();
     this.transientGestureCancel = cancel;
+    const record: ConnectionPreview = { document: this.document, file: this.file, filePath: this.file?.path ?? null, vault: this.app.vault, vaultRoot: this.app.vault.root, bytes: this.getText(), node: node,  preview, parent: svg, cancel, dispose: cleanup, finished: false };
+    this.connectionPreview = record;
   }
 
   private addConnectedTextCard(source: CanvasNode, sourceSide: CanvasSide, worldPoint: Point): void {
@@ -3166,11 +3232,13 @@ export class CanvasView implements View {
   }
 
   /** Refuse gestures before pauseAutosave can cancel or roll them back. */
-  assertWorkspaceLoadReady(): void {
+  assertWorkspaceLoadReady(): void { this.assertNativeCloseReady(); }
+
+  private assertNativeCloseReady(allowedPreview?: () => void): void {
     if (this.recoveryError !== null || this.conflictReadOnly) throw new Error("Resolve Canvas recovery or conflict before loading a workspace.");
     if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.historyInProgress || this.geometryGestures.size) throw new Error("Finish or recover the Canvas presentation change before loading a workspace.");
     for (const presentation of this.nodePresentations.values()) if (presentation.el.querySelector(".canvas-node-text-editor")) throw new Error("Finish or cancel the Canvas text draft before loading a workspace.");
-    if (this.transientGestureCancel || this.touchDragSnapshot || this.touchGesture.pointerIds().length) throw new Error("Finish the Canvas gesture before loading a workspace.");
+    if ((this.transientGestureCancel && this.transientGestureCancel !== allowedPreview) || this.touchDragSnapshot || this.touchGesture.pointerIds().length) throw new Error("Finish the Canvas gesture before loading a workspace.");
     if (this.persistRequestedWhileSuspended) throw new Error("Canvas changed during the workspace operation. Retry after its edits are saved.");
   }
 

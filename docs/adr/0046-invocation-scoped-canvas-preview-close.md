@@ -70,3 +70,14 @@ Owned Task `1a766f90-c69c-4712-ac72-7635cf6837f3`, PR393. Original implementatio
 At exact393 head, ordinary calls are WorkspaceLeaf.detach (`workspace.ts:577`) and direct View.onClose compatibility calls (including unchanged mobile test1806). Implicit calls are WorkspaceLeaf.setView (`:214`), renderer disposeCanvases/failed startup, LP Canvas startup catch (`live-preview.ts:951`), and App.initializeDocumentView failure cleanup (`app.ts:4920`). Actual shared View is not expanded: Canvas-specific internal cleanup wrapper or scope.close remains the strict seam. Generic RenderScope recursion/registry/prepareRetirement has no close context. Production callers must be re-audited on the final composed source, especially navigationB's moved App/renderer lines.
 
 Diagnostic instrumentation changes only test observation: native vault.modify wrapper forwards every call unchanged; TestInfo JSON captures exact state before/after original onClose. The original rejection is rethrown. No existing bytes, zoom, gesture, conflict or relaunch assertion changes. A nonempty touch pointer set is an independent guard and requires further causal review, never an exemption inferred from the preview. No diagnostic outcome claimed by accepting this ADR.
+
+
+## Reviewed implementation checkpoint
+
+The bounded correction forwards immutable root-only context, keeps all implicit callers strict, and repeats pure forest preflight after task drain outside keyed write preparation. Preview and invocation snapshots include exact file object/path, Vault object/root, model identity/serialized bytes, node/edge identity and preview parent/cancel identity. Refused preparation preserves a live preview during resume. Actual event wrappers are inert while frozen; internal active cancellation retains its prior behavior.
+
+Regression-first evidence: original35 real Scope/Canvas cases20fail/15pass before implementation; same-file path/Vault/root controls3fail before adding target snapshots. Focused final local verification: nine files115pass, Vitest4.1.10,1.79s. These local checks do not replace remote types/full units/build/Electron/mobile gates. Root and independent source review cleared the bounded diff before frozen verification.
+
+Overlapping-gesture ordering is pre-existing: both original gesture methods append the new preview/listeners before cancelling the previous gesture; a previous reconnect cancellation can render and retire that new parent. The correction preserves that ordering and refuses a snapshot whose parent is no longer the current projection. It does not claim to repair overlapping-gesture behavior.
+
+A separate hosted macOS sync guard case failed after temporary inert release: the Base draft remained unsaved after Enter. Its original assertions are preserved in a separate test-only diagnostic on unchanged PR393 production source. It is an independent unresolved delivery gate, not evidence against the narrow preview cleanup or a waived failure.

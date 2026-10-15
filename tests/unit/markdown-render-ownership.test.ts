@@ -1,11 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { MarkdownRenderer } from "../../src/renderer/markdown/render";
 import { nativeRenderOwnership, type RenderScope } from "../../src/renderer/workspaces/render-ownership";
-const state = vi.hoisted(() => ({ gate: Promise.resolve(), closed: 0, constructed: [] as unknown[] }));
+const state = vi.hoisted(() => ({ gate: Promise.resolve(), closed: 0, ordinary: 0, implicit: 0, constructed: [] as unknown[] }));
 vi.mock("../../src/renderer/views/canvas-view", () => ({ CanvasView: class {
   readonly containerEl = {}; readonly renderOwner: RenderScope;
   constructor(_app: object, parent: RenderScope) { this.renderOwner = parent.child({ writer: this, close: async () => { state.closed++; } }); state.constructed.push(this); }
-  markEmbedded() {} onOpen() {} onClose() { return this.renderOwner.close(); }
+  markEmbedded() {} onOpen() {} onClose() { state.ordinary++; return this.renderOwner.close(); }
+  closeImplicitly() { state.implicit++; return this.renderOwner.close(); }
   setFile() { return this.renderOwner.run(async token => { await state.gate; token.check(); }); }
 } }));
 vi.mock("../../src/renderer/views/base-view", () => ({ BaseView: class {
@@ -15,7 +16,7 @@ vi.mock("../../src/renderer/views/base-view", () => ({ BaseView: class {
   setFile() { return this.renderOwner.run(async token => { await state.gate; token.check(); }); }
   mountInline() { return this.setFile(); }
 } }));
-afterEach(() => { vi.unstubAllGlobals(); state.gate = Promise.resolve(); state.closed = 0; state.constructed = []; });
+afterEach(() => { vi.unstubAllGlobals(); state.gate = Promise.resolve(); state.closed = 0; state.ordinary = 0; state.implicit = 0; state.constructed = []; });
 function setup() {
   const app = { vault: { getFileByPath: (path: string) => ({ path, basename: path }), cachedRead: vi.fn(async () => "# nested") } };
   const renderer = new MarkdownRenderer(app as never); const root = nativeRenderOwnership(app).create({});
@@ -38,6 +39,7 @@ it.each(["canvas", "base"])("registers a pending %s before initialization and cl
   await Promise.resolve(); await Promise.resolve();
   expect(root.writers()).toHaveLength(1); const draining = root.freezeAndDrain(); finish(); await draining;
   await expect(pending).rejects.toThrow(/owner changed/); expect(mount.replaceWith).not.toHaveBeenCalled(); expect(state.closed).toBe(1);
+  if (kind === "canvas") { expect(state.implicit).toBe(1); expect(state.ordinary).toBe(0); }
   await root.close(); expect(state.closed).toBe(1);
 });
 it("awaits old embedded writers before a replacement render publishes its HTML", async () => {
@@ -74,4 +76,10 @@ it("keeps rejected disposal discoverable and prepares all containers before any 
   refuse = false; const retirement = await renderer.prepareDisposal([a, b]);
   expect(close).not.toHaveBeenCalled(); await retirement.commit();
   expect(close).toHaveBeenCalledTimes(2); expect(renderer.renderScopes.has(a)).toBe(false); expect(renderer.renderScopes.has(b)).toBe(false);
+});
+
+it("renderer legacy Canvas disposal uses strict cleanup without ordinary close intent", () => {
+  const { renderer } = setup(), content = {};
+  const ordinary = vi.fn(), strict = vi.fn(); renderer.mountedCanvases.set(content, [{ onClose: ordinary, closeImplicitly: strict }]);
+  renderer.disposeCanvases(content); expect(strict).toHaveBeenCalledOnce(); expect(ordinary).not.toHaveBeenCalled();
 });
