@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test, type Page } from "@playwright/test";
 
+import { CanvasBackgroundLifetimes, expectSavedCanvasClosure } from "./helpers/canvas-background-lifetimes";
+
 const repoRoot = path.resolve(__dirname, "..", "..");
 
 test("retains Canvas media loaded before its restored view is attached", async ({}, testInfo) => {
@@ -63,14 +65,14 @@ async function chooseFile(window: Page, actionName: string, fileName: string): P
   await window.locator(".prompt-result", { hasText: fileName }).click();
 }
 
-test("adds filtered note and media cards with safe rendering and blob cleanup", async () => {
+test("adds filtered note and media cards with safe rendering and blob cleanup", async ({}, info) => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-file-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-file-user-"));
   const canvasPath = path.join(vaultDir, "Files.canvas");
   fs.writeFileSync(path.join(vaultDir, "Sectioned.md"), "# Intro\n\nIntro text\n\n## Details\n\n**Section detail**\n");
   fs.writeFileSync(path.join(vaultDir, "Whole.md"), "# Whole note\n\nSafe **Markdown** body.\n");
   fs.writeFileSync(path.join(vaultDir, "Photo.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
-  fs.writeFileSync(path.join(vaultDir, "Sound.mp3"), Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 0]));
+  fs.copyFileSync(path.join(__dirname, "fixtures/media/canvas-silence.mp3"), path.join(vaultDir, "Sound.mp3"));
   fs.writeFileSync(path.join(vaultDir, "Clip.mp4"), Buffer.from([0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70]));
   fs.writeFileSync(path.join(vaultDir, "Archive.bin"), Buffer.from([1, 2, 3, 4]));
   fs.writeFileSync(canvasPath, JSON.stringify({
@@ -93,31 +95,20 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const window = await app.firstWindow();
+    const resources = new CanvasBackgroundLifetimes(window, "__canvasBlobTracker", info);
     const errors: string[] = [];
     window.on("console", (msg) => {
       if (msg.type() !== "error") return;
       const location = msg.location();
+      if (resources.isExpectedProbeError(msg.text(), location.url)) return;
       errors.push(`${msg.text()} [${location.url || "unknown"}:${location.lineNumber}:${location.columnNumber}]`);
     });
     window.on("requestfailed", (request) => {
+      if (resources.isExpectedProbeRequestFailure(request.url())) return;
       errors.push(`Request failed: ${request.url()} (${request.failure()?.errorText ?? "unknown"})`);
     });
     window.on("pageerror", (error) => errors.push(String(error)));
-    await window.evaluate(() => {
-      const tracker = { created: [] as string[], revoked: [] as string[] };
-      const create = URL.createObjectURL.bind(URL);
-      const revoke = URL.revokeObjectURL.bind(URL);
-      URL.createObjectURL = (blob: Blob) => {
-        const url = create(blob);
-        tracker.created.push(url);
-        return url;
-      };
-      URL.revokeObjectURL = (url: string) => {
-        tracker.revoked.push(url);
-        revoke(url);
-      };
-      (window as any).__canvasBlobTracker = tracker;
-    });
+    await resources.install();
 
     await window.locator('.nav-file-title[data-path="Files.canvas"]').click();
     const view = window.locator(".canvas-view");
@@ -202,16 +193,23 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
     expect(imagePosition.x + imagePosition.width / 2).toBeCloseTo(expectedCenter.x, 3);
     expect(imagePosition.y + imagePosition.height / 2).toBeCloseTo(expectedCenter.y, 3);
 
+    const imageResource = await resources.captureMedia(view, "file-3", "image");
     await chooseFile(window, "Add media from vault", "Sound.mp3");
     await expect(view.locator('.canvas-node[data-node-id="file-4"] audio.canvas-node-media')).toHaveAttribute("src", /^blob:/);
     await chooseFile(window, "Add media from vault", "Archive.bin");
     await expect(view.locator('.canvas-node[data-node-id="file-5"] .canvas-node-file-fallback')).toHaveText("Archive.bin");
 
-    // A Canvas rerender revokes its previous direct-media object URLs.
+    // Unchanged media retain their actual DOM/source across unrelated edits.
+    // The MP3 fixture is valid; its native loadeddata proof is separate from PNG.
     await expect.poll(() => window.evaluate(() => (window as any).__canvasBlobTracker.created.length)).toBeGreaterThanOrEqual(2);
+    await resources.expectRetained(view, "file-3", imageResource);
+    const audioResource = await resources.captureMedia(view, "file-4", "audio");
+    await resources.expectLiveExactly([imageResource, audioResource]);
     await view.getByRole("button", { name: "Add text card" }).click();
     await view.locator(".canvas-node-text-editor").press("Escape");
-    await expect.poll(() => window.evaluate(() => (window as any).__canvasBlobTracker.revoked.length)).toBeGreaterThanOrEqual(2);
+    await resources.expectRetained(view, "file-3", imageResource);
+    await resources.expectRetained(view, "file-4", audioResource);
+    await resources.expectLiveExactly([imageResource, audioResource]);
     expect(errors, `Console errors after Canvas rerender: ${errors.join("\n")}`).toEqual([]);
 
     const saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
@@ -219,8 +217,14 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
     expect(saved.nodes.map((node: { id: string }) => node.id).sort()).toEqual(["file-1", "file-2", "file-3", "file-4", "file-5"]);
     expect(saved.nodes.find((node: { id: string }) => node.id === "file-1").vendorNode).toBe("keep");
 
+    const savedText = fs.readFileSync(canvasPath, "utf8");
+    await window.locator('.workspace-tab-header[data-type="canvas"] .workspace-tab-header-inner-close-button').click();
+    await resources.expectRetired([imageResource, audioResource]);
+    await resources.expectAllRetired();
+    await expectSavedCanvasClosure(vaultDir);
     await window.reload();
     await expect.poll(() => window.evaluate(() => (window as any).app?.workspace?.layoutReady ?? false)).toBe(true);
+    await resources.install();
     await window.locator('.nav-file-title[data-path="Files.canvas"]').click();
     await expect(window.locator('.canvas-node[data-node-id="file-2"] .canvas-node-note h1')).toHaveText("Whole note");
     await expect(window.locator('.canvas-node[data-node-id="file-3"] img.canvas-node-media')).toHaveAttribute("src", /^blob:/);
@@ -228,6 +232,16 @@ test("adds filtered note and media cards with safe rendering and blob cleanup", 
     await expect(window.locator('.canvas-node[data-node-id="file-5"] .canvas-node-file-fallback')).toHaveText("Archive.bin");
     await expect(window.locator(".canvas-view").getByRole("button", { name: "Add note from vault" })).toHaveCount(1);
     await expect(window.locator(".canvas-view").getByRole("button", { name: "Add media from vault" })).toHaveCount(1);
+
+    const restored = window.locator(".canvas-view");
+    const restoredImage = await resources.captureMedia(restored, "file-3", "image");
+    const restoredAudio = await resources.captureMedia(restored, "file-4", "audio");
+    await resources.expectLiveExactly([restoredImage, restoredAudio]);
+    expect(fs.readFileSync(canvasPath, "utf8")).toBe(savedText);
+    await window.locator('.workspace-tab-header[data-type="canvas"] .workspace-tab-header-inner-close-button').click();
+    await resources.expectRetired([restoredImage, restoredAudio]);
+    await resources.expectAllRetired();
+    expect(fs.readFileSync(canvasPath, "utf8")).toBe(savedText);
 
     expect(errors, `Console errors after renderer reload: ${errors.join("\n")}`).toEqual([]);
   } finally {

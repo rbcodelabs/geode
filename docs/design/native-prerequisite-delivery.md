@@ -17,3 +17,11 @@ Named-layout storage/modal/layout-writer scaffolds are excluded. The standalone 
 The initial composed Base reload unit run exposed an incomplete old prototype fixture: closeNative now awaits sourcePersistsInFlight, absent from that fixture. Adding the real empty Set preserves every original assertion; the same four affected files then passed all 43 tests. Local focused checks use the existing dependency installation and are not the locked remote gate.
 
 Fresh frozen-source full unit/type/build/Electron verification and independent source/artifact review remain required. This package does not establish complete persistent native ownership, named Workspaces delivery or Obsidian parity.
+
+## First full gate and reviewed corrections
+
+Frozen `7d983c22f2d9a3c7569532509e3f9ae1c2f3cfb5`, testq `01M5088VCNAXAQ7DSPTZF63C5M`: typecheck/build passed;340 unitfiles /4914 ordinary tests plus1 inherited expected failure and3 benchmarkskips passed. Full actual Electron:376 passed,15 inherited platform/fixture skips,7 repeated failures,11.5min. Manifest `cd64718ac470d820d28883a5a76d8ede6f021ca1bbdf468c12a4844aa128dae7` verified all125 artifacts.
+
+All five media failures are obsolete blanket revoke-on-unrelated-rerender assertions. Reviewed corrections from `65b87d0c3ddf1aa9042efaa84352b8feb49d88b4`, `9e3e0ea2e10e6fc468258e1a36036ca37fdecb87`, and `d475ef94607bf1642d2ca5e93ddab89ee95e9268` retain authoring/persistence/camera contracts and verify exact retained DOM/URL/native image/audio decodes, retired decode rejection and final close cleanup. Video decode remains outside this bounded proof.
+
+Recovery failed because its old owned alert survived valid text acceptance. Exact3line source patch from `bebe1dd` plus39line regression: new regression reproduced1 failure/2 controls before source change; same3 tests passed afterward. Page Preview failed a duplicate-disposal count, replaced by the already reviewed published PR388 actual child/listener/resource lifetime witnesses (`beccf14f3d09c4be861dd511987630532511a9e8`). No deadline or skip changes. Fresh affected Electron and full gates remain required.
