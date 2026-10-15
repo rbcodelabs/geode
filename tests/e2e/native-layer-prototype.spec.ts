@@ -26,6 +26,8 @@ async function withPrototype(info: TestInfo, run: (page: Page, vault: string, ap
     const probe = await page.evaluate(() => { const p = (window as any).__layerProbe; return p ? { inputConnected: p.input.isConnected, value: p.input.value, rootConnected: p.root.isConnected, parentStable: p.root.parentElement === p.parent, focused: document.activeElement === p.input, blurCount: p.blur } : null; }).catch(error => String(error));
     const retainedInputs = await page.evaluate(() => [(window as any).__firstFailedLayerInput, (window as any).__layerProbe?.input].filter(Boolean).map(input => ({ connected: input.isConnected, value: input.value, focused: document.activeElement === input, occurrence: input.closest(".native-prototype-record")?.dataset.occurrence }))).catch(error => String(error));
     const geometry = await page.evaluate(() => ({
+      tabVisibility: (window as any).__nativeTabVisibility,
+      shelfPointer: (window as any).__nativeShelfPointer,
       heightMeasurements: (window as any).__heightMeasurements,
       mixedHeightGeometry: (window as any).__mixedHeightGeometry,
       validationCalls: (window as any).__layerValidationCalls,
@@ -534,4 +536,145 @@ test("an actual returning anchor waits for held retirement and ignores the old w
       expect(await page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString())).toBe(source);
     } finally { await page.evaluate(() => (window as any).__releaseNativePreparation?.()); }
   });
+});
+async function prepareNativeSiblingTab(page: Page) {
+  await page.evaluate(async () => {
+    const app = (window as any).app; const owner = app.workspace.getActiveLeaf();
+    const other = app.workspace.getLeaf(true);
+    await app.openFileInLeaf(other, app.vault.getFileByPath("Other.md"));
+    app.workspace.setActiveLeaf(owner, { focus: false });
+    (window as any).__nativeTabs = { owner, other };
+  });
+}
+test("trusted tab focus transfer keeps the native root through its ordinary blur save", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    await prepareNativeSiblingTab(page);
+    const input = await edit(page); await capture(page, input);
+    const countsBefore = await page.evaluate(() => { const h = (window as any).nativeLayerHarness; return { allocations: h.layer.allocations, retirements: h.layer.retirements }; });
+    await page.locator('.workspace-tab-header[aria-label="Other"]').click();
+    await page.locator(".workspace-leaf.mod-active .cm-content").click();
+    await expect.poll(() => fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original.replace("priority: 2", "priority: 9"));
+    await page.locator('.workspace-tab-header[aria-label="Outer"]').click();
+    expect(await page.evaluate(() => {
+      const p = (window as any).__layerProbe; const h = (window as any).nativeLayerHarness;
+      return { connected: p.root.isConnected, sameParent: p.root.parentElement === p.parent,
+        allocations: h.layer.allocations, retirements: h.layer.retirements };
+    })).toEqual({ connected: true, sameParent: true, ...countsBefore });
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+  });
+});
+test("real background host activation records focus policy while preserving native ownership", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    await prepareNativeSiblingTab(page);
+    const input = await edit(page); await capture(page, input);
+    const countsBefore = await page.evaluate(() => { const h = (window as any).nativeLayerHarness; return { allocations: h.layer.allocations, retirements: h.layer.retirements }; });
+    await page.evaluate(() => {
+      const app = (window as any).app; const tabs = (window as any).__nativeTabs;
+      app.workspace.setActiveLeaf(tabs.other, { focus: false });
+    });
+    await expect.poll(() => page.evaluate(() => (window as any).__nativeTabs.owner.leafEl.getBoundingClientRect().height)).toBe(0);
+    const hidden = await page.evaluate(() => {
+      const p = (window as any).__layerProbe; const h = (window as any).nativeLayerHarness;
+      const snapshot = { rootConnected: p.root.isConnected, sameParent: p.root.parentElement === p.parent,
+        inputConnected: p.input.isConnected, value: p.input.value, focused: document.activeElement === p.input,
+        blur: p.blur, pending: h.scope.hasUnacknowledgedWrites, allocations: h.layer.allocations, retirements: h.layer.retirements };
+      (window as any).__nativeTabVisibility = { hidden: snapshot }; return snapshot;
+    });
+    expect(hidden.rootConnected).toBe(true); expect(hidden.sameParent).toBe(true);
+    expect(hidden.allocations).toBe(countsBefore.allocations); expect(hidden.retirements).toBe(countsBefore.retirements);
+    const hiddenBytes = fs.readFileSync(path.join(vault, "Source.md"), "utf8");
+    await page.evaluate(() => {
+      const app = (window as any).app; app.workspace.setActiveLeaf((window as any).__nativeTabs.owner, { focus: false });
+    });
+    await expect(record(page)).toBeVisible();
+    await page.evaluate(({ hiddenBytes, original }) => {
+      const p = (window as any).__layerProbe;
+      Object.assign((window as any).__nativeTabVisibility, { hiddenBytes,
+        noBlurWitness: (window as any).__nativeTabVisibility.hidden.focused && document.activeElement === p.input && p.input.isConnected && p.input.value === "9" && p.blur === 0 && hiddenBytes === original,
+        returned: { rootConnected: p.root.isConnected, sameParent: p.root.parentElement === p.parent,
+          inputConnected: p.input.isConnected, value: p.input.value, focused: document.activeElement === p.input, blur: p.blur,
+          allocations: (window as any).nativeLayerHarness.layer.allocations, retirements: (window as any).nativeLayerHarness.layer.retirements } });
+    }, { hiddenBytes, original });
+    expect(await page.evaluate(() => (window as any).__nativeTabVisibility.returned)).toMatchObject({ rootConnected: true, sameParent: true, ...countsBefore });
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+    // This diagnostic asserts ownership only. A browser focus/blur transfer is
+    // recorded as an outstanding no-blur acceptance gap, never waived as proof.
+  });
+});
+test("the opaque retained shelf blocks hidden inline clicks while exposed inline cells remain interactive", async ({}, info) => {
+  const doc = source.slice(0, 2000) + "\n![[Board.canvas]]\n\n" + "Tail paragraph.\n\n".repeat(400);
+  await withPrototype(info, async (page, vault) => {
+    await page.evaluate(() => {
+      const app = (window as any).app; const modify = app.vault.modify.bind(app.vault);
+      app.vault.modify = (file: any, text: string) => file.path === "Source.md" ? Promise.reject(new Error("synthetic retained shelf draft failure")) : modify(file, text);
+    });
+    const input = await edit(page); await input.press("Enter");
+    await expect(record(page).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await expect(input).toBeFocused(); await capture(page, input);
+    await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]", 100)).top; });
+    await expect(record(page, 2).locator(".bases-table")).toBeVisible();
+    await unchanged(page, vault); await expect(page.locator(".native-prototype-shelf")).toBeVisible();
+    const points = await record(page, 2).evaluate(root => {
+      const shelf = document.querySelector<HTMLElement>(".native-prototype-shelf")!;
+      const rail = document.querySelector<HTMLElement>('[aria-label="Scroll retained embedded edits"]')!;
+      const rect = shelf.getBoundingClientRect(), headerBottom = rail.getBoundingClientRect().top;
+      let positive: { x: number; y: number } | null = null, covered: { x: number; y: number } | null = null;
+      for (const cell of root.querySelectorAll<HTMLElement>("td.bases-cell")) {
+        const cellRect = cell.getBoundingClientRect();
+        const x = (Math.max(cellRect.left, rect.left) + Math.min(cellRect.right, rect.right)) / 2;
+        const aboveBottom = Math.min(cellRect.bottom, rect.top - 2);
+        if (!positive && aboveBottom > cellRect.top) {
+          const y = (cellRect.top + aboveBottom) / 2, hit = document.elementFromPoint(x, y);
+          if (hit && cell.contains(hit) && hit.closest(".native-prototype-record") === root) positive = { x, y };
+        }
+        const top = Math.max(cellRect.top, rect.top + 2), bottom = Math.min(cellRect.bottom, headerBottom - 2);
+        if (!covered && bottom > top && cellRect.right > rect.left && cellRect.left < rect.right) covered = { x, y: (top + bottom) / 2 };
+      }
+      (window as any).__nativeShelfPointer = { positive, covered, shelf: rect.toJSON(), headerBottom,
+        background: getComputedStyle(shelf).backgroundColor, opacity: getComputedStyle(shelf).opacity, clicks: 0 };
+      root.addEventListener("click", () => { (window as any).__nativeShelfPointer.clicks++; }, true);
+      const background = getComputedStyle(shelf).backgroundColor;
+      const channels = background.match(/^rgba?\(([^)]+)\)$/)?.[1].split(",").map(Number);
+      const opaque = !!channels && channels.every(Number.isFinite) && (channels.length === 3 || channels.length === 4 && channels[3] === 1);
+      return { positive, covered, opaque, opacity: getComputedStyle(shelf).opacity };
+    });
+    expect(points.positive).not.toBeNull(); expect(points.covered).not.toBeNull();
+    expect(points.opacity).toBe("1"); expect(points.opaque).toBe(true);
+    if (!points.positive || !points.covered) throw new Error("Actual exposed and opaque-overlapped inline cells are required");
+    await page.mouse.click(points.positive.x, points.positive.y);
+    expect(await page.evaluate(() => (window as any).__nativeShelfPointer.clicks)).toBe(1);
+    await expect(record(page).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    expect(await page.evaluate(() => { const p = (window as any).__layerProbe; return { connected: p.input.isConnected, value: p.input.value, sameParent: p.root.parentElement === p.parent }; })).toEqual({ connected: true, value: "9", sameParent: true });
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+    await expect(page.locator(".native-prototype-shelf")).toBeVisible();
+    expect(await page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.find((item: any) => item.id === 1)?.state)).toBe("retained");
+    expect(await page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.find((item: any) => item.id === 2)?.state)).toBe("inline");
+    const coveredNow = await record(page, 2).evaluate(root => {
+      const shelf = document.querySelector<HTMLElement>(".native-prototype-shelf")!, rail = document.querySelector<HTMLElement>('[aria-label="Scroll retained embedded edits"]')!;
+      const shelfRect = shelf.getBoundingClientRect(), headerBottom = rail.getBoundingClientRect().top, style = getComputedStyle(shelf);
+      const channels = style.backgroundColor.match(/^rgba?\(([^)]+)\)$/)?.[1].split(",").map(Number);
+      const opaque = style.opacity === "1" && !!channels && channels.every(Number.isFinite) && (channels.length === 3 || channels.length === 4 && channels[3] === 1);
+      for (const cell of root.querySelectorAll<HTMLElement>("td.bases-cell")) {
+        const rect = cell.getBoundingClientRect();
+        const left = Math.max(rect.left, shelfRect.left, 0), right = Math.min(rect.right, shelfRect.right, innerWidth);
+        const top = Math.max(rect.top, shelfRect.top + 2, 0), bottom = Math.min(rect.bottom, headerBottom - 2, innerHeight);
+        if (cell.isConnected && right > left && bottom > top) {
+          const point = { x: (left + right) / 2, y: (top + bottom) / 2 }, hit = document.elementFromPoint(point.x, point.y);
+          (window as any).__nativeShelfCoveredCell = cell;
+          (window as any).__nativeShelfPointer.coveredBeforeClick = { point, cell: { rect: rect.toJSON(), text: cell.textContent?.slice(0, 80), connected: cell.isConnected },
+            shelf: shelfRect.toJSON(), headerBottom, background: style.backgroundColor, opacity: style.opacity,
+            hit: hit ? { tag: hit.tagName, className: hit.className, occurrence: hit.closest<HTMLElement>(".native-prototype-record")?.dataset.occurrence } : null };
+          return { point, opaque };
+        }
+      }
+      return null;
+    });
+    expect(coveredNow).not.toBeNull();
+    if (!coveredNow) throw new Error("No live inline cell remains underneath the visible opaque shelf header");
+    expect(coveredNow.opaque).toBe(true);
+    await page.mouse.click(coveredNow.point.x, coveredNow.point.y);
+    expect(await page.evaluate(() => (window as any).__nativeShelfPointer.clicks)).toBe(1);
+    expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+    expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
+  }, doc);
 });
