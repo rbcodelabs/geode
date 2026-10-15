@@ -36,7 +36,10 @@ for y in range(32):
     for x in range(32): image.putpixel((x,y), (24,118,86) if (x//8+y//8)%2 else (245,203,82))
 encoded=BytesIO(); image.save(encoded,format='JPEG2000',irreversible=False)
 basic('JPX.pdf',b'q 256 0 0 256 64 400 cm /Im1 Do Q',b'<< /XObject << /Im1 6 0 R >> >>',[stream(encoded.getvalue(),b'/Type /XObject /Subtype /Image /Width 32 /Height 32 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode')])
-mono=image.convert('1'); encoded=BytesIO();mono.save(encoded,format='TIFF',compression='group4');tiff=encoded.getvalue();info=Image.open(BytesIO(tiff));offsets=info.tag_v2[273];counts=info.tag_v2[279];mmr=b''.join(tiff[o:o+c] for o,c in zip(offsets,counts))
+mono=Image.new('1',(32,32))
+for y in range(32):
+    for x in range(32): mono.putpixel((x,y), 255 if (x//8+y//8)%2 == 0 else 0)
+encoded=BytesIO();mono.save(encoded,format='TIFF',compression='group4');tiff=encoded.getvalue();info=Image.open(BytesIO(tiff));offsets=info.tag_v2[273];counts=info.tag_v2[279];mmr=b''.join(tiff[o:o+c] for o,c in zip(offsets,counts))
 def segment(number, kind, page, data): return struct.pack('>IBBBI',number,kind,0,page,len(data))+data
 jbig2=segment(1,48,1,struct.pack('>IIIIBH',32,32,0,0,0,0))+segment(2,38,1,struct.pack('>IIIIBB',32,32,0,0,0,1)+mmr)
 basic('JBIG2.pdf',b'q 256 0 0 256 64 400 cm /Im1 Do Q',b'<< /XObject << /Im1 6 0 R >> >>',[stream(jbig2,b'/Type /XObject /Subtype /Image /Width 32 /Height 32 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode')])
