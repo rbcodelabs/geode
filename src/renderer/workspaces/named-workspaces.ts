@@ -9,7 +9,7 @@ function invalid(): never { throw new Error("Invalid or oversized workspace layo
 function cloneJson(value: unknown): unknown {
   let bytes: string | undefined;
   try { bytes = JSON.stringify(value); } catch { return invalid(); }
-  if (!bytes || bytes.length > MAX_BYTES) return invalid();
+  if (!bytes || bytes.length > MAX_BYTES || new TextEncoder().encode(bytes).byteLength > MAX_BYTES) return invalid();
   const copy: unknown = JSON.parse(bytes);
   const walk = (value: unknown, depth: number): void => {
     if (depth > 48) invalid();
