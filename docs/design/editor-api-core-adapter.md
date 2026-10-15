@@ -2,9 +2,16 @@
 
 Design: [ADR0036](../adr/0036-public-editor-core-facade.md), accepted by the
 overnight coordinator under the user's reversible-design authority. No
-implementation is included. Delivery Task: `6f88c11d-f694-4a63-8d1c-c38d5baac74d`.
+product integration is included in this design brief. Delivery Task: `6f88c11d-f694-4a63-8d1c-c38d5baac74d`.
 Audit target: editor `b63cae9`; pinned API `9abd9605`. Use a new branch after an integrated frozen baseline;
 do not reuse the folding/multiple-cursor Task or modify another engineer's files.
+
+The accepted [Phase0 sequencing addendum](editor-core-preparation-addendum.md)
+allows only a private, unwired adapter and isolated CM state/history tests before
+that baseline. These establish preparation evidence, not native/plugin integration.
+The explicit legacy dispatch bridge retains native transaction-spec/history
+semantics; do not infer the core mutation undo-isolation guarantee for arbitrary
+legacy dispatch calls.
 
 ## Scope and seams
 

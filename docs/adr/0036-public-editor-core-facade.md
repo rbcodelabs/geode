@@ -9,6 +9,13 @@ authority to make reversible design decisions. Delivery Task:
 merging, releasing, or claiming comparative API parity. The integrated native
 baseline and shared-file coordination requirements below still apply.
 
+The accepted [Phase0 sequencing addendum](../design/editor-core-preparation-addendum.md)
+permits an isolated, unwired preparation module before that integration baseline.
+It does not permit product acquisition, callback wiring or public runtime exports.
+Legacy dispatch preserves explicit native transaction-spec/history behavior; the
+isolated undo-unit guarantee below applies to core mutation methods, not arbitrary
+legacy dispatch specifications.
+
 ## Context
 
 The pinned public API (`obsidianmd/obsidian-api` commit
