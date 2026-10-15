@@ -94,6 +94,7 @@ test("actual failed Base write keeps original Retry reachable after scrolling an
     const input = await edit(page); await capture(page, input);
     await page.evaluate(() => { const app = (window as any).app; (window as any).__originalLayerModify = app.vault.modify.bind(app.vault); app.vault.modify = (file: any, text: string) => file.path === "Source.md" ? Promise.reject(new Error("synthetic row failure")) : (window as any).__originalLayerModify(file, text); });
     await input.press("Enter"); await expect(record(page).getByRole("button", { name: "Retry Base save" })).toBeVisible();
+    await expect(input).toBeFocused(); await capture(page, input);
     await scrollAway(page); await unchanged(page, vault);
     await page.evaluate(() => { (window as any).app.vault.modify = (window as any).__originalLayerModify; });
     await record(page).getByRole("button", { name: "Retry Base save" }).click();
