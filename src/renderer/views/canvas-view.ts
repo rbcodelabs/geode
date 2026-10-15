@@ -3128,6 +3128,10 @@ export class CanvasView implements View {
 
   private restoreHistoryInteraction(): void {
     if (this.historyInProgress || this.historyPriorInert == null || this.vaultSwitching || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    // A superseding conflict may have refused preparation while history owned
+    // the barrier. Its old projection was already retired: keep those controls
+    // disabled, while releasing the header and recovery banner outside it.
+    if (this.conflictReadOnly) this.surfaceEl.inert = true;
     this.containerEl.inert = this.historyPriorInert;
     this.historyPriorInert = null;
   }

@@ -145,6 +145,7 @@ it("does not publish history into a newer conflict after its already-started wri
   view.presentConflict(null, "New.canvas", true); finish();
   await expect(undoing).resolves.toBeUndefined();
   expect(view.document.nodes).toEqual([node]); expect(view.conflictReadOnly).toBe(true); expect(view.undoStack).toHaveLength(1);
+  expect(view.containerEl.inert).toBe(false); expect(view.surfaceEl.inert).toBe(true);
 });
 
 
