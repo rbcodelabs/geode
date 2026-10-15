@@ -124,3 +124,29 @@ test("a removed pending actual Canvas mount settles before close and never publi
     await page.evaluate(() => { const app = (window as any).app; const read = app.vault.read.bind(app.vault); app.vault.read = async (file: any) => { if (file.path === "Board.canvas") { (window as any).__layerReadEntered = true; await new Promise<void>(resolve => { (window as any).__releaseLayerRead = resolve; }); } return read(file); }; });
   });
 });
+
+test("trusted Return pointer activation preserves the unfinished native draft and source bytes", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    const input = await edit(page); await capture(page, input); await scrollAway(page); await unchanged(page, vault);
+    await record(page).getByRole("button", { name: "Return to embed" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records[0]?.state)).toBe("inline");
+    await unchanged(page, vault);
+  });
+});
+
+test("a retained native Return remains pointer reachable when a later occurrence is inline", async ({}, info) => {
+  const doc = source.slice(0, 2000) + "\n![[Board.canvas]]\n\n" + "Tail paragraph.\n\n".repeat(400);
+  await withPrototype(info, async (page, vault) => {
+    const input = await edit(page); await capture(page, input);
+    await page.evaluate(() => { const h = (window as any).nativeLayerHarness; h.editor.scrollDOM.scrollTop = h.editor.lineBlockAt(h.editor.state.doc.toString().indexOf("![[Board.canvas]]", 100)).top; });
+    await expect(record(page, 2).locator(".bases-table")).toBeVisible(); await unchanged(page, vault);
+    const button = record(page).getByRole("button", { name: "Return to embed" }); await expect(button).toBeVisible();
+    expect(await button.evaluate(button => {
+      const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return hit === button || button.contains(hit);
+    })).toBe(true);
+    await button.click();
+    await expect.poll(() => page.evaluate(() => (window as any).nativeLayerHarness.layer.snapshot().records.find((item: any) => item.id === 1)?.state)).toBe("inline");
+    await unchanged(page, vault);
+  }, doc);
+});
