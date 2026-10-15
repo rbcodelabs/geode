@@ -42,6 +42,15 @@ geode-wiki sync init    --root ~/Notes2 --ssh hub --store /srv/notes-hub        
 Common options: `--root <dir>` (required except `serve`), `--state-dir <dir>`,
 `--settle-ms <n>` (defer files modified within n ms; default 5000), `--json`.
 
+**Per-path settle (`--settle-rule <folder-or-*.ext>=<ms>`, repeatable).** History is append-only and every version is a whole blob, so a file that is
+appended to continuously (a Claude session log, `Claude/logs/<id>.jsonl`, up to ~100 MB) would be re-published in full on every sync: 8 GB of hub
+blobs for one 30 MB log in a day was measured. Files matching a rule are deferred (`blocked: unsettled`, never read, hashed, published, deleted or
+overwritten) until they have been quiet for the rule's window, then sync normally. Defaults: `Claude/logs=600000` and `*.jsonl=600000` (10 min); the
+most specific rule wins (folder over extension, longer folder over shorter); `=0` opts a path out; a rule with the same path replaces the default.
+`--settle-ms` is unchanged and still applies to every file. The desktop app (`SyncService`) and the CLI share the rule through
+`buildHistoryPorts` (`src/sync-core/ports.ts`, `src/sync-core/settle.ts`). Trade-off: a log reaches other devices up to window + one sync interval
+after its last write. This reduces the *rate* of growth; it does not make a single version smaller (see the chunked-storage design).
+
 State directory default: `~/.geode/sync/root-<sha256(realpath root)[:16]>`
 (`GEODE_SYNC_HOME` moves the base). It must be outside the vault; init refuses
 otherwise (`state-dir-invalid`).

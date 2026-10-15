@@ -18,6 +18,7 @@ import {
   classifySyncError, describeTarget, parseListenAddress, readTokenFile, serveStore, startHttpStoreServer, syncConflicts, syncGc, syncInit, syncPreview, syncResolve,
   syncRun, syncStatus,
   type PreviewSummary, type SyncOverrides, type SyncTarget, type WikiSyncContext,
+  parseSettleRule, type SettleRule,
 } from "../sync-node/index";
 import { emit, usageOutcome, type CliOutcome, type Streams } from "./output";
 import {
@@ -41,7 +42,7 @@ type Values = Record<string, string | boolean | string[] | undefined>;
 type OptionSpec = Record<string, { type: "string" | "boolean"; multiple?: boolean }>;
 
 const SHARED: OptionSpec = { json: { type: "boolean" }, help: { type: "boolean" } };
-const VAULT: OptionSpec = { root: { type: "string" }, "state-dir": { type: "string" }, "settle-ms": { type: "string" } };
+const VAULT: OptionSpec = { root: { type: "string" }, "state-dir": { type: "string" }, "settle-ms": { type: "string" }, "settle-rule": { type: "string", multiple: true } };
 const OVERRIDES: OptionSpec = {
   "override-delete-limit": { type: "string" },
   "override-shrunk-scan": { type: "boolean" },
@@ -82,6 +83,8 @@ Options:
   --json                        structured output; named statuses preserved verbatim
   --state-dir <dir>             device state directory (default ~/.geode/sync/root-<hash>; must be outside the vault)
   --settle-ms <n>               defer files modified within n ms (default 5000)
+  --settle-rule <path>=<ms>     per-path quiet period, repeatable; <path> is a folder or *.ext. Defaults: Claude/logs=600000, *.jsonl=600000
+                                (a continuously appended file is stored once per quiet period, not once per sync); =0 opts a path out
 
 Safety rails (all checked before anything is changed):
   first run                     needs 'sync preview --approve' on the exact plan; otherwise approval-required / approval-stale
@@ -156,10 +159,17 @@ function previewLines(summary: PreviewSummary): string[] {
 function contextFrom(values: Values, ctx: SyncCliContext): WikiSyncContext | CliOutcome {
   const settle = values["settle-ms"] === undefined ? undefined : nonNegative(values["settle-ms"] as string, "--settle-ms");
   if (isError(settle)) return usageOutcome(settle.error);
+  const rules: SettleRule[] = [];
+  for (const text of (values["settle-rule"] as string[] | undefined) ?? []) {
+    const rule = parseSettleRule(text);
+    if (typeof rule === "string") return usageOutcome(rule);
+    rules.push(rule);
+  }
   return {
     root: values.root as string, env: ctx.env,
     ...(typeof values["state-dir"] === "string" ? { stateDir: values["state-dir"] } : {}),
     ...(settle !== undefined ? { settleMs: settle } : {}),
+    ...(rules.length ? { settleRules: rules } : {}),
     onStderr: line => ctx.streams.err(line + "\n"),
   };
 }

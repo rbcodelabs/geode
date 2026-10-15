@@ -1,6 +1,7 @@
 import type { HistoryApply, HistoryControllerPorts, HistoryControllerState, HistoryLocalResource, HistoryLocalSnapshot, HistoryOperation } from "./history-controller";
 import { SYNC_MAX_FILE_BYTES } from "./history-types";
 import { isLocalOnlyConfigPath, isPathInSyncScope, isRawConfigResourcePath, portableResourcePhysicalPath, rawConfigCategory, rawResourcePath, type SyncScope } from "./scope";
+import { DEFAULT_SETTLE_RULES, SETTLE_REASON, isUnsettled, type SettleRule } from "./settle";
 import { isPortableAssetPath } from "../shared/portable-assets";
 import type { GuardedMutation, GuardedMutationResult, SyncStorageRequest } from "../shared/sync-safety";
 
@@ -92,6 +93,8 @@ export interface HistoryPortsContext {
   /** Fired after a portable-config mutation was applied. */
   portableChanged(): Promise<void>;
   now?(): number;
+  /** Per-path settle windows for continuously appended files (session logs). Default: DEFAULT_SETTLE_RULES. */
+  settleRules?: readonly SettleRule[];
 }
 
 // The hash cache is durable (SQLite, survives app restarts), so a stat taken
@@ -164,7 +167,14 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
     const scan = await host.vault.reconcileScan(); assertContext();
     const result: HistoryLocalSnapshot = { authoritative: scan.status === "complete", scopeKey: JSON.stringify(scope), entries: [], excluded: [], blocked: [] };
     const folders = new Map<string, HistoryLocalResource>();
-    const walked = scan.entries.length;
+    // Files still inside their per-path settle window are deferred, not hashed: they are reported as blocked, which the
+    // engine never publishes, deletes or overwrites, and the first run after the quiet period picks them up.
+    const settleRules = ctx.settleRules ?? DEFAULT_SETTLE_RULES, settleNow = now();
+    const deferred: SyncVaultPathIssue[] = [], settledEntries = scan.entries.filter(entry => {
+      if (entry.isFolder || !isUnsettled(entry.path, entry.mtime, settleNow, settleRules)) return true;
+      deferred.push({ path: entry.path, reason: SETTLE_REASON }); return false;
+    });
+    const walked = settledEntries.length;
     let visited = 0;
     // Every entry pays a full binary read plus a SHA-256 (and, for content
     // paths, two provider exclude checks) on every preview()/run() cycle even
@@ -177,10 +187,11 @@ export function buildHistoryPorts(host: SyncHostLite, ctx: HistoryPortsContext):
     // where append-only sync never runs anyway) this degrades to the
     // unconditional behavior that existed before it.
     for (const issue of scan.blocked ?? []) result.blocked.push({ namespace: "content", path: issue.path, reason: issue.reason });
+    for (const issue of deferred) result.blocked.push({ namespace: "content", path: issue.path, reason: issue.reason });
     for (const issue of scan.excluded ?? []) result.excluded.push({ namespace: "content", path: issue.path, reason: issue.reason });
     const hashCache = (await host.hashCache?.readAll()) ?? {}; assertContext();
     const hashCacheUpdates: Record<string, SyncHashCacheEntry> = {};
-    for (const entry of scan.entries) {
+    for (const entry of settledEntries) {
       // Before the work, counting entries already finished — the same
       // convention `transferring` uses, so `completed` can never claim an
       // entry that has not been dealt with. Reported ahead of every `continue`
