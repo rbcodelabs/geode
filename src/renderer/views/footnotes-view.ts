@@ -1,3 +1,4 @@
+import { ScopeCancelled } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import type { TFile } from "../types";
 import type { View } from "../workspace";
@@ -14,6 +15,7 @@ export class FootnotesView implements View {
   private closed = false;
   private showing = false;
   private generation = 0;
+  private navigationGeneration = 0;
   private controller: AbortController | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -52,7 +54,7 @@ export class FootnotesView implements View {
   }
   onOpen(): void { this.sync(true); }
   onReveal(): void { this.sync(true); }
-  onClose(): void { this.closed = true; this.cancel(); for (const stop of this.stops.splice(0)) stop(); }
+  onClose(): void { this.navigationGeneration++; this.closed = true; this.cancel(); for (const stop of this.stops.splice(0)) stop(); }
 
   async render(): Promise<void> {
     this.cancel(); if (!this.visible || this.app.vault.root !== this.root) return;
@@ -80,12 +82,12 @@ export class FootnotesView implements View {
         const label = document.createElement("span"); label.className = "footnotes-label"; label.textContent = item.label;
         const text = document.createElement("span"); text.className = "footnotes-text"; text.textContent = item.text || "Empty footnote";
         edit.append(label, text);
-        edit.addEventListener("click", () => this.navigate(file, snapshot, item, true));
+        edit.addEventListener("click", () => { void this.navigate(file, snapshot, item, true); });
         const detail = document.createElement("div"); detail.className = "footnotes-detail";
         detail.textContent = item.missing ? item.text : `${item.references} reference${item.references === 1 ? "" : "s"}${item.editable ? "" : " · Partial definition; navigate to edit"}`;
         const jump = document.createElement("button"); jump.type = "button"; jump.className = "footnotes-jump"; jump.textContent = "Jump";
         jump.setAttribute("aria-label", `Go to footnote ${item.label}`);
-        jump.addEventListener("click", () => this.navigate(file, snapshot, item, false));
+        jump.addEventListener("click", () => { void this.navigate(file, snapshot, item, false); });
         row.append(edit, detail, jump); this.body.appendChild(row);
       }
       const notices: string[] = [];
@@ -94,15 +96,30 @@ export class FootnotesView implements View {
       this.status.textContent = notices.join(" ");
     } catch { if (current()) this.status.textContent = "Could not load footnotes. Reopen the pane to retry."; }
   }
-  private navigate(file: TFile, snapshot: string, item: FootnotePaneItem, edit: boolean): void {
-    const view = this.app.getActiveMarkdownView();
-    if (!this.visible || this.root !== this.app.vault.root || this.app.workspace.getActiveFile() !== file || this.app.vault.getFileByPath(file.path) !== file ||
-        view?.file !== file || view.getText() !== snapshot || !view.editor) { this.schedule(); return; }
-    if (edit && (!item.editable || view.isConflictReadOnly())) return;
+  private async navigate(file: TFile, snapshot: string, item: FootnotePaneItem, edit: boolean): Promise<void> {
+    const view = this.app.getActiveMarkdownView(), editor = view?.editor;
+    const vault = this.app.vault, root = vault.root, path = file.path;
+    const leaf = this.app.workspace.getActiveLeaf(), navigation = ++this.navigationGeneration;
+    const current = () => navigation === this.navigationGeneration && this.visible && this.root === root &&
+      this.app.vault === vault && vault.root === root && file.path === path && vault.getFileByPath(path) === file &&
+      this.app.workspace.getActiveLeaf() === leaf && this.app.workspace.getActiveFile() === file &&
+      this.app.getActiveMarkdownView() === view && view?.file === file && view.editor === editor && view.getText() === snapshot &&
+      (!edit || (item.editable && view.canApplySourceEdit({ allowReading: true })));
+    if (!view || !editor || !current()) { this.schedule(); return; }
     const from = edit ? item.editFrom : item.from, to = edit ? item.editTo : item.from;
-    view.scrollToOffset(from); // Reading mode retains the same editor; reveal it.
-    if (edit && view.mode !== "source") view.toggleSource();
-    view.editor.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
-    view.editor.focus();
+    try {
+      await view.scrollToOffsetAsync(from, { focus: false });
+      if (!current()) { this.schedule(); return; }
+      if (edit && view.mode !== "source") {
+        await view.toggleSource({ focus: false });
+        if (!current()) { this.schedule(); return; }
+      }
+      editor.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+      if (current()) editor.focus();
+    } catch (error) {
+      if (!(error instanceof ScopeCancelled) && current()) {
+        this.status.textContent = `Could not open footnote: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
   }
 }

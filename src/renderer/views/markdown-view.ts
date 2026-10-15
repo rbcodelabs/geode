@@ -871,16 +871,16 @@ export class MarkdownView implements View {
   }
 
   /** Flip between Live Preview and raw source while editing. */
-  toggleSource(): Promise<void> {
+  toggleSource(options: { focus?: boolean } = {}): Promise<void> {
     const editing = this.mode === "reading" ? this.lastEditingMode : this.mode;
-    return this.changeMode(editing === "live" ? "source" : "live");
+    return this.changeMode(editing === "live" ? "source" : "live", options.focus !== false);
   }
 
   private editingExtensions(mode: MarkdownMode) {
     return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
   }
 
-  private changeMode(desired: MarkdownMode): Promise<void> {
+  private changeMode(desired: MarkdownMode, focusEditor = true): Promise<void> {
     return this.replaceProjections(async () => async () => {
       this.pagePreview.hide();
       this.lpProjection = this.renderOwner?.child({}) ?? null;
@@ -889,7 +889,7 @@ export class MarkdownView implements View {
       this.editor?.dispatch({ effects: this.editingCompartment.reconfigure(this.editingExtensions(desired)) });
       if (desired === "reading") await this.renderReadingNative();
       else { if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl); this.readingContentEl = null; this.readingEl.innerHTML = ""; }
-      this.applyMode();
+      this.applyMode(focusEditor);
     });
   }
 
@@ -962,15 +962,16 @@ export class MarkdownView implements View {
   /** Public-compatible adapter; native callers await the internal promise. */
   scrollToOffset(offset: number): void { this.observeReplacement(this.scrollToOffsetAsync(offset)); }
 
-  async scrollToOffsetAsync(offset: number): Promise<void> {
+  /** Internal callers may defer focus until their own async ownership checks pass. */
+  async scrollToOffsetAsync(offset: number, options: { focus?: boolean } = {}): Promise<void> {
     const file = this.file; const vault = this.app.vault;
     this.preflightReplacement();
-    if (this.mode === "reading") await this.changeMode(this.lastEditingMode);
+    if (this.mode === "reading") await this.changeMode(this.lastEditingMode, options.focus !== false);
     if (this.file !== file || this.app.vault !== vault || this.transitionClosing) throw new ScopeCancelled();
     if (!this.editor) return;
     const pos = Math.max(0, Math.min(offset, this.editor.state.doc.length));
     this.editor.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
-    this.focusOwnedEditor();
+    if (options.focus !== false) this.focusOwnedEditor();
   }
 
   // --- Bookmarks (headings & blocks) --------------------------------------

@@ -18,9 +18,10 @@ function setup() {
   const file = { path: "Note.md", extension: "md" };
   let text = "Body[^a]\n\n[^a]: Footnote text";
   const workspace = new Events() as Events & Record<string, any>; workspace.getActiveFile = () => file;
-  const metadataCache = new Events();
+  const metadataCache = new Events(); const leaf = {}; workspace.getActiveLeaf = () => leaf;
   const editor = { file, mode: "live", getText: () => text, isConflictReadOnly: () => false,
-    scrollToOffset: vi.fn(), toggleSource: vi.fn(() => { editor.mode = "source"; }),
+    scrollToOffsetAsync: vi.fn(async () => {}), toggleSource: vi.fn(async () => { editor.mode = "source"; }),
+    canApplySourceEdit: () => !editor.isConflictReadOnly(),
     editor: { dispatch: vi.fn(), focus: vi.fn() } };
   const app = { workspace, metadataCache, getActiveMarkdownView: () => editor,
     vault: { root: "synthetic", getFileByPath: () => file, read: vi.fn(async () => "stale disk") }, notify: vi.fn() };
@@ -30,7 +31,7 @@ it("clicking a footnote selects current live source for normal editor editing", 
   expect(api.FootnotesView).toBeTypeOf("function");
   const { app, editor } = setup(); const view = new api.FootnotesView(app as any); view.onOpen(); await view.render();
   const button = (view.containerEl as unknown as Element).all().find(element => element.className === "footnotes-edit")!;
-  expect(button).toBeDefined(); button.events.get("click")!();
+  expect(button).toBeDefined(); button.events.get("click")!(); await new Promise(resolve => setImmediate(resolve));
   expect(editor.toggleSource).toHaveBeenCalled();
   expect(editor.editor.dispatch).toHaveBeenCalledWith({ selection: { anchor: 16, head: 29 }, scrollIntoView: true });
   expect(app.vault.read).not.toHaveBeenCalled(); view.onClose();
