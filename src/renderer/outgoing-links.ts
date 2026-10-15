@@ -32,7 +32,7 @@ function maskLinkedSpans(text: string, truncated: boolean): string {
   // tail once rather than rescanning it from every unmatched opening bracket.
   // This masks spans only; the shared metadata parser still owns parsed Links.
   const labels: number[] = [];
-  const shortcutCandidates: { from: number; to: number; label: string }[] = [];
+  const shortcutCandidates: { from: number; to: number }[] = [];
   const definitions = new Set<string>();
   const normalizeLabel = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
   for (let i = 0; i < text.length; i++) {
@@ -55,11 +55,11 @@ function maskLinkedSpans(text: string, truncated: boolean): string {
         if (text[end] === "]") spans.push([from, end + 1]);
         i = text[end] === "]" ? end : end - 1;
       } else if (text[i + 1] === ":") {
-        definitions.add(normalizeLabel(text.slice(from + 1, i)));
+        if (i - from <= 1000) definitions.add(normalizeLabel(text.slice(from + 1, i)));
         let end = i + 2;
         while (end < text.length && text[end] !== "\n") end++;
         spans.push([from, end]); i = end;
-      } else shortcutCandidates.push({ from, to: i + 1, label: normalizeLabel(text.slice(from + 1, i)) });
+      } else shortcutCandidates.push({ from, to: i + 1 });
     } else if (text[i] === "<") {
       let end = i + 1;
       while (end < text.length && !"<>\n".includes(text[end])) end++;
@@ -68,7 +68,12 @@ function maskLinkedSpans(text: string, truncated: boolean): string {
     }
   }
   for (const candidate of shortcutCandidates) {
-    if (truncated || definitions.has(candidate.label)) spans.push([candidate.from, candidate.to]);
+    // Reference labels are at most 999 characters. Retain only offsets while
+    // scanning so nested bracket runs cannot allocate quadratic substrings.
+    if (truncated || (definitions.size && candidate.to - candidate.from <= 1001 &&
+        definitions.has(normalizeLabel(text.slice(candidate.from + 1, candidate.to - 1))))) {
+      spans.push([candidate.from, candidate.to]);
+    }
   }
   // The omitted suffix may close an authored wikilink/Markdown label. Never
   // convert a candidate whose label context extends beyond the inspected text.

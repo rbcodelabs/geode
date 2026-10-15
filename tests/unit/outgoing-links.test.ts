@@ -111,3 +111,9 @@ it("never offers a mention from a link or label cut by the source scan bound", a
     expect(result.limited, tail).toBe(true);
   }
 });
+
+it("handles many nested closed labels without retaining growing label substrings", async () => {
+  const text = "[".repeat(50_000) + "]".repeat(50_000) + "\n\n[Atlas]: Target.md";
+  const result = await api.findOutgoingMentions(text, source, targets.slice(0, 1), { yieldControl: async () => {} });
+  expect(result.mentions).toEqual([]);
+});
