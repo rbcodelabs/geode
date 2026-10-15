@@ -12,7 +12,11 @@ full-path hover/accessibility labels to disambiguate duplicate filenames.
 basename or frontmatter alias. Click **Link** to convert one occurrence. Alias
 spelling and all surrounding text are preserved. The change uses the current
 editor buffer and normal undo/autosave. Stale suggestions refresh without editing.
-Read-only/Reading views show suggestions with conversion disabled. A mention
+Read-only/Reading views show suggestions with conversion disabled. To keep the
+editor responsive on large or dense notes, mention scans inspect the first 128 Ki
+characters and collect at most 500 matches. The pane explicitly announces a
+limited scan whenever either bound is reached; its displayed count is then a
+subset, not a total. Scans yield within single-target matches and between targets. A mention
 inside a code block can be converted, but links inside code do not enter Links.
 
 Under **Settings → Files and links → Excluded files**, list vault-relative files,

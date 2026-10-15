@@ -47,3 +47,15 @@ Riskiest assumption: all displayed offsets can refer to one consistent live edit
 Out of scope for this package: backlinks changes, canvas outgoing graph, public plugin API additions, universal hover-preview settings. No claim that the whole linking specification is verified by this package alone.
 
 Visual verification: rendered locally with installed Playwright Chromium at 1440×900 and 320×760; reviewed screenshots `desktop-outgoing.png` and `narrow-outgoing.png`, both legible with no horizontal overflow (narrow document scroll width 320). Artifact buttons switch all three pane references; conversion demonstrates success state only, not actual persistence.
+
+
+## Review hardening — 2026-10-14
+
+Independent review found quadratic rescanning of unmatched Markdown openers and
+newline-free snippets, with cancellation only between target records. The approved
+review fix uses one forward masking pass, precomputed line starts, byte/match
+cancellation checkpoints, a 128 Ki-character source bound and at most 500 collected
+matches. The pane announces limited coverage explicitly. This is a responsiveness
+tradeoff: long/dense notes show a truthful subset and remain a parity limitation
+until incremental scanning can safely expose the rest. Existing parser graph
+coverage remains a separate package. No editor/disk mutation policy changes.

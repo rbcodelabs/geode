@@ -1,9 +1,12 @@
-import { parser } from "@lezer/markdown";
-import { parseMetadata } from "../wiki/metadata";
+import { buildLineStarts, parseMetadata } from "../wiki/metadata";
 import { FRONTMATTER_BLOCK_RE } from "../wiki/constants";
 
 export interface OutgoingTarget { path: string; basename: string; aliases: readonly string[] }
 export interface OutgoingMention { targetPath: string; from: number; to: number; text: string; snippet: string }
+export interface OutgoingMentionResult { mentions: OutgoingMention[]; limited: boolean; scannedCharacters: number }
+const MAX_SOURCE_CHARACTERS = 128 * 1024;
+const MAX_VISIBLE_MENTIONS = 500;
+
 export interface OutgoingReference { link: string; displayText: string; count: number }
 
 /** Uses the existing metadata parser; Markdown-link graph support is tracked separately. */
@@ -25,16 +28,48 @@ function maskLinkedSpans(text: string): string {
   const frontmatter = FRONTMATTER_BLOCK_RE.exec(text);
   if (frontmatter) spans.push([0, frontmatter[0].length]);
   for (const match of text.matchAll(/!?\[\[[^\[\]\n]+\]\]/g)) spans.push([match.index, match.index + match[0].length]);
-  parser.parse(text).iterate({ enter(node) {
-    if (["Link", "Image", "LinkReference", "LinkReferenceDefinition", "Autolink"].includes(node.name)) {
-      spans.push([node.from, node.to]); return false;
+  // One forward pass for Markdown syntax. Incomplete destinations consume their
+  // tail once rather than rescanning it from every unmatched opening bracket.
+  // This masks spans only; the shared metadata parser still owns parsed Links.
+  const labels: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\") { i++; continue; }
+    if (text[i] === "[") { labels.push(i); continue; }
+    if (text[i] === "]" && labels.length) {
+      const from = labels.pop()!;
+      if (text[i + 1] === "(") {
+        let end = i + 2, depth = 1;
+        for (; end < text.length; end++) {
+          if (text[end] === "\\") { end++; continue; }
+          if (text[end] === "(") depth++;
+          else if (text[end] === ")" && --depth === 0) break;
+        }
+        spans.push([from, Math.min(end + 1, text.length)]);
+        i = end;
+      } else if (text[i + 1] === "[") {
+        let end = i + 2;
+        while (end < text.length && !"[]\n".includes(text[end])) end++;
+        if (text[end] === "]") spans.push([from, end + 1]);
+        i = text[end] === "]" ? end : end - 1;
+      } else if (text[i + 1] === ":") {
+        let end = i + 2;
+        while (end < text.length && text[end] !== "\n") end++;
+        spans.push([from, end]); i = end;
+      }
+    } else if (text[i] === "<") {
+      let end = i + 1;
+      while (end < text.length && !"<>\n".includes(text[end])) end++;
+      if (text[end] === ">") spans.push([i, end + 1]);
+      i = text[end] === ">" ? end : end - 1;
     }
-  } });
-  // Markdown inside a code block has no Link nodes. Mask that authored syntax too,
-  // so a second click can never nest links inside a converted code mention.
-  for (const match of text.matchAll(/!?\[[^\]\n]*\](?:\([^\n]*?\)|\[[^\]\n]*\])/g)) spans.push([match.index, match.index + match[0].length]);
+  }
   const chars = text.split("");
-  for (const [from, to] of spans) for (let i = from; i < to; i++) if (chars[i] !== "\n") chars[i] = " ";
+  spans.sort((a, b) => a[0] - b[0]);
+  let maskedTo = 0;
+  for (const [from, to] of spans) {
+    for (let i = Math.max(from, maskedTo); i < to; i++) if (chars[i] !== "\n") chars[i] = " ";
+    maskedTo = Math.max(maskedTo, to);
+  }
   return chars.join("");
 }
 
@@ -47,30 +82,50 @@ function abortIfNeeded(signal?: AbortSignal): void {
 export async function findOutgoingMentions(
   text: string, sourcePath: string, targets: Iterable<OutgoingTarget>,
   options: { signal?: AbortSignal; excluded?: (path: string) => boolean; yieldControl?: () => Promise<void> } = {},
-): Promise<OutgoingMention[]> {
+): Promise<OutgoingMentionResult> {
   abortIfNeeded(options.signal);
-  const available = maskLinkedSpans(text);
-  const matches: OutgoingMention[] = [];
-  let visited = 0;
+  const source = text.slice(0, MAX_SOURCE_CHARACTERS);
+  let limited = source.length < text.length;
   const yieldControl = options.yieldControl ?? (() => new Promise<void>(resolve => setTimeout(resolve, 0)));
-  for (const target of targets) {
-    if (++visited % 128 === 0) { await yieldControl(); abortIfNeeded(options.signal); }
+  const cooperate = async () => { await yieldControl(); abortIfNeeded(options.signal); };
+  // Bound the synchronous parser/masking phase, with cancellation checkpoints on
+  // both sides. Candidate scans have an independent byte/match work budget below.
+  if (source.length >= 8192) await cooperate();
+  const available = maskLinkedSpans(source);
+  if (source.length >= 8192) await cooperate();
+  const lineStarts = buildLineStarts(source);
+  const lineAt = (offset: number) => {
+    let lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >>> 1; if (lineStarts[mid] <= offset) lo = mid; else hi = mid - 1; }
+    return lo;
+  };
+  const matches: OutgoingMention[] = [];
+  let visited = 0, work = 0;
+  targetScan: for (const target of targets) {
+    if (++visited % 128 === 0) await cooperate();
     if (target.path === sourcePath || options.excluded?.(target.path)) continue;
     const seen = new Set<string>();
     for (const name of new Set([target.basename, ...target.aliases])) {
-      if (!name || name.includes("\n")) continue;
+      if (!name || name.includes("\n") || name.length > available.length) continue;
+      work += available.length;
+      if (work >= 32768) { work = 0; await cooperate(); }
+      const first = Array.from(name)[0], last = Array.from(name).at(-1)!;
       // RegExp case folding preserves UTF-16 source offsets even for Unicode.
       const expression = new RegExp(escape(name), "giu");
       for (const match of available.matchAll(expression)) {
+        work += 1024;
+        if (work >= 32768) { work = 0; await cooperate(); }
         const from = match.index, to = from + match[0].length;
         const before = Array.from(available.slice(Math.max(0, from - 2), from)).at(-1) ?? "";
         const after = Array.from(available.slice(to, to + 2))[0] ?? "";
-        if ((word.test(Array.from(name)[0]) && word.test(before)) || (word.test(Array.from(name).at(-1)!) && word.test(after))) continue;
+        if ((word.test(first) && word.test(before)) || (word.test(last) && word.test(after))) continue;
         const key = `${from}:${to}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        matches.push({ targetPath: target.path, from, to, text: text.slice(from, to),
-          snippet: text.slice(Math.max(text.lastIndexOf("\n", from - 1) + 1, from - 60), Math.min(text.indexOf("\n", to) < 0 ? text.length : text.indexOf("\n", to), to + 80)) });
+        const line = lineAt(from);
+        matches.push({ targetPath: target.path, from, to, text: source.slice(from, to),
+          snippet: source.slice(Math.max(lineStarts[line], from - 60), Math.min(lineStarts[line + 1] === undefined ? source.length : lineStarts[line + 1] - 1, to + 80)) });
+        if (matches.length === MAX_VISIBLE_MENTIONS) { limited = true; break targetScan; }
       }
     }
   }
@@ -83,7 +138,7 @@ export async function findOutgoingMentions(
     if (match.from < coveredTo && (match.from !== lastFrom || match.to !== lastTo)) continue;
     result.push(match); coveredTo = match.to; lastFrom = match.from; lastTo = match.to;
   }
-  return result;
+  return { mentions: result, limited, scannedCharacters: source.length };
 }
 
 export function mentionStillCurrent(snapshot: string, current: string, mention: Pick<OutgoingMention, "from" | "to" | "text">): boolean {
