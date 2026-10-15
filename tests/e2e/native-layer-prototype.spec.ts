@@ -327,3 +327,50 @@ test("normal outside CM typing and undo preserve source semantics after delibera
     expect(fs.readFileSync(path.join(vault, "Other.md"), "utf8")).toBe(secondOriginal);
   });
 });
+test("measured native frame height converges with its CM placeholder after delayed loading and resize", async ({}, info) => {
+  await withPrototype(info, async (page, vault) => {
+    try {
+      await expect.poll(() => page.evaluate(() => (window as any).__heightReadEntered)).toBe(true);
+      await record(page).evaluate(root => { (window as any).__heightRoot = root; root.style.height = "360px"; });
+      await page.evaluate(() => (window as any).__releaseHeightRead());
+      const input = await edit(page); await capture(page, input);
+      const before = await page.evaluate(() => (window as any).nativeLayerHarness.editor.state.doc.toString());
+      for (const height of [400, 240]) {
+        await record(page).evaluate((root, height) => { root.style.height = `${height}px`; }, height);
+        const measure = () => page.evaluate(() => {
+          const root = (window as any).__heightRoot as HTMLElement;
+          const anchor = document.querySelector<HTMLElement>('.native-layer-placeholder[data-occurrence="1"]')!;
+          return { root: root.getBoundingClientRect().toJSON(), anchor: anchor.getBoundingClientRect().toJSON(),
+            sameRoot: root === (window as any).__layerProbe.root,
+            source: (window as any).nativeLayerHarness.editor.state.doc.toString(),
+            measurements: (window as any).nativeLayerHarness.layer.measurements };
+        });
+        await expect.poll(async () => {
+          const geometry = await measure();
+          return Math.abs(geometry.anchor.height - geometry.root.height) <= 1 &&
+            Math.abs(geometry.anchor.top - geometry.root.top) <= 1 && Math.abs(geometry.anchor.left - geometry.root.left) <= 1;
+        }).toBe(true);
+        const geometry = await measure();
+        expect(geometry.sameRoot).toBe(true);
+        expect(geometry.root.height).toBe(height);
+        expect(Math.abs(geometry.anchor.height - geometry.root.height)).toBeLessThanOrEqual(1);
+        expect(Math.abs(geometry.anchor.top - geometry.root.top)).toBeLessThanOrEqual(1);
+        expect(Math.abs(geometry.anchor.left - geometry.root.left)).toBeLessThanOrEqual(1);
+        expect(geometry.source).toBe(before); expect(geometry.measurements).toBeLessThan(100);
+        await unchanged(page, vault);
+      }
+      expect(await page.evaluate(() => (window as any).nativeLayerHarness.undo())).toBe(false);
+    } finally { await page.evaluate(() => (window as any).__releaseHeightRead?.()); }
+  }, source, async page => {
+    await page.evaluate(() => {
+      const app = (window as any).app; const read = app.vault.read.bind(app.vault);
+      app.vault.read = async (file: any) => {
+        if (file.path === "Board.canvas") {
+          (window as any).__heightReadEntered = true;
+          await new Promise<void>(resolve => { (window as any).__releaseHeightRead = resolve; });
+        }
+        return read(file);
+      };
+    });
+  });
+});
