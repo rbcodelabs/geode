@@ -6,7 +6,7 @@ export { applyGuardedMutation, durableWrite, ensureDurableDirectory, type ApplyD
 export { moveToTrash, type TrashIo } from "./trash";
 export { withPathLock, withVaultMutation } from "./path-lock";
 export { SyncPrivateStorage } from "./sync-private-storage";
-export { FsBlobWriter, FsStoreProvider, FsStoreSession, STORE_CHUNK_BYTES } from "./fs-store";
+export { AT_REST_CHUNK_BYTES, AT_REST_MIN_BYTES, FsBlobWriter, FsStoreProvider, FsStoreSession, STORE_CHUNK_BYTES, sweepOrphanChunks } from "./fs-store";
 export { serveStore, type ServeOptions, type ServeStats } from "./serve";
 export { startHttpStoreServer, readTokenFile, parseListenAddress, MIN_TOKEN_CHARS, type HttpStoreServer, type HttpStoreServerOptions } from "./http-serve";
 export { RpcClient, RpcStoreProvider, RpcStoreSession, spawnSshStore, spawnTransport, type SpawnCommand, type StoreTransport } from "./rpc-store";

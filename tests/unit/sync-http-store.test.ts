@@ -134,7 +134,7 @@ describe("reconnect, replay and cancellation", () => {
     await settled(() => readdirSync(blobDir(dir)).length === 0);
     expect(readdirSync(blobDir(dir))).toEqual([]);
     await s.putBlob({ operationId: "o", sha256: digest, size: data.byteLength, data }, never);
-    expect(readdirSync(blobDir(dir)).filter(n => !n.startsWith(".tmp-"))).toEqual([digest]);
+    expect(readdirSync(blobDir(dir)).filter(n => !n.startsWith(".tmp-"))).toEqual([`${digest}.manifest`]);
   }, 60_000);
 
   it("pipelines concurrent putBlobs over the one connection and they all land", async () => {

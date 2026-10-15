@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomFillSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
@@ -13,6 +13,12 @@ export const never = new AbortController().signal;
 export const tmpStore = () => mkdtempSync(join(tmpdir(), "geode-store-"));
 export const rm = (path: string) => rmSync(path, { recursive: true, force: true });
 export const sha = (data: Uint8Array | ArrayBuffer) => createHash("sha256").update(data instanceof ArrayBuffer ? new Uint8Array(data) : data).digest("hex");
+/** Size of a stored blob in either on-disk form (whole file, or chunk manifest), null when absent. */
+export function storedBlobSize(store: string, id: string): number | null {
+  const whole = join(store, "blobs", id), manifest = whole + ".manifest";
+  if (existsSync(whole)) return statSync(whole).size;
+  return existsSync(manifest) ? (JSON.parse(readFileSync(manifest, "utf8")) as { size: number }).size : null;
+}
 export const bytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
 
 export function record(vaultId: string, id: string, blob?: BlobRef, extra: Partial<HistoryRecord> = {}): HistoryRecord {

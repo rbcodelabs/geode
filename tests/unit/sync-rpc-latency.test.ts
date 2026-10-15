@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { latencyProvider } from "../helpers/latency-transport";
 import { device, never, put, rmrf, tmp } from "../helpers/node-host-harness";
-import { bytes, record, sha } from "../helpers/sync-store-harness";
+import { storedBlobSize, bytes, record, sha } from "../helpers/sync-store-harness";
 import { FsStoreProvider, serveStore } from "../../src/sync-node/index";
 import type { AppendOnlySyncProvider, VaultDescriptor } from "../../src/sync-core/history-types";
 
@@ -20,7 +20,7 @@ const indexIds = (store: string) => existsSync(join(store, "index.log")) ? readF
 function assertStoreConsistent(store: string) {
   for (const id of indexIds(store)) {
     const rec = JSON.parse(readFileSync(join(store, "records", `${id}.json`), "utf8"));
-    if (rec.blob) expect(existsSync(join(store, "blobs", rec.blob.sha256)), `blob of ${id}`).toBe(true);
+    if (rec.blob) expect(storedBlobSize(store, rec.blob.sha256), `blob of ${id}`).toBe(rec.blob.size);
   }
   expect(readdirSync(join(store, "blobs")).filter(n => n.startsWith(".tmp-"))).toEqual([]);
 }
