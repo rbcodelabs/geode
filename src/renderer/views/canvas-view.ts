@@ -122,6 +122,7 @@ export class CanvasView implements View {
   private edgeLabelEditorEl: HTMLInputElement | null = null;
   private edgeLabelEditorCancel: (() => void) | null = null;
   private recoveryError: string | null = null;
+  private recoveryAlert: HTMLElement | null = null;
   private loadGeneration = 0;
   private suppressReconcileModify = false;
   private conflictReadOnly = false;
@@ -349,6 +350,7 @@ export class CanvasView implements View {
     this.document = parsed;
     this.recoveryError = null;
     this.containerEl.classList.remove("has-error");
+    this.recoveryAlert?.remove(); this.recoveryAlert = null;
     this.render();
   }
 
@@ -373,6 +375,7 @@ export class CanvasView implements View {
 
     const error = document.createElement("div");
     error.className = "canvas-error";
+    this.recoveryAlert = error;
     error.setAttribute("role", "alert");
     const title = document.createElement("div");
     title.className = "canvas-error-title";
