@@ -1,3 +1,4 @@
+import { PropertyTypes } from "./properties/property-types";
 import { Vault } from "./vault";
 import { PostApplyRefresh } from "./sync/post-apply-refresh";
 import { watchSyncStatus } from "./sync/status-refresh";
@@ -2794,8 +2795,11 @@ export class App {
   private openConflictModal: ConflictCompareModal | null = null;
   private refreshDetailsModal: ErrorDetailsModal | null = null;
 
+  readonly propertyTypes = new PropertyTypes();
+
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
+    this.propertyTypes.onError(() => this.notify("Could not save property types. Check the assignment and try again."));
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
     this.uniqueNotes = new UniqueNotesService(host.config);
@@ -3416,6 +3420,7 @@ export class App {
       this.showVaultPicker(rootEl, recents);
       return;
     }
+    await this.propertyTypes.load(this.host.config).catch(() => this.notify("Could not load property types. Type changes are unavailable."));
     const saved = (await this.host.config.read("app")) as Partial<AppSettings> | null;
     await this.commands.loadHotkeys();
     if (saved) {
@@ -4355,6 +4360,7 @@ export class App {
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
+    await this.propertyTypes.close();
     await this.vault.close();
     this.metadataCache.dispose();
     this.workspace?.dispose();
@@ -4388,6 +4394,7 @@ export class App {
     this.noteComposerPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
+    await this.propertyTypes.close();
     await this.vault.close();
   }
 

@@ -67,10 +67,11 @@ class PropertiesWidget extends WidgetType {
   eq(other: PropertiesWidget): boolean { return other.yamlText === this.yamlText; }
   ignoreEvent(): boolean { return true; }
   updateDOM(root: HTMLElement): boolean { propertyControls.get(root)?.refresh(); return true; }
+  destroy(root: HTMLElement): void { propertyControls.get(root)?.destroy(); propertyControls.delete(root); }
   toDOM(view: EditorView): HTMLElement {
     const file = this.app.workspace?.getLeavesOfType("markdown").map(leaf => leaf.view as MarkdownView).find(owner => owner.editor === view)?.file ?? null;
     const owner = () => this.app.workspace?.getLeavesOfType("markdown").map(leaf => leaf.view as MarkdownView).find(candidate => candidate.editor === view) ?? null;
-    const controls = new PropertyEditor({
+    const controls = new PropertyEditor({ types: this.app.propertyTypes,
       getText: () => view.state.doc.toString(),
       editable: () => owner()?.canApplySourceEdit({ allowReading: true }) ?? true,
       commit: operation => {

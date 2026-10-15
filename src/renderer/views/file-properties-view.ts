@@ -39,19 +39,19 @@ export class FilePropertiesView implements View {
   }
   onOpen(): void { this.refresh(); }
   onReveal(): void { this.refresh(); }
-  onClose(): void { clearTimeout(this.timer); this.closed = true; this.generation++; this.controls = null; for (const stop of this.stops.splice(0)) stop(); }
+  onClose(): void { clearTimeout(this.timer); this.closed = true; this.generation++; this.controls?.destroy(); this.controls = null; for (const stop of this.stops.splice(0)) stop(); }
   refresh(): void {
     if (!this.visible || this.app.vault.root !== this.root) return;
     const file = this.app.workspace.getActiveFile();
     const owner = this.app.getActiveMarkdownView();
     if (file && file.extension === "md" && owner?.file === file && this.subject === file && this.owner === owner && this.controls) { this.controls.refresh(); return; }
-    this.generation++; this.subject = file; this.owner = owner; this.controls = null; this.body.replaceChildren();
+    this.generation++; this.subject = file; this.owner = owner; this.controls?.destroy(); this.controls = null; this.body.replaceChildren();
     if (!file || file.extension !== "md") { this.body.textContent = "No file is open."; return; }
     const name = document.createElement("div"); name.className = "file-properties-name"; name.textContent = file.basename; this.body.append(name);
     if (owner?.file === file) {
       const generation = this.generation;
       const owns = () => this.current(file) && this.generation === generation && this.owner === owner && this.app.getActiveMarkdownView() === owner && owner.file === file;
-      this.controls = new PropertyEditor({
+      this.controls = new PropertyEditor({ types: this.app.propertyTypes,
         getText: () => owns() ? owner.getText() : "",
         editable: () => owns() && owner.canApplySourceEdit({ allowReading: true }),
         commit: operation => owns() ? this.commit(file, owner, operation) : { ok: false, error: "The active note changed. Refresh the field before editing." },
@@ -65,7 +65,7 @@ export class FilePropertiesView implements View {
       const generation = this.generation;
       void this.app.vault.read(file).then(snapshot => {
         if (!this.current(file) || !this.visible || generation !== this.generation) return;
-        this.controls = new PropertyEditor({ getText: () => snapshot, editable: () => false, commit: () => ({ ok: false, error: "Open this note to edit it." }), openSource: () => { if (this.current(file)) void this.app.openFile(file, false); } });
+        this.controls = new PropertyEditor({ types: this.app.propertyTypes, getText: () => snapshot, editable: () => false, commit: () => ({ ok: false, error: "Open this note to edit it." }), openSource: () => { if (this.current(file)) void this.app.openFile(file, false); } });
         this.body.append(this.controls.root);
       }).catch(() => { if (this.current(file) && generation === this.generation) message.textContent = "Could not read this note. Open it to try again."; });
     }

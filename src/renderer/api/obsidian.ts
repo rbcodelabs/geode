@@ -1,3 +1,4 @@
+import { PropertyTypes } from "../properties/property-types";
 /**
  * Geode's Obsidian-compatible API surface. This is what a plugin gets from
  * `require('obsidian')` (and, as a superset, `require('geode')`). It
@@ -1835,20 +1836,12 @@ export function installObsidianAppCompat(app: App): void {
   }
   a.keymap ??= new Keymap(a.scope);
   if (!a.metadataTypeManager) {
-    // Obsidian's property-type registry (the "Properties" core feature).
-    // obsidian-tasks reads `getAllProperties()` and calls `setType(name,type)`
-    // for its own known task properties (see `setObsidianPropertiesTypes`).
-    // Geode has no user-facing property-type system, so this is a minimal
-    // in-memory shim: `getAllProperties()` returns a map of the types set so
-    // far (empty at first, never undefined), and `setType` records one.
-    // Enough for plugins that probe/seed property types without throwing.
-    const types: Record<string, { type: string; name: string }> = {};
+    // Lightweight App doubles share the same owner, without persistence I/O.
+    const owner: PropertyTypes = a.propertyTypes ??= new PropertyTypes();
     a.metadataTypeManager = {
-      getAllProperties: () => types,
-      getPropertyInfo: (name: string) => types[name.toLowerCase()] ?? null,
-      setType: (name: string, type: string) => {
-        types[name.toLowerCase()] = { type, name };
-      },
+      getAllProperties: () => owner.getAllProperties(),
+      getPropertyInfo: (name: string) => owner.getPropertyInfo(name),
+      setType: (name: string, type: string) => owner.setType(name, type),
     };
   }
   if (!a.foldManager) {
