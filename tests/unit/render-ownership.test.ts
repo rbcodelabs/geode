@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { RenderOwnership, ScopeCancelled } from "../../src/renderer/workspaces/render-ownership";
+import { RenderOwnership, RenderScope, ScopeCancelled } from "../../src/renderer/workspaces/render-ownership";
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(finish => { resolve = finish; }); return { promise, resolve }; };
 it("tracks an initialization before its first await and cancels late publication", async () => {
   const registry = new RenderOwnership(); const scope = registry.create({}); const gate = deferred(); let published = false;
@@ -116,4 +116,26 @@ it("releases every retained owner and the admission latch even if one resume cal
   registry.create(one, { resume: () => { throw new Error("render resume failed"); } }); registry.create(two, { resume: resumed });
   const held = await registry.hold(new Set([one, two])); expect(() => registry.release(held)).toThrow("render resume failed");
   expect(resumed).toHaveBeenCalledOnce(); expect(registry.admissionOpen).toBe(true);
+});
+
+
+it("prepares every retirement sibling before closing any, and preserves all on refusal", async () => {
+  const registry = new RenderOwnership(); const closed = vi.fn(async () => {}); let refuse = true;
+  const a = registry.create({}, { close: closed });
+  const b = registry.create({}, { prepareClose: async () => { if (refuse) throw new Error("Finish draft"); }, close: closed });
+  await expect(RenderScope.prepareRetirement([a, b])).rejects.toThrow("Finish draft");
+  expect(closed).not.toHaveBeenCalled(); expect(a.admissionAllowed).toBe(true); expect(b.admissionAllowed).toBe(true);
+  refuse = false;
+  const retirement = await RenderScope.prepareRetirement([a, b]);
+  expect(closed).not.toHaveBeenCalled(); expect(a.admissionAllowed).toBe(false);
+  await retirement.commit(); await retirement.commit(); expect(closed).toHaveBeenCalledTimes(2);
+});
+
+it("preflights every affected subtree before invalidating pending work or blurring controls", async () => {
+  const registry = new RenderOwnership(); const a = registry.create({});
+  const gate = deferred(); let valid = false;
+  const task = a.run(async token => { await gate.promise; valid = token.current(); });
+  const b = registry.create({}, { preflightClose: () => { throw new Error("Finish cell"); } });
+  await expect(RenderScope.prepareRetirement([a, b])).rejects.toThrow("Finish cell");
+  gate.resolve(); await task; expect(valid).toBe(true); expect(a.admissionAllowed).toBe(true);
 });
