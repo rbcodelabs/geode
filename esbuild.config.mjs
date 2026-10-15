@@ -76,6 +76,10 @@ function pdfAssets() {
 }
 const builds = [
   {
+    ...common, entryPoints: ["src/renderer/pdf/viewer-entry.ts"], outfile: "dist/pdf-viewer.mjs", platform: "browser", format: "esm",
+    define: { process: "undefined" },
+  },
+  {
     ...common, entryPoints: ["src/renderer/pdf/display-entry.ts"], outfile: "dist/pdf-display.mjs", platform: "browser", format: "esm",
     define: { process: "undefined" },
   },
@@ -173,6 +177,7 @@ if (!process.argv.includes("--mobile-only")) {
   const pdfRoot = path.dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));
   const names = ["LICENSE", "cmaps/LICENSE", "standard_fonts/LICENSE_FOXIT", "standard_fonts/LICENSE_LIBERATION", "iccs/LICENSE", ...readdirSync(path.join(pdfRoot, "wasm")).filter(name => name.startsWith("LICENSE")).map(name => "wasm/" + name)];
   await mkdir("dist", { recursive: true });
+  await Promise.all([copyFile("src/renderer/pdf/viewer.html","dist/pdf-viewer.html"),copyFile("src/renderer/pdf/viewer.css","dist/pdf-viewer.css")]);
   await writeFile("dist/pdf-licenses.txt", names.map(name => `=== pdfjs-dist/${name} ===\n${readFileSync(path.join(pdfRoot, name), "utf8")}`).join("\n\n"));
 }
 

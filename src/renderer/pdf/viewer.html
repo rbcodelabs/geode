@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="./viewer.css"><script type="module" src="./viewer.mjs"></script><title>PDF</title></head>
+<body>
+  <div class="pdf-toolbar" role="toolbar" aria-label="PDF controls">
+    <button id="previous" type="button" aria-label="Previous page" title="Previous page" disabled>‹</button>
+    <button id="next" type="button" aria-label="Next page" title="Next page" disabled>›</button>
+    <label class="page-control">Page <input id="page" type="number" min="1" value="1" aria-label="Page number" disabled></label><span id="count" aria-label="Page count">/ —</span>
+    <span class="toolbar-space"></span>
+    <select id="zoom" aria-label="Zoom" disabled><option value="fit">Fit width</option><option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select>
+    <button id="fit" type="button" aria-label="Fit width" title="Fit width" disabled>↔</button>
+  </div>
+  <div id="status" role="status" aria-live="polite">Loading PDF…</div>
+  <main id="viewport" aria-label="PDF pages" tabindex="0" aria-busy="true"><div id="sheet" class="pdf-page"><canvas id="canvas" aria-hidden="true"></canvas><div id="text" class="textLayer" role="document" aria-label="PDF text"></div></div></main>
+</body></html>

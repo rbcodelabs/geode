@@ -1,0 +1,38 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { _electron as electron, expect, test } from "@playwright/test";
+const repo=path.resolve(__dirname,"../.."),fixture=path.join(repo,"tests/fixtures/pdf/FieldGuide.pdf");
+function setup(){const vault=fs.mkdtempSync(path.join(os.tmpdir(),"geode-pdf-vault-")),profile=fs.mkdtempSync(path.join(os.tmpdir(),"geode-pdf-ud-"));fs.copyFileSync(fixture,path.join(vault,"FieldGuide.pdf"));fs.writeFileSync(path.join(vault,"Broken.pdf"),"%PDF-1.7\ninvalid PDF");fs.writeFileSync(path.join(vault,"Note.md"),"# PDF fixture\n");fs.writeFileSync(path.join(profile,"geode.json"),JSON.stringify({recentVaults:[vault],lastVault:vault}));return {vault,profile};}
+const hash=(filename:string)=>createHash("sha256").update(fs.readFileSync(filename)).digest("hex");
+test("opens a read-only isolated PDF tab with page/zoom controls and keyboard-selectable native text",async()=>{
+ const f=setup(),before=hash(path.join(f.vault,"FieldGuide.pdf")),app=await electron.launch({args:[repo,`--user-data-dir=${f.profile}`],cwd:repo});
+ try{const win=await app.firstWindow();await expect(win.locator('.nav-file-title[data-path="FieldGuide.pdf"]')).toBeVisible();await win.locator('.nav-file-title[data-path="FieldGuide.pdf"]').click();
+  const host=win.locator('.workspace-leaf.mod-active .pdf-frame'),viewer=host.frameLocator("iframe");await expect(viewer.locator(".textLayer")).toContainText("Synthetic page 1 of 3");
+  await viewer.getByLabel("Page number").fill("2");await viewer.getByLabel("Page number").press("Enter");await expect(viewer.locator(".textLayer")).toContainText("Synthetic page 2 of 3");
+  await viewer.getByLabel("Zoom",{exact:true}).selectOption("1.25");await expect(viewer.getByLabel("Zoom",{exact:true})).toHaveValue("1.25");await viewer.getByRole("button",{name:"Fit width",exact:true}).click();await expect(viewer.getByLabel("Zoom",{exact:true})).toHaveValue("fit");
+  await viewer.locator("body").evaluate(()=>{const page=document.getElementById("page") as HTMLInputElement,zoom=document.getElementById("zoom") as HTMLSelectElement;for(let i=0;i<12;i++){page.value=String(i%3+1);page.dispatchEvent(new Event("change"));zoom.value=i%2?"1.25":"fit";zoom.dispatchEvent(new Event("change"));}page.value="2";page.dispatchEvent(new Event("change"));});
+  await expect(viewer.locator(".textLayer")).toContainText("Synthetic page 2 of 3");await expect(viewer.locator("#status")).toBeHidden();
+  await viewer.getByLabel("Page number").fill("99");await viewer.getByLabel("Page number").press("Enter");await expect(viewer.getByLabel("Page number")).toHaveAttribute("aria-invalid","true");expect(await win.evaluate(()=>(window as any).app.workspace.activeLeaf.view.getState().page)).toBe(2);
+  await viewer.getByLabel("Page number").fill("2");await viewer.getByLabel("Page number").press("Enter");await expect(viewer.locator("#status")).toBeHidden();
+  await viewer.locator(".textLayer span").first().click();await win.keyboard.press("ControlOrMeta+a");await expect.poll(()=>viewer.locator("body").evaluate(()=>getSelection()?.toString())).toContain("Synthetic page 2 of 3");
+  const realm=await viewer.locator("body").evaluate(()=>({node:typeof Reflect.get(globalThis,"require"),bridge:typeof Reflect.get(globalThis,"geode"),parentDOM:(()=>{try{return typeof parent.document}catch{return "blocked"}})()}));expect(realm).toEqual({node:"undefined",bridge:"undefined",parentDOM:"blocked"});
+  if(process.env.PDF_SCREENSHOTS){fs.mkdirSync(path.join(repo,"docs/screenshots/pdf-viewer"),{recursive:true});await win.screenshot({path:path.join(repo,"docs/screenshots/pdf-viewer/desktop.png")});}
+ }finally{await app.close();expect(hash(path.join(f.vault,"FieldGuide.pdf"))).toBe(before);fs.rmSync(f.vault,{recursive:true,force:true});fs.rmSync(f.profile,{recursive:true,force:true});}
+});
+test("shares the four-document limit across tabs and retries only after owned close",async()=>{
+ const f=setup(),app=await electron.launch({args:[repo,`--user-data-dir=${f.profile}`],cwd:repo});
+ try{const win=await app.firstWindow();await expect(win.locator('.nav-file-title[data-path="FieldGuide.pdf"]')).toBeVisible();
+  await win.evaluate(async()=>{const app=(window as any).app;(window as any).__pdfLeaves=[];(window as any).__pdfReads=0;const read=app.host.pdfResources.read.bind(app.host.pdfResources);app.host.pdfResources.read=(...args:any[])=>{(window as any).__pdfReads++;return read(...args)};for(let i=0;i<5;i++){const leaf=app.workspace.getLeaf(true);(window as any).__pdfLeaves.push(leaf);await leaf.openFile(app.vault.getFileByPath("FieldGuide.pdf"));}});
+  await expect(win.locator(".pdf-frame iframe")).toHaveCount(4);await expect(win.locator(".workspace-leaf.mod-active .pdf-frame-status")).toContainText("four PDFs");expect(await win.evaluate(()=>(window as any).__pdfReads)).toBe(4);
+  await win.evaluate(async()=>{await (window as any).__pdfLeaves[0].detach();});await win.getByRole("button",{name:"Retry PDF",exact:true}).last().click();await expect(win.locator(".pdf-frame iframe")).toHaveCount(4);await expect.poll(()=>win.evaluate(()=>(window as any).__pdfReads)).toBe(5);
+ }finally{await app.close();fs.rmSync(f.vault,{recursive:true,force:true});fs.rmSync(f.profile,{recursive:true,force:true});}
+});
+test("reports corrupt PDFs and restores only the selected file/page after restart",async()=>{
+ const f=setup();let app=await electron.launch({args:[repo,`--user-data-dir=${f.profile}`],cwd:repo});
+ try{let win=await app.firstWindow();await expect(win.locator('.nav-file-title[data-path="Broken.pdf"]')).toBeVisible();await win.locator('.nav-file-title[data-path="Broken.pdf"]').click();await expect(win.locator(".workspace-leaf.mod-active .pdf-frame-status")).toHaveAttribute("role","alert");await expect(win.getByRole("button",{name:"Retry PDF",exact:true})).toBeVisible();
+  await win.locator('.nav-file-title[data-path="FieldGuide.pdf"]').click();let viewer=win.locator(".workspace-leaf.mod-active .pdf-frame").frameLocator("iframe");await expect(viewer.locator(".textLayer")).toContainText("Synthetic page 1");await viewer.getByLabel("Page number").fill("3");await viewer.getByLabel("Page number").press("Enter");await expect(viewer.locator(".textLayer")).toContainText("Synthetic page 3");
+  await expect.poll(()=>{try{const saved=JSON.parse(fs.readFileSync(path.join(f.vault,".geode/workspace.json"),"utf8"));const find=(v:any):boolean=>!!v&&typeof v==="object"&&((v.type==="pdf"&&v.state?.page===3)||Object.values(v).some(find));return find(saved);}catch{return false}}).toBe(true);await app.close();app=await electron.launch({args:[repo,`--user-data-dir=${f.profile}`],cwd:repo});win=await app.firstWindow();viewer=win.locator(".workspace-leaf.mod-active .pdf-frame").frameLocator("iframe");await expect(viewer.locator(".textLayer")).toContainText("Synthetic page 3");
+ }finally{await app.close();fs.rmSync(f.vault,{recursive:true,force:true});fs.rmSync(f.profile,{recursive:true,force:true});}
+});

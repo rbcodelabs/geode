@@ -16,7 +16,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
 > & Partial<Pick<GeodeApi,
   "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "readPdf"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "readPdf" | "cancelPdfRead"
 >>;
 
 export function createElectronHost(preload: ElectronPreloadApi): HostServices {
@@ -41,7 +41,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       },
     },
     ...(preload.externalRoots ? { externalRoots: preload.externalRoots } : {}),
-    ...(preload.readPdf ? { pdfResources: { read: (root: string, path: string) => preload.readPdf!({ root, path }) } } : {}),
+    ...(preload.readPdf && preload.cancelPdfRead ? { pdfResources: { read: (root: string, path: string, id: string) => preload.readPdf!({ root, path, id }), cancel: (root: string, id: string) => preload.cancelPdfRead!({ root, id }) } } : {}),
     capabilities: Object.freeze({
       multipleWindows: true,
       nodePlugins: true,

@@ -159,7 +159,8 @@ const api = {
     ipcRenderer.invoke("plugin-file-read", path, rendererSentAt),
   replacePluginFiles: (id: string, expectedManifest: string, replacement: PluginFileSet): Promise<void> =>
     ipcRenderer.invoke("plugin-files-replace", id, expectedManifest, replacement),
-  readPdf: (request: { root: string; path: string }): Promise<ArrayBuffer> => ipcRenderer.invoke("vault-read-pdf", request),
+  cancelPdfRead: (request: { root: string; id: string }): Promise<void> => ipcRenderer.invoke("vault-cancel-pdf-read", request),
+  readPdf: (request: { root: string; path: string; id: string }): Promise<ArrayBuffer> => ipcRenderer.invoke("vault-read-pdf", request),
   readBinary: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("vault-read-binary", path),
   writeBinary: (path: string, data: ArrayBuffer, options?: { mtime?: number; ctime?: number }): Promise<{ mtime: number; ctime: number; size: number }> =>
@@ -447,12 +448,13 @@ export type GeodeApi = Omit<
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless" | "readPdf"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless" | "readPdf" | "cancelPdfRead"
 > & {
   /** Desktop-only: true under GEODE_HEADLESS / --headless (e2e). Absent (falsy) on mobile/browser. */
   isHeadless?: boolean;
   /** Desktop-only bounded local PDF read; no legacy binary fallback. */
   readPdf?: ElectronOnlyGeodeApi["readPdf"];
+  cancelPdfRead?: ElectronOnlyGeodeApi["cancelPdfRead"];
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
   readMetadataCachePage?: ElectronOnlyGeodeApi["readMetadataCachePage"];

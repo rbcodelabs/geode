@@ -56,6 +56,9 @@ import { hasExternalChange, MarkdownView } from "./views/markdown-view";
 import { BaseView, defaultBaseYaml } from "./views/base-view";
 import { CanvasView } from "./views/canvas-view";
 import { ImageView } from "./views/image-view";
+import { PdfView } from "./views/pdf-view";
+import { pdfDocumentCapacity } from "./pdf/capacity";
+import { parsePdfFragment } from "../shared/pdf";
 import { serializeCanvas } from "./canvas/canvas-data";
 import { FileExplorerView } from "./views/file-explorer";
 import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
@@ -3646,6 +3649,7 @@ export class App {
     // the factory map — without these two, an open Graph or Bases tab was
     // silently dropped on relaunch. `BaseView.getState()/setState()` carry the
     // `.base` file path across the restart; `GraphView` is stateless.
+    this.workspace.registerViewFactory("pdf", () => new PdfView(this));
     this.workspace.registerViewFactory("graph", () => new GraphView(this));
     this.workspace.registerViewFactory("base", () => new BaseView(this));
 
@@ -4388,6 +4392,7 @@ export class App {
     await this.propertyTypes.close();
     await this.footnotesLifecycle.catch(() => undefined);
     await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
+    await pdfDocumentCapacity(this).closeAll();
     await this.vault.close();
     this.metadataCache.dispose();
     this.workspace?.dispose();
@@ -4407,6 +4412,7 @@ export class App {
     await this.footnotesLifecycle.catch(() => undefined);
     await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.workspace?.closeAllLeaves();
+    await pdfDocumentCapacity(this).closeAll();
     await this.pluginManager?.dispose();
     this.mermaidPlugin?.unload();
     this.onboarding?.unload();
@@ -4964,7 +4970,7 @@ export class App {
       });
       return;
     }
-    if (file.extension === "base" || file.extension === "md" || IMAGE_EXTENSIONS.has(file.extension)) {
+    if (file.extension === "base" || file.extension === "md" || file.extension === "pdf" || IMAGE_EXTENSIONS.has(file.extension)) {
       const existing = this.workspace.findLeafForFile(file.path);
       if (existing && !newTab) {
         existing.group.setActiveLeaf(existing);
@@ -5024,6 +5030,12 @@ export class App {
       } else {
         await this.initializeDocumentView(new MarkdownView(this), file, leaf);
       }
+    } else if (file.extension === "pdf") {
+      if (leaf.view instanceof PdfView) {
+        await leaf.view.setFile(file);
+        leaf.group.renderTabs();
+        this.workspace.trigger("file-open", file);
+      } else await this.initializeDocumentView(new PdfView(this), file, leaf);
     } else if (IMAGE_EXTENSIONS.has(file.extension)) {
       if (leaf.view instanceof ImageView) {
         await leaf.view.setFile(file);
@@ -5311,7 +5323,11 @@ export class App {
     if (dest) {
       await this.openFile(dest, newTab, sourceLeaf);
       const hash = linktext.indexOf("#");
-      if (hash !== -1) {
+      if (hash !== -1 && dest.extension === "pdf") {
+        const page = parsePdfFragment(linktext.slice(hash)).page;
+        const view = this.workspace.getActiveLeaf()?.view;
+        if (view instanceof PdfView && view.getFile()?.path === dest.path) view.setPage(page);
+      } else if (hash !== -1) {
         const offset = await this.resolveSubpathOffset(dest, linktext.slice(hash));
         if (offset !== null) this.revealOffsetInActiveMarkdownView(dest, offset);
       }
@@ -5898,6 +5914,8 @@ export class App {
   }
 
   /** Construct a fresh file-backed image view (used during workspace restore). */
+  createPdfView(): PdfView { return new PdfView(this); }
+
   createImageView(): ImageView {
     return new ImageView(this);
   }

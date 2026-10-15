@@ -1182,7 +1182,7 @@ function registerIpc() {
   registerPdfReadIpc(ipcMain, event => {
     const sender = event.sender, win = BrowserWindow.fromWebContents(sender), captured = win && sessions.get(win.id);
     if (!win || !captured || win.webContents !== sender || captured.externalRootsInvalidated) throw new Error("PDF vault session is unavailable.");
-    return { root: captured.root, current: () => !win.isDestroyed() && win.webContents === sender && sessions.get(win.id) === captured && !captured.externalRootsInvalidated };
+    return { root: captured.root, identity: captured, current: () => !win.isDestroyed() && win.webContents === sender && sessions.get(win.id) === captured && !captured.externalRootsInvalidated };
   });
 
   ipcMain.handle("vault-read-binary", async (e, rel: string) => {

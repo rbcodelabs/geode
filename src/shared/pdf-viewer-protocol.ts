@@ -3,7 +3,7 @@ export const PDF_VIEWER_VERSION = 1;
 export const PDF_VIEWER_ORIGIN = "geode-pdf://viewer";
 export const PDF_VIEWER_URL = `${PDF_VIEWER_ORIGIN}/index.html`;
 interface Envelope { version: 1; generation: number }
-export type PdfHostMessage = Envelope & ({ kind: "load"; bytes: ArrayBuffer; page: number; height?: number; label: string } | { kind: "dispose" });
+export type PdfHostMessage = Envelope & ({ kind: "load"; bytes: ArrayBuffer; page: number; height?: number; label: string; theme?: "light" | "dark" } | { kind: "dispose" } | { kind: "navigate"; page: number });
 export type PdfViewerMessage = Envelope & ({ kind: "state"; page: number; count: number; zoom: number } | { kind: "error"; message: string } | { kind: "disposed" });
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= max;
 function envelope(value: unknown): value is Record<string, unknown> {
@@ -13,8 +13,9 @@ function only(value: Record<string, unknown>, keys: string[]): boolean { return 
 export function isPdfHostMessage(value: unknown): value is PdfHostMessage {
   if (!envelope(value)) return false;
   if (value.kind === "dispose") return only(value, []);
-  if (value.kind !== "load" || !only(value, ["bytes", "page", "height", "label"])) return false;
-  return value.bytes instanceof ArrayBuffer && value.bytes.byteLength >= 5 && value.bytes.byteLength <= PDF_LIMITS.bytes && integer(value.page, PDF_LIMITS.pages) && typeof value.label === "string" && value.label.length <= 160 && (value.height === undefined || (integer(value.height, PDF_LIMITS.maxHeight) && value.height >= PDF_LIMITS.minHeight));
+  if (value.kind === "navigate") return only(value, ["page"]) && integer(value.page, PDF_LIMITS.pages);
+  if (value.kind !== "load" || !only(value, ["bytes", "page", "height", "label", "theme"])) return false;
+  return (value.theme === undefined || value.theme === "light" || value.theme === "dark") && value.bytes instanceof ArrayBuffer && value.bytes.byteLength >= 5 && value.bytes.byteLength <= PDF_LIMITS.bytes && integer(value.page, PDF_LIMITS.pages) && typeof value.label === "string" && value.label.length <= 160 && (value.height === undefined || (integer(value.height, PDF_LIMITS.maxHeight) && value.height >= PDF_LIMITS.minHeight));
 }
 export function isPdfViewerMessage(value: unknown): value is PdfViewerMessage {
   if (!envelope(value)) return false;

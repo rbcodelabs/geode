@@ -312,7 +312,7 @@ export interface HostServices {
   /** Internal desktop-only Project integration; absent on mobile/browser. */
   externalRoots?: import("../../shared/external-roots").ExternalRootsHost;
   /** Internal verified local PDF viewer capability; absent on unsupported hosts. */
-  readonly pdfResources?: { read(root: string, path: string): Promise<ArrayBuffer> };
+  readonly pdfResources?: { read(root: string, path: string, id: string): Promise<ArrayBuffer>; cancel(root: string, id: string): Promise<void> };
   readonly capabilities: Readonly<HostCapabilities>;
   readonly runtime: RuntimeService;
   readonly vaultRegistry: VaultRegistryService;

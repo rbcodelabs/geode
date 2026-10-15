@@ -374,7 +374,13 @@ export class WorkspaceLeaf {
       const loadedPath = loadedFile?.path;
       const requestedPath = file.path;
       const subpath = state?.eState?.subpath;
-      if (typeof subpath === "string" && subpath) {
+      if (typeof subpath === "string" && subpath && file.extension === "pdf") {
+        const page = (await import("../shared/pdf")).parsePdfFragment(subpath).page;
+        if (this.view === loaded && file.path === requestedPath && loaded?.getFile?.() === loadedFile && loadedFile?.path === loadedPath) {
+          const pdf = loaded as View & { setPage?(page: number): void };
+          pdf?.setPage?.(page);
+        }
+      } else if (typeof subpath === "string" && subpath) {
         const offset = await this.app.resolveSubpathOffset(file, subpath);
         if (offset !== null && this.view === loaded && file.path === requestedPath && loaded?.getFile?.() === loadedFile && loadedFile?.path === loadedPath) {
           const native = loaded as View & { scrollToOffsetAsync?(offset: number): Promise<void> };
@@ -384,6 +390,7 @@ export class WorkspaceLeaf {
       }
     } finally {
       if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) focusBefore.focus({ preventScroll: true });
+
     }
   }
 
@@ -2228,6 +2235,7 @@ export const RESERVED_VIEW_TYPES: ReadonlySet<string> = new Set([
   "markdown",
   "canvas",
   "image",
+  "pdf",
   "graph",
   "base",
 ]);
@@ -3631,6 +3639,11 @@ export class Workspace extends Events {
     if (!v || v.viewType === "empty") {
       return companion.companionOwner ? { type: "empty", pinned: leaf.pinned, ...companion } : null;
     }
+    if (v.viewType === "pdf") {
+      const file = v.getFile?.()?.path;
+      const state = v.getState?.() as { page?: number } | undefined;
+      return file ? { type: "pdf", file, state: { page: state?.page ?? 1 }, pinned: leaf.pinned, ...companion } : null;
+    }
     // Empty/placeholder tabs (and markdown tabs whose file vanished) aren't
     // worth persisting — and persisting them caused empties to accumulate
     // across launches (restore recreated them, then a fresh one was added).
@@ -3728,6 +3741,14 @@ export class Workspace extends Events {
       } else {
         await leaf.setView(this.app.createEmptyView());
       }
+    } else if (ls.type === "pdf" && ls.file) {
+      const file = this.app.vault.getFileByPath(ls.file);
+      if (file) {
+        const view = this.app.createPdfView();
+        const state = ls.state as { page?: unknown } | undefined;
+        await view.setFile(file, typeof state?.page === "number" ? state.page : 1);
+        await leaf.setView(view);
+      } else await leaf.setView(this.app.createEmptyView());
     } else if (ls.type === "image" && ls.file) {
       const file = this.app.vault.getFileByPath(ls.file);
       if (file) {
