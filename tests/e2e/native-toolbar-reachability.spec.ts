@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "../.."), original = "---\npriority: 2\n---\n\nOriginal source\n";
-for (const mode of ["exposed pointer", "keyboard fourth row"] as const) test(`unfiltered native table remains reachable through ${mode}`, async ({}, info) => {
+for (const mode of ["exposed pointer", "keyboard fourth row", "exposed pointer then ordinary pan"] as const) test(`unfiltered native table remains reachable through ${mode}`, async ({}, info) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "geode-toolbar-reachability-")), vault = path.join(directory, "vault"), profile = path.join(directory, "profile");
   fs.mkdirSync(vault); fs.mkdirSync(profile);
   const board = JSON.stringify({ nodes: [{ id: "owned", type: "file", x: 0, y: 0, width: 760, height: 600, file: "Host.md" }], edges: [] });
@@ -48,7 +48,7 @@ for (const mode of ["exposed pointer", "keyboard fourth row"] as const) test(`un
       });
       expect(point).not.toBeNull(); await page.mouse.click(point!.x, point!.y);
     };
-    if (mode === "exposed pointer") await clickExposed(source);
+    if (mode !== "keyboard fourth row") await clickExposed(source);
     else {
       await clickExposed(table.locator(".bases-data-row").first().locator("td").nth(1));
       await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
@@ -58,6 +58,22 @@ for (const mode of ["exposed pointer", "keyboard fourth row"] as const) test(`un
     const input = source.locator("input"); await expect(input).toBeFocused(); await input.fill("9");
     await input.evaluate(el => { const p = (window as any).__toolbarReachability; p.input = el; el.addEventListener("blur", () => p.blur++); });
     await snapshot("draft-before-reachability-oracle");
+    if (mode === "exposed pointer then ordinary pan") {
+      expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
+      expect(await input.evaluate(el => { const p = (window as any).__toolbarReachability; return { same: p.input === el, connected: el.isConnected, focused: document.activeElement === el, value: (el as HTMLInputElement).value, blur: p.blur, root: p.root.isConnected && p.root.parentElement === p.parent }; })).toEqual({ same: true, connected: true, focused: true, value: "9", blur: 0, root: true });
+      const wheel = await input.evaluate(el => {
+        const r = el.getBoundingClientRect(); let left = Math.max(0, r.left), top = Math.max(0, r.top), right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
+        for (let parent = el.parentElement; parent; parent = parent.parentElement) { const style = getComputedStyle(parent), rect = parent.getBoundingClientRect(); if (style.overflowX !== "visible") { left = Math.max(left, rect.left); right = Math.min(right, rect.right); } if (style.overflowY !== "visible") { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); } }
+        const samples = [];
+        for (const yRatio of [0.1, 0.3, 0.5, 0.7, 0.9]) for (const xRatio of [0.1, 0.3, 0.5, 0.7, 0.9]) { const x = left + (right - left) * xRatio, y = top + (bottom - top) * yRatio, hit = document.elementFromPoint(x, y); samples.push({ x, y, owned: right > left && bottom > top && hit === el, hit: hit && { tag: hit.tagName, className: (hit as HTMLElement).className } }); }
+        const candidate = samples.find(point => point.owned), chosen = candidate ? { x: candidate.x, y: candidate.y } : null, p = (window as any).__toolbarReachability;
+        p.wheelHitmap = { rect: r.toJSON(), clipped: { left, top, right, bottom }, samples, chosen }; return { chosen, panBefore: p.phases.at(-1).camera.pan.y };
+      });
+      expect(wheel.chosen).not.toBeNull();
+      await page.mouse.move(wheel.chosen!.x, wheel.chosen!.y); await page.mouse.wheel(0, 120);
+      await expect.poll(() => page.evaluate(() => (window as any).app.workspace.getActiveLeaf().view.renderOwner.writers().find((writer: any) => writer.viewType === "canvas").pan.y)).not.toBe(wheel.panBefore);
+      await snapshot("after-one-trusted-pan");
+    }
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(original);
     expect(await input.evaluate(el => { const p = (window as any).__toolbarReachability, r = el.getBoundingClientRect(); return { same: p.input === el, connected: el.isConnected, focused: document.activeElement === el, value: (el as HTMLInputElement).value, blur: p.blur, root: p.root.isConnected && p.root.parentElement === p.parent, hit: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === el }; })).toEqual({ same: true, connected: true, focused: true, value: "9", blur: 0, root: true, hit: true });
     expect(await page.evaluate(() => (window as any).__toolbarReachability.trusted.some((event: any) => event.trusted))).toBe(true);
@@ -68,7 +84,7 @@ for (const mode of ["exposed pointer", "keyboard fourth row"] as const) test(`un
     await expect(page.getByPlaceholder("Search notes…")).toBeVisible(); await page.keyboard.press("Escape");
     expect(fs.readFileSync(path.join(vault, "Board.canvas"), "utf8")).toBe(board);
   } finally {
-    const state = await page.evaluate(() => { const p = (window as any).__toolbarReachability; return p && { phases: p.phases, hitmaps: p.hitmaps, blur: p.blur, trusted: p.trusted, input: p.input && { connected: p.input.isConnected, value: p.input.value }, root: p.root.isConnected && p.root.parentElement === p.parent }; }).catch(() => null);
+    const state = await page.evaluate(() => { const p = (window as any).__toolbarReachability; return p && { phases: p.phases, hitmaps: p.hitmaps, wheelHitmap: p.wheelHitmap, blur: p.blur, trusted: p.trusted, input: p.input && { connected: p.input.isConnected, value: p.input.value }, root: p.root.isConnected && p.root.parentElement === p.parent }; }).catch(() => null);
     fs.writeFileSync(info.outputPath("final-state.json"), JSON.stringify({ state, provider: fs.readFileSync(path.join(vault, "Source.md"), "utf8"), board: fs.readFileSync(path.join(vault, "Board.canvas"), "utf8") }, null, 2));
     await page.screenshot({ path: info.outputPath("toolbar-reachability.png") }).catch(() => {});
     await application.close(); fs.rmSync(directory, { recursive: true, force: true });
