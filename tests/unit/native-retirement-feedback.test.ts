@@ -177,3 +177,15 @@ it("overlapping retirement requests share one validation and destructor", async 
   state.releaseValidation(); await first; await state.drain();
   expect(state.counts.closes).toBe(1); expect(state.record.lifetime.retired).toBe(true);
 });
+it("stacks retained controls above inline records and keeps the shelf rail above both", async () => {
+  const state = await harness(false);
+  expect(state.record.root.style.zIndex).toBe("0");
+  await state.remove(); await state.geometryTurn();
+  expect(state.record.state).toBe("removed");
+  expect(state.record.root.style.zIndex).toBe("2");
+  expect((state.layer as any).shelf.style.zIndex).toBe("1");
+  expect((state.layer as any).rail.style.zIndex).toBe("3");
+  state.layer.reconcile([{ id: 1, from: 0, to: 17, target: "Board.canvas" }]); await state.geometryTurn();
+  expect(state.record.state).toBe("inline"); expect(state.record.root.style.zIndex).toBe("0");
+  expect(state.record.root.isConnected).toBe(true); expect(state.counts.closes).toBe(0);
+});

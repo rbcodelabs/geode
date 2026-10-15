@@ -105,10 +105,10 @@ export class NativePresentationPrototype {
     this.layer.className = "native-prototype-layer";
     Object.assign(this.layer.style, { position: "absolute", inset: "0", overflow: "hidden", pointerEvents: "none", zIndex: "5" });
     this.shelf.className = "native-prototype-shelf";
-    Object.assign(this.shelf.style, { position: "absolute", left: "0", right: "0", borderTop: "1px solid var(--background-modifier-border)", background: "var(--background-primary)", pointerEvents: "none" });
+    Object.assign(this.shelf.style, { position: "absolute", left: "0", right: "0", borderTop: "1px solid var(--background-modifier-border)", background: "var(--background-primary)", pointerEvents: "none", zIndex: "1" });
     this.shelf.textContent = "Unfinished embedded edits";
     this.rail.tabIndex = 0; this.rail.setAttribute("aria-label", "Scroll retained embedded edits");
-    Object.assign(this.rail.style, { position: "absolute", right: "0", width: "18px", overflowY: "auto", pointerEvents: "auto" });
+    Object.assign(this.rail.style, { position: "absolute", right: "0", width: "18px", overflowY: "auto", pointerEvents: "auto", zIndex: "3" });
     this.railContent.style.width = "1px"; this.rail.appendChild(this.railContent);
     this.layer.append(this.shelf, this.rail); options.host.appendChild(this.layer);
     this.rail.addEventListener("scroll", this.requestGeometry);
@@ -241,6 +241,8 @@ export class NativePresentationPrototype {
         record.state = offscreen ? valid ? "retained" : "removed" : "inline";
         const top = offscreen ? shelfTop + 24 + retained++ * (height + 8) - offset : placement.top;
         Object.assign(record.root.style, { left: `${offscreen ? 8 : placement.left}px`, top: `${top}px`, width: `${offscreen ? measured.pane.width - 32 : placement.width}px`, clipPath: offscreen ? `inset(${Math.max(0, shelfTop + 24 - top)}px 0 ${Math.max(0, top + height - measured.pane.height)}px 0)` : "none" });
+        // Stable roots keep their DOM order; shelf controls must paint above later inline records.
+        record.root.style.zIndex = offscreen ? "2" : "0";
         record.root.inert = record.lifetime.failedClosed;
         record.returnButton.hidden = record.lifetime.failedClosed || record.state === "inline" || !valid;
         const text = nativePresentationLabel(record.occurrence, valid, record.mountError, record.lifetime.failedClosed);
