@@ -1,7 +1,7 @@
 # ADR-0048: Owner-scoped programmatic background visibility
 
 **Date:** 2026-10-15
-**Status:** Proposed; coordinator acceptance required before production implementation.
+**Status:** Accepted by coordinator for bounded desktop C1a; broader route inventory remains deferred.
 **Traceability:** Task c65cbc91-82c3-4256-8789-4f39e915b8e8, parent 5ebcf1f8-5fab-421f-8ab8-1989300588b7, Solution ac76d20b-1183-4698-af07-21e3d0560dfe. Follows accepted ADR-0038/0040/0045; preserves ADR-0046 and ADR-0047.
 
 ## Context and evidence

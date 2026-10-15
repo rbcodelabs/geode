@@ -1,3 +1,4 @@
+import type { BackgroundVisibility } from "./workspaces/background-visibility";
 import { Events } from "./events";
 import type { App } from "./app";
 import type { CanvasView } from "./views/canvas-view";
@@ -3223,7 +3224,12 @@ export class Workspace extends Events {
   ): void {
     const focus =
       typeof paramsOrPushHistory === "boolean" ? !!legacyFocus : !!paramsOrPushHistory?.focus;
-    leaf.group.setActiveLeaf(leaf);
+    const previous = leaf.group.active;
+    const background = previous?.view as (View & { backgroundVisibility?: BackgroundVisibility }) | null;
+    const finishHide = !focus && previous && previous !== leaf && leaf.group instanceof TabGroup && !leaf.group.sidebar && !this.isCompactMobile()
+      ? background?.backgroundVisibility?.beginHide(previous.leafEl) : undefined;
+    try { leaf.group.setActiveLeaf(leaf); }
+    finally { finishHide?.(); }
     if (focus) focusLeafContent(leaf);
   }
 
@@ -3605,6 +3611,8 @@ export class Workspace extends Events {
       arr.splice(Math.max(0, Math.min(ins, arr.length)), 0, leaf);
       target.renderTabs();
     } else if (from !== target) {
+      try { (leaf.view as View & { renderOwner?: { assertRetirementReady(): void } } | null)?.renderOwner?.assertRetirementReady(); }
+      catch (error) { this.app.notify(`Could not move tab: ${error instanceof Error ? error.message : String(error)}`); return; }
       leaf.companionOwner = undefined;
       from.extractLeaf(leaf);
       target.insertLeaf(leaf, index);

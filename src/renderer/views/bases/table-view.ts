@@ -1,3 +1,4 @@
+import type { BackgroundEditCapture } from "../../workspaces/background-visibility";
 import { isPausedBaseEditAttempt, isPausedBaseEditError, type BaseSyncFocusReceipt } from "./paused-edit";
 import type { RenderScope } from "../../workspaces/render-ownership";
 import { bindSourceControlNavigation, type SourceOwnedNavigation } from "../../markdown/source-owned-navigation";
@@ -22,6 +23,7 @@ export interface TableViewOptions {
 }
 
 export interface TableViewCallbacks {
+  preserveBackgroundBlur?(input: HTMLInputElement): boolean;
   onOpenFile(file: TFile, newTab: boolean): void;
   /** Commit an edited cell's raw text back to the file's frontmatter. */
   onEditCell(file: TFile, columnPath: string, rawText: string): Promise<void>;
@@ -336,6 +338,7 @@ export class BasesTableView {
     };
     if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", event => {
       if (this.editSession !== session) return;
+      if (this.callbacks.preserveBackgroundBlur?.(input)) return;
       const retry = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>("button[data-base-row-retry]");
       const owner = this.containerEl.closest(".base-view");
       if (owner && retry?.closest(".base-view") === owner && retry.dataset.baseRowRetry === JSON.stringify([file.path, path])) return;
@@ -382,6 +385,16 @@ export class BasesTableView {
     const input = this.containerEl.querySelector<HTMLInputElement>(".bases-cell-input");
     if (input) input.disabled = readOnly;
     if (readOnly) this.mobileEditorActionsEl?.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  }
+
+  /** A visibility capture declines blur-save only; it never restores focus. */
+  captureBackgroundEdit(eligible: () => boolean): BackgroundEditCapture | null {
+    const session = this.editSession;
+    if (!session || document.activeElement !== session.input || this.readOnly || session.input.disabled) return null;
+    const { input, cell, token, pos } = session, value = input.value, container = this.containerEl, row = pos.row, col = pos.col;
+    return { input, current: () => this.editSession === session && session.token === token && session.pos === pos && pos.row === row && pos.col === col &&
+      this.cellEls[row]?.[col] === cell && this.containerEl === container && session.input === input && session.cell === cell &&
+      input.parentElement === cell && input.isConnected && input.value === value && !input.disabled && !this.readOnly && eligible() };
   }
 
   get editIdentity(): object | null { return this.editSession; }

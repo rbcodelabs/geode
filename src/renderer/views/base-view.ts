@@ -1,3 +1,4 @@
+import { nativeBackgroundVisibility, type BackgroundVisibility, type BackgroundEditCapture } from "../workspaces/background-visibility";
 import { rejectPausedBaseEdit, type BaseSyncFocusReceipt } from "./bases/paused-edit";
 import { SourceOwnedNavigation, captureNavigationOrigin } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure } from "../workspaces/render-ownership";
@@ -252,7 +253,9 @@ export class BaseView implements View {
 
   readonly renderOwner: RenderScope;
   readonly sourceNavigation: SourceOwnedNavigation;
-  constructor(private app: App, parentOwner?: RenderScope, sourceNavigation?: SourceOwnedNavigation) {
+  readonly backgroundVisibility: BackgroundVisibility;
+  private releaseBackgroundEdit?: () => void;
+  constructor(private app: App, parentOwner?: RenderScope, sourceNavigation?: SourceOwnedNavigation, backgroundVisibility?: BackgroundVisibility) {
     const options = this.nativeRenderOptions();
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.sourceNavigation = sourceNavigation ?? new SourceOwnedNavigation({
@@ -271,6 +274,8 @@ export class BaseView implements View {
       },
       notify: message => app.notify(message),
     });
+    this.backgroundVisibility = backgroundVisibility ?? nativeBackgroundVisibility(app, this, () => [this.reloadOwnerGeneration, this.nativeLifecycleGeneration, this.definitionRevision]);
+    this.releaseBackgroundEdit = this.backgroundVisibility.register(() => this.captureBackgroundEdit());
     this.containerEl = document.createElement("div");
     this.containerEl.className = "base-view";
 
@@ -311,6 +316,7 @@ export class BaseView implements View {
     this.tableView = new BasesTableView(app, {
       onOpenFile: (file, newTab) => { void this.sourceNavigation.prepareNavigation({ kind: "file", file, newTab }, captureNavigationOrigin(this.renderOwner)).dispatch(); },
       onEditCell: (file, columnPath, rawText) => this.editCell(file, columnPath, rawText),
+      preserveBackgroundBlur: input => this.backgroundVisibility.preserves(input),
       onEditStart: (file, columnPath, rawText) => this.beginSourceEdit(file, columnPath, rawText),
       onEditDraft: (rawText) => { if (this.sourceEdit) this.sourceEdit.rawText = rawText; },
       onEditEnd: identity => this.endSourceEdit(identity),
@@ -513,10 +519,13 @@ export class BaseView implements View {
 
   onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
 
+  onReveal(): void { this.backgroundVisibility?.reveal(); }
+
   private async closeNative(): Promise<void> {
     this.reloadClosed = true; this.definitionRevision++; this.reloadOwnerGeneration++;
     try { await Promise.all([this.persistQueue, ...this.sourcePersistsInFlight]); }
     catch (error) { this.reloadClosed = false; this.reloadOwnerGeneration++; throw error; }
+    this.releaseBackgroundEdit?.(); this.releaseBackgroundEdit = undefined;
     this.app.vault.off("modify", this.onVaultChange);
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
@@ -797,6 +806,20 @@ export class BaseView implements View {
 
   private nativeRenderOptions() {
     return { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), close: () => this.closeNative(), resume: () => { this.nativeLifecycleGeneration++; if (this.file && this.def) this.runAndRender(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
+  }
+
+  /** Exact native draft authority for its outer source-owner visibility interval. */
+  private captureBackgroundEdit(): BackgroundEditCapture | null {
+    const table = this.tableView, edit = this.sourceEdit, file = this.file, path = file?.path, vault = this.app.vault, root = vault.root;
+    if (!edit || !file || this.vaultSwitching || this.sourceConflictReadOnly) return null;
+    const source = edit.file, sourcePath = source.path, raw = edit.rawText, column = edit.columnPath;
+    const container = this.containerEl, parent = container.parentElement;
+    const generation = this.reloadOwnerGeneration, lifecycle = this.nativeLifecycleGeneration, revision = this.definitionRevision, owner = this.renderOwner;
+    return table.captureBackgroundEdit(() => this.tableView === table && this.sourceEdit === edit && edit.file === source && source.path === sourcePath && edit.rawText === raw && edit.columnPath === column &&
+      this.file === file && file.path === path && this.app.vault === vault && vault.root === root && this.containerEl === container && container.parentElement === parent &&
+      this.renderOwner === owner && owner.admissionAllowed && !owner.hasUnacknowledgedWrites && !this.reloadClosed && !this.sourceConflictReadOnly &&
+      this.reloadOwnerGeneration === generation && this.nativeLifecycleGeneration === lifecycle && this.definitionRevision === revision &&
+      !this.retainedNativeFailures.length && !this.rowFailures.size && !this.sourcePersistsInFlight.size && !this.definitionWritesPending && !this.rowRefreshFailed);
   }
 
   /** Built-in App sync guards only; no public View/SDK focus contract. */

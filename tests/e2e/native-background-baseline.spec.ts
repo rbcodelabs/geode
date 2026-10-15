@@ -180,7 +180,7 @@ async function preserved(page: Page, vault: string, info: TestInfo, phase: strin
   return value;
 }
 for (const mode of ["Reading", "Live Preview"] as const) {
-  test(`${mode} repeated programmatic activation preserves the exact session and never steals foreground focus`, async ({}, info) => {
+  test(`${mode} repeated programmatic activation preserves the exact session without refocusing the hidden input`, async ({}, info) => {
     await fixture(mode, info, async (page, vault) => {
       await page.evaluate(() => {
         const workspace = (window as any).app.workspace, tabs = (window as any).__backgroundTabs;
