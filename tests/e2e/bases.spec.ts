@@ -87,8 +87,12 @@ test("create a base, filter/sort a Table view, and edit a cell back to frontmatt
 
     const fileNameCells = window.locator(".bases-data-row td.bases-cell:first-child");
     await expect(fileNameCells).toHaveCount(8);
-    const namesAfterSort = await fileNameCells.allInnerTexts();
-    expect(namesAfterSort.slice(-3)).toEqual(["Alpha Task.md", "Beta Task.md", "Gamma Task.md"]);
+    // Sorting persists asynchronously before the table is re-rendered. The
+    // row count stays eight throughout, so wait for the required ordered text.
+    await expect(fileNameCells).toHaveText([
+      "Daily Plan.md", "Mermaid.md", "Scratch.md", "Roadmap.md", "Welcome.md",
+      "Alpha Task.md", "Beta Task.md", "Gamma Task.md",
+    ]);
 
     // --- Filter (this view) to note.status == "Done": only Gamma Task ---
     await window.locator(".bases-toolbar-btn", { hasText: "Filter" }).click();
