@@ -82,8 +82,9 @@ export class OutgoingLinksView implements View {
       function* targets(): IterableIterator<OutgoingTarget> {
         for (const target of app.vault.getMarkdownFiles()) yield { path: target.path, basename: target.basename, aliases: app.metadataCache.getFileCache(target)?.aliases ?? [] };
       }
-      const mentions = await findOutgoingMentions(snapshot, file.path, targets(), { signal: controller.signal, excluded: this.app.excludedFiles.matches });
+      const scan = await findOutgoingMentions(snapshot, file.path, targets(), { signal: controller.signal, excluded: this.app.excludedFiles.matches });
       if (!current()) return;
+      const mentions = scan.mentions;
       this.bodyEl.replaceChildren();
       const references = outgoingReferences(snapshot);
       this.section(`Links (${references.reduce((count, reference) => count + reference.count, 0)})`);
@@ -112,7 +113,10 @@ export class OutgoingLinksView implements View {
         button.addEventListener("click", () => this.convert(file, snapshot, mention));
         row.append(snippet, path, button); this.bodyEl.appendChild(row);
       }
-      this.statusEl.textContent = editable || !mentions.length ? "" : "Open this note in edit mode to link mentions.";
+      const notices: string[] = [];
+      if (scan.limited) notices.push(`Showing ${mentions.length} suggestions from a limited scan (first ${scan.scannedCharacters.toLocaleString()} characters; up to 500 matches).`);
+      if (!editable && mentions.length) notices.push("Open this note in edit mode to link mentions.");
+      this.statusEl.textContent = notices.join(" ");
     } catch (error) {
       if (current()) this.statusEl.textContent = "Could not load outgoing links. Reopen this pane to retry.";
     } finally { if (current()) this.bodyEl.removeAttribute("aria-busy"); }

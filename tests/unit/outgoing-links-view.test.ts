@@ -80,3 +80,11 @@ describe("Outgoing links view", () => {
     view.onClose();
   });
 });
+
+it("announces limited suggestions instead of presenting a capped count as complete", async () => {
+  const { app } = setup("Atlas ".repeat(1_000));
+  const view = new api.OutgoingLinksView(app as any); view.onOpen(); await view.render();
+  expect((view.containerEl as unknown as Element).text()).toContain("Showing 500 suggestions from a limited scan");
+  expect((view.containerEl as unknown as Element).all().filter(e => e.className === "outgoing-link-convert")).toHaveLength(500);
+  view.onClose();
+});
