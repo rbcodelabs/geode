@@ -24,6 +24,7 @@ addEventListener("message",createPdfFrameInitializer(parent,({init,port:accepted
   port.addEventListener("message",async event=>{
     if(!isPdfHostMessage(event.data)||event.data.generation!==generation||disposed)return;
     if(event.data.kind==="dispose") { disposed=true;renderGeneration++;resize.disconnect();clearTimeout(resizeTimer);try{await session?.close();}finally{port?.postMessage({kind:"disposed",version:1,generation});port?.close();}return; }
+    if(event.data.kind==="appearance"){document.documentElement.dataset.theme=event.data.theme;return;}
     if(event.data.kind==="navigate"){if(session?.count)navigate(event.data.page);else page=event.data.page;return;}
     if(loaded)return;loaded=true;page=event.data.page;document.title=event.data.label;document.documentElement.dataset.theme=event.data.theme??"light";session=new PdfSession(api);
     try{await session.load(new Uint8Array(event.data.bytes),page);if(!disposed)await render();}

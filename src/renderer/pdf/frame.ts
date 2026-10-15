@@ -4,7 +4,7 @@ import { pdfDocumentCapacity, type PdfDocumentLease } from "./capacity";
 import { PDF_VIEWER_BUILD, waitForPdfFrameReady, type PdfFrameInit } from "./handshake";
 import { isPdfViewerMessage, PDF_VIEWER_ORIGIN, PDF_VIEWER_URL } from "../../shared/pdf-viewer-protocol";
 import { PDF_LIMITS } from "../../shared/pdf";
-interface PdfFrameApp { host:Pick<HostServices,"pdfResources">;vault:{root:string};isDarkMode?():boolean }
+interface PdfFrameApp { host:Pick<HostServices,"pdfResources">;vault:{root:string};isDarkMode?():boolean;workspace?:{on(event:string,callback:()=>void):()=>void} }
 export interface PdfFrameOptions { path:string;label:string;page:number;height?:number;current?():boolean;onPage?(page:number):void }
 function nonce():string { return Array.from(crypto.getRandomValues(new Uint8Array(32)),byte=>byte.toString(16).padStart(2,"0")).join(""); }
 function cancelled():Error { const error=new Error("PDF loading cancelled.");error.name="AbortError";return error; }
@@ -23,6 +23,7 @@ export class PdfFrame {
   private readId:string|undefined;
   private cancelSent=false;
   private cleanup:Promise<void>|undefined;
+  private stopAppearance:(()=>void)|undefined;
   private closed=false;
   private phase:"idle"|"initializing"|"ready"|"failed"|"interrupted"="idle";
   private generation=0;
@@ -31,13 +32,15 @@ export class PdfFrame {
   private requestedPage:number;
   private pageCount:number|undefined;
   constructor(private readonly app:PdfFrameApp,parent:RenderScope,private readonly options:PdfFrameOptions) {
-    this.renderOwner=parent.child({close:()=>this.closeNative(),resume:()=>{if(this.phase==="interrupted"&&this.valid())void this.open();}});this.root=app.vault.root;this.requestedPage=options.page;
+    this.renderOwner=parent.child({close:()=>this.closeNative(),resume:()=>{if((this.phase==="interrupted"||this.phase==="initializing")&&this.valid())void this.open();else this.sendAppearance();}});this.root=app.vault.root;this.requestedPage=options.page;
     this.containerEl=document.createElement("div");this.containerEl.className="pdf-frame";
     Object.assign(this.containerEl.style,{position:"relative",height:options.height?`${options.height}px`:"100%",minHeight:"120px",width:"100%",flex:"1",overflow:"hidden"});
     this.status=document.createElement("div");this.status.className="pdf-frame-status";this.status.setAttribute("role","status");Object.assign(this.status.style,{position:"absolute",inset:"0",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"12px",padding:"16px",textAlign:"center",background:"var(--background-primary)"});
     this.retry=document.createElement("button");this.retry.type="button";this.retry.textContent="Retry PDF";this.retry.hidden=true;this.retry.addEventListener("click",()=>void this.open());
     this.containerEl.append(this.status);this.show("Loading PDF…",false);
+    this.stopAppearance=app.workspace?.on("css-change",()=>this.sendAppearance());
   }
+  private sendAppearance():void{if(this.valid()&&this.renderOwner.admissionAllowed)this.port?.postMessage({kind:"appearance",version:1,generation:this.transportGeneration,theme:this.app.isDarkMode?.()?"dark":"light"});}
   get page():number {return this.currentPage;}
   navigate(page:number):void {if(!Number.isSafeInteger(page)||page<1||page>(this.pageCount??PDF_LIMITS.pages))throw new Error("Unsupported PDF page.");this.requestedPage=page;this.port?.postMessage({kind:"navigate",version:1,generation:this.transportGeneration,page});}
   private show(message:string,error:boolean):void {this.status.hidden=false;this.status.style.display="flex";this.status.setAttribute("role",error?"alert":"status");this.status.textContent=message.slice(0,400);this.retry.hidden=!error;this.retry.disabled=false;this.status.append(this.retry);}
@@ -104,7 +107,7 @@ export class PdfFrame {
     channel.port1.postMessage({kind:"load",version:1,generation,bytes,page:this.requestedPage,height:this.options.height,label:this.options.label.slice(0,160),theme:this.app.isDarkMode?.()?"dark":"light"},[bytes]);
   }
   close():Promise<void> {this.closed=true;this.generation++;this.abort?.abort();this.cancelRead();return this.renderOwner.close();}
-  private async closeNative():Promise<void> {this.closed=true;this.generation++;this.abort?.abort();this.cancelRead();if(this.lease)await this.lease.close();else await this.disposeTransport();this.containerEl.remove();}
+  private async closeNative():Promise<void> {this.closed=true;this.stopAppearance?.();this.stopAppearance=undefined;this.generation++;this.abort?.abort();this.cancelRead();if(this.lease)await this.lease.close();else await this.disposeTransport();this.containerEl.remove();}
   private disposeTransport():Promise<void> {
     if(this.cleanup)return this.cleanup;
     this.abort?.abort();this.cancelRead();const frame=this.iframe,port=this.port,generation=this.transportGeneration;this.iframe=undefined;this.port=undefined;

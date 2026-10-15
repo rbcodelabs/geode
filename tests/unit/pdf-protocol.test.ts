@@ -21,3 +21,10 @@ describe("private PDF viewer message schema", () => {
     for (const value of [{ kind: "state", version: 1, generation: 1, page: 4, count: 3, zoom: 1 }, { kind: "state", version: 1, generation: 1, page: 1, count: 1001, zoom: 1 }, { kind: "state", version: 1, generation: 1, page: 1, count: 1, zoom: NaN }, { kind: "error", version: 1, generation: 1, message: "x".repeat(401) }, { kind: "open", version: 1, generation: 1, url: "https://example.test" }]) expect(api.isPdfViewerMessage(value)).toBe(false);
   });
 });
+
+it("accepts only an enum theme over the private presentation channel",()=>{
+ expect(api.isPdfHostMessage({kind:"appearance",version:1,generation:1,theme:"dark"})).toBe(true);
+ expect(api.isPdfHostMessage({kind:"appearance",version:1,generation:1,theme:"light"})).toBe(true);
+ for(const theme of ["auto","url(x)",{},null])expect(api.isPdfHostMessage({kind:"appearance",version:1,generation:1,theme})).toBe(false);
+ expect(api.isPdfHostMessage({kind:"appearance",version:1,generation:1,theme:"dark",css:"body{}"})).toBe(false);
+});
