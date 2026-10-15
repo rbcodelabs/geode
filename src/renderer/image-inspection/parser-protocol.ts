@@ -6,7 +6,7 @@ export const PARSE_MS = 30_000;
 export interface ParserSession { version: 1; build: typeof BUILD; epoch: number; nonce: string }
 export type ParserInit = ParserSession & { kind: "initialize" };
 export type ParserRequest = ParserSession & ({ kind: "parse"; request: number; source: string } | { kind: "cancel"; request: number } | { kind: "close" });
-export type ParserReply = ParserSession & ({ kind: "ready" | "closed" } | { kind: "worker-ready"; request: number } | { kind: "parsed"; request: number; payload: unknown } | { kind: "cancelled"; request: number; released: true } | { kind: "failed"; request: number; code: "worker-error" | "invalid-result" });
+export type ParserReply = ParserSession & ({ kind: "ready" } | { kind: "closed" } | { kind: "worker-ready"; request: number } | { kind: "parsed"; request: number; payload: unknown } | { kind: "cancelled"; request: number; released: true } | { kind: "failed"; request: number; code: "worker-error" | "invalid-result" });
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const positive = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const sessionKeys = ["kind", "version", "build", "epoch", "nonce"];

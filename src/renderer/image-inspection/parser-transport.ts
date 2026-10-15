@@ -9,7 +9,7 @@ interface Active {
 /** Private unwired browser transport. The constructor owns its frame/ports before any await. */
 export class ImageParserTransport implements OwnedImageParseTransport {
   private readonly frame: HTMLIFrameElement;
-  private readonly channel = new MessageChannel();
+  private readonly channel: MessageChannel;
   private readonly session: ParserSession;
   private ready = false;
   private loaded = false;
@@ -22,9 +22,13 @@ export class ImageParserTransport implements OwnedImageParseTransport {
   private resolveClose?: () => void;
   private rejectClose?: (error: Error) => void;
   constructor(doc: Document = document) {
+    const body = doc.body;
+    if (!body) throw new Error("Image parser document body unavailable.");
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     this.session = { version: 1, build: BUILD, epoch: 1, nonce: Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("") };
     this.frame = doc.createElement("iframe");
+    this.channel = new MessageChannel();
+    try {
     this.frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
     this.frame.setAttribute("aria-hidden", "true");
     this.frame.tabIndex = -1;
@@ -36,7 +40,11 @@ export class ImageParserTransport implements OwnedImageParseTransport {
     this.channel.port1.start();
     this.arm(READY_MS, "readiness");
     this.frame.src = `${ORIGIN}/index.html`;
-    doc.body.append(this.frame);
+    body.append(this.frame);
+    } catch {
+      this.dispose();
+      throw new Error("Image parser initialization failed.");
+    }
   }
   private readonly load = () => {
     if (this.disposed) return;

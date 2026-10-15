@@ -90,3 +90,16 @@ it("starts the thirty-second parse budget after worker readiness without chargin
   await expect(transport.close()).rejects.toThrow(/parse deadline/i);
  } finally {timer.mockRestore();vi.useRealTimers();}
 });
+it("retires allocated ports, listeners and timers if frame attachment throws",()=>{
+ vi.useFakeTimers();const close=vi.spyOn(MessagePort.prototype,"close");
+ try {
+  const b=browser();vi.mocked(b.doc.body.append).mockImplementation(()=>{throw Error("synthetic attachment failure");});
+  expect(()=>new ImageParserTransport(b.doc)).toThrow(/failure|failed/i);expect(b.frame.removed).toBe(true);expect(close).toHaveBeenCalledTimes(2);expect(vi.getTimerCount()).toBe(0);
+  const calls=b.frame.contentWindow.postMessage.mock.calls.length;b.frame.dispatchEvent(new Event("load"));expect(b.frame.contentWindow.postMessage.mock.calls).toHaveLength(calls);
+ } finally {close.mockRestore();vi.useRealTimers();}
+});
+it("refuses a missing document body before allocating channels or frame handlers",()=>{
+ const b=browser(),create=vi.spyOn(b.doc,"createElement");
+ try { expect(()=>new ImageParserTransport({...b.doc,body:null} as unknown as Document)).toThrow(/body|initialization/i);expect(create).not.toHaveBeenCalled();expect(b.frame.contentWindow.postMessage).not.toHaveBeenCalled(); }
+ finally {create.mockRestore();}
+});
