@@ -23,7 +23,7 @@ export function outgoingReferences(text: string): OutgoingReference[] {
 }
 
 /** Exclude authored links/frontmatter while deliberately leaving code mentions eligible. */
-function maskLinkedSpans(text: string): string {
+function maskLinkedSpans(text: string, truncated: boolean): string {
   const spans: [number, number][] = [];
   const frontmatter = FRONTMATTER_BLOCK_RE.exec(text);
   if (frontmatter) spans.push([0, frontmatter[0].length]);
@@ -32,6 +32,9 @@ function maskLinkedSpans(text: string): string {
   // tail once rather than rescanning it from every unmatched opening bracket.
   // This masks spans only; the shared metadata parser still owns parsed Links.
   const labels: number[] = [];
+  const shortcutCandidates: { from: number; to: number; label: string }[] = [];
+  const definitions = new Set<string>();
+  const normalizeLabel = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
   for (let i = 0; i < text.length; i++) {
     if (text[i] === "\\") { i++; continue; }
     if (text[i] === "[") { labels.push(i); continue; }
@@ -52,10 +55,11 @@ function maskLinkedSpans(text: string): string {
         if (text[end] === "]") spans.push([from, end + 1]);
         i = text[end] === "]" ? end : end - 1;
       } else if (text[i + 1] === ":") {
+        definitions.add(normalizeLabel(text.slice(from + 1, i)));
         let end = i + 2;
         while (end < text.length && text[end] !== "\n") end++;
         spans.push([from, end]); i = end;
-      }
+      } else shortcutCandidates.push({ from, to: i + 1, label: normalizeLabel(text.slice(from + 1, i)) });
     } else if (text[i] === "<") {
       let end = i + 1;
       while (end < text.length && !"<>\n".includes(text[end])) end++;
@@ -63,6 +67,12 @@ function maskLinkedSpans(text: string): string {
       i = text[end] === ">" ? end : end - 1;
     }
   }
+  for (const candidate of shortcutCandidates) {
+    if (truncated || definitions.has(candidate.label)) spans.push([candidate.from, candidate.to]);
+  }
+  // The omitted suffix may close an authored wikilink/Markdown label. Never
+  // convert a candidate whose label context extends beyond the inspected text.
+  if (truncated && labels.length) spans.push([labels[0], text.length]);
   const chars = text.split("");
   spans.sort((a, b) => a[0] - b[0]);
   let maskedTo = 0;
@@ -91,7 +101,7 @@ export async function findOutgoingMentions(
   // Bound the synchronous parser/masking phase, with cancellation checkpoints on
   // both sides. Candidate scans have an independent byte/match work budget below.
   if (source.length >= 8192) await cooperate();
-  const available = maskLinkedSpans(source);
+  const available = maskLinkedSpans(source, limited);
   if (source.length >= 8192) await cooperate();
   const lineStarts = buildLineStarts(source);
   const lineAt = (offset: number) => {
