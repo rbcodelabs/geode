@@ -112,6 +112,8 @@ import {
 import type { Command } from "./commands";
 import moment from "moment";
 import { UniqueNotesService, uniqueNotePath } from "./unique-notes";
+import { NoteComposerService, type TextAfterExtraction } from "./note-composer";
+import { NoteComposerPlugin } from "./internal-plugins/note-composer/note-composer-plugin";
 import { TemplatesService, renderTemplate, templateFiles, templatePath, templateNoteName, type TemplatesConfig } from "./templates";
 import { Menu, type PluginSettingTab, installObsidianAppCompat } from "./api/obsidian";
 import { createDismissibleNotice } from "./notice";
@@ -1351,6 +1353,34 @@ class SettingsModal extends Modal {
     }
   }
 
+  private renderNoteComposerSettings(container: HTMLElement): void {
+    const composer = this.geodeApp.noteComposer;
+    container.insertAdjacentHTML("beforeend", `<h3>Note composer</h3>`);
+    const save = async (patch: Parameters<typeof composer.update>[0]) => {
+      try { await composer.update(patch); this.geodeApp.syncNoteComposerPlugin(); }
+      catch (err) {
+        console.error(err);
+        this.geodeApp.notify("Could not save Note composer settings. Your previous settings are still active.");
+        this.activateTab(this.activeTabId);
+      }
+    };
+    this.addToggle(container, "Enable Note composer", composer.enabled, (enabled) => void save({ enabled }));
+    this.addToggle(container, "Ask before merging", composer.options.askBeforeMerging, (askBeforeMerging) => void save({ askBeforeMerging }));
+    const { control } = this.addRow(container, "Text after extraction");
+    const select = document.createElement("select");
+    select.className = "dropdown";
+    select.setAttribute("aria-label", "Text after extraction");
+    for (const [value, label] of [["link", "Link to new file"], ["embed", "Embed new file"], ["none", "None"]] as const) {
+      select.add(new Option(label, value));
+    }
+    select.value = composer.options.textAfterExtraction;
+    select.addEventListener("change", () => void save({ textAfterExtraction: select.value as TextAfterExtraction }));
+    control.appendChild(select);
+    const template = this.addTextInput(container, "Template file location", composer.options.template, (value) => {
+      void save({ template: value }).then(() => { template.value = composer.options.template; });
+    });
+  }
+
   private renderCorePluginsTab(container: HTMLElement): void {
     const webViewer = this.geodeApp.webViewer;
     container.innerHTML = `<h2>Core plugins</h2><h3>Slash commands</h3>`;
@@ -1365,6 +1395,7 @@ class SettingsModal extends Modal {
       this.geodeApp.syncSlidesPlugin();
       this.geodeApp.saveSettings();
     });
+    this.renderNoteComposerSettings(container);
     container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
     this.addToggle(container, "Enable Audio recorder", this.geodeApp.settings.audioRecorderEnabled, (enabled) => {
       this.geodeApp.settings.audioRecorderEnabled = enabled;
@@ -2601,6 +2632,9 @@ export class App {
   readonly dailyNotes: DailyNotesService;
   readonly templates: TemplatesService;
   readonly uniqueNotes: UniqueNotesService;
+  /** Note composer core plugin settings (enabled by default, as in Obsidian) and its live plugin instance. */
+  readonly noteComposer: NoteComposerService;
+  private noteComposerPlugin?: NoteComposerPlugin;
   private uniqueNoteRibbonEl: HTMLElement | null = null;
   readonly webViewer: WebViewerService;
   readonly sync: SyncService;
@@ -2739,6 +2773,7 @@ export class App {
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
     this.uniqueNotes = new UniqueNotesService(host.config);
+    this.noteComposer = new NoteComposerService(host.config);
     this.webViewer = new WebViewerService(host.config, () => this.applyWebViewerLifecycle());
     this.sync = new SyncService(host, () => this.vault.root, () => this.reloadPortableSettings());
     this.settings.webViewer = this.webViewer.options;
@@ -3390,6 +3425,7 @@ export class App {
     await this.dailyNotes.load();
     await this.templates.load();
     await this.uniqueNotes.load();
+    await this.noteComposer.load();
     this.syncUniqueNoteRibbon();
     await this.webViewer.load(saved?.webViewer);
 
@@ -3588,6 +3624,7 @@ export class App {
     this.syncFormatConverterPlugin();
     this.syncSlashCommandsPlugin();
     this.syncSlidesPlugin();
+    this.syncNoteComposerPlugin();
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
     // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
     await this.hubSyncUnregister?.(); this.hubSyncUnregister = undefined; this.hubSyncProvider = undefined;
@@ -4317,6 +4354,8 @@ export class App {
     this.slashCommandsPlugin = undefined;
     this.slidesPlugin?.unload();
     this.slidesPlugin = undefined;
+    this.noteComposerPlugin?.unload();
+    this.noteComposerPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
     await this.vault.close();
@@ -6200,6 +6239,15 @@ export class App {
     if (this.host.capabilities.multipleWindows) {
       void this.host.desktop?.setWindowBackgroundColor(color);
     }
+  }
+
+  /** Load or unload the Note composer core plugin to match `noteComposer.enabled`. */
+  syncNoteComposerPlugin(): void {
+    this.noteComposerPlugin?.unload();
+    this.noteComposerPlugin = undefined;
+    if (!this.noteComposer.enabled) return;
+    this.noteComposerPlugin = new NoteComposerPlugin(this);
+    this.noteComposerPlugin.load();
   }
 
   /** Load or unload the Slash commands core plugin to match `settings.slashCommandsEnabled`. */

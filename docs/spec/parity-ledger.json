@@ -39,11 +39,11 @@
     },
     "byStatus": {
       "verified": 328,
-      "partial": 54,
+      "partial": 55,
       "missing": 0,
       "intentionally-equivalent": 0,
       "blocked": 1,
-      "unknown": 2480
+      "unknown": 2479
     }
   },
   "requirements": [
@@ -1718,8 +1718,12 @@
       "title": "Note composer",
       "sourcePath": "obsidian-help/en/Plugins/Note composer.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-help/blob/master/en/Plugins/Note%20composer.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/note-composer.test.ts",
+        "tests/e2e/note-composer.spec.ts"
+      ],
+      "notes": "Observed in Electron: file-explorer 'Merge entire file with...' and the 'Note composer: Merge current file with another file...' command open a target picker where Enter appends, Shift+Enter prepends and Ctrl/Cmd+Enter creates a new note; the source is moved to the system trash and wikilinks/embeds/aliases/heading links to it are rewritten on disk (reusing the rename rewriter); 'Ask before merging' (default on) shows a confirmation modal that Cancel respects. Editor context-menu and command 'Extract current selection...' use the same keys and leave a link, embed or nothing per 'Text after extraction'; template variables {{content}} (appended at the bottom when omitted), {{fromTitle}}, {{newTitle}} and {{date:FORMAT}} are applied to new notes. Partial: heading-scoped extraction is not implemented; only wikilinks (not Markdown-style links) are rewritten, as with rename; source frontmatter is carried verbatim into the destination (no property merging); the Help page was not diffed line by line and the system trash stands in for File recovery, which Geode lacks."
     },
     {
       "id": "HELP-71a13098c749",
