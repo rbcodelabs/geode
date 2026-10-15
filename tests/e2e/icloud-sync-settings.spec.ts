@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,7 +57,9 @@ async function openIcloudTab() {
 
 test.beforeAll(async () => {
   realBefore = statSig(realGeodeDir);
-  expect(fs.existsSync(path.join(pluginSrc, "main.js")), "run `npm run build:icloud-sync` first").toBe(true);
+  // CI does not build the plugin ahead of the suite, so build it here (esbuild, ~10ms) rather than assume a prior step.
+  execFileSync(process.execPath, [path.join(repoRoot, "packages", "geode-icloud-sync", "build.mjs")], { cwd: repoRoot, stdio: "pipe" });
+  expect(fs.existsSync(path.join(pluginSrc, "main.js"))).toBe(true);
   vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-icloud-vault-"));
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-icloud-user-"));
   base = fs.mkdtempSync(path.join(os.tmpdir(), "geode-icloud-base-"));
