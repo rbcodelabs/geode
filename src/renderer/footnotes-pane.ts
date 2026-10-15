@@ -24,14 +24,13 @@ export async function projectFootnotes(text: string, options: { signal?: AbortSi
   const items: (FootnotePaneItem & { order: number })[] = [];
   const counts = new Map<string, number>();
   for (const reference of scan.references) if (reference.kind === "ref") counts.set(reference.id, (counts.get(reference.id) ?? 0) + 1);
-  const lastLine = source.lastIndexOf("\n");
   for (const definition of scan.definitions) {
     let editFrom = definition.labelTo, editTo = definition.to;
     while (/[ \t]/.test(source[editFrom] ?? "") && editFrom < editTo) editFrom++;
     if (source[editTo - 1] === "\r") editTo--;
     items.push({ key: `definition:${definition.id}`, label: String(definition.number ?? definition.id), text: definition.text,
       references: counts.get(definition.id) ?? 0, missing: false, from: definition.from, to: definition.to,
-      editFrom, editTo, editable: !(limited && definition.to >= lastLine), order: definition.number ?? Number.MAX_SAFE_INTEGER });
+      editFrom, editTo, editable: !(limited && !source.slice(definition.to).trim()), order: definition.number ?? Number.MAX_SAFE_INTEGER });
   }
   for (const reference of scan.references) if (reference.kind === "inline") items.push({
     key: `inline:${reference.from}`, label: String(reference.number), text: reference.text, references: 1, missing: false,
