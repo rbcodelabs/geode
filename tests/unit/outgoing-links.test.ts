@@ -97,3 +97,17 @@ it("does not match artificial spaces from masking or a partial word at the sourc
   expect(limited.mentions).toEqual([]);
   expect(limited.limited).toBe(true);
 });
+
+it("masks normalized shortcut references backed by definitions, including definitions after use", async () => {
+  const result = await api.findOutgoingMentions("[Atlas]\n\n[atlas]: Note.md\n\n[World map   ]\n\n[world map]: Atlas.md\n\nAtlas", source, targets.slice(0, 1));
+  expect(result.mentions.map(mention => mention.text)).toEqual(["Atlas"]);
+});
+
+it("never offers a mention from a link or label cut by the source scan bound", async () => {
+  for (const tail of ["[[Atlas|alias]]", "[Atlas label](note.md)", "[Atlas](https://example.com)", "[[Atlas]]"]) {
+    const prefix = " ".repeat(128 * 1024 - 8);
+    const result = await api.findOutgoingMentions(prefix + tail, source, targets.slice(0, 1));
+    expect(result.mentions, tail).toEqual([]);
+    expect(result.limited, tail).toBe(true);
+  }
+});

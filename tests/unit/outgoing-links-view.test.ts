@@ -88,3 +88,15 @@ it("announces limited suggestions instead of presenting a capped count as comple
   expect((view.containerEl as unknown as Element).all().filter(e => e.className === "outgoing-link-convert")).toHaveLength(500);
   view.onClose();
 });
+
+it("refuses generated targets that would activate an external scheme", async () => {
+  const { app, editor } = setup();
+  app.fileManager.generateMarkdownLink = () => "[[https://example.com|Atlas]]";
+  const view = new api.OutgoingLinksView(app as any); view.onOpen(); await view.render();
+  const button = (view.containerEl as unknown as Element).all().find(element => element.className === "outgoing-link-convert")!;
+  button.events.get("click")!({});
+  expect(editor.applySourceEdit).not.toHaveBeenCalled();
+  expect(app.workspace.openLinkText).not.toHaveBeenCalled();
+  expect(app.notify).toHaveBeenCalledWith("Could not create an unambiguous link for this mention.");
+  view.onClose();
+});
