@@ -43,3 +43,47 @@ Current parser head is9f. Other-owner PR391 remains at0d94760d8bc28ef390239c7e8b
 Main's future authority provider must derive the current application window, exact live main frame and captured Vault session from the actual application registry; a renderer-provided root/current callback is never authority. Foundation tests inject that provider to exercise registrar behavior only. No product IPC authority or resource registration is established by this unregistered package.
 
 All six raster MIME families remain required: PNG, JPEG, GIF, WebP, BMP and AVIF. Header-family admission only establishes bounded supported bytes and fixed MIME; it does not prove valid native decoding, cancellation during decoding, OS/heap settlement or decoder resource bounds. The actual six-family decoder proof remains a separate explicit gate before any enablement. A missing format proof leaves this foundation unwired; it does not silently enable a narrower format subset.
+
+## Resumed implementation checkpoint
+
+The documentation-only hold above records the original checkpoint. Hosted parser PR392 verification and mobile checks subsequently passed on frozen `9f96317dc51a758d9bc926a188ead2fd9a7834d0`; coordinator then resumed this accepted private scope. Current code remains unregistered and unwired. No main/preload/App/Markdown/Live Preview registration, modal UI, metadata epoch adapter, parser change or dependency accompanies the foundation.
+
+The reader uses actual filesystem operations with canonical containment, root/file identity and metadata rechecks, bounded chunks and an exact-size output allocation plus a separate overflow byte. Successful reads recheck canonical root, root identity, target path and file metadata after the awaited handle close. These are point-in-time checks, not a universal atomic snapshot of a hostile filesystem. All six synthetic header-family vectors are admitted; these vectors deliberately do not establish valid native decoding.
+
+Active read admission also lives in a module-private stable-window WeakMap, surviving replacement registrars while an old read or handle close remains unsettled. Originating completion releases only its exact entry. Independent windows retain separate admission; each registrar tracks and awaits only its own active operations. Repeated disposal cannot remove a replacement registrar's installed handlers.
+
+### Explicit private cleanup uncertainty
+
+`ImageCleanupUncertainError` in `src/shared/image-cleanup.ts` retains the original close failure and any primary read failure. The main registrar recognizes it in-process and retains one failure in a module-private WeakMap keyed by stable application-window identity. Session/root changes or registrar replacement cannot bypass that seal. Success remains bounded bytes and a fixed six-family MIME. Ordinary settled read errors remain recoverable rejections.
+
+Both read and cancel handlers return `{kind: "cleanup-uncertain", error}` for a sealed authorized window, without starting further I/O. Registrar disposal removes handlers and awaits actual reads; it retains its first observed resource uncertainty as a failed repeated disposal outcome. Each uncertain window separately retains its complete original error. Disposal does not clear the seal or certify successful descriptor cleanup.
+
+The trusted session adapter must explicitly map this read/cancel discriminant. It must never infer uncertainty from an error message or a cloned Error prototype. A future actual Electron/preload bridge must validate the reply schema and preserve this distinction; no such bridge or cross-process error-identity guarantee is implemented here. Injected authority and adapter tests are not actual product IPC evidence.
+
+### Private session lifecycle
+
+`ImageInspectionSession` binds a stable view owner and copies file, Vault, root, path and source snapshot authority for each intent. It generates a fresh64hex read ID. `invalidate()` is the explicit notification seam future source/navigation hooks must call synchronously: it hides, clears, releases and requests scoped cancellation immediately, then awaits actual read/decode settlement and the cancellation acknowledgement. Acknowledgement alone never releases the active slot. The latest pending intent may start after retirement; invalidation does not reopen a permanently closed session.
+
+`close()` seals admission synchronously and retains its pending/rejected result through repeated or reentrant calls. Every owned URL has one revocation attempt, including URLs created during invalidation. Ordinary settled read/decode failures are recoverable. Resource or presentation cleanup uncertainty seals the session and preserves primary plus cleanup failures. Natural-pixel admission checks only arithmetic at64,000,000; no bitmap allocation or decoder memory bound is implied.
+
+Authority callbacks may be reentrant: local ownership is checked again after the callback, and final settlement drains cancellation registered during that final check. A callback returning true cannot override a synchronous close/invalidation or manufacture read/decode/cancel settlement.
+
+### Verification checkpoint and remaining gates
+
+Meaningful assertion RED precedes each implementation boundary: initial IPC authority, partial-registration rollback, reader containment/await races, post-close mutation, initial session ownership/lifecycle, explicit invalidation, and composed cleanup-uncertainty propagation. Additional regressions preserve host plus presentation errors, registrar rotation during actual held handle close, and reentrant final-authority cancellation settlement. Current focused local verification:128 tests across four files pass, including incomplete-capability rejection before any read. This is a development checkpoint; independent source/security review, typecheck/build, full regression gates and final exact-source evidence remain required before a foundation PR. Native six-family decoder evidence and all actual product integration remain subsequent work.
+
+
+### Synthetic header-family inventory
+
+These exact test vectors were reviewed before reader GREEN. They are header-admission controls, deliberately not native decoder fixtures.
+
+| Family | Bytes | SHA256 |
+| --- | ---: | --- |
+| png | 33 | `7a62e481c41f555352930feb61d703eb7b6225a82815d9aadf3dcc1e5f34b2ac` |
+| jpeg | 6 | `fc16d7dcee9cae83ef3923222a81ccd8fe96c9d25fdb7f504d66f1011e0cd870` |
+| gif | 13 | `e166f869cdc0a87f67fc5841ad08082c87d0ffa3c1d677956415ea3110e1fd3f` |
+| webp | 26 | `ea3eb4f6b14361f4e7fc6f30196d9333b9989efaf2b06ef247f9fac2ac0af5b2` |
+| bmp | 26 | `812e154fa935534f17f34c756bb00803d22c8d7717a82800e7e6eaad522cb93c` |
+| avif | 24 | `5b456c9d667bfffe29cb898a91fa5e462c0b38b72970f769814c5fe05033571c` |
+
+The mutable authority-provider regression additionally proves that in-place session/root/window changes and replacement of the original current callback cannot change captured admission or release another window slot. Captured method callbacks retain their original provider receiver.
