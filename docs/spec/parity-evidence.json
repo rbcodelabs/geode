@@ -4523,5 +4523,237 @@
       "docs/spec/05-parity-ledger.md"
     ],
     "notes": "not a behavior: section heading"
+  },
+  "DEV-8c2ecd3adeda": {
+    "status": "partial",
+    "evidence": [
+      "docs/spec/parity-api-audit-2026-10.md",
+      "tests/unit/parity-metadata-audit.test.ts",
+      "tests/unit/metadata-cache.test.ts",
+      "tests/unit/list-items.test.ts"
+    ],
+    "notes": "All 13 direct properties assessed individually. Three are verified, six partial and four missing; page/declaration coverage does not imply member completeness."
+  },
+  "DEV-dcfb7373660e": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
+  },
+  "DEV-f2bc8acb44a7": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
+  },
+  "DEV-ec1772bb1c78": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The audit observes a named reference ID, exact source position, exclusion of inline code and definition lines, and absence when none exist."
+  },
+  "DEV-eb5b4bb19c0b": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
+  },
+  "DEV-65524af420d7": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "YAML scalar/array properties, aliases, malformed YAML, and absent frontmatter are directly asserted. This does not verify frontmatterLinks or frontmatterPosition."
+  },
+  "DEV-fbca18774e8b": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
+  },
+  "DEV-2cd025271555": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
+  },
+  "DEV-cbd02c61c60b": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Heading text/levels, closing hashes and code exclusion are asserted; exact HeadingCache position spans remain unverified."
+  },
+  "DEV-3361879302ea": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
+  },
+  "DEV-1c9adcc843f7": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/list-items.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Tests observe ordered/unordered and task items, nesting parent lines, absolute source lines, task characters, block IDs, code exclusion and absence when none exist."
+  },
+  "DEV-7869f2fc38c9": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Full and collapsed references with IDs, link text and positions are observed. The pinned API example uses shortcut syntax, which is absent; the desired contract is an expected-failure diagnostic."
+  },
+  "DEV-2fee06feccfa": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/list-items.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Root heading, paragraph, list, YAML and code section grouping/positions are observed. Callout/blockquote semantics from the pinned API example and other block forms remain unverified."
+  },
+  "DEV-eea9393d76ec": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "YAML and inline tags, nested tags, numeric-only rejection and code exclusion are observed. Exact TagCache position semantics across frontmatter/body are not fully asserted."
+  },
+  "API-c9bc68ef59b3": {
+    "status": "partial",
+    "evidence": [
+      "docs/spec/parity-api-audit-2026-10.md",
+      "tests/unit/parity-metadata-audit.test.ts",
+      "tests/unit/metadata-cache.test.ts",
+      "tests/unit/list-items.test.ts"
+    ],
+    "notes": "All 13 direct properties assessed individually. Three are verified, six partial and four missing; page/declaration coverage does not imply member completeness."
+  },
+  "API-MEMBER-5044a80b7bec": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
+  },
+  "API-MEMBER-ec995522ee54": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
+  },
+  "API-MEMBER-307c0cc6c879": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The audit observes a named reference ID, exact source position, exclusion of inline code and definition lines, and absence when none exist."
+  },
+  "API-MEMBER-b814d289442c": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
+  },
+  "API-MEMBER-c8c975fa15b1": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "YAML scalar/array properties, aliases, malformed YAML, and absent frontmatter are directly asserted. This does not verify frontmatterLinks or frontmatterPosition."
+  },
+  "API-MEMBER-37a62532185d": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
+  },
+  "API-MEMBER-1de2fffa3b60": {
+    "status": "missing",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
+  },
+  "API-MEMBER-3e675579d038": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Heading text/levels, closing hashes and code exclusion are asserted; exact HeadingCache position spans remain unverified."
+  },
+  "API-MEMBER-938987404f45": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
+  },
+  "API-MEMBER-a316e0e6cf63": {
+    "status": "verified",
+    "evidence": [
+      "tests/unit/list-items.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Tests observe ordered/unordered and task items, nesting parent lines, absolute source lines, task characters, block IDs, code exclusion and absence when none exist."
+  },
+  "API-MEMBER-b2bcab4c7b0b": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/parity-metadata-audit.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Full and collapsed references with IDs, link text and positions are observed. The pinned API example uses shortcut syntax, which is absent; the desired contract is an expected-failure diagnostic."
+  },
+  "API-MEMBER-c6e74ea52a82": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/list-items.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "Root heading, paragraph, list, YAML and code section grouping/positions are observed. Callout/blockquote semantics from the pinned API example and other block forms remain unverified."
+  },
+  "API-MEMBER-c3b9b84fc156": {
+    "status": "partial",
+    "evidence": [
+      "tests/unit/metadata-cache.test.ts",
+      "docs/spec/parity-api-audit-2026-10.md"
+    ],
+    "notes": "YAML and inline tags, nested tags, numeric-only rejection and code exclusion are observed. Exact TagCache position semantics across frontmatter/body are not fully asserted."
   }
 }
