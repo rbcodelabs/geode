@@ -38,12 +38,12 @@
       "api-member": 1014
     },
     "byStatus": {
-      "verified": 331,
-      "partial": 124,
-      "missing": 54,
+      "verified": 335,
+      "partial": 140,
+      "missing": 62,
       "intentionally-equivalent": 5,
       "blocked": 79,
-      "unknown": 2270
+      "unknown": 2242
     }
   },
   "requirements": [
@@ -5929,8 +5929,14 @@
       "title": "CachedMetadata",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "docs/spec/parity-api-audit-2026-10.md",
+        "tests/unit/parity-metadata-audit.test.ts",
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/list-items.test.ts"
+      ],
+      "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
     },
     {
       "id": "DEV-dcfb7373660e",
@@ -5940,8 +5946,12 @@
       "title": "blocks",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/blocks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/blocks.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
     },
     {
       "id": "DEV-f2bc8acb44a7",
@@ -5951,8 +5961,13 @@
       "title": "embeds",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/embeds.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/embeds.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
     },
     {
       "id": "DEV-ec1772bb1c78",
@@ -5962,8 +5977,12 @@
       "title": "footnoteRefs",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/footnoteRefs.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/footnoteRefs.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The audit observes a named reference ID, exact source position, exclusion of inline code and definition lines, and absence when none exist."
     },
     {
       "id": "DEV-eb5b4bb19c0b",
@@ -5973,8 +5992,12 @@
       "title": "footnotes",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/footnotes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/footnotes.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
     },
     {
       "id": "DEV-65524af420d7",
@@ -5984,8 +6007,12 @@
       "title": "frontmatter",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/frontmatter.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/frontmatter.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "YAML scalar/array properties, aliases, malformed YAML, and absent frontmatter are directly asserted. This does not verify frontmatterLinks or frontmatterPosition."
     },
     {
       "id": "DEV-fbca18774e8b",
@@ -5995,8 +6022,12 @@
       "title": "frontmatterLinks",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/frontmatterLinks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/frontmatterLinks.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
     },
     {
       "id": "DEV-2cd025271555",
@@ -6006,8 +6037,12 @@
       "title": "frontmatterPosition",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/frontmatterPosition.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/frontmatterPosition.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
     },
     {
       "id": "DEV-cbd02c61c60b",
@@ -6017,8 +6052,12 @@
       "title": "headings",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/headings.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/headings.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Heading text/levels, closing hashes and code exclusion are asserted; exact HeadingCache position spans remain unverified."
     },
     {
       "id": "DEV-3361879302ea",
@@ -6028,8 +6067,13 @@
       "title": "links",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/links.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/links.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
     },
     {
       "id": "DEV-1c9adcc843f7",
@@ -6039,8 +6083,13 @@
       "title": "listItems",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/listItems.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/listItems.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "tests/unit/list-items.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
     },
     {
       "id": "DEV-7869f2fc38c9",
@@ -6050,8 +6099,12 @@
       "title": "referenceLinks",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/referenceLinks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/referenceLinks.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
     },
     {
       "id": "DEV-2fee06feccfa",
@@ -6061,8 +6114,12 @@
       "title": "sections",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/sections.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/sections.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/list-items.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Root heading, paragraph, list, YAML and code section grouping/positions are observed. Callout/blockquote semantics from the pinned API example and other block forms remain unverified."
     },
     {
       "id": "DEV-eea9393d76ec",
@@ -6072,8 +6129,12 @@
       "title": "tags",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/tags.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/tags.md",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "YAML and inline tags, nested tags, numeric-only rejection and code exclusion are observed. Exact TagCache position semantics across frontmatter/body are not fully asserted."
     },
     {
       "id": "DEV-ead8dc91ba67",
@@ -18925,8 +18986,14 @@
       "title": "CachedMetadata",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "docs/spec/parity-api-audit-2026-10.md",
+        "tests/unit/parity-metadata-audit.test.ts",
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/list-items.test.ts"
+      ],
+      "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
     },
     {
       "id": "API-6a68cea124f8",
@@ -23540,8 +23607,12 @@
       "title": "CachedMetadata.blocks",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
     },
     {
       "id": "API-MEMBER-ec995522ee54",
@@ -23551,8 +23622,13 @@
       "title": "CachedMetadata.embeds",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
     },
     {
       "id": "API-MEMBER-307c0cc6c879",
@@ -23562,8 +23638,12 @@
       "title": "CachedMetadata.footnoteRefs",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The audit observes a named reference ID, exact source position, exclusion of inline code and definition lines, and absence when none exist."
     },
     {
       "id": "API-MEMBER-b814d289442c",
@@ -23573,8 +23653,12 @@
       "title": "CachedMetadata.footnotes",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
     },
     {
       "id": "API-MEMBER-c8c975fa15b1",
@@ -23584,8 +23668,12 @@
       "title": "CachedMetadata.frontmatter",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "verified",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "YAML scalar/array properties, aliases, malformed YAML, and absent frontmatter are directly asserted. This does not verify frontmatterLinks or frontmatterPosition."
     },
     {
       "id": "API-MEMBER-37a62532185d",
@@ -23595,8 +23683,12 @@
       "title": "CachedMetadata.frontmatterLinks",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
     },
     {
       "id": "API-MEMBER-1de2fffa3b60",
@@ -23606,8 +23698,12 @@
       "title": "CachedMetadata.frontmatterPosition",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "missing",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
     },
     {
       "id": "API-MEMBER-3e675579d038",
@@ -23617,8 +23713,12 @@
       "title": "CachedMetadata.headings",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Heading text/levels, closing hashes and code exclusion are asserted; exact HeadingCache position spans remain unverified."
     },
     {
       "id": "API-MEMBER-938987404f45",
@@ -23628,8 +23728,13 @@
       "title": "CachedMetadata.links",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
     },
     {
       "id": "API-MEMBER-a316e0e6cf63",
@@ -23639,8 +23744,13 @@
       "title": "CachedMetadata.listItems",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "tests/unit/list-items.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
     },
     {
       "id": "API-MEMBER-b2bcab4c7b0b",
@@ -23650,8 +23760,12 @@
       "title": "CachedMetadata.referenceLinks",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/parity-metadata-audit.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
     },
     {
       "id": "API-MEMBER-c6e74ea52a82",
@@ -23661,8 +23775,12 @@
       "title": "CachedMetadata.sections",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/list-items.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "Root heading, paragraph, list, YAML and code section grouping/positions are observed. Callout/blockquote semantics from the pinned API example and other block forms remain unverified."
     },
     {
       "id": "API-MEMBER-c3b9b84fc156",
@@ -23672,8 +23790,12 @@
       "title": "CachedMetadata.tags",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "unknown",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "tests/unit/metadata-cache.test.ts",
+        "docs/spec/parity-api-audit-2026-10.md"
+      ],
+      "notes": "YAML and inline tags, nested tags, numeric-only rejection and code exclusion are observed. Exact TagCache position semantics across frontmatter/body are not fully asserted."
     },
     {
       "id": "API-MEMBER-f2b839736f5a",
