@@ -49,7 +49,10 @@ test("a field refused during Reading replacement stays reachable until explicit 
     await expect.poll(() => fs.readFileSync(f.file, "utf8")).toContain("status: reading");
     expect(fs.readFileSync(f.file, "utf8")).toContain("Body\n");
     expect(await f.page.evaluate(() => (window as any).app.getActiveMarkdownView().mode)).toBe("reading");
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.page.evaluate(() => (window as any).__releasePropertiesFlush?.()).catch(() => {});
+    await f.cleanup();
+  }
 });
 test("accepted same-turn Reading edits publish the latest buffer and retain independent undo", async () => {
   const f = await fixture();

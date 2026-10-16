@@ -177,7 +177,7 @@ it("publishes accepted same-turn Reading property edits rather than cancelling t
   const second = owner.getText(); expect(owner.applySourceEdit(second, second.indexOf("one"), second.indexOf("one") + 3, "two", { allowReading: true })).toBe(true);
   await owner.readingRefreshInFlight.catch(() => {}); await new Promise(resolve => setImmediate(resolve));
   expect(owner.getText()).toContain("status: two");
-  expect((state.app as any).markdownRenderer.render).toHaveBeenCalledWith(expect.stringContaining("status: two"), expect.anything(), "Note.md", expect.anything(), expect.anything(), owner.sourceNavigation); state.view.onClose();
+  expect((state.app as any).markdownRenderer.render.mock.calls[0]?.slice(0, 6)).toEqual([expect.stringContaining("status: two"), expect.anything(), "Note.md", expect.anything(), expect.anything(), owner.sourceNavigation]); state.view.onClose();
 });
 
 it("Escape discards a rejected field explicitly without committing it after the native transition", async () => {
