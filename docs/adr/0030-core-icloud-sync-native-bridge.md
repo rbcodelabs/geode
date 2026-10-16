@@ -1,8 +1,24 @@
 # ADR-0030: Core iCloud Sync Over a Native Container Bridge (Electron + iOS)
 
 **Date:** 2026-10-15
-**Status:** Proposed
-**Supersedes (in part):** [ADR-0029](0029-icloud-drive-sync-provider-plugin.md) (placement and platform scope only; its provider semantics are kept)
+**Status:** Accepted for the points recorded under "Decisions taken (2026-10-15)" below. Everything else (the iOS plugin, mobile UI, the two-device gate) stays Proposed until its PR lands.
+**Supersedes:** [ADR-0029](0029-icloud-drive-sync-provider-plugin.md) (placement, platform scope and remote location; its provider semantics are kept)
+
+> **Reading guide.** The user decided the open questions on 2026-10-15. Where the body below still shows the original recommendation (M1 for the Mac, a frozen community plugin, a legacy Drive-folder mode, a migration banner), the "Decisions taken" section wins; the superseded text is marked inline and kept for the reasoning behind it.
+
+## Decisions taken (2026-10-15)
+
+Made by the user; they override the recommendations in the body.
+
+| # | Decision | Effect |
+|---|---|---|
+| 1 | **Container:** `iCloud.com.rbcodelabs.geode` on the existing App ID `com.rbcodelabs.geode`, team `6M8F464WCQ`. Remote root is `Documents/<name>/`; the Mac reads the on-disk mirror `~/Library/Mobile Documents/iCloud~com~rbcodelabs~geode/Documents/`. | Open question 1 = (a). The id is permanent once used. |
+| 2 | **Mac signing: add the iCloud entitlement and a Developer ID provisioning profile** (option M2's signing half, not M1's "no entitlement"). | PR 1 does **not** change signing or release config. The exact changes are listed in "Follow-up PR: Mac signing and release" below and are blocked on portal steps only the user can do. Until that PR ships, a signed release build has no entitlement, so the real container is reachable only if the mirror directory exists and macOS permits plain file access; the unsigned dev build and the E2E suite use the `GEODE_ICLOUD_BASE` override. |
+| 3 | **Community plugin `geode-icloud-sync` is removed outright** (it was never released and nobody uses it). | `packages/geode-icloud-sync`, its `build:icloud-sync`/`typecheck:icloud-sync` scripts and its docs pointers are deleted; ADR 0029 is Superseded by this ADR. **No migration code, no import of its `data.json`, no supersede rule in `PluginManager`, no migration banner.** Its logic and tests were ported into the core implementation. |
+| 4 | **No legacy location.** There is no `com~apple~CloudDocs/Geode` mode, no `location` setting and no "copy into container" action. | Open question 4 is moot. The path-derived legacy folder name from the plugin is gone too (nothing could have created it). |
+| 5 | **Core toggle `icloudSyncEnabled`, default off**, under Settings -> Core plugins, guarded by `HostCapabilities.icloudContainer` (true only on Electron macOS in PR 1). | Open question 5 = (a) without the migration banner. |
+
+Superseded by these decisions (kept below for the record): Decision items 3 and 4, "Option M1" as the recommendation, "What happens to `com~apple~CloudDocs/Geode`", section 2 "Migration from the community plugin", and PR 4's migration scope.
 
 ## Context
 
@@ -36,10 +52,10 @@ iOS cannot read `~/Library/Mobile Documents/com~apple~CloudDocs/Geode`: an iOS a
 Recommended (details and alternatives below):
 
 1. Introduce an optional host service `HostServices.icloudContainer` (type `IcloudContainerBridge`, `src/shared/icloud-container.ts`) made of **small, natively atomic primitives**. All sync *policy* (folder naming/selection, marker, op index, trash layout, conflict-copy heuristics, placeholder-to-`partial` mapping, scan assembly, capabilities) stays in one shared TypeScript provider that is the existing PR #381 logic re-pointed at the bridge.
-2. Both platforms address **the same remote**: the app's iCloud container `iCloud.com.rbcodelabs.geode`, subfolder `Documents/<remote folder name>/`. iOS uses the real container API; the Mac Electron app reads the same container's on-disk mirror `~/Library/Mobile Documents/iCloud~com~rbcodelabs~geode/Documents/<remote folder name>/` **directly with Node fs, with no iCloud entitlement or provisioning profile** (to be confirmed by a spike, see Decision 1). The Mac release process does not change.
-3. Ship it as a core plugin `IcloudSyncPlugin` (setting `icloudSyncEnabled`, default false), with its UI in the Core plugins tab, available only where `host.icloudContainer` exists. The old Mac-only `com~apple~CloudDocs/Geode` location is retained as a hidden "iCloud Drive folder (legacy)" location so existing remotes keep working, with a guided copy to the container.
-4. Supersede the community plugin in the host (skip loading `geode-icloud-sync` when the core plugin is enabled) and import its folder choice once.
-5. Land in four small PRs: (1) bridge interface + Electron impl + core move, (2) Swift plugin + iOS project wiring, (3) mobile UI/settings, (4) migration affordances and docs. Only PR 2 needs the user's Apple portal action.
+2. Both platforms address **the same remote**: the app's iCloud container `iCloud.com.rbcodelabs.geode`, subfolder `Documents/<remote folder name>/`. iOS uses the real container API; the Mac Electron app reads the same container's on-disk mirror `~/Library/Mobile Documents/iCloud~com~rbcodelabs~geode/Documents/<remote folder name>/` **directly with Node fs** ~~with no iCloud entitlement or provisioning profile~~ (superseded: Decision 2 adds the entitlement and a Developer ID profile in a follow-up PR; PR 1 reads the mirror with plain Node fs either way).
+3. Ship it as a core plugin `IcloudSyncPlugin` (setting `icloudSyncEnabled`, default false), with its UI in the Core plugins tab, available only where `host.icloudContainer` exists. ~~The old Mac-only `com~apple~CloudDocs/Geode` location is retained as a hidden legacy location.~~ (Superseded: no legacy location.)
+4. ~~Supersede the community plugin in the host and import its folder choice once.~~ (Superseded: the community plugin is deleted; no migration.)
+5. Land in small PRs: (1) bridge interface + Electron impl + core plugin (this PR), (2) Swift plugin + iOS project wiring, (3) mobile UI/settings, (4) docs. A separate **Mac signing and release** PR follows the user's portal steps. PR 2 and the signing PR both need the user's Apple portal action.
 
 ## 1. Platform-neutral bridge and the two implementations
 
@@ -125,7 +141,7 @@ What stays in TS (moved verbatim from `packages/geode-icloud-sync/src/provider.t
 | iOS entitlements (new `ios/App/App/App.entitlements`, referenced by `CODE_SIGN_ENTITLEMENTS`) | `com.apple.developer.icloud-container-identifiers` = [`iCloud.com.rbcodelabs.geode`]; `com.apple.developer.icloud-services` = [`CloudDocuments`]; `com.apple.developer.ubiquity-container-identifiers` = [`iCloud.com.rbcodelabs.geode`] | Certain these are required for the iOS ubiquity container. |
 | iOS `Info.plist` | `NSUbiquitousContainers` dict keyed by the container id with `NSUbiquitousContainerIsDocumentScopePublic = true`, `NSUbiquitousContainerSupportedFolderLevels = Any`, `NSUbiquitousContainerName = Geode` | Certain this makes the container appear in Files and Finder. The folder typically appears only after the container has content and the app has launched once on a signed-in device: **NOT VERIFIED**. |
 | Apple Developer portal | Enable the iCloud capability on App ID `com.rbcodelabs.geode` and create the container; then provisioning must be regenerated | **User action** (Open question 1). Whether CI's cloud-managed signing key (`-allowProvisioningUpdates`, Admin key) can enable the capability automatically: **NOT VERIFIED**, assume manual. |
-| Mac entitlement / profile | **None required in the recommended design** | Strong precedent (Obsidian's non-sandboxed Electron app reads `iCloud~md~obsidian/Documents` directly), but **a spike on the user's Mac is required** before PR 1 merges (below). |
+| Mac entitlement / profile | ~~None required in the recommended design~~ **Decision 2: add the iCloud entitlement and a Developer ID provisioning profile** (follow-up PR below; not part of PR 1) | (Original reasoning, superseded:) Strong precedent (Obsidian's non-sandboxed Electron app reads `iCloud~md~obsidian/Documents` directly), but **a spike on the user's Mac is required** before PR 1 merges (below). |
 
 #### The Mac Electron story
 
@@ -136,11 +152,13 @@ The Geode Mac app is Developer ID signed and not sandboxed, so it can read and w
 | **M1. Direct fs on the container's on-disk mirror, no entitlement (recommended)** | No portal work for the Mac; no profile in the release pipeline; zero risk of a mis-provisioned notarized build refusing to launch; reuses PR #381 code almost unchanged | The folder only exists on the Mac once the container exists in the user's iCloud (created by the iOS app with a public container, or by any Mac app owning it); coordination is uncoordinated fs like today; a TCC prompt may appear |
 | M2. Give the Mac app the iCloud entitlement + Developer ID provisioning profile, resolve the container via `NSFileManager` in a native helper | Mac becomes a first-class container owner (container exists without iOS, `NSFileCoordinator` available, closes the race window) | Restricted entitlements need an embedded provisioning profile; a mismatch makes the signed app **fail to launch** (AMFI) on every user's Mac; requires electron-builder `provisioningProfile`, separate helper-process entitlements, notarization re-test, and a native helper binary or Node addon |
 
-Recommendation M1 now, M2 as a later hardening phase if the spike or field data shows a need. Consequence to state to users: the Mac folder appears after Geode for iOS has been installed on a device with the same Apple ID and opened once (a TestFlight build counts); a Mac-only user with no iOS app gets the explicit `container-not-found` unavailable state with that explanation, and can keep using the legacy Drive-folder location.
+**Superseded by Decision 2:** the user chose to add the entitlement and profile, so the Mac gets the "container exists without iOS" property and a path to `NSFileCoordinator` later. PR 1 still ships plain Node `fs` access to the mirror (the native coordinated helper remains a later hardening phase), and nothing in PR 1 depends on the entitlement: the container directory simply has to exist. The original recommendation follows for the record. Recommendation M1 now, M2 as a later hardening phase if the spike or field data shows a need. Consequence to state to users: the Mac folder appears after Geode for iOS has been installed on a device with the same Apple ID and opened once (a TestFlight build counts); a Mac-only user with no iOS app gets the explicit `container-not-found` unavailable state with that explanation, and can keep using the legacy Drive-folder location.
 
 **Spike (required, cheap, user's Mac, before PR 1 merges):** with the iOS build from PR 2 installed (or an Obsidian-style public container for a throwaway id), confirm that (a) the Mac mirror directory appears, (b) the non-sandboxed notarized-style Electron app can create/read/rename/hardlink in it, (c) dot-folders (`.geode-sync`) sync both ways, (d) which TCC prompt appears. If (b) fails, fall back to M2 and re-order phasing.
 
 #### What happens to `com~apple~CloudDocs/Geode`
+
+> **Superseded by Decision 4 (2026-10-15): there is no legacy location and no migration.** The community plugin was never released, so no remote exists there. The analysis below is kept for the record.
 
 | Option | Pros | Cons |
 |---|---|---|
@@ -153,6 +171,8 @@ The location is a per-vault device setting `location: "container" | "drive-folde
 Guard: refuse to enable (or register) the provider when the local vault itself lies inside any `Mobile Documents` tree or, on iOS, is a ubiquitous item (a picker-selected iCloud Drive folder vault), because two sync engines on one folder is the failure mode ADR-0029 already forbids. The `splitICloudPlaceholders` path in `capacitor-host.ts` is the existing signal that iCloud-hosted iOS vaults are a real case.
 
 ## 2. Migration from the community plugin `geode-icloud-sync`
+
+> **Superseded by Decision 3 (2026-10-15): the community plugin is removed outright; there is no migration.** No supersede rule, no `data.json` import, no banner. Nothing below is implemented. The semantics it lists as "kept stable" (provider id `icloud`, path ids, revision format, marker/ops/trash layout) are still kept, because the remote format is shared with iOS. Kept for the record.
 
 Kept stable on purpose: provider id `icloud`, name, path-based entry ids, revision format, marker/ops/trash layout. This is what lets device-local baselines, cursors and journals (host-owned, keyed by provider/vault, not by plugin) continue to apply, so a migrated vault should preview as a no-op. That the baseline is keyed independent of the plugin owner is an assumption to be confirmed in PR 1 with a test.
 
@@ -178,19 +198,34 @@ Files:
 - `.../provider.ts`, `.../folders.ts` (moved from the package, `node:*` imports removed, path helpers pure; hashing/fs removed in favor of the bridge).
 - `.../folder-selection.ts` (`FolderSelection` over `bridge.listRoots/inspectRoot` + device state; pure, unit-testable).
 - `src/shared/icloud-container.ts` (interface + error types), `src/sync-node/icloud-container.ts`, `src/main/icloud-container-ipc.ts`, preload/`electron-host.ts`/`legacy-facade.ts`/`contracts.ts` wiring, `src/renderer/host/capacitor-host.ts` (JS side of the Swift plugin).
-- `packages/geode-icloud-sync/`: kept for one release as the frozen shim (or removed, per Open question 3); its fs code is superseded by `src/sync-node/icloud-container.ts`.
+- `packages/geode-icloud-sync/`: **deleted in PR 1** (Decision 3); its fs code is superseded by `src/sync-node/icloud-container.ts` and its policy and tests live in `src/renderer/internal-plugins/icloud-sync/` and `tests/unit/icloud-*`.
+
+#### Bridge interface as implemented in PR 1
+
+The pseudocode above was finalised as follows (`src/shared/icloud-container.ts` is the source of truth). Deviations, with reasons:
+
+- **Addressing:** every call takes a `root` (one folder under `Documents/`) and a `path` relative to it, so the bridge can confine symlinks to the root rather than just to `Documents/`. `""` is the root itself.
+- **`walk` is one call returning `{ entries, problems }`** (not an `AsyncIterable` of batches), because the Electron transport is request/response IPC. Batched/paged walking is deferred to the iOS plugin (PR 2) and can be added without changing the provider by paging inside the bridge wrapper; revisit if large vaults make a single reply too big. `walk` takes data-only skip rules (`skipNames`, `skipPrefixes`, `skipTopLevel`) so junk and `.geode-trash`/`.geode-sync` are never hashed, and `maxHashBytes` so oversize files are listed but never read.
+- **`stat` and `list` were added** (fresh, never-cached `stat` with revision; shallow `list`) in place of `inspectRoot`: marker/junk policy stays in TypeScript. `listRoots` stays.
+- **`beginWrite(root, path)` takes the destination** so the temp file is created beside it and the publish is one atomic rename. `commitWrite` preconditions are `{ absent: true }` (hard link, never replaces), `{ revision }` (re-hash and compare inside the critical section) or `{ any: true }` (marker and op records, which are ours alone).
+- **No trash primitive:** trash is a conditional `move` into `.geode-trash/<bucket>/<path>`, done by the provider.
+- **`watch`/`pendingUploadCount` are not implemented** in PR 1 (hints only; correctness comes from the next full scan).
+- **Errors** cross IPC as `{ code, message }` (`precondition-failed | not-found | unavailable | aborted | too-large | invalid-path | failed`) and are rebuilt as `IcloudBridgeError`; the provider maps them to `SyncPreconditionError`, `AbortError` and `RangeError`.
+- **Availability** is `unavailable` (never an empty snapshot) when the container or its `Documents/` directory is missing, with a reason (`icloud-drive-disabled`, `container-not-found`, `unsupported-platform`) and a user-facing message. The Electron bridge never creates the container, `Documents/` or anything above a root folder; `GEODE_ICLOUD_BASE` replaces the `Documents/` directory for tests and is the only way tests point it elsewhere.
+- **Hashing** of op keys and payloads in the provider uses WebCrypto; revisions (`mtime:size:sha256`) are computed natively and cached by `dev:ino:mtime:ctime:size`.
+- **Folder state** (the per-vault remote folder choice) is device-local (`host.deviceState`, key `plugin/icloud-sync/folders`), not a file in the vault.
 
 Settings and sync:
 
 - `AppSettings.icloudSyncEnabled: boolean`, default `false`, loaded like `slidesEnabled` (`saved.icloudSyncEnabled === true`); `syncIcloudSyncPlugin()` follows the existing unload/construct/load pattern and is called with the other `sync*Plugin()` calls near `app.ts:3654`. Unlike Slides it returns early (no provider) when `!this.host.icloudContainer`, and runs `availability()` lazily at `open()`, not at load.
 - Add `icloudContainer` to `HostCapabilities` (true on Electron-darwin and iOS native; false on browser, Electron non-darwin, Android) so UI does not probe an optional member.
-- Pre-condition ordering: it must be constructed before `pluginManager.initialize()` (as the other core plugins are) so the supersede check is deterministic.
+- Pre-condition ordering: it must be constructed before `pluginManager.initialize()` (as the other core plugins are). (The supersede check this originally served is gone with Decision 3; the ordering is kept for consistency.)
 
 Where the folder UI goes: **into the Core plugins tab** (recommended) rather than a `PluginSettingTab`. Every existing core plugin that has options renders them inside `renderCorePluginsTab` (note composer, web viewer); the plugin setting tab API is community-plugin machinery, and a second place for the same toggle would split the story. A new `renderIcloudSyncSettings(container)` section shows: enable toggle; availability line (signed in / container found / reason when unavailable); Remote folder name + Apply; existing marker-bearing folders dropdown; location selector (darwin, legacy only); the migration banner. The `GEODE_ICLOUD_BASE` override is kept (it replaces the container's `Documents` root and the legacy Drive root) for E2E.
 
 Mobile surface: `renderCorePluginsTab` is shared code, so the same section appears on iOS; the work is layout (touch targets, no hover), the platform-specific unavailable copy ("Sign in to iCloud and enable iCloud Drive for Geode in Settings"), and hiding the location selector. The sync status/preview/approval UI (Settings -> Sync) is the existing shared one.
 
-Guards via `host.capabilities.icloudContainer` and `host.runtime`: toggle hidden when false; legacy location visible only when `runtime.platform === "darwin"` and `runtime.runtime === "electron"`; "Copy into container" only on desktop; iOS never shows `brctl`-flavored copy.
+Guards via `host.capabilities.icloudContainer` and `host.runtime`: toggle hidden when false (the legacy-location and "Copy into container" controls this sentence once listed are dropped, Decision 4); iOS never shows `brctl`-flavored copy.
 
 ## 4. Testing strategy
 
@@ -199,7 +234,7 @@ Guards via `host.capabilities.icloudContainer` and `host.runtime`: toggle hidden
 | Unit: provider over a **fake bridge** | Port `tests/unit/icloud-sync-provider.test.ts` and `icloud-sync-folders.test.ts` to an in-memory `FakeIcloudBridge` (scripted availability, placeholders, conflicts, precondition failures, abort); same suite also runs against the real Node implementation on a temp dir (contract test shared by both) | `npm test` / `verify.yml` | Policy parity with #381, bridge contract, fail-closed paths |
 | Unit: Node bridge | `src/sync-node/icloud-container.ts` against temp dirs with simulated stubs and dataless files; crash/replay of the op index | CI (mac and linux where applicable) | Revision semantics, atomic conditional write, hard-link create |
 | Unit: core plugin | `syncIcloudSyncPlugin()` registers/unregisters, capability guard, supersede skip, community `data.json` import | `npm test` | Lifecycle and migration |
-| Electron E2E | Extend `tests/e2e/icloud-sync-settings.spec.ts`: no longer copies a plugin build; instead enable via the Core plugins toggle, with `GEODE_ICLOUD_BASE` pointing at a temp base; cover container and legacy locations, folder dropdown, Apply, refusals, and an end-to-end preview/sync round trip between two temp vaults on one base | `npm run e2e` | Real IPC, preload, UI, host registration, no real iCloud touched |
+| Electron E2E | `tests/e2e/icloud-sync-settings.spec.ts` (rewritten in PR 1): no plugin install; enable via the Core plugins toggle, with `GEODE_ICLOUD_BASE` pointing at a temp `Documents/`; folder dropdown, Apply, sanitising, refusals, activation through the real IPC bridge, toggle off, the unavailable-container message, and proof that the real container is untouched. macOS only (skips elsewhere). A two-vault preview/sync round trip is not yet covered | `npm run e2e` | Real IPC, preload, UI, host registration, no real iCloud touched |
 | Mobile web (Playwright mobile config) | Core plugins tab renders the section against a stub `host.icloudContainer`; unavailable copy; hidden legacy selector | existing `verify.yml` mobile job | Mobile layout and guards, **not** native behavior |
 | Swift analysis/build | `xcodebuild archive` already compiles the Swift in `ios-testflight.yml`; add a CI step (macOS runner) `xcodebuild build-for-testing -scheme App -destination 'generic/platform=iOS Simulator'` so Swift errors fail PRs, not tag builds | new job in `verify.yml` | Compiles, entitlements file well-formed |
 | XCTest | `GeodeIcloudContainerEngineTests` against a temp-directory root with a fake coordinator: revision computation, precondition failure, create-only collision, stub-name normalization, trash move, abort, path-escape rejection. Add to the existing test target alongside `GeodeKeychainStoreTests` | Simulator on a macOS runner (new CI job, minutes cost) or the local `ios-mvp-acceptance.sh` | Engine logic. **Does not** involve iCloud |
@@ -211,11 +246,12 @@ Guards via `host.capabilities.icloudContainer` and `host.runtime`: toggle hidden
 
 | PR | Scope | Verification | Release implication |
 |---|---|---|---|
-| **0 (spike, no PR)** | User's Mac: confirm container mirror access from a non-sandboxed Electron app; capture TCC behavior | Manual, recorded in the ADR | Decides M1 vs M2 |
-| **1. Bridge + Electron + core move** | `src/shared/icloud-container.ts`; Node impl + IPC + preload + host wiring; provider ported to the bridge; core plugin, `icloudSyncEnabled`, supersede rule, Core plugins UI, community-data import; default location **legacy Drive folder on Electron until the container exists** (so nothing regresses before PR 2); unit + extended Electron E2E | tsc, unit, Electron E2E, build | Ships in a normal signed/notarized desktop release. No entitlement or profile change. Zero iOS effect. Safe to merge before any portal work |
+| **0 (spike, no PR)** | User's Mac: confirm container mirror access from a non-sandboxed Electron app; capture TCC behavior | Manual, recorded in the ADR | Now informs how the Mac behaves before the signing PR; M2 was chosen regardless (Decision 2) |
+| **1. Bridge + Electron + core plugin** (this PR) | `src/shared/icloud-container.ts`; Node impl + IPC + preload + host wiring; provider ported to the bridge; core plugin, `icloudSyncEnabled`, Core plugins UI; community plugin deleted (Decision 3); `unavailable` with a clear message when the container is absent; unit (fake bridge and real Node bridge) + rewritten Electron E2E | tsc, unit, Electron E2E, build | Desktop release. **No entitlement or profile change in this PR** (see the follow-up below). Zero iOS effect. Safe to merge before any portal work; the feature reports `unavailable` until the container exists on the Mac |
 | **2. Swift plugin + iOS wiring** | `GeodeIcloudContainerPlugin.swift` + engine + XCTests; `App.entitlements`, `CODE_SIGN_ENTITLEMENTS`, `NSUbiquitousContainers`; JS `registerPlugin` in `capacitor-host.ts`; `host.icloudContainer` on native; CI Swift build job | Simulator XCTest, `xcodebuild` build, mobile Playwright with stub | **Needs the user's Apple Developer portal action first** (Open question 1) or the export step fails (provisioning lacks iCloud). Ships through `ios-testflight.yml` on an `ios-v*` tag (tag must match `package.json`); the first TestFlight build is also the build that creates the container, which the Mac spike and PR 3's real-device gate depend on |
 | **3. Mobile UI + container as default** | Core plugins section on mobile (layout, copy, unavailable states); container becomes the default location on Electron once the container is found; guards for iCloud-hosted vaults | Mobile Playwright, Electron E2E, then the two-device manual gate | Desktop release + a second TestFlight build. Beta caveat in-app until the manual gate is signed off |
-| **4. Migration affordances + docs** | "Copy remote into container" action, switch banner, deprecate community plugin (final 0.2.0), update `plugin-sync-api.md` and the README, supersede ADR-0029 placement text | Unit + E2E for the copy action | Desktop release |
+| **4. Docs** | ~~Copy-remote action, switch banner, deprecate community plugin~~ (dropped, Decisions 3 and 4). `plugin-sync-api.md` and ADR 0029 were updated in PR 1 | n/a | Desktop release |
+| **Mac signing and release** (separate PR, after portal steps) | See "Follow-up PR: Mac signing and release" | Notarized build launches; entitlement and profile verified in `release.yml` | Changes the signed Mac release process |
 | *Later (optional)* | Mac M2 hardening: native `NSFileCoordinator` helper + entitlement/profile; native `NSFileVersion` conflict resolution; background refresh on iOS | Separate ADR | Changes the signed Mac release process, hence its own decision |
 
 Each PR keeps the ADR-0029 beta posture (disposable vault copies, do not combine with another sync engine on the folder, no recommendation until the two-device soak passes).
@@ -248,12 +284,56 @@ Each PR keeps the ADR-0029 beta posture (disposable vault copies, do not combine
 
 ## Open questions for the user
 
+**Answered 2026-10-15:** Q1 = (a); Q2 = (b) add the entitlement and a Developer ID profile (follow-up PR below); Q3 = (c) remove outright; Q4 = drop it, and with nothing to migrate there is no guided copy either; Q5 = (a) without the migration banner. **Q6 (Xcode CI cost) is still open** and belongs to PR 2. The original wording follows.
+
 1. **Apple identifiers and portal action (blocks PR 2).** Which container id should be created? (a) `iCloud.com.rbcodelabs.geode` on the existing App ID `com.rbcodelabs.geode`, team `6M8F464WCQ` (recommended; matches the bundle id and the Electron `appId`); (b) a separate shared id such as `iCloud.com.rbcodelabs.geode.sync` (only if you want the container decoupled from the bundle id; the id is permanent either way); (c) not yet, hold iOS and ship PR 1 only. If (a) or (b): you must enable the iCloud capability (iCloud Documents) and create the container in the Developer portal, or tell me to try letting the Admin App Store Connect key do it via `-allowProvisioningUpdates`.
 2. **Mac signing strategy.** (a) Direct filesystem access with no iCloud entitlement, pending the spike (recommended); (b) add the iCloud entitlement and a Developer ID provisioning profile to the Mac build now (adds launch-failure risk and a profile to maintain); (c) decide after the spike. Also: can you run the spike on your Mac once the first iCloud-enabled TestFlight build has been opened on a device?
 3. **Community plugin `geode-icloud-sync`.** (a) Freeze it with a final deprecation release and supersede it in the host (recommended); (b) keep maintaining it in parallel; (c) remove it outright in the same release as the core plugin (only safe if no one but you has installed it).
 4. **Legacy Drive-folder location on the Mac.** (a) Keep it as a hidden legacy mode plus a guided copy into the container (recommended); (b) drop it and require everyone to migrate; (c) keep it as the Mac default and make the container opt-in (iOS then cannot join the default remote).
 5. **Core toggle default and rollout.** (a) `icloudSyncEnabled` default off, with an in-app migration banner for vaults that have the community plugin enabled (recommended); (b) auto-enable for those vaults on upgrade; (c) ship hidden behind a developer flag until the two-device soak passes.
 6. **CI cost.** (a) Add an Xcode `build-for-testing` plus XCTest job on a macOS runner to `verify.yml` for PRs touching `ios/**` (recommended); (b) keep Swift tests local-only via `ios-mvp-acceptance.sh`, accepting that Swift breakage is found at tag time.
+
+## Follow-up PR: Mac signing and release (NOT in PR 1)
+
+PR 1 deliberately changes no signing or release configuration. This section is the checklist for the separate PR that does, written so it can be executed once the user has finished the portal steps. Items marked **UNVERIFIED** are my understanding of Apple's rules and must be checked against Apple's documentation or a test build before they are relied on; none of this has been run.
+
+### A. Portal steps (user only; blocks the PR)
+
+1. developer.apple.com -> Certificates, Identifiers & Profiles -> Identifiers -> iCloud Containers: register `iCloud.com.rbcodelabs.geode`. **The id cannot be renamed once created.**
+2. Identifiers -> App IDs -> `com.rbcodelabs.geode` (team `6M8F464WCQ`): enable the **iCloud** capability (iCloud Documents / container storage; CloudKit is not needed) and assign the container from step 1. Make sure the App ID covers macOS as well as iOS.
+3. Expect existing provisioning profiles for this App ID to be invalidated by the capability change. iOS (`ios-testflight.yml`, cloud-managed signing with `-allowProvisioningUpdates`) should regenerate its own; whether the App Store Connect API key can do that unattended is **UNVERIFIED**. This matters to PR 2, not to the Mac.
+4. Profiles -> Distribution -> **Developer ID** (macOS): create a profile for App ID `com.rbcodelabs.geode` using the existing Developer ID Application certificate, and download the `.provisionprofile`. Note its expiry date and add a calendar reminder; an expired or mismatched profile makes the signed app fail to launch (AMFI) on users' Macs.
+5. Store the profile in CI as a base64 secret (for example `MAC_PROVISIONING_PROFILE_BASE64`). Do not commit it.
+
+### B. Entitlement keys for the main app executable (`build/entitlements.mac.plist`)
+
+Add to the existing `allow-jit` and `audio-input` entries (all **UNVERIFIED** until a signed build launches):
+
+| Key | Value |
+|---|---|
+| `com.apple.application-identifier` | `6M8F464WCQ.com.rbcodelabs.geode` |
+| `com.apple.developer.team-identifier` | `6M8F464WCQ` |
+| `com.apple.developer.icloud-container-identifiers` | `[iCloud.com.rbcodelabs.geode]` |
+| `com.apple.developer.icloud-services` | `[CloudDocuments]` |
+| `com.apple.developer.ubiquity-container-identifiers` | `[iCloud.com.rbcodelabs.geode]` |
+
+Keep these keys out of `build/entitlements.mac.inherit.plist` (helper processes): restricted entitlements must match the embedded profile and belong on the main executable only (**UNVERIFIED**). The values must be exactly what the profile grants, or AMFI refuses to launch the app.
+
+### C. electron-builder `mac` config (`package.json` -> `build.mac`)
+
+- Add `"provisioningProfile": "build/embedded.provisionprofile"` (electron-builder embeds it as `Contents/embedded.provisionprofile`). Decode the CI secret to that path before packaging; keep the file git-ignored.
+- Keep `hardenedRuntime: true`, `notarize: true` and the existing `entitlements`/`entitlementsInherit` split. No new `extendInfo` keys are required for the Mac.
+- Do not add the `com.apple.security.app-sandbox` entitlement; Geode stays unsandboxed.
+
+### D. `.github/workflows/release.yml`
+
+- Decode the profile secret to `build/embedded.provisionprofile` in the "Package, sign, notarize, and staple" step and add it to the required-secrets loop.
+- Extend `verify_app` so a build without the capability, or with a profile that does not match, fails the release: assert the five keys above appear in `codesign -d --entitlements :-`, assert `Contents/embedded.provisionprofile` exists and `security cms -D -i` of it contains `iCloud.com.rbcodelabs.geode`, and keep the existing forbidden-entitlement list unchanged.
+- Gate: a notarized build must launch on a clean Mac (not just pass `spctl`) before the release is published. Launch failure from a bad profile is the main risk of this change.
+
+### E. Verification the follow-up PR must report
+
+On a real Mac signed in to the Apple ID: the signed, notarized app launches; `codesign -d --entitlements` shows the keys; the container appears at `~/Library/Mobile Documents/iCloud~com~rbcodelabs~geode/Documents/` without iOS involved; enabling iCloud sync in Core plugins moves from `unavailable` to a usable remote. Real two-device propagation is separate and stays in the manual gate.
 
 ## Appendix: implementation plan (for the engineer)
 
@@ -263,7 +343,7 @@ Each PR keeps the ADR-0029 beta posture (disposable vault copies, do not combine
    2. Move `provider.ts`/`folders.ts` into `src/renderer/internal-plugins/icloud-sync/`; replace `node:fs/crypto/child_process` use with bridge calls; keep the exported constants and error codes unchanged.
    3. Implement `src/sync-node/icloud-container.ts`; add IPC (`icloud-container`, `icloud-container-abort`, watch events), preload object, `electron-host.ts`, `legacy-facade.ts`, `contracts.ts` (`icloudContainer?`, `HostCapabilities.icloudContainer`).
    4. Add `IcloudSyncPlugin`, `icloudSyncEnabled` (type, default, load, save), `syncIcloudSyncPlugin()` and its call site, `renderIcloudSyncSettings`.
-   5. Add the supersede rule in `PluginManager` and the community-`data.json` import.
+   5. ~~Add the supersede rule in `PluginManager` and the community-`data.json` import.~~ Dropped (Decision 3): delete `packages/geode-icloud-sync` instead.
    6. Port unit tests; extend `tests/e2e/icloud-sync-settings.spec.ts`; run tsc, unit, the narrow E2E (homelab/`tq` first per machine-capacity rules), build.
 3. **PR 2 (iOS):** after the portal action, add `App.entitlements`, `NSUbiquitousContainers`, `GeodeIcloudContainerPlugin.swift` + `IcloudContainerEngine` + XCTests, JS registration; add the Xcode build CI job; cut an `ios-v*` TestFlight build; run the manual real-device checks and record results here.
 4. **PR 3 / PR 4:** as in the phasing table; update this ADR's status to Accepted only after the two-device gate passes, and record the NOT VERIFIED items that remain.

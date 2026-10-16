@@ -1,5 +1,6 @@
 import type { GeodeApi } from "../../main/preload";
 import { vaultRefreshFailure } from "../../shared/vault-refresh";
+import { createIpcIcloudBridge } from "../../shared/icloud-container";
 import type { HostServices, VaultFileEntry } from "./contracts";
 
 export type ElectronPreloadApi = Pick<GeodeApi,
@@ -14,7 +15,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent" | "onAgentBrowserWindowOpen"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "icloudContainer" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 >>;
@@ -29,6 +30,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       onPrepare: handler => preload.onSyncPrepare!(handler), onRelease: handler => preload.onSyncRelease!(handler),
     } : undefined,
     ...(preload.hubSync ? { hubSync: preload.hubSync } : {}),
+    ...(preload.icloudContainer ? { icloudContainer: createIpcIcloudBridge(preload.icloudContainer) } : {}),
     network: {
       request: async (input, signal) => {
         if (!preload.httpRequest) throw new Error("Host networking unavailable");
@@ -52,6 +54,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       processDiagnostics: true,
       chromeCookieImport: true,
       artifacts: true,
+      icloudContainer: Boolean(preload.icloudContainer),
     }),
     runtime: {
       runtime: "electron",

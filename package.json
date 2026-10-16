@@ -35,8 +35,6 @@
     "benchmark:offset-to-loc": "node scripts/run-offset-to-loc-benchmark.mjs",
     "build": "node esbuild.config.mjs",
     "build:cli": "node scripts/build-cli.mjs",
-    "build:icloud-sync": "node packages/geode-icloud-sync/build.mjs",
-    "typecheck:icloud-sync": "tsc --noEmit -p packages/geode-icloud-sync/tsconfig.json",
     "build:mobile": "node esbuild.config.mjs --mobile-only",
     "ios:version": "node scripts/ios-version.mts",
     "ios:sync": "npm run ios:version && npm run build:mobile && cap sync ios",
