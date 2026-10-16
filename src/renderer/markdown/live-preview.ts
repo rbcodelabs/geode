@@ -1,3 +1,4 @@
+import type { BackgroundVisibility } from "../workspaces/background-visibility";
 import { bindSourceLinkNavigation, type SourceOwnedNavigation } from "./source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope } from "../workspaces/render-ownership";
 import {
@@ -719,7 +720,7 @@ class EmbedWidget extends WidgetType {
      */
     private getLeaf: () => WorkspaceLeaf | null,
     private owner?: RenderScope,
-    private navigation?: SourceOwnedNavigation
+    private navigation?: SourceOwnedNavigation, private backgroundVisibility?: BackgroundVisibility
   ) {
     super();
   }
@@ -763,7 +764,7 @@ class EmbedWidget extends WidgetType {
         root.textContent = `Recursive Canvas embed: ${file.basename}`;
         return root;
       }
-      const canvas = new CanvasView(this.app, scope, this.navigation);
+      const canvas = new CanvasView(this.app, scope, this.navigation, this.backgroundVisibility);
       this.canvasView = canvas;
       canvas.markEmbedded();
       canvas.onOpen();
@@ -824,7 +825,7 @@ class EmbedWidget extends WidgetType {
       root.appendChild(title);
       root.appendChild(content);
       this.app.markdownRenderer
-        .renderNoteEmbed(file, resolved.subpath, this.sourcePath, content, this.getLeaf, scope, this.navigation)
+        .renderNoteEmbed(file, resolved.subpath, this.sourcePath, content, this.getLeaf, scope, this.navigation, this.backgroundVisibility)
         .then(() => { if (!this.destroyed) view.requestMeasure(); })
         .catch(error => { if (!this.destroyed && !(error instanceof ScopeCancelled)) content.textContent = "Unable to load note."; });
       return root;
@@ -1156,7 +1157,7 @@ export function livePreview(
   getPath: () => string,
   getLeaf: () => WorkspaceLeaf | null = () => null,
   renderOwner?: RenderScope,
-  navigation?: SourceOwnedNavigation
+  navigation?: SourceOwnedNavigation, backgroundVisibility?: BackgroundVisibility
 ): Extension {
   const hide = Decoration.replace({});
 
@@ -1464,7 +1465,7 @@ export function livePreview(
             // giving it block layout — the same technique HRWidget already
             // uses for full-line widgets in this file.
             const isBlock = (resolved.kind === "note" || resolved.kind === "canvas") && wholeLine;
-            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock, getLeaf, renderOwner, navigation);
+            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock, getLeaf, renderOwner, navigation, backgroundVisibility);
             decos.push(
               Decoration.replace({ widget }).range(isBlock ? line.from : start, isBlock ? line.to : end)
             );

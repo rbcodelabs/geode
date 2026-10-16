@@ -1,4 +1,5 @@
 import { PropertyTypes } from "../../src/renderer/properties/property-types";
+import { BackgroundVisibility } from "../../src/renderer/workspaces/background-visibility";
 import { afterEach, expect, it, vi } from "vitest";
 import { App } from "../../src/renderer/app";
 import { BaseView } from "../../src/renderer/views/base-view";
@@ -204,4 +205,24 @@ it("non-transforming side observers preserve the exact paused Promise used by th
   };
   await f.prepare("one", "Source.md"); await f.blur(); expect(returned).toBe(actual);
   await f.finish("one"); await tick(); expect(f.input.focus).toHaveBeenCalledTimes(1); expect(f.modify).not.toHaveBeenCalled();
+});
+
+it("background hide before actual App guard admission creates no A47 save attempt or refocus", async () => {
+  const f = await fixture(); const visibility = new BackgroundVisibility(() => () => true);
+  visibility.register(() => f.base.captureBackgroundEdit());
+  f.table.callbacks.preserveBackgroundBlur = (input: HTMLInputElement) => visibility.preserves(input);
+  const done = visibility.beginHide(f.base.containerEl); await f.blur(); done();
+  await f.prepare("hide-first", "Source.md"); await f.finish("hide-first"); await tick();
+  expect(f.modify).not.toHaveBeenCalled(); expect(f.base.sourceEdit.rawText).toBe("9");
+  expect(f.input.focus).not.toHaveBeenCalled(); visibility.reveal();
+});
+it("actual App guard before a hidden owner preserves A47 pause semantics without restoring the hidden input", async () => {
+  const f = await fixture(); await f.prepare("sync-first", "Source.md");
+  const visibility = new BackgroundVisibility(() => () => true); visibility.register(() => f.base.captureBackgroundEdit());
+  f.table.callbacks.preserveBackgroundBlur = (input: HTMLInputElement) => visibility.preserves(input);
+  const done = visibility.beginHide(f.base.containerEl); await f.blur(); done();
+  f.workspace.activeLeaf = { view: null };
+  await f.finish("sync-first"); await tick();
+  expect(f.modify).not.toHaveBeenCalled(); expect(f.base.sourceEdit.rawText).toBe("9");
+  expect(f.input.focus).not.toHaveBeenCalled(); visibility.reveal();
 });
