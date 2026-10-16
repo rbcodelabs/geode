@@ -34,6 +34,13 @@ jobs:
         run: npm run proof:local-wiki
       - name: Unit, build and Electron regression gate
         run: npm test
+      - name: Upload desktop Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-playwright-results
+          path: test-results/
+          retention-days: 7
 
   mobile:
     # Keeps the mobile renderer suite (tests/mobile) from drifting away from the
