@@ -643,6 +643,10 @@ struct IcloudContainerEngine {
     }
 
     private func replace(_ destination: URL, with temp: URL) throws {
+        // Never swap a folder (or symlink/special file) for file bytes: replaceItemAt would delete the whole subtree.
+        if let info = try lstatInfo(destination), !info.isRegular {
+            throw IcloudBridgeFailure.precondition("\(destination.lastPathComponent) is not a regular file")
+        }
         do { _ = try FileManager.default.replaceItemAt(destination, withItemAt: temp) }
         catch { throw IcloudBridgeFailure.failed("Could not replace \(destination.lastPathComponent): \(error.localizedDescription)") }
     }

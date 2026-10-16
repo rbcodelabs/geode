@@ -302,6 +302,20 @@ final class IcloudContainerEngineTests: XCTestCase {
         XCTAssertEqual(leftoverTempFiles(), [])
     }
 
+    func testUnconditionalWriteNeverReplacesAFolderWithAFile() throws {
+        try put("data/keep.md", "keep")
+        XCTAssertThrowsError(try write("data", "oops", .any))
+        XCTAssertEqual(try text("data/keep.md"), "keep", "a folder with content must survive a file publish")
+        XCTAssertEqual(leftoverTempFiles(), [])
+    }
+
+    func testRevisionWriteNeverReplacesAFolderWithAFile() throws {
+        try put("data/keep.md", "keep")
+        XCTAssertThrowsError(try write("data", "oops", .revision(IcloudContainerEngine.folderRevision)))
+        XCTAssertEqual(try text("data/keep.md"), "keep")
+        XCTAssertEqual(leftoverTempFiles(), [])
+    }
+
     func testChunkedAppendAssemblesInOrderAndDiscardRemovesTheStagedFile() throws {
         let handle = try engine.beginWrite(root: root, path: "chunked.md")
         try engine.appendChunk(handle: handle, data: Data("hel".utf8))

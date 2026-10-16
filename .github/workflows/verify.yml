@@ -111,4 +111,6 @@ jobs:
             -destination "platform=iOS Simulator,id=$udid" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -only-testing:AppUITests/IcloudContainerEngineTests \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/engine-tests.log"
+          # Fail if the filter matched nothing (xcodebuild can exit 0 with zero tests).
+          grep -Eq "Executed [1-9][0-9]* tests?, with 0 failures" "$RUNNER_TEMP/engine-tests.log"
