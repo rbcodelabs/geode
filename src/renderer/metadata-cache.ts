@@ -50,6 +50,15 @@ function yieldToEventLoop(): Promise<void> {
  * each batch's synchronous-parse jank window bigger. */
 export const INDEX_CONCURRENCY = 16;
 export const METADATA_CACHE_SCHEMA_VERSION = METADATA_INDEX_SCHEMA_VERSION;
+/**
+ * Stamp on every renderer-written persisted cache. Bump it whenever the output
+ * of `parseMetadata` or `extractMentionIndexKeys` changes for the same input
+ * (tests/unit/metadata-parser-fingerprint.test.ts fails until you do), so a
+ * newer build re-parses instead of trusting rows an older parser produced.
+ * A snapshot with no stamp (written before the stamp existed, or by the
+ * desktop utility process) is accepted as the baseline version 1.
+ */
+export const METADATA_PARSER_VERSION = 2;
 
 function toLinkRecord(counts: Map<string, number>): Record<string, number> {
   const record: Record<string, number> = Object.create(null);
@@ -673,6 +682,25 @@ export class MetadataCache extends Events {
   private backgroundRefreshRunning = false;
   private backgroundRefreshPending = false;
   private backgroundUnavailable = false;
+  /**
+   * True when the cache restored at `initialize()` is exactly the vault's
+   * current markdown set (every file a stat-matching hit, no extra rows), so a
+   * pass that parsed nothing has nothing new to persist. Unknown (false) for
+   * hosts that stream the cache in pages.
+   */
+  private persistedCacheInSync = false;
+  /**
+   * Vault events before the first `initialize()` are not queued. `Vault.open`
+   * announces every existing file as a `create`, and that burst used to start
+   * a second full-vault read and parse that ran next to the persisted-cache
+   * restore (and re-fired `changed` for every note). `initialize()` snapshots
+   * the vault's files when it starts and indexes all of them, so anything
+   * that happened earlier is already covered; events after that point flow
+   * through the incremental path as before.
+   */
+  private initializeStarted = false;
+  /** Paths an in-flight `flush()` is still reading; their cache row may lag the file's current stat. */
+  private flushingPaths = new Set<string>();
   /** Why `backgroundUnavailable` was set — surfaced to diagnostic.log when `applyRendererFallback` runs. */
   private backgroundUnavailableReason: string | null = null;
   private backgroundTask: Promise<void> = Promise.resolve();
@@ -708,7 +736,9 @@ export class MetadataCache extends Events {
       const api = typeof window === "undefined" ? undefined : window.geode;
       if (!api?.readMetadataCache) return null;
       const value = await api.readMetadataCache();
-      return isPersistedMetadataIndexSnapshot(value) ? value : null;
+      if (!isPersistedMetadataIndexSnapshot(value)) return null;
+      const stamp = (value as { parserVersion?: unknown }).parserVersion;
+      return stamp === undefined || stamp === METADATA_PARSER_VERSION ? value : null;
     } catch {
       return null;
     }
@@ -793,7 +823,7 @@ export class MetadataCache extends Events {
 
         for (const file of files) {
           const metadata = this.cache.get(file.path);
-          if (!metadata) continue;
+          if (!metadata || this.isCacheRowPending(file.path)) continue;
           const entry: PersistedMetadataEntry = {
             mtimeMs: file.mtime,
             size: file.size,
@@ -820,7 +850,7 @@ export class MetadataCache extends Events {
       const entries: Record<string, PersistedMetadataEntry> = {};
       for (const file of files) {
         const metadata = this.cache.get(file.path);
-        if (metadata) {
+        if (metadata && !this.isCacheRowPending(file.path)) {
           entries[file.path] = {
             mtimeMs: file.mtime,
             size: file.size,
@@ -829,10 +859,20 @@ export class MetadataCache extends Events {
           };
         }
       }
-      await api.writeMetadataCache({ schemaVersion: METADATA_CACHE_SCHEMA_VERSION, entries });
+      await api.writeMetadataCache({ schemaVersion: METADATA_CACHE_SCHEMA_VERSION, parserVersion: METADATA_PARSER_VERSION, entries });
     } catch (error) {
       console.error("Failed to persist metadata cache", error);
     }
+  }
+
+  /**
+   * A row is only persisted with the file's current mtime/size when its
+   * metadata is known to describe that stat. A path with a queued or in-flight
+   * incremental update may not be, and warm start trusts a stat-matching row,
+   * so it is left out (a missing row simply re-parses next launch).
+   */
+  private isCacheRowPending(path: string): boolean {
+    return this.dirty.has(path) || this.flushingPaths.has(path);
   }
 
   private removeMentionSourceFromReverseIndex(path: string, keys: string[]): void {
@@ -896,16 +936,23 @@ export class MetadataCache extends Events {
 
   constructor(private vault: Vault) {
     super();
-    vault.on("create", (f: TFile) => this.enqueue(f, false, true, !(this.backgroundIndexerActive && f?.extension === "md")));
+    vault.on("create", (f: TFile) => {
+      if (this.initializeStarted) this.enqueue(f, false, true, !(this.backgroundIndexerActive && f?.extension === "md"));
+    });
     vault.on("modify", (f: TFile) => {
+      if (!this.initializeStarted) return;
       // Markdown and Canvas are renderer metadata sources. Other file
       // modifies are content-only with unchanged names and remain ignored.
       if (f?.kind === "file" && (f.extension === "md" || f.extension === "canvas")) {
         this.enqueue(f, true, true, f.extension === "canvas" || !this.backgroundIndexerActive);
       }
     });
-    vault.on("delete", (f: TFile) => this.enqueue(f, true, false, !(this.backgroundIndexerActive && f?.extension === "md")));
-    vault.on("rename", (f: TFile, oldPath: string) => this.enqueueRename(f, oldPath));
+    vault.on("delete", (f: TFile) => {
+      if (this.initializeStarted) this.enqueue(f, true, false, !(this.backgroundIndexerActive && f?.extension === "md"));
+    });
+    vault.on("rename", (f: TFile, oldPath: string) => {
+      if (this.initializeStarted) this.enqueueRename(f, oldPath);
+    });
     // See unlinkedMentionsCache's doc comment: "resolved" alone is sufficient invalidation.
     this.on("resolved", () => {
       this.unlinkedMentionsEpoch += 1;
@@ -1042,6 +1089,7 @@ export class MetadataCache extends Events {
     const pendingDeleted = this.pendingDeleted;
     this.pendingDeleted = new Map();
     if (dirty.size === 0) return;
+    for (const path of dirty.keys()) this.flushingPaths.add(path);
 
     // Paths whose content read failed this flush — excluded from the index
     // update AND from `changed` firing (a read failure is a no-op, matching
@@ -1166,6 +1214,8 @@ export class MetadataCache extends Events {
 
     });
 
+    for (const path of dirty.keys()) this.flushingPaths.delete(path);
+
     // Fire `changed` once per changed file (skipping reads that failed), so
     // BaseView per-file semantics + the public plugin contract are preserved.
     for (const file of pendingChanged.values()) {
@@ -1178,6 +1228,7 @@ export class MetadataCache extends Events {
   }
 
   async initialize(): Promise<void> {
+    this.initializeStarted = true;
     let attemptedBackground = false;
     let completePersistedMentionIndex = false;
     let recoverPagedMisses: (() => Promise<void>) | undefined;
@@ -1215,6 +1266,7 @@ export class MetadataCache extends Events {
         this.mentionKeysBySource.clear();
         this.mentionIndexReady = false;
         if (paged) await this.hydratePersistedPages();
+        let persistedHits = 0;
         const toRead: TFile[] = [];
         const deferredMisses: TFile[] = [];
         for (const file of markdownFiles) {
@@ -1222,10 +1274,15 @@ export class MetadataCache extends Events {
           if (entry && entry.mtimeMs === file.mtime && entry.size === file.size) {
             this.cache.set(file.path, entry.metadata);
             if (entry.mentionKeys) this.setMentionSourceKeys(file.path, entry.mentionKeys);
+            persistedHits += 1;
           } else if ((!attemptedBackground || paged) && !this.cache.has(file.path)) {
             (paged && attemptedBackground ? deferredMisses : toRead).push(file);
           }
         }
+        this.persistedCacheInSync = !paged && !!persisted &&
+          persistedHits === markdownFiles.length &&
+          Object.keys(persisted.entries).length === persistedHits &&
+          markdownFiles.every((file) => !!persisted.entries[file.path]?.mentionKeys);
         // Canvas projection is renderer-only and intentionally never enters the
         // utility-process or persisted Markdown cache schema.
         toRead.push(...canvasFiles);
@@ -1375,25 +1432,37 @@ export class MetadataCache extends Events {
     this.backgroundUnavailableReason = null;
     const api = typeof window === "undefined" ? undefined : window.geode;
     void api?.reportMetadataFallback?.({ reason, fileCount: files.length })?.catch(() => {});
+    // Files restored from the persisted cache at initialize() were validated
+    // there against the file's current mtime and size, and live edits since
+    // then flow through the incremental path, so a row that is present (with
+    // its mention keys) is trusted and the file is not read again. Only new,
+    // changed (stat mismatch) or incompletely-cached files are parsed.
+    const stale = files.filter((file) => !this.cache.has(file.path) || !this.mentionKeysBySource.has(file.path));
     this.mentionIndexReady = false;
     this.mentionSourcesByKey.clear();
-    await processInBatches(files, INDEX_CONCURRENCY, async (file) => {
+    let parsed = 0;
+    await processInBatches(stale, INDEX_CONCURRENCY, async (file) => {
       try {
         const content = await this.vault.cachedRead(file);
         this.cache.set(file.path, parseMetadata(content, this.scanCapBytes));
         this.setMentionSourceKeys(file.path, extractMentionIndexKeys(content));
+        parsed += 1;
       } catch (err) {
         if (!isBenignEnoent(err)) console.error(`Failed to index ${file.path}`, err);
       }
     });
     await yieldToEventLoop();
-    this.rebuildNameIndex();
-    this.resolveAll();
-    await processInBatches(files.filter((file) => this.cache.has(file.path)), 50, async (file) => {
-      this.trigger("resolve", file);
-    });
+    // Nothing parsed means the name index and link resolution that
+    // initialize() derived from the cache are already complete.
+    if (parsed > 0) {
+      this.rebuildNameIndex();
+      this.resolveAll();
+      await processInBatches(files.filter((file) => this.cache.has(file.path)), 50, async (file) => {
+        this.trigger("resolve", file);
+      });
+    }
     await this.rebuildMentionIndex();
-    await this.persistCache();
+    if (parsed > 0 || stale.length > 0 || !this.persistedCacheInSync) await this.persistCache();
   }
 
   /** Add a present file's basename/name (+ alias) keys to the name index. */
