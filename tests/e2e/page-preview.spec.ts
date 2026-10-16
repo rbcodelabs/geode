@@ -7,7 +7,7 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const platformModifier: "Meta" | "Control" = process.platform === "darwin" ? "Meta" : "Control";
 const wrongPlatformModifier: "Meta" | "Control" = platformModifier === "Meta" ? "Control" : "Meta";
 
-function fixture(): { vaultDir: string; userDataDir: string } {
+function fixture(withLifecyclePlugin = false): { vaultDir: string; userDataDir: string } {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-page-preview-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-page-preview-user-"));
   fs.mkdirSync(path.join(vaultDir, "Folder"), { recursive: true });
@@ -62,6 +62,37 @@ function fixture(): { vaultDir: string; userDataDir: string } {
   fs.writeFileSync(path.join(vaultDir, "Fast.md"), "# Fast\nFresh fast content.");
   fs.writeFileSync(path.join(vaultDir, "Reject.md"), "# Reject\nRenderer rejection content.");
   fs.writeFileSync(path.join(vaultDir, "Other.md"), "# Other\nNo previews here.");
+  if (withLifecyclePlugin) {
+    const pluginDir = path.join(vaultDir, ".geode", "plugins", "preview-lifecycle-proof");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "manifest.json"), JSON.stringify({ id: "preview-lifecycle-proof", name: "Preview lifecycle proof", version: "1.0.0", minAppVersion: "0.1.0", description: "Synthetic preview cleanup fixture", author: "Geode tests" }));
+    fs.writeFileSync(path.join(vaultDir, ".geode", "plugins.json"), JSON.stringify(["preview-lifecycle-proof"]));
+    fs.writeFileSync(path.join(pluginDir, "main.js"), `
+      const { Plugin, MarkdownRenderChild } = require('geode');
+      module.exports.default = class extends Plugin {
+        onload() {
+          const ledger = window.previewLifecycle = { children: [], active: new Set(), settled: [] };
+          this.registerMarkdownPostProcessor((el, ctx) => {
+            if (!el.classList.contains('page-preview-content')) return;
+            const kind = ctx.sourcePath === 'Slow.md' ? 'slow' : ctx.sourcePath === 'Fast.md' ? 'fast' : ctx.sourcePath === 'Reject.md' ? 'reject' : 'sibling';
+            const record = { kind, loads: 0, unloads: 0, cleanups: 0, pings: 0, url: null, revoked: false };
+            ledger.children.push(record);
+            const child = new class extends MarkdownRenderChild {
+              onload() {
+                record.loads++; ledger.active.add(record);
+                const pixel = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='), value => value.charCodeAt(0));
+                record.url = URL.createObjectURL(new Blob([pixel], { type: 'image/png' }));
+                this.registerDomEvent(window, 'preview-lifecycle-ping', () => record.pings++);
+                this.register(() => { record.cleanups++; URL.revokeObjectURL(record.url); record.revoked = true; ledger.active.delete(record); });
+              }
+              onunload() { record.unloads++; }
+            }(el);
+            ctx.addChild(child);
+          });
+        }
+      };
+    `);
+  }
   fs.writeFileSync(
     path.join(userDataDir, "geode.json"),
     JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
@@ -69,13 +100,13 @@ function fixture(): { vaultDir: string; userDataDir: string } {
   return { vaultDir, userDataDir };
 }
 
-async function launchFixture(): Promise<{
+async function launchFixture(withLifecyclePlugin = false): Promise<{
   app: ElectronApplication;
   window: Page;
   vaultDir: string;
   userDataDir: string;
 }> {
-  const { vaultDir, userDataDir } = fixture();
+  const { vaultDir, userDataDir } = fixture(withLifecyclePlugin);
   const app = await electron.launch({
     args: [repoRoot, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
@@ -330,40 +361,46 @@ test("does not leave a stale card visible while a different link is pending", as
   }
 });
 
-test("disposes canonical renderer work on dismissal, replacement, staleness, and rejection", async () => {
-  const { app, window, vaultDir, userDataDir } = await launchFixture();
+test("unloads real preview children and resources on dismissal, replacement, staleness, and rejection", async () => {
+  const { app, window, vaultDir, userDataDir } = await launchFixture(true);
   const pageErrors: string[] = [];
   window.on("pageerror", (error) => pageErrors.push(error.message));
   try {
+    await window.waitForFunction(() => !!(window as any).previewLifecycle);
     await window.getByRole("button", { name: /Toggle reading view/ }).click();
     await window.evaluate(() => {
       const renderer = (window as any).app.markdownRenderer;
       const originalRender = renderer.render.bind(renderer);
-      const originalDispose = renderer.dispose.bind(renderer);
-      const ids = new WeakMap<HTMLElement, string>();
-      (window as any).previewDisposals = [];
-      renderer.dispose = (el: HTMLElement) => {
-        const id = ids.get(el);
-        if (id) (window as any).previewDisposals.push(id);
-        return originalDispose(el);
-      };
-      renderer.render = async (markdown: string, el: HTMLElement, sourcePath: string) => {
-        const id = markdown.includes("Stale slow content")
-          ? "slow"
-          : markdown.includes("Fresh fast content")
-            ? "fast"
-            : markdown.includes("Renderer rejection content")
-              ? "reject"
-              : "sibling";
-        ids.set(el, id);
-        if (id === "slow") {
+      renderer.render = async (...args: any[]) => {
+        // Run the canonical renderer and real ctx.addChild first: cancellation
+        // and rejection must clean up actual allocated resources, not a spy.
+        await originalRender(...args);
+        if (args[2] === "Slow.md") {
           (window as any).slowCanonicalRenderStarted = true;
           await new Promise<void>((resolve) => { (window as any).releaseSlowCanonicalRender = resolve; });
         }
-        if (id === "reject") throw new Error("intentional preview renderer rejection");
-        return originalRender(markdown, el, sourcePath);
+        (window as any).previewLifecycle.settled.push(args[2]);
+        if (args[2] === "Reject.md") throw new Error("intentional preview renderer rejection after allocation");
       };
     });
+
+    const children = () => window.evaluate(() => (window as any).previewLifecycle.children.map((row: any) => ({ kind: row.kind, loads: row.loads, unloads: row.unloads, cleanups: row.cleanups, revoked: row.revoked })));
+    const active = () => window.evaluate(() => [...(window as any).previewLifecycle.active].map((row: any) => row.kind).sort());
+    const assertReleasedResources = async () => {
+      expect(await window.evaluate(async () => {
+        const ledger = (window as any).previewLifecycle;
+        const before = ledger.children.map((row: any) => row.pings);
+        window.dispatchEvent(new Event("preview-lifecycle-ping"));
+        const staleListeners = ledger.children.filter((row: any, i: number) => row.unloads && row.pings !== before[i]).length;
+        const activeListeners = ledger.children.filter((row: any, i: number) => ledger.active.has(row) && row.pings === before[i] + 1).length;
+        const released = ledger.children.filter((row: any) => row.unloads);
+        const blobStillReadable = await Promise.all(released.map(async (row: any) => {
+          const image = new Image(); image.src = row.url;
+          try { await image.decode(); return true; } catch { return false; }
+        }));
+        return { staleListeners, activeListeners, blobStillReadable };
+      })).toEqual({ staleListeners: 0, activeListeners: (await active()).length, blobStillReadable: (await children()).filter((row: any) => row.unloads).map(() => false) });
+    };
 
     const preview = window.locator(".page-preview");
     const alias = window.locator('.markdown-reading-view a.internal-link[data-href="Preview Alias#Details"]');
@@ -373,34 +410,52 @@ test("disposes canonical renderer work on dismissal, replacement, staleness, and
 
     await alias.hover();
     await expect(preview).toBeVisible();
-    const beforeDismiss = await window.evaluate(() => (window as any).previewDisposals.length);
+    await expect.poll(active).toEqual(["sibling"]);
+    expect(await window.evaluate(async () => {
+      const row = (window as any).previewLifecycle.children[0];
+      // Renderer CSP permits blob images, but intentionally disallows blob fetch.
+      const image = new Image(); image.src = row.url; await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    })).toEqual({ width: 1, height: 1 });
     await window.keyboard.press("Escape");
-    await expect.poll(() => window.evaluate(() => (window as any).previewDisposals.length)).toBe(beforeDismiss + 1);
+    await expect(preview).toHaveCount(0);
+    await expect.poll(children).toEqual([{ kind: "sibling", loads: 1, unloads: 1, cleanups: 1, revoked: true }]);
+    await expect.poll(active).toEqual([]);
+    await assertReleasedResources();
 
     await window.mouse.move(0, 0);
     await alias.hover();
     await expect(preview).toBeVisible();
-    const beforeReplacement = await window.evaluate(() => (window as any).previewDisposals.length);
+    await expect.poll(active).toEqual(["sibling"]);
     await slow.hover();
     await expect(preview).toHaveCount(0);
-    await expect.poll(() => window.evaluate(() => (window as any).previewDisposals.length)).toBe(beforeReplacement + 1);
+    await expect.poll(async () => (await children()).filter((row: any) => row.kind === "sibling")).toEqual([
+      { kind: "sibling", loads: 1, unloads: 1, cleanups: 1, revoked: true },
+      { kind: "sibling", loads: 1, unloads: 1, cleanups: 1, revoked: true },
+    ]);
 
     await expect.poll(() => window.evaluate(() => (window as any).slowCanonicalRenderStarted)).toBe(true);
+    await expect.poll(active).toEqual(["slow"]);
     await fast.hover();
     await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
+    await expect.poll(active).toEqual(["fast", "slow"]);
     await window.evaluate(() => (window as any).releaseSlowCanonicalRender());
-    await expect.poll(() => window.evaluate(() =>
-      (window as any).previewDisposals.filter((id: string) => id === "slow").length
-    )).toBeGreaterThanOrEqual(2);
+    await expect.poll(() => window.evaluate(() => (window as any).previewLifecycle.settled.includes("Slow.md"))).toBe(true);
+    await expect.poll(async () => (await children()).filter((row: any) => row.kind === "slow")).toEqual([{ kind: "slow", loads: 1, unloads: 1, cleanups: 1, revoked: true }]);
+    await expect.poll(active).toEqual(["fast"]);
     await expect(preview.locator(".page-preview-title")).toHaveText("Fast");
+    await expect(preview).not.toContainText("Stale slow content");
+    await assertReleasedResources();
 
     await window.mouse.move(0, 0);
     await expect(preview).toHaveCount(0);
+    await expect.poll(active).toEqual([]);
     await reject.hover();
-    await expect.poll(() => window.evaluate(() =>
-      (window as any).previewDisposals.filter((id: string) => id === "reject").length
-    )).toBeGreaterThanOrEqual(1);
+    await expect.poll(async () => (await children()).filter((row: any) => row.kind === "reject")).toEqual([{ kind: "reject", loads: 1, unloads: 1, cleanups: 1, revoked: true }]);
     await expect(preview).toHaveCount(0);
+    await expect.poll(active).toEqual([]);
+    await assertReleasedResources();
+    expect((await children()).every((row: any) => row.loads === 1 && row.unloads === 1 && row.cleanups === 1)).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {
     await closeFixture(app, vaultDir, userDataDir);

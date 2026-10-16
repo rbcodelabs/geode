@@ -132,6 +132,7 @@ try {
     "src/sync-core/ports.ts",
     "src/sync-core/rails.ts",
     "src/sync-core/scope.ts",
+    "src/sync-core/settle.ts",
     "src/sync-node/fs-store.ts",
     "src/sync-node/http-serve.ts",
     "src/sync-node/index.ts",
