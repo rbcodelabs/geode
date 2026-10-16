@@ -30,7 +30,7 @@ export interface HostCapabilities {
   processDiagnostics: boolean;
   chromeCookieImport: boolean;
   artifacts: boolean;
-  /** Geode's iCloud container is reachable through `HostServices.icloudContainer` (Electron on macOS in this release). */
+  /** Geode's iCloud container is reachable through `HostServices.icloudContainer` (Electron on macOS and native iOS). */
   icloudContainer: boolean;
 }
 

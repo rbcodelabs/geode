@@ -31,6 +31,10 @@
 		A1B2C3D42FE993A70072D4E8 /* GeodeBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D32FE993A70072D4E8 /* GeodeBridgeViewController.swift */; };
 		B2C3D4E52FE993A70072D4E8 /* GeodeManagedVaultPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E42FE993A70072D4E8 /* GeodeManagedVaultPlugin.swift */; };
 		C3D4E5F62FE993A70072D4E8 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C3D4E5F52FE993A70072D4E8 /* PrivacyInfo.xcprivacy */; };
+		F02000000000000000000002 /* IcloudContainerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02000000000000000000001 /* IcloudContainerEngine.swift */; };
+		F02000000000000000000003 /* IcloudContainerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02000000000000000000001 /* IcloudContainerEngine.swift */; };
+		F02000000000000000000005 /* GeodeIcloudContainerPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02000000000000000000004 /* GeodeIcloudContainerPlugin.swift */; };
+		F02000000000000000000008 /* IcloudContainerEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02000000000000000000007 /* IcloudContainerEngineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +73,10 @@
 		A1B2C3D32FE993A70072D4E8 /* GeodeBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeBridgeViewController.swift; sourceTree = "<group>"; };
 		B2C3D4E42FE993A70072D4E8 /* GeodeManagedVaultPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeManagedVaultPlugin.swift; sourceTree = "<group>"; };
 		C3D4E5F52FE993A70072D4E8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		F02000000000000000000001 /* IcloudContainerEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IcloudContainerEngine.swift; sourceTree = "<group>"; };
+		F02000000000000000000004 /* GeodeIcloudContainerPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeodeIcloudContainerPlugin.swift; sourceTree = "<group>"; };
+		F02000000000000000000006 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		F02000000000000000000007 /* IcloudContainerEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IcloudContainerEngineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -119,6 +127,9 @@
 				F01000000000000000000001 /* GeodeKeychainStore.swift */,
 				F01000000000000000000004 /* GeodeSyncPrivateStore.swift */,
 				B2C3D4E42FE993A70072D4E8 /* GeodeManagedVaultPlugin.swift */,
+				F02000000000000000000004 /* GeodeIcloudContainerPlugin.swift */,
+				F02000000000000000000001 /* IcloudContainerEngine.swift */,
+				F02000000000000000000006 /* App.entitlements */,
 				C3D4E5F52FE993A70072D4E8 /* PrivacyInfo.xcprivacy */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
@@ -141,6 +152,7 @@
 				F0100000000000000000000D /* SyncNativeProbeUITests.swift */,
 				F01000000000000000000007 /* GeodeKeychainStoreTests.swift */,
 				F01000000000000000000009 /* GeodeSyncPrivateStoreTests.swift */,
+				F02000000000000000000007 /* IcloudContainerEngineTests.swift */,
 			);
 			path = AppUITests;
 			sourceTree = "<group>";
@@ -267,6 +279,8 @@
 				F01000000000000000000006 /* GeodeSyncPrivateStore.swift in Sources */,
 				F01000000000000000000008 /* GeodeKeychainStoreTests.swift in Sources */,
 				F0100000000000000000000A /* GeodeSyncPrivateStoreTests.swift in Sources */,
+				F02000000000000000000003 /* IcloudContainerEngine.swift in Sources */,
+				F02000000000000000000008 /* IcloudContainerEngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -280,6 +294,8 @@
 				F01000000000000000000002 /* GeodeKeychainStore.swift in Sources */,
 				F01000000000000000000005 /* GeodeSyncPrivateStore.swift in Sources */,
 				B2C3D4E52FE993A70072D4E8 /* GeodeManagedVaultPlugin.swift in Sources */,
+				F02000000000000000000005 /* GeodeIcloudContainerPlugin.swift in Sources */,
+				F02000000000000000000002 /* IcloudContainerEngine.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A1B2C3D42FE993A70072D4E8 /* GeodeBridgeViewController.swift in Sources */,
 			);
@@ -459,6 +475,7 @@
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 6M8F464WCQ;
 				INFOPLIST_FILE = App/Info.plist;
@@ -481,6 +498,7 @@
 			baseConfigurationReference = D02000000000000000000001 /* version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 6M8F464WCQ;
 				INFOPLIST_FILE = App/Info.plist;

@@ -9,6 +9,7 @@ import { SyncBlockedError } from "../../sync-core/ports";
 import { createPrivateHashCache } from "./private-hash-cache";
 import { readPrivateBinary, readVaultBinary, writePrivateBinary, writeVaultBinary } from "./chunked-binary";
 import { createMobileSyncSafety, type MobileSyncPorts, type NativeStat } from "./mobile-sync-safety";
+import { createCapacitorIcloudBridge, type IcloudContainerPlugin } from "./capacitor-icloud-container";
 
 type EmptyResult = Record<string, never>;
 
@@ -184,6 +185,11 @@ function createKeychainSecrets(plugin: ManagedVaultPlugin): NonNullable<HostServ
 export interface CapacitorHostOptions {
   /** Test seam: replaces the private-store-backed sync hash cache. */
   hashCache?: (rootId: () => string | null) => HashCacheService;
+  /**
+   * Native `GeodeIcloudContainer` plugin (ADR 0030). Present on iOS builds that ship it; it surfaces as
+   * `host.icloudContainer` and flips `capabilities.icloudContainer`.
+   */
+  icloudContainer?: IcloudContainerPlugin;
 }
 
 export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostServices, options: CapacitorHostOptions = {}): HostServices {
@@ -221,6 +227,7 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     ? "tablet" as const
     : "phone" as const;
 
+  const icloudContainer = options.icloudContainer ? createCapacitorIcloudBridge(options.icloudContainer) : undefined;
   const syncSafety = createCapacitorSyncSafety(plugin, portable, () => activeRoot);
   const appSecrets = createKeychainSecrets(plugin);
   // Only where guarded sync exists (the cache serves the append-only engine alone).
@@ -231,7 +238,8 @@ export function createCapacitorHost(plugin: ManagedVaultPlugin, portable: HostSe
     ...portable,
     ...(syncSafety ? { syncSafety } : {}),
     ...(hashCache && syncSafety ? { hashCache } : {}),
-    capabilities: Object.freeze({ ...portable.capabilities, externalVaultFolder: true }),
+    ...(icloudContainer ? { icloudContainer } : {}),
+    capabilities: Object.freeze({ ...portable.capabilities, externalVaultFolder: true, icloudContainer: Boolean(icloudContainer) }),
     runtime: {
       runtime: "ios",
       platform: "ios",
