@@ -1,3 +1,5 @@
+import type { RenderScope } from "../../workspaces/render-ownership";
+import { bindSourceControlNavigation, type SourceOwnedNavigation } from "../../markdown/source-owned-navigation";
 import type { App } from "../../app";
 import type { BaseDefinition } from "../../bases/base-file";
 import { valueToDisplayString } from "../../bases/coerce";
@@ -42,13 +44,17 @@ function displayFor(row: QueryRow, path: string): string {
 export class BasesCardsView {
   containerEl: HTMLElement;
   private objectUrls: string[] = [];
+  private navigationCleanups: (() => void)[] = [];
+  private mobileNavigationCleanups: (() => void)[] = [];
   private selectedFile: TFile | null = null;
   private mobileActionsEl: HTMLElement | null = null;
   private suppressTouchClickUntil = 0;
 
   constructor(
     private app: App,
-    private callbacks: CardsViewCallbacks
+    private callbacks: CardsViewCallbacks,
+    private navigation?: SourceOwnedNavigation,
+    private navigationOrigin?: RenderScope
   ) {
     this.containerEl = document.createElement("div");
     this.containerEl.className = "bases-cards-container";
@@ -56,6 +62,8 @@ export class BasesCardsView {
   }
 
   render(result: QueryResult, opts: CardsViewOptions): void {
+    this.navigationCleanups.splice(0).forEach(cleanup => cleanup());
+    this.mobileNavigationCleanups.splice(0).forEach(cleanup => cleanup());
     this.revokeObjectUrls();
     this.containerEl.innerHTML = "";
     this.containerEl.style.setProperty("--bases-card-size", `${opts.cardSize}px`);
@@ -104,6 +112,8 @@ export class BasesCardsView {
 
   /** Free blob URLs created for cover images on the previous render. */
   destroy(): void {
+    this.navigationCleanups.splice(0).forEach(cleanup => cleanup());
+    this.mobileNavigationCleanups.splice(0).forEach(cleanup => cleanup());
     this.revokeObjectUrls();
     this.selectedFile = null;
     this.mobileActionsEl?.remove();
@@ -167,6 +177,7 @@ export class BasesCardsView {
         this.selectCard(row.file, card);
       });
     } else {
+      if (this.navigation) this.navigationCleanups.push(bindSourceControlNavigation(card, this.navigation, event => ({ kind: "file", file: row.file, newTab: event.metaKey || event.ctrlKey }), this.navigationOrigin));
       card.addEventListener("click", (e) => this.callbacks.onOpenFile(row.file, e.metaKey || e.ctrlKey));
     }
 
@@ -226,6 +237,7 @@ export class BasesCardsView {
   }
 
   private renderMobileActions(): void {
+    this.mobileNavigationCleanups.splice(0).forEach(cleanup => cleanup());
     this.mobileActionsEl?.remove();
     if (!this.selectedFile) return;
     const actions = document.createElement("div");
@@ -234,11 +246,13 @@ export class BasesCardsView {
     open.type = "button";
     open.textContent = "Open";
     open.setAttribute("aria-label", "Open selected card");
+    if (this.navigation) this.mobileNavigationCleanups.push(bindSourceControlNavigation(open, this.navigation, () => ({ kind: "file", file: this.selectedFile!, newTab: false }), this.navigationOrigin));
     open.addEventListener("click", () => this.selectedFile && this.callbacks.onOpenFile(this.selectedFile, false));
     const edit = document.createElement("button");
     edit.type = "button";
     edit.textContent = "Edit note";
     edit.setAttribute("aria-label", "Edit selected card");
+    if (this.navigation) this.mobileNavigationCleanups.push(bindSourceControlNavigation(edit, this.navigation, () => ({ kind: "file", file: this.selectedFile!, newTab: false }), this.navigationOrigin));
     edit.addEventListener("click", () => this.selectedFile && this.callbacks.onOpenFile(this.selectedFile, false));
     actions.append(open, edit);
     this.containerEl.appendChild(actions);

@@ -22,11 +22,17 @@ The generator reads these official repositories:
   gap. This explicitly includes image lightbox, navigation, zoom/pan, and Live
   Preview image selection, resizing, editing, and layout refinements.
 
-The checked-in baseline contains 2,856 rows: 176 help pages, 1,319 developer
-pages, 50 changelog deltas, 300 public API declarations, and 1,011 public API
+The checked-in baseline contains 2,863 rows: 179 help pages, 1,319 developer
+pages, 50 changelog deltas, 301 public API declarations, and 1,014 public API
 members. Generated IDs are a kind prefix plus the first 12 hexadecimal digits
 of a SHA-256 hash over the row's canonical source identity. IDs do not depend on
 filesystem location, generation time, or row order.
+
+The [October API audit](parity-api-audit-2026-10.md) pins the exact source
+commits that reproduce this inventory and separates declaration/page assessment
+from member completeness. Generated source links still point to `master`; use
+the pinned commits for reproducible review. Row counts measure inventory, not
+feature completeness or a percentage of parity.
 
 ## Status and evidence policy
 

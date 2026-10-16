@@ -69,11 +69,15 @@ try {
   assert.deepEqual(sources, [
     "src/renderer/api/frontmatter.ts",
     "src/renderer/comments/model.ts",
+    "src/wiki/code-mask.ts",
     "src/wiki/constants.ts",
     "src/wiki/folder-provider.ts",
+    "src/wiki/footnote-scan.ts",
     "src/wiki/index.ts",
     "src/wiki/link-candidates.ts",
     "src/wiki/local-filesystem.ts",
+    "src/wiki/markdown-destination.ts",
+    "src/wiki/markdown-references.ts",
     "src/wiki/metadata.ts",
     "src/wiki/snapshot.ts",
   ], "the SDK input graph must be exactly the audited set");

@@ -55,6 +55,9 @@ import type {
  * `readNote` without it.
  */
 export type {
+  BlockCache,
+  FootnoteCache,
+  FrontmatterLinkCache,
   CachedMetadata,
   FootnoteRefCache,
   HeadingCache,

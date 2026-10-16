@@ -1,6 +1,6 @@
 import type { CachedMetadata } from "../wiki/types";
 
-export const METADATA_INDEX_SCHEMA_VERSION = 1;
+export const METADATA_INDEX_SCHEMA_VERSION = 2;
 
 /**
  * The on-disk / wire shape of a metadata index entry. Deliberately excludes

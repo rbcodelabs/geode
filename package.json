@@ -1,6 +1,6 @@
 {
   "name": "geode",
-  "version": "0.30.3",
+  "version": "0.30.4",
   "description": "Geode — an open-source knowledge base that works on local Markdown files",
   "main": "dist/main.js",
   "//exports": "The desktop app entry stays on `main`, which is what Electron reads. `./wiki` is the headless engine SDK, `./catalog` is the conventional PostgreSQL publish/restore SDK, and `./catalog/cloud` is the opt-in Node DSQL/private Blob adapter. These curated entries do not expose their directories. Other modules remain internal by omission. SDK entries resolve to TypeScript source for in-repo bundling; registry publication is out of scope. See docs/design/headless-wiki-sdk.md and docs/design/node-dsql-cloud-adapter.md.",
@@ -35,6 +35,8 @@
     "benchmark:offset-to-loc": "node scripts/run-offset-to-loc-benchmark.mjs",
     "build": "node esbuild.config.mjs",
     "build:cli": "node scripts/build-cli.mjs",
+    "build:icloud-sync": "node packages/geode-icloud-sync/build.mjs",
+    "typecheck:icloud-sync": "tsc --noEmit -p packages/geode-icloud-sync/tsconfig.json",
     "build:mobile": "node esbuild.config.mjs --mobile-only",
     "ios:version": "node scripts/ios-version.mts",
     "ios:sync": "npm run ios:version && npm run build:mobile && cap sync ios",

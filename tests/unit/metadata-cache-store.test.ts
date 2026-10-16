@@ -49,6 +49,31 @@ function entry(overrides: Partial<PersistedMetadataIndexEntry> = {}): PersistedM
 }
 
 describe("metadata cache store", () => {
+  it("invalidates old derived entries without changing notes or sync hash rows", async () => {
+    const root = await tmpRoot();
+    await fsp.writeFile(path.join(root, "Note.md"), "[label](Target.md)");
+    let db = openMetadataDb(root);
+    upsertMetadataEntries(db, { "Note.md": entry() });
+    upsertHashCacheEntries(db, { "Note.md": { mtimeMs: 1, size: 4, sha256: "unchanged", excludeReason: null, providerId: "provider" } });
+    db.exec("PRAGMA user_version = 1");
+    db.close();
+    db = openMetadataDb(root);
+    try {
+      expect(readMetadataStats(db)).toEqual([]);
+      expect(readAllMetadataEntries(db).entries).toEqual({});
+      expect(readHashCacheEntries(db)["Note.md"].sha256).toBe("unchanged");
+      expect(await fsp.readFile(path.join(root, "Note.md"), "utf8")).toBe("[label](Target.md)");
+      const read = vi.fn(async () => "[label](Target.md)");
+      await reconcileMetadataIndex([{ path: "Note.md", mtimeMs: 1, size: 4 }], {
+        readStats: () => readMetadataStats(db),
+        upsertBatch: entries => upsertMetadataEntries(db, entries),
+        deletePaths: paths => deleteMetadataEntries(db, paths),
+      }, read, parseMetadata);
+      expect(read).toHaveBeenCalledWith("Note.md");
+      expect(readAllMetadataEntries(db).entries["Note.md"].metadata.links[0].link).toBe("Target.md");
+    } finally { db.close(); }
+  });
+
   it("creates the database file (and parent directory) on first open, at the expected path", async () => {
     const root = await tmpRoot();
     const db = openMetadataDb(root);

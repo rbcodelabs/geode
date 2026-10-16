@@ -20,7 +20,7 @@ export interface PortableConfigOwners {
 }
 
 // AppSettings is private to App; mirror only its explicitly approved portable defaults.
-const EDITOR_DEFAULTS: PortableConfigValues['editor.json'] = { readableLineLength: true, foldHeading: false, showLineNumber: false, showRibbon: true, showStatusBar: true };
+const EDITOR_DEFAULTS: PortableConfigValues['editor.json'] = { readableLineLength: true, foldHeading: true, showLineNumber: false, showRibbon: true, showStatusBar: true };
 const APPEARANCE_DEFAULTS: PortableConfigValues['appearance.json'] = { theme: 'auto', baseFontSize: 16, cssTheme: '' };
 const DAILY_DEFAULTS = { enabled: true, folder: '', format: 'YYYY-MM-DD', template: '' };
 const utf8 = new TextEncoder();

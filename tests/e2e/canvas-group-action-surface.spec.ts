@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test, type Locator, type Page } from "@playwright/test";
 
+import { CanvasBackgroundLifetimes, expectSavedCanvasClosure } from "./helpers/canvas-background-lifetimes";
+
 const repoRoot = path.resolve(__dirname, "..", "..");
 const plainGroupMenu = ["Zoom to selection", "Edit label", "Set background", "Delete"];
 const backgroundGroupMenu = [
@@ -52,7 +54,7 @@ async function chooseImage(page: Page, name: string): Promise<void> {
   await page.locator(".prompt-result", { hasText: name }).click();
 }
 
-test("exposes exact group label and background actions in context and sole-selection controls", async () => {
+test("exposes exact group label and background actions in context and sole-selection controls", async ({}, info) => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-group-actions-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-group-actions-user-"));
   const canvasPath = path.join(vaultDir, "Group actions.canvas");
@@ -89,10 +91,14 @@ test("exposes exact group label and background actions in context and sole-selec
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const window = await app.firstWindow();
+    const resources = new CanvasBackgroundLifetimes(window, "__groupActionUrls", info);
     const errors: string[] = [];
-    window.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    window.on("console", (message) => {
+      if (message.type() === "error" && !resources.isExpectedProbeError(message.text(), message.location().url)) errors.push(message.text());
+    });
     window.on("pageerror", (error) => errors.push(String(error)));
     await expect(window.locator('.nav-file-title[data-path="Group actions.canvas"]')).toBeVisible();
+    await resources.install();
     await window.evaluate(() => {
       const w = window as any;
       const modify = w.app.vault.modify.bind(w.app.vault);
@@ -101,20 +107,6 @@ test("exposes exact group label and background actions in context and sole-selec
         if (file.path === "Group actions.canvas") w.__groupActionWrites += 1;
         return modify(file, data);
       };
-      const created: string[] = [];
-      const revoked: string[] = [];
-      const createObjectURL = URL.createObjectURL.bind(URL);
-      const revokeObjectURL = URL.revokeObjectURL.bind(URL);
-      URL.createObjectURL = (blob: Blob) => {
-        const url = createObjectURL(blob);
-        created.push(url);
-        return url;
-      };
-      URL.revokeObjectURL = (url: string) => {
-        revoked.push(url);
-        revokeObjectURL(url);
-      };
-      w.__groupActionUrls = { created, revoked };
     });
 
     await window.locator('.nav-file-title[data-path="Group actions.canvas"]').click();
@@ -122,6 +114,9 @@ test("exposes exact group label and background actions in context and sole-selec
     await view.locator('[data-canvas-action="zoom-in"]').click();
     const transformedCamera = await camera(view);
     await expect.poll(() => window.evaluate(() => (window as any).__groupActionUrls.created.length)).toBe(1);
+
+    const existing = await resources.capture(view, "existing");
+    await resources.expectLiveExactly([existing]);
 
     // Group-only context menus expose Edit label immediately before the
     // existing background actions, while non-group menus remain exact.
@@ -204,7 +199,8 @@ test("exposes exact group label and background actions in context and sole-selec
 
     // A successful staged control action commits background and style once,
     // rerenders through managed blob URLs, and expands the same controls.
-    const createdBefore = await window.evaluate(() => [...(window as any).__groupActionUrls.created] as string[]);
+    await resources.expectRetained(view, "existing", existing);
+    await resources.expectLiveExactly([existing]);
     await view.getByRole("button", { name: "Set background", exact: true }).click();
     await chooseImage(window, "New.png");
     await window.locator(".context-menu-item", { hasText: /^Ratio$/ }).click();
@@ -213,10 +209,9 @@ test("exposes exact group label and background actions in context and sole-selec
     await expect.poll(() => readCanvas(canvasPath)?.nodes[0]?.backgroundStyle ?? null).toBe("ratio");
     expect(await window.evaluate(() => (window as any).__groupActionWrites)).toBe(2);
     expect(await controlNames(view)).toEqual(backgroundGroupControls);
-    await expect.poll(async () => {
-      const revoked = await window.evaluate(() => [...(window as any).__groupActionUrls.revoked] as string[]);
-      return createdBefore.every((url) => revoked.includes(url));
-    }).toBe(true);
+    await resources.expectRetained(view, "existing", existing);
+    const ratio = await resources.capture(view, "plain");
+    await resources.expectLiveExactly([existing, ratio]);
     expect(await selectedIds(view)).toEqual(["plain"]);
     expect(await camera(view)).toEqual(transformedCamera);
 
@@ -232,6 +227,10 @@ test("exposes exact group label and background actions in context and sole-selec
     await expect(plain).toHaveCSS("background-repeat", "repeat");
     await expect.poll(() => readCanvas(canvasPath)?.nodes[0]?.backgroundStyle ?? null).toBe("repeat");
     expect(await window.evaluate(() => (window as any).__groupActionWrites)).toBe(3);
+    await resources.expectRetired([ratio]);
+    await resources.expectRetained(view, "existing", existing);
+    const repeated = await resources.capture(view, "plain");
+    await resources.expectLiveExactly([existing, repeated]);
     await view.getByRole("button", { name: "Remove background", exact: true }).click();
     await expect(plain).toHaveCSS("background-image", "none");
     await expect.poll(() => {
@@ -243,6 +242,10 @@ test("exposes exact group label and background actions in context and sole-selec
     expect(await selectedIds(view)).toEqual(["plain"]);
     expect(await camera(view)).toEqual(transformedCamera);
 
+    await resources.expectRetired([repeated]);
+    await resources.expectRetained(view, "existing", existing);
+    await resources.expectLiveExactly([existing]);
+
     const saved = JSON.parse(fs.readFileSync(canvasPath, "utf8"));
     expect(saved).toEqual({
       ...initial,
@@ -253,7 +256,14 @@ test("exposes exact group label and background actions in context and sole-selec
     await view.locator('.canvas-node[data-node-id="text"]').click({ position: { x: 30, y: 30 } });
     expect(await controlNames(view)).toEqual(["Set color", "Edit", "Convert to file…", "Remove"]);
 
+    const savedText = fs.readFileSync(canvasPath, "utf8");
+    await window.locator('.nav-file-title[data-path="Not image.md"]').click();
+    await resources.expectRetired([existing]);
+    await resources.expectAllRetired();
+    await expectSavedCanvasClosure(vaultDir);
     await window.reload();
+    await expect(window.locator('.nav-file-title[data-path="Group actions.canvas"]')).toBeVisible();
+    await resources.install();
     await window.locator('.nav-file-title[data-path="Group actions.canvas"]').click();
     view = window.locator(".canvas-view");
     await expect(view.locator('.canvas-node[data-node-id="plain"] .canvas-group-label')).toHaveText("Renamed plain");
@@ -261,6 +271,13 @@ test("exposes exact group label and background actions in context and sole-selec
     await expect(view.locator('.canvas-node[data-node-id="existing"]')).toHaveCSS("background-size", "cover");
     expect(JSON.parse(fs.readFileSync(canvasPath, "utf8"))).toEqual(saved);
     await expect(view.locator(".canvas-selection-controls")).toHaveCount(0);
+    const restored = await resources.capture(view, "existing");
+    await resources.expectLiveExactly([restored]);
+    expect(fs.readFileSync(canvasPath, "utf8")).toBe(savedText);
+    await window.locator('.nav-file-title[data-path="Not image.md"]').click();
+    await resources.expectRetired([restored]);
+    await resources.expectAllRetired();
+    expect(fs.readFileSync(canvasPath, "utf8")).toBe(savedText);
     expect(errors, `Console errors: ${errors.join("\n")}`).toEqual([]);
   } finally {
     await app.close();

@@ -166,7 +166,7 @@ test('dirty Canvas document blocks an incoming guarded write', async () => {
   });
 });
 
-test('uncommitted Base source-cell draft blocks the underlying note write', async () => {
+test('uncommitted Base source-cell draft blocks the underlying note write', async ({}, testInfo) => {
   await isolated(async ({ second, vault, apply }) => {
     await open(second, 'Tasks.base');
     const row = second.locator('.bases-data-row').filter({ hasText: 'Source.md' });
@@ -177,14 +177,71 @@ test('uncommitted Base source-cell draft blocks the underlying note write', asyn
     const cell = row.locator('td.bases-cell').nth(column);
     await cell.dblclick();
     await cell.locator('.bases-cell-input').fill('9');
+    await expect(cell.locator('.bases-cell-input')).toHaveValue('9');
     expect(await second.evaluate(async () => Boolean(await (window as any).app.workspace.activeLeaf.view.getDirtySourceConflict('Source.md')))).toBe(true);
+    await second.evaluate(() => {
+      const app = (window as any).app, view = app.workspace.activeLeaf.view, table = view.tableView;
+      const input = view.containerEl.querySelector('.bases-cell-input') as HTMLInputElement;
+      const events: unknown[] = []; (window as any).baseSyncFocusDiagnostic = events;
+      (window as any).baseSyncFocusOriginal = { input, table, session: table.editSession, draft: view.sourceEdit };
+      const capture = (phase: string, extra: Record<string, unknown> = {}) => {
+        const active = document.activeElement as HTMLElement | null;
+        events.push({ phase, inert: document.body.inert, viewInert: view.containerEl.inert, suspended: view.vaultSwitching,
+          activeTag: active?.tagName, activeClass: active?.className, activeIsInput: active === input,
+          inputConnected: input.isConnected, sameInput: view.containerEl.querySelector('.bases-cell-input') === input,
+          inputValue: input.value, inputDisabled: input.disabled, editIdentity: Boolean(table.editIdentity),
+          sourceDraft: view.sourceEdit && { path: view.sourceEdit.file.path, rawText: view.sourceEdit.rawText }, ...extra });
+      };
+      (window as any).captureBaseSyncFocus = capture;
+      input.addEventListener('blur', event => capture('blur', { relatedTag: (event.relatedTarget as HTMLElement | null)?.tagName }), true);
+      const edit = table.callbacks.onEditCell;
+      let originalAttempt: Promise<void> | undefined;
+      const observeEdit = (...args: unknown[]) => {
+        capture('save-start');
+        try {
+          const attempt = Reflect.apply(edit, table.callbacks, args) as Promise<void>;
+          originalAttempt = attempt;
+          void attempt.then(() => capture('save-fulfilled'), error => capture('save-rejected', { error: String(error) }));
+          return attempt;
+        } catch (error) { capture('save-threw', { error: String(error) }); throw error; }
+      };
+      table.callbacks.onEditCell = (...args: unknown[]) => {
+        const attempt = observeEdit(...args);
+        capture('attempt-identity', { sameOriginalPromise: attempt === originalAttempt });
+        return attempt;
+      };
+      const hold = app.workspace.holdAutosave.bind(app.workspace);
+      app.workspace.holdAutosave = async (...args: unknown[]) => { capture('hold-enter'); try { return await hold(...args); } finally { capture('hold-exit'); } };
+      const release = app.workspace.releaseAutosaveHold.bind(app.workspace);
+      app.workspace.releaseAutosaveHold = (...args: unknown[]) => { capture('release-enter'); const result = release(...args); capture('release-exit'); return result; };
+      capture('before-guard');
+    });
+    try {
     await expect(apply('Source.md', sourceText, '---\npriority: 2\n---\nRemote source\n')).rejects.toThrow(/Base|unsaved/i);
-    // Release can leave the draft open or blur-commit it. If still open,
-    // verify it survived before explicitly committing as the user would.
-    const draft = cell.locator('.bases-cell-input');
-    if (await draft.isVisible()) { await expect(draft).toHaveValue('9'); await draft.press('Enter'); }
+    // Releasing inert can blur-commit and remove the editor. Send the user's
+    // Enter to the current focus, then verify the saved draft bytes below.
+    await expect.poll(() => second.evaluate(() => document.body.inert)).toBe(false);
+    await second.evaluate(() => (window as any).captureBaseSyncFocus('released-before-enter'));
+    expect(fs.readFileSync(path.join(vault, 'Source.md'), 'utf8')).toBe(sourceText);
+    expect(await second.evaluate(() => {
+      const original = (window as any).baseSyncFocusOriginal;
+      const view = (window as any).app.workspace.activeLeaf.view;
+      return { sameTable: view.tableView === original.table, sameSession: original.table.editSession === original.session,
+        sameDraft: view.sourceEdit === original.draft, sameInput: view.containerEl.querySelector('.bases-cell-input') === original.input,
+        connected: original.input.isConnected, value: original.input.value, focused: document.activeElement === original.input };
+    })).toEqual({ sameTable: true, sameSession: true, sameDraft: true, sameInput: true, connected: true, value: '9', focused: true });
+    await second.keyboard.press('Enter');
+    await second.evaluate(() => (window as any).captureBaseSyncFocus('after-enter'));
     await expect.poll(() => fs.readFileSync(path.join(vault, 'Source.md'), 'utf8')).toContain('priority: 9');
     expect(fs.readFileSync(path.join(vault, 'Source.md'), 'utf8')).toContain('Original source');
+    } finally {
+      await second.evaluate(() => (window as any).captureBaseSyncFocus('after-original-case'));
+      const events = await second.evaluate(() => (window as any).baseSyncFocusDiagnostic);
+      const artifact = { events, provider: fs.readFileSync(path.join(vault, 'Source.md'), 'utf8'), platform: process.platform };
+      const output = testInfo.outputPath('base-sync-focus-diagnostic.json');
+      fs.writeFileSync(output, JSON.stringify(artifact, null, 2));
+      await testInfo.attach('base-sync-focus-diagnostic', { path: output, contentType: 'application/json' });
+    }
   });
 });
 
@@ -199,7 +256,7 @@ test('prepare timeout releases holds even when the prepare callback completes la
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('old');
     await second.evaluate(() => (window as any).guardContinue());
     await second.waitForFunction(() => (window as any).guardFinished);
-    await expect.poll(() => second.evaluate(() => ({ body: document.body.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: false, suspended: false });
+    await expect.poll(() => second.evaluate(() => ({ body: document.body.inert, suspended: ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused) }))).toEqual({ body: false, suspended: false });
     await second.evaluate(() => { (window as any).app.workspace.holdAutosave = (window as any).guardOriginalHold; });
     await apply();
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
@@ -243,11 +300,11 @@ test('nested reconciliation does not release the outer sync autosave hold', asyn
     const attempted = apply();
     await second.waitForFunction(() => (window as any).guardEntered);
     await second.evaluate(() => (window as any).app.reconcileVault('manual'));
-    expect(await second.evaluate(() => ({ body: document.body.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: true, suspended: true });
+    expect(await second.evaluate(() => ({ body: document.body.inert, suspended: ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused) }))).toEqual({ body: true, suspended: true });
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('old');
     await second.evaluate(() => (window as any).guardContinue());
     await attempted;
-    await expect.poll(() => second.evaluate(() => (window as any).app.workspace.activeLeaf.view.vaultSwitching)).toBe(false);
+    await expect.poll(() => second.evaluate(() => ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused))).toBe(false);
     expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
   });
 });
@@ -300,7 +357,7 @@ for (const failure of ['throw', 'timeout'] as const) {
       }
       if (failure === 'throw') await expect(apply('Note.md', 'remote')).rejects.toThrow(/refresh incomplete/i);
       expect(fs.readFileSync(path.join(vault, 'Note.md'), 'utf8')).toBe('remote');
-      expect(await second.evaluate(() => ({ body: document.body.inert, editor: (window as any).app.workspace.activeLeaf.view.containerEl.inert, suspended: (window as any).app.workspace.activeLeaf.view.vaultSwitching }))).toEqual({ body: false, editor: true, suspended: true });
+      expect(await second.evaluate(() => ({ body: document.body.inert, editor: (window as any).app.workspace.activeLeaf.view.containerEl.inert, suspended: ((window as any).app.workspace.activeLeaf.view.vaultSwitching || (window as any).app.workspace.activeLeaf.view.autosavePaused) }))).toEqual({ body: false, editor: true, suspended: true });
       await expect(second.evaluate(() => {
         const app = (window as any).app;
         return app.comments.create(app.vault.getFileByPath('Note.md'), { from: 0, to: 3 }, 'stale comment', { type: 'agent', name: 'Test agent' });
@@ -371,21 +428,25 @@ test('leaving or closing a note in external-edit recovery cannot write the local
     const state = await enterRecovery();
     expect(state.readOnly).toBe(true);
     expect(state.buffer).toBe('local edit that must not be published');
-    await open(second, 'Source.md');
+    // An unpreserved local snapshot now refuses destructive navigation.
+    await expect(open(second, 'Source.md')).rejects.toThrow(/recovery/);
     await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8'), { timeout: 4000 }).toBe('old');
 
     // 2. Nor may closing the tab.
-    await open(second);
     await enterRecovery();
-    await second.evaluate(async () => {
+    const refusal = await second.evaluate(async () => {
       const app = (window as any).app;
       const leaf = app.workspace.getLeavesOfType('markdown').find((item: any) => item.view?.file?.path === 'Note.md')!;
-      await leaf.detach?.() ?? app.workspace.detachLeaf?.(leaf);
+      try { await leaf.detach(); return null; } catch (error) { return String(error); }
     });
+    expect(refusal).toMatch(/recovery/);
+    expect(await second.evaluate(() => {
+      const view = (window as any).app.workspace.getLeavesOfType('markdown').find((item: any) => item.view?.file?.path === 'Note.md')!.view;
+      return { connected: view.editor.dom.isConnected, local: view.getText() };
+    })).toEqual({ connected: true, local: 'local edit that must not be published' });
     await expect.poll(() => fs.readFileSync(path.join(vault, 'Note.md'), 'utf8'), { timeout: 4000 }).toBe('old');
 
     // 3. Nor may toggling reading mode, which also flushes.
-    await open(second);
     await enterRecovery();
     await second.evaluate(async () => {
       const app = (window as any).app;

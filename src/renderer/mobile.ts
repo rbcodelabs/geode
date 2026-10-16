@@ -149,11 +149,12 @@ const browserHost = createBrowserHost(state, {
   },
 });
 const nativeHost = Capacitor.isNativePlatform() ? createCapacitorHost(GeodeManagedVault, browserHost) : browserHost;
-// Native iOS: per-file sync history and the reconcile manifest overflow the 5 MB localStorage snapshot the browser host uses.
+// Native iOS: per-file sync history, the reconcile manifest and the metadata cache overflow the 5 MB localStorage
+// snapshot the browser host uses. Without IndexedDB the durable stores fall back to the snapshot for small values.
 const supportedPluginTransport = createMobileArtifactTransport();
 const host = installHostServices({
-  ...(Capacitor.isNativePlatform() && typeof indexedDB !== "undefined"
-    ? withDurableMobileStorage(nativeHost)
+  ...(Capacitor.isNativePlatform()
+    ? withDurableMobileStorage(nativeHost, typeof indexedDB === "undefined" ? undefined : indexedDB, { legacyConfigNames: () => state.config.keys() })
     : nativeHost),
   supportedPluginTransport,
 });

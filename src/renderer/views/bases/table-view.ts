@@ -1,3 +1,6 @@
+import { isPausedBaseEditAttempt, isPausedBaseEditError, type BaseSyncFocusReceipt } from "./paused-edit";
+import type { RenderScope } from "../../workspaces/render-ownership";
+import { bindSourceControlNavigation, type SourceOwnedNavigation } from "../../markdown/source-owned-navigation";
 import type { App } from "../../app";
 import { valueToDisplayString } from "../../bases/coerce";
 import type { BaseDefinition } from "../../bases/base-file";
@@ -22,9 +25,9 @@ export interface TableViewCallbacks {
   onOpenFile(file: TFile, newTab: boolean): void;
   /** Commit an edited cell's raw text back to the file's frontmatter. */
   onEditCell(file: TFile, columnPath: string, rawText: string): Promise<void>;
-  onEditStart(file: TFile, columnPath: string, rawText: string): void;
+  onEditStart(file: TFile, columnPath: string, rawText: string): object | void;
   onEditDraft(rawText: string): void;
-  onEditEnd(): void;
+  onEditEnd(identity?: object | void): void;
 }
 
 function cellValue(row: QueryRow, path: string): BaseValue | undefined {
@@ -59,7 +62,10 @@ export class BasesTableView {
   private activeCell: GridPos | null = null;
   private selection: Selection = { type: "none" };
   private editing: GridPos | null = null;
+  private editSession: { pos: GridPos; token: object | void; input: HTMLInputElement; cell: HTMLTableCellElement } | null = null;
+  private guardFocus: { mark(event: FocusEvent): void; attempt(promise: Promise<void>): ((error: unknown) => void) | undefined } | null = null;
   private mobileActionsEl: HTMLElement | null = null;
+  private mobileNavigationCleanup?: () => void;
   private mobileEditorActionsEl: HTMLElement | null = null;
   private readonly resultLimitEl: HTMLElement | null;
   private readOnly = false;
@@ -67,7 +73,9 @@ export class BasesTableView {
 
   constructor(
     private app: App,
-    private callbacks: TableViewCallbacks
+    private callbacks: TableViewCallbacks,
+    private navigation?: SourceOwnedNavigation,
+    private navigationOrigin?: RenderScope
   ) {
     this.containerEl = document.createElement("div");
     this.containerEl.className = "bases-table-container";
@@ -193,7 +201,7 @@ export class BasesTableView {
 
   private selectCell(row: number, col: number): void {
     if (this.readOnly) return;
-    this.containerEl.focus();
+    this.containerEl.focus({ preventScroll: true });
     this.activeCell = { row, col };
     this.selection = { type: "cell", pos: this.activeCell };
     this.applySelectionClasses();
@@ -233,6 +241,34 @@ export class BasesTableView {
     return this.dataRows[pos.row].file;
   }
 
+  /** Internal sync guard receipt; it never submits, retries or replaces an edit. */
+  captureSyncGuardFocus(active: () => boolean, eligible: () => boolean): BaseSyncFocusReceipt | null {
+    const session = this.editSession;
+    if (!session || document.activeElement !== session.input || this.readOnly || session.input.disabled) return null;
+    const { input, cell, token, pos } = session, value = input.value, container = this.containerEl, row = pos.row, col = pos.col;
+    let live = true, displaced = false, knownPaused = false, settled = false, pausedResult = false;
+    let complete!: () => void;
+    const completion = new Promise<void>(resolve => { complete = resolve; });
+    const current = () => live && this.editSession === session && session.token === token && session.pos === pos && pos.row === row && pos.col === col && this.cellEls[row]?.[col] === cell && this.containerEl === container && session.input === input && session.cell === cell && input.parentElement === cell && input.isConnected && input.value === value && !this.readOnly && eligible();
+    const capture = {
+      mark: (event: FocusEvent) => { if (current() && active() && (event.relatedTarget === null || event.relatedTarget === document.body)) displaced = true; },
+      attempt: (promise: Promise<void>) => {
+        if (!current() || !displaced || !active() || !isPausedBaseEditAttempt(promise)) return undefined;
+        knownPaused = true;
+        return (error: unknown) => { pausedResult = isPausedBaseEditError(error); settled = true; complete(); };
+      },
+    };
+    this.guardFocus = capture;
+    const discard = () => { live = false; if (this.guardFocus === capture) this.guardFocus = null; };
+    return { input, discard, restore: async allow => {
+      try {
+        if (!current() || document.activeElement === input || !displaced || !knownPaused) return;
+        if (!settled) await completion;
+        if (pausedResult && current() && this.guardFocus === capture && !input.disabled && document.activeElement === document.body && allow()) input.focus({ preventScroll: true });
+      } finally { discard(); }
+    } };
+  }
+
   private startEdit(pos: GridPos): void {
     if (this.readOnly) return;
     const path = this.columns[pos.col];
@@ -249,42 +285,69 @@ export class BasesTableView {
     input.className = "bases-cell-input";
     input.value = currentText;
     td.appendChild(input);
-    this.callbacks.onEditStart(this.currentFile(pos), path, currentText);
-    input.addEventListener("input", () => this.callbacks.onEditDraft(input.value));
+    const file = this.currentFile(pos);
+    const session = { pos, token: this.callbacks.onEditStart(file, path, currentText), input, cell: td };
+    this.editSession = session;
+    input.addEventListener("input", () => { if (this.editSession === session) this.callbacks.onEditDraft(input.value); });
     input.focus();
     input.select();
 
     let committing = false;
-    const commit = async () => {
-      if (this.editing !== pos) return;
+    const commit = async (trigger: "explicit" | "blur" = "explicit") => {
+      if (this.editSession !== session) return;
       if (committing) return;
       committing = true;
+      const focusAtStart = document.activeElement;
       input.disabled = true;
+      let settleGuard: ((error: unknown) => void) | undefined;
+      let guardError: unknown;
       try {
-        await this.callbacks.onEditCell(this.currentFile(pos), path, input.value);
+        const attempt = this.callbacks.onEditCell(file, path, input.value);
+        if (trigger === "blur") settleGuard = this.guardFocus?.attempt(attempt);
+        await attempt;
+        if (this.editSession !== session) return;
         this.editing = null;
-        this.callbacks.onEditEnd();
+        this.editSession = null;
         this.mobileEditorActionsEl?.remove();
         this.mobileEditorActionsEl = null;
-      } catch {
+        this.callbacks.onEditEnd(session.token);
+      } catch (error) {
+        guardError = error;
+        if (this.editSession !== session) return;
         committing = false;
-        input.disabled = false;
-        input.focus();
+        input.disabled = this.readOnly;
+        // A blur save must not reclaim the control the user deliberately left.
+        // Explicit saves may recover focus only while the same focus context
+        // remains current; a delayed failure must not steal another pane's focus.
+        if (!this.readOnly && trigger === "explicit" &&
+          (document.activeElement === input || document.activeElement === this.containerEl || document.activeElement === focusAtStart)) input.focus();
+      } finally {
+        settleGuard?.(guardError);
       }
     };
     const cancel = () => {
+      if (this.editSession !== session) return;
       this.editing = null;
-      this.callbacks.onEditEnd();
+      this.editSession = null;
       td.textContent = currentText;
       this.mobileEditorActionsEl?.remove();
       this.mobileEditorActionsEl = null;
+      this.callbacks.onEditEnd(session.token);
     };
-    if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", () => { void commit(); });
+    if (!document.body.classList.contains("is-mobile")) input.addEventListener("blur", event => {
+      if (this.editSession !== session) return;
+      const retry = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>("button[data-base-row-retry]");
+      const owner = this.containerEl.closest(".base-view");
+      if (owner && retry?.closest(".base-view") === owner && retry.dataset.baseRowRetry === JSON.stringify([file.path, path])) return;
+      this.guardFocus?.mark(event);
+      void commit("blur");
+    });
     input.addEventListener("keydown", (e) => {
+      if (this.editSession !== session) { e.stopPropagation(); return; }
       if (e.key === "Enter") {
         e.preventDefault();
         void commit();
-        this.containerEl.focus();
+        this.containerEl.focus({ preventScroll: true });
       } else if (e.key === "Escape") {
         e.preventDefault();
         cancel();
@@ -293,7 +356,8 @@ export class BasesTableView {
       e.stopPropagation();
     });
     if (document.body.classList.contains("is-mobile")) {
-      this.mobileActionsEl?.remove();
+      this.cancelNavigation();
+    this.mobileActionsEl?.remove();
       const actions = document.createElement("div");
       actions.className = "bases-mobile-editor-actions";
       const save = document.createElement("button");
@@ -320,18 +384,24 @@ export class BasesTableView {
     if (readOnly) this.mobileEditorActionsEl?.querySelectorAll("button").forEach((button) => { button.disabled = true; });
   }
 
-  acknowledgeEdit(): void {
-    if (!this.editing) return;
+  get editIdentity(): object | null { return this.editSession; }
+
+  acknowledgeEdit(expected: object | null = this.editSession): void {
+    if (!this.editSession || this.editSession !== expected) return;
+    const token = this.editSession.token;
     this.editing = null;
-    this.callbacks.onEditEnd();
+    this.editSession = null;
     this.mobileEditorActionsEl?.remove();
     this.mobileEditorActionsEl = null;
+    this.callbacks.onEditEnd(token);
   }
 
   resetForFile(): void {
     this.editing = null;
+    this.editSession = null;
     this.activeCell = null;
     this.selection = { type: "none" };
+    this.cancelNavigation();
     this.mobileActionsEl?.remove();
     this.mobileActionsEl = null;
     this.mobileEditorActionsEl?.remove();
@@ -339,8 +409,11 @@ export class BasesTableView {
     this.readOnly = false;
   }
 
+  cancelNavigation(): void { this.mobileNavigationCleanup?.(); this.mobileNavigationCleanup = undefined; }
+
   private renderMobileActions(): void {
     if (!document.body.classList.contains("is-mobile") || !this.activeCell || this.editing) return;
+    this.cancelNavigation();
     this.mobileActionsEl?.remove();
     const actions = document.createElement("div");
     actions.className = "bases-mobile-cell-actions";
@@ -354,6 +427,7 @@ export class BasesTableView {
     open.type = "button";
     open.textContent = "Open row";
     open.setAttribute("aria-label", "Open selected row");
+    if (this.navigation) this.mobileNavigationCleanup = bindSourceControlNavigation(open, this.navigation, () => ({ kind: "file", file: this.currentFile(this.activeCell!), newTab: false }), this.navigationOrigin);
     open.addEventListener("click", () => this.activeCell && this.callbacks.onOpenFile(this.currentFile(this.activeCell), false));
     actions.append(edit, open);
     this.containerEl.appendChild(actions);

@@ -14,13 +14,13 @@ describe("MetadataIndexerHost", () => {
     const host = new MetadataIndexerHost(child, (message) => forwarded.push(message));
     const ready = host.initialize("/vault", [{ path: "A.md", mtimeMs: 1, size: 1 }]);
     expect(child.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "initialize", root: "/vault" }));
-    child.emit("message", { type: "snapshot-start", schemaVersion: 1, totalEntries: 1 });
+    child.emit("message", { type: "snapshot-start", schemaVersion: 2, totalEntries: 1 });
     child.emit("message", { type: "snapshot-chunk", sequence: 0, entries: { "A.md": { content: "a" } } });
     child.emit("message", { type: "snapshot-complete", totalChunks: 1 });
     await expect(ready).resolves.toBe(true);
     child.emit("message", { type: "delta", path: "A.md", deleted: true });
     expect(forwarded).toEqual([
-      { type: "snapshot-start", schemaVersion: 1, totalEntries: 1 },
+      { type: "snapshot-start", schemaVersion: 2, totalEntries: 1 },
       { type: "snapshot-chunk", sequence: 0, entries: { "A.md": { content: "a" } } },
       { type: "snapshot-complete", totalChunks: 1 },
       { type: "delta", path: "A.md", deleted: true },

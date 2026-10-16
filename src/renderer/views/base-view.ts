@@ -1,3 +1,6 @@
+import { rejectPausedBaseEdit, type BaseSyncFocusReceipt } from "./bases/paused-edit";
+import { SourceOwnedNavigation, captureNavigationOrigin } from "../markdown/source-owned-navigation";
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { parseBaseFile, runQuery, type BaseDefinition, type BaseViewDefinition, type QueryResult } from "../bases";
 import { stringifyBaseFile } from "../bases/base-file-write";
@@ -20,6 +23,17 @@ import { BasesPluginViewHost } from "./bases/plugin-view-host";
 import { BUILTIN_BASES_VIEW_NAMES, BUILTIN_BASES_VIEW_TYPES } from "../api/bases-view";
 import { parseExpression } from "../bases/parser";
 import type { Expr } from "../bases/ast";
+
+interface FailedBaseRow {
+  file: TFile;
+  filePath: string;
+  ownerFile: TFile | null;
+  ownerPath: string | null;
+  vault: unknown;
+  columnPath: string;
+  rawText: string;
+  sequence: number;
+}
 
 const DEFAULT_CARD_ASPECT_RATIO = 16 / 9;
 const DEFAULT_CARD_SIZE = 240;
@@ -101,6 +115,7 @@ export class BaseView implements View {
   private lastColumns: string[] = [];
   private lastResult: QueryResult | null = null;
   private renderScheduled = false;
+  private projectionRefreshPending = false;
   /**
    * The exact text we last knew to be on disk for this file — set both
    * right before `persist()` writes it (predicting the write's outcome)
@@ -124,12 +139,26 @@ export class BaseView implements View {
    */
   private lastKnownText: string | null = null;
   private pendingKnownText: string | null = null;
+  // Invalidate at persist admission, pending/known transitions, apply, and
+  // file/inline/open/close lifecycle changes (see ADR0041).
+  private definitionRevision = 0;
+  private reloadOwnerGeneration = 0;
+  private nativeLifecycleGeneration = 0;
+  private reloadRequestGeneration = 0;
+  private reloadHandledGeneration = 0;
+  private reloadInFlight: Promise<void> | null = null;
+  private reloadClosed = false;
   private vaultSwitching = false;
   private persistRequestedWhileSuspended = false;
   private suppressReconcileModify = false;
   private sourceEdit: { file: TFile; columnPath: string; rawText: string; originalText: Promise<string> } | null = null;
-  private sourceWritePath: string | null = null;
   private readonly sourcePersistsInFlight = new Set<Promise<void>>();
+  private readonly sourcePersistPaths = new Map<Promise<void>, string>();
+  private readonly rowFailures = new Map<string, FailedBaseRow>();
+  private retainedNativeFailures: readonly RenderFailure[] = [];
+  private rowSubmissionSequence = 0;
+  private rowRefreshFailed = false;
+  private definitionWritesPending = 0;
   private sourceConflictReadOnly = false;
   private readonly saveStatusEl: HTMLElement;
   private readonly mobileCleanups: Array<() => void> = [];
@@ -144,6 +173,7 @@ export class BaseView implements View {
   private inlinePersist: ((text: string) => Promise<void>) | null = null;
 
   private readonly onVaultChange = (changedFile?: TFile) => {
+    if (!nativeRenderOwnership(this.app).admissionOpen) return;
     if (changedFile && this.file && changedFile.path === this.file.path) {
       if (this.suppressReconcileModify) {
         this.suppressReconcileModify = false;
@@ -154,10 +184,10 @@ export class BaseView implements View {
       // and our own persist writes back to that same host note (ignoring it
       // here also avoids a write→modify→reload loop).
       if (this.inlinePersist) return;
-      void this.reloadIfChangedExternally();
+      void this.reloadIfChangedExternally().catch(error => { if (!(error instanceof ScopeCancelled)) this.app.notify(`Could not reload Base: ${error instanceof Error ? error.message : String(error)}`); });
       return;
     }
-    if (changedFile && changedFile.path === this.sourceWritePath) return;
+    if (changedFile && [...this.sourcePersistPaths.values()].includes(changedFile.path)) return;
     // Some other file changed (a row's frontmatter was edited, a note was
     // created/deleted, etc.) — re-run the query against the current
     // (unchanged) `.base` definition, no need to re-parse it from disk.
@@ -165,16 +195,82 @@ export class BaseView implements View {
   };
 
   /** Re-parse from disk only if the file's current content differs from what we last wrote/read — see `lastKnownText`'s doc comment. */
-  private async reloadIfChangedExternally(): Promise<void> {
-    if (!this.file) return;
-    const cached = this.app.vault.getCachedContent(this.file.path);
-    if (cached !== undefined && cached === this.lastKnownText) return;
-    const text = await this.app.vault.read(this.file);
-    if (text === (this.pendingKnownText ?? this.lastKnownText)) return;
-    await this.applyText(text);
+  private reloadIfChangedExternally(): Promise<void> {
+    this.reloadRequestGeneration++;
+    return this.startExternalReloadDrain();
   }
 
-  constructor(private app: App) {
+  private startExternalReloadDrain(): Promise<void> {
+    if (this.reloadInFlight) return this.reloadInFlight;
+    // Register before running: synchronous modify echoes may request a reload,
+    // but the write itself must never await the drain waiting on its tail.
+    const operation = Promise.resolve().then(() => {
+      const reload = (token?: RenderToken) => this.drainExternalReloads(token);
+      return this.renderOwner ? this.renderOwner.run(reload) : reload();
+    });
+    const task: Promise<void> = operation.then(() => {
+      if (this.reloadInFlight === task) this.reloadInFlight = null;
+      // Include requests arriving between the drain's final check and cleanup
+      // in the same coalesced promise rather than silently losing the last one.
+      if (!this.reloadClosed && this.reloadHandledGeneration !== this.reloadRequestGeneration) return this.startExternalReloadDrain();
+    }, error => {
+      if (this.reloadInFlight === task) this.reloadInFlight = null;
+      // A rejected write/read is not an invitation to replace a failed draft.
+      throw error;
+    });
+    this.reloadInFlight = task;
+    return task;
+  }
+
+  private async drainExternalReloads(token?: RenderToken): Promise<void> {
+    for (;;) {
+      const request = this.reloadRequestGeneration;
+      const file = this.file, vault = this.app.vault, root = vault.root;
+      const path = file?.path, owner = this.reloadOwnerGeneration;
+      const inline = this.inlinePersist, revision = this.definitionRevision;
+      const currentOwner = () => !this.reloadClosed && owner === this.reloadOwnerGeneration
+        && this.file === file && file?.path === path && this.app.vault === vault
+        && vault.root === root && this.inlinePersist === inline;
+      if (!file || inline || !currentOwner()) { this.reloadHandledGeneration = request; return; }
+      const tail = this.persistQueue;
+      token?.check();
+      await tail; // Even an already-rejected tail must reject this drain.
+      if (!currentOwner()) { this.reloadHandledGeneration = request; return; }
+      if (tail !== this.persistQueue || revision !== this.definitionRevision || request !== this.reloadRequestGeneration) continue;
+      const cached = vault.getCachedContent(path!);
+      if (cached !== undefined && cached === this.lastKnownText) { this.reloadHandledGeneration = request; return; }
+      const text = await vault.read(file); token?.check();
+      if (!currentOwner()) { this.reloadHandledGeneration = request; return; }
+      if (tail !== this.persistQueue || revision !== this.definitionRevision || request !== this.reloadRequestGeneration) continue;
+      if (text !== (this.pendingKnownText ?? this.lastKnownText)) await this.applyText(text);
+      this.reloadHandledGeneration = request;
+      // applyText advances the local revision itself; only a new request needs
+      // another iteration after a current result has been accepted.
+      if (request === this.reloadRequestGeneration) return;
+    }
+  }
+
+  readonly renderOwner: RenderScope;
+  readonly sourceNavigation: SourceOwnedNavigation;
+  constructor(private app: App, parentOwner?: RenderScope, sourceNavigation?: SourceOwnedNavigation) {
+    const options = this.nativeRenderOptions();
+    this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
+    this.sourceNavigation = sourceNavigation ?? new SourceOwnedNavigation({
+      capture: () => {
+        const leaf = app.workspace.findLeafForView(this), file = this.file, vault = app.vault, root = vault.root, token = this.renderOwner.captureToken();
+        if (!leaf) throw new ScopeCancelled();
+        return () => {
+          if (app.workspace.findLeafForView(this) !== leaf || leaf.view !== this || this.file !== file || app.vault !== vault || vault.root !== root) throw new ScopeCancelled();
+          token.check();
+        };
+      },
+      preflight: () => this.renderOwner.assertRetirementReady(),
+      execute: (request, validate) => {
+        const leaf = app.workspace.findLeafForView(this); if (!leaf) throw new ScopeCancelled();
+        return app.navigateFromSource(request, leaf, validate);
+      },
+      notify: message => app.notify(message),
+    });
     this.containerEl = document.createElement("div");
     this.containerEl.className = "base-view";
 
@@ -213,16 +309,16 @@ export class BaseView implements View {
     this.errorEl.style.display = "none";
 
     this.tableView = new BasesTableView(app, {
-      onOpenFile: (file, newTab) => void this.app.openFile(file, newTab),
+      onOpenFile: (file, newTab) => { void this.sourceNavigation.prepareNavigation({ kind: "file", file, newTab }, captureNavigationOrigin(this.renderOwner)).dispatch(); },
       onEditCell: (file, columnPath, rawText) => this.editCell(file, columnPath, rawText),
       onEditStart: (file, columnPath, rawText) => this.beginSourceEdit(file, columnPath, rawText),
       onEditDraft: (rawText) => { if (this.sourceEdit) this.sourceEdit.rawText = rawText; },
-      onEditEnd: () => { this.sourceEdit = null; },
-    });
+      onEditEnd: identity => this.endSourceEdit(identity),
+    }, this.sourceNavigation, this.renderOwner);
 
     this.cardsView = new BasesCardsView(app, {
-      onOpenFile: (file, newTab) => void this.app.openFile(file, newTab),
-    });
+      onOpenFile: (file, newTab) => { void this.sourceNavigation.prepareNavigation({ kind: "file", file, newTab }, captureNavigationOrigin(this.renderOwner)).dispatch(); },
+    }, this.sourceNavigation, this.renderOwner);
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "base-view-body";
@@ -297,17 +393,24 @@ export class BaseView implements View {
     await this.setFile(file);
   }
 
-  async setFile(file: TFile, requireValid = false): Promise<void> {
+  setFile(file: TFile, requireValid = false): Promise<void> {
+    return this.renderOwner ? this.renderOwner.run(token => this.setFileNative(file, requireValid, token)) : this.setFileNative(file, requireValid);
+  }
+
+  private async setFileNative(file: TFile, requireValid: boolean, token?: RenderToken): Promise<void> {
+    this.definitionRevision++; this.reloadOwnerGeneration++;
     await this.persistQueue;
     await Promise.all([...this.sourcePersistsInFlight]);
+    token?.check();
     const text = await this.app.vault.read(file);
+    token?.check();
     const parsed = parseBaseFile(text);
     if (requireValid && "error" in parsed) throw new Error(`Couldn't parse base: ${parsed.error}`);
     this.tableView.resetForFile();
+    this.tableView.cancelNavigation();
     this.cardsView.destroy();
     this.pluginViewHost.destroy();
     this.sourceEdit = null;
-    this.sourceWritePath = null;
     this.sourceConflictReadOnly = false;
     this.vaultSwitching = false;
     this.persistRequestedWhileSuspended = false;
@@ -321,6 +424,7 @@ export class BaseView implements View {
     this.containerEl.querySelector(".bases-conflict-state")?.remove();
     delete this.containerEl.dataset.basesConflictPath;
     this.setSaveStatus("", false);
+    this.definitionRevision++; this.reloadOwnerGeneration++;
     this.file = file;
     this.containerEl.inert = false;
     this.bodyEl.inert = false;
@@ -336,17 +440,19 @@ export class BaseView implements View {
    * the note). Used by the Markdown renderer for embedded bases; the tab
    * header is hidden since an embed has no tab of its own.
    */
-  async mountInline(
+  mountInline(
     hostFile: TFile,
     text: string,
     persist: (text: string) => Promise<void>,
     viewName?: string
   ): Promise<void> {
-    this.inlinePersist = persist;
-    this.file = hostFile;
-    this.markEmbedded();
-    if (viewName) this.currentViewName = viewName;
-    await this.applyText(text);
+    const initialize = async (token?: RenderToken) => {
+      this.definitionRevision++; this.reloadOwnerGeneration++;
+      token?.check(); this.inlinePersist = persist; this.file = hostFile; this.markEmbedded();
+      if (viewName) this.currentViewName = viewName;
+      await this.applyText(text); token?.check();
+    };
+    return this.renderOwner ? this.renderOwner.run(initialize) : initialize();
   }
 
   /** Hide the tab-style header and mark the container as an embed — used when this view is embedded/transcluded inside a note. */
@@ -373,6 +479,7 @@ export class BaseView implements View {
     // Leave `lastKnownText` alone too: this read told us nothing, so the next
     // one must still count as a change.
     if (shouldIgnoreBaseReload(text, this.def?.views.length ?? 0)) return;
+    this.definitionRevision++;
     this.lastKnownText = text;
     const parsed = parseBaseFile(text);
     if ("error" in parsed) {
@@ -397,18 +504,24 @@ export class BaseView implements View {
   }
 
   onOpen(): void {
+    this.reloadClosed = false; this.definitionRevision++; this.reloadOwnerGeneration++;
     this.app.vault.on("modify", this.onVaultChange);
     this.app.vault.on("create", this.onVaultChange);
     this.app.vault.on("delete", this.onVaultChange);
     this.app.metadataCache.on("changed", this.onVaultChange);
   }
 
-  async onClose(): Promise<void> {
-    await this.persistQueue;
+  onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
+
+  private async closeNative(): Promise<void> {
+    this.reloadClosed = true; this.definitionRevision++; this.reloadOwnerGeneration++;
+    try { await Promise.all([this.persistQueue, ...this.sourcePersistsInFlight]); }
+    catch (error) { this.reloadClosed = false; this.reloadOwnerGeneration++; throw error; }
     this.app.vault.off("modify", this.onVaultChange);
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
+    this.tableView.cancelNavigation();
     this.cardsView.destroy();
     this.pluginViewHost.destroy();
     this.sourceEdit = null;
@@ -475,7 +588,14 @@ export class BaseView implements View {
     ];
   }
 
+  private canRefreshProjection(): boolean {
+    if (this.sourceEdit || this.tableView.editIdentity) { this.projectionRefreshPending = true; return false; }
+    this.projectionRefreshPending = false;
+    return true;
+  }
+
   private runAndRender(): void {
+    if (!this.canRefreshProjection()) return;
     if (!this.def || !this.file) return;
     const view = this.currentView();
     if (!view) return;
@@ -525,6 +645,7 @@ export class BaseView implements View {
    * render it.
    */
   private renderActiveView(view: BaseViewDefinition, result: QueryResult, columns: string[]): void {
+    if (!this.canRefreshProjection()) return;
     if (!this.def) return;
 
     const registration = this.pluginViewHost.registrationFor(view.type);
@@ -585,28 +706,80 @@ export class BaseView implements View {
    */
   private persistQueue: Promise<void> = Promise.resolve();
 
+  private recoverNativeWrites(failures: readonly RenderFailure[]): void {
+    this.retainedNativeFailures = failures;
+    // Recovery is presentation only. A broken projection must not reclassify
+    // bytes already acknowledged by the vault as another failed mutation.
+    try {
+      if (failures.some(failure => failure.key === "definition")) this.setSaveStatus("Base save failed", true, () => this.persist(true));
+      else {
+        const record = [...this.rowFailures.values()].find(row => this.rowTargetCurrent(row));
+        if (record) this.setSaveStatus("Base save failed", true, () => this.retryFailedRow(record), { file: record.file, columnPath: record.columnPath });
+        else if (!failures.length && !this.sourceEdit && !this.rowRefreshFailed) this.setSaveStatus("Base saved", false);
+      }
+    } catch { this.app.notify("Base save recovery could not refresh its controls."); }
+  }
+
+  private rowTargetCurrent(row: FailedBaseRow): boolean {
+    return this.app.vault === row.vault && this.file === row.ownerFile && (this.file?.path ?? null) === row.ownerPath && row.file.path === row.filePath;
+  }
+
+  private async retryFailedRow(row: FailedBaseRow): Promise<void> {
+    if (!this.rowTargetCurrent(row)) return;
+    await this.retryRowEdit(row.file, row.columnPath, row.rawText);
+  }
+
   /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `lastKnownText`'s doc comment for why the resulting "modify" event(s) must not trigger a second, object-identity-breaking reload). */
-  private persist(): Promise<void> {
-    if (this.vaultSwitching) {
+  private persist(retry = false): Promise<void> {
+    this.definitionRevision++;
+    if (this.renderOwner?.closed) return Promise.resolve();
+    if (this.vaultSwitching || (this.renderOwner && !this.renderOwner.admissionAllowed)) {
       this.persistRequestedWhileSuspended = true;
       return Promise.resolve();
     }
-    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist());
+    this.definitionWritesPending++;
+    const previous = this.persistQueue;
+    const write = async (token?: RenderToken) => { await previous.catch(() => {}); token?.check(); await this.doPersist(token); };
+    const task = this.renderOwner ? retry ? this.renderOwner.retry(write, "definition") : this.renderOwner.run(write, "definition") : write();
+    this.persistQueue = task.finally(() => { this.definitionWritesPending--; });
+    void task.then(() => { if (this.renderOwner?.admissionAllowed && !this.renderOwner.hasUnacknowledgedWrites) this.setSaveStatus("Base saved", false); }, () => {});
+    void task.catch(() => { if (this.renderOwner?.admissionAllowed) this.setSaveStatus("Base save failed", true, () => this.persist(true)); });
+    // UI callbacks are fire-and-forget; retain rejection for pause/load callers.
+    void this.persistQueue.catch(() => {});
     return this.persistQueue;
   }
 
-  private async doPersist(): Promise<void> {
+  private async doPersist(token?: RenderToken): Promise<void> {
     if (!this.def || !this.file) return;
     const text = stringifyBaseFile(this.def);
+    this.definitionRevision++;
     this.pendingKnownText = text;
     try {
+      token?.check();
       if (this.inlinePersist) await this.inlinePersist(text);
       else await this.app.vault.modify(this.file, text);
+      this.definitionRevision++;
       this.lastKnownText = text;
     } finally {
-      if (this.pendingKnownText === text) this.pendingKnownText = null;
+      if (this.pendingKnownText === text) { this.definitionRevision++; this.pendingKnownText = null; }
     }
-    this.runAndRender();
+    if (!token || token.current()) this.runAndRender();
+  }
+
+  workspaceWritePaths(): string[] {
+    return [...new Set([...(this.definitionWritesPending || this.pendingKnownText !== null ? [this.file?.path ?? ""] : []), ...this.sourcePersistPaths.values()])].filter(Boolean);
+  }
+
+  assertWorkspaceLoadReady(): void {
+    if (this.sourceConflictReadOnly) throw new Error("Resolve Base source conflict or recovery before loading a workspace.");
+    if (this.sourceEdit || this.tableView.editIdentity) throw new Error("Finish or cancel the active Base cell draft before loading a workspace.");
+    if (this.persistRequestedWhileSuspended) throw new Error("The Base changed during the workspace operation. Retry after its edits are saved.");
+  }
+
+  async settleWorkspaceLoad(): Promise<void> {
+    this.assertWorkspaceLoadReady();
+    await Promise.all([this.persistQueue, ...this.sourcePersistsInFlight]);
+    this.assertWorkspaceLoadReady();
   }
 
   async prepareVaultSwitch(): Promise<void> {
@@ -620,6 +793,26 @@ export class BaseView implements View {
       this.persistRequestedWhileSuspended = false;
       void this.persist();
     }
+  }
+
+  private nativeRenderOptions() {
+    return { writer: this, preflightClose: () => this.assertWorkspaceLoadReady(), prepareClose: () => this.settleWorkspaceLoad(), close: () => this.closeNative(), resume: () => { this.nativeLifecycleGeneration++; if (this.file && this.def) this.runAndRender(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
+  }
+
+  /** Built-in App sync guards only; no public View/SDK focus contract. */
+  captureSyncGuardFocus(active: () => boolean): BaseSyncFocusReceipt | null {
+    const file = this.file, path = file?.path, vault = this.app.vault, root = vault.root;
+    const table = this.tableView, container = this.containerEl, body = this.bodyEl;
+    const edit = this.sourceEdit, owner = this.renderOwner, generation = this.reloadOwnerGeneration, lifecycle = this.nativeLifecycleGeneration, revision = this.definitionRevision;
+    if (!file || !edit || this.vaultSwitching || document.body.inert || this.containerEl.closest("[inert]")) return null;
+    const source = edit.file, sourcePath = source.path, column = edit.columnPath, raw = edit.rawText;
+    const eligible = () => this.tableView === table && this.containerEl === container && this.bodyEl === body && this.file === file && file.path === path && this.app.vault === vault && vault.root === root && this.sourceEdit === edit && edit.file === source && source.path === sourcePath && edit.columnPath === column && edit.rawText === raw &&
+      this.reloadOwnerGeneration === generation && this.nativeLifecycleGeneration === lifecycle && this.definitionRevision === revision && !this.reloadClosed && this.renderOwner === owner && owner.admissionAllowed && !owner.hasUnacknowledgedWrites &&
+      !this.sourceConflictReadOnly && !this.retainedNativeFailures.length && !this.rowFailures.size && !this.sourcePersistsInFlight.size && !this.definitionWritesPending && !this.rowRefreshFailed;
+    if (!eligible()) return null;
+    const receipt = table.captureSyncGuardFocus(active, eligible);
+    if (!receipt) return null;
+    return { input: receipt.input, discard: () => receipt.discard(), restore: allow => receipt.restore(() => eligible() && !this.vaultSwitching && !document.body.inert && !receipt.input.closest("[inert]") && allow()) };
   }
 
   async pauseAutosave(): Promise<void> {
@@ -670,6 +863,7 @@ export class BaseView implements View {
     new PromptModal(this.app, {
       placeholder: "View name",
       onSubmit: (name) => {
+        if (this.renderOwner && !this.renderOwner.admissionAllowed) return;
         if (!this.def || this.def.views.some((v) => v.name === name)) return;
         this.def.views.push({ type, name });
         this.currentViewName = name;
@@ -695,6 +889,7 @@ export class BaseView implements View {
       placeholder: "New view name",
       initialValue: name,
       onSubmit: (newName) => {
+        if (this.renderOwner && !this.renderOwner.admissionAllowed) return;
         if (!this.def || newName === name || this.def.views.some((v) => v.name === newName)) return;
         const view = this.def.views.find((v) => v.name === name);
         if (!view) return;
@@ -809,49 +1004,93 @@ export class BaseView implements View {
   }
 
   private createNewFileInFolder(): void {
+    if (this.renderOwner && !this.renderOwner.admissionAllowed) return;
     if (!this.file) return;
-    void this.app.createNewNote(this.file.parent);
+    const parent = this.file.parent;
+    const create = async (token?: RenderToken) => { token?.check(); await this.app.createNewNote(parent); };
+    const task = this.renderOwner ? this.renderOwner.retry(create, "create-note") : create();
+    void task.catch(() => this.app.notify("Could not create the Base note."));
   }
 
   // --- Cell editing ---------------------------------------------------------
 
-  private editCell(file: TFile, columnPath: string, rawText: string): Promise<void> {
-    const operation = this.commitCellEdit(file, columnPath, rawText);
+  private editCell(file: TFile, columnPath: string, rawText: string, _retry = false): Promise<void> {
+    if (this.vaultSwitching) return rejectPausedBaseEdit();
+    if (this.sourceConflictReadOnly) return Promise.reject(new Error("Resolve Base source conflict before editing its rows."));
+    const edit = this.sourceEdit;
+    const key = JSON.stringify(["row", file.path, columnPath]);
+    const previous = this.rowFailures.get(key);
+    const record: FailedBaseRow = { file, filePath: file.path, ownerFile: this.file, ownerPath: this.file?.path ?? null, vault: this.app.vault, columnPath, rawText, sequence: ++this.rowSubmissionSequence };
+    const write = async (token: RenderToken) => {
+      token.check();
+      if (!this.rowTargetCurrent(record)) throw new Error("The Base row target changed before its save.");
+      const guardedToken: RenderToken = {
+        current: () => token.current() && this.rowTargetCurrent(record) && !this.sourceConflictReadOnly,
+        check: () => {
+          token.check();
+          if (!this.rowTargetCurrent(record) || this.sourceConflictReadOnly) throw new Error("The Base row target or conflict state changed before its save.");
+        },
+      };
+      await this.commitCellEdit(file, columnPath, rawText, guardedToken, edit);
+    };
+    // Every user submission supersedes only failures captured for its exact key.
+    const operation = this.renderOwner.retry(write, key).then(() => {
+      if (this.rowFailures.get(key) === previous) this.rowFailures.delete(key);
+      this.recoverNativeWrites(this.retainedNativeFailures);
+    }, error => {
+      const retained = this.rowFailures.get(key);
+      if (!retained || retained.sequence < record.sequence) this.rowFailures.set(key, record);
+      if (this.renderOwner.admissionAllowed) this.recoverNativeWrites(this.retainedNativeFailures);
+      throw error;
+    });
     this.sourcePersistsInFlight.add(operation);
+    this.sourcePersistPaths.set(operation, file.path);
     operation.then(
-      () => this.sourcePersistsInFlight.delete(operation),
-      () => this.sourcePersistsInFlight.delete(operation),
+      () => { this.sourcePersistsInFlight.delete(operation); this.sourcePersistPaths.delete(operation); },
+      () => { this.sourcePersistsInFlight.delete(operation); this.sourcePersistPaths.delete(operation); },
     );
     return operation;
   }
 
-  private async commitCellEdit(file: TFile, columnPath: string, rawText: string): Promise<void> {
+  private async commitCellEdit(file: TFile, columnPath: string, rawText: string, token: RenderToken, edit = this.sourceEdit): Promise<void> {
     const key = frontmatterKeyForColumn(columnPath);
     if (!key) return;
-    this.setSaveStatus("Saving Base…", false);
-    this.sourceWritePath = file.path;
-    try {
-      await patchFrontmatter(this.app.vault, file, (fm) => {
-        const value = parseEditedValue(rawText);
-        if (value === undefined) delete fm[key];
-        else fm[key] = value;
-      });
-      this.sourceEdit = null;
-      this.setSaveStatus("Base saved", false);
-      this.runAndRender();
-    } catch (error) {
-      this.setSaveStatus("Base save failed", true, async () => {
-        await this.editCell(file, columnPath, rawText);
-        this.tableView.acknowledgeEdit();
-      });
-      throw error;
-    } finally {
-      this.sourceWritePath = null;
-    }
+    if (this.sourceEdit === edit) this.setSaveStatus("Saving Base…", false);
+    await patchFrontmatter(this.app.vault, file, (fm) => {
+      const value = parseEditedValue(rawText);
+      if (value === undefined) delete fm[key];
+      else fm[key] = value;
+    }, undefined, () => token.check());
+    if (this.sourceEdit !== edit) return;
+    this.sourceEdit = null;
+    this.rowRefreshFailed = false;
+    try { this.setSaveStatus("Base saved", false); this.runAndRender(); }
+    catch { this.rowRefreshFailed = true; try { this.setSaveStatus("Base saved, but its view refresh failed.", true); } catch { this.app.notify("Base saved, but its view refresh failed."); } }
   }
 
-  private beginSourceEdit(file: TFile, columnPath: string, rawText: string): void {
+  private async retryRowEdit(file: TFile, columnPath: string, failedText: string): Promise<void> {
+    const draft = this.sourceEdit;
+    if (draft && (draft.file.path !== file.path || draft.columnPath !== columnPath)) {
+      this.app.notify("Finish or cancel the current cell draft before retrying another row.");
+      return;
+    }
+    const tableEdit = this.tableView.editIdentity;
+    await this.editCell(file, columnPath, draft?.rawText ?? failedText, true);
+    this.tableView.acknowledgeEdit(tableEdit);
+  }
+
+  private beginSourceEdit(file: TFile, columnPath: string, rawText: string): object {
     this.sourceEdit = { file, columnPath, rawText, originalText: this.app.vault.read(file) };
+    return this.sourceEdit;
+  }
+
+  private endSourceEdit(identity: object | void): void {
+    if (this.sourceEdit && this.sourceEdit !== identity) return;
+    this.sourceEdit = null;
+    if (this.projectionRefreshPending) {
+      try { this.runAndRender(); }
+      catch { this.setSaveStatus("Base view refresh failed.", true); }
+    }
   }
 
   async getDirtySourceConflict(path: string, folder = false): Promise<{ file: TFile; text: string } | null> {
@@ -904,7 +1143,7 @@ export class BaseView implements View {
     this.containerEl.dataset.basesConflictPath = conflictPath ?? "recovery";
   }
 
-  private setSaveStatus(message: string, failed: boolean, retry?: () => Promise<void>): void {
+  private setSaveStatus(message: string, failed: boolean, retry?: () => Promise<void>, row?: { file: TFile; columnPath: string }): void {
     this.saveStatusEl.replaceChildren();
     this.saveStatusEl.setAttribute("role", failed ? "alert" : "status");
     if (!message) return;
@@ -915,6 +1154,11 @@ export class BaseView implements View {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = "Retry Base save";
+      if (row) {
+        button.dataset.baseRowRetry = JSON.stringify([row.file.path, row.columnPath]);
+        // Preserve the failed editor until this explicit retry owns the save.
+        button.addEventListener("pointerdown", event => event.preventDefault());
+      }
       button.addEventListener("click", () => { void retry().catch(() => {}); });
       this.saveStatusEl.appendChild(button);
     }
