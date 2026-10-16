@@ -5,7 +5,7 @@ import {
   drawSelection,
   placeholder,
 } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import {
   autocompletion,
@@ -300,7 +300,10 @@ export class MarkdownView implements View {
         ),
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...completionKeymap, indentWithTab]),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) this.scheduleSave();
+          if (update.docChanged) {
+            this.scheduleSave();
+            this.app.workspace.trigger("editor-change", this);
+          }
           if (update.docChanged || update.selectionSet) this.updateCommentButton();
         }),
         imageAttachmentHandlers({
@@ -664,6 +667,18 @@ export class MarkdownView implements View {
 
   getText(): string {
     return this.editor?.state.doc.toString() ?? this.lastSavedText;
+  }
+
+  /** Internal sidebar mutation seam; all edits use the normal editor undo/autosave. */
+  canApplySourceEdit(): boolean {
+    return !!this.editor && !this.vaultSwitching && !this.conflictReadOnly && this.mode !== "reading";
+  }
+
+  applySourceEdit(snapshot: string, from: number, to: number, insert: string): boolean {
+    if (!this.canApplySourceEdit() || !this.editor || this.getText() !== snapshot ||
+        from < 0 || to < from || to > snapshot.length) return false;
+    this.editor.dispatch({ changes: { from, to, insert }, annotations: isolateHistory.of("full") });
+    return true;
   }
 
   /** Wait for an already-started save without publishing any new editor edits. */
