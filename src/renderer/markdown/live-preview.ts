@@ -1,3 +1,4 @@
+import { bindSourceLinkNavigation, type SourceOwnedNavigation } from "./source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, type RenderScope } from "../workspaces/render-ownership";
 import {
   Decoration,
@@ -897,7 +898,8 @@ class EmbedWidget extends WidgetType {
      * by one editor, so comparing it would never distinguish two widgets.
      */
     private getLeaf: () => WorkspaceLeaf | null,
-    private owner?: RenderScope
+    private owner?: RenderScope,
+    private navigation?: SourceOwnedNavigation
   ) {
     super();
   }
@@ -941,7 +943,7 @@ class EmbedWidget extends WidgetType {
         root.textContent = `Recursive Canvas embed: ${file.basename}`;
         return root;
       }
-      const canvas = new CanvasView(this.app, scope);
+      const canvas = new CanvasView(this.app, scope, this.navigation);
       this.canvasView = canvas;
       canvas.markEmbedded();
       canvas.onOpen();
@@ -1002,7 +1004,7 @@ class EmbedWidget extends WidgetType {
       root.appendChild(title);
       root.appendChild(content);
       this.app.markdownRenderer
-        .renderNoteEmbed(file, resolved.subpath, this.sourcePath, content, this.getLeaf, scope)
+        .renderNoteEmbed(file, resolved.subpath, this.sourcePath, content, this.getLeaf, scope, this.navigation)
         .then(() => { if (!this.destroyed) view.requestMeasure(); })
         .catch(error => { if (!this.destroyed && !(error instanceof ScopeCancelled)) content.textContent = "Unable to load note."; });
       return root;
@@ -1333,7 +1335,8 @@ export function livePreview(
   app: App,
   getPath: () => string,
   getLeaf: () => WorkspaceLeaf | null = () => null,
-  renderOwner?: RenderScope
+  renderOwner?: RenderScope,
+  navigation?: SourceOwnedNavigation
 ): Extension {
   const hide = Decoration.replace({});
 
@@ -1641,7 +1644,7 @@ export function livePreview(
             // giving it block layout — the same technique HRWidget already
             // uses for full-line widgets in this file.
             const isBlock = (resolved.kind === "note" || resolved.kind === "canvas") && wholeLine;
-            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock, getLeaf, renderOwner);
+            const widget = new EmbedWidget(target, param, sourcePath, app, isBlock, getLeaf, renderOwner, navigation);
             decos.push(
               Decoration.replace({ widget }).range(isBlock ? line.from : start, isBlock ? line.to : end)
             );
@@ -1791,7 +1794,13 @@ export function livePreview(
     },
   });
 
+  const sourceLinks = navigation ? ViewPlugin.fromClass(class {
+    private readonly cleanup: () => void;
+    constructor(view: EditorView) { this.cleanup = bindSourceLinkNavigation(view.dom, navigation!, getPath, renderOwner); }
+    destroy(): void { this.cleanup(); }
+  }) : [];
   return [
+    sourceLinks,
     frontmatterField,
     tableField,
     mermaidField,
