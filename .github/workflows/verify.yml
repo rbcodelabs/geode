@@ -73,3 +73,42 @@ jobs:
           name: mobile-playwright-results
           path: test-results/
           retention-days: 7
+
+  ios-swift:
+    # Swift errors must fail PRs, not `ios-v*` tag builds (ADR 0030 section 4). Compiles the App target and the test
+    # bundle for the simulator without signing (the entitlements file is parsed but never matched to a profile), then
+    # runs the pure engine XCTests. Nothing here touches iCloud: real propagation is the two-device manual gate.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Select Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode="$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+      - name: Build the app and tests for the iOS simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -project ios/App/App.xcodeproj -scheme App \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO
+      - name: iCloud container engine XCTests
+        shell: bash
+        run: |
+          set -euo pipefail
+          udid="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')"
+          [[ -n "$udid" && "$udid" != "null" ]] || { echo "No iPhone simulator available" >&2; exit 1; }
+          xcodebuild test-without-building \
+            -project ios/App/App.xcodeproj -scheme App \
+            -destination "platform=iOS Simulator,id=$udid" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -only-testing:AppUITests/IcloudContainerEngineTests \
+            CODE_SIGNING_ALLOWED=NO
