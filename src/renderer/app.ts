@@ -1,4 +1,7 @@
 import { PropertyTypes } from "./properties/property-types";
+import type { BaseSyncFocusReceipt } from "./views/bases/paused-edit";
+import { SourceNavigationEffectFailure, type SourceNavigationRequest } from "./markdown/source-owned-navigation";
+import { ScopeCancelled } from "./workspaces/render-ownership";
 import { Vault } from "./vault";
 import { PostApplyRefresh } from "./sync/post-apply-refresh";
 import { watchSyncStatus } from "./sync/status-refresh";
@@ -64,6 +67,7 @@ import { FilePropertiesView } from "./views/file-properties-view";
 import { OutgoingLinksView } from "./views/outgoing-links-view";
 import { ExcludedFiles } from "./excluded-files";
 import { renderFilesAndLinksTab } from "./settings/files-and-links-tab";
+import { FootnotesPlugin } from "./internal-plugins/footnotes-plugin";
 import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
@@ -173,6 +177,8 @@ interface AppSettings {
   slashCommandsEnabled: boolean;
   /** Slides core plugin; off by default, as in Obsidian. */
   slidesEnabled: boolean;
+  /** Footnotes core plugin; optional sidebar, off by default. */
+  footnotesEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -1419,6 +1425,11 @@ class SettingsModal extends Modal {
       this.geodeApp.settings.slidesEnabled = enabled;
       this.geodeApp.syncSlidesPlugin();
       this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Footnotes</h3>`);
+    this.addToggle(container, "Enable Footnotes", this.geodeApp.settings.footnotesEnabled, (enabled) => {
+      this.geodeApp.settings.footnotesEnabled = enabled;
+      void this.geodeApp.syncFootnotesPlugin().then(() => this.geodeApp.host.config.write("app", this.geodeApp.settings)).catch(() => this.geodeApp.notify("Could not update Footnotes"));
     });
     this.renderNoteComposerSettings(container);
     container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
@@ -2771,6 +2782,7 @@ export class App {
     formatConverterEnabled: false,
     slashCommandsEnabled: true,
     slidesEnabled: false,
+    footnotesEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -2791,6 +2803,8 @@ export class App {
   private externalModifyInFlight = new Map<string, Promise<void>>();
   private webViewerLifecycleEnabled = false;
   private commentsView?: CommentsView;
+  private footnotesPlugin?: FootnotesPlugin;
+  private footnotesLifecycle: Promise<void> = Promise.resolve();
   private syncConflictBanners: SyncConflictBannerController | null = null;
   private openConflictModal: ConflictCompareModal | null = null;
   private refreshDetailsModal: ErrorDetailsModal | null = null;
@@ -3440,6 +3454,7 @@ export class App {
         formatConverterEnabled: saved.formatConverterEnabled === true,
         slashCommandsEnabled: saved.slashCommandsEnabled !== false,
         slidesEnabled: saved.slidesEnabled === true,
+        footnotesEnabled: saved.footnotesEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -3526,10 +3541,55 @@ export class App {
     const syncWorkspace = this.workspace;
     const syncGuards = new Set<string>(); let previousInert = false; let syncDisposed = false;
     const staleViews = new Map<HTMLElement, { original: boolean; count: number }>();
-    const finishGuard = (token: string) => { syncGuards.delete(token); this.comments.releaseMutationHold(token); syncWorkspace.releaseAutosaveHold(token); if (!syncGuards.size && this.workspace === syncWorkspace) document.body.inert = previousInert; };
+    // Focus-only eligibility expires independently of host waiter/guard timing.
+    const focusLifetimeMs = 4000;
+    let focusEpoch: { receipt: BaseSyncFocusReceipt; leaf: WorkspaceLeaf; view: BaseView; expires: number; cleanup(): void } | undefined;
+    const discardFocus = () => { const epoch = focusEpoch; focusEpoch = undefined; epoch?.receipt.discard(); epoch?.cleanup(); };
+    const captureFocus = () => {
+      discardFocus();
+      const leaf = syncWorkspace.activeLeaf, view = leaf?.view;
+      if (!leaf || !(view instanceof BaseView)) return;
+      const receipt: BaseSyncFocusReceipt | null = view.captureSyncGuardFocus(() => focusEpoch?.receipt === receipt && syncGuards.size > 0 && document.body.inert && view.containerEl.inert && !syncDisposed);
+      if (!receipt) return;
+      const superseded = () => discardFocus();
+      const focus = (event: FocusEvent) => { if (event.target !== receipt.input && event.target !== document.body) discardFocus(); };
+      const intent = (event: Event) => { if (event.target !== receipt.input || (event as KeyboardEvent).key === "Tab") discardFocus(); };
+      const hidden = () => { if (document.hidden) discardFocus(); };
+      const changed = () => { if (this.workspace !== syncWorkspace || syncWorkspace.activeLeaf !== leaf || leaf.view !== view) discardFocus(); };
+      const leafRef = syncWorkspace.on("active-leaf-change", changed);
+      const layoutRef = syncWorkspace.on("layout-change", changed);
+      document.addEventListener("focusin", focus, true);
+      document.addEventListener("pointerdown", intent, true);
+      document.addEventListener("keydown", intent, true);
+      document.addEventListener("visibilitychange", hidden, true);
+      window.addEventListener("blur", superseded);
+      const timer = setTimeout(discardFocus, focusLifetimeMs);
+      focusEpoch = { receipt, leaf, view, expires: performance.now() + focusLifetimeMs, cleanup: () => {
+        clearTimeout(timer);
+        document.removeEventListener("focusin", focus, true);
+        document.removeEventListener("pointerdown", intent, true);
+        document.removeEventListener("keydown", intent, true);
+        document.removeEventListener("visibilitychange", hidden, true);
+        window.removeEventListener("blur", superseded);
+        if (leafRef) syncWorkspace.offref(leafRef);
+        if (layoutRef) syncWorkspace.offref(layoutRef);
+      } };
+    };
+    const finishGuard = (token: string) => {
+      if (!syncGuards.delete(token)) return;
+      this.comments.releaseMutationHold(token); syncWorkspace.releaseAutosaveHold(token);
+      if (syncGuards.size) return;
+      if (this.workspace !== syncWorkspace) { discardFocus(); return; }
+      document.body.inert = previousInert;
+      const epoch = focusEpoch;
+      if (!epoch) return;
+      const eligible = () => focusEpoch === epoch && !syncDisposed && !syncGuards.size && !staleViews.size && this.workspace === syncWorkspace && syncWorkspace.activeLeaf === epoch.leaf && epoch.leaf.view === epoch.view && performance.now() < epoch.expires;
+      if (!eligible()) { discardFocus(); return; }
+      void epoch.receipt.restore(eligible).finally(() => { if (focusEpoch === epoch) discardFocus(); }).catch(() => {});
+    };
     const stopPrepare = this.host.syncSafety?.onPrepare(async (token, relative) => {
       if (syncDisposed || this.workspace !== syncWorkspace) return "Vault window changed";
-      if (!syncGuards.size) previousInert = document.body.inert;
+      if (!syncGuards.size) { previousInert = document.body.inert; captureFocus(); }
       syncGuards.add(token); document.body.inert = true;
       await this.comments.holdMutations(token);
       if (!syncGuards.has(token) || syncDisposed || this.workspace !== syncWorkspace) return "Editor guard was released";
@@ -3550,6 +3610,7 @@ export class App {
     // lifted by `recover`, which performReconcile runs after a successful refresh (or the user's Retry). Both a failed and a
     // merely slow refresh take this path; only a failed one fails the sync.
     const holdStale = (token: string) => {
+      discardFocus();
       const elements: HTMLElement[] = [];
       syncWorkspace.iterateLeaves(leaf => { if (leaf.view) {
         const element = leaf.view.containerEl, held = staleViews.get(element) ?? { original: element.inert, count: 0 };
@@ -3574,7 +3635,7 @@ export class App {
       assertLive: () => { if (syncDisposed || this.workspace !== syncWorkspace) throw new Error("Vault window changed"); },
     });
     const stopRelease = this.host.syncSafety?.onRelease(async (token, outcome) => { if (syncGuards.has(token)) await postApply.release(token, outcome); });
-    this.hostDisposers.add(() => { syncDisposed = true; stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
+    this.hostDisposers.add(() => { syncDisposed = true; discardFocus(); stopPrepare?.(); stopRelease?.(); for (const token of [...syncGuards]) finishGuard(token); });
     this.statusBar = new StatusBar(this, shell);
     const mobileNavigation = this.createMobileNavigation();
     mobileNavigation.inert = true;
@@ -3659,6 +3720,7 @@ export class App {
     this.syncFormatConverterPlugin();
     this.syncSlashCommandsPlugin();
     this.syncSlidesPlugin();
+    await this.syncFootnotesPlugin();
     this.syncNoteComposerPlugin();
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
     // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
@@ -3825,11 +3887,13 @@ export class App {
   }
 
   private async restoreConflictRecovery(): Promise<void> {
+    const vault = this.vault;
     const prefix = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:`;
     for (const key of Object.keys(localStorage).filter((candidate) => candidate.startsWith(prefix))) {
       try {
-        const recovery = JSON.parse(localStorage.getItem(key) ?? "null") as { path?: string; text?: string } | null;
-        if (!recovery?.path || typeof recovery.text !== "string") continue;
+        const record = localStorage.getItem(key);
+        const recovery = JSON.parse(record ?? "null") as { vaultId?: string; path?: string; text?: string } | null;
+        if (!record || recovery?.vaultId !== vault.root || !recovery.path || typeof recovery.text !== "string") continue;
         let leaf = this.workspace.findLeafForFile(recovery.path);
         if (!leaf) {
           const file = this.vault.getFileByPath(recovery.path);
@@ -3841,9 +3905,11 @@ export class App {
         if (!(view instanceof MarkdownView)) continue;
         let externalText: string | null = null;
         try { externalText = await this.host.vaultFiles.read(recovery.path); } catch { /* provider deletion remains explicit */ }
-        view.restoreConflictRecovery(recovery.text, externalText);
-      } catch {
-        // Malformed derived recovery records are ignored without touching provider bytes.
+        if (this.vault !== vault || leaf?.view !== view || view.file?.path !== recovery.path) continue;
+        await view.restoreConflictRecovery(recovery.text, externalText);
+        if (view.file) view.confirmDeviceRecovery(vault, view.file, recovery.path, recovery.text, key, record);
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && !(error instanceof ScopeCancelled)) this.notify("Could not restore the local recovery presentation. Keep its stored record for retry.");
       }
     }
   }
@@ -3997,6 +4063,7 @@ export class App {
   }
 
   private async processExternalModify(file: TFile, suppliedText?: string): Promise<void> {
+    const vault = this.vault;
     const leaf = this.workspace.findLeafForFile(file.path);
     const view = leaf?.view;
     if (!(view instanceof MarkdownView) || !view.file) return;
@@ -4014,9 +4081,10 @@ export class App {
         if (!view.hasPendingSave() && known === view.getLastKnownText()) break;
       }
     }
+    if (this.vault !== vault || leaf?.view !== view || view.file?.path !== file.path) return;
     if (!hasExternalChange(text, view.getLastKnownText())) return;
     if (!view.hasUnacknowledgedChanges()) {
-      view.acceptExternalText(text);
+      await view.acceptExternalText(text);
       return;
     }
     await this.preserveConflict(view, file, text, file.path);
@@ -4090,21 +4158,26 @@ export class App {
     externalText: string | null,
     candidatePath: string,
   ): Promise<() => void> {
+    const vault = this.vault; const sourcePath = file.path;
     const localText = view.getText();
-    const conflictPath = buildConflictPath(
-      candidatePath,
-      formatConflictTimestamp(new Date()),
-      (path) => this.vault.getAbstractFileByPath(path) !== null,
-    );
+    const assertCurrent = () => { if (this.vault !== vault || view.file !== file || file.path !== sourcePath) throw new ScopeCancelled(); };
+    const conflictPath = buildConflictPath(candidatePath, formatConflictTimestamp(new Date()), path => vault.getAbstractFileByPath(path) !== null);
     try {
-      await this.vault.create(conflictPath, localText);
-      return () => view.presentConflict(externalText, conflictPath, false);
+      const copy = await vault.create(conflictPath, localText);
+      return () => {
+        assertCurrent(); view.presentConflict(externalText, conflictPath, false);
+        if (view instanceof MarkdownView) view.confirmRecoveryCopy(vault, file, sourcePath, localText, copy);
+      };
     } catch (writeError) {
-      const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(this.vault.root)}:${encodeURIComponent(file.path)}`;
+      assertCurrent();
+      const recoveryKey = `geode:conflict-recovery:${encodeURIComponent(vault.root)}:${encodeURIComponent(sourcePath)}`;
       view.presentConflict(externalText, null, true, "memory");
       try {
-        localStorage.setItem(recoveryKey, JSON.stringify({ vaultId: this.vault.root, path: file.path, text: localText }));
-        view.presentConflict(externalText, null, true, "device");
+        const record = JSON.stringify({ vaultId: vault.root, path: sourcePath, text: localText });
+        localStorage.setItem(recoveryKey, record);
+        if (localStorage.getItem(recoveryKey) !== record) throw new Error("Device recovery could not be confirmed.");
+        assertCurrent(); view.presentConflict(externalText, null, true, "device");
+        if (view instanceof MarkdownView) view.confirmDeviceRecovery(vault, file, sourcePath, localText, recoveryKey, record);
       } catch (storageError) {
         throw new AggregateError([writeError, storageError], "Conflict copy and device recovery both failed");
       }
@@ -4361,6 +4434,8 @@ export class App {
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
     await this.propertyTypes.close();
+    await this.footnotesLifecycle.catch(() => undefined);
+    await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.vault.close();
     this.metadataCache.dispose();
     this.workspace?.dispose();
@@ -4377,6 +4452,8 @@ export class App {
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
     this.activeSettingsModal?.close();
+    await this.footnotesLifecycle.catch(() => undefined);
+    await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.workspace?.closeAllLeaves();
     await this.pluginManager?.dispose();
     this.mermaidPlugin?.unload();
@@ -4469,6 +4546,11 @@ export class App {
       resource: file,
       ...this.viewActionContext(leaf?.view),
     };
+  }
+
+  private async observeMarkdownAction(operation: Promise<unknown>): Promise<void> {
+    try { await operation; }
+    catch (error) { if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not change this note's presentation."); }
   }
 
   private registerActions(): void {
@@ -4631,13 +4713,13 @@ export class App {
       id: "view.toggle-reading",
       label: "Toggle reading view",
       isAvailable: (context) => !!context.view,
-      run: (context) => context.view!.toggleMode(),
+      run: (context) => this.observeMarkdownAction(context.view!.toggleMode()),
     });
     this.actions.register({
       id: "view.toggle-source",
       label: "Toggle Live Preview/Source mode",
       isAvailable: (context) => !!context.view,
-      run: (context) => context.view!.toggleSource(),
+      run: (context) => this.observeMarkdownAction(context.view!.toggleSource()),
     });
     this.actions.register({
       id: "web.reload",
@@ -4955,6 +5037,15 @@ export class App {
     return leaf.runDocumentNavigation(open);
   }
 
+  private async initializeDocumentView<T extends View & { setFile(file: TFile): Promise<void> }>(view: T, file: TFile, leaf: WorkspaceLeaf): Promise<void> {
+    try { await view.setFile(file); await leaf.setView(view); }
+    catch (error) {
+      try { if (leaf.view !== view) { if (view instanceof CanvasView) await view.closeImplicitly(); else await view.onClose(); } }
+      catch (closeError) { throw new AggregateError([error, closeError], "Could not initialize or close the new document view."); }
+      throw error;
+    }
+  }
+
   private async mountDocumentInLeaf(leaf: WorkspaceLeaf, file: TFile, recordHistory: boolean): Promise<void> {
     const previousNavigation = recordHistory ? leaf.captureDocumentNavigation() : null;
     if (file.extension === "canvas") {
@@ -4963,9 +5054,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new CanvasView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new CanvasView(this), file, leaf);
       }
     } else if (file.extension === "base") {
       if (leaf.view instanceof BaseView) {
@@ -4973,9 +5062,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new BaseView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new BaseView(this), file, leaf);
       }
     } else if (file.extension === "md") {
       if (leaf.view instanceof MarkdownView) {
@@ -4983,9 +5070,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new MarkdownView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new MarkdownView(this), file, leaf);
       }
     } else if (IMAGE_EXTENSIONS.has(file.extension)) {
       if (leaf.view instanceof ImageView) {
@@ -5005,9 +5090,7 @@ export class App {
         leaf.group.renderTabs();
         this.workspace.trigger("file-open", file);
       } else {
-        const view = new MarkdownView(this);
-        await view.setFile(file);
-        await leaf.setView(view);
+        await this.initializeDocumentView(new MarkdownView(this), file, leaf);
       }
     }
     if (recordHistory) {
@@ -5181,13 +5264,12 @@ export class App {
     if (result.kind !== "vault") return result.kind;
     const file = this.vault.getAbstractFileByPath(result.path);
     if (!isTFile(file)) return "rejected";
-    await this.openFile(file, false);
-    if (file.extension === "md" && result.line !== undefined) {
-      const view = this.getActiveMarkdownView();
-      if (!view?.editor) return "vault";
-      const line = view.editor.state.doc.line(Math.min(result.line, view.editor.state.doc.lines));
-      const columnOffset = Math.min((result.column ?? 1) - 1, line.length);
-      view.scrollToOffset(line.from + columnOffset);
+    const intended = file.extension === "md" ? await this.openMarkdownForReveal(file) : null;
+    if (file.extension !== "md") await this.openFile(file, false);
+    if (intended?.editor && result.line !== undefined) {
+      const line = intended.editor.state.doc.line(Math.max(1, Math.min(result.line, intended.editor.state.doc.lines)));
+      const columnOffset = Math.max(0, Math.min((result.column ?? 1) - 1, line.length));
+      await intended.scrollToOffsetAsync(line.from + columnOffset);
     }
     return "vault";
   }
@@ -5256,6 +5338,65 @@ export class App {
     }
   }
 
+  /** Private native-origin route. The source queue owns the intent, never its child render scope. */
+  async navigateFromSource(request: SourceNavigationRequest, sourceLeaf: WorkspaceLeaf, validate: () => void): Promise<void> {
+    const vault = this.vault, root = vault.root;
+    const current = () => {
+      if (this.vault !== vault || vault.root !== root) throw new ScopeCancelled();
+      validate();
+    };
+    return sourceLeaf.runDocumentNavigation(async () => {
+      let effectsStarted = false;
+      try {
+        current();
+        let file: TFile | null;
+        let subpath = "";
+        if (request.kind === "file") file = request.file;
+        else {
+          file = this.metadataCache.getFirstLinkpathDest(request.linktext, request.sourcePath);
+          const hash = request.linktext.indexOf("#");
+          if (hash !== -1) subpath = request.linktext.slice(hash);
+          if (!file) {
+            const name = request.linktext.split("#")[0].trim();
+            if (!name) return;
+            current();
+            effectsStarted = true;
+            file = await vault.create(vault.availablePath("", name, "md"), "");
+            current();
+          }
+        }
+        if (vault.getFileByPath(file.path) !== file) throw new ScopeCancelled();
+        const offset = subpath ? await this.resolveSubpathOffset(file, subpath) : null;
+        current();
+        if (vault.getFileByPath(file.path) !== file) throw new ScopeCancelled();
+        const supported = file.extension === "canvas" || file.extension === "base" || file.extension === "md" || IMAGE_EXTENSIONS.has(file.extension);
+        if (!supported) {
+          // HTML and unsupported types retain their existing behavior after source validation.
+          effectsStarted = true;
+          await this.openFile(file, request.newTab, sourceLeaf);
+          return;
+        }
+        const existing = !request.newTab ? this.workspace.findLeafForFile(file.path) : null;
+        effectsStarted = true;
+        const destination = existing ?? this.workspace.getLeaf(request.newTab, undefined, sourceLeaf);
+        if (existing) existing.group.setActiveLeaf(existing);
+        else await this.openFileInLeaf(destination, file, true, destination === sourceLeaf);
+        // Source replacement is now intentional; subsequent checks belong to the destination.
+        if (this.vault !== vault || vault.root !== root || destination.view?.getFile?.() !== file) throw new ScopeCancelled();
+        const destinationView = destination.view;
+        if (!existing && this.workspace.getActiveLeaf() !== destination) destination.group.setActiveLeaf(destination);
+        if (this.vault !== vault || destination.view !== destinationView || destination.view?.getFile?.() !== file) throw new ScopeCancelled();
+        if (offset !== null && destination.view instanceof MarkdownView) {
+          const view = destination.view;
+          await view.scrollToOffsetAsync(offset);
+          if (this.vault !== vault || destination.view !== view || view.file !== file) throw new ScopeCancelled();
+        }
+      } catch (error) {
+        if (effectsStarted && !(error instanceof SourceNavigationEffectFailure)) throw new SourceNavigationEffectFailure(error);
+        throw error;
+      }
+    });
+  }
   /**
    * `sourceLeaf` is the pane holding the document the link was clicked in.
    * Every in-app link handler that knows its own leaf passes it, so the
@@ -5891,7 +6032,7 @@ export class App {
     new PromptModal(this, {
       placeholder: "Add a comment…",
       onSubmit: (body) => void this.comments.create(file, range, body, { type: "user", name: "You" })
-        .then((thread) => { this.showComments(); view.revealComment(thread.id); })
+        .then(async (thread) => { if (view.file !== file) return; await view.revealCommentAsync(thread.id); this.showComments(); })
         .catch((error) => this.notify(error instanceof Error ? error.message : "Could not add comment")),
     }).open();
   }
@@ -5914,8 +6055,10 @@ export class App {
   }
 
   revealComment(thread: CommentThread): void {
-    this.selectComment(thread.id);
-    void this.openFile(thread.file, false).then(() => this.getActiveMarkdownView()?.revealComment(thread.id));
+    void this.openMarkdownForReveal(thread.file).then(async view => {
+      if (!view) return;
+      await view.revealCommentAsync(thread.id); this.selectComment(thread.id);
+    }).catch(error => { if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not reveal this comment."); });
   }
 
   selectComment(threadId: string): void {
@@ -5940,14 +6083,29 @@ export class App {
     this.workspace.rightSidebar.show(this.commentsView);
   }
 
-  revealOffsetInActiveMarkdownView(file: TFile, offset: number) {
-    this.openFile(file, false).then(() => {
-      this.getActiveMarkdownView()?.scrollToOffset(offset);
+  private async openMarkdownForReveal(file: TFile): Promise<MarkdownView | null> {
+    const vault = this.vault; const path = file.path;
+    const existing = this.workspace.findLeafForFile(path);
+    const leaf = existing ?? this.workspace.getLeaf(false);
+    if (existing) existing.group.setActiveLeaf(existing);
+    else await this.openFileInLeaf(leaf, file);
+    const view = leaf.view;
+    if (this.vault !== vault || file.path !== path || !(view instanceof MarkdownView) || view.file?.path !== path) return null;
+    return view;
+  }
+
+  revealOffsetInActiveMarkdownView(file: TFile, offset: number): void {
+    void this.openMarkdownForReveal(file).then(view => view?.scrollToOffsetAsync(offset)).catch(error => {
+      if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not reveal this note position.");
     });
   }
 
   /** Rename a file and rewrite wikilinks in all notes that reference it. */
   async renameFileWithLinkUpdate(file: TFile, newPath: string): Promise<void> {
+    this.workspace.iterateLeaves(leaf => {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file?.path === file.path && view.isConflictReadOnly()) throw new Error("Resolve this note's local recovery before renaming it.");
+    });
     const oldBasename = file.basename;
     const oldPathNoExt = file.path.replace(/\.md$/, "");
     const oldPath = file.path;
@@ -5955,6 +6113,11 @@ export class App {
       .getBacklinks(file)
       .map((b) => b.source)
       .filter((f) => f.path !== file.path);
+    const affectedPaths = new Set([file.path, ...referencers.map(ref => ref.path)]);
+    this.workspace.iterateLeaves(leaf => {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file && affectedPaths.has(view.file.path) && view.isConflictReadOnly()) throw new Error("Resolve affected notes' local recovery before renaming this file.");
+    });
     await this.vault.rename(file, newPath);
     const renamed = this.vault.getFileByPath(newPath);
     if (!renamed) return;
@@ -5967,7 +6130,8 @@ export class App {
     // Refresh any open view of the renamed file
     const leaf = this.workspace.findLeafForFile(newPath) ?? this.workspace.findLeafForFile(file.path);
     if (leaf?.view instanceof MarkdownView) {
-      await leaf.view.setFile(renamed);
+      try { await leaf.view.setFile(renamed); }
+      catch (error) { this.notify(`The file was renamed, but its pane could not refresh: ${error instanceof Error ? error.message : "presentation unavailable"}`); }
       leaf.group.renderTabs();
     }
   }
@@ -6320,6 +6484,19 @@ export class App {
     if (!this.settings.slashCommandsEnabled) return;
     this.slashCommandsPlugin = new SlashCommandsPlugin(this);
     this.slashCommandsPlugin.load();
+  }
+
+  /** Core-plugin lifecycle is serialized so fast disable/re-enable cannot race pane creation. */
+  syncFootnotesPlugin(): Promise<void> {
+    const enabled = this.settings.footnotesEnabled, workspace = this.workspace;
+    const operation = this.footnotesLifecycle.catch(() => undefined).then(async () => {
+      if (workspace !== this.workspace) return;
+      if (enabled && this.footnotesPlugin) return;
+      if (this.footnotesPlugin) { await this.footnotesPlugin.stop(); this.footnotesPlugin = undefined; }
+      if (enabled) { this.footnotesPlugin = new FootnotesPlugin(this); this.footnotesPlugin.load(); }
+    });
+    this.footnotesLifecycle = operation;
+    return operation;
   }
 
   /** Load or unload the Slides core plugin to match `settings.slidesEnabled`. */

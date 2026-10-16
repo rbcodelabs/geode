@@ -1,9 +1,14 @@
+import { MarkdownView } from "../../src/renderer/views/markdown-view";
+import { RenderOwnership } from "../../src/renderer/workspaces/render-ownership";
+import { Compartment, EditorState } from "@codemirror/state";
 import { PropertyTypes } from "../../src/renderer/properties/property-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Events } from "../../src/renderer/events";
 import { FilePropertiesView } from "../../src/renderer/views/file-properties-view";
 
 class Element {
+  style: Record<string, string> = {}; inert = false;
+  set innerHTML(_: string) { this.children = []; }
   className = ""; textContent = ""; isConnected = true; disabled = false; hiddenHost = false;
   value = ""; checked = false; type = "text"; inputMode = ""; placeholder = "";
   dataset: Record<string, string> = {}; attributes: Record<string, string> = {};
@@ -45,7 +50,7 @@ function setup(source = "---\nstatus: old\n---\nUnsaved body", propertyTypes?: P
   const view = new FilePropertiesView(app as any); view.onOpen();
   const input = (label: string) => (view.containerEl as unknown as Element).all().find(element => element.attributes["aria-label"] === label)!;
   const enter = (element: Element, value: string) => { element.value = value; element.events.get("input")?.({}); element.events.get("keydown")?.({ key: "Enter", preventDefault() {} }); };
-  return { view, owner, setOwner: (next: typeof owner) => { activeOwner = next; }, workspace, metadataCache, vault, file, input, enter, getText: () => text, switchFile: (file: any) => { currentFile = file; }, setReadonly: (value = true) => { readonly = value; } };
+  return { app, view, owner, setOwner: (next: typeof owner) => { activeOwner = next; }, workspace, metadataCache, vault, file, input, enter, getText: () => text, switchFile: (file: any) => { currentFile = file; }, setReadonly: () => { readonly = true; } };
 }
 describe("File properties buffer ownership", () => {
   it("commits through the guarded live buffer and never writes or reads disk", () => {
@@ -144,58 +149,150 @@ it("allows an explicit unset action for a typed boolean", () => {
   expect(state.getText()).toContain("done: null"); expect(state.getText()).toContain("Dirty body"); state.view.onClose();
 });
 
+function actualNativeOwner(state: ReturnType<typeof setup>, mode = "live") {
+  const compartment = new Compartment();
+  const editor = { state: EditorState.create({ doc: state.getText(), extensions: [compartment.of([])] }), dispatch: vi.fn((spec: any) => { editor.state = editor.state.update(spec).state; }), focus: vi.fn(() => { (document as any).activeElement = document.body; }) };
+  const owner = Object.assign(Object.create(MarkdownView.prototype), { app: state.app, editor, file: state.file, mode, lastEditingMode: "live", transitionTail: Promise.resolve(), transitionGeneration: 0, transitionClosing: false, readingRenderGeneration: 0, bodyEl: new Element(), readingEl: new Element(), editorHostEl: new Element(), editingCompartment: compartment, pagePreview: { hide() {} }, flush: vi.fn(async () => {}), ownLeaf: () => null });
+  Object.assign(state.app, { markdownRenderer: { render: vi.fn(async () => {}), dispose: vi.fn() }, notify: vi.fn() });
+  owner.renderOwner = new RenderOwnership().create(owner);
+  state.setOwner(owner); state.view.refresh(); return { owner, editor };
+}
+it("retains a refused sidebar draft after delayed native Reading transition and subsequent metadata refresh", async () => {
+  const state = setup(); const { owner } = actualNativeOwner(state);
+  let finish!: () => void; owner.flush = () => new Promise<void>(resolve => { finish = resolve; });
+  const changing = owner.toggleMode(); await new Promise(resolve => setImmediate(resolve));
+  expect(owner.bodyEl.inert).toBe(true);
+  const field = state.input("Value: status"); field.focus(); state.enter(field, "reading");
+  expect(owner.getText()).toContain("status: old"); expect((state.view.containerEl as unknown as Element).text()).toContain("read-only");
+  finish(); await changing; owner.flush = vi.fn(async () => {});
+  (document as any).activeElement = document.body; state.metadataCache.trigger("changed", state.file);
+  expect(state.input("Value: status").value).toBe("reading");
+  expect(owner.getText()).toContain("status: old");
+  state.enter(state.input("Value: status"), "reading");
+  expect(owner.getText()).toContain("status: reading"); state.view.onClose();
+});
+it("publishes accepted same-turn Reading property edits rather than cancelling the only refresh", async () => {
+  const state = setup(); const { owner } = actualNativeOwner(state, "reading");
+  const first = owner.getText(); expect(owner.applySourceEdit(first, first.indexOf("old"), first.indexOf("old") + 3, "one", { allowReading: true })).toBe(true);
+  const second = owner.getText(); expect(owner.applySourceEdit(second, second.indexOf("one"), second.indexOf("one") + 3, "two", { allowReading: true })).toBe(true);
+  await owner.readingRefreshInFlight.catch(() => {}); await new Promise(resolve => setImmediate(resolve));
+  expect(owner.getText()).toContain("status: two");
+  expect((state.app as any).markdownRenderer.render).toHaveBeenCalledWith(expect.stringContaining("status: two"), expect.anything(), "Note.md", expect.anything(), expect.anything(), owner.sourceNavigation); state.view.onClose();
+});
 
-describe("rejected property drafts on the nonnative live-buffer adapter", () => {
-  function rejected(source = "---\nstatus: old\ncount: 4\ndone: false\n---\nUnsaved body", types?: PropertyTypes) {
-    const state = setup(source, types);
-    const failed = state.input("Value: status"); failed.focus(); state.setReadonly(); state.enter(failed, "rejected"); state.setReadonly(false);
-    return { ...state, failed };
-  }
-  it("retains a refused draft after blur and metadata refresh, then retries only its field", () => {
-    const state = rejected();
-    (document as any).activeElement = document.body; state.failed.events.get("blur")!({});
-    state.metadataCache.trigger("changed", state.file);
-    expect(state.input("Value: status")).toBe(state.failed); expect(state.failed.value).toBe("rejected");
-    expect(state.owner.applySourceEdit).not.toHaveBeenCalled();
-    state.enter(state.failed, "accepted"); expect(state.getText()).toContain("status: accepted"); expect(state.getText()).toContain("Unsaved body"); state.view.onClose();
-  });
-  it("discards a refused draft only through that field's explicit Escape", () => {
-    const state = rejected(); state.failed.events.get("keydown")!({ key: "Escape", preventDefault() {} });
-    expect(state.input("Value: status").value).toBe("old"); expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); state.view.onClose();
-  });
-  it.each(["4", "5"])("does not resolve a refused status draft via sibling count Enter=%s", value => {
-    const state = rejected(); const sibling = state.input("Value: count"); sibling.focus(); state.enter(sibling, value);
-    expect(state.input("Value: status")).toBe(state.failed); expect(state.failed.value).toBe("rejected");
-    expect(state.getText()).toContain("count: 4"); expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); state.view.onClose();
-  });
-  it.each(["remove", "checkbox", "type", "add", "other Escape"])("blocks unrelated %s while the exact refused field survives", action => {
-    const types = new PropertyTypes(), state = rejected(undefined, types);
-    if (action === "remove") state.input("Remove property: count").events.get("click")!({});
-    if (action === "checkbox") { const field = state.input("Value: done"); field.checked = true; field.events.get("change")!({}); expect(field.checked).toBe(false); }
-    if (action === "type") { const field = state.input("Type: count"); field.value = "text"; field.events.get("change")!({}); }
-    if (action === "add") state.input("Add property").events.get("click")!({});
-    if (action === "other Escape") state.input("Value: count").events.get("keydown")!({ key: "Escape", preventDefault() {} });
-    expect(state.input("Value: status")).toBe(state.failed); expect(state.failed.value).toBe("rejected");
-    expect((state.view.containerEl as unknown as Element).text()).toContain("Return to the rejected field");
-    expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); expect(types.getPropertyInfo("count")).toBe(null); state.view.onClose();
-  });
-  it("restores an unrelated blocked checkbox's unset presentation", () => {
-    const types = new PropertyTypes(); types.setType("done", "checkbox");
-    const state = rejected("---\nstatus: old\ndone: null\n---\nUnsaved body", types);
-    const checkbox = state.input("Value: done"); checkbox.checked = true; (checkbox as any).indeterminate = false; checkbox.events.get("change")!({});
-    expect(checkbox.checked).toBe(false); expect((checkbox as any).indeterminate).toBe(true); expect(state.owner.applySourceEdit).not.toHaveBeenCalled(); state.view.onClose();
-  });
-  it("allows a failed checkbox's own retry without promising text-field keys", () => {
-    const state = setup("---\ndone: false\n---\nUnsaved body"), checkbox = state.input("Value: done");
-    state.setReadonly(); checkbox.checked = true; checkbox.events.get("change")!({});
-    expect((state.view.containerEl as unknown as Element).text()).toContain("read-only"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("Press Enter");
-    state.setReadonly(false); checkbox.events.get("change")!({}); expect(state.getText()).toContain("done: true"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("read-only"); state.view.onClose();
-  });
-  it("clears a generic type-picker error through its own successful retry", () => {
-    const types = new PropertyTypes(), state = setup(undefined, types), picker = state.input("Type: status");
-    state.setReadonly(); picker.value = "number"; picker.events.get("change")!({});
-    expect((state.view.containerEl as unknown as Element).text()).toContain("read-only"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("Press Enter");
-    state.setReadonly(false); picker.events.get("change")!({}); expect(types.getPropertyInfo("status")?.type).toBe("number");
-    expect((state.view.containerEl as unknown as Element).text()).not.toContain("read-only"); state.view.onClose();
-  });
+it("Escape discards a rejected field explicitly without committing it after the native transition", async () => {
+  const state = setup(); const { owner } = actualNativeOwner(state);
+  owner.bodyEl.inert = true; const field = state.input("Value: status"); field.focus(); state.enter(field, "rejected");
+  owner.bodyEl.inert = false; field.events.get("blur")!({});
+  expect(owner.getText()).toContain("status: old");
+  field.events.get("keydown")!({ key: "Escape", preventDefault() {} });
+  expect(state.input("Value: status").value).toBe("old"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("read-only"); state.view.onClose();
+});
+it("destroys a rejected control with its owner and never replays it into a same-file replacement", () => {
+  const state = setup(); const { owner } = actualNativeOwner(state); owner.bodyEl.inert = true;
+  const field = state.input("Value: status"); field.focus(); state.enter(field, "rejected");
+  const next = { ...state.owner, applySourceEdit: vi.fn(() => true) }; state.setOwner(next); state.workspace.trigger("active-leaf-change");
+  state.enter(field, "rejected"); expect(next.applySourceEdit).not.toHaveBeenCalled(); expect(state.input("Value: status")).not.toBe(field); state.view.onClose();
+});
+it("retains rejected text on a registry update while revalidating its explicit retry against the current type", () => {
+  const types = new PropertyTypes(); const state = setup(undefined, types); const { owner } = actualNativeOwner(state); owner.bodyEl.inert = true;
+  const field = state.input("Value: status"); field.focus(); state.enter(field, "rejected"); owner.bodyEl.inert = false;
+  (document as any).activeElement = document.body; types.setType("status", "number");
+  expect(state.input("Value: status")).toBe(field); expect(field.value).toBe("rejected");
+  state.enter(field, "rejected"); expect(owner.getText()).toContain("status: old"); expect((state.view.containerEl as unknown as Element).text()).toContain("does not match"); state.view.onClose();
+});
+it("coalesces three accepted Reading edits queued behind an earlier operation to the latest snapshot", async () => {
+  const state = setup(); const { owner } = actualNativeOwner(state, "reading"); let release!: () => void;
+  owner.transitionTail = new Promise<void>(resolve => { release = resolve; });
+  for (const next of ["one", "two", "three"]) { const text = owner.getText(); const prior = text.match(/status: (.*)/)![1]; expect(owner.applySourceEdit(text, text.indexOf(prior), text.indexOf(prior) + prior.length, next, { allowReading: true })).toBe(true); await new Promise(resolve => setImmediate(resolve)); }
+  let finishRender!: () => void; (state.app as any).markdownRenderer.render = vi.fn(() => new Promise<void>(resolve => { finishRender = resolve; }));
+  let settled = false; const pending = owner.readingRefreshInFlight; void pending.then(() => { settled = true; }, () => { settled = true; });
+  release(); await new Promise(resolve => setImmediate(resolve)); expect(settled).toBe(false);
+  expect((state.app as any).markdownRenderer.render).toHaveBeenCalledOnce(); finishRender(); await pending;
+  expect(settled).toBe(true); expect((state.app as any).markdownRenderer.render).toHaveBeenCalledOnce(); expect((state.app as any).markdownRenderer.render.mock.calls[0][0]).toContain("status: three"); state.view.onClose();
+});
+it("keeps native admission closed during an actual delayed Reading render rather than accepting a second edit", async () => {
+  const state = setup(); const { owner } = actualNativeOwner(state, "reading"); let release!: () => void;
+  (state.app as any).markdownRenderer.render = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+  const first = owner.getText(); expect(owner.applySourceEdit(first, first.indexOf("old"), first.indexOf("old") + 3, "one", { allowReading: true })).toBe(true);
+  await new Promise(resolve => setImmediate(resolve)); expect(owner.bodyEl.inert).toBe(true);
+  const second = owner.getText(); expect(owner.applySourceEdit(second, second.indexOf("one"), second.indexOf("one") + 3, "two", { allowReading: true })).toBe(false);
+  release(); await owner.readingRefreshInFlight; expect(owner.getText()).toContain("status: one"); expect(owner.bodyEl.inert).toBe(false); state.view.onClose();
+});
+it("does not retry a genuine native refusal even when newer Reading requests were coalesced", async () => {
+  const state = setup(); const { owner } = actualNativeOwner(state, "reading"); const refusing = vi.fn(() => { throw Error("Finish nested edit"); });
+  owner.readingProjection = owner.renderOwner.child({ preflightClose: refusing });
+  const first = owner.getText(); owner.applySourceEdit(first, first.indexOf("old"), first.indexOf("old") + 3, "one", { allowReading: true });
+  const second = owner.getText(); owner.applySourceEdit(second, second.indexOf("one"), second.indexOf("one") + 3, "two", { allowReading: true });
+  await expect(owner.readingRefreshInFlight).rejects.toThrow("Finish nested edit");
+  expect(refusing).toHaveBeenCalledOnce(); expect((state.app as any).markdownRenderer.render).not.toHaveBeenCalled(); expect(owner.readingProjection.admissionAllowed).toBe(true); state.view.onClose();
+});
+it.each(["file", "editor", "mode", "vault", "root", "generation", "admission"])("does not replay a superseded Reading request after %s changes", async change => {
+  const state = setup(); const { owner } = actualNativeOwner(state, "reading"); let release!: () => void; owner.transitionTail = new Promise<void>(resolve => { release = resolve; });
+  const first = owner.getText(); owner.applySourceEdit(first, first.indexOf("old"), first.indexOf("old") + 3, "one", { allowReading: true }); await new Promise(resolve => setImmediate(resolve));
+  const second = owner.getText(); owner.applySourceEdit(second, second.indexOf("one"), second.indexOf("one") + 3, "two", { allowReading: true });
+  if (change === "file") owner.file = { ...state.file };
+  if (change === "editor") owner.editor = { ...owner.editor };
+  if (change === "mode") owner.mode = "source";
+  if (change === "vault") state.app.vault = { ...state.app.vault };
+  if (change === "root") state.app.vault.root = "changed";
+  if (change === "generation") owner.transitionGeneration++;
+  if (change === "admission") owner.renderOwner.freezeAdmission();
+  release(); await expect(owner.readingRefreshInFlight).rejects.toThrow(); expect((state.app as any).markdownRenderer.render).not.toHaveBeenCalled(); state.view.onClose();
+});
+
+it("does not retry a snapshot cancellation without a newer Reading request", async () => {
+  const state = setup(); const { owner, editor } = actualNativeOwner(state, "reading"); let release!: () => void; owner.transitionTail = new Promise<void>(resolve => { release = resolve; });
+  const pending = owner.renderReading(); await new Promise(resolve => setImmediate(resolve));
+  editor.dispatch({ changes: { from: editor.state.doc.length, insert: "raw external buffer mutation" } });
+  release(); await expect(pending).rejects.toThrow(/owner changed/); expect((state.app as any).markdownRenderer.render).not.toHaveBeenCalled(); state.view.onClose();
+});
+it("propagates a real delayed flush failure without retrying newer accepted Reading requests", async () => {
+  const state = setup(); const { owner } = actualNativeOwner(state, "reading"); const failure = Error("Storage unavailable"); owner.flush = vi.fn(async () => { throw failure; });
+  const first = owner.getText(); owner.applySourceEdit(first, first.indexOf("old"), first.indexOf("old") + 3, "one", { allowReading: true });
+  const second = owner.getText(); owner.applySourceEdit(second, second.indexOf("one"), second.indexOf("one") + 3, "two", { allowReading: true });
+  await expect(owner.readingRefreshInFlight).rejects.toBe(failure); expect(owner.flush).toHaveBeenCalledOnce(); expect(owner.getText()).toContain("status: two"); expect((state.app as any).markdownRenderer.render).not.toHaveBeenCalled(); state.view.onClose();
+});
+
+it.each(["4", "5"])("does not resolve a rejected status draft through another count field's Enter=%s", next => {
+  const state = setup("---\nstatus: old\ncount: 4\n---\nBody"); const { owner } = actualNativeOwner(state); owner.bodyEl.inert = true;
+  const failed = state.input("Value: status"); failed.focus(); state.enter(failed, "rejected"); owner.bodyEl.inert = false;
+  const other = state.input("Value: count"); other.focus(); state.enter(other, next);
+  expect(state.input("Value: status")).toBe(failed); expect(failed.value).toBe("rejected");
+  expect((state.view.containerEl as unknown as Element).text()).toContain("read-only");
+  expect(owner.getText()).toContain("status: old"); expect(owner.getText()).toContain("count: 4"); state.view.onClose();
+});
+
+it.each(["remove", "checkbox", "type", "add", "other Escape"])("refuses unrelated %s action while an exact rejected field survives", action => {
+  const types = new PropertyTypes(); const state = setup("---\nstatus: old\ncount: 4\ndone: false\n---\nBody", types); const { owner } = actualNativeOwner(state); owner.bodyEl.inert = true;
+  const failed = state.input("Value: status"); failed.focus(); state.enter(failed, "rejected"); owner.bodyEl.inert = false;
+  if (action === "remove") state.input("Remove property: count").events.get("click")!({});
+  if (action === "checkbox") { const field = state.input("Value: done"); field.checked = true; field.events.get("change")!({}); expect(field.checked).toBe(false); expect((field as any).indeterminate).toBe(false); }
+  if (action === "type") { const field = state.input("Type: count"); field.value = "text"; field.events.get("change")!({}); }
+  if (action === "add") state.input("Add property").events.get("click")!({});
+  if (action === "other Escape") state.input("Value: count").events.get("keydown")!({ key: "Escape", preventDefault() {} });
+  expect(state.input("Value: status")).toBe(failed); expect(failed.value).toBe("rejected");
+  expect((state.view.containerEl as unknown as Element).text()).toContain("Return to the rejected field");
+  expect(owner.getText()).toContain("count: 4"); expect(owner.getText()).toContain("done: false"); expect(types.getPropertyInfo("count")).toBe(null); state.view.onClose();
+});
+it("allows a failed checkbox's own action to recover without advertising unsupported Enter/Escape keys", () => {
+  const state = setup("---\ndone: false\n---\nBody"); const { owner } = actualNativeOwner(state); owner.bodyEl.inert = true;
+  const field = state.input("Value: done"); field.checked = true; field.events.get("change")!({});
+  expect((state.view.containerEl as unknown as Element).text()).toContain("read-only"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("Press Enter");
+  owner.bodyEl.inert = false; field.events.get("change")!({}); expect(owner.getText()).toContain("done: true"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("read-only"); state.view.onClose();
+});
+it("allows a failed type picker's explicit action to clear its generic error", () => {
+  const types = new PropertyTypes(); const state = setup(undefined, types); const { owner } = actualNativeOwner(state); owner.bodyEl.inert = true;
+  const picker = state.input("Type: status"); picker.value = "number"; picker.events.get("change")!({});
+  expect((state.view.containerEl as unknown as Element).text()).toContain("read-only"); expect((state.view.containerEl as unknown as Element).text()).not.toContain("Press Enter");
+  owner.bodyEl.inert = false; picker.events.get("change")!({}); expect(types.getPropertyInfo("status")?.type).toBe("number");
+  expect((state.view.containerEl as unknown as Element).text()).not.toContain("read-only"); expect(owner.getText()).toContain("status: old"); state.view.onClose();
+});
+
+it("restores an unrelated blocked checkbox's original unset presentation", () => {
+  const types = new PropertyTypes(); types.setType("done", "checkbox");
+  const state = setup("---\nstatus: old\ndone: null\n---\nBody", types); const { owner } = actualNativeOwner(state); owner.bodyEl.inert = true;
+  const failed = state.input("Value: status"); failed.focus(); state.enter(failed, "rejected"); owner.bodyEl.inert = false;
+  const checkbox = state.input("Value: done"); checkbox.checked = true; (checkbox as any).indeterminate = false; checkbox.events.get("change")!({});
+  expect(checkbox.checked).toBe(false); expect((checkbox as any).indeterminate).toBe(true); expect(owner.getText()).toContain("done: null"); expect(state.input("Value: status")).toBe(failed); state.view.onClose();
 });

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeDocument, FakeElement, settle } from "../helpers/fake-dom";
+import { MarkdownView } from "../../src/renderer/views/markdown-view";
 import {
   SyncConflictBannerController,
   SyncConflictBannerSlot,
@@ -764,11 +765,27 @@ describe("markdown view wiring", () => {
     expect(/\n  presentConflict\([\s\S]*?\n  \}/.exec(view)?.[0]).toContain("this.conflictReadOnly = true");
   });
 
-  it("drops the banner when the pane changes file or closes", () => {
-    const setFile = view.slice(view.indexOf("async setFile("), view.indexOf("beginTitleRename()"));
-    expect(setFile).toContain("this.clearSyncConflict()");
-    const onClose = view.slice(view.indexOf("async onClose("));
-    expect(onClose).toContain("this.clearSyncConflict()");
+  it("drops the actual banner when the pane changes file or closes", async () => {
+    const { RenderOwnership } = await import("../../src/renderer/workspaces/render-ownership");
+    const pane = Object.create(MarkdownView.prototype) as any;
+    const container = el(); const body = el(); container.appendChild(body);
+    const slot = new SyncConflictBannerSlot(container, body); const destroy = vi.fn();
+    const editor = { state: { doc: { toString: () => "saved" } }, destroy };
+    Object.assign(pane, {
+      transitionTail: Promise.resolve(), transitionGeneration: 0, transitionClosing: false, lpProjection: null, readingProjection: null, syncConflictSlot: slot, containerEl: container, file: { path: "Old.md", basename: "Old" }, editor,
+      mode: "source", conflictReadOnly: false, lastSavedText: "saved", saveTimer: null, flushInFlight: null,
+      pagePreview: { hide() {}, destroy() {} }, titleEl: el(), titleParentEl: el(), readingContentEl: null,
+      clearConflictState: vi.fn(), applyMode: vi.fn(), buildEditor: (text: string) => { editor.state.doc.toString = () => text; },
+      app: { vault: { read: async () => "new saved content", modify: vi.fn() } },
+    });
+    pane.renderOwner = new RenderOwnership().create(pane, { prepareClose: () => pane.prepareCloseNative(), failureKey: "markdown-save", close: () => pane.closeNative() });
+    const info = { entityId: "entity-1", path: "Old.md", heads: ["rec-a", "rec-b"], reason: "Concurrent edits" };
+    pane.presentSyncConflict(info, () => {}); expect(all(container, "sync-conflict-banner")).toHaveLength(1);
+    await pane.setFile({ path: "New.md", basename: "New", parent: "" });
+    expect(pane.getFile().path).toBe("New.md"); expect(slot.element).toBeNull(); expect(all(container, "sync-conflict-banner")).toHaveLength(0);
+    pane.presentSyncConflict({ ...info, path: "New.md" }, () => {}); expect(all(container, "sync-conflict-banner")).toHaveLength(1);
+    await pane.onClose();
+    expect(slot.element).toBeNull(); expect(all(container, "sync-conflict-banner")).toHaveLength(0); expect(destroy).toHaveBeenCalledOnce();
   });
 });
 

@@ -577,15 +577,16 @@ export class Vault extends Events {
 
   /**
    * Obsidian's `Vault.recurseChildren` static: depth-first visit every
-   * descendant (files and folders) of `root`, calling `cb` on each. Real
+   * folder/file, starting with `root` itself, calling `cb` on each once. Real
    * plugins call this directly on the `Vault` class (not an instance) —
    * e.g. obsidian-daily-notes-interface's `getAllDailyNotes` uses it to
    * enumerate every file under the configured daily-notes folder.
    */
   static recurseChildren(root: TFolder, cb: (file: TAbstractFile) => any): void {
+    cb(root);
     for (const child of root.children) {
-      cb(child);
       if (isTFolder(child)) Vault.recurseChildren(child, cb);
+      else cb(child);
     }
   }
 
@@ -701,7 +702,7 @@ export class Vault extends Events {
     if (this.files.has(newPath) || this.folders.has(newPath)) {
       throw new Error(`File already exists: ${newPath}`);
     }
-    return this.create(newPath, await this.read(file));
+    return this.createBinary(newPath, await this.readBinary(file));
   }
 
   async trash(item: TFile | TFolder): Promise<void> {

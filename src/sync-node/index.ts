@@ -16,4 +16,5 @@ export { scanVault, type ScanOptions, type ScanReport, type ScanIo } from "./nod
 export { NodeHashCache } from "./node-hash-cache";
 export { hydrateIcloudPaths, execRunner, type CommandRunner, type HydrateOptions, type HydrateReport } from "./node-icloud";
 export { syncInit, syncPreview, syncRun, syncStatus, syncConflicts, syncResolve, syncGc, classifySyncError, resolveStateDir, validateExcludeFolders, deleteLimitFor, describeTarget, SyncRailError, SyncRefusal, MIN_DELETE_LIMIT, MIN_SCAN_RATIO, type WikiSyncContext, type WikiSyncConfig, type SyncTarget, type SyncOverrides, type SyncFailure, type SyncRailStatus, type PreviewSummary, type RailReport, type ResolveChoice, type InitInput } from "./wiki-sync";
+export { parseSettleRule, type SettleRule } from "../sync-core/settle";
 export { readLockHolder } from "./store-lock";

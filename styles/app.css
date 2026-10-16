@@ -7296,6 +7296,12 @@ body.is-mobile .cm-editor .cm-scroller {
 .outgoing-links-status:empty { display: none; }
 .excluded-files-input { display: block; margin-top: 8px; width: 100%; resize: vertical; }
 
+/* Override CodeMirror's outer gutter chrome in both editor modes and themes. */
+.markdown-source-view .cm-editor .cm-gutters {
+  background: transparent;
+  border: none;
+}
+
 /* Editing gutters: collapsed sections retain their arrow away from hover. */
 .geode-fold-gutter { background: transparent; color: var(--text-muted); }
 .geode-fold-gutter .cm-gutterElement { padding: 0 3px; }
@@ -7337,3 +7343,11 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
   .metadata-property:has(input[type="date"]) .metadata-property-remove, .metadata-property:has(input[type="datetime-local"]) .metadata-property-remove { grid-column: 2; grid-row: 1; }
 }
 .metadata-property-value input[type="date"], .metadata-property-value input[type="datetime-local"] { min-width: 0; max-width: 100%; }
+.footnotes-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 8px; gap: 5px 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.footnotes-edit { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 8px; width: 100%; height: auto; text-align: left; white-space: normal; padding: 4px; background: transparent; box-shadow: none; border: none; }
+.footnotes-label { flex: none; color: var(--text-muted); font-size: var(--font-smallest); }
+.footnotes-text { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.footnotes-detail { color: var(--text-muted); font-size: var(--font-smallest); align-self: center; overflow-wrap: anywhere; }
+.footnotes-jump { font-size: var(--font-smallest); }
+.footnotes-view button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.footnotes-status:empty { display: none; }

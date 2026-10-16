@@ -1,0 +1,59 @@
+{
+  "base": "7d983c22f2d9a3c7569532509e3f9ae1c2f3cfb5",
+  "sourceRecords": [
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/canvas-detached-render-media.spec.ts"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/canvas-file-card.spec.ts"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/canvas-group-action-surface.spec.ts"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/canvas-group-background-authoring.spec.ts"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/canvas-group-background.spec.ts"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/helpers/canvas-background-lifetimes.ts"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/fixtures/media/README.md"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "tests/e2e/fixtures/media/canvas-silence.mp3"
+    },
+    {
+      "source": "d475ef94607bf1642d2ca5e93ddab89ee95e9268",
+      "path": "docs/evidence/canvas-background/media-extension-contract.md"
+    },
+    {
+      "source": "bebe1dd2770b7d2e1592135bd144d84b5e9bbaf8",
+      "path": "src/renderer/views/canvas-view.ts"
+    },
+    {
+      "source": "bebe1dd2770b7d2e1592135bd144d84b5e9bbaf8",
+      "path": "tests/unit/canvas-recovery-presentation.test.ts"
+    },
+    {
+      "source": "beccf14f3d09c4be861dd511987630532511a9e8",
+      "path": "tests/e2e/page-preview.spec.ts"
+    }
+  ],
+  "mediaEarlierCommits": [
+    "65b87d0c3ddf1aa9042efaa84352b8feb49d88b4",
+    "9e3e0ea2e10e6fc468258e1a36036ca37fdecb87"
+  ],
+  "recoveryProcedure": "apply only3line source patch plus exact new regression; do not overwritewholeCanvas",
+  "otherProcedure": "review exact file diffs against7d, no unrelated branchcontent"
+}
