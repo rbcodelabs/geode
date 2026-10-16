@@ -124,6 +124,14 @@ export class BaseView implements View {
    */
   private lastKnownText: string | null = null;
   private pendingKnownText: string | null = null;
+  // Invalidate at persist admission, pending/known transitions, apply, and
+  // file/inline/open/close lifecycle changes (see ADR0041).
+  private definitionRevision = 0;
+  private reloadOwnerGeneration = 0;
+  private reloadRequestGeneration = 0;
+  private reloadHandledGeneration = 0;
+  private reloadInFlight: Promise<void> | null = null;
+  private reloadClosed = false;
   private vaultSwitching = false;
   private persistRequestedWhileSuspended = false;
   private suppressReconcileModify = false;
@@ -154,7 +162,7 @@ export class BaseView implements View {
       // and our own persist writes back to that same host note (ignoring it
       // here also avoids a write→modify→reload loop).
       if (this.inlinePersist) return;
-      void this.reloadIfChangedExternally();
+      void this.reloadIfChangedExternally().catch(error => this.app.notify(`Could not reload Base: ${error instanceof Error ? error.message : String(error)}`));
       return;
     }
     if (changedFile && changedFile.path === this.sourceWritePath) return;
@@ -165,13 +173,55 @@ export class BaseView implements View {
   };
 
   /** Re-parse from disk only if the file's current content differs from what we last wrote/read — see `lastKnownText`'s doc comment. */
-  private async reloadIfChangedExternally(): Promise<void> {
-    if (!this.file) return;
-    const cached = this.app.vault.getCachedContent(this.file.path);
-    if (cached !== undefined && cached === this.lastKnownText) return;
-    const text = await this.app.vault.read(this.file);
-    if (text === (this.pendingKnownText ?? this.lastKnownText)) return;
-    await this.applyText(text);
+  private reloadIfChangedExternally(): Promise<void> {
+    this.reloadRequestGeneration++;
+    return this.startExternalReloadDrain();
+  }
+
+  private startExternalReloadDrain(): Promise<void> {
+    if (this.reloadInFlight) return this.reloadInFlight;
+    // Register before running: synchronous modify echoes may request a reload,
+    // but the write itself must never await the drain waiting on its tail.
+    const operation = Promise.resolve().then(() => this.drainExternalReloads());
+    const task: Promise<void> = operation.then(() => {
+      if (this.reloadInFlight === task) this.reloadInFlight = null;
+      // Include requests arriving between the drain's final check and cleanup
+      // in the same coalesced promise rather than silently losing the last one.
+      if (!this.reloadClosed && this.reloadHandledGeneration !== this.reloadRequestGeneration) return this.startExternalReloadDrain();
+    }, error => {
+      if (this.reloadInFlight === task) this.reloadInFlight = null;
+      // A rejected write/read is not an invitation to replace a failed draft.
+      throw error;
+    });
+    this.reloadInFlight = task;
+    return task;
+  }
+
+  private async drainExternalReloads(): Promise<void> {
+    for (;;) {
+      const request = this.reloadRequestGeneration;
+      const file = this.file, vault = this.app.vault, root = vault.root;
+      const path = file?.path, owner = this.reloadOwnerGeneration;
+      const inline = this.inlinePersist, revision = this.definitionRevision;
+      const currentOwner = () => !this.reloadClosed && owner === this.reloadOwnerGeneration
+        && this.file === file && file?.path === path && this.app.vault === vault
+        && vault.root === root && this.inlinePersist === inline;
+      if (!file || inline || !currentOwner()) { this.reloadHandledGeneration = request; return; }
+      const tail = this.persistQueue;
+      await tail; // Even an already-rejected tail must reject this drain.
+      if (!currentOwner()) { this.reloadHandledGeneration = request; return; }
+      if (tail !== this.persistQueue || revision !== this.definitionRevision || request !== this.reloadRequestGeneration) continue;
+      const cached = vault.getCachedContent(path!);
+      if (cached !== undefined && cached === this.lastKnownText) { this.reloadHandledGeneration = request; return; }
+      const text = await vault.read(file);
+      if (!currentOwner()) { this.reloadHandledGeneration = request; return; }
+      if (tail !== this.persistQueue || revision !== this.definitionRevision || request !== this.reloadRequestGeneration) continue;
+      if (text !== (this.pendingKnownText ?? this.lastKnownText)) await this.applyText(text);
+      this.reloadHandledGeneration = request;
+      // applyText advances the local revision itself; only a new request needs
+      // another iteration after a current result has been accepted.
+      if (request === this.reloadRequestGeneration) return;
+    }
   }
 
   constructor(private app: App) {
@@ -298,6 +348,7 @@ export class BaseView implements View {
   }
 
   async setFile(file: TFile, requireValid = false): Promise<void> {
+    this.definitionRevision++; this.reloadOwnerGeneration++;
     await this.persistQueue;
     await Promise.all([...this.sourcePersistsInFlight]);
     const text = await this.app.vault.read(file);
@@ -321,6 +372,7 @@ export class BaseView implements View {
     this.containerEl.querySelector(".bases-conflict-state")?.remove();
     delete this.containerEl.dataset.basesConflictPath;
     this.setSaveStatus("", false);
+    this.definitionRevision++; this.reloadOwnerGeneration++;
     this.file = file;
     this.containerEl.inert = false;
     this.bodyEl.inert = false;
@@ -342,6 +394,7 @@ export class BaseView implements View {
     persist: (text: string) => Promise<void>,
     viewName?: string
   ): Promise<void> {
+    this.definitionRevision++; this.reloadOwnerGeneration++;
     this.inlinePersist = persist;
     this.file = hostFile;
     this.markEmbedded();
@@ -373,6 +426,7 @@ export class BaseView implements View {
     // Leave `lastKnownText` alone too: this read told us nothing, so the next
     // one must still count as a change.
     if (shouldIgnoreBaseReload(text, this.def?.views.length ?? 0)) return;
+    this.definitionRevision++;
     this.lastKnownText = text;
     const parsed = parseBaseFile(text);
     if ("error" in parsed) {
@@ -397,6 +451,7 @@ export class BaseView implements View {
   }
 
   onOpen(): void {
+    this.reloadClosed = false; this.definitionRevision++; this.reloadOwnerGeneration++;
     this.app.vault.on("modify", this.onVaultChange);
     this.app.vault.on("create", this.onVaultChange);
     this.app.vault.on("delete", this.onVaultChange);
@@ -404,7 +459,9 @@ export class BaseView implements View {
   }
 
   async onClose(): Promise<void> {
-    await this.persistQueue;
+    this.reloadClosed = true; this.definitionRevision++; this.reloadOwnerGeneration++;
+    try { await this.persistQueue; }
+    catch (error) { this.reloadClosed = false; this.reloadOwnerGeneration++; throw error; }
     this.app.vault.off("modify", this.onVaultChange);
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
@@ -587,6 +644,7 @@ export class BaseView implements View {
 
   /** Persist the in-memory definition back to the `.base` file and re-render immediately from that same in-memory state (see `lastKnownText`'s doc comment for why the resulting "modify" event(s) must not trigger a second, object-identity-breaking reload). */
   private persist(): Promise<void> {
+    this.definitionRevision++;
     if (this.vaultSwitching) {
       this.persistRequestedWhileSuspended = true;
       return Promise.resolve();
@@ -598,13 +656,15 @@ export class BaseView implements View {
   private async doPersist(): Promise<void> {
     if (!this.def || !this.file) return;
     const text = stringifyBaseFile(this.def);
+    this.definitionRevision++;
     this.pendingKnownText = text;
     try {
       if (this.inlinePersist) await this.inlinePersist(text);
       else await this.app.vault.modify(this.file, text);
+      this.definitionRevision++;
       this.lastKnownText = text;
     } finally {
-      if (this.pendingKnownText === text) this.pendingKnownText = null;
+      if (this.pendingKnownText === text) { this.definitionRevision++; this.pendingKnownText = null; }
     }
     this.runAndRender();
   }
