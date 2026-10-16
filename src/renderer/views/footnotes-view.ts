@@ -80,12 +80,12 @@ export class FootnotesView implements View {
         const label = document.createElement("span"); label.className = "footnotes-label"; label.textContent = item.label;
         const text = document.createElement("span"); text.className = "footnotes-text"; text.textContent = item.text || "Empty footnote";
         edit.append(label, text);
-        edit.addEventListener("click", () => this.navigate(file, snapshot, item, true));
+        edit.addEventListener("click", () => this.observeNavigation(this.navigate(file, snapshot, item, true)));
         const detail = document.createElement("div"); detail.className = "footnotes-detail";
         detail.textContent = item.missing ? item.text : `${item.references} reference${item.references === 1 ? "" : "s"}${item.editable ? "" : " · Partial definition; navigate to edit"}`;
         const jump = document.createElement("button"); jump.type = "button"; jump.className = "footnotes-jump"; jump.textContent = "Jump";
         jump.setAttribute("aria-label", `Go to footnote ${item.label}`);
-        jump.addEventListener("click", () => this.navigate(file, snapshot, item, false));
+        jump.addEventListener("click", () => this.observeNavigation(this.navigate(file, snapshot, item, false)));
         row.append(edit, detail, jump); this.body.appendChild(row);
       }
       const notices: string[] = [];
@@ -94,15 +94,33 @@ export class FootnotesView implements View {
       this.status.textContent = notices.join(" ");
     } catch { if (current()) this.status.textContent = "Could not load footnotes. Reopen the pane to retry."; }
   }
-  private navigate(file: TFile, snapshot: string, item: FootnotePaneItem, edit: boolean): void {
-    const view = this.app.getActiveMarkdownView();
-    if (!this.visible || this.root !== this.app.vault.root || this.app.workspace.getActiveFile() !== file || this.app.vault.getFileByPath(file.path) !== file ||
-        view?.file !== file || view.getText() !== snapshot || !view.editor) { this.schedule(); return; }
-    if (edit && (!item.editable || view.isConflictReadOnly())) return;
-    const from = edit ? item.editFrom : item.from, to = edit ? item.editTo : item.from;
-    view.scrollToOffset(from); // Reading mode retains the same editor; reveal it.
-    if (edit && view.mode !== "source") view.toggleSource();
-    view.editor.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
-    view.editor.focus();
+  private observeNavigation(operation: Promise<void>): Promise<void> {
+    return operation.catch(() => {
+      if (!this.closed) this.app.notify("Could not edit footnote. Reopen the pane to retry.");
+    });
+  }
+  private async navigate(file: TFile, snapshot: string, item: FootnotePaneItem, edit: boolean): Promise<void> {
+    const view = this.app.getActiveMarkdownView(), editor = view?.editor;
+    const vault = this.app.vault, root = vault.root, path = file.path;
+    const current = () => this.visible && this.root === root && this.app.vault === vault && vault.root === root
+      && this.app.getActiveMarkdownView() === view && this.app.workspace.getActiveFile() === file
+      && file.path === path && vault.getFileByPath(path) === file && view?.file === file
+      && view.editor === editor && !!editor && view.getText() === snapshot && (!edit || !view.isConflictReadOnly());
+    if (!current()) { this.schedule(); return; }
+    if (!edit) { view!.scrollToOffset(item.from); return; }
+    if (!item.editable) return;
+    // Public methods work on both synchronous Source toggles and the native
+    // asynchronous transition queue. Never enqueue two Reading replacements.
+    if (view!.mode === "reading") {
+      await view!.toggleMode();
+      if (!current()) { this.schedule(); return; }
+    }
+    if (view!.mode !== "source") {
+      await view!.toggleSource();
+      if (!current()) { this.schedule(); return; }
+    }
+    if (view!.mode !== "source" || !view!.canApplySourceEdit()) { this.schedule(); return; }
+    editor!.dispatch({ selection: { anchor: item.editFrom, head: item.editTo }, scrollIntoView: true });
+    editor!.focus();
   }
 }
