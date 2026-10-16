@@ -23,6 +23,7 @@
     "test:e2e:native-fullscreen": "npm run build && GEODE_NATIVE_FULLSCREEN_E2E=1 playwright test tests/e2e/window-chrome.spec.ts",
     "test:mobile": "npm run build:mobile && playwright test --config playwright.mobile.config.ts",
     "e2e:kill": "node scripts/e2e-clean.mts",
+    "e2e:threads-plugin": "playwright test tests/e2e/threads-sandbox-offer.spec.ts --retries=0",
     "e2e:linux": "node scripts/e2e-linux-shards.mts",
     "demo": "node demo/engine/run.mts",
     "demo:doctor": "node demo/engine/run.mts doctor",
