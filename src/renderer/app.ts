@@ -156,6 +156,7 @@ interface AppSettings {
   readableLineLength: boolean;
   baseFontSize: number;
   foldHeading: boolean;
+  foldIndent: boolean;
   showLineNumber: boolean;
   showRibbon: boolean;
   showStatusBar: boolean;
@@ -733,8 +734,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "files-and-links" | "appearance" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["files-and-links", "appearance", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
+type BuiltinTabId = "files-and-links" | "appearance" | "editor" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["files-and-links", "appearance", "editor", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
 /** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
 const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
@@ -878,6 +879,8 @@ class SettingsModal extends Modal {
       this.renderAppearanceTab(this.contentContainerEl);
     } else if (id === "files-and-links") {
       renderFilesAndLinksTab(this.contentContainerEl, this.geodeApp.excludedFiles);
+    } else if (id === "editor") {
+      this.renderEditorTab(this.contentContainerEl);
     } else if (id === "hotkeys") {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "daily-notes") {
@@ -934,6 +937,7 @@ class SettingsModal extends Modal {
     const groups: SettingsNavGroup[] = [];
     const builtin: SettingsNavItem[] = [
       { id: "appearance", label: "Appearance" },
+      { id: "editor", label: "Editor" },
       { id: "hotkeys", label: "Hotkeys" },
       { id: "files-and-links", label: "Files and links" },
       { id: "daily-notes", label: "Daily Notes" },
@@ -1187,6 +1191,19 @@ class SettingsModal extends Modal {
         this.geodeApp.saveSettings();
       }
     );
+  }
+
+  private renderEditorTab(container: HTMLElement): void {
+    container.innerHTML = "<h2>Editor</h2>";
+    for (const [key, label] of [["foldHeading", "Fold heading"], ["foldIndent", "Fold indent"]] as const) {
+      this.addToggle(container, label, this.geodeApp.settings[key], value => {
+        void this.geodeApp.vault.setConfig(key, value).then(() => {
+          // Persistence errors restore settings; reflect the resulting value.
+          const input = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+          if (input) input.checked = this.geodeApp.settings[key];
+        });
+      });
+    }
   }
 
   private renderHotkeysTab(container: HTMLElement): void {
@@ -2741,7 +2758,8 @@ export class App {
     theme: "auto",
     readableLineLength: true,
     baseFontSize: 16,
-    foldHeading: false,
+    foldHeading: true,
+    foldIndent: true,
     showLineNumber: false,
     showRibbon: true,
     showStatusBar: true,
@@ -3408,6 +3426,7 @@ export class App {
         baseFontSize: typeof saved.baseFontSize === "number" && Number.isFinite(saved.baseFontSize) && saved.baseFontSize > 0
           ? saved.baseFontSize
           : this.settings.baseFontSize,
+        foldIndent: typeof saved.foldIndent === "boolean" ? saved.foldIndent : this.settings.foldIndent,
         foldHeading: typeof saved.foldHeading === "boolean" ? saved.foldHeading : this.settings.foldHeading,
         showLineNumber: typeof saved.showLineNumber === "boolean" ? saved.showLineNumber : this.settings.showLineNumber,
         webViewer: this.webViewer.options,
@@ -4636,6 +4655,19 @@ export class App {
     const c = (id: string, name: string, hotkey: string | undefined, callback: () => void) =>
       this.commands.add({ id, name, hotkey, callback });
 
+    for (const [id, name, action] of [
+      ["editor:fold-all", "Fold all headings and lists", "all"],
+      ["editor:unfold-all", "Unfold all headings and lists", "none"],
+      ["editor:fold-more", "Fold more", "more"],
+      ["editor:fold-less", "Fold less", "less"],
+    ] as const) {
+      this.commands.add({ id, name, checkCallback: checking => {
+        const view = this.getActiveMarkdownView();
+        if (!view?.editor || view.mode === "reading") return false;
+        if (!checking) view.fold(action);
+        return true;
+      } });
+    }
     c("command-palette", "Open command palette", "Mod+P", () => this.openCommandPalette());
     c("outgoing-links:open", "Show outgoing links", undefined, () => {
       const view = this.workspace.getLeavesOfType("outgoing-links")[0]?.view;
@@ -6161,6 +6193,9 @@ export class App {
     // re-derives it here instead of keeping the colors it was born with.
     // Optional-chained defensively: `workspace` is only assigned once a vault
     // is opened, and applySettings() is reachable from the settings tab.
+    for (const leaf of this.workspace?.getLeavesOfType?.("markdown") ?? []) {
+      if (leaf.view instanceof MarkdownView) leaf.view.applyEditorSettings();
+    }
     if (emitCssChange) this.workspace?.trigger("css-change");
   }
 
@@ -6168,6 +6203,7 @@ export class App {
     switch (key) {
       case "baseFontSize": return this.settings.baseFontSize;
       case "foldHeading": return this.settings.foldHeading;
+      case "foldIndent": return this.settings.foldIndent;
       case "showLineNumber": return this.settings.showLineNumber;
       case "readableLineLength": return this.settings.readableLineLength;
       case "theme":
@@ -6188,6 +6224,7 @@ export class App {
         }
         break;
       case "foldHeading":
+      case "foldIndent":
       case "showLineNumber":
       case "readableLineLength":
         if (typeof value === "boolean" && value !== this.settings[key]) {

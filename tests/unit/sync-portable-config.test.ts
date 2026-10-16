@@ -11,9 +11,13 @@ const owners=():PortableConfigOwners=>({applyEditor:vi.fn(async()=>{}),applyAppe
 describe('portable configuration',()=>{
   it('exports known deterministic defaults when configuration is absent',async()=>{
     expect(await projectPortableConfig(source({}),DEFAULT_SYNC_SCOPE)).toEqual([
-      {name:'editor.json',value:editor},{name:'appearance.json',value:appearance},
+      {name:'editor.json',value:{...editor,foldHeading:true}},{name:'appearance.json',value:appearance},
       {name:'hotkeys.json',value:{version:1,overrides:{}}},{name:'daily-notes.json',value:daily},
     ]);
+  });
+  it('preserves an explicit heading preference while leaving indent folding device-local',async()=>{
+    const out=await projectPortableConfig(source({app:{...editor,foldIndent:false}}),DEFAULT_SYNC_SCOPE);
+    expect(out.find(document=>document.name==='editor.json')).toEqual({name:'editor.json',value:editor});
   });
   it('never exports confidential or machine-local fields from app or category config',async()=>{
     const out=await projectPortableConfig(source({app:{...editor,...appearance,metadataScanCapBytes:42,webViewer:{secret:'private'},accessToken:'secret'},'daily-notes':{...daily,deviceId:'private'},hotkeys:{version:1,overrides:{},password:'secret'}}),DEFAULT_SYNC_SCOPE);

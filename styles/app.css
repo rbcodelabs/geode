@@ -7295,3 +7295,15 @@ body.is-mobile .cm-editor .cm-scroller {
 .outgoing-link-convert { font-size: var(--font-smallest); }
 .outgoing-links-status:empty { display: none; }
 .excluded-files-input { display: block; margin-top: 8px; width: 100%; resize: vertical; }
+
+/* Editing gutters: collapsed sections retain their arrow away from hover. */
+.geode-fold-gutter { background: transparent; color: var(--text-muted); }
+.geode-fold-gutter .cm-gutterElement { padding: 0 3px; }
+.geode-fold-toggle {
+  appearance: none; border: 0; box-shadow: none; background: transparent;
+  color: inherit; width: 18px; min-height: 0; height: 1.4em; padding: 0;
+  line-height: inherit; cursor: pointer; font: inherit;
+}
+.geode-fold-toggle[aria-expanded="true"] { opacity: 0; }
+.cm-editor:hover .geode-fold-toggle, .geode-fold-toggle:focus-visible { opacity: 1; }
+.geode-fold-toggle:focus-visible { outline: 2px solid var(--interactive-accent); }
