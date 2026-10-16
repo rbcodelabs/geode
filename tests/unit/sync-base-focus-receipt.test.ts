@@ -1,3 +1,4 @@
+import { PropertyTypes } from "../../src/renderer/properties/property-types";
 import { BackgroundVisibility } from "../../src/renderer/workspaces/background-visibility";
 import { afterEach, expect, it, vi } from "vitest";
 import { App } from "../../src/renderer/app";
@@ -44,7 +45,7 @@ async function fixture() {
   state.workspace = workspace;
   let prepare!: (token: string, path: string) => Promise<unknown>, release!: (token: string, outcome?: any) => Promise<void>;
   const load = async () => {};
-  Object.assign(app, { workspace, vault: { root: "/synthetic-vault", getFileByPath: () => file, getFolderByPath: () => null, open: load, read: async () => "---\npriority: 1\n---\n", modify }, sync: { cancel: load },
+  Object.assign(app, { propertyTypes: new PropertyTypes(), workspace, vault: { root: "/synthetic-vault", getFileByPath: () => file, getFolderByPath: () => null, open: load, read: async () => "---\npriority: 1\n---\n", modify }, sync: { cancel: load },
     host: { config: { read: async () => null }, syncSafety: { onPrepare: (cb: any) => { prepare = cb; return () => {}; }, onRelease: (cb: any) => { release = cb; return () => {}; } } },
     commands: { loadHotkeys: load }, settings: { metadataScanCapBytes: 100 }, metadataCache: { setScanCapBytes() {}, on() {} },
     dailyNotes: { load }, templates: { load }, uniqueNotes: { load }, noteComposer: { load }, webViewer: { load }, syncUniqueNoteRibbon() {},

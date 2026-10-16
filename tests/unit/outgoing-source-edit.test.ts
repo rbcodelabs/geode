@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { history, undo } from "@codemirror/commands";
 import { MarkdownView } from "../../src/renderer/views/markdown-view";
@@ -29,4 +29,16 @@ describe("safe sidebar editor transaction", () => {
     value.mode = "reading"; expect(value.applySourceEdit(value.getText(), 0, 9, "replacement")).toBe(false);
     expect(value.getText()).toBe("World map");
   });
+});
+
+it("allows only an explicit retained-buffer property edit in Reading mode", () => {
+  const { value } = view();
+  value.mode = "reading";
+  const refresh = vi.fn(async () => {});
+  Object.assign(value, { renderReading: refresh });
+  expect(value.applySourceEdit(value.getText(), 0, 5, "Earth")).toBe(false);
+  expect(value.applySourceEdit(value.getText(), 0, 5, "Earth", { allowReading: true })).toBe(true);
+  expect(refresh).toHaveBeenCalledOnce();
+  Object.assign(value, { conflictReadOnly: true });
+  expect(value.applySourceEdit(value.getText(), 0, 5, "World", { allowReading: true })).toBe(false);
 });

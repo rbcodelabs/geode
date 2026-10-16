@@ -1,0 +1,19 @@
+# Safe file properties P1 implementation
+
+Historical implementation checkpoint: dates, source branches, local checks and P2 deferrals below describe original P1 work. Current delivery combines P1 and P2a; see [the delivery record](properties-delivery.md). P3 remains deferred. The original local execution checked only the repo manifest; the shared default compute policy was missed. Current full gates use the testq pool.
+
+Date: 2026-10-14. Task `e7954a61-948a-4c00-b74d-227692c1c0fc` → Solution `523dc576-9b4d-4028-a8d3-e2e5f765d45a` → KR `c3b390f0-92a8-479c-b629-2b6745d577d5`.
+
+Scope follows the accepted P1 in architect commit `b0b44d2:docs/design/properties-parity.md` and [ADR-0031](../adr/0031-sidebar-properties-parity.md). The overnight user instruction authorizes reversible implementation and tested PRs; merging and release remain excluded. This branch stacks on outgoing-links commit `96dbb21`, reusing its guarded buffer mutation seam.
+
+`PropertyEditor` owns shared DOM controls, input validation and focus tokens. `property-source` strictly parses the latest YAML document and applies one operation, retaining unrelated AST content and body bytes. `FilePropertiesView` owns active-file/split identity, subscriptions and stale event guards. The CodeMirror widget supplies a separate owned-buffer adapter to the same controls. No property control writes directly to disk.
+
+The internal source mutation helper accepts an explicit `allowReading` option (default false); Properties opts in, while outgoing links retains its existing Reading restriction. Existing conflict/vault-switch/preimage/range guards remain. A successful Reading mutation refreshes its rendered display. Dirty focused fields survive unrelated cache updates; field-level expected values reject concurrent overwrites. Sidebar rebinding tracks both file and owning split. Unsupported nesting and malformed input are refused, including BOM-prefixed frontmatter.
+
+Visual reference: approved sidebar design artifact `create-a-reviewable-static-geode-sidebar-parity-reference-pr`, desktop-properties state. Existing metadata CSS/tokens are reused, with individual list fields, explicit errors and semantic buttons. The exclusive Electron slot exercised the checked-in demo vault through a temporary copy and synthetic editing flows. [Inspected screenshots](../screenshots/properties-p1/README.md) show Live Preview, Reading and a narrow sidebar.
+
+## Verification checkpoint
+
+Local machine; `pm-config.md` has no compute-offload entry. Five targeted unit files pass (29 tests): property serialization/data integrity, pane ownership/lifecycle, outgoing source helper/default Reading restriction and outgoing pane regression coverage. Independent review regressions reproduce detached split callbacks and stale Reading metadata; adapters now bind generation and owner, and Reading derives properties from its buffer with asynchronous render identity guards. Typecheck and build pass. Test-first regressions included stale split ownership (old buffer incorrectly retained), invalid YAML/numbers, duplicate operations, comments and CRLF body preservation.
+
+`tests/e2e/file-properties.spec.ts` prepares synthetic-vault verification for shared in-note/sidebar values, unsaved body preservation, isolated undo, duplicate rename, lists, active-file switching and malformed YAML. Properties plus smoke passed 5/5 with retries disabled; the final expanded Properties spec passed 2/2 with retries disabled. Reading refresh, invalid-number focus, dirty focused input preservation and the copied demo vault were exercised in the real app. Screenshots are committed and inspected. Full units, full Electron, shared-report screenshot publication and final independent review remain required before a tested PR claim. Properties ledger rows remain partial; P2/P3 registry, global operations and presentation are deferred explicitly.

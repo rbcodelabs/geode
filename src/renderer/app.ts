@@ -1,3 +1,4 @@
+import { PropertyTypes } from "./properties/property-types";
 import type { BaseSyncFocusReceipt } from "./views/bases/paused-edit";
 import { SourceNavigationEffectFailure, type SourceNavigationRequest } from "./markdown/source-owned-navigation";
 import { ScopeCancelled } from "./workspaces/render-ownership";
@@ -63,6 +64,7 @@ import { FileExplorerView } from "./views/file-explorer";
 import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
 import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
+import { FilePropertiesView } from "./views/file-properties-view";
 import { OutgoingLinksView } from "./views/outgoing-links-view";
 import { ExcludedFiles } from "./excluded-files";
 import { renderFilesAndLinksTab } from "./settings/files-and-links-tab";
@@ -2916,8 +2918,11 @@ export class App {
   private openConflictModal: ConflictCompareModal | null = null;
   private refreshDetailsModal: ErrorDetailsModal | null = null;
 
+  readonly propertyTypes = new PropertyTypes();
+
   constructor(host: HostServices = getHostServices()) {
     this.host = host;
+    this.propertyTypes.onError(() => this.notify("Could not save property types. Check the assignment and try again."));
     this.dailyNotes = new DailyNotesService(host.config);
     this.templates = new TemplatesService(host.config);
     this.uniqueNotes = new UniqueNotesService(host.config);
@@ -3538,6 +3543,7 @@ export class App {
       this.showVaultPicker(rootEl, recents);
       return;
     }
+    await this.propertyTypes.load(this.host.config).catch(() => this.notify("Could not load property types. Type changes are unavailable."));
     const saved = (await this.host.config.read("app")) as Partial<AppSettings> | null;
     await this.commands.loadHotkeys();
     if (saved) {
@@ -3753,6 +3759,7 @@ export class App {
     this.excludedFiles = new ExcludedFiles(this.host.deviceState, this.vault.root);
     this.workspace.rightSidebar.addView(new BacklinksView(this));
     this.workspace.rightSidebar.addView(new OutgoingLinksView(this));
+    this.workspace.rightSidebar.addView(new FilePropertiesView(this));
     this.workspace.rightSidebar.addView(new OutlineView(this));
     this.workspace.rightSidebar.addView(new TagPaneView(this));
     this.commentsView = new CommentsView(this);
@@ -4537,6 +4544,7 @@ export class App {
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
+    await this.propertyTypes.close();
     await this.footnotesLifecycle.catch(() => undefined);
     await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.vault.close();
@@ -4576,6 +4584,7 @@ export class App {
     this.noteComposerPlugin = undefined;
     this.workspace?.dispose();
     this.metadataCache.dispose();
+    await this.propertyTypes.close();
     await this.vault.close();
   }
 
@@ -4864,6 +4873,10 @@ export class App {
       } });
     }
     c("command-palette", "Open command palette", "Mod+P", () => this.openCommandPalette());
+    c("file-properties:open", "Show file properties", undefined, () => {
+      const view = this.workspace.getLeavesOfType("file-properties")[0]?.view;
+      if (view) this.workspace.rightSidebar.show(view);
+    });
     c("outgoing-links:open", "Show outgoing links", undefined, () => {
       const view = this.workspace.getLeavesOfType("outgoing-links")[0]?.view;
       if (view) this.workspace.rightSidebar.show(view);
