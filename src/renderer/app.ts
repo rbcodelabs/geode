@@ -37,6 +37,7 @@ import { AudioRecorderPlugin } from "./internal-plugins/audio-recorder/audio-rec
 import { FormatConverterPlugin } from "./internal-plugins/format-converter/format-converter-plugin";
 import { SlashCommandsPlugin } from "./internal-plugins/slash-commands/slash-commands-plugin";
 import { SlidesPlugin } from "./internal-plugins/slides/slides-plugin";
+import { IcloudSyncPlugin } from "./internal-plugins/icloud-sync/icloud-sync-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
 import {
@@ -175,6 +176,8 @@ interface AppSettings {
   slashCommandsEnabled: boolean;
   /** Slides core plugin; off by default, as in Obsidian. */
   slidesEnabled: boolean;
+  /** iCloud sync core plugin (ADR 0030); off by default. Only offered where the host reaches Geode's iCloud container. */
+  icloudSyncEnabled: boolean;
   /** Footnotes core plugin; optional sidebar, off by default. */
   footnotesEnabled: boolean;
   /**
@@ -1468,6 +1471,109 @@ class SettingsModal extends Modal {
     cookieBtn.title = cookieBtn.disabled ? "Chrome cookie import requires Web Viewer on desktop" : "";
     cookieBtn.addEventListener("click", () => new ChromeCookieImportModal(this.geodeApp).open());
     cookieControl.appendChild(cookieBtn);
+    this.renderIcloudSyncSettings(container);
+  }
+
+  /** Re-render Core plugins without losing the user's place: the tab is rebuilt from scratch, which resets scroll to the top. */
+  private reloadCoreTabKeepingScroll(): void {
+    let scroller: HTMLElement | null = this.contentContainerEl;
+    while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
+    const top = scroller?.scrollTop ?? 0;
+    this.activateTab("core-plugins");
+    if (scroller) scroller.scrollTop = top;
+    // Sections that fill in asynchronously (iCloud) are shorter at this instant, so the browser clamps the offset;
+    // they call `restorePendingCoreScroll` once they have their final height.
+    this.pendingCoreScroll = scroller ? { el: scroller, top } : null;
+  }
+  private pendingCoreScroll: { el: HTMLElement; top: number } | null = null;
+  private restorePendingCoreScroll(): void {
+    const pending = this.pendingCoreScroll;
+    this.pendingCoreScroll = null;
+    if (pending?.el.isConnected) pending.el.scrollTop = pending.top;
+  }
+
+  /**
+   * iCloud sync core plugin (ADR 0030): enable toggle, container availability, and the remote folder choice.
+   * Shown only where the host can reach Geode's iCloud container; elsewhere the plugin cannot run, so there is
+   * nothing to configure.
+   */
+  private renderIcloudSyncSettings(container: HTMLElement): void {
+    if (!this.geodeApp.host.capabilities.icloudContainer) return;
+    const section = document.createElement("div");
+    section.className = "icloud-sync-settings";
+    container.appendChild(section);
+    section.innerHTML = `<h3>iCloud sync</h3>`;
+    this.addToggle(section, "Enable iCloud sync", this.geodeApp.settings.icloudSyncEnabled, (enabled) => {
+      this.geodeApp.settings.icloudSyncEnabled = enabled;
+      this.geodeApp.syncIcloudSyncPlugin();
+      this.geodeApp.saveSettings();
+      this.reloadCoreTabKeepingScroll();
+    });
+    const plugin = this.geodeApp.icloudSyncPlugin;
+    if (!this.geodeApp.settings.icloudSyncEnabled || !plugin) return;
+
+    const status = document.createElement("p");
+    status.className = "setting-item-description icloud-sync-status";
+    status.textContent = "Checking Geode's iCloud container…";
+    section.appendChild(status);
+    const controls = document.createElement("div");
+    section.appendChild(controls);
+
+    const notice = (message: string) => this.geodeApp.notify(message);
+    const render = async (): Promise<void> => {
+      let remote;
+      try {
+        remote = await plugin.describeRemote();
+      } catch (error) {
+        status.textContent = `Could not read the iCloud container: ${error instanceof Error ? error.message : String(error)}`;
+        return;
+      }
+      if (!section.isConnected) return;
+      controls.replaceChildren();
+      if (remote.state === "unavailable") {
+        status.textContent = `iCloud container unavailable: ${remote.message}`;
+        return;
+      }
+      const describe = { missing: "will be created on first sync", marked: "existing Geode folder", empty: "empty", unmarked: "NOT a Geode folder" } as const;
+      status.textContent = `Remote: iCloud container / ${remote.name} (${describe[remote.folder]})`;
+
+      let typed = remote.name;
+      const apply = async (value: string): Promise<void> => {
+        const result = await plugin.applyFolder(value);
+        if (!result.ok) {
+          notice(result.message);
+          return;
+        }
+        notice(result.changed ? `Remote folder set to "${result.name}" (name was adjusted to be safe).` : `Remote folder set to "${result.name}".`);
+        this.reloadCoreTabKeepingScroll();
+      };
+
+      const { control: nameControl } = this.addRow(controls, "Remote folder name", "Folder in Geode's iCloud container that holds this vault's synced copy. Defaults to the vault's folder name. Use the same name on every device. Disconnect sync before changing it.");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "web-view-address";
+      input.style.width = "20rem";
+      input.setAttribute("aria-label", "Remote folder name");
+      input.spellcheck = false;
+      input.value = remote.name;
+      input.addEventListener("input", () => { typed = input.value; });
+      nameControl.appendChild(input);
+      const applyBtn = document.createElement("button");
+      applyBtn.textContent = "Apply";
+      applyBtn.addEventListener("click", () => void apply(typed));
+      nameControl.appendChild(applyBtn);
+
+      const { control: pickControl } = this.addRow(controls, "Use an existing remote folder", "Folders in the container that already contain a Geode sync marker, e.g. created by another device.");
+      const select = document.createElement("select");
+      select.className = "dropdown";
+      select.setAttribute("aria-label", "Existing remote folder");
+      select.add(new Option(remote.existing.length ? "Select a folder…" : "No existing folders found", ""));
+      for (const name of remote.existing) select.add(new Option(name, name));
+      select.value = remote.existing.includes(remote.name) ? remote.name : "";
+      select.addEventListener("change", () => { if (select.value) void apply(select.value); });
+      pickControl.appendChild(select);
+    };
+    void render().finally(() => this.restorePendingCoreScroll());
   }
 
   private async updateWebViewer(
@@ -2763,6 +2869,8 @@ export class App {
   slashCommandsPlugin?: SlashCommandsPlugin;
   /** Live Slides plugin, or undefined while the core plugin is off. */
   slidesPlugin?: SlidesPlugin;
+  /** Live iCloud sync plugin, or undefined while the core plugin is off or the host has no iCloud container. */
+  icloudSyncPlugin?: IcloudSyncPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2780,6 +2888,7 @@ export class App {
     formatConverterEnabled: false,
     slashCommandsEnabled: true,
     slidesEnabled: false,
+    icloudSyncEnabled: false,
     footnotesEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
@@ -3448,6 +3557,7 @@ export class App {
         formatConverterEnabled: saved.formatConverterEnabled === true,
         slashCommandsEnabled: saved.slashCommandsEnabled !== false,
         slidesEnabled: saved.slidesEnabled === true,
+        icloudSyncEnabled: saved.icloudSyncEnabled === true,
         footnotesEnabled: saved.footnotesEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
@@ -3713,6 +3823,7 @@ export class App {
     this.syncFormatConverterPlugin();
     this.syncSlashCommandsPlugin();
     this.syncSlidesPlugin();
+    this.syncIcloudSyncPlugin();
     await this.syncFootnotesPlugin();
     this.syncNoteComposerPlugin();
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
@@ -4459,6 +4570,8 @@ export class App {
     this.slashCommandsPlugin = undefined;
     this.slidesPlugin?.unload();
     this.slidesPlugin = undefined;
+    this.icloudSyncPlugin?.unload();
+    this.icloudSyncPlugin = undefined;
     this.noteComposerPlugin?.unload();
     this.noteComposerPlugin = undefined;
     this.workspace?.dispose();
@@ -6493,6 +6606,19 @@ export class App {
     if (!this.settings.slidesEnabled) return;
     this.slidesPlugin = new SlidesPlugin(this);
     this.slidesPlugin.load();
+  }
+
+  /**
+   * Load or unload the iCloud sync core plugin to match `settings.icloudSyncEnabled`. Unlike Slides it also needs the
+   * host to reach Geode's iCloud container; without it no provider is registered, whatever the saved setting says.
+   */
+  syncIcloudSyncPlugin(): void {
+    this.icloudSyncPlugin?.unload();
+    this.icloudSyncPlugin = undefined;
+    const bridge = this.host.icloudContainer;
+    if (!this.settings.icloudSyncEnabled || !this.host.capabilities.icloudContainer || !bridge) return;
+    this.icloudSyncPlugin = new IcloudSyncPlugin(this, bridge);
+    this.icloudSyncPlugin.load();
   }
 
   /** Load or unload the Audio recorder core plugin to match `settings.audioRecorderEnabled`. */

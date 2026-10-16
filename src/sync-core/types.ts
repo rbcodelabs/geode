@@ -55,6 +55,11 @@ export interface SyncProvider {
   readonly name: string;
   readonly capabilities: Readonly<SyncProviderCapabilities>;
   open(context: { vaultId: string }): Promise<SyncSession>;
+  /**
+   * Optional cheap check run when the user selects this provider. Throw with a user-facing message to refuse the
+   * selection (e.g. the transport's backing store is not reachable) instead of connecting and failing on every scan.
+   */
+  preflight?(): Promise<void>;
 }
 
 export type SyncStatusState = "disconnected" | "idle" | "preview" | "pending" | "syncing" | "paused" | "conflict" | "error";

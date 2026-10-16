@@ -101,6 +101,7 @@ export class SyncCoordinator extends Events implements SyncApi {
   async activate(providerId: string): Promise<void> {
     const registration = this.providers.get(providerId);
     if (!registration) throw new Error(`Unknown sync provider: ${providerId}`);
+    await registration.provider.preflight?.();
     const state = await this.loadState();
     if (state.providerId && state.providerId !== providerId) throw new Error("Disconnect the active sync provider before selecting another");
     state.providerId = providerId;

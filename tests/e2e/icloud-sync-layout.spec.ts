@@ -1,0 +1,37 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { _electron as electron, expect, test } from "@playwright/test";
+
+test.skip(process.platform !== "darwin", "iCloud sync is available on macOS (and iOS) only");
+test("remote folder input is wide enough and Apply keeps the scroll position", async () => {
+  const repoRoot = path.resolve(__dirname, "..", "..");
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), "a23-vault-a-very-long-vault-name-"));
+  const user = fs.mkdtempSync(path.join(os.tmpdir(), "a23-user-"));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "a23-base-"));
+  fs.writeFileSync(path.join(user, "geode.json"), JSON.stringify({ recentVaults: [vault], lastVault: vault }));
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${user}`], cwd: repoRoot, env: { ...process.env, GEODE_HEADLESS: "1", GEODE_ICLOUD_BASE: base } });
+  const win = await app.firstWindow();
+  await win.setViewportSize({ width: 1280, height: 800 });
+  await win.waitForFunction(() => Boolean((window as any).app?.workspace));
+  const modal = win.locator('.modal.mod-settings[aria-label="Settings"]');
+  await win.evaluate(() => (window as any).app.setting.openTabById("core-plugins"));
+  await modal.getByRole("checkbox", { name: "Enable iCloud sync" }).check();
+  const field = modal.getByRole("textbox", { name: "Remote folder name" });
+  await expect(field).toBeVisible();
+  const box = await field.boundingBox();
+  expect(box!.width).toBeGreaterThan(280);
+  const scrollTop = () => win.evaluate(() => { let e: HTMLElement | null = document.querySelector(".vertical-tab-content-container"); while (e && e.scrollHeight <= e.clientHeight) e = e.parentElement; return e?.scrollTop ?? -1; });
+  await win.evaluate(() => { let e: HTMLElement | null = document.querySelector(".vertical-tab-content-container"); while (e && e.scrollHeight <= e.clientHeight) e = e.parentElement; if (e) e.scrollTop = e.scrollHeight; });
+  const before = await scrollTop();
+  expect(before).toBeGreaterThan(0);
+  await field.fill("Another");
+  await modal.getByRole("button", { name: "Apply" }).click();
+  await expect(win.locator(".notice", { hasText: 'Remote folder set to "Another"' }).last()).toBeVisible();
+  await expect(field).toHaveValue("Another");
+  const after = await scrollTop();
+  expect(after).toBeGreaterThan(0);
+  await expect(modal.getByRole("button", { name: "Apply" })).toBeInViewport();
+  await app.close();
+  for (const d of [vault, user, base]) fs.rmSync(d, { recursive: true, force: true });
+});

@@ -139,6 +139,13 @@ const api = {
     call: (request: import("../shared/hub-sync").HubRequest, requestId: string) => ipcRenderer.invoke("hub-sync", request, requestId),
     abort: (requestId: string): void => ipcRenderer.send("hub-sync-abort", requestId),
   } as import("../shared/hub-sync").HubSyncBridge,
+  /** macOS only (ADR 0030): primitives over Geode's iCloud container; the renderer gets no raw fs. */
+  ...(process.platform === "darwin" ? {
+    icloudContainer: {
+      call: (method: import("../shared/icloud-container").IcloudBridgeMethod, args: unknown[], requestId: string) => ipcRenderer.invoke("icloud-container", method, args, requestId),
+      abort: (requestId: string): void => ipcRenderer.send("icloud-container-abort", requestId),
+    } as import("../shared/icloud-container").IcloudContainerIpc,
+  } : {}),
   applySyncMutation: (token: string, input: GuardedMutation): Promise<GuardedMutationResult> => ipcRenderer.invoke("sync-local-apply", token, input),
   onSyncPrepare: (handler: (token: string, path: string) => Promise<string | null>): (() => void) => {
     const listener = async (_event: Electron.IpcRendererEvent, token: string, path: string) => {

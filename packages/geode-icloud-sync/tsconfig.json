@@ -1,5 +1,0 @@
-{
-  "extends": "../../tsconfig.json",
-  "compilerOptions": { "types": ["node"] },
-  "include": ["src/**/*.ts", "../../tests/unit/icloud-sync-provider.test.ts", "../../tests/unit/icloud-sync-plugin.test.ts", "../../tests/unit/icloud-sync-folders.test.ts"]
-}

@@ -32,7 +32,7 @@ Creates receive a durable `operationKey` and must be idempotent for it. Updates,
 
 For this contract, Geode rejects providers lacking binary payloads, conditional writes, an authoritative snapshot/delta mechanism, or recoverable trash. `maxFileSize`, when present, is checked before bytes are read. The optional discriminator is `protocol: "conditional-mutation-v1"`; omitting it preserves existing provider compatibility.
 
-A filesystem-backed reference implementation of this contract is the iCloud Drive plugin in `packages/geode-icloud-sync` ([ADR 0029](adr/0029-icloud-drive-sync-provider-plugin.md)).
+A reference implementation of this contract is the core iCloud sync provider in `src/renderer/internal-plugins/icloud-sync/` ([ADR 0030](adr/0030-core-icloud-sync-native-bridge.md), which superseded the earlier community plugin of [ADR 0029](adr/0029-icloud-drive-sync-provider-plugin.md)). It is written once against a platform bridge (`src/shared/icloud-container.ts`) and is a worked example of every `conditional-mutation-v1` rule above: idempotent creates keyed by `operationKey`, revision-checked update/move/trash, recoverable trash, complete snapshots that fail closed, and `maxFileSize` checks before bytes are read. Core plugins register it through the same `registerSyncProvider` API a community plugin would use.
 
 ## Append-only history provider contract
 
