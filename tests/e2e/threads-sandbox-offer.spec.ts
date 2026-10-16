@@ -66,6 +66,8 @@ async function installSeams(page: Page, opts: { setupFails?: boolean } = {}): Pr
     w.__sandboxReady = false;
     w.__probeCalls = 0;
     w.__setupRuns = 0;
+    w.__events = [] as string[];
+    manager.subscribe((_id: string, e: { type: string }) => w.__events.push(e.type));
     manager.sandboxSetupSupported = () => true;
     manager.sandboxCapabilityProbe = async () => {
       w.__probeCalls++;
@@ -121,6 +123,31 @@ async function watchSessionStart(page: Page, threadId: string): Promise<void> {
     session.start = (...args: unknown[]) => { w.__startCalls++; return original(...args); };
   }, threadId);
 }
+/** Manager events recorded by installSeams(), to prove the working state resumes after the gate releases. */
+const events = (page: Page) => page.evaluate(() => (window as any).__events as string[]);
+
+/** While the card is up nothing is running: no working bubble/spinner, Stop inactive, sidebar says waiting. */
+async function expectParkedUi(page: Page): Promise<void> {
+  await expect(card(page)).toBeVisible();
+  await expect(page.locator(".ct-streaming")).toHaveCount(0);
+  await expect(page.locator(".ct-status-card-spinner")).toHaveCount(0);
+  await expect(page.locator(".ct-stop-btn:not(.ct-hidden)")).toHaveCount(0);
+  const row = page.locator(".ct-agents-row-active .ct-agents-row-activity");
+  await expect(row).toHaveText("Waiting for your sandbox choice");
+  await expect(page.locator(".ct-agents-row-active")).not.toContainText("Completed");
+  await expect(page.locator(".ct-agents-row-active")).not.toContainText("Reviewed");
+}
+
+/** After release the thread is working again: streaming_start was re-emitted after the offer, and it settles with the reply. */
+async function expectRunningResumed(page: Page): Promise<void> {
+  const seen = await events(page);
+  const offerAt = seen.indexOf("sandbox_setup_offer");
+  expect(offerAt).toBeGreaterThanOrEqual(0);
+  expect(seen.slice(offerAt + 1)).toContain("streaming_start");
+  await expect(reply(page)).toBeVisible();
+  await expect(page.locator(".ct-stop-btn:not(.ct-hidden)")).toHaveCount(0);
+  await expect(page.locator(".ct-agents-row-active .ct-agents-row-activity")).not.toHaveText("Waiting for your sandbox choice");
+}
 const startCalls = (page: Page) => page.evaluate(() => (window as any).__startCalls as number);
 
 async function cleanup(f?: Fixture): Promise<void> {
@@ -141,6 +168,7 @@ test.describe("sandbox offer before launch (real app + real plugin)", () => {
       await send(page, "hello");
       await expect(card(page)).toBeVisible();
       await watchSessionStart(page, id);
+      await expectParkedUi(page);
       await expect(card(page).locator(".ct-sandbox-offer-title")).toHaveText("Run this thread in a sandbox?");
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, "sandbox-offer-card.png") });
       // Held: nothing starts while the card is up (give a stray start time to show up).
@@ -151,7 +179,7 @@ test.describe("sandbox offer before launch (real app + real plugin)", () => {
       await expect(page.locator("body")).not.toContainText(REPLY);
       await card(page).getByRole("button", { name: "Not now" }).click();
       await expect(card(page)).toHaveCount(0);
-      await expect(reply(page)).toBeVisible();
+      await expectRunningResumed(page);
       expect(await startCalls(page)).toBe(1);
     } finally { await cleanup(f); }
   });
@@ -197,8 +225,10 @@ test.describe("sandbox offer before launch (real app + real plugin)", () => {
       await expect(progress).toContainText("Installing the runtime");
       expect(await noAssistantOutput(page)).toBe(0);
       expect(await startCalls(page)).toBe(0);
+      await expect(page.locator(".ct-streaming")).toHaveCount(0);
+      await expect(page.locator(".ct-stop-btn:not(.ct-hidden)")).toHaveCount(0);
       await expect(progress).toContainText("Sandbox ready. This thread is starting inside it.");
-      await expect(reply(page)).toBeVisible();
+      await expectRunningResumed(page);
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, "sandbox-offer-done.png") });
       expect(await startCalls(page)).toBe(1);
       expect(await page.evaluate(() => (window as any).__setupRuns)).toBe(1);
