@@ -1,6 +1,6 @@
 import { createHash, type Hash } from "node:crypto";
 import { link, mkdir, open, readdir, readFile, rename, stat, truncate, unlink, type FileHandle } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySession, type AppendOnlySyncProvider, type BlobRef, type HistoryRecord, type HistoryScan, type VaultDescriptor } from "../sync-core/history-types";
 import { abortError, SyncStoreError } from "./store-errors";
 import { withStoreLock } from "./store-lock";
@@ -10,6 +10,8 @@ import { withStoreLock } from "./store-lock";
  *
  *   <store>/descriptor.json      immutable VaultDescriptor (one vault per store)
  *   <store>/blobs/<sha256>       immutable, content-addressed blobs (id === sha256)
+ *   <store>/blobs/<sha256>.manifest + <store>/chunks/<xx>/<sha256>
+ *                                the same blob stored as fixed-size chunks (see "Chunked blobs at rest")
  *   <store>/records/<id>.json    immutable records (canonical JSON)
  *   <store>/index.log            append-only newline-separated record ids; the ONLY
  *                                thing that makes a record visible to scan()
@@ -50,6 +52,30 @@ const INDEX_READ_WINDOW = 1024 * 1024;
 const TMP_MAX_AGE_MS = 60 * 60 * 1000;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
+
+/*
+ * Chunked blobs at rest.
+ *
+ * History is append-only and every version of a file is a whole content-addressed blob, so a log that grows by a few
+ * KB per edit costs its full size per version (a 30 MB log with 460 versions is 8 GB). A blob of at least
+ * AT_REST_MIN_BYTES is therefore stored as fixed-size chunks (AT_REST_CHUNK_BYTES, aligned to offset 0) in a shared
+ * content-addressed pool, plus a small manifest. Fixed alignment is exactly right for append-only files: every full
+ * chunk of the previous version is byte-identical in the next, so only the changed tail chunk is new storage.
+ *
+ * This is a purely internal storage detail of the hub. The BlobRef (id === sha256 of the WHOLE blob), the record
+ * format, the RPC/WebSocket protocol, putBlob/readBlob/readBlobRange and their verification are all unchanged, so
+ * existing clients (including older desktop apps) are unaffected. Legacy whole-blob files keep working and are read
+ * first; chunkLegacyBlob() converts them in place.
+ *
+ *   chunks/<xx>/<sha256>         immutable chunk, written via linkNew (never partial, exclusive)
+ *   blobs/<id>.manifest          {"v":1,"size":N,"chunk":C,"chunks":[sha256,...]}, written AFTER every chunk is durable
+ *
+ * GEODE_HUB_CHUNKED=0 stops new blobs from being chunked (existing manifests are still read).
+ */
+export const AT_REST_CHUNK_BYTES = 1024 * 1024;
+export const AT_REST_MIN_BYTES = 2 * AT_REST_CHUNK_BYTES;
+const chunkedEnabled = () => process.env.GEODE_HUB_CHUNKED !== "0";
+export interface BlobManifest { v: 1; size: number; chunk: number; chunks: string[] }
 
 export const canonicalJson = (value: unknown): string => JSON.stringify(sortKeys(value));
 function sortKeys(value: unknown): unknown {
@@ -104,6 +130,59 @@ async function linkNew(dir: string, target: string, bytes: Uint8Array): Promise<
 const notFound = (error: unknown) => (error as NodeJS.ErrnoException)?.code === "ENOENT";
 const checkSignal = (signal: AbortSignal) => { if (signal.aborted) throw abortError(signal); };
 
+const manifestPath = (blobsDir: string, id: string) => join(blobsDir, `${id}.manifest`);
+const chunkDirOf = (blobsDir: string, sha: string) => join(dirname(blobsDir), "chunks", sha.slice(0, 2));
+const chunkPathOf = (blobsDir: string, sha: string) => join(chunkDirOf(blobsDir, sha), sha);
+
+/** The manifest of a chunked blob, null when the blob is not chunked; throws hash-mismatch when it is unreadable or inconsistent. */
+async function readManifest(blobsDir: string, id: string): Promise<BlobManifest | null> {
+  let text: string;
+  try { text = await readFile(manifestPath(blobsDir, id), "utf8"); } catch (error) { if (notFound(error)) return null; throw error; }
+  let m: BlobManifest;
+  try { m = JSON.parse(text) as BlobManifest; } catch { throw new SyncStoreError("hash-mismatch", "Blob manifest is corrupt"); }
+  const ok = m && m.v === 1 && Number.isSafeInteger(m.size) && m.size >= 0 && m.size <= SYNC_MAX_FILE_BYTES && Number.isSafeInteger(m.chunk) && m.chunk > 0 && m.chunk <= 64 * 1024 * 1024
+    && Array.isArray(m.chunks) && m.chunks.length === Math.ceil(m.size / m.chunk) && m.chunks.every(c => typeof c === "string" && SHA_RE.test(c));
+  if (!ok) throw new SyncStoreError("hash-mismatch", "Blob manifest is inconsistent");
+  return m;
+}
+
+/** Splits an already-verified file into the chunk pool. Existing chunks are not rewritten. Returns the manifest and the bytes newly stored. */
+async function storeChunksFrom(blobsDir: string, filePath: string, size: number): Promise<{ manifest: BlobManifest; newBytes: number }> {
+  const chunks: string[] = []; let newBytes = 0;
+  const handle = await open(filePath, "r");
+  try {
+    const buf = Buffer.allocUnsafe(AT_REST_CHUNK_BYTES);
+    for (let offset = 0; offset < size; offset += AT_REST_CHUNK_BYTES) {
+      const want = Math.min(AT_REST_CHUNK_BYTES, size - offset);
+      let got = 0;
+      while (got < want) { const { bytesRead } = await handle.read(buf, got, want - got, offset + got); if (!bytesRead) throw new SyncStoreError("size-mismatch", "Blob is shorter than declared"); got += bytesRead; }
+      const part = buf.subarray(0, want), sha = createHash("sha256").update(part).digest("hex"), dir = chunkDirOf(blobsDir, sha), path = chunkPathOf(blobsDir, sha);
+      await mkdir(dir, { recursive: true });
+      let present = false;
+      try { present = (await stat(path)).size === want; if (!present) await unlink(path); } catch (error) { if (!notFound(error)) throw error; }
+      if (!present && await linkNew(dir, path, part)) newBytes += want;
+      chunks.push(sha);
+    }
+  } finally { await handle.close(); }
+  return { manifest: { v: 1, size, chunk: AT_REST_CHUNK_BYTES, chunks }, newBytes };
+}
+
+/** True when the blob is fully present in either form. A broken manifest is removed so the blob can be re-stored. */
+async function blobPresent(blobsDir: string, id: string, size: number): Promise<boolean> {
+  try { if ((await stat(join(blobsDir, id))).size === size) return true; } catch (error) { if (!notFound(error)) throw error; }
+  try {
+    const m = await readManifest(blobsDir, id);
+    if (!m) return false;
+    if (m.size === size) {
+      let complete = true;
+      for (const c of m.chunks) { try { await stat(chunkPathOf(blobsDir, c)); } catch (error) { if (!notFound(error)) throw error; complete = false; break; } }
+      if (complete) return true;
+    }
+  } catch (error) { if (!(error instanceof SyncStoreError)) throw error; }
+  await unlink(manifestPath(blobsDir, id)).catch(() => {});
+  return false;
+}
+
 /** Streaming blob upload: bytes are hashed and written as they arrive; nothing is buffered beyond one chunk. */
 export class FsBlobWriter {
   private hash: Hash | null = createHash("sha256");
@@ -119,7 +198,7 @@ export class FsBlobWriter {
     if (!Number.isSafeInteger(size) || size < 0) throw new SyncStoreError("invalid-request", "Invalid blob size");
     if (size > SYNC_MAX_FILE_BYTES) throw new SyncStoreError("too-large", `Blob exceeds ${SYNC_MAX_FILE_BYTES} bytes`);
     let existing = false;
-    try { existing = (await stat(join(blobsDir, sha256))).size === size; } catch (error) { if (!notFound(error)) throw error; }
+    existing = await blobPresent(blobsDir, sha256, size);
     const writer = new FsBlobWriter(blobsDir, sha256, size, existing);
     if (!existing) {
       writer.tmpPath = join(blobsDir, tmpName());
@@ -148,8 +227,15 @@ export class FsBlobWriter {
         await this.handle.sync();
         await this.handle.close();
         this.handle = null;
-        await rename(this.tmpPath!, join(this.blobsDir, this.sha256));
-        this.tmpPath = null;
+        if (chunkedEnabled() && this.size >= AT_REST_MIN_BYTES) {
+          // Chunks first (each durable), then the manifest that makes the blob visible, then drop the verified temp file.
+          const { manifest } = await storeChunksFrom(this.blobsDir, this.tmpPath!, this.size);
+          await linkNew(this.blobsDir, manifestPath(this.blobsDir, this.sha256), Buffer.from(canonicalJson(manifest)));
+          await unlink(this.tmpPath!); this.tmpPath = null;
+        } else {
+          await rename(this.tmpPath!, join(this.blobsDir, this.sha256));
+          this.tmpPath = null;
+        }
         await fsyncDir(this.blobsDir);
       }
     } catch (error) { await this.abort(); throw error; }
@@ -220,7 +306,10 @@ export class FsStoreSession implements AppendOnlySession {
     checkSignal(signal);
     if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || length > STORE_CHUNK_BYTES) throw new SyncStoreError("invalid-request", "Invalid blob range");
     let handle: FileHandle;
-    try { handle = await open(this.blobPath(id), "r"); } catch (error) { if (notFound(error)) throw new SyncStoreError("not-found", "Blob not found"); throw error; }
+    try { handle = await open(this.blobPath(id), "r"); } catch (error) {
+      if (!notFound(error)) throw error;
+      return this.readChunkedRange(id, offset, length); // not a whole-file blob: chunked, or not found
+    }
     try {
       const size = (await handle.stat()).size;
       if (offset > size) throw new SyncStoreError("invalid-request", "Blob range out of bounds");
@@ -231,8 +320,59 @@ export class FsStoreSession implements AppendOnlySession {
     } finally { await handle.close(); }
   }
 
+  private async readChunkedRange(id: string, offset: number, length: number): Promise<Buffer> {
+    const m = await readManifest(this.blobsDir, id);
+    if (!m) throw new SyncStoreError("not-found", "Blob not found");
+    if (offset > m.size) throw new SyncStoreError("invalid-request", "Blob range out of bounds");
+    const want = Math.min(length, m.size - offset), out = Buffer.allocUnsafe(want);
+    let got = 0;
+    while (got < want) {
+      const pos = offset + got, index = Math.floor(pos / m.chunk), within = pos % m.chunk;
+      const take = Math.min(m.chunk - within, want - got, m.size - index * m.chunk - within);
+      let handle: FileHandle;
+      try { handle = await open(chunkPathOf(this.blobsDir, m.chunks[index]), "r"); } catch (error) { if (notFound(error)) throw new SyncStoreError("not-found", "Blob chunk not found"); throw error; }
+      try {
+        let read = 0;
+        while (read < take) { const { bytesRead } = await handle.read(out, got + read, take - read, within + read); if (!bytesRead) throw new SyncStoreError("hash-mismatch", "Stored chunk is corrupt"); read += bytesRead; }
+      } finally { await handle.close(); }
+      got += take;
+    }
+    return out;
+  }
+
   async blobSize(id: string): Promise<number> {
-    try { return (await stat(this.blobPath(id))).size; } catch (error) { if (notFound(error)) throw new SyncStoreError("not-found", "Blob not found"); throw error; }
+    try { return (await stat(this.blobPath(id))).size; } catch (error) { if (!notFound(error)) throw error; }
+    const m = await readManifest(this.blobsDir, id);
+    if (!m) throw new SyncStoreError("not-found", "Blob not found");
+    return m.size;
+  }
+
+  /**
+   * Converts one whole-file blob to the chunked form in place. Safe while the hub is serving: chunks and the manifest
+   * are durable before the whole file is unlinked, and readers fall back from the whole file to the manifest.
+   * A blob whose bytes do not hash to its id is left untouched ("corrupt").
+   */
+  async chunkLegacyBlob(id: string): Promise<{ status: "chunked" | "already-chunked" | "too-small" | "missing" | "corrupt"; legacyBytes: number; newChunkBytes: number }> {
+    const path = this.blobPath(id);
+    let size: number;
+    try { size = (await stat(path)).size; } catch (error) {
+      if (!notFound(error)) throw error;
+      return { status: (await readManifest(this.blobsDir, id)) ? "already-chunked" : "missing", legacyBytes: 0, newChunkBytes: 0 };
+    }
+    if (size < AT_REST_MIN_BYTES) return { status: "too-small", legacyBytes: size, newChunkBytes: 0 };
+    const hash = createHash("sha256"), handle = await open(path, "r");
+    try {
+      const buf = Buffer.allocUnsafe(STORE_CHUNK_BYTES);
+      for (let offset = 0; offset < size;) { const { bytesRead } = await handle.read(buf, 0, Math.min(buf.length, size - offset), offset); if (!bytesRead) break; hash.update(buf.subarray(0, bytesRead)); offset += bytesRead; }
+    } finally { await handle.close(); }
+    if (hash.digest("hex") !== id) return { status: "corrupt", legacyBytes: size, newChunkBytes: 0 };
+    const { manifest, newBytes } = await storeChunksFrom(this.blobsDir, path, size);
+    if (!(await readManifest(this.blobsDir, id).catch(() => null))) {
+      await unlink(manifestPath(this.blobsDir, id)).catch(() => {});
+      await linkNew(this.blobsDir, manifestPath(this.blobsDir, id), Buffer.from(canonicalJson(manifest)));
+    }
+    await unlink(path); await fsyncDir(this.blobsDir);
+    return { status: "chunked", legacyBytes: size, newChunkBytes: newBytes };
   }
 
   async readBlob(ref: BlobRef, signal: AbortSignal): Promise<ArrayBuffer> {
@@ -469,4 +609,33 @@ export class FsStoreProvider implements AppendOnlySyncProvider {
     void session.reapTemp();
     return session;
   }
+}
+
+/**
+ * Finds (and with `apply` deletes) chunks no manifest references, plus stale temp files in the chunk pool. A chunk is only
+ * ever deleted when it is older than `minAgeMs` (a writer stores chunks before its manifest, so a young orphan may be in
+ * flight). Refuses to run when any manifest is unreadable: a bad manifest could be hiding references.
+ */
+export async function sweepOrphanChunks(storePath: string, options: { apply: boolean; minAgeMs?: number; now?: number }): Promise<{ referenced: number; orphans: number; orphanBytes: number; removed: number; refused?: string }> {
+  const blobsDir = join(storePath, "blobs"), chunksDir = join(storePath, "chunks"), minAge = options.minAgeMs ?? TMP_MAX_AGE_MS, now = options.now ?? Date.now();
+  const referenced = new Set<string>();
+  for (const name of await readdir(blobsDir)) {
+    if (!name.endsWith(".manifest")) continue;
+    try { const m = await readManifest(blobsDir, name.slice(0, -".manifest".length)); for (const c of m?.chunks ?? []) referenced.add(c); }
+    catch { return { referenced: referenced.size, orphans: 0, orphanBytes: 0, removed: 0, refused: `unreadable manifest ${name}` }; }
+  }
+  let orphans = 0, orphanBytes = 0, removed = 0;
+  let dirs: string[] = [];
+  try { dirs = await readdir(chunksDir); } catch (error) { if (!notFound(error)) throw error; }
+  for (const dir of dirs) {
+    for (const name of await readdir(join(chunksDir, dir))) {
+      const path = join(chunksDir, dir, name);
+      if (!name.startsWith(".tmp-") && referenced.has(name)) continue;
+      let st; try { st = await stat(path); } catch { continue; }
+      if (now - st.mtimeMs < minAge) continue;
+      orphans++; orphanBytes += st.size;
+      if (options.apply) { await unlink(path).catch(() => {}); removed++; }
+    }
+  }
+  return { referenced: referenced.size, orphans, orphanBytes, removed };
 }

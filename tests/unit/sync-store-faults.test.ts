@@ -7,7 +7,7 @@ import { currentBootId, withStoreLock } from "../../src/sync-node/store-lock";
 import { canonicalJson } from "../../src/sync-node/fs-store";
 import { MAX_FRAME_BYTES, MAX_HEADER_BYTES, PROTOCOL_NAME, PROTOCOL_VERSION } from "../../src/sync-node/rpc-framing";
 import { SYNC_MAX_FILE_BYTES } from "../../src/sync-core/history-types";
-import { bytes, childProvider, cleanBundle, inProcessProvider, never, randomBytes, record, rm, runAppender, sha, spawnServe, tmpStore } from "../helpers/sync-store-harness";
+import { storedBlobSize, bytes, childProvider, cleanBundle, inProcessProvider, never, randomBytes, record, rm, runAppender, sha, spawnServe, tmpStore } from "../helpers/sync-store-harness";
 
 afterAll(() => cleanBundle());
 const visibleBlobs = (store: string) => readdirSync(join(store, "blobs")).filter(n => !n.startsWith(".tmp-"));
@@ -289,7 +289,7 @@ describe("connection loss and cancellation", () => {
       bigWrites = -1000; // let the retry through
       const ref = await session.putBlob({ operationId: "o2", sha256: digest, size: data.length, data: data.buffer as ArrayBuffer }, never);
       expect(ref.id).toBe(digest);
-      expect(statSync(join(store, "blobs", digest)).size).toBe(data.length);
+      expect(storedBlobSize(store, digest)).toBe(data.length);
       await provider.close();
     } finally { rm(store); }
   }, 60_000);
@@ -310,7 +310,7 @@ describe("bounded memory on large blobs", () => {
       expect(stats.framesIn).toBe(4 + CHUNKS);
       expect(stats.maxFrameIn).toBe(4 * 1024 * 1024);
       expect(stats.peakBuffered).toBeLessThanOrEqual(4 * 1024 * 1024);
-      expect(statSync(join(store, "blobs", digest)).size).toBe(SIZE);
+      expect(storedBlobSize(store, digest)).toBe(SIZE);
       expect(sha(await session.readBlob(ref, never))).toBe(digest);
       await provider.close();
     } finally { rm(store); }
