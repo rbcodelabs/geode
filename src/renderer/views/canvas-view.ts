@@ -1,3 +1,4 @@
+import { nativeRenderOwnership, ScopeCancelled, type RenderScope, type RenderToken, type RenderFailure, type PreparedRetirement } from "../workspaces/render-ownership";
 import type { App } from "../app";
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, type TFile } from "../types";
 import { buildViewHeaderNavButtons, type View } from "../workspace";
@@ -36,6 +37,23 @@ type NodeActionCapability =
   | { kind: "swap"; signature: string; fileKind: SwappableFileKind }
   | { kind: "external"; signature: string; url: string }
   | { kind: "generic"; signature: string };
+
+interface ConnectionPreview {
+  document: CanvasDocument;
+  file: TFile | null;
+  filePath: string | null;
+  vault: App["vault"];
+  vaultRoot: string;
+  bytes: string;
+  edge?: CanvasEdge;
+  node: CanvasNode;
+  preview: Element;
+  parent: Element;
+  cancel: () => void;
+  dispose: () => void;
+  finished: boolean;
+}
+interface PreviewCloseIntent { preview: ConnectionPreview | null; document: CanvasDocument; file: TFile | null; filePath: string | null; vault: App["vault"]; vaultRoot: string; bytes: string }
 
 function normalizeWebUrl(raw: string): string | null {
   try {
@@ -103,23 +121,41 @@ export class CanvasView implements View {
   private readonly redoStack: string[] = [];
   private readonly objectUrls = new Set<string>();
   private readonly markdownContentEls = new Set<HTMLElement>();
+  private readonly pendingConversions = new Map<string, string>();
+  private readonly pendingConversionNames = new Map<string, string>();
+  private pendingHistory: "undo" | "redo" | null = null;
   private renderVersion = 0;
+  private readonly nodePresentations = new Map<string, { node: CanvasNode; signature: string; el: HTMLElement; version: number }>();
+  private readonly presentationUrls = new Map<HTMLElement, Set<string>>();
+  private edgesEl: SVGSVGElement | null = null;
+  private presentationChangeInProgress = false;
+  private presentationRetirementFailed = false;
+  private conflictGeneration = 0;
+  private historyInProgress = false;
+  private historyPriorInert: boolean | null = null;
+  private readonly geometryGestures = new Set<() => void>();
   private selectionControlsEl: HTMLElement | null = null;
   private colorPaletteEl: HTMLElement | null = null;
   private edgeLabelEditorEl: HTMLInputElement | null = null;
   private edgeLabelEditorCancel: (() => void) | null = null;
   private recoveryError: string | null = null;
+  private recoveryAlert: HTMLElement | null = null;
   private loadGeneration = 0;
   private suppressReconcileModify = false;
   private conflictReadOnly = false;
   private transientGestureCancel: (() => void) | null = null;
+  private connectionPreview: ConnectionPreview | null = null;
+  private readonly previewCloseIntents = new WeakMap<object, PreviewCloseIntent>();
   private readonly saveStatusEl: HTMLElement;
   private readonly touchGesture: CanvasTouchGesture;
   private readonly capturedTouchPointers = new Set<number>();
   private touchDragSnapshot: { id: string; x: number; y: number } | null = null;
   private readonly touchCleanups: Array<() => void> = [];
 
-  constructor(private app: App) {
+  readonly renderOwner: RenderScope;
+  constructor(private app: App, parentOwner?: RenderScope) {
+    const options = { writer: this, preflightClose: (context?: object) => this.assertCloseReady(context), prepareClose: (context?: object) => this.prepareClose(context), failureKey: "canvas-save", close: () => this.closeNative(), resume: () => { if (this.file && this.recoveryError === null && !this.connectionPreview) this.render(); }, recover: (failures: readonly RenderFailure[]) => this.recoverNativeWrites(failures) };
+    this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
     this.containerEl = document.createElement("div");
     this.containerEl.className = "canvas-view";
 
@@ -180,19 +216,29 @@ export class CanvasView implements View {
     }
   }
 
-  async setFile(file: TFile, requireValid = false): Promise<void> {
+  setFile(file: TFile, requireValid = false): Promise<void> {
+    return this.renderOwner ? this.renderOwner.run(token => this.setFileNative(file, requireValid, token)) : this.setFileNative(file, requireValid);
+  }
+
+  private async setFileNative(file: TFile, requireValid: boolean, token?: RenderToken): Promise<void> {
     await this.persistQueue;
+    token?.check();
     const text = await this.app.vault.read(file);
+    token?.check();
     // Navigation is transactional: validate before changing the live file,
     // title, recovery state, or history owned by this view.
     if (requireValid) parseCanvas(text);
-    this.file = file;
-    this.conflictReadOnly = false;
-    this.surfaceEl.inert = false;
-    this.lastKnownText = null;
-    this.titleEl.textContent = file.basename;
-    if (this.containerEl.classList.contains("canvas-embed-view")) this.containerEl.dataset.canvasPath = file.path;
-    this.load(text, true);
+    const changed = await this.changePresentations(this.document.nodes, () => {
+      token?.check();
+      this.file = file;
+      this.conflictReadOnly = false;
+      this.surfaceEl.inert = false;
+      this.lastKnownText = null;
+      this.titleEl.textContent = file.basename;
+      if (this.containerEl.classList.contains("canvas-embed-view")) this.containerEl.dataset.canvasPath = file.path;
+      this.applyLoadedText(text, true);
+    });
+    if (!changed) throw new Error("Finish or recover the embedded Canvas editor before switching files.");
   }
 
   /** Mount the real Canvas surface without its normal workspace-tab header. */
@@ -204,7 +250,42 @@ export class CanvasView implements View {
   }
 
   onOpen(): void { this.app.vault.on("modify", this.onVaultModify); }
-  async onClose(): Promise<void> {
+  onClose(): Promise<void> {
+    if (!this.renderOwner) return this.closeNative();
+    const context = {};
+    this.previewCloseIntents.set(context, { preview: this.connectionPreview, document: this.document, file: this.file, filePath: this.file?.path ?? null, vault: this.app.vault, vaultRoot: this.app.vault.root, bytes: this.getText() });
+    const closing = this.renderOwner.close(context);
+    void closing.finally(() => this.previewCloseIntents.delete(context)).catch(() => {});
+    return closing;
+  }
+
+  /** Internal implicit replacement/disposal retains strict retirement guards. */
+  closeImplicitly(): Promise<void> { return this.renderOwner.close(); }
+
+  private assertCloseReady(context?: object): void {
+    const intent = context && this.previewCloseIntents.get(context);
+    if (!intent) { this.assertWorkspaceLoadReady(); return; }
+    if (this.document !== intent.document || this.file !== intent.file || (this.file?.path ?? null) !== intent.filePath || this.app.vault !== intent.vault || this.app.vault.root !== intent.vaultRoot || this.getText() !== intent.bytes) throw new Error("Canvas preview changed during close.");
+    const record = intent.preview;
+    if (record) {
+      if (record.document !== this.document || record.file !== this.file || record.filePath !== (this.file?.path ?? null) || record.vault !== this.app.vault || record.vaultRoot !== this.app.vault.root || record.bytes !== this.getText() ||
+          this.document.nodes.find(node => node.id === record.node.id) !== record.node ||
+          (record.edge && this.document.edges.find(edge => edge.id === record.edge!.id) !== record.edge)) throw new Error("Canvas preview model changed during close.");
+      if (record.finished) {
+        if (this.connectionPreview || this.transientGestureCancel || record.preview.parentElement) throw new Error("Canvas preview changed after retirement.");
+      } else if (this.connectionPreview !== record || this.transientGestureCancel !== record.cancel || record.preview.parentElement !== record.parent || this.viewportEl.querySelector(".canvas-edges") !== record.parent) throw new Error("Canvas preview changed during close.");
+    }
+    this.assertNativeCloseReady(record && !record.finished ? record.cancel : undefined);
+  }
+
+  private async prepareClose(context?: object): Promise<void> {
+    this.assertCloseReady(context);
+    const record = context && this.previewCloseIntents.get(context)?.preview;
+    if (record && !record.finished) record.dispose();
+    await this.settleWorkspaceLoad();
+  }
+
+  private async closeNative(): Promise<void> {
     this.cancelTouchGesture();
     this.cancelTransientGesture();
     await this.persistQueue;
@@ -212,6 +293,8 @@ export class CanvasView implements View {
     this.loadGeneration += 1;
     this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
+    this.nodePresentations.clear();
+    this.edgesEl = null;
     this.disposeMarkdownContents();
     this.revokeObjectUrls();
     for (const cleanup of this.touchCleanups.splice(0)) cleanup();
@@ -223,21 +306,20 @@ export class CanvasView implements View {
       this.suppressReconcileModify = false;
       return;
     }
+    if (!nativeRenderOwnership(this.app).admissionOpen) return;
     await this.reloadFromFile(true);
   };
 
   async acceptExternalText(text: string): Promise<void> {
-    this.load(text, true);
+    if (!await this.load(text, true)) throw new Error("Finish or recover the embedded Canvas editor before accepting external changes.");
     this.suppressReconcileModify = true;
   }
 
   presentConflict(externalText: string | null, conflictPath: string | null, recoveryOnly: boolean, _recoveryTier?: "memory" | "device"): void {
-    if (externalText !== null) this.load(externalText, true);
-    if (externalText === null) {
-      this.conflictReadOnly = true;
-      this.persistRequestedWhileSuspended = false;
-      this.surfaceEl.inert = true;
-    }
+    const generation = ++this.conflictGeneration;
+    this.conflictReadOnly = true;
+    this.persistRequestedWhileSuspended = false;
+    void this.prepareConflictPresentation(externalText, generation);
     this.containerEl.querySelector(".canvas-conflict-state")?.remove();
     const state = document.createElement("div");
     state.className = "canvas-conflict-state";
@@ -259,29 +341,69 @@ export class CanvasView implements View {
     this.containerEl.dataset.canvasConflictPath = conflictPath ?? "recovery";
   }
 
+  private async prepareConflictPresentation(externalText: string | null, generation: number): Promise<void> {
+    if (externalText !== null) {
+      if (await this.load(externalText, true, () => generation === this.conflictGeneration) && generation === this.conflictGeneration) { this.conflictReadOnly = false; this.surfaceEl.inert = false; }
+      return;
+    }
+    if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.historyInProgress || this.geometryGestures.size || this.transientGestureCancel || this.touchDragSnapshot || this.touchGesture.pointerIds().length) {
+      this.app.notify("Finish or recover the Canvas presentation change before locking its controls."); return;
+    }
+    const file = this.file; const model = this.document;
+    let retirement: PreparedRetirement | undefined;
+    try {
+      const contents = [...this.markdownContentEls];
+      for (const presentation of this.nodePresentations.values()) if (presentation.el.querySelector(".canvas-node-text-editor")) throw new Error("Finish or cancel the Canvas text draft before locking its controls.");
+      this.app.markdownRenderer.preflightDisposal(contents);
+      this.presentationChangeInProgress = true;
+      retirement = await this.app.markdownRenderer.prepareDisposal(contents);
+      if (this.file !== file || this.document !== model || generation !== this.conflictGeneration) throw new Error("Canvas changed while its conflict state was preparing.");
+      // This path keeps the projection: preparation proves it is safe to make
+      // read-only, and abort releases the temporary ownership freeze.
+      retirement.abort(); retirement = undefined;
+      this.surfaceEl.inert = true;
+    } catch (error) {
+      retirement?.abort();
+      this.app.notify(error instanceof Error ? error.message : String(error));
+    } finally { this.presentationChangeInProgress = false; }
+  }
+
   private async reloadFromFile(resetHistory = false): Promise<void> {
+    const reload = (token?: RenderToken) => this.reloadNative(resetHistory, token);
+    try { await (this.renderOwner ? this.renderOwner.run(reload) : reload()); }
+    catch (error) { if (!(error instanceof ScopeCancelled)) throw error; }
+  }
+
+  private async reloadNative(resetHistory: boolean, token?: RenderToken): Promise<void> {
     const file = this.file;
     if (!file) return;
     const cached = this.app.vault.getCachedContent(file.path);
     if (cached !== undefined && cached === this.lastKnownText) return;
     const generation = ++this.loadGeneration;
-    const text = await this.app.vault.read(file);
+    const text = await this.app.vault.read(file); token?.check();
     if (generation !== this.loadGeneration || file !== this.file || text === (this.pendingKnownText ?? this.lastKnownText)) return;
-    this.load(text, resetHistory);
+    await this.load(text, resetHistory);
   }
 
-  private load(text: string, resetHistory = false): void {
+  private load(text: string, resetHistory = false, current: () => boolean = () => true): Promise<boolean> {
+    return this.changePresentations(this.document.nodes, () => this.applyLoadedText(text, resetHistory), current);
+  }
+
+  private applyLoadedText(text: string, resetHistory: boolean): void {
+    let parsed: CanvasDocument;
+    try { parsed = parseCanvas(text); }
+    catch (error) {
+      this.lastKnownText = text;
+      if (resetHistory) this.clearHistory();
+      this.enterRecoveryMode((error as Error).message); return;
+    }
     this.lastKnownText = text;
     if (resetHistory) this.clearHistory();
-    try {
-      const document = parseCanvas(text);
-      this.document = document;
-      this.recoveryError = null;
-      this.containerEl.classList.remove("has-error");
-      this.render();
-    } catch (error) {
-      this.enterRecoveryMode((error as Error).message);
-    }
+    this.document = parsed;
+    this.recoveryError = null;
+    this.containerEl.classList.remove("has-error");
+    this.recoveryAlert?.remove(); this.recoveryAlert = null;
+    this.render();
   }
 
   private enterRecoveryMode(detail: string): void {
@@ -293,6 +415,8 @@ export class CanvasView implements View {
     this.spacePressed = false;
     this.edgeLabelEditorCancel?.();
     this.renderVersion += 1;
+    this.nodePresentations.clear();
+    this.edgesEl = null;
     this.disposeMarkdownContents();
     this.revokeObjectUrls();
     this.selectionControlsEl?.remove();
@@ -303,6 +427,7 @@ export class CanvasView implements View {
 
     const error = document.createElement("div");
     error.className = "canvas-error";
+    this.recoveryAlert = error;
     error.setAttribute("role", "alert");
     const title = document.createElement("div");
     title.className = "canvas-error-title";
@@ -319,13 +444,71 @@ export class CanvasView implements View {
     this.viewportEl.appendChild(error);
   }
 
+  /** Refusal and preparation precede authoritative model, history and DOM changes. */
+  private interactionBlocked(): boolean {
+    return this.recoveryError !== null || this.presentationChangeInProgress || this.historyInProgress || this.presentationRetirementFailed || this.conflictReadOnly || this.vaultSwitching || !!this.renderOwner && !this.renderOwner.admissionAllowed;
+  }
+
+  private async changePresentations(nodes: readonly CanvasNode[], change: () => void, current: () => boolean = () => true): Promise<boolean> {
+    if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.historyInProgress || this.geometryGestures.size || this.transientGestureCancel || this.touchDragSnapshot || this.touchGesture.pointerIds().length || this.renderOwner && !this.renderOwner.admissionAllowed) {
+      this.app.notify("Finish the current Canvas operation before changing cards."); return false;
+    }
+    const wrappers = nodes.flatMap(node => { const entry = this.nodePresentations.get(node.id); return entry ? [entry.el] : []; });
+    const contents = [...this.markdownContentEls].filter(content => wrappers.some(wrapper => wrapper.contains(content)));
+    const file = this.file; const model = this.document;
+    const snapshot = serializeCanvas(model);
+    const selection = JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]);
+    const conflict = this.conflictGeneration;
+    const isCurrent = () => current() && conflict === this.conflictGeneration && this.file === file && this.document === model && serializeCanvas(model) === snapshot && JSON.stringify([[...this.selectedIds], [...this.selectedEdgeIds]]) === selection && (!this.renderOwner || this.renderOwner.admissionAllowed) && !this.geometryGestures.size && !this.transientGestureCancel && !this.touchDragSnapshot && !this.touchGesture.pointerIds().length;
+    let retirement: PreparedRetirement | undefined;
+    const interaction = wrappers.map(el => ({ el, inert: el.inert }));
+    try {
+      for (const wrapper of wrappers) if (wrapper.querySelector(".canvas-node-text-editor")) throw new Error("Finish or cancel the Canvas text draft before changing cards.");
+      this.app.markdownRenderer.preflightDisposal(contents);
+      this.presentationChangeInProgress = true;
+      for (const { el } of interaction) el.inert = true;
+      retirement = await this.app.markdownRenderer.prepareDisposal(contents);
+      if (!isCurrent()) {
+        retirement.abort(); throw new Error("Canvas changed while its embedded cards were preparing. Retry the action.");
+      }
+      await retirement.commit();
+      if (!isCurrent()) throw new Error("The Canvas action was superseded during teardown. Its previous model is retained.");
+      for (const node of nodes) {
+        const presentation = this.nodePresentations.get(node.id);
+        if (presentation) presentation.signature = "retired-projection";
+      }
+      for (const content of contents) this.markdownContentEls.delete(content);
+      for (const { el, inert } of interaction) el.inert = inert;
+      this.presentationChangeInProgress = false;
+      change();
+      return true;
+    } catch (error) {
+      if (!retirement?.destructionStarted) {
+        retirement?.abort();
+        for (const { el, inert } of interaction) el.inert = inert;
+      } else {
+        this.presentationRetirementFailed = true;
+        this.setSaveStatus("Canvas card teardown failed. Its state is retained; recover it before changing this Canvas.", true, false);
+      }
+      this.app.notify(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally { this.presentationChangeInProgress = false; }
+  }
+
   private render(): void {
-    if (this.recoveryError !== null) return;
+    if (this.recoveryError !== null || this.presentationChangeInProgress || this.presentationRetirementFailed || this.renderOwner && !this.renderOwner.admissionAllowed) return;
     this.edgeLabelEditorCancel?.();
     const version = ++this.renderVersion;
-    this.disposeMarkdownContents();
-    this.revokeObjectUrls();
-    this.viewportEl.innerHTML = "";
+    // Keep unchanged wrappers connected: moving them through a fragment or
+    // appending them again can blur an embedded native editor.
+    const nodesById = new Map(this.document.nodes.map(node => [node.id, node]));
+    for (const [id, presentation] of this.nodePresentations) {
+      const node = nodesById.get(id);
+      if (node === presentation.node && this.presentationSignature(node) === presentation.signature) continue;
+      this.retirePresentation(presentation.el);
+      this.nodePresentations.delete(id);
+    }
+    this.edgesEl?.remove();
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("canvas-edges");
     svg.setAttribute("viewBox", "-100000 -100000 200000 200000");
@@ -345,9 +528,57 @@ export class CanvasView implements View {
     svg.appendChild(defs);
     for (const edge of this.document.edges) this.renderEdge(svg, edge);
 
+    this.edgesEl = svg;
     this.viewportEl.appendChild(svg);
-    for (const node of this.document.nodes) this.viewportEl.appendChild(this.renderNode(node, version));
+    for (const [index, node] of this.document.nodes.entries()) {
+      let presentation = this.nodePresentations.get(node.id);
+      if (!presentation) {
+        const el = this.renderNode(node, version);
+        presentation = { node, signature: this.presentationSignature(node), el, version };
+        this.nodePresentations.set(node.id, presentation);
+        this.viewportEl.appendChild(el);
+      }
+      const el = presentation.el;
+      Object.assign(el.style, { left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px`, height: `${node.height}px`, zIndex: String(index + 1) });
+      el.dataset.width = String(node.width);
+      el.dataset.height = String(node.height);
+      el.classList.toggle("is-selected", this.selectedIds.has(node.id));
+      delete el.dataset.canvasColor;
+      el.style.removeProperty("--canvas-node-color");
+      if (node.color && /^[1-6]$/.test(node.color)) el.dataset.canvasColor = node.color;
+      else if (node.color) el.style.setProperty("--canvas-node-color", node.color);
+    }
     this.updateSelectionControls();
+  }
+
+  private presentationSignature(node: CanvasNode): string {
+    const { x, y, width, height, color, ...source } = node;
+    return JSON.stringify([this.file?.path ?? "", source]);
+  }
+
+  private retirePresentation(el: HTMLElement): void {
+    for (const content of this.markdownContentEls) {
+      if (!el.contains(content)) continue;
+      this.app.markdownRenderer.dispose(content);
+      this.markdownContentEls.delete(content);
+    }
+    for (const url of this.presentationUrls.get(el) ?? []) {
+      URL.revokeObjectURL(url);
+      this.objectUrls.delete(url);
+    }
+    this.presentationUrls.delete(el);
+    el.remove();
+  }
+
+  private retainPresentationUrl(el: Element, url: string): void {
+    this.objectUrls.add(url);
+    for (const presentation of this.nodePresentations.values()) {
+      if (!presentation.el.contains(el)) continue;
+      let urls = this.presentationUrls.get(presentation.el);
+      if (!urls) this.presentationUrls.set(presentation.el, urls = new Set());
+      urls.add(url);
+      break;
+    }
   }
 
   private renderEdge(svg: SVGSVGElement, edge: CanvasEdge): void {
@@ -527,12 +758,14 @@ export class CanvasView implements View {
       const text = document.createElement("div");
       text.className = "canvas-node-text";
       el.appendChild(text);
-      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "");
-      el.addEventListener("dblclick", (event) => { event.stopPropagation(); this.editTextNode(el, node); });
+      this.markdownContentEls.add(text);
+      void this.app.markdownRenderer.render(node.text, text, this.file?.path ?? "", undefined, this.renderOwner).catch(() => { if (this.isLiveNodeRender(version, text)) text.textContent = "Could not render Canvas text."; });
+      el.addEventListener("dblclick", (event) => { if (this.isEmbeddedInteraction(event.target)) return; event.stopPropagation(); this.editTextNode(el, node); });
     } else if (node.type === "file") {
       el.dataset.filePath = node.file;
       this.renderFileNode(el, node, version);
-      el.addEventListener("dblclick", () => {
+      el.addEventListener("dblclick", (event) => {
+        if (this.isEmbeddedInteraction(event.target)) return;
         const file = this.app.vault.getFileByPath(node.file);
         if (file) void this.app.openFile(file, true);
       });
@@ -541,6 +774,7 @@ export class CanvasView implements View {
     }
     el.addEventListener("pointerdown", (event) => this.beginNodeDrag(event, node));
     el.addEventListener("contextmenu", (event) => {
+      if (this.interactionBlocked() || this.isEmbeddedInteraction(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       if (!this.selectedIds.has(node.id)) {
@@ -640,7 +874,7 @@ export class CanvasView implements View {
         URL.revokeObjectURL(url);
         return;
       }
-      this.objectUrls.add(url);
+      this.retainPresentationUrl(el, url);
       el.style.backgroundImage = `url(${JSON.stringify(url)})`;
       if (node.backgroundStyle === "repeat") {
         el.style.backgroundPosition = "left top";
@@ -713,13 +947,12 @@ export class CanvasView implements View {
    * even though nothing is connected yet, and nothing re-renders once the view
    * is finally attached, so dropping it left the card permanently blank.
    *
-   * Containment in the live viewport is the accurate test instead: every
-   * render replaces the viewport's children wholesale, so an element still
-   * inside it belongs to the current generation whether or not the view has
-   * reached the document.
+   * Containment plus the owning presentation generation remains accurate
+   * before the view is attached. Geometry redraws retain that generation;
+   * replaced presentations cannot publish through an old asynchronous callback.
    */
   private isLiveNodeRender(version: number, el: Element): boolean {
-    return version === this.renderVersion && this.viewportEl.contains(el);
+    return this.viewportEl.contains(el) && [...this.nodePresentations.values()].some(presentation => presentation.version === version && presentation.el.contains(el));
   }
 
   private renderFileNode(el: HTMLElement, node: Extract<CanvasNode, { type: "file" }>, version: number): void {
@@ -737,7 +970,7 @@ export class CanvasView implements View {
       el.appendChild(content);
       this.markdownContentEls.add(content);
       void this.app.markdownRenderer
-        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content)
+        .renderNoteEmbed(file, resolved.subpath, this.file?.path ?? "", content, undefined, this.renderOwner)
         .then(() => {
           if (this.isLiveNodeRender(version, content)) return;
           this.app.markdownRenderer.dispose(content);
@@ -801,7 +1034,7 @@ export class CanvasView implements View {
       URL.revokeObjectURL(url);
       return;
     }
-    this.objectUrls.add(url);
+    this.retainPresentationUrl(media, url);
     media.src = url;
   }
 
@@ -813,10 +1046,17 @@ export class CanvasView implements View {
     }
     for (const url of this.objectUrls) URL.revokeObjectURL(url);
     this.objectUrls.clear();
+    this.presentationUrls.clear();
   }
 
-  private editTextNode(el: HTMLElement, node: CanvasTextNode, isNew = false, rollbackNew?: () => void): void {
-    if (el.querySelector("textarea")) return;
+  private async editTextNode(el: HTMLElement, node: CanvasTextNode, isNew = false, rollbackNew?: () => void): Promise<void> {
+    if (this.conflictReadOnly || el.querySelector("textarea")) return;
+    await this.changePresentations([node], () => this.editTextNodePrepared(el, node, isNew, rollbackNew));
+  }
+
+  private editTextNodePrepared(el: HTMLElement, node: CanvasTextNode, isNew: boolean, rollbackNew?: () => void): void {
+    const presentation = this.nodePresentations.get(node.id);
+    if (presentation) presentation.signature = this.presentationSignature(node);
     const originalText = node.text;
     const editor = document.createElement("textarea");
     editor.className = "canvas-node-text-editor";
@@ -826,6 +1066,8 @@ export class CanvasView implements View {
     const finish = (commit: boolean) => {
       if (finished) return;
       finished = true;
+      const presentation = this.nodePresentations.get(node.id);
+      if (presentation) presentation.signature = "retired-source-editor";
       if (!commit) {
         if (isNew) {
           this.document.nodes = this.document.nodes.filter((candidate) => candidate !== node);
@@ -866,7 +1108,7 @@ export class CanvasView implements View {
   }
 
   private addTextCardAt(worldPoint: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const node: CanvasTextNode = {
       id: this.nextTextNodeId(),
       type: "text",
@@ -913,7 +1155,7 @@ export class CanvasView implements View {
   }
 
   private addFileCardsAt(files: TFile[], worldPoint: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     if (files.length === 0) return;
     const nodes: CanvasNode[] = [];
     for (const [index, file] of files.entries()) {
@@ -955,7 +1197,7 @@ export class CanvasView implements View {
   }
 
   private addLinkCardAt(canonicalUrl: string, worldPoint: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const node = this.createLinkCard(canonicalUrl, worldPoint);
     this.document.nodes.push(node);
     this.selectedEdgeIds.clear();
@@ -973,7 +1215,7 @@ export class CanvasView implements View {
   }
 
   private openWebPagePrompt(worldPoint?: Point, choose?: (canonicalUrl: string) => void): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     new PromptModal(this.app, {
       placeholder: "Enter web page URL…",
       allowEmptySubmit: true,
@@ -990,7 +1232,7 @@ export class CanvasView implements View {
   }
 
   private openGroupPrompt(worldPoint?: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const selectedCards = worldPoint
       ? []
       : this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id));
@@ -1002,7 +1244,7 @@ export class CanvasView implements View {
   }
 
   private addGroup(selectedCards: CanvasNode[], label: string, worldPoint?: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     let x: number;
     let y: number;
     let width: number;
@@ -1056,6 +1298,7 @@ export class CanvasView implements View {
       initialValue: group.label ?? "",
       allowEmptySubmit: true,
       onSubmit: (label) => {
+        if (this.interactionBlocked() || !this.document.nodes.includes(group)) return;
         const current = this.document.nodes.find((node) => node.id === groupId);
         if (!current || current.type !== "group") return;
         if (label) current.label = label;
@@ -1090,7 +1333,7 @@ export class CanvasView implements View {
   }
 
   private openFilePicker(kind: "note" | "media", worldPoint?: Point, choose?: (file: TFile) => void): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const onChoose = choose ?? ((file: TFile) => this.addFileCardAt(file, worldPoint ?? this.viewportCenter()));
     if (kind === "note") {
       this.openNotePicker(onChoose);
@@ -1105,7 +1348,7 @@ export class CanvasView implements View {
   }
 
   private openNotePicker(choose: (file: TFile) => void): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getMarkdownFiles(),
@@ -1115,7 +1358,7 @@ export class CanvasView implements View {
   }
 
   private openGroupBackgroundPicker(nodeId: string, menuPoint: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     new CanvasFileSuggestModal(
       this.app,
       this.app.vault.getFiles().filter((file) => IMAGE_EXTENSIONS.has(file.extension)),
@@ -1143,7 +1386,7 @@ export class CanvasView implements View {
     background: string,
     backgroundStyle: "cover" | "ratio" | "repeat",
   ): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
     if (!node || node.type !== "group") return;
     node.background = background;
@@ -1153,7 +1396,7 @@ export class CanvasView implements View {
   }
 
   private removeGroupBackground(nodeId: string): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
     if (!node || node.type !== "group" || !node.background) return;
     delete node.background;
@@ -1163,21 +1406,26 @@ export class CanvasView implements View {
   }
 
   private openSwapFilePicker(nodeId: string, kind: SwappableFileKind): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const files = kind === "note"
       ? this.app.vault.getMarkdownFiles()
       : this.app.vault.getFiles().filter((file) => this.fileKind(file) === kind);
+    const ownerFile = this.file; const model = this.document;
+    const node = model.nodes.find(candidate => candidate.id === nodeId);
+    if (!node || node.type !== "file") return;
+    const target = node.file; const subpath = node.subpath;
     new CanvasFileSuggestModal(
       this.app,
       files,
       kind === "note" ? "Search notes…" : `Search ${kind} files…`,
       (file) => {
-        const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
-        if (!node || node.type !== "file") return;
-        node.file = file.path;
-        delete node.subpath;
-        this.render();
-        void this.persist();
+        if (this.file !== ownerFile || this.document !== model || !model.nodes.includes(node) || node.file !== target || node.subpath !== subpath) return;
+        void this.changePresentations([node], () => {
+          node.file = file.path;
+          delete node.subpath;
+          this.render();
+          void this.persist();
+        });
       },
     ).open();
   }
@@ -1201,7 +1449,7 @@ export class CanvasView implements View {
   }
 
   private openConvertTextNodePrompt(nodeId: string): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     new PromptModal(this.app, {
       placeholder: "File name…",
       initialValue: "Untitled",
@@ -1211,24 +1459,53 @@ export class CanvasView implements View {
   }
 
   private async convertTextNodeToFile(nodeId: string, rawName: string): Promise<void> {
-    if (this.recoveryError !== null) return;
+    if (this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    const name = rawName.trim().replace(/\.md$/i, "").trim();
+    if (!name || INVALID_MARKDOWN_FILE_NAME.test(name)) { this.app.notify("Enter a valid file name."); return; }
+    const node = this.document.nodes.find(candidate => candidate.id === nodeId);
+    if (!node || node.type !== "text" && !this.pendingConversions.has(nodeId)) return;
+    const file = this.file; const model = this.document;
+    let task: Promise<void> | undefined;
+    const changed = await this.changePresentations([node], () => {
+      this.pendingConversionNames.set(nodeId, rawName);
+      task = this.queueOwnedWrite(`conversion:${nodeId}`, token => {
+        if (this.file !== file || this.document !== model || !model.nodes.includes(node)) throw new ScopeCancelled();
+        return this.convertTextNodeToFileNative(nodeId, rawName, token);
+      }, true);
+      void task.catch(() => {
+        const path = this.pendingConversions.get(nodeId);
+        if (path) this.app.notify(`Conversion paused. ${path} was preserved; retry Convert to file to finish.`);
+      });
+      void task.then(() => this.pendingConversionNames.delete(nodeId), () => {});
+    });
+    if (changed) await task;
+  }
+
+  private async convertTextNodeToFileNative(nodeId: string, rawName: string, token?: RenderToken): Promise<void> {
+    if (this.interactionBlocked()) return;
     const base = rawName.trim().replace(/\.md$/i, "").trim();
     if (!base || INVALID_MARKDOWN_FILE_NAME.test(base)) {
       this.app.notify("Enter a valid file name.");
       return;
     }
     const node = this.document.nodes.find((candidate) => candidate.id === nodeId);
-    if (!node || node.type !== "text") return;
-    const filePath = this.app.vault.availablePath(this.file?.parent ?? "", base, "md");
-    await this.app.vault.create(filePath, node.text);
-    if (!this.document.nodes.includes(node) || node.type !== "text") return;
+    if (!node || (node.type !== "text" && !this.pendingConversions.has(nodeId))) return;
+    const filePath = this.pendingConversions.get(nodeId) ?? this.app.vault.availablePath(this.file?.parent ?? "", base, "md");
+    token?.check();
+    if (!this.pendingConversions.has(nodeId) && node.type === "text") {
+      await this.app.vault.create(filePath, node.text);
+      this.pendingConversions.set(nodeId, filePath);
+    }
+    token?.check();
+    if (!this.document.nodes.includes(node)) return;
     const converted = node as unknown as Record<string, unknown>;
     converted.type = "file";
     converted.file = filePath;
     delete converted.text;
     delete converted.subpath;
     this.render();
-    void this.persist();
+    await this.doPersist(token);
+    this.pendingConversions.delete(nodeId);
   }
 
   private canvasColor(color: string): string {
@@ -1236,6 +1513,7 @@ export class CanvasView implements View {
   }
 
   private select(node: CanvasNode, additive = false): void {
+    if (this.interactionBlocked()) return;
     this.selectedEdgeIds.clear();
     if (additive && this.selectedIds.has(node.id)) {
       this.selectedIds.delete(node.id);
@@ -1248,12 +1526,11 @@ export class CanvasView implements View {
   }
 
   private promote(node: CanvasNode): void {
+    if (this.interactionBlocked()) return;
     const index = this.document.nodes.indexOf(node);
     if (index < 0 || index === this.document.nodes.length - 1) return;
     this.document.nodes.splice(index, 1);
     this.document.nodes.push(node);
-    const selectedEl = this.viewportEl.querySelector<HTMLElement>(`.canvas-node[data-node-id="${CSS.escape(node.id)}"]`);
-    if (selectedEl) this.viewportEl.appendChild(selectedEl);
     this.document.nodes.forEach((orderedNode, zIndex) => {
       const el = this.viewportEl.querySelector<HTMLElement>(`.canvas-node[data-node-id="${CSS.escape(orderedNode.id)}"]`);
       if (el) el.style.zIndex = String(zIndex + 1);
@@ -1379,7 +1656,7 @@ export class CanvasView implements View {
   }
 
   private openColorPalette(): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const controls = this.selectionControlsEl;
     if (!controls) return;
     this.colorPaletteEl?.remove();
@@ -1412,7 +1689,7 @@ export class CanvasView implements View {
   }
 
   private openCustomColorPrompt(): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     this.colorPaletteEl?.remove();
     this.colorPaletteEl = null;
     new PromptModal(this.app, {
@@ -1439,7 +1716,7 @@ export class CanvasView implements View {
   }
 
   private applySelectionColor(color: string): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     if (this.selectedEdgeIds.size > 0) {
       let changed = false;
       for (const edge of this.document.edges) {
@@ -1462,12 +1739,14 @@ export class CanvasView implements View {
   }
 
   private clearSelection(): void {
+    if (this.interactionBlocked()) return;
     this.selectedIds.clear();
     this.selectedEdgeIds.clear();
     this.updateSelectionClasses();
   }
 
   private duplicateSelection(): void {
+    if (this.interactionBlocked()) return;
     const sources = this.document.nodes.filter((node) => this.selectedIds.has(node.id) && node.type !== "group");
     if (sources.length === 0) return;
     const used = new Set(this.document.nodes.map((node) => node.id));
@@ -1502,6 +1781,7 @@ export class CanvasView implements View {
   }
 
   private connectSelectedNodes(): void {
+    if (this.interactionBlocked()) return;
     const nodes = this.document.nodes.filter((node) => this.selectedIds.has(node.id));
     if (nodes.length !== 2) return;
     if (this.document.edges.some((edge) => edge.fromNode === nodes[0].id && edge.toNode === nodes[1].id)) return;
@@ -1514,6 +1794,7 @@ export class CanvasView implements View {
   }
 
   private selectEdge(edgeId: string, additive = false): void {
+    if (this.interactionBlocked()) return;
     this.selectedIds.clear();
     if (additive && this.selectedEdgeIds.has(edgeId)) this.selectedEdgeIds.delete(edgeId);
     else {
@@ -1531,6 +1812,7 @@ export class CanvasView implements View {
       initialValue: edge.label ?? "",
       allowEmptySubmit: true,
       onSubmit: (label) => {
+        if (this.interactionBlocked() || !this.document.edges.includes(edge)) return;
         const current = this.document.edges.find((candidate) => candidate.id === edgeId);
         if (!current) return;
         if (label) current.label = label;
@@ -1617,7 +1899,7 @@ export class CanvasView implements View {
   }
 
   private removeEdge(edgeId: string): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const length = this.document.edges.length;
     this.document.edges = this.document.edges.filter((edge) => edge.id !== edgeId);
     if (this.document.edges.length === length) return;
@@ -1627,7 +1909,7 @@ export class CanvasView implements View {
   }
 
   private beginEdgeReconnect(event: PointerEvent, edgeId: string, endpoint: "source" | "target"): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1657,6 +1939,7 @@ export class CanvasView implements View {
       };
     };
     const move = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       const point = toWorld(next);
       preview.setAttribute("d", endpoint === "source"
         ? this.edgePath(point, fromSide, to, toSide)
@@ -1666,9 +1949,11 @@ export class CanvasView implements View {
     const cleanup = (rollback: boolean) => {
       if (finished) return;
       finished = true;
+      record.finished = true;
+      if (this.connectionPreview === record) this.connectionPreview = null;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("pointercancel", cancelFromPointer);
       preview.remove();
       this.containerEl.classList.remove("is-connecting");
       if (this.transientGestureCancel === cancel) this.transientGestureCancel = null;
@@ -1678,7 +1963,9 @@ export class CanvasView implements View {
       }
     };
     const cancel = () => cleanup(true);
+    const cancelFromPointer = () => { if (!finished && this.renderOwner.admissionAllowed) cancel(); };
     const up = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       cleanup(false);
       const targetHandle = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((candidate) => {
         const rect = candidate.getBoundingClientRect();
@@ -1710,9 +1997,11 @@ export class CanvasView implements View {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("pointercancel", cancelFromPointer);
     this.cancelTransientGesture();
     this.transientGestureCancel = cancel;
+    const record: ConnectionPreview = { document: this.document, file: this.file, filePath: this.file?.path ?? null, vault: this.app.vault, vaultRoot: this.app.vault.root, bytes: this.getText(), node: fromNode, edge, preview, parent: svg, cancel, dispose: () => cleanup(false), finished: false };
+    this.connectionPreview = record;
   }
 
   private closestSide(node: CanvasNode, point: Point): CanvasSide {
@@ -1870,8 +2159,14 @@ export class CanvasView implements View {
     }
   }
 
+  private isEmbeddedInteraction(target: EventTarget | null): boolean {
+    const owner = (target as HTMLElement | null)?.closest?.(".base-view, .canvas-view");
+    return !!owner && owner !== this.containerEl;
+  }
+
   private beginNodeDrag(event: PointerEvent, node: CanvasNode): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
+    if (this.isEmbeddedInteraction(event.target)) return;
     if (event.pointerType === "touch") return;
     if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge, .canvas-node-connection-handle, .canvas-node-connection-touch-hit")) return;
     event.stopPropagation();
@@ -1921,6 +2216,7 @@ export class CanvasView implements View {
     const spaceBypass = this.trackGestureSpaceBypass();
     let didMove = false;
     const move = (next: PointerEvent) => {
+      if (this.interactionBlocked()) return;
       if (!didMove) {
         didMove = true;
         if (node.type !== "group" && !wasSelected) {
@@ -1973,6 +2269,8 @@ export class CanvasView implements View {
       this.render();
     };
     const up = () => {
+      this.geometryGestures.delete(up);
+      window.removeEventListener("pointercancel", up);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       spaceBypass.dispose();
@@ -1982,12 +2280,14 @@ export class CanvasView implements View {
       }
       void this.persist();
     };
+    this.geometryGestures.add(up);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   }
 
   private beginNodeDuplication(event: PointerEvent, draggedNode: CanvasNode): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     event.preventDefault();
     const sourceNodes = this.selectedIds.has(draggedNode.id)
       ? this.document.nodes.filter((node) => node.type !== "group" && this.selectedIds.has(node.id))
@@ -1997,6 +2297,7 @@ export class CanvasView implements View {
     let clones: Array<{ node: CanvasNode; x: number; y: number }> | null = null;
 
     const move = (next: PointerEvent) => {
+      if (this.interactionBlocked()) return;
       const screenDx = next.clientX - start.x;
       const screenDy = next.clientY - start.y;
       if (!clones && Math.hypot(screenDx, screenDy) < 4) return;
@@ -2034,12 +2335,16 @@ export class CanvasView implements View {
       this.render();
     };
     const up = () => {
+      this.geometryGestures.delete(up);
+      window.removeEventListener("pointercancel", up);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       if (clones) void this.persist();
     };
+    this.geometryGestures.add(up);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   }
 
   private nextDuplicateNodeId(sourceId: string, usedIds: Set<string>): string {
@@ -2052,7 +2357,7 @@ export class CanvasView implements View {
   }
 
   private beginResize(event: PointerEvent, node: CanvasNode, direction: ResizeDirection = "southeast"): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     event.preventDefault();
     event.stopPropagation();
     this.surfaceEl.focus({ preventScroll: true });
@@ -2080,6 +2385,7 @@ export class CanvasView implements View {
         : []);
     const spaceBypass = this.trackGestureSpaceBypass();
     const move = (next: PointerEvent) => {
+      if (this.interactionBlocked()) return;
       const dx = (next.clientX - start.pointerX) / this.scale;
       const dy = (next.clientY - start.pointerY) / this.scale;
       const minimumScale = Math.max(MIN_WIDTH / start.width, MIN_HEIGHT / start.height);
@@ -2133,17 +2439,21 @@ export class CanvasView implements View {
       this.render();
     };
     const up = () => {
+      this.geometryGestures.delete(up);
+      window.removeEventListener("pointercancel", up);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       spaceBypass.dispose();
       void this.persist();
     };
+    this.geometryGestures.add(up);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   }
 
   private beginConnection(event: PointerEvent, node: CanvasNode, side: CanvasSide): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2168,21 +2478,26 @@ export class CanvasView implements View {
       };
     };
     const move = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       preview.setAttribute("d", this.edgePath(from, side, toWorld(next), this.oppositeSide(side)));
     };
     let finished = false;
     const cleanup = () => {
       if (finished) return;
       finished = true;
+      record.finished = true;
+      if (this.connectionPreview === record) this.connectionPreview = null;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("pointercancel", cancelFromPointer);
       preview.remove();
       this.containerEl.classList.remove("is-connecting");
       if (this.transientGestureCancel === cancel) this.transientGestureCancel = null;
     };
     const cancel = () => cleanup();
+    const cancelFromPointer = () => { if (!finished && this.renderOwner.admissionAllowed) cancel(); };
     const up = (next: PointerEvent) => {
+      if (finished || !this.renderOwner.admissionAllowed) return;
       cleanup();
       const target = [...this.viewportEl.querySelectorAll<HTMLElement>(".canvas-node-connection-handle")].find((handle) => {
         const rect = handle.getBoundingClientRect();
@@ -2235,13 +2550,15 @@ export class CanvasView implements View {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("pointercancel", cancelFromPointer);
     this.cancelTransientGesture();
     this.transientGestureCancel = cancel;
+    const record: ConnectionPreview = { document: this.document, file: this.file, filePath: this.file?.path ?? null, vault: this.app.vault, vaultRoot: this.app.vault.root, bytes: this.getText(), node: node,  preview, parent: svg, cancel, dispose: cleanup, finished: false };
+    this.connectionPreview = record;
   }
 
   private addConnectedTextCard(source: CanvasNode, sourceSide: CanvasSide, worldPoint: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const node: CanvasTextNode = {
       id: this.nextTextNodeId(),
       type: "text",
@@ -2278,17 +2595,17 @@ export class CanvasView implements View {
   }
 
   private addConnectedFileCard(source: CanvasNode, sourceSide: CanvasSide, file: TFile, worldPoint: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     this.addConnectedCard(source, sourceSide, this.createFileCard(file, worldPoint));
   }
 
   private addConnectedLinkCard(source: CanvasNode, sourceSide: CanvasSide, url: string, worldPoint: Point): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     this.addConnectedCard(source, sourceSide, this.createLinkCard(url, worldPoint));
   }
 
   private addConnectedCard(source: CanvasNode, sourceSide: CanvasSide, node: CanvasNode): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     if (!this.document.nodes.includes(source)) return;
     const edge: CanvasEdge = {
       id: this.nextEdgeId(),
@@ -2394,6 +2711,7 @@ export class CanvasView implements View {
   private installTouchControls(): void {
     const point = (event: PointerEvent) => ({ pointerId: event.pointerId, x: event.clientX, y: event.clientY });
     this.surfaceEl.addEventListener("pointerdown", (event) => {
+      if (this.interactionBlocked() || this.isEmbeddedInteraction(event.target)) return;
       if (event.pointerType !== "touch" || (event.target as HTMLElement).closest(
         "button, textarea, input, .canvas-edge-hit, .canvas-edge-endpoint-handle, .canvas-edge-endpoint-touch-hit, .canvas-node-connection-handle, .canvas-node-connection-touch-hit, .canvas-node-resize-handle, .canvas-node-resize-touch-hit, .canvas-node-resize-edge"
       )) return;
@@ -2406,6 +2724,7 @@ export class CanvasView implements View {
       this.containerEl.dataset.canvasGesture = "touch";
     }, { capture: true, passive: false });
     this.surfaceEl.addEventListener("pointermove", (event) => {
+      if (this.interactionBlocked()) return;
       if (event.pointerType !== "touch" || !this.capturedTouchPointers.has(event.pointerId)) return;
       event.preventDefault();
       this.touchGesture.move(point(event));
@@ -2451,7 +2770,7 @@ export class CanvasView implements View {
   private installCameraControls(): void {
     const isEmptyDropTarget = (target: EventTarget | null) => target === this.surfaceEl || target === this.viewportEl;
     this.surfaceEl.addEventListener("dragover", (event) => {
-      if (this.recoveryError !== null) return;
+      if (this.interactionBlocked()) return;
       const types = event.dataTransfer?.types;
       if (
         !isEmptyDropTarget(event.target)
@@ -2462,7 +2781,7 @@ export class CanvasView implements View {
       event.dataTransfer.dropEffect = "copy";
     });
     this.surfaceEl.addEventListener("drop", (event) => {
-      if (this.recoveryError !== null) return;
+      if (this.interactionBlocked()) return;
       const transfer = event.dataTransfer;
       if (!isEmptyDropTarget(event.target) || !transfer) return;
       if (transfer.types.includes(VAULT_FILE_DRAG_MIME)) {
@@ -2493,12 +2812,12 @@ export class CanvasView implements View {
       this.addLinkCardAt(canonicalUrl, this.screenToWorld(event.clientX, event.clientY));
     });
     this.surfaceEl.addEventListener("dblclick", (event) => {
-      if (this.recoveryError !== null) return;
+      if (this.interactionBlocked()) return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.addTextCardAt(this.screenToWorld(event.clientX, event.clientY));
     });
     this.surfaceEl.addEventListener("contextmenu", (event) => {
-      if (this.recoveryError !== null) return;
+      if (this.interactionBlocked()) return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       event.preventDefault();
       event.stopPropagation();
@@ -2511,6 +2830,7 @@ export class CanvasView implements View {
       ]);
     });
     this.surfaceEl.addEventListener("pointerdown", (event) => {
+      if (this.interactionBlocked()) return;
       if (event.pointerType === "touch") return;
       if (event.target !== this.surfaceEl && event.target !== this.viewportEl) return;
       this.surfaceEl.focus({ preventScroll: true });
@@ -2524,6 +2844,7 @@ export class CanvasView implements View {
         const start = { x: event.clientX, y: event.clientY };
         let marqueeEl: HTMLElement | null = null;
         const move = (next: PointerEvent) => {
+          if (this.interactionBlocked()) return;
           if (!marqueeEl && Math.hypot(next.clientX - start.x, next.clientY - start.y) < 4) return;
           if (!marqueeEl) {
             marqueeEl = document.createElement("div");
@@ -2559,11 +2880,13 @@ export class CanvasView implements View {
           this.updateSelectionClasses();
         };
         const up = () => {
+          this.geometryGestures.delete(up);
+          window.removeEventListener("pointercancel", up);
           marqueeEl?.remove();
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
-          window.removeEventListener("pointercancel", up);
         };
+        this.geometryGestures.add(up);
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
         window.addEventListener("pointercancel", up);
@@ -2573,9 +2896,11 @@ export class CanvasView implements View {
       event.preventDefault();
       const start = { x: event.clientX, y: event.clientY, panX: this.pan.x, panY: this.pan.y };
       const move = (next: PointerEvent) => { this.pan = { x: start.panX + next.clientX - start.x, y: start.panY + next.clientY - start.y }; this.updateTransform(); };
-      const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+      const up = () => { this.geometryGestures.delete(up); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+      this.geometryGestures.add(up);
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
     });
     this.surfaceEl.addEventListener("keydown", (event) => this.handleKeyDown(event));
     this.surfaceEl.addEventListener("keyup", (event) => {
@@ -2614,7 +2939,7 @@ export class CanvasView implements View {
   }
 
   private handleKeyDown(event: KeyboardEvent): void {
-    if (this.recoveryError !== null) return;
+    if (this.interactionBlocked()) return;
     const target = event.target as HTMLElement;
     if (target.matches("textarea, input, [contenteditable=true]")) return;
     const modifier = event.ctrlKey || event.metaKey;
@@ -2652,12 +2977,18 @@ export class CanvasView implements View {
     }
   }
 
-  private deleteSelection(): void {
-    if (this.recoveryError !== null) return;
-    if (this.selectedEdgeIds.size > 0) {
-      this.document.edges = this.document.edges.filter((edge) => !this.selectedEdgeIds.has(edge.id));
-    } else if (this.selectedIds.size > 0) {
-      const removedNodes = new Set(this.selectedIds);
+  private async deleteSelection(): Promise<void> {
+    if (this.interactionBlocked()) return;
+    const nodes = new Set(this.selectedIds); const edges = new Set(this.selectedEdgeIds);
+    const affected = edges.size ? [] : this.document.nodes.filter(node => nodes.has(node.id));
+    await this.changePresentations(affected, () => this.deleteSelectionPrepared(nodes, edges));
+  }
+
+  private deleteSelectionPrepared(nodes: ReadonlySet<string>, edges: ReadonlySet<string>): void {
+    if (edges.size > 0) {
+      this.document.edges = this.document.edges.filter((edge) => !edges.has(edge.id));
+    } else if (nodes.size > 0) {
+      const removedNodes = nodes;
       this.document.nodes = this.document.nodes.filter((node) => !removedNodes.has(node.id));
       this.document.edges = this.document.edges.filter((edge) => !removedNodes.has(edge.fromNode) && !removedNodes.has(edge.toNode));
     } else {
@@ -2703,7 +3034,7 @@ export class CanvasView implements View {
       setIcon(icon, iconName);
       button.appendChild(icon);
       button.addEventListener("click", () => {
-        if (this.recoveryError === null) run();
+        if (!this.interactionBlocked()) run();
       });
       if (mobileOnly) button.dataset.mobileOnly = "true";
       toolbar.appendChild(button);
@@ -2802,20 +3133,25 @@ export class CanvasView implements View {
     this.containerEl.dataset.panY = String(this.pan.y);
   }
 
-  private async persist(): Promise<void> {
-    if (this.conflictReadOnly) return;
+  private queueOwnedWrite(key: string, write: (token?: RenderToken) => Promise<void>, retry = false): Promise<void> {
+    if (this.renderOwner?.closed || this.conflictReadOnly) return Promise.resolve();
     if (this.vaultSwitching) {
       this.persistRequestedWhileSuspended = true;
-      return;
+      return Promise.resolve();
     }
-    this.persistQueue = this.persistQueue.catch(() => {}).then(() => this.doPersist());
+    if (this.renderOwner && !this.renderOwner.admissionAllowed) { this.persistRequestedWhileSuspended = true; return Promise.resolve(); }
+    const previous = this.persistQueue;
+    const operation = async (token?: RenderToken): Promise<void> => { await previous.catch(() => {}); token?.check(); await write(token); };
+    this.persistQueue = this.renderOwner ? retry ? this.renderOwner.retry(operation, key) : this.renderOwner.run(operation, key) : operation();
     // Most Canvas commands intentionally fire-and-forget; attach a rejection
     // observer while preserving the rejected queue for pause/switch callers.
     void this.persistQueue.catch(() => {});
     return this.persistQueue;
   }
 
-  private async doPersist(): Promise<void> {
+  private persist(retry = false): Promise<void> { return this.queueOwnedWrite("canvas-save", token => this.doPersist(token), retry); }
+
+  private async doPersist(token?: RenderToken): Promise<void> {
     if (!this.file || this.recoveryError !== null) return;
     const text = serializeCanvas(this.document);
     if (text === this.pendingKnownText || (this.pendingKnownText === null && this.matchesLastKnownDocument())) return;
@@ -2834,13 +3170,16 @@ export class CanvasView implements View {
     // just-dropped node) that hasn't itself reached disk yet.
     this.suppressReconcileModify = true;
     try {
+      token?.check();
       await this.app.vault.modify(this.file, text);
       if (prior !== null) this.pushHistory(this.undoStack, prior);
       this.redoStack.length = 0;
       this.lastKnownText = text;
-      this.containerEl.dataset.canvasDirty = "false";
-      this.containerEl.dataset.canvasSaved = text;
-      this.setSaveStatus("Canvas saved", false, false);
+      if (!token || token.current()) {
+        this.containerEl.dataset.canvasDirty = "false";
+        this.containerEl.dataset.canvasSaved = text;
+        this.setSaveStatus("Canvas saved", false, false);
+      }
     } catch (error) {
       // The write never reached the vault, so it never fired (and therefore
       // never consumed) the "modify" event that would otherwise clear this.
@@ -2854,7 +3193,30 @@ export class CanvasView implements View {
     }
   }
 
-  private setSaveStatus(message: string, failed: boolean, retry: boolean): void {
+  private restoreHistoryInteraction(): void {
+    if (this.historyInProgress || this.historyPriorInert == null || this.vaultSwitching || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    // A superseding conflict may have refused preparation while history owned
+    // the barrier. Its old projection was already retired: keep those controls
+    // disabled, while releasing the header and recovery banner outside it.
+    if (this.conflictReadOnly) this.surfaceEl.inert = true;
+    this.containerEl.inert = this.historyPriorInert;
+    this.historyPriorInert = null;
+  }
+
+  private recoverNativeWrites(failures: readonly RenderFailure[]): void {
+    this.restoreHistoryInteraction();
+    const conversion = failures.find(failure => failure.key.startsWith("conversion:"));
+    if (conversion) {
+      const id = conversion.key.slice("conversion:".length); const name = this.pendingConversionNames.get(id);
+      if (name !== undefined) this.setSaveStatus("Canvas conversion paused; its created note and draft are preserved.", true, () => this.convertTextNodeToFile(id, name));
+    } else if (failures.some(failure => failure.key === "history") && this.pendingHistory) {
+      const direction = this.pendingHistory;
+      this.render();
+      this.setSaveStatus("Canvas history save failed", true, () => this.restoreHistory(direction));
+    } else if (failures.some(failure => failure.key === "canvas-save")) this.setSaveStatus("Canvas save failed", true, true);
+  }
+
+  private setSaveStatus(message: string, failed: boolean, retry: boolean | (() => Promise<void>)): void {
     this.saveStatusEl.replaceChildren();
     this.saveStatusEl.setAttribute("role", failed ? "alert" : "status");
     const text = document.createElement("span");
@@ -2864,9 +3226,26 @@ export class CanvasView implements View {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = "Retry Canvas save";
-      button.addEventListener("click", () => { void this.persist(); });
+      button.addEventListener("click", () => { const task = typeof retry === "function" ? retry() : this.persist(true); void task.catch(() => {}); });
       this.saveStatusEl.appendChild(button);
     }
+  }
+
+  /** Refuse gestures before pauseAutosave can cancel or roll them back. */
+  assertWorkspaceLoadReady(): void { this.assertNativeCloseReady(); }
+
+  private assertNativeCloseReady(allowedPreview?: () => void): void {
+    if (this.recoveryError !== null || this.conflictReadOnly) throw new Error("Resolve Canvas recovery or conflict before loading a workspace.");
+    if (this.presentationChangeInProgress || this.presentationRetirementFailed || this.historyInProgress || this.geometryGestures.size) throw new Error("Finish or recover the Canvas presentation change before loading a workspace.");
+    for (const presentation of this.nodePresentations.values()) if (presentation.el.querySelector(".canvas-node-text-editor")) throw new Error("Finish or cancel the Canvas text draft before loading a workspace.");
+    if ((this.transientGestureCancel && this.transientGestureCancel !== allowedPreview) || this.touchDragSnapshot || this.touchGesture.pointerIds().length) throw new Error("Finish the Canvas gesture before loading a workspace.");
+    if (this.persistRequestedWhileSuspended) throw new Error("Canvas changed during the workspace operation. Retry after its edits are saved.");
+  }
+
+  async settleWorkspaceLoad(): Promise<void> {
+    this.assertWorkspaceLoadReady(); await this.persistQueue; this.assertWorkspaceLoadReady();
+    this.persistQueue = this.persistQueue.then(() => this.doPersist());
+    await this.persistQueue; this.assertWorkspaceLoadReady();
   }
 
   async prepareVaultSwitch(): Promise<void> {
@@ -2909,6 +3288,25 @@ export class CanvasView implements View {
   }
 
   private async restoreHistory(direction: "undo" | "redo"): Promise<void> {
+    if (this.conflictReadOnly || this.renderOwner && !this.renderOwner.admissionAllowed) return;
+    const source = direction === "undo" ? this.undoStack : this.redoStack;
+    if (!source.length) return;
+    let task: Promise<void> | undefined;
+    const changed = await this.changePresentations(this.document.nodes, () => {
+      this.pendingHistory = direction;
+      this.historyInProgress = true;
+      this.historyPriorInert = this.containerEl.inert;
+      this.containerEl.inert = true;
+      task = this.queueOwnedWrite("history", token => this.restoreHistoryNative(direction, token), true).finally(() => {
+        this.historyInProgress = false;
+        this.restoreHistoryInteraction();
+      });
+      void task.then(() => { this.pendingHistory = null; }, () => {});
+    });
+    if (changed) await task;
+  }
+
+  private async restoreHistoryNative(direction: "undo" | "redo", token?: RenderToken): Promise<void> {
     if (!this.file || this.recoveryError !== null) return;
     const source = direction === "undo" ? this.undoStack : this.redoStack;
     const target = direction === "undo" ? this.redoStack : this.undoStack;
@@ -2921,28 +3319,37 @@ export class CanvasView implements View {
     } catch {
       return;
     }
-    const currentDocument = this.document;
-    this.document = restored;
-    this.selectedIds.clear();
-    this.selectedEdgeIds.clear();
-    this.render();
+    const currentDocument = this.document; const file = this.file; const conflict = this.conflictGeneration;
     this.containerEl.dataset.canvasDirty = "true";
     // Same self-write echo as doPersist() (see the comment there): this write
     // must not let its own "modify" event bounce back into a spurious reload.
     this.suppressReconcileModify = true;
     try {
-      await this.app.vault.modify(this.file, snapshot);
+      token?.check();
+      await this.app.vault.modify(file, snapshot);
+      // The in-flight write is acknowledged, but a newer conflict owns the
+      // projection now. Suppress stale publication without inventing a failed
+      // write that could permanently block its recovery.
+      if (this.file !== file || this.conflictGeneration !== conflict) return;
+      this.document = restored;
+      this.selectedIds.clear();
+      this.selectedEdgeIds.clear();
+      if (!token || token.current()) this.render();
       source.pop();
       this.pushHistory(target, current);
       this.lastKnownText = snapshot;
-      this.containerEl.dataset.canvasDirty = "false";
-      this.containerEl.dataset.canvasSaved = snapshot;
-      delete this.containerEl.dataset.canvasSaveError;
+      if (!token || token.current()) {
+        this.containerEl.dataset.canvasDirty = "false";
+        this.containerEl.dataset.canvasSaved = snapshot;
+        delete this.containerEl.dataset.canvasSaveError;
+      }
     } catch (error) {
       this.suppressReconcileModify = false;
-      this.document = currentDocument;
-      this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
-      this.render();
+      if (this.file === file && this.conflictGeneration === conflict) {
+        this.document = currentDocument;
+        this.containerEl.dataset.canvasSaveError = error instanceof Error ? error.message : String(error);
+        if (!token || token.current()) this.render();
+      }
       throw error;
     }
   }

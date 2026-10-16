@@ -1,0 +1,25 @@
+{
+  "testedSource": "b53aa3a0ff85a3820044b7a9ffa9b8525f8577b4",
+  "job": "01M50963RMMAA8BZX6Y9CFK7AZ",
+  "worker": "test-worker-2",
+  "date": "2026-10-15",
+  "viewport": "1280x815 actual Electron window",
+  "artifactManifest": "3c8fa51ba447570cb46dd5998c9916af841ae065e888ca014ae34a605f48b8d4",
+  "captures": [
+    {
+      "name": "connected-draft-2c9d5.png",
+      "sourceArtifact": "markdown-owned-replacement-2c9d5--valid-connected-Base-draft/retained-draft-before-submit.png",
+      "sha256": "2e5fba05e97c1c5e42550c68629ac507ef4bf603d0a233f925c00014708fe51e"
+    },
+    {
+      "name": "connected-draft-998e3.png",
+      "sourceArtifact": "markdown-owned-replacement-998e3--valid-connected-Base-draft/retained-draft-before-submit.png",
+      "sha256": "057729752e786a8b3d04031ef0b6475ad60411b9099f5bc917ebd4bb8d97b6d2"
+    },
+    {
+      "name": "newer-recovery-refused-close.png",
+      "sourceArtifact": "markdown-recovery-retireme-cd39b-connected-recovery-controls/recovery-state.png",
+      "sha256": "c58cfe339835d3ebb31cfe53bdbac0b69b7ed787a90a3ee3eddd03b200ea9f0f"
+    }
+  ]
+}

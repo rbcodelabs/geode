@@ -1,5 +1,6 @@
 import { Events } from "./events";
 import type { App } from "./app";
+import type { CanvasView } from "./views/canvas-view";
 import type { TFile } from "./types";
 import { setIcon } from "./api/icons";
 import type { PaneType } from "./api/keymap";
@@ -211,7 +212,11 @@ export class WorkspaceLeaf {
   async setView(view: View): Promise<void> {
     markStart("view-mount");
     try {
-      if (this.view && this.opened) await this.view.onClose();
+      if (this.view && this.opened) {
+        const canvas = this.view as Partial<CanvasView>;
+        if (this.view.viewType === "canvas" && typeof canvas.closeImplicitly === "function") await canvas.closeImplicitly();
+        else await this.view.onClose();
+      }
       this.view = view;
       this.opened = false;
       this.contentEl.innerHTML = "";
@@ -367,14 +372,23 @@ export class WorkspaceLeaf {
   async openFile(file: TFile, state?: OpenViewState): Promise<void> {
     const keepFocus = state?.active === false;
     const focusBefore = keepFocus ? (document.activeElement as HTMLElement | null) : null;
-    await this.app.openFileInLeaf(this, file);
-    const subpath = state?.eState?.subpath;
-    if (typeof subpath === "string" && subpath) {
-      const offset = await this.app.resolveSubpathOffset(file, subpath);
-      if (offset !== null) this.view?.scrollToOffset?.(offset);
-    }
-    if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) {
-      focusBefore.focus({ preventScroll: true });
+    try {
+      await this.app.openFileInLeaf(this, file);
+      const loaded = this.view;
+      const loadedFile = loaded?.getFile?.();
+      const loadedPath = loadedFile?.path;
+      const requestedPath = file.path;
+      const subpath = state?.eState?.subpath;
+      if (typeof subpath === "string" && subpath) {
+        const offset = await this.app.resolveSubpathOffset(file, subpath);
+        if (offset !== null && this.view === loaded && file.path === requestedPath && loaded?.getFile?.() === loadedFile && loadedFile?.path === loadedPath) {
+          const native = loaded as View & { scrollToOffsetAsync?(offset: number): Promise<void> };
+          if (native?.viewType === "markdown" && native.scrollToOffsetAsync) await native.scrollToOffsetAsync(offset);
+          else loaded?.scrollToOffset?.(offset);
+        }
+      }
+    } finally {
+      if (focusBefore?.isConnected && this.contentEl.contains(document.activeElement)) focusBefore.focus({ preventScroll: true });
     }
   }
 
@@ -574,6 +588,11 @@ export class WorkspaceLeaf {
   }
 }
 
+/** Internal event boundary: lifecycle rejection keeps the pane and reports why. */
+export function closeLeafFromUI(leaf: WorkspaceLeaf): void {
+  void leaf.detach().catch(error => leaf.app.notify(`Could not close tab: ${error instanceof Error ? error.message : String(error)}`));
+}
+
 /**
  * `.view-header-nav-buttons` (back/forward), shared by `ItemView`
  * (api/obsidian.ts) and `MarkdownView` (views/markdown-view.ts). Geode's
@@ -637,7 +656,7 @@ function buildTabHeader(leaf: WorkspaceLeaf, isActive: boolean): HTMLElement {
   close.addEventListener("mousedown", (e) => e.stopPropagation());
   close.addEventListener("click", (e) => {
     e.stopPropagation();
-    leaf.detach();
+    closeLeafFromUI(leaf);
   });
 
   const status = document.createElement("div");
@@ -1434,7 +1453,7 @@ export class TabGroup implements LeafContainer {
         this.workspace.toggleFocusPane(this);
       };
       tab.onmousedown = (e) => {
-        if (e.button === 1) leaf.detach();
+        if (e.button === 1) closeLeafFromUI(leaf);
         else this.setActiveLeaf(leaf);
       };
       tab.oncontextmenu = (e) => this.app.showTabContextMenu(e, leaf);
