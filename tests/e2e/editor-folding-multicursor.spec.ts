@@ -128,3 +128,35 @@ test("Alt-click multi-edit, undo, Escape, and both rectangular selection gesture
     expect((await snapshot(page)).ranges).toBe(1);
   } finally { await app.close(); fs.rmSync(vault, { recursive: true, force: true }); fs.rmSync(userData, { recursive: true, force: true }); }
 });
+
+
+test("editing gutters stay transparent and borderless in both themes and modes", async () => {
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), "geode-gutter-vault-"));
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "geode-gutter-ud-"));
+  fs.writeFileSync(path.join(vault, "Note.md"), text);
+  fs.writeFileSync(path.join(userData, "geode.json"), JSON.stringify({ recentVaults: [vault], lastVault: vault }));
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userData}`], cwd: repoRoot });
+  try {
+    const page = await app.firstWindow();
+    await page.locator('.nav-file-title[data-path="Note.md"]').click();
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate(theme => (window as any).app.setTheme(theme === "dark" ? "obsidian" : "moonstone"), theme);
+      await expect(page.locator("body")).toHaveClass(new RegExp(`theme-${theme}`));
+      for (const mode of ["live", "source"]) {
+        await page.evaluate(async mode => {
+          const view = (window as any).app.getActiveMarkdownView();
+          if (view.mode !== mode) await view.toggleSource();
+        }, mode);
+        await expect.poll(() => page.evaluate(() => (window as any).app.getActiveMarkdownView().mode)).toBe(mode);
+        await expect(page.locator(".geode-fold-toggle")).toHaveCount(4);
+        const style = await page.locator(".cm-editor .cm-gutters").evaluate(el => {
+          const css = getComputedStyle(el);
+          return { background: css.backgroundColor, left: css.borderLeftWidth, right: css.borderRightWidth };
+        });
+        expect.soft(style, `${theme}/${mode} gutter`).toEqual({ background: "rgba(0, 0, 0, 0)", left: "0px", right: "0px" });
+        await page.screenshot({ path: test.info().outputPath(`gutter-${theme}-${mode}.png`) });
+      }
+    }
+    expect(fs.readFileSync(path.join(vault, "Note.md"), "utf8")).toBe(text);
+  } finally { await app.close(); fs.rmSync(vault, { recursive: true, force: true }); fs.rmSync(userData, { recursive: true, force: true }); }
+});
