@@ -1,3 +1,4 @@
+import { nativeBackgroundVisibility, type BackgroundVisibility } from "../workspaces/background-visibility";
 import { SourceOwnedNavigation } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, RenderScope, type RenderToken } from "../workspaces/render-ownership";
 import { Compartment, EditorSelection, EditorState, Prec } from "@codemirror/state";
@@ -123,9 +124,11 @@ export class MarkdownView implements View {
   private retiredProjectionPending = false;
   readonly renderOwner: RenderScope;
   readonly sourceNavigation: SourceOwnedNavigation;
+  readonly backgroundVisibility: BackgroundVisibility;
   constructor(private app: App, parentOwner?: RenderScope) {
     const options = { writer: this, preflightClose: () => this.assertNativeCloseReady(), prepareClose: () => this.prepareCloseNative(), validateClose: () => this.validateRecoveryReceipt(), failureKey: "markdown-save", close: () => this.closeNative(), resume: () => this.resumeOwnedRendering() };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
+    this.backgroundVisibility = nativeBackgroundVisibility(app, this, () => [this.transitionGeneration, this.editor, this.mode, this.getText()]);
     this.sourceNavigation = new SourceOwnedNavigation({
       capture: () => {
         const leaf = this.ownLeaf(), file = this.file, editor = this.editor, mode = this.mode;
@@ -387,7 +390,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
+            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
@@ -891,7 +894,7 @@ export class MarkdownView implements View {
   }
 
   private editingExtensions(mode: MarkdownMode) {
-    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
+    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
   }
 
   private changeMode(desired: MarkdownMode): Promise<void> {
@@ -950,7 +953,7 @@ export class MarkdownView implements View {
       if (props && Object.keys(props).length) inner.appendChild(renderProperties(props));
     }
     const contentEl = document.createElement("div"); this.readingContentEl = contentEl; inner.appendChild(contentEl);
-    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf(), this.readingProjection ?? undefined, this.sourceNavigation);
+    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf(), this.readingProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility);
   }
 
   /** Public-compatible adapter; native callers await the internal promise. */
@@ -1055,6 +1058,7 @@ export class MarkdownView implements View {
    * becomes visible, which is the earliest point real geometry exists.
    */
   onReveal(): void {
+    this.backgroundVisibility?.reveal();
     this.editor?.requestMeasure();
   }
 
@@ -1111,6 +1115,7 @@ export class MarkdownView implements View {
   private async prepareCloseNative(): Promise<void> { await this.flushNative(); }
 
   private async closeNative(): Promise<void> {
+    this.backgroundVisibility?.reveal();
     this.pagePreview.destroy();
     this.clearSyncConflict();
     this.vaultSwitching = true;
