@@ -159,6 +159,7 @@ try {
     "src/wiki/index.ts",
     "src/wiki/link-candidates.ts",
     "src/wiki/local-filesystem.ts",
+    "src/wiki/markdown-destination.ts",
     "src/wiki/markdown-references.ts",
     "src/wiki/metadata.ts",
     "src/wiki/snapshot.ts",

@@ -1,3 +1,5 @@
+import { SourceOwnedNavigation } from "../markdown/source-owned-navigation";
+import { nativeRenderOwnership, ScopeCancelled, RenderScope, type RenderToken } from "../workspaces/render-ownership";
 import { Compartment, EditorSelection, EditorState, Prec } from "@codemirror/state";
 import {
   EditorView,
@@ -50,6 +52,14 @@ const mdHighlight = HighlightStyle.define([
 ]);
 
 export type MarkdownMode = "live" | "source" | "reading";
+interface RecoveryReceipt {
+  vault: App["vault"];
+  root: string;
+  source: TFile;
+  sourcePath: string;
+  localText: string;
+  destination: { kind: "copy"; file: TFile; path: string } | { kind: "device"; key: string; record: string };
+}
 
 /**
  * Pure comparison used to decide whether a `"modify"` event on the currently
@@ -87,7 +97,9 @@ export class MarkdownView implements View {
   private pendingSaveText: string | null = null;
   private flushInFlight: Promise<void> | null = null;
   private vaultSwitching = false;
+  private autosavePaused = false;
   private conflictReadOnly = false;
+  private recoveryReceipt: RecoveryReceipt | null = null;
   private conflictBanner: HTMLElement | null = null;
   /**
    * The sync conflict banner is a separate, advisory surface from the
@@ -100,7 +112,37 @@ export class MarkdownView implements View {
   private pagePreview: PagePreviewController;
   private commentButton: HTMLButtonElement;
 
-  constructor(private app: App) {
+  private lpProjection: RenderScope | null = null;
+  private readingProjection: RenderScope | null = null;
+  private transitionTail: Promise<void> = Promise.resolve();
+  private transitionGeneration = 0;
+  private transitionClosing = false;
+  private refreshScheduled = false;
+  private refreshPending = false;
+  private readingRefreshInFlight: Promise<void> | null = null;
+  private retiredProjectionPending = false;
+  readonly renderOwner: RenderScope;
+  readonly sourceNavigation: SourceOwnedNavigation;
+  constructor(private app: App, parentOwner?: RenderScope) {
+    const options = { writer: this, preflightClose: () => this.assertNativeCloseReady(), prepareClose: () => this.prepareCloseNative(), validateClose: () => this.validateRecoveryReceipt(), failureKey: "markdown-save", close: () => this.closeNative(), resume: () => this.resumeOwnedRendering() };
+    this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
+    this.sourceNavigation = new SourceOwnedNavigation({
+      capture: () => {
+        const leaf = this.ownLeaf(), file = this.file, editor = this.editor, mode = this.mode;
+        const vault = app.vault, root = vault.root, generation = this.transitionGeneration, text = this.getText();
+        if (!leaf) throw new ScopeCancelled();
+        return () => {
+          if (this.ownLeaf() !== leaf || leaf.view !== this || app.vault !== vault || vault.root !== root || this.file !== file ||
+            this.editor !== editor || this.mode !== mode || this.transitionGeneration !== generation || this.getText() !== text) throw new ScopeCancelled();
+        };
+      },
+      preflight: () => this.preflightReplacement(),
+      execute: (request, validate) => {
+        const leaf = this.ownLeaf(); if (!leaf) throw new ScopeCancelled();
+        return app.navigateFromSource(request, leaf, validate);
+      },
+      notify: message => app.notify(message),
+    });
     this.containerEl = document.createElement("div");
     this.containerEl.className = "markdown-view";
     this.headerEl = document.createElement("div");
@@ -138,13 +180,18 @@ export class MarkdownView implements View {
     sourceBtn.title = "Toggle Live Preview / Source mode";
     sourceBtn.setAttribute("aria-label", "Toggle Live Preview / Source mode");
     setIcon(sourceBtn, "code-2");
-    sourceBtn.addEventListener("click", () => void this.app.actions.execute("view.toggle-source", { view: this }));
+    const preflightPointer = (event: PointerEvent) => {
+      try { this.preflightReplacement(); } catch (error) { event.preventDefault(); this.app.notify(error instanceof Error ? error.message : "Finish the native edit before changing modes."); }
+    };
+    sourceBtn.addEventListener("pointerdown", preflightPointer);
+    sourceBtn.addEventListener("click", () => this.observeReplacement(this.app.actions.execute("view.toggle-source", { view: this })));
     const modeBtn = document.createElement("button");
     modeBtn.className = "view-mode-toggle clickable-icon view-action";
     modeBtn.title = "Toggle reading view (Cmd/Ctrl+E)";
     modeBtn.setAttribute("aria-label", "Toggle reading view (Cmd/Ctrl+E)");
     setIcon(modeBtn, "book-open");
-    modeBtn.addEventListener("click", () => void this.app.actions.execute("view.toggle-reading", { view: this }));
+    modeBtn.addEventListener("pointerdown", preflightPointer);
+    modeBtn.addEventListener("click", () => this.observeReplacement(this.app.actions.execute("view.toggle-reading", { view: this })));
     const moreBtn = document.createElement("button");
     moreBtn.className = "view-more-options clickable-icon view-action";
     moreBtn.title = "More options";
@@ -209,26 +256,80 @@ export class MarkdownView implements View {
     return this.app.workspace?.findLeafForView(this) ?? null;
   }
 
-  async setFile(file: TFile): Promise<void> {
-    this.pagePreview.hide();
-    await this.flush();
-    const diskText = await this.app.vault.read(file);
-    this.lineEnding = diskText.includes("\r\n") ? "\r\n" : "\n";
-    const text = diskText.replace(/\r\n/g, "\n");
-    this.file = file;
-    this.titleEl.textContent = file.basename;
-    this.titleParentEl.innerHTML = "";
-    if (file.parent) {
-      for (const el of buildBreadcrumbs(file.parent)) this.titleParentEl.appendChild(el);
-    }
-    this.clearConflictState();
-    // The pane now shows a different note; its conflict state is re-reconciled
-    // from sync state rather than inherited.
-    this.clearSyncConflict();
-    this.lastSavedText = text;
-    this.buildEditor(text);
-    if (this.mode === "reading") await this.renderReading();
-    this.applyMode(!document.body.classList.contains("is-mobile"));
+  private projectionScopes(): RenderScope[] {
+    return [this.lpProjection, this.readingProjection].filter((scope): scope is RenderScope => !!scope);
+  }
+
+  private preflightReplacement(): void {
+    if (this.transitionClosing || this.vaultSwitching) throw new Error("This note is paused during an owner operation.");
+    this.renderOwner?.assertAdmission();
+    for (const scope of this.projectionScopes()) scope.assertRetirementReady();
+  }
+
+  /** The queue owns the root operation; retirement owns only its children. */
+  private replaceProjections(stage: (token?: RenderToken) => Promise<() => void | Promise<void>>, flush = true, destructiveBuffer = false): Promise<void> {
+    const captured = { file: this.file, editor: this.editor, mode: this.mode, text: this.getText(), vault: this.app.vault, root: this.app.vault.root, generation: this.transitionGeneration };
+    const current = (token?: RenderToken) => {
+      token?.check();
+      if (this.transitionClosing || this.app.vault !== captured.vault || this.app.vault.root !== captured.root || this.file !== captured.file || this.editor !== captured.editor || this.mode !== captured.mode || this.getText() !== captured.text || this.transitionGeneration !== captured.generation) throw new ScopeCancelled();
+    };
+    const execute = async (token?: RenderToken) => {
+      current(token); this.preflightReplacement();
+      if (destructiveBuffer) this.assertNativeCloseReady();
+      const previousInert = this.bodyEl?.inert ?? false;
+      const restoreAfterPublish = this.retiredProjectionPending ? false : previousInert;
+      const focused = this.bodyEl?.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+      const leaf = this.ownLeaf();
+      if (this.bodyEl) this.bodyEl.inert = true;
+      let retirement: Awaited<ReturnType<typeof RenderScope.prepareRetirement>> | undefined;
+      let published = false;
+      try {
+        if (flush) await this.flush();
+        current(token);
+        const publish = await stage(token);
+        current(token);
+        retirement = await RenderScope.prepareRetirement(this.projectionScopes());
+        if (destructiveBuffer) await this.validateRecoveryReceipt();
+        current(token);
+        await retirement.commit();
+        this.lpProjection = null; this.readingProjection = null; this.retiredProjectionPending = true;
+        token?.check();
+        if (this.transitionClosing || this.app.vault !== captured.vault || this.transitionGeneration !== captured.generation) throw new ScopeCancelled();
+        this.transitionGeneration++;
+        await publish(); published = true; this.retiredProjectionPending = false;
+      } catch (error) {
+        if (!retirement?.destructionStarted) retirement?.abort();
+        throw error;
+      } finally {
+        // A partial destructor failure cannot revive closed native controls.
+        if (this.bodyEl && (published || !retirement?.destructionStarted)) this.bodyEl.inert = published ? restoreAfterPublish : previousInert;
+        const focusStayedOwned = document.activeElement === document.body || this.bodyEl?.contains(document.activeElement);
+        const sameLeaf = this.ownLeaf() === leaf && (!leaf || this.app.workspace?.getActiveLeaf() === leaf);
+        if (!retirement?.destructionStarted && !previousInert && focused?.isConnected && focusStayedOwned && sameLeaf && !this.transitionClosing && this.renderOwner?.admissionAllowed) focused.focus({ preventScroll: true });
+      }
+    };
+    const queued = this.transitionTail.catch(() => {}).then(() => this.renderOwner ? this.renderOwner.run(execute) : execute());
+    this.transitionTail = queued;
+    return queued;
+  }
+
+  setFile(file: TFile): Promise<void> {
+    const path = file.path;
+    return this.replaceProjections(async token => {
+      const diskText = await this.app.vault.read(file); token?.check();
+      if (file.path !== path) throw new ScopeCancelled();
+      return async () => {
+        this.pagePreview.hide();
+        this.lineEnding = diskText.includes("\r\n") ? "\r\n" : "\n";
+        const text = diskText.replace(/\r\n/g, "\n");
+        this.file = file; this.titleEl.textContent = file.basename; this.titleParentEl.innerHTML = "";
+        if (file.parent) for (const el of buildBreadcrumbs(file.parent)) this.titleParentEl.appendChild(el);
+        this.clearConflictState(); this.clearSyncConflict(); this.lastSavedText = text;
+        this.buildEditor(text);
+        if (this.mode === "reading") await this.renderReadingNative();
+        this.applyMode(!document.body.classList.contains("is-mobile"));
+      };
+    }, true, true);
   }
 
   /** Enter the same title-editing flow used after creating an Untitled note. */
@@ -244,6 +345,7 @@ export class MarkdownView implements View {
 
   private buildEditor(text: string) {
     this.editor?.destroy();
+    this.lpProjection = this.renderOwner?.child({}) ?? null;
     const app = this.app;
     const view = this;
 
@@ -285,7 +387,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
+            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
@@ -318,7 +420,7 @@ export class MarkdownView implements View {
           vault: this.app.vault,
           linktext: (file, sourcePath) => this.app.metadataCache.fileToLinktext(file, sourcePath),
           sourcePath: () => this.file?.path ?? "",
-          canEdit: () => !this.vaultSwitching && !this.conflictReadOnly,
+          canEdit: () => !this.vaultSwitching && !this.autosavePaused && !this.conflictReadOnly,
           notify: (message) => this.app.notify(message),
         }),
         EditorView.domEventHandlers({
@@ -433,7 +535,8 @@ export class MarkdownView implements View {
   }
 
   async applyCommentMutation(mutator: (source: string) => string): Promise<void> {
-    if (this.vaultSwitching || this.conflictReadOnly) throw new Error("Comment editing is paused while the note is read-only");
+    this.renderOwner?.assertAdmission();
+    if (this.vaultSwitching || this.autosavePaused || this.conflictReadOnly) throw new Error("Comment editing is paused while the note is read-only");
     if (!this.editor) throw new Error("The note editor is not available");
     const source = this.editor.state.doc.toString();
     const next = mutator(source);
@@ -464,21 +567,21 @@ export class MarkdownView implements View {
     }
   }
 
-  revealComment(threadId: string): void {
-    const thread = parseCommentThreads(this.getText()).threads.find((item) => item.id === threadId);
+  revealComment(threadId: string): void { this.observeReplacement(this.revealCommentAsync(threadId)); }
+
+  async revealCommentAsync(threadId: string): Promise<void> {
+    const file = this.file; const vault = this.app.vault;
+    this.preflightReplacement();
+    if (this.mode !== "live") await this.changeMode("live");
+    if (this.file !== file || this.app.vault !== vault || this.transitionClosing) throw new ScopeCancelled();
+    const thread = parseCommentThreads(this.getText()).threads.find(item => item.id === threadId);
     if (!thread) return;
-    if (this.mode !== "live") {
-      this.mode = "live";
-      this.lastEditingMode = "live";
-      this.editor?.dispatch({ effects: this.editingCompartment.reconfigure([
-        livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()),
-        commentDecorations,
-        commentInteractions((id) => this.app.selectComment(id)),
-      ]) });
-      this.applyMode();
-    }
     this.editor?.dispatch({ selection: { anchor: thread.from, head: thread.to }, scrollIntoView: true });
-    this.editor?.focus();
+    this.focusOwnedEditor();
+  }
+
+  private observeReplacement(operation: Promise<unknown>): void {
+    void operation.catch(error => { if (!(error instanceof ScopeCancelled)) this.app.notify(error instanceof Error ? error.message : "Could not replace this note's presentation."); });
   }
 
   private wikilinkAt(text: string, pos: number): string | null {
@@ -500,13 +603,19 @@ export class MarkdownView implements View {
 
   private scheduleSave() {
     if (this.saveTimer) window.clearTimeout(this.saveTimer);
-    if (this.vaultSwitching || this.conflictReadOnly) return;
+    if (this.vaultSwitching || this.autosavePaused || this.conflictReadOnly || (this.renderOwner && !this.renderOwner.admissionAllowed)) return;
     this.saveTimer = window.setTimeout(() => this.flush(), 1000);
     this.app.statusBar.update();
   }
 
   /** Persist pending edits immediately. */
   async flush(): Promise<void> {
+    if (this.renderOwner?.closed) return;
+    if (this.renderOwner?.admissionAllowed) await this.renderOwner.retry(() => this.flushNative(), "markdown-save");
+    else await this.flushNative();
+  }
+
+  private async flushNative(): Promise<void> {
     if (this.saveTimer) {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -545,6 +654,15 @@ export class MarkdownView implements View {
     }
   }
 
+  /** Internal named-layout preflight; recovery buffers are never flushed. */
+  assertWorkspaceLoadReady(): void {
+    if (this.conflictReadOnly) throw new Error("Resolve this note's conflict or recovery before loading a workspace.");
+  }
+
+  async settleWorkspaceLoad(): Promise<void> {
+    this.assertWorkspaceLoadReady(); await this.flush(); this.assertWorkspaceLoadReady();
+  }
+
   async prepareVaultSwitch(): Promise<void> {
     this.vaultSwitching = true;
     await this.flush();
@@ -556,7 +674,7 @@ export class MarkdownView implements View {
   }
 
   async pauseAutosave(): Promise<void> {
-    this.vaultSwitching = true;
+    this.autosavePaused = true;
     if (this.saveTimer) {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -565,7 +683,7 @@ export class MarkdownView implements View {
   }
 
   resumeAutosave(): void {
-    this.vaultSwitching = false;
+    this.autosavePaused = false;
     if (!this.conflictReadOnly && this.hasUnacknowledgedChanges()) this.scheduleSave();
   }
 
@@ -586,16 +704,15 @@ export class MarkdownView implements View {
     return this.conflictReadOnly;
   }
 
-  acceptExternalText(text: string): void {
-    this.pagePreview.hide();
-    this.clearConflictState();
-    this.pendingSaveText = null;
-    this.lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
-    const normalized = text.replace(/\r\n/g, "\n");
-    this.lastSavedText = normalized;
-    this.buildEditor(normalized);
-    if (this.mode === "reading") void this.renderReading();
-    this.applyMode();
+  acceptExternalText(text: string): Promise<void> {
+    return this.replaceProjections(async () => async () => {
+      this.pagePreview.hide(); this.clearConflictState(); this.pendingSaveText = null;
+      this.lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+      const normalized = text.replace(/\r\n/g, "\n"); this.lastSavedText = normalized;
+      this.buildEditor(normalized);
+      if (this.mode === "reading") await this.renderReadingNative();
+      this.applyMode();
+    }, false, true);
   }
 
   presentConflict(
@@ -604,6 +721,8 @@ export class MarkdownView implements View {
     recoveryOnly: boolean,
     recoveryLocation: "device" | "memory" = "device",
   ): void {
+    this.transitionGeneration++;
+    this.recoveryReceipt = null;
     const localText = this.getText();
     this.conflictReadOnly = true;
     this.lastSavedText = externalText ?? "";
@@ -629,7 +748,7 @@ export class MarkdownView implements View {
       const openProvider = document.createElement("button");
       openProvider.type = "button";
       openProvider.textContent = "Open provider version";
-      openProvider.addEventListener("click", () => this.acceptExternalText(externalText));
+      openProvider.addEventListener("click", () => this.observeReplacement(this.acceptExternalText(externalText)));
       banner.appendChild(openProvider);
     }
     if (conflictPath) {
@@ -663,11 +782,13 @@ export class MarkdownView implements View {
     this.conflictBanner = banner;
   }
 
-  restoreConflictRecovery(localText: string, externalText: string | null): void {
-    this.lastSavedText = externalText ?? "";
-    this.buildEditor(localText);
-    this.presentConflict(externalText, null, true);
-    this.applyMode();
+  restoreConflictRecovery(localText: string, externalText: string | null): Promise<void> {
+    return this.replaceProjections(async () => async () => {
+      this.lastSavedText = externalText ?? ""; this.buildEditor(localText);
+      this.presentConflict(externalText, null, true);
+      if (this.mode === "reading") await this.renderReadingNative();
+      this.applyMode();
+    }, false, true);
   }
 
   /**
@@ -684,13 +805,22 @@ export class MarkdownView implements View {
   }
 
   private clearConflictState(): void {
+    this.recoveryReceipt = null;
     this.conflictReadOnly = false;
     this.conflictBanner?.remove();
     this.conflictBanner = null;
     this.editor?.contentDOM.removeAttribute("aria-readonly");
   }
 
-  private async commitTitleRename() {
+  private runOwnedAction(key: string, action: (token?: RenderToken) => Promise<void>): Promise<void> {
+    if (!this.renderOwner) return action();
+    if (!this.renderOwner.admissionAllowed) return Promise.resolve();
+    const task = this.renderOwner.retry(action, key); void task.catch(() => {}); return task;
+  }
+
+  private commitTitleRename(): Promise<void> { return this.runOwnedAction("rename", token => this.commitTitleRenameNative(token)); }
+
+  private async commitTitleRenameNative(token?: RenderToken) {
     const newName = this.titleEl.textContent?.trim() ?? "";
     if (!this.file) return;
     if (newName === this.file.basename) {
@@ -698,7 +828,10 @@ export class MarkdownView implements View {
       return;
     }
     const oldName = this.file.basename;
-    if (!(await this.app.renameFile(this.file, newName))) this.titleEl.textContent = oldName;
+    const file = this.file; token?.check();
+    const renamed = await this.app.renameFile(file, newName);
+    token?.check();
+    if (!renamed && this.file === file) this.titleEl.textContent = oldName;
   }
 
   getText(): string {
@@ -746,68 +879,92 @@ export class MarkdownView implements View {
   }
 
   /** Cmd/Ctrl+E: flip between editing (live or source) and reading. */
-  async toggleMode(): Promise<void> {
-    this.pagePreview.hide();
-    this.mode = this.mode === "reading" ? this.lastEditingMode : "reading";
-    if (this.mode === "reading") await this.renderReading();
-    this.applyMode();
+  toggleMode(): Promise<void> {
+    const desired = this.mode === "reading" ? this.lastEditingMode : "reading";
+    return this.changeMode(desired);
   }
 
   /** Flip between Live Preview and raw source while editing. */
-  toggleSource(): void {
-    this.pagePreview.hide();
-    if (this.mode === "reading") this.mode = this.lastEditingMode;
-    this.mode = this.mode === "live" ? "source" : "live";
-    this.lastEditingMode = this.mode;
-    this.editor?.dispatch({
-      effects: this.editingCompartment.reconfigure(
-        this.mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf()), commentDecorations, commentInteractions((id) => this.app.selectComment(id))] : []
-      ),
+  toggleSource(): Promise<void> {
+    const editing = this.mode === "reading" ? this.lastEditingMode : this.mode;
+    return this.changeMode(editing === "live" ? "source" : "live");
+  }
+
+  private editingExtensions(mode: MarkdownMode) {
+    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
+  }
+
+  private changeMode(desired: MarkdownMode): Promise<void> {
+    return this.replaceProjections(async () => async () => {
+      this.pagePreview.hide();
+      this.lpProjection = this.renderOwner?.child({}) ?? null;
+      this.mode = desired;
+      if (desired !== "reading") this.lastEditingMode = desired;
+      this.editor?.dispatch({ effects: this.editingCompartment.reconfigure(this.editingExtensions(desired)) });
+      if (desired === "reading") await this.renderReadingNative();
+      else { if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl); this.readingContentEl = null; this.readingEl.innerHTML = ""; }
+      this.applyMode();
     });
-    this.applyMode();
+  }
+
+  private focusOwnedEditor(): void {
+    const leaf = this.ownLeaf();
+    if (!leaf || this.app.workspace?.getActiveLeaf() === leaf) this.editor?.focus();
   }
 
   private applyMode(focusEditor = true) {
     const editing = this.mode !== "reading";
     this.editorHostEl.style.display = editing ? "" : "none";
     this.readingEl.style.display = editing ? "none" : "";
-    if (editing && focusEditor) this.editor?.focus();
+    if (editing && focusEditor) this.focusOwnedEditor();
   }
 
-  private async renderReading() {
-    this.pagePreview.hide();
-    await this.flush();
+  private renderReading(): Promise<void> {
+    if (this.readingRefreshInFlight) return this.readingRefreshInFlight;
+    const operation = this.replaceProjections(async () => () => this.renderReadingNative());
+    this.readingRefreshInFlight = operation;
+    void operation.then(() => { this.readingRefreshInFlight = null; }, () => { this.readingRefreshInFlight = null; this.refreshPending = true; });
+    return operation;
+  }
+
+  private resumeOwnedRendering(): void {
+    if (!this.editor || !this.file || this.refreshScheduled) return;
+    this.refreshPending = true; this.refreshScheduled = true;
+    queueMicrotask(() => {
+      this.refreshScheduled = false;
+      if (!this.refreshPending || !this.renderOwner.admissionAllowed || this.transitionClosing) return;
+      this.refreshPending = false;
+      const refresh = this.mode === "reading" ? this.renderReading() : this.changeMode(this.mode);
+      void refresh.catch(error => { if (!(error instanceof ScopeCancelled)) { this.refreshPending = true; this.app.notify("Finish or retry the native edit before refreshing this note."); } });
+    });
+  }
+
+  private async renderReadingNative(token?: RenderToken) {
+    this.pagePreview.hide(); token?.check();
     if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);
-    this.readingContentEl = null;
-    this.readingEl.innerHTML = "";
-    const inner = document.createElement("div");
-    inner.className = "markdown-preview-sizer";
-    this.readingEl.appendChild(inner);
+    this.readingContentEl = null; this.readingEl.innerHTML = "";
+    this.readingProjection = this.renderOwner?.child({}) ?? null;
+    const inner = document.createElement("div"); inner.className = "markdown-preview-sizer"; this.readingEl.appendChild(inner);
     if (this.file) {
       const props = this.app.metadataCache.getFileCache(this.file)?.frontmatter;
-      if (props && Object.keys(props).length) {
-        inner.appendChild(renderProperties(props));
-      }
+      if (props && Object.keys(props).length) inner.appendChild(renderProperties(props));
     }
-    const contentEl = document.createElement("div");
-    this.readingContentEl = contentEl;
-    inner.appendChild(contentEl);
-    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf());
+    const contentEl = document.createElement("div"); this.readingContentEl = contentEl; inner.appendChild(contentEl);
+    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf(), this.readingProjection ?? undefined, this.sourceNavigation);
   }
 
-  /** Jump the editor to a given offset (used by outline/search). */
-  scrollToOffset(offset: number) {
-    if (this.mode === "reading") {
-      this.mode = this.lastEditingMode;
-      this.applyMode();
-    }
+  /** Public-compatible adapter; native callers await the internal promise. */
+  scrollToOffset(offset: number): void { this.observeReplacement(this.scrollToOffsetAsync(offset)); }
+
+  async scrollToOffsetAsync(offset: number): Promise<void> {
+    const file = this.file; const vault = this.app.vault;
+    this.preflightReplacement();
+    if (this.mode === "reading") await this.changeMode(this.lastEditingMode);
+    if (this.file !== file || this.app.vault !== vault || this.transitionClosing) throw new ScopeCancelled();
     if (!this.editor) return;
-    const pos = Math.min(offset, this.editor.state.doc.length);
-    this.editor.dispatch({
-      selection: { anchor: pos },
-      scrollIntoView: true,
-    });
-    this.editor.focus();
+    const pos = Math.max(0, Math.min(offset, this.editor.state.doc.length));
+    this.editor.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    this.focusOwnedEditor();
   }
 
   // --- Bookmarks (headings & blocks) --------------------------------------
@@ -849,11 +1006,14 @@ export class MarkdownView implements View {
    * or generates a short one and appends it to that line (persisting the file),
    * then stores a block bookmark.
    */
-  async bookmarkBlockUnderCursor(): Promise<void> {
+  bookmarkBlockUnderCursor(): Promise<void> { return this.runOwnedAction("bookmark", token => this.bookmarkBlockNative(token)); }
+
+  private async bookmarkBlockNative(token?: RenderToken): Promise<void> {
     if (!this.file || !this.editor) {
       this.app.notify("Open a note to bookmark a block");
       return;
     }
+    const file = this.file;
     const doc = this.editor.state.doc;
     const cursorLine0 = doc.lineAt(this.editor.state.selection.main.head).number - 1;
     const cache = this.app.metadataCache.getFileCache(this.file);
@@ -877,7 +1037,9 @@ export class MarkdownView implements View {
       this.editor.dispatch({ changes: { from: cmLine.to, insert: `${prefix}^${blockId}` } });
       await this.flush();
     }
-    await this.app.addBlockBookmark(this.file, blockId);
+    token?.check();
+    if (this.file !== file) throw new ScopeCancelled();
+    await this.app.addBlockBookmark(file, blockId);
   }
 
   onOpen(): void {
@@ -896,10 +1058,61 @@ export class MarkdownView implements View {
     this.editor?.requestMeasure();
   }
 
+  /** Internal receipt seam: called only after the existing App preservation succeeds. */
+  confirmRecoveryCopy(vault: App["vault"], source: TFile, sourcePath: string, localText: string, copy: TFile): void {
+    if (this.app.vault !== vault || this.file !== source || source.path !== sourcePath || copy === source || copy.path === sourcePath) return;
+    this.recoveryReceipt = { vault, root: vault.root, source, sourcePath, localText, destination: { kind: "copy", file: copy, path: copy.path } };
+  }
+
+  confirmDeviceRecovery(vault: App["vault"], source: TFile, sourcePath: string, localText: string, key: string, record: string): void {
+    if (this.app.vault !== vault || this.file !== source || source.path !== sourcePath || localStorage.getItem(key) !== record) return;
+    try {
+      const parsed = JSON.parse(record) as { vaultId?: unknown; path?: unknown; text?: unknown };
+      if (parsed.vaultId !== vault.root || parsed.path !== sourcePath || parsed.text !== localText) return;
+      this.recoveryReceipt = { vault, root: vault.root, source, sourcePath, localText, destination: { kind: "device", key, record } };
+    } catch { /* An unconfirmed record cannot authorize retirement. */ }
+  }
+
+  private assertNativeCloseReady(): void {
+    if (!this.conflictReadOnly) return;
+    const receipt = this.recoveryReceipt;
+    if (!receipt || receipt.vault !== this.app.vault || receipt.root !== this.app.vault.root || receipt.source !== this.file || receipt.sourcePath !== this.file?.path || receipt.localText !== this.getText()) throw new Error("Preserve the current local recovery snapshot before leaving this note.");
+  }
+
+  private async validateRecoveryReceipt(): Promise<void> {
+    if (!this.conflictReadOnly) return;
+    this.assertNativeCloseReady();
+    const receipt = this.recoveryReceipt!;
+    const destination = receipt.destination;
+    if (destination.kind === "copy") {
+      if (receipt.vault.getFileByPath(destination.path) !== destination.file || destination.path === receipt.sourcePath) throw new Error("The indexed recovery copy changed. Keep this note open.");
+      const text = await receipt.vault.read(destination.file);
+      if (text !== receipt.localText || receipt.vault.getFileByPath(destination.path) !== destination.file) throw new Error("The recovery copy no longer matches this local edit.");
+    } else {
+      if (localStorage.getItem(destination.key) !== destination.record) throw new Error("The device recovery record changed. Keep this note open.");
+      const record = JSON.parse(destination.record) as { vaultId?: unknown; path?: unknown; text?: unknown };
+      if (record.vaultId !== receipt.root || record.path !== receipt.sourcePath || record.text !== receipt.localText) throw new Error("The device recovery record does not match this local edit.");
+    }
+    this.assertNativeCloseReady();
+    if (this.recoveryReceipt !== receipt) throw new Error("The local recovery owner changed during validation.");
+  }
+
   async onClose(): Promise<void> {
+    this.assertNativeCloseReady();
+    this.transitionClosing = true; this.transitionGeneration++;
+    await this.transitionTail?.catch(() => {});
+    try { await (this.renderOwner?.close() ?? this.closeNative()); }
+    catch (error) {
+      if (!this.renderOwner || this.renderOwner.admissionAllowed) this.transitionClosing = false;
+      throw error;
+    }
+  }
+
+  private async prepareCloseNative(): Promise<void> { await this.flushNative(); }
+
+  private async closeNative(): Promise<void> {
     this.pagePreview.destroy();
     this.clearSyncConflict();
-    await this.flush();
     this.vaultSwitching = true;
     this.editor?.destroy();
     this.editor = null;

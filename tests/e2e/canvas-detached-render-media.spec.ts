@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 
+import { CanvasBackgroundLifetimes } from "./helpers/canvas-background-lifetimes";
+
 const repoRoot = path.resolve(__dirname, "..", "..");
 
 /**
@@ -20,13 +22,14 @@ const repoRoot = path.resolve(__dirname, "..", "..");
  * every `leaf.setView` for 250ms, which is far longer than a vault binary read
  * — so the first render always completes while detached.
  */
-test("fills Canvas media cards rendered before the view is attached to the document", async () => {
+test("fills Canvas media cards rendered before the view is attached to the document", async ({}, info) => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-detached-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-detached-user-"));
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
   fs.writeFileSync(path.join(vaultDir, "Photo.png"), png);
   fs.writeFileSync(path.join(vaultDir, "Unreadable.png"), png);
-  fs.writeFileSync(path.join(vaultDir, "Sound.mp3"), Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 0]));
+  fs.copyFileSync(path.join(__dirname, "fixtures/media/canvas-silence.mp3"), path.join(vaultDir, "Sound.mp3"));
+  fs.writeFileSync(path.join(vaultDir, "Close.md"), "# Close Canvas\n");
   fs.writeFileSync(path.join(vaultDir, "Detached.canvas"), JSON.stringify({
     nodes: [
       { id: "image", type: "file", x: 0, y: 0, width: 320, height: 220, file: "Photo.png" },
@@ -35,31 +38,22 @@ test("fills Canvas media cards rendered before the view is attached to the docum
     ],
     edges: [],
   }));
+  const canvasBefore = fs.readFileSync(path.join(vaultDir, "Detached.canvas"), "utf8");
   fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
 
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const window = await app.firstWindow();
+    const resources = new CanvasBackgroundLifetimes(window, "__detachedBlobTracker", info);
     const errors: string[] = [];
-    window.on("console", (msg) => { if (msg.type() === "error") errors.push(msg.text()); });
+    window.on("console", (msg) => {
+      if (msg.type() === "error" && !resources.isExpectedProbeError(msg.text(), msg.location().url)) errors.push(msg.text());
+    });
     window.on("pageerror", (error) => errors.push(String(error)));
 
     await expect.poll(() => window.evaluate(() => (window as any).app?.workspace?.layoutReady ?? false)).toBe(true);
+    await resources.install();
     await window.evaluate(() => {
-      const tracker = { created: [] as string[], revoked: [] as string[] };
-      const create = URL.createObjectURL.bind(URL);
-      const revoke = URL.revokeObjectURL.bind(URL);
-      URL.createObjectURL = (blob: Blob) => {
-        const url = create(blob);
-        tracker.created.push(url);
-        return url;
-      };
-      URL.revokeObjectURL = (url: string) => {
-        tracker.revoked.push(url);
-        revoke(url);
-      };
-      (window as any).__detachedBlobTracker = tracker;
-
       const application = (window as any).app;
       // One vault file is unreadable, so the read-failure branch is exercised
       // in the same detached window as the success branch.
@@ -92,20 +86,27 @@ test("fills Canvas media cards rendered before the view is attached to the docum
     await expect(view.locator('.canvas-node[data-node-id="broken"] .canvas-node-file-fallback')).toHaveText("Unreadable.png");
     await expect(view.locator('.canvas-node[data-node-id="broken"] img.canvas-node-media')).toHaveCount(0);
 
-    // Blob cleanup still holds: a rerender revokes the URLs it replaces.
-    const live = await view.locator(".canvas-node-media").evaluateAll((nodes) =>
-      nodes.map((node) => (node as HTMLImageElement | HTMLMediaElement).src));
-    expect(live).toHaveLength(2);
+    // Unchanged media retain the actual connected node and source URL across
+    // an unrelated transient card. Both PNG and valid MP3 have native positives.
+    const imageResource = await resources.captureMedia(view, "image", "image");
+    const audioResource = await resources.captureMedia(view, "audio", "audio");
+    await resources.expectLiveExactly([imageResource, audioResource]);
     await view.getByRole("button", { name: "Add text card" }).click();
     await view.locator(".canvas-node-text-editor").press("Escape");
-    await expect.poll(() => window.evaluate((urls) =>
-      urls.every((url) => (window as any).__detachedBlobTracker.revoked.includes(url)), live)).toBe(true);
+    await resources.expectRetained(view, "image", imageResource);
+    await resources.expectRetained(view, "audio", audioResource);
+    await resources.expectLiveExactly([imageResource, audioResource]);
 
-    // The replacement render refilled the cards rather than blanking them.
+    // The retained cards and failed-read fallback remain visible.
     await expect(view.locator('.canvas-node[data-node-id="image"] img.canvas-node-media')).toHaveAttribute("src", /^blob:/);
     await expect(view.locator('.canvas-node[data-node-id="audio"] audio.canvas-node-media')).toHaveAttribute("src", /^blob:/);
     await expect(view.locator('.canvas-node[data-node-id="broken"] .canvas-node-file-fallback')).toHaveText("Unreadable.png");
 
+    await window.locator('.nav-file-title[data-path="Close.md"]').click();
+    await resources.expectRetired([imageResource, audioResource]);
+    await resources.expectAllRetired();
+
+    expect(fs.readFileSync(path.join(vaultDir, "Detached.canvas"), "utf8")).toBe(canvasBefore);
     expect(errors, `Console errors: ${errors.join("\n")}`).toEqual([]);
   } finally {
     await app.close();

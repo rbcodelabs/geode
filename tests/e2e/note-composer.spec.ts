@@ -86,15 +86,37 @@ test("Merge appends via Enter, rewrites links on disk, and asks for confirmation
     expect(h.exists("Src.md")).toBe(true);
     expect(h.read("Dest.md")).toBe("Dest body\n");
 
+    // Hold the actual later referencer write to demonstrate that the completed
+    // destination write is not a merge-completion barrier (especially on Linux,
+    // where there is no successful OS-trash/deletion barrier below).
+    await win.evaluate(() => {
+      const vault = (window as any).app.vault;
+      const modify = vault.modify.bind(vault);
+      let release!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const gate = { reached: false, release };
+      (window as any).__composerReferencerGate = gate;
+      vault.modify = async (file: any, text: string, options?: unknown) => {
+        if (file.path === "Linker.md" && !gate.reached) { gate.reached = true; await held; }
+        return modify(file, text, options);
+      };
+    });
     await mergeFromExplorer(win, "Dest", "Enter");
     await win.locator(".note-composer-confirm-merge").click();
     await expect.poll(() => h.read("Dest.md")).toBe("Dest body\n\nSource body\n");
+    try {
+      await expect.poll(() => win.evaluate(() => (window as any).__composerReferencerGate.reached)).toBe(true);
+      expect(h.read("Linker.md")).toBe(MERGE_FILES["Linker.md"]);
+    } finally {
+      await win.evaluate(() => (window as any).__composerReferencerGate.release());
+    }
     if (canTrash) await expect.poll(() => h.exists("Src.md")).toBe(false);
     expect(h.read("Dest.md")).toBe("Dest body\n\nSource body\n");
-    expect(h.read("Linker.md")).toBe("see [[Dest]] and ![[Dest]] and [[Dest#H]] and [[Dest|alias]] and [[Other]]\n");
+    await expect.poll(() => h.read("Linker.md")).toBe("see [[Dest]] and ![[Dest]] and [[Dest#H]] and [[Dest|alias]] and [[Other]]\n");
     expect(h.read("Other.md")).toBe("other\n");
   } finally {
-    await h.cleanup();
+    try { await h.win.evaluate(() => (window as any).__composerReferencerGate?.release()); }
+    finally { await h.cleanup(); }
   }
 });
 
@@ -122,7 +144,7 @@ test("Merge with Shift+Enter prepends, and the command opens the same picker", a
     if (canTrash) await expect.poll(() => h.exists("Src.md")).toBe(false);
     await expect(win.locator(".note-composer-confirm")).toHaveCount(0);
     expect(h.read("Dest.md")).toBe("Source body\n\nDest body\n");
-    expect(h.read("Linker.md")).toContain("[[Dest]] and ![[Dest]]");
+    await expect.poll(() => h.read("Linker.md")).toContain("[[Dest]] and ![[Dest]]");
   } finally {
     await h.cleanup();
   }

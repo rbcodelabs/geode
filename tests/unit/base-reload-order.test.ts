@@ -22,10 +22,10 @@ function fixture() {
   const view = Object.create(BaseView.prototype) as any;
   Object.assign(view, {
     file, def: definition(source), currentViewName: "Table", lastKnownText: source, pendingKnownText: null,
-    persistQueue: Promise.resolve(), vaultSwitching: false, inlinePersist: null,
+    persistQueue: Promise.resolve(), sourcePersistsInFlight: new Set(), vaultSwitching: false, inlinePersist: null,
     definitionRevision: 0, reloadOwnerGeneration: 0, reloadRequestGeneration: 0, reloadHandledGeneration: 0, reloadInFlight: null, reloadClosed: false,
     app: { vault, notify: vi.fn(), metadataCache: { off: vi.fn() } }, runAndRender: vi.fn(),
-    cardsView: { destroy: vi.fn() }, pluginViewHost: { destroy: vi.fn() }, mobileCleanups: [],
+    tableView: { cancelNavigation: vi.fn() }, cardsView: { destroy: vi.fn() }, pluginViewHost: { destroy: vi.fn() }, mobileCleanups: [],
   });
   return { view, vault, file };
 }
@@ -48,7 +48,7 @@ it.each(["file", "path", "vault", "root", "inline", "close"])("refuses an old re
   if (change === "vault") view.app.vault = { ...vault };
   if (change === "root") vault.root = "/other-synthetic-vault";
   if (change === "inline") view.inlinePersist = async () => {};
-  if (change === "close") await view.onClose();
+  if (change === "close") { await view.onClose(); expect(view.tableView.cancelNavigation).toHaveBeenCalledOnce(); }
   gate.resolve(text("note.status")); await reload;
   expect(view.def).toBe(original); expect(view.runAndRender).not.toHaveBeenCalled();
 });

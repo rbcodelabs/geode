@@ -1,0 +1,32 @@
+{
+  "unmatchedOpeners": {
+    "units": 300000,
+    "sha256": "1286d0cfa9f572a17770437e528b51105a64c02c90ffc9aad1a660d4d66afb64",
+    "occurrences": 0
+  },
+  "nestedDelimiters": {
+    "units": 300000,
+    "sha256": "f1d4ef0690edaf55d5289d7bae4b9c754acac05bd7d7cacaa63c4e07ca9bbda3",
+    "occurrences": 0
+  },
+  "unmatchedImages": {
+    "units": 300000,
+    "sha256": "516d463ef771a5f398a6a90c7a6502fafd5ae8dd4454036109da8dbe3b4029a0",
+    "occurrences": 0
+  },
+  "ordinaryWhitespace": {
+    "units": 300000,
+    "sha256": "ec1d4e9f3fac7cfaac20c2488bf5be476840082dffe5b7a07270317dd030abf3",
+    "occurrences": 1
+  },
+  "prose": {
+    "units": 300000,
+    "sha256": "8520b4cd4c26e964bbbf3d3cd12e9cab1ab15d376b7cde7efe6b02ce81a196d9",
+    "occurrences": 1
+  },
+  "denseImages": {
+    "units": 300000,
+    "sha256": "adc84c952a3733a0017aa9851928d80f2a5326ea4efc38f5cb91a32613c53026",
+    "occurrences": 20000
+  }
+}

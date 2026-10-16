@@ -1,21 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _electron as electron, expect, test, type Locator, type Page } from "@playwright/test";
+import { _electron as electron, expect, test, type Locator } from "@playwright/test";
+
+import { CanvasBackgroundLifetimes } from "./helpers/canvas-background-lifetimes";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
-
-interface BlobTracker {
-  created: string[];
-  revoked: string[];
-}
-
-async function tracker(page: Page): Promise<BlobTracker> {
-  return page.evaluate(() => ({
-    created: [...(window as any).__canvasGroupBackgroundUrls.created],
-    revoked: [...(window as any).__canvasGroupBackgroundUrls.revoked],
-  }));
-}
 
 async function expectBackground(
   scope: Locator,
@@ -29,7 +19,7 @@ async function expectBackground(
   await expect(node).toHaveCSS("background-repeat", expected.repeat);
 }
 
-test("renders documented group image backgrounds with safe Canvas-owned blob lifecycle", async () => {
+test("renders documented group image backgrounds with safe Canvas-owned blob lifecycle", async ({}, info) => {
   const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-group-background-vault-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-group-background-user-"));
   const canvasPath = path.join(vaultDir, "Backgrounds.canvas");
@@ -57,25 +47,15 @@ test("renders documented group image backgrounds with safe Canvas-owned blob lif
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
   try {
     const window = await app.firstWindow();
+    const resources = new CanvasBackgroundLifetimes(window, "__canvasGroupBackgroundUrls", info);
     const errors: string[] = [];
-    window.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    window.on("console", (message) => {
+      if (message.type() === "error" && !resources.isExpectedProbeError(message.text(), message.location().url)) errors.push(message.text());
+    });
     window.on("pageerror", (error) => errors.push(String(error)));
     await expect(window.locator('.nav-file-title[data-path="Backgrounds.canvas"]')).toBeVisible();
+    await resources.install();
     await window.evaluate(() => {
-      const created: string[] = [];
-      const revoked: string[] = [];
-      const createObjectURL = URL.createObjectURL.bind(URL);
-      const revokeObjectURL = URL.revokeObjectURL.bind(URL);
-      URL.createObjectURL = (blob: Blob) => {
-        const url = createObjectURL(blob);
-        created.push(url);
-        return url;
-      };
-      URL.revokeObjectURL = (url: string) => {
-        revoked.push(url);
-        revokeObjectURL(url);
-      };
-      (window as any).__canvasGroupBackgroundUrls = { created, revoked };
       const vault = (window as any).app.vault;
       const modify = vault.modify.bind(vault);
       (window as any).__canvasGroupBackgroundWrites = 0;
@@ -100,20 +80,20 @@ test("renders documented group image backgrounds with safe Canvas-owned blob lif
     await expect(view.locator('.canvas-node[data-node-id="cover"] .canvas-group-label')).toHaveText("Cover");
     await expect(view.locator('.canvas-node[data-node-id="cover"]')).toHaveAttribute("data-canvas-color", "1");
     await expect(view.locator(".canvas-node.is-selected")).toHaveCount(0);
-    await expect.poll(async () => (await tracker(window)).created.length).toBe(3);
-    const firstRenderUrls = (await tracker(window)).created;
+    await expect.poll(async () => (await resources.tracker()).created.length).toBe(3);
+    const direct = await Promise.all(["cover", "ratio", "repeat"].map((id) => resources.capture(view, id)));
+    await resources.expectLiveExactly(direct);
 
-    // Canceling a transient text card forces a safe Canvas rerender without a
-    // vault write. Every URL owned by the prior render must be revoked.
+    // An unrelated transient card must retain the connected group presentations
+    // and their still-decodable browser resources without a vault write.
     await view.getByRole("button", { name: "Add text card" }).click();
     await view.locator(".canvas-node-text-editor").press("Escape");
-    await expect.poll(async () => {
-      const state = await tracker(window);
-      return firstRenderUrls.every((url) => state.revoked.includes(url));
-    }).toBe(true);
+    for (const [index, id] of ["cover", "ratio", "repeat"].entries()) {
+      await resources.expectRetained(view, id, direct[index]);
+    }
     await expectBackground(view, "cover", { size: "cover", position: "50% 50%", repeat: "no-repeat" });
-    const beforeClose = await tracker(window);
-    expect(beforeClose.created.length).toBeGreaterThan(firstRenderUrls.length);
+    expect((await resources.tracker()).created.sort()).toEqual(direct.map(({ url }) => url).sort());
+    await resources.expectLiveExactly(direct);
     expect({
       scale: await view.getAttribute("data-scale"),
       panX: await view.getAttribute("data-pan-x"),
@@ -124,21 +104,17 @@ test("renders documented group image backgrounds with safe Canvas-owned blob lif
     // The same Canvas rendered as a Markdown embed retains the background
     // behavior through the shared CanvasView lifecycle.
     await window.locator('.nav-file-title[data-path="Host.md"]').click();
-    await expect.poll(async () => {
-      const state = await tracker(window);
-      return beforeClose.created.every((url) => state.revoked.includes(url));
-    }).toBe(true);
+    await resources.expectRetired(direct);
     const embedded = window.locator(".cm-embed-widget.canvas-embed-widget .canvas-embed-view");
     await expectBackground(embedded, "cover", { size: "cover", position: "50% 50%", repeat: "no-repeat" });
     await expectBackground(embedded, "ratio", { size: "contain", position: "50% 50%", repeat: "no-repeat" });
     await expectBackground(embedded, "repeat", { size: "auto", position: "0% 0%", repeat: "repeat" });
-    const beforeEmbedClose = await tracker(window);
+    const embeddedBackgrounds = await Promise.all(["cover", "ratio", "repeat"].map((id) => resources.capture(embedded, id)));
+    await resources.expectLiveExactly(embeddedBackgrounds);
     await window.getByRole("button", { name: "Toggle Live Preview / Source mode" }).click();
     await expect(embedded).toHaveCount(0);
-    await expect.poll(async () => {
-      const state = await tracker(window);
-      return beforeEmbedClose.created.every((url) => state.revoked.includes(url));
-    }).toBe(true);
+    await resources.expectRetired(embeddedBackgrounds);
+    await resources.expectAllRetired();
 
     expect(fs.readFileSync(canvasPath, "utf8")).toBe(diskBefore);
     expect(await window.evaluate(() => (window as any).__canvasGroupBackgroundWrites)).toBe(0);
