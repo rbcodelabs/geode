@@ -219,16 +219,17 @@ test.describe("when the container is unavailable", () => {
   test("a sync scan reports the provider as unavailable rather than an empty remote", async () => {
     const outcome = await win.evaluate(async () => {
       const app = (window as any).app;
-      await app.sync.activate("icloud");
       try {
-        await app.sync.preview();
-        return { threw: false, message: "" };
+        await app.sync.activate("icloud");
+        return { threw: false, message: "", active: app.sync.getActiveProvider()?.id ?? null };
       } catch (error) {
-        return { threw: true, message: error instanceof Error ? error.message : String(error) };
+        return { threw: true, message: error instanceof Error ? error.message : String(error), active: app.sync.getActiveProvider()?.id ?? null };
       }
     });
+    // Selection is refused with the reason; the provider never becomes "Connected".
     expect(outcome.threw).toBe(true);
-    expect(outcome.message).toMatch(/unavailable/);
+    expect(outcome.message).toMatch(/iCloud is unavailable:.*does not exist/);
+    expect(outcome.active).toBeNull();
     expect(fs.existsSync(missing)).toBe(false);
   });
 });

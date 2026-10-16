@@ -71,6 +71,16 @@ export function createIcloudProvider(options: IcloudProviderOptions): SyncProvid
     id: "icloud",
     name: "iCloud",
     capabilities,
+    async preflight() {
+      // Refuse to connect to a container that is not there, with the reason, instead of "Connected" and a failing scan.
+      let availability;
+      try {
+        availability = await options.bridge.availability();
+      } catch (error) {
+        throw hostError(error);
+      }
+      if (availability.state !== "available") throw new Error(`iCloud is unavailable: ${availability.message}`);
+    },
     async open({ vaultId }) {
       const folder = await resolveFolderName(vaultId, await options.chosenFolder?.(vaultId));
       return new IcloudSession(vaultId, folder, options, maxFileSize);

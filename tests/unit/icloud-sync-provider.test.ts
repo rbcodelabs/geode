@@ -69,6 +69,17 @@ describe.each([
     });
   });
 
+  describe("preflight (selecting the provider)", () => {
+    it("accepts selection when the container is available", async () => {
+      await expect(createIcloudProvider({ bridge: h.bridge }).preflight!()).resolves.toBeUndefined();
+    });
+
+    it("refuses selection with the reason when the container is unavailable, so it never shows as Connected", async () => {
+      h.makeUnavailable();
+      await expect(createIcloudProvider({ bridge: h.bridge }).preflight!()).rejects.toThrow(/iCloud is unavailable: .+/);
+    });
+  });
+
   describe("scan", () => {
     it("fails closed as unavailable when the container is missing, and says why", async () => {
       h.makeUnavailable();

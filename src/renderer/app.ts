@@ -1463,6 +1463,24 @@ class SettingsModal extends Modal {
     this.renderIcloudSyncSettings(container);
   }
 
+  /** Re-render Core plugins without losing the user's place: the tab is rebuilt from scratch, which resets scroll to the top. */
+  private reloadCoreTabKeepingScroll(): void {
+    let scroller: HTMLElement | null = this.contentContainerEl;
+    while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
+    const top = scroller?.scrollTop ?? 0;
+    this.activateTab("core-plugins");
+    if (scroller) scroller.scrollTop = top;
+    // Sections that fill in asynchronously (iCloud) are shorter at this instant, so the browser clamps the offset;
+    // they call `restorePendingCoreScroll` once they have their final height.
+    this.pendingCoreScroll = scroller ? { el: scroller, top } : null;
+  }
+  private pendingCoreScroll: { el: HTMLElement; top: number } | null = null;
+  private restorePendingCoreScroll(): void {
+    const pending = this.pendingCoreScroll;
+    this.pendingCoreScroll = null;
+    if (pending?.el.isConnected) pending.el.scrollTop = pending.top;
+  }
+
   /**
    * iCloud sync core plugin (ADR 0030): enable toggle, container availability, and the remote folder choice.
    * Shown only where the host can reach Geode's iCloud container; elsewhere the plugin cannot run, so there is
@@ -1478,7 +1496,7 @@ class SettingsModal extends Modal {
       this.geodeApp.settings.icloudSyncEnabled = enabled;
       this.geodeApp.syncIcloudSyncPlugin();
       this.geodeApp.saveSettings();
-      this.activateTab("core-plugins");
+      this.reloadCoreTabKeepingScroll();
     });
     const plugin = this.geodeApp.icloudSyncPlugin;
     if (!this.geodeApp.settings.icloudSyncEnabled || !plugin) return;
@@ -1516,13 +1534,14 @@ class SettingsModal extends Modal {
           return;
         }
         notice(result.changed ? `Remote folder set to "${result.name}" (name was adjusted to be safe).` : `Remote folder set to "${result.name}".`);
-        this.activateTab("core-plugins");
+        this.reloadCoreTabKeepingScroll();
       };
 
       const { control: nameControl } = this.addRow(controls, "Remote folder name", "Folder in Geode's iCloud container that holds this vault's synced copy. Defaults to the vault's folder name. Use the same name on every device. Disconnect sync before changing it.");
       const input = document.createElement("input");
       input.type = "text";
       input.className = "web-view-address";
+      input.style.width = "20rem";
       input.setAttribute("aria-label", "Remote folder name");
       input.spellcheck = false;
       input.value = remote.name;
@@ -1543,7 +1562,7 @@ class SettingsModal extends Modal {
       select.addEventListener("change", () => { if (select.value) void apply(select.value); });
       pickControl.appendChild(select);
     };
-    void render();
+    void render().finally(() => this.restorePendingCoreScroll());
   }
 
   private async updateWebViewer(
