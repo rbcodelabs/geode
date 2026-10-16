@@ -507,7 +507,7 @@ class Vault extends Events {
   trash(file: TAbstractFile, system: boolean): Promise<void>;    // OS trash or .trash/
   rename(file: TAbstractFile, newPath: string): Promise<void>;   // does NOT update links — use FileManager.renameFile
 
-  static recurseChildren(root: TFolder, cb: (file: TAbstractFile) => any): void;
+  static recurseChildren(root: TFolder, cb: (file: TAbstractFile) => any): void; // includes root; depth-first
 
   // Events
   on(name: 'create', cb: (file: TAbstractFile) => any, ctx?: any): EventRef;
@@ -518,6 +518,16 @@ class Vault extends Events {
 }
 interface DataWriteOptions { ctime?: number; mtime?: number; }
 ```
+
+Geode's current `Vault.copy` implementation supports files and preserves their raw
+bytes through `readBinary`/`createBinary`, including binary attachments, empty
+files, BOMs and line endings. It rejects an existing destination and propagates
+read/write failures. Folder copying is still unsupported and rejects explicitly;
+the generic signature above describes the target API, not completed folder parity.
+`Vault.recurseChildren` visits the supplied root folder first, followed by its
+files and subfolders depth-first, once per object. These semantics follow the
+[public Vault API declarations](https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts).
+
 
 `DataAdapter` is the low-level FS abstraction beneath Vault (implementations: `FileSystemAdapter` on desktop/Node, Capacitor adapter on mobile). String-path based, no TFile objects, can reach inside `.obsidian/`:
 
