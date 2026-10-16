@@ -7284,3 +7284,40 @@ body.is-mobile .cm-editor .cm-scroller {
   cursor: default;
   pointer-events: none;
 }
+
+/* Outgoing links is a compact sibling of Backlinks. */
+.outgoing-link-target { width: 100%; text-align: left; background: transparent; height: auto; white-space: normal; box-shadow: none; border: none; }
+.outgoing-link-target .nav-item-title { overflow-wrap: anywhere; }
+.outgoing-links-view button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.outgoing-mention { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.outgoing-mention .pane-result-context { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+.outgoing-mention-path { font-size: var(--font-smallest); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; align-self: center; }
+.outgoing-link-convert { font-size: var(--font-smallest); }
+.outgoing-links-status:empty { display: none; }
+.excluded-files-input { display: block; margin-top: 8px; width: 100%; resize: vertical; }
+
+/* Override CodeMirror's outer gutter chrome in both editor modes and themes. */
+.markdown-source-view .cm-editor .cm-gutters {
+  background: transparent;
+  border: none;
+}
+
+/* Editing gutters: collapsed sections retain their arrow away from hover. */
+.geode-fold-gutter { background: transparent; color: var(--text-muted); }
+.geode-fold-gutter .cm-gutterElement { padding: 0 3px; }
+.geode-fold-toggle {
+  appearance: none; border: 0; box-shadow: none; background: transparent;
+  color: inherit; width: 18px; min-height: 0; height: 1.4em; padding: 0;
+  line-height: inherit; cursor: pointer; font: inherit;
+}
+.geode-fold-toggle[aria-expanded="true"] { opacity: 0; }
+.cm-editor:hover .geode-fold-toggle, .geode-fold-toggle:focus-visible { opacity: 1; }
+.geode-fold-toggle:focus-visible { outline: 2px solid var(--interactive-accent); }
+.footnotes-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 8px; gap: 5px 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.footnotes-edit { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 8px; width: 100%; height: auto; text-align: left; white-space: normal; padding: 4px; background: transparent; box-shadow: none; border: none; }
+.footnotes-label { flex: none; color: var(--text-muted); font-size: var(--font-smallest); }
+.footnotes-text { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.footnotes-detail { color: var(--text-muted); font-size: var(--font-smallest); align-self: center; overflow-wrap: anywhere; }
+.footnotes-jump { font-size: var(--font-smallest); }
+.footnotes-view button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.footnotes-status:empty { display: none; }

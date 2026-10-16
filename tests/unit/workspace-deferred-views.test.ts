@@ -99,6 +99,12 @@ describe("serializeLeaf with a deferred leaf", () => {
       serializeLeaf(this: Workspace, leaf: WorkspaceLeaf): PersistedLeaf | null;
     }).serializeLeaf.call(workspace, leaf);
 
+  it("persists Markdown editor state alongside its file", () => {
+    const state = { folding: { fingerprint: "example", ranges: [{ from: 7, to: 12 }] } };
+    const leaf = fakeLeaf({ viewType: "markdown", getFile: () => ({ path: "Note.md" }), getState: () => state } as unknown as View);
+    expect(serialize(fakeWorkspace([leaf]), leaf)).toEqual({ type: "markdown", file: "Note.md", state, pinned: false });
+  });
+
   it("round-trips a still-deferred leaf byte-for-byte", () => {
     const persisted: PersistedLeaf = {
       type: "claude-threads-kanban",

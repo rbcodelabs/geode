@@ -30,7 +30,7 @@ const SAFE_CAUSE_NAMES = new Set([
 ]);
 
 /** DOMException.code 22 (and Firefox's 1014) with the standard name: the webview's storage quota was exceeded. */
-function isQuotaExceeded(error: unknown): boolean {
+export function isQuotaExceeded(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const { name, code } = error as { name?: unknown; code?: unknown };
   return name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED" || (typeof code === "number" && (code === 22 || code === 1014) && typeof name === "string" && /quota/i.test(name));

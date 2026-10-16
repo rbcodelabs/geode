@@ -62,6 +62,10 @@ import { FileExplorerView } from "./views/file-explorer";
 import { ExternalSourceView, validateExternalSourceViewState } from "./views/external-source-view";
 import type { ResourceRef } from "../shared/root-registry";
 import { BacklinksView, OutlineView, TagPaneView } from "./views/sidebar-views";
+import { OutgoingLinksView } from "./views/outgoing-links-view";
+import { ExcludedFiles } from "./excluded-files";
+import { renderFilesAndLinksTab } from "./settings/files-and-links-tab";
+import { FootnotesPlugin } from "./internal-plugins/footnotes-plugin";
 import { CommentsView } from "./views/comments-view";
 import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
@@ -156,6 +160,7 @@ interface AppSettings {
   readableLineLength: boolean;
   baseFontSize: number;
   foldHeading: boolean;
+  foldIndent: boolean;
   showLineNumber: boolean;
   showRibbon: boolean;
   showStatusBar: boolean;
@@ -170,6 +175,8 @@ interface AppSettings {
   slashCommandsEnabled: boolean;
   /** Slides core plugin; off by default, as in Obsidian. */
   slidesEnabled: boolean;
+  /** Footnotes core plugin; optional sidebar, off by default. */
+  footnotesEnabled: boolean;
   /**
    * Cap (in bytes of a note's body, after frontmatter is stripped) beyond
    * which `parseMetadata` skips heading/tag/link/list-item indexing for that
@@ -733,8 +740,8 @@ class VaultSwitchBusyError extends Error {
 }
 
 /** Ids of the built-in settings tabs, as opposed to a plugin id keyed into `App.settingTabs`. */
-type BuiltinTabId = "appearance" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
-const BUILTIN_TAB_IDS: BuiltinTabId[] = ["appearance", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
+type BuiltinTabId = "files-and-links" | "appearance" | "editor" | "hotkeys" | "daily-notes" | "unique-notes" | "templates" | "community-plugins" | "sync" | "advanced" | "performance" | "project-folders" | "github";
+const BUILTIN_TAB_IDS: BuiltinTabId[] = ["files-and-links", "appearance", "editor", "hotkeys", "daily-notes", "unique-notes", "templates", "community-plugins", "sync", "advanced", "performance", "project-folders", "github"];
 /** Rows shown per blocked/excluded reason group before collapsing the rest behind "Show N more". */
 const SYNC_ISSUE_GROUP_VISIBLE_LIMIT = 10;
 
@@ -876,6 +883,10 @@ class SettingsModal extends Modal {
 
     if (id === "appearance") {
       this.renderAppearanceTab(this.contentContainerEl);
+    } else if (id === "files-and-links") {
+      renderFilesAndLinksTab(this.contentContainerEl, this.geodeApp.excludedFiles);
+    } else if (id === "editor") {
+      this.renderEditorTab(this.contentContainerEl);
     } else if (id === "hotkeys") {
       this.renderHotkeysTab(this.contentContainerEl);
     } else if (id === "daily-notes") {
@@ -932,7 +943,9 @@ class SettingsModal extends Modal {
     const groups: SettingsNavGroup[] = [];
     const builtin: SettingsNavItem[] = [
       { id: "appearance", label: "Appearance" },
+      { id: "editor", label: "Editor" },
       { id: "hotkeys", label: "Hotkeys" },
+      { id: "files-and-links", label: "Files and links" },
       { id: "daily-notes", label: "Daily Notes" },
       { id: "unique-notes", label: "Unique note creator" },
       { id: "templates", label: "Templates" },
@@ -1186,6 +1199,19 @@ class SettingsModal extends Modal {
     );
   }
 
+  private renderEditorTab(container: HTMLElement): void {
+    container.innerHTML = "<h2>Editor</h2>";
+    for (const [key, label] of [["foldHeading", "Fold heading"], ["foldIndent", "Fold indent"]] as const) {
+      this.addToggle(container, label, this.geodeApp.settings[key], value => {
+        void this.geodeApp.vault.setConfig(key, value).then(() => {
+          // Persistence errors restore settings; reflect the resulting value.
+          const input = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+          if (input) input.checked = this.geodeApp.settings[key];
+        });
+      });
+    }
+  }
+
   private renderHotkeysTab(container: HTMLElement): void {
     container.innerHTML = `<h2>Hotkeys</h2>`;
     const guidance = document.createElement("p");
@@ -1397,6 +1423,11 @@ class SettingsModal extends Modal {
       this.geodeApp.settings.slidesEnabled = enabled;
       this.geodeApp.syncSlidesPlugin();
       this.geodeApp.saveSettings();
+    });
+    container.insertAdjacentHTML("beforeend", `<h3>Footnotes</h3>`);
+    this.addToggle(container, "Enable Footnotes", this.geodeApp.settings.footnotesEnabled, (enabled) => {
+      this.geodeApp.settings.footnotesEnabled = enabled;
+      void this.geodeApp.syncFootnotesPlugin().then(() => this.geodeApp.host.config.write("app", this.geodeApp.settings)).catch(() => this.geodeApp.notify("Could not update Footnotes"));
     });
     this.renderNoteComposerSettings(container);
     container.insertAdjacentHTML("beforeend", `<h3>Audio recorder</h3>`);
@@ -2632,6 +2663,7 @@ export class App {
   /** Screenshot mode's fake macOS titlebar overlay, created once — see `ensureDrawnMacTitlebar`. */
   private drawnTitlebarEl: HTMLElement | null = null;
   readonly host: HostServices;
+  excludedFiles!: ExcludedFiles;
   readonly dailyNotes: DailyNotesService;
   readonly templates: TemplatesService;
   readonly uniqueNotes: UniqueNotesService;
@@ -2737,7 +2769,8 @@ export class App {
     theme: "auto",
     readableLineLength: true,
     baseFontSize: 16,
-    foldHeading: false,
+    foldHeading: true,
+    foldIndent: true,
     showLineNumber: false,
     showRibbon: true,
     showStatusBar: true,
@@ -2747,6 +2780,7 @@ export class App {
     formatConverterEnabled: false,
     slashCommandsEnabled: true,
     slidesEnabled: false,
+    footnotesEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
   /** Live plugin-facing options alias retained for compatibility with existing callers. */
@@ -2767,6 +2801,8 @@ export class App {
   private externalModifyInFlight = new Map<string, Promise<void>>();
   private webViewerLifecycleEnabled = false;
   private commentsView?: CommentsView;
+  private footnotesPlugin?: FootnotesPlugin;
+  private footnotesLifecycle: Promise<void> = Promise.resolve();
   private syncConflictBanners: SyncConflictBannerController | null = null;
   private openConflictModal: ConflictCompareModal | null = null;
   private refreshDetailsModal: ErrorDetailsModal | null = null;
@@ -3404,6 +3440,7 @@ export class App {
         baseFontSize: typeof saved.baseFontSize === "number" && Number.isFinite(saved.baseFontSize) && saved.baseFontSize > 0
           ? saved.baseFontSize
           : this.settings.baseFontSize,
+        foldIndent: typeof saved.foldIndent === "boolean" ? saved.foldIndent : this.settings.foldIndent,
         foldHeading: typeof saved.foldHeading === "boolean" ? saved.foldHeading : this.settings.foldHeading,
         showLineNumber: typeof saved.showLineNumber === "boolean" ? saved.showLineNumber : this.settings.showLineNumber,
         webViewer: this.webViewer.options,
@@ -3411,6 +3448,7 @@ export class App {
         formatConverterEnabled: saved.formatConverterEnabled === true,
         slashCommandsEnabled: saved.slashCommandsEnabled !== false,
         slidesEnabled: saved.slidesEnabled === true,
+        footnotesEnabled: saved.footnotesEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
         // this is the one place raw disk content becomes a validated setting.
@@ -3602,7 +3640,9 @@ export class App {
     // Sidebar views
     this.workspace.leftSidebar.addView(new FileExplorerView(this));
     this.workspace.leftSidebar.addView(new SearchView(this));
+    this.excludedFiles = new ExcludedFiles(this.host.deviceState, this.vault.root);
     this.workspace.rightSidebar.addView(new BacklinksView(this));
+    this.workspace.rightSidebar.addView(new OutgoingLinksView(this));
     this.workspace.rightSidebar.addView(new OutlineView(this));
     this.workspace.rightSidebar.addView(new TagPaneView(this));
     this.commentsView = new CommentsView(this);
@@ -3673,6 +3713,7 @@ export class App {
     this.syncFormatConverterPlugin();
     this.syncSlashCommandsPlugin();
     this.syncSlidesPlugin();
+    await this.syncFootnotesPlugin();
     this.syncNoteComposerPlugin();
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
     // opened vault, like a plugin-provided one: its saved binding restores here and syncing resumes on its own.
@@ -4385,6 +4426,8 @@ export class App {
     if (this.saveLayoutTimer) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
+    await this.footnotesLifecycle.catch(() => undefined);
+    await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.vault.close();
     this.metadataCache.dispose();
     this.workspace?.dispose();
@@ -4401,6 +4444,8 @@ export class App {
     this.saveLayoutTimer = null;
     this.teardownLaunchSequence();
     this.activeSettingsModal?.close();
+    await this.footnotesLifecycle.catch(() => undefined);
+    await this.footnotesPlugin?.stop(); this.footnotesPlugin = undefined;
     await this.workspace?.closeAllLeaves();
     await this.pluginManager?.dispose();
     this.mermaidPlugin?.unload();
@@ -4692,7 +4737,24 @@ export class App {
     const c = (id: string, name: string, hotkey: string | undefined, callback: () => void) =>
       this.commands.add({ id, name, hotkey, callback });
 
+    for (const [id, name, action] of [
+      ["editor:fold-all", "Fold all headings and lists", "all"],
+      ["editor:unfold-all", "Unfold all headings and lists", "none"],
+      ["editor:fold-more", "Fold more", "more"],
+      ["editor:fold-less", "Fold less", "less"],
+    ] as const) {
+      this.commands.add({ id, name, checkCallback: checking => {
+        const view = this.getActiveMarkdownView();
+        if (!view?.editor || view.mode === "reading") return false;
+        if (!checking) view.fold(action);
+        return true;
+      } });
+    }
     c("command-palette", "Open command palette", "Mod+P", () => this.openCommandPalette());
+    c("outgoing-links:open", "Show outgoing links", undefined, () => {
+      const view = this.workspace.getLeavesOfType("outgoing-links")[0]?.view;
+      if (view) this.workspace.rightSidebar.show(view);
+    });
     c("quick-switcher", "Quick switcher: Open", "Mod+O", () => this.openQuickSwitcher());
     c("new-note", "Create new note", "Mod+N", () => this.createNewNote());
     for (const [id, name, needsEditor, run] of [
@@ -6295,6 +6357,9 @@ export class App {
     // re-derives it here instead of keeping the colors it was born with.
     // Optional-chained defensively: `workspace` is only assigned once a vault
     // is opened, and applySettings() is reachable from the settings tab.
+    for (const leaf of this.workspace?.getLeavesOfType?.("markdown") ?? []) {
+      if (leaf.view instanceof MarkdownView) leaf.view.applyEditorSettings();
+    }
     if (emitCssChange) this.workspace?.trigger("css-change");
   }
 
@@ -6302,6 +6367,7 @@ export class App {
     switch (key) {
       case "baseFontSize": return this.settings.baseFontSize;
       case "foldHeading": return this.settings.foldHeading;
+      case "foldIndent": return this.settings.foldIndent;
       case "showLineNumber": return this.settings.showLineNumber;
       case "readableLineLength": return this.settings.readableLineLength;
       case "theme":
@@ -6322,6 +6388,7 @@ export class App {
         }
         break;
       case "foldHeading":
+      case "foldIndent":
       case "showLineNumber":
       case "readableLineLength":
         if (typeof value === "boolean" && value !== this.settings[key]) {
@@ -6404,6 +6471,19 @@ export class App {
     if (!this.settings.slashCommandsEnabled) return;
     this.slashCommandsPlugin = new SlashCommandsPlugin(this);
     this.slashCommandsPlugin.load();
+  }
+
+  /** Core-plugin lifecycle is serialized so fast disable/re-enable cannot race pane creation. */
+  syncFootnotesPlugin(): Promise<void> {
+    const enabled = this.settings.footnotesEnabled, workspace = this.workspace;
+    const operation = this.footnotesLifecycle.catch(() => undefined).then(async () => {
+      if (workspace !== this.workspace) return;
+      if (enabled && this.footnotesPlugin) return;
+      if (this.footnotesPlugin) { await this.footnotesPlugin.stop(); this.footnotesPlugin = undefined; }
+      if (enabled) { this.footnotesPlugin = new FootnotesPlugin(this); this.footnotesPlugin.load(); }
+    });
+    this.footnotesLifecycle = operation;
+    return operation;
   }
 
   /** Load or unload the Slides core plugin to match `settings.slidesEnabled`. */

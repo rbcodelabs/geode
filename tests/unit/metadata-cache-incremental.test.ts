@@ -264,8 +264,10 @@ describe("MetadataCache incremental — golden equivalence", () => {
     const rng = mulberry32(SEED);
     const fake = new FakeVault({});
     const cache = new MetadataCache(fake.asVault());
-    // Start from an empty vault so the whole final state is built purely
-    // through the incremental event path.
+    // Events before initialize() are subsumed by it, so initialize the (empty)
+    // cache first; the whole final state is then built purely through the
+    // incremental event path.
+    await cache.initialize();
     const d = new Driver(fake, cache);
 
     const log: string[] = [];

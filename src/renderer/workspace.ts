@@ -3651,7 +3651,7 @@ export class Workspace extends Events {
       // No title/icon here: the file path is the source of truth for these,
       // and they always have a restore branch, so they're never deferred.
       const file = v.getFile?.()?.path;
-      return file ? { type: v.viewType, file, pinned: leaf.pinned, ...companion } : null;
+      return file ? { type: v.viewType, file, ...(v.viewType === "markdown" ? { state: v.getState?.() } : {}), pinned: leaf.pinned, ...companion } : null;
     }
     // A `DeferredView` needs no special case: it impersonates its persisted
     // type and returns its persisted state/title/icon, so a leaf that is still
@@ -3727,6 +3727,7 @@ export class Workspace extends Events {
       if (file) {
         const view = this.app.createMarkdownView();
         await view.setFile(file);
+        view.restoreEditorState(ls.state);
         await leaf.setView(view);
       } else {
         await leaf.setView(this.app.createEmptyView());
