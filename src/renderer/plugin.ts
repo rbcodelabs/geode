@@ -25,6 +25,70 @@ export interface PluginCommand {
   editorCheckCallback?: (checking: boolean, editor: EditorView, context: MarkdownView) => boolean | void;
 }
 
+/** Trailing debounce for data.json writes; bursts inside this window cost one stringify and one write. */
+export const DATA_SAVE_DEBOUNCE_MS = 1_000;
+/** Serialized payloads larger than this are written compact; smaller ones stay human-readable. */
+export const DATA_PRETTY_MAX_BYTES = 256 * 1024;
+
+interface DataSaveState {
+  plugin: Plugin; data: unknown; pending: boolean;
+  timer?: ReturnType<typeof setTimeout>; inFlight?: Promise<void>;
+  waiters: Array<{ resolve: () => void; reject: (error: unknown) => void }>;
+  /** Text this plugin instance last wrote; ignored for other instances, whose view of the disk may differ (reload, vault switch). */
+  lastWritten?: { by: Plugin; text: string };
+}
+const dataSaves = new Map<string, DataSaveState>();
+let unloadHookInstalled = false;
+
+function scheduleDataSave(path: string, plugin: Plugin, data: unknown): Promise<void> {
+  installUnloadHook();
+  let state = dataSaves.get(path);
+  if (!state) { state = { plugin, data, pending: false, waiters: [] }; dataSaves.set(path, state); }
+  state.plugin = plugin; state.data = data; state.pending = true;
+  const target = state;
+  const done = new Promise<void>((resolve, reject) => target.waiters.push({ resolve, reject }));
+  armDataSave(path, target);
+  return done;
+}
+
+function armDataSave(path: string, state: DataSaveState): void {
+  state.timer ??= setTimeout(() => { state.timer = undefined; void flushDataSave(path); }, DATA_SAVE_DEBOUNCE_MS);
+}
+
+function serializeData(data: unknown): string | undefined {
+  const compact = JSON.stringify(data);
+  if (compact === undefined || compact.length > DATA_PRETTY_MAX_BYTES) return compact;
+  return JSON.stringify(data, null, 2);
+}
+
+function flushDataSave(path: string): Promise<void> {
+  const state = dataSaves.get(path);
+  if (!state) return Promise.resolve();
+  if (state.timer) { clearTimeout(state.timer); state.timer = undefined; }
+  // One write in flight per file: the newest snapshot goes out once it settles.
+  if (state.inFlight) return state.inFlight.then(() => flushDataSave(path), () => flushDataSave(path));
+  if (!state.pending) return Promise.resolve();
+  const waiters = state.waiters, data = state.data, plugin = state.plugin;
+  state.waiters = []; state.pending = false;
+  let text: string | undefined;
+  try { text = serializeData(data); } catch (error) { for (const w of waiters) w.reject(error); return Promise.resolve(); }
+  if (text === undefined || (state.lastWritten?.by === plugin && text === state.lastWritten.text)) { for (const w of waiters) w.resolve(); return Promise.resolve(); }
+  const payload = text;
+  const work = window.geode.write(path, payload).then(
+    () => { state.lastWritten = { by: plugin, text: payload }; notifyThreadsDataSaved(plugin, data); for (const w of waiters) w.resolve(); },
+    (error) => { for (const w of waiters) w.reject(error); },
+  ).finally(() => { state.inFlight = undefined; if (state.pending) armDataSave(path, state); });
+  state.inFlight = work;
+  return work;
+}
+
+/** Best effort: start every pending write when the window goes away (the IPC may still be cut short). */
+function installUnloadHook(): void {
+  if (unloadHookInstalled || typeof window === "undefined" || typeof window.addEventListener !== "function") return;
+  unloadHookInstalled = true;
+  window.addEventListener("beforeunload", () => { for (const path of [...dataSaves.keys()]) void flushDataSave(path).catch(() => {}); });
+}
+
 export type PluginErrorHandler = (boundary: string, error: unknown) => void | Promise<void>;
 
 /**
@@ -87,6 +151,8 @@ export abstract class Plugin extends Component {
   async unloadAndWait(): Promise<void> {
     this.hostGeneration = "inactive";
     this.unload();
+    // Flush after unload() so a final save issued from onunload() is included; failures reach saveData() callers.
+    await this.flushData().catch(() => {});
     while (this.pendingTeardowns.size) {
       const results = await Promise.allSettled([...this.pendingTeardowns]);
       const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -289,6 +355,8 @@ export abstract class Plugin extends Component {
   /** Load this plugin's persisted settings (`<plugin dir>/data.json`), or null if none saved yet. */
   async loadData(): Promise<any> {
     try {
+      // Read-your-writes: a debounced save must reach disk before we read it back.
+      await flushDataSave(this.dataPath()).catch(() => {});
       const raw = await window.geode.read(this.dataPath());
       return JSON.parse(raw);
     } catch {
@@ -296,11 +364,17 @@ export abstract class Plugin extends Component {
     }
   }
 
-  /** Persist this plugin's settings to `<plugin dir>/data.json`. */
-  async saveData(data: unknown): Promise<void> {
-    await window.geode.write(this.dataPath(), JSON.stringify(data, null, 2));
-    notifyThreadsDataSaved(this, data);
+  /**
+   * Persist this plugin's settings to `<plugin dir>/data.json`. Writes are coalesced per file: the latest
+   * value wins, the payload is serialized once when the trailing debounce fires (never per call), and the
+   * returned promise settles when a snapshot at least as new as `data` is durably written.
+   */
+  saveData(data: unknown): Promise<void> {
+    return scheduleDataSave(this.dataPath(), this, data);
   }
+
+  /** @internal Persist any debounced data.json write now. */
+  flushData(): Promise<void> { return flushDataSave(this.dataPath()); }
 
   /** Called once when the plugin is enabled (including on app startup, if already enabled). Register everything here. */
   onload(): void | Promise<void> {}

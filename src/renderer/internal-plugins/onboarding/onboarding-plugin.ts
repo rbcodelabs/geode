@@ -201,7 +201,10 @@ export class OnboardingPlugin extends GeodePlugin {
     this.refreshChain = this.refreshChain.then(async () => {
       if (this.disposed) return;
       try {
-        const next = await applyChecks(this.state, this.registry.list(), new Date());
+        const base = this.state;
+        const next = await applyChecks(base, this.registry.list(), new Date());
+        // A user action may have replaced the state while the checks ran; never overwrite it with a stale result.
+        if (this.state !== base) { this.emit(); return; }
         // Auto-detected completions are kept in memory. They are written only
         // once the checklist is actually open (or with the next user-driven
         // change), so background startup/refresh never touches the vault.

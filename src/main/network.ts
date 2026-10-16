@@ -1,20 +1,82 @@
+import { nextDelay } from "../shared/backoff";
 import type { HostHttpRequest, HostHttpResponse } from "../shared/network";
 
 const MAX_BYTES = 100 * 1024 * 1024;
 
+export interface SenderRequestsOptions {
+  /** Concurrent fetches per sender; the rest wait in a FIFO queue. */
+  maxActive?: number;
+  /** Requests allowed to wait per sender before new ones are rejected. */
+  maxQueued?: number;
+  /** Consecutive transport failures to one origin before it fails fast. */
+  circuitThreshold?: number;
+  now?: () => number;
+  random?: () => number;
+}
+
+const CIRCUIT_BACKOFF = { baseMs: 1_000, maxMs: 30_000, jitter: "equal" } as const;
+const TRANSPORT_FAILURE = "Network request failed";
+
+interface Entry { id: string; request: HostHttpRequest; controller: AbortController; started: boolean; resolve: (r: HostHttpResponse) => void; reject: (e: unknown) => void }
+interface OwnerState { entries: Map<string, Entry>; queue: Entry[]; active: number }
+interface Circuit { failures: number; openUntil: number }
+
 export class SenderRequests {
-  private readonly owners = new Map<number, Map<string, AbortController>>();
-  constructor(private readonly transport = requestOverHttp) {}
-  async run(owner: number, id: string, request: HostHttpRequest): Promise<HostHttpResponse> {
-    if (typeof id !== "string" || id.length > 128 || !id) throw new Error("Invalid request identity");
-    const owned = this.owners.get(owner) ?? new Map<string, AbortController>(); this.owners.set(owner, owned);
-    if (owned.has(id) || owned.size >= 32) throw new Error("Too many active requests");
-    const controller = new AbortController(); owned.set(id, controller);
-    try { return await this.transport(request, controller.signal); }
-    finally { owned.delete(id); if (!owned.size && this.owners.get(owner) === owned) this.owners.delete(owner); }
+  private readonly owners = new Map<number, OwnerState>();
+  private readonly circuits = new Map<string, Circuit>();
+  private readonly maxActive: number; private readonly maxQueued: number; private readonly threshold: number;
+  private readonly now: () => number; private readonly random: () => number;
+  constructor(private readonly transport = requestOverHttp, options: SenderRequestsOptions = {}) {
+    this.maxActive = options.maxActive ?? 6; this.maxQueued = options.maxQueued ?? 256; this.threshold = options.circuitThreshold ?? 3;
+    this.now = options.now ?? Date.now; this.random = options.random ?? Math.random;
   }
-  cancel(owner: number, id: string): void { this.owners.get(owner)?.get(id)?.abort(); }
-  cancelOwner(owner: number): void { for (const controller of this.owners.get(owner)?.values() ?? []) controller.abort(); this.owners.delete(owner); }
+  run(owner: number, id: string, request: HostHttpRequest): Promise<HostHttpResponse> {
+    if (typeof id !== "string" || id.length > 128 || !id) return Promise.reject(new Error("Invalid request identity"));
+    const state = this.owners.get(owner) ?? { entries: new Map<string, Entry>(), queue: [] as Entry[], active: 0 }; this.owners.set(owner, state);
+    if (state.entries.has(id)) return Promise.reject(new Error("Too many active requests"));
+    if (state.active >= this.maxActive && state.queue.length >= this.maxQueued) return Promise.reject(new Error("Request queue is full"));
+    return new Promise<HostHttpResponse>((resolve, reject) => {
+      const entry: Entry = { id, request, controller: new AbortController(), started: false, resolve, reject };
+      state.entries.set(id, entry); state.queue.push(entry); this.pump(owner, state);
+    });
+  }
+  private pump(owner: number, state: OwnerState): void {
+    while (state.active < this.maxActive && state.queue.length) {
+      const entry = state.queue.shift()!; entry.started = true; state.active++;
+      void this.execute(entry).then(entry.resolve, entry.reject).finally(() => {
+        state.active--; state.entries.delete(entry.id);
+        if (!state.entries.size && this.owners.get(owner) === state) this.owners.delete(owner); else this.pump(owner, state);
+      });
+    }
+  }
+  private async execute(entry: Entry): Promise<HostHttpResponse> {
+    if (entry.controller.signal.aborted) throw new DOMException("Request cancelled", "AbortError");
+    let origin: string | undefined; try { origin = new URL(entry.request.url).origin; } catch { /* the transport reports invalid URLs */ }
+    const circuit = origin ? this.circuits.get(origin) : undefined;
+    if (circuit && this.now() < circuit.openUntil) throw new Error(TRANSPORT_FAILURE);
+    try {
+      const response = await this.transport(entry.request, entry.controller.signal);
+      if (origin) this.circuits.delete(origin);
+      return response;
+    } catch (error) {
+      // Only transport-level failures trip the circuit; aborts, validation and size errors say nothing about the origin.
+      if (origin && error instanceof Error && error.name !== "AbortError" && error.message === TRANSPORT_FAILURE) {
+        const failures = (circuit?.failures ?? 0) + 1;
+        const openUntil = failures >= this.threshold ? this.now() + nextDelay(failures - this.threshold, { ...CIRCUIT_BACKOFF, random: this.random }) : 0;
+        this.circuits.set(origin, { failures, openUntil });
+      }
+      throw error;
+    }
+  }
+  cancel(owner: number, id: string): void { const state = this.owners.get(owner); const entry = state?.entries.get(id); if (state && entry) this.abort(state, entry); }
+  cancelOwner(owner: number): void { const state = this.owners.get(owner); if (state) for (const entry of [...state.entries.values()]) this.abort(state, entry); }
+  private abort(state: OwnerState, entry: Entry): void {
+    entry.controller.abort();
+    if (entry.started) return;
+    // Never started: settle now and drop it so it cannot fetch.
+    state.queue.splice(state.queue.indexOf(entry), 1); state.entries.delete(entry.id);
+    entry.reject(new DOMException("Request cancelled", "AbortError"));
+  }
 }
 
 export async function requestOverHttp(request: HostHttpRequest, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<HostHttpResponse> {
