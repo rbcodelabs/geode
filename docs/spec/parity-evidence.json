@@ -2663,14 +2663,14 @@
     "evidence": [
       "tests/e2e/file-editor-menu-events.spec.ts"
     ],
-    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. Also now observed firing from the tab-header right-click menu (source \"tab-header\") and the view-header \"more options\" \u22ee button (source \"more-options\"), both passing the optional fourth leaf argument; a tab with no file (e.g. Graph) still shows its built-in menu without firing the event. Remaining gap: Geode has no link/embed context menu at all yet, so the event is not fired from that Obsidian source."
+    "notes": "Observed firing on File Explorer right-click for both files and folders, passing the real TAbstractFile (a TFile, or a TFolder as Obsidian does rather than a separate folder-menu event) and the \"file-explorer-context-menu\" source, with plugin items rendering after the built-ins in the same menu and behind an automatic separator. Fires on a non-markdown file too, where a built-in is withheld but the plugin still receives the TFile. Also now observed firing from the tab-header right-click menu (source \"tab-header\") and the view-header \"more options\" ⋮ button (source \"more-options\"), both passing the optional fourth leaf argument; a tab with no file (e.g. Graph) still shows its built-in menu without firing the event. Remaining gap: Geode has no link/embed context menu at all yet, so the event is not fired from that Obsidian source."
   },
   "DEV-407dfa8627cb": {
     "status": "partial",
     "evidence": [
       "tests/e2e/file-editor-menu-events.spec.ts"
     ],
-    "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror\u2019s EditorView standing in for Obsidian\u2019s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
+    "notes": "Observed firing on every editor right-click, including when neither built-in applies, so a plugin can contribute the only item; plugin items append after the built-in Add comment and Bookmark this heading entries when those apply, the menu is suppressed entirely when nothing is added, and Escape dismisses it like any other menu. The second argument is CodeMirror’s EditorView standing in for Obsidian’s Editor wrapper, which Geode does not implement yet, so plugins reading editor methods rather than info.file will not find parity."
   },
   "DEV-bc37c2dcd147": {
     "status": "partial",
@@ -4530,26 +4530,28 @@
       "docs/spec/parity-api-audit-2026-10.md",
       "tests/unit/parity-metadata-audit.test.ts",
       "tests/unit/metadata-cache.test.ts",
-      "tests/unit/list-items.test.ts"
+      "tests/unit/list-items.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
+    "notes": "All 13 direct properties assessed individually: 3 verified, 10 partial, 0 missing in this source package. Initial audit was 4 verified, 16 partial, 8 missing across 28 rows; current bounded implementation is 6 verified, 22 partial, 0 missing. Container coverage never implies full member completeness."
   },
   "DEV-dcfb7373660e": {
-    "status": "missing",
+    "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
+    "notes": "Paragraph/list block IDs now populate the public record with source spans. Standalone IDs and other block forms remain unverified; bounded snapshot diagnostics retain uncertainty."
   },
   "DEV-f2bc8acb44a7": {
     "status": "partial",
     "evidence": [
-      "tests/unit/metadata-cache.test.ts",
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
+    "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
   },
   "DEV-ec1772bb1c78": {
     "status": "verified",
@@ -4560,12 +4562,13 @@
     "notes": "The audit observes a named reference ID, exact source position, exclusion of inline code and definition lines, and absence when none exist."
   },
   "DEV-eb5b4bb19c0b": {
-    "status": "missing",
+    "status": "verified",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
+    "notes": "Footnote definition IDs, exact multiline spans, code exclusion and absent arrays are tested through the shared portable renderer/metadata scanner."
   },
   "DEV-65524af420d7": {
     "status": "verified",
@@ -4576,20 +4579,22 @@
     "notes": "YAML scalar/array properties, aliases, malformed YAML, and absent frontmatter are directly asserted. This does not verify frontmatterLinks or frontmatterPosition."
   },
   "DEV-fbca18774e8b": {
-    "status": "missing",
+    "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
+    "notes": "Quoted and sequence property wikilinks expose key/link/original fields separately from body arrays. Actual YAML scalar spans support shared graph projection. YAML aliases and full property syntax remain unverified."
   },
   "DEV-2cd025271555": {
-    "status": "missing",
+    "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
+    "notes": "Parsed mapping frontmatter exposes its actual source span, including CRLF input. Empty/BOM/nonmapping frontmatter parity remains unverified."
   },
   "DEV-cbd02c61c60b": {
     "status": "partial",
@@ -4602,28 +4607,29 @@
   "DEV-3361879302ea": {
     "status": "partial",
     "evidence": [
-      "tests/unit/metadata-cache.test.ts",
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
+    "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
   },
   "DEV-1c9adcc843f7": {
     "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "tests/unit/list-items.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
+    "notes": "Roots now share the documented negative first-item line; line-zero -0/JSON0 ambiguity is explicit and real bookmark/SDK consumers are tested. Multiline positions and actual third-party Tasks hierarchy behavior remain unverified."
   },
   "DEV-7869f2fc38c9": {
     "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
+    "notes": "Full, collapsed, shortcut and image reference uses now carry definition destinations with case-insensitive lookup and spans. Nested bracket labels remain unsupported and the broader reference grammar is not fully verified."
   },
   "DEV-2fee06feccfa": {
     "status": "partial",
@@ -4647,26 +4653,28 @@
       "docs/spec/parity-api-audit-2026-10.md",
       "tests/unit/parity-metadata-audit.test.ts",
       "tests/unit/metadata-cache.test.ts",
-      "tests/unit/list-items.test.ts"
+      "tests/unit/list-items.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
+    "notes": "All 13 direct properties assessed individually: 3 verified, 10 partial, 0 missing in this source package. Initial audit was 4 verified, 16 partial, 8 missing across 28 rows; current bounded implementation is 6 verified, 22 partial, 0 missing. Container coverage never implies full member completeness."
   },
   "API-MEMBER-5044a80b7bec": {
-    "status": "missing",
+    "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
+    "notes": "Paragraph/list block IDs now populate the public record with source spans. Standalone IDs and other block forms remain unverified; bounded snapshot diagnostics retain uncertainty."
   },
   "API-MEMBER-ec995522ee54": {
     "status": "partial",
     "evidence": [
-      "tests/unit/metadata-cache.test.ts",
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
+    "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
   },
   "API-MEMBER-307c0cc6c879": {
     "status": "verified",
@@ -4677,12 +4685,13 @@
     "notes": "The audit observes a named reference ID, exact source position, exclusion of inline code and definition lines, and absence when none exist."
   },
   "API-MEMBER-b814d289442c": {
-    "status": "missing",
+    "status": "verified",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
+    "notes": "Footnote definition IDs, exact multiline spans, code exclusion and absent arrays are tested through the shared portable renderer/metadata scanner."
   },
   "API-MEMBER-c8c975fa15b1": {
     "status": "verified",
@@ -4693,20 +4702,22 @@
     "notes": "YAML scalar/array properties, aliases, malformed YAML, and absent frontmatter are directly asserted. This does not verify frontmatterLinks or frontmatterPosition."
   },
   "API-MEMBER-37a62532185d": {
-    "status": "missing",
+    "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
+    "notes": "Quoted and sequence property wikilinks expose key/link/original fields separately from body arrays. Actual YAML scalar spans support shared graph projection. YAML aliases and full property syntax remain unverified."
   },
   "API-MEMBER-1de2fffa3b60": {
-    "status": "missing",
+    "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
+    "notes": "Parsed mapping frontmatter exposes its actual source span, including CRLF input. Empty/BOM/nonmapping frontmatter parity remains unverified."
   },
   "API-MEMBER-3e675579d038": {
     "status": "partial",
@@ -4719,28 +4730,29 @@
   "API-MEMBER-938987404f45": {
     "status": "partial",
     "evidence": [
-      "tests/unit/metadata-cache.test.ts",
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
+    "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
   },
   "API-MEMBER-a316e0e6cf63": {
     "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "tests/unit/list-items.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
+    "notes": "Roots now share the documented negative first-item line; line-zero -0/JSON0 ambiguity is explicit and real bookmark/SDK consumers are tested. Multiline positions and actual third-party Tasks hierarchy behavior remain unverified."
   },
   "API-MEMBER-b2bcab4c7b0b": {
     "status": "partial",
     "evidence": [
       "tests/unit/parity-metadata-audit.test.ts",
-      "docs/spec/parity-api-audit-2026-10.md"
+      "tests/unit/metadata-parity-extraction.test.ts",
+      "docs/design/metadata-parity-implementation.md"
     ],
-    "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
+    "notes": "Full, collapsed, shortcut and image reference uses now carry definition destinations with case-insensitive lookup and spans. Nested bracket labels remain unsupported and the broader reference grammar is not fully verified."
   },
   "API-MEMBER-c6e74ea52a82": {
     "status": "partial",

@@ -129,7 +129,7 @@ describe("bounded metadata readers", () => {
     try {
       const a = { ...entry, metadata: { ...entry.metadata, frontmatter: { text: "x".repeat(130000) } } };
       const b = { ...entry, metadata: { ...entry.metadata, frontmatter: { text: "" } } };
-      const envelope = { schemaVersion: 1, sequence: 0, entries: { 'A空".md': a, "B.md": b }, examined: 50, omitted: { corrupt: 50, oversized: 50 }, done: false };
+      const envelope = { schemaVersion: 2, sequence: 0, entries: { 'A空".md': a, "B.md": b }, examined: 50, omitted: { corrupt: 50, oversized: 50 }, done: false };
       const remaining = 256 * 1024 - Buffer.byteLength(JSON.stringify(envelope));
       for (const extra of [0, 1]) {
         b.metadata.frontmatter.text = "x".repeat(remaining + extra);

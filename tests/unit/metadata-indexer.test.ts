@@ -41,7 +41,7 @@ describe("metadata utility-process indexer", () => {
   describe("chunkMetadataSnapshot", () => {
     it("serializes a snapshot as ordered byte- and entry-bounded chunks", () => {
       const snapshot: PersistedMetadataIndexSnapshot = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         entries: Object.fromEntries(Array.from({ length: 7 }, (_, index) => [
           `Note ${index}.md`,
           { mtimeMs: index, size: 80, metadata, mentionKeys: [`w:note${index}`.repeat(4)] },
@@ -49,7 +49,7 @@ describe("metadata utility-process indexer", () => {
       };
 
       const messages = chunkMetadataSnapshot(snapshot, { maxBytes: 600, maxEntries: 2 });
-      expect(messages[0]).toEqual({ type: "snapshot-start", schemaVersion: 1, totalEntries: 7 });
+      expect(messages[0]).toEqual({ type: "snapshot-start", schemaVersion: 2, totalEntries: 7 });
       expect(messages.at(-1)).toEqual(expect.objectContaining({ type: "snapshot-complete" }));
       const chunks = messages.slice(1, -1);
       expect(chunks.length).toBeGreaterThan(1);
@@ -64,7 +64,7 @@ describe("metadata utility-process indexer", () => {
 
     it("omits an individual entry too large to fit in any chunk, without dropping the rest", () => {
       const snapshot: PersistedMetadataIndexSnapshot = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         entries: {
           "small.md": { mtimeMs: 1, size: 4, metadata },
           "huge.md": { mtimeMs: 2, size: 4, metadata: { ...metadata, aliases: Array(500).fill("x".repeat(50)) } },
@@ -117,7 +117,7 @@ describe("metadata utility-process indexer", () => {
   describe("isPersistedMetadataIndexSnapshot", () => {
     it("accepts a well-formed content-less persisted snapshot", () => {
       const snapshot: PersistedMetadataIndexSnapshot = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         entries: { "a.md": { mtimeMs: 1, size: 4, metadata } },
       };
       expect(isPersistedMetadataIndexSnapshot(snapshot)).toBe(true);
@@ -125,26 +125,26 @@ describe("metadata utility-process indexer", () => {
 
     it("accepts an entry that carries mentionKeys", () => {
       const snapshot: PersistedMetadataIndexSnapshot = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         entries: { "a.md": { mtimeMs: 1, size: 4, metadata, mentionKeys: ["w:a"] } },
       };
       expect(isPersistedMetadataIndexSnapshot(snapshot)).toBe(true);
     });
 
     it("rejects the wrong schemaVersion", () => {
-      expect(isPersistedMetadataIndexSnapshot({ schemaVersion: 2, entries: {} })).toBe(false);
+      expect(isPersistedMetadataIndexSnapshot({ schemaVersion: 999, entries: {} })).toBe(false);
     });
 
     it("rejects an entry with missing/malformed metadata fields", () => {
       expect(isPersistedMetadataIndexSnapshot({
-        schemaVersion: 1,
+        schemaVersion: 2,
         entries: { "a.md": { mtimeMs: 1, size: 4, metadata: { links: [], embeds: [], tags: [], headings: [] } } },
       })).toBe(false);
     });
 
     it("rejects a non-array mentionKeys", () => {
       expect(isPersistedMetadataIndexSnapshot({
-        schemaVersion: 1,
+        schemaVersion: 2,
         entries: { "a.md": { mtimeMs: 1, size: 4, metadata, mentionKeys: "not-an-array" } },
       })).toBe(false);
     });

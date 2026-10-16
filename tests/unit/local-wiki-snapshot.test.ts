@@ -85,7 +85,6 @@ describe("strict snapshot resolution", () => {
 describe("parser coverage and detached queries", () => {
   it.each([
     ["crlf-headings", "# Heading\r\n", "Heading"],
-    ["tilde-fence-references", "~~~\n[[Target]]\n~~~", "Missing"],
     ["frontmatter-malformed", "---\na: [\n---\n", "Missing"],
     ["frontmatter-unterminated", "---\na: yes\n", "Missing"],
     ["frontmatter-nonmapping", "---\n- yes\n---\n", "Missing"],
@@ -95,11 +94,18 @@ describe("parser coverage and detached queries", () => {
     expect(s.resolve("Target.md", `#${heading}`)).toMatchObject({ subpath: { status: "unknown" } });
   });
 
-  it("marks unsupported Markdown links without changing raw search coverage", () => {
-    const s = createWikiSnapshot([note("Target.md", "[inline](Other.md) [ref][id]\n[id]: Other.md")]);
-    expect(s.info.diagnostics).toContainEqual(expect.objectContaining({ code: "markdown-links-unsupported" }));
+  it("excludes tilde-fenced references and headings while retaining outside content", () => {
+    const s = createWikiSnapshot([note("Source.md", "~~~\n# Hidden\n[[Target]]\n~~~\n# Real\n[[Visible]]")]);
+    expect(s.outgoing("Source.md").references.map(reference => reference.link)).toEqual(["Visible"]);
+    expect(s.resolve("Source.md", "#Hidden").subpath.status).toBe("missing");
+    expect(s.resolve("Source.md", "#Real").subpath.status).toBe("found");
+    expect(s.info.diagnostics).not.toContainEqual(expect.objectContaining({ code: "tilde-fence-references" }));
+  });
+  it("discloses bounded Markdown links without claiming a complete graph", () => {
+    const s = createWikiSnapshot([note("Target.md", "[inline](Other.md) [ref][id]\n\n[id]: Other.md")]);
+    expect(s.info.diagnostics).toContainEqual(expect.objectContaining({ code: "markdown-links-bounded" }));
     expect(s.search("Other")).toMatchObject({ complete: true, hits: [{ path: "Target.md" }] });
-    expect(s.outgoing("Target.md").references).toEqual([]);
+    expect(s.outgoing("Target.md").references.map(reference => reference.link)).toEqual(["Other.md", "Other.md"]);
   });
 
   it("detects body scan limits in code units at the exact parser boundary", () => {
@@ -125,15 +131,15 @@ describe("parser coverage and detached queries", () => {
     expect(s.resolve("Source.md", "Good")).toMatchObject({ status: "resolved", path: "Good.md" });
   });
 
-  it("freezes cyclic frontmatter and discloses paragraph-block coverage", () => {
+  it("freezes cyclic frontmatter and resolves extracted paragraph block IDs", () => {
     const s = createWikiSnapshot([note("Target.md", "---\ncycle: &cycle\n  self: *cycle\n---\nparagraph ^para")]);
     const result = s.readNote("Target.md");
     if (result.status !== "ok") throw Error("expected loaded note");
     const cycle = result.note.metadata!.frontmatter!.cycle as Record<string, unknown>;
     expect(cycle.self).toBe(cycle);
     expect(() => { cycle.changed = true; }).toThrow();
-    expect(s.resolve("Target.md", "#^para")).toMatchObject({ subpath: { status: "unknown" } });
-    expect(s.info.diagnostics).toContainEqual({ code: "paragraph-block-ids-unsupported", path: "Target.md" });
+    expect(s.resolve("Target.md", "#^para")).toMatchObject({ subpath: { status: "found" } });
+    expect(s.info.diagnostics).not.toContainEqual({ code: "paragraph-block-ids-unsupported", path: "Target.md" });
   });
 
   it("keeps YAML Set/Map mutations on returned metadata detached from the snapshot", () => {

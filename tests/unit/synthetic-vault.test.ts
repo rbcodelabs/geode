@@ -126,7 +126,8 @@ describe("synthetic vault generator", () => {
         expect(note).toEqual(syntheticNote(100, options));
         expect(note.content).not.toBe(syntheticNote(100, { ...options, seed: 2 }).content);
         const metadata = parseMetadata(note.content);
-        expect(metadata.links.length + metadata.embeds.length).toBe(96);
+        expect(metadata.links.length + metadata.embeds.length).toBe(97);
+        expect(note.references.filter(reference => reference.syntax === "markdown")).toEqual([{ link: notePath(101), target: notePath(101), embed: false, syntax: "markdown" }]);
         expect(metadata.aliases).toContain("Shared alias 3");
         expect(metadata.headings.length).toBeGreaterThan(0);
         expect(metadata.listItems?.some(item => item.id === "anchor")).toBe(true);
@@ -141,6 +142,7 @@ describe("synthetic vault generator", () => {
         expect(a).toEqual(b);
         expect(a.stats.notes).toBe(20);
         expect(a.stats.wikiReferences).toBe(20 * 24);
+        expect(a.stats.markdownLinks).toBe(20);
         expect(a.digest).toMatch(/^[a-f0-9]{64}$/);
         await expect(generateSyntheticVault(join(p, "a"), { notes: 20 })).rejects.toThrow();
         expect(JSON.parse(await readFile(join(p, "a", "synthetic-manifest.json"), "utf8"))).toEqual(a);

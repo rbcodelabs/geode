@@ -1,4 +1,4 @@
-import { buildLineStarts, offsetToLoc, maskCode, parseMetadata } from "../wiki/metadata";
+import { buildLineStarts, offsetToLoc, maskCode, parseMetadata, metadataReferences, isExternalReference } from "../wiki/metadata";
 export { buildLineStarts, offsetToLoc, parseMetadata } from "../wiki/metadata";
 import { resolveFirstLinkpathDest } from "../wiki/link-resolution";
 import { Events } from "./events";
@@ -15,6 +15,7 @@ import {
   splitExt,
 } from "./types";
 import {
+  METADATA_INDEX_SCHEMA_VERSION,
   DEFAULT_METADATA_SCAN_CAP_BYTES,
   isPersistedMetadataIndexSnapshot,
   METADATA_SNAPSHOT_CHUNK_MAX_BYTES,
@@ -48,7 +49,7 @@ function yieldToEventLoop(): Promise<void> {
  * queues extra requests behind the same 4 threadpool slots while making
  * each batch's synchronous-parse jank window bigger. */
 export const INDEX_CONCURRENCY = 16;
-export const METADATA_CACHE_SCHEMA_VERSION = 1;
+export const METADATA_CACHE_SCHEMA_VERSION = METADATA_INDEX_SCHEMA_VERSION;
 
 function toLinkRecord(counts: Map<string, number>): Record<string, number> {
   const record: Record<string, number> = Object.create(null);
@@ -1456,7 +1457,8 @@ export class MetadataCache extends Events {
       const canvasSource = isCanvasPath(path);
       const resolved = new Map<string, number>();
       const unresolved = new Map<string, number>();
-      for (const link of [...meta.links, ...meta.embeds]) {
+      for (const link of metadataReferences(meta)) {
+        if (isExternalReference(link.link)) continue;
         const dest = this.getFirstLinkpathDest(link.link, path);
         if (dest) {
           if (canvasSource && dest.extension !== "md") continue;
@@ -1509,7 +1511,8 @@ export class MetadataCache extends Events {
       const resolved = new Map<string, number>();
       const unresolved = new Map<string, number>();
       const canvasSource = isCanvasPath(path);
-      for (const link of [...meta.links, ...meta.embeds]) {
+      for (const link of metadataReferences(meta)) {
+        if (isExternalReference(link.link)) continue;
         const dest = this.getFirstLinkpathDest(link.link, path);
         if (dest) {
           if (canvasSource && dest.extension !== "md") continue;
@@ -1594,7 +1597,8 @@ export class MetadataCache extends Events {
         }
       }
       const snippets: string[] = [];
-      for (const link of [...(meta?.links ?? []), ...(meta?.embeds ?? [])]) {
+      for (const link of meta ? metadataReferences(meta) : []) {
+        if (isExternalReference(link.link)) continue;
         if (this.getFirstLinkpathDest(link.link, src)?.path !== file.path) continue;
         const lineText = lines[link.position.start.line]?.trim();
         if (lineText) snippets.push(lineText);

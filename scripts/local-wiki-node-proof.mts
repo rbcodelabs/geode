@@ -46,10 +46,11 @@ try {
   const reopened = await openLocalWikiSnapshot(directory);
   assert.equal(reopened.status, "ok");
   if (reopened.status !== "ok") throw Error("Expected reopened snapshot");
-  for (const code of ["frontmatter-malformed", "crlf-headings", "markdown-links-unsupported", "tilde-fence-references"]) {
+  for (const code of ["frontmatter-malformed", "crlf-headings", "markdown-links-bounded"]) {
     assert.ok(reopened.snapshot.info.diagnostics.some(d => d.code === code));
   }
   assert.equal(reopened.snapshot.resolve("Broken.md", "#CRLF").subpath.status, "unknown");
+  assert.equal(reopened.snapshot.outgoing("Broken.md").references.length, 1);
   console.log(JSON.stringify({ nodeOnly: true, files: 5, queryOperations: 7, duplicateCandidates: 2, snapshotDetached: true, diagnostics: true }));
 } finally {
   await rm(directory, { recursive: true, force: true });

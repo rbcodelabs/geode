@@ -38,9 +38,9 @@
       "api-member": 1014
     },
     "byStatus": {
-      "verified": 335,
-      "partial": 140,
-      "missing": 62,
+      "verified": 337,
+      "partial": 146,
+      "missing": 54,
       "intentionally-equivalent": 5,
       "blocked": 79,
       "unknown": 2242
@@ -5934,9 +5934,10 @@
         "docs/spec/parity-api-audit-2026-10.md",
         "tests/unit/parity-metadata-audit.test.ts",
         "tests/unit/metadata-cache.test.ts",
-        "tests/unit/list-items.test.ts"
+        "tests/unit/list-items.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
+      "notes": "All 13 direct properties assessed individually: 3 verified, 10 partial, 0 missing in this source package. Initial audit was 4 verified, 16 partial, 8 missing across 28 rows; current bounded implementation is 6 verified, 22 partial, 0 missing. Container coverage never implies full member completeness."
     },
     {
       "id": "DEV-dcfb7373660e",
@@ -5946,12 +5947,13 @@
       "title": "blocks",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/blocks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/blocks.md",
-      "status": "missing",
+      "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
+      "notes": "Paragraph/list block IDs now populate the public record with source spans. Standalone IDs and other block forms remain unverified; bounded snapshot diagnostics retain uncertainty."
     },
     {
       "id": "DEV-f2bc8acb44a7",
@@ -5963,11 +5965,11 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/embeds.md",
       "status": "partial",
       "evidence": [
-        "tests/unit/metadata-cache.test.ts",
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
+      "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
     },
     {
       "id": "DEV-ec1772bb1c78",
@@ -5992,12 +5994,13 @@
       "title": "footnotes",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/footnotes.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/footnotes.md",
-      "status": "missing",
+      "status": "verified",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
+      "notes": "Footnote definition IDs, exact multiline spans, code exclusion and absent arrays are tested through the shared portable renderer/metadata scanner."
     },
     {
       "id": "DEV-65524af420d7",
@@ -6022,12 +6025,13 @@
       "title": "frontmatterLinks",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/frontmatterLinks.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/frontmatterLinks.md",
-      "status": "missing",
+      "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
+      "notes": "Quoted and sequence property wikilinks expose key/link/original fields separately from body arrays. Actual YAML scalar spans support shared graph projection. YAML aliases and full property syntax remain unverified."
     },
     {
       "id": "DEV-2cd025271555",
@@ -6037,12 +6041,13 @@
       "title": "frontmatterPosition",
       "sourcePath": "obsidian-developer-docs/en/Reference/TypeScript API/CachedMetadata/frontmatterPosition.md",
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/frontmatterPosition.md",
-      "status": "missing",
+      "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
+      "notes": "Parsed mapping frontmatter exposes its actual source span, including CRLF input. Empty/BOM/nonmapping frontmatter parity remains unverified."
     },
     {
       "id": "DEV-cbd02c61c60b",
@@ -6069,11 +6074,11 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-developer-docs/blob/master/en/Reference/TypeScript%20API/CachedMetadata/links.md",
       "status": "partial",
       "evidence": [
-        "tests/unit/metadata-cache.test.ts",
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
+      "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
     },
     {
       "id": "DEV-1c9adcc843f7",
@@ -6086,10 +6091,10 @@
       "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "tests/unit/list-items.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
+      "notes": "Roots now share the documented negative first-item line; line-zero -0/JSON0 ambiguity is explicit and real bookmark/SDK consumers are tested. Multiline positions and actual third-party Tasks hierarchy behavior remain unverified."
     },
     {
       "id": "DEV-7869f2fc38c9",
@@ -6102,9 +6107,10 @@
       "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
+      "notes": "Full, collapsed, shortcut and image reference uses now carry definition destinations with case-insensitive lookup and spans. Nested bracket labels remain unsupported and the broader reference grammar is not fully verified."
     },
     {
       "id": "DEV-2fee06feccfa",
@@ -18991,9 +18997,10 @@
         "docs/spec/parity-api-audit-2026-10.md",
         "tests/unit/parity-metadata-audit.test.ts",
         "tests/unit/metadata-cache.test.ts",
-        "tests/unit/list-items.test.ts"
+        "tests/unit/list-items.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "All 13 direct properties assessed individually. Two are verified, seven partial and four missing; page/declaration coverage does not imply member completeness."
+      "notes": "All 13 direct properties assessed individually: 3 verified, 10 partial, 0 missing in this source package. Initial audit was 4 verified, 16 partial, 8 missing across 28 rows; current bounded implementation is 6 verified, 22 partial, 0 missing. Container coverage never implies full member completeness."
     },
     {
       "id": "API-6a68cea124f8",
@@ -23607,12 +23614,13 @@
       "title": "CachedMetadata.blocks",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "missing",
+      "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The pinned blocks record is absent, even for a paragraph with an explicit block ID."
+      "notes": "Paragraph/list block IDs now populate the public record with source spans. Standalone IDs and other block forms remain unverified; bounded snapshot diagnostics retain uncertainty."
     },
     {
       "id": "API-MEMBER-ec995522ee54",
@@ -23624,11 +23632,11 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "partial",
       "evidence": [
-        "tests/unit/metadata-cache.test.ts",
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki embeds are observed, including link targets and positions; Markdown image syntax is absent. The expected-failure diagnostic asserts the desired Markdown embed contract."
+      "notes": "Wiki and authored Markdown images, source ordering, code/comment exclusion and exact spans are tested. Reference images are supported; nested bracket labels remain a reproduced unsupported grammar case. Nested images inside authored links are omitted by the current projection; linked-image embed completeness remains partial."
     },
     {
       "id": "API-MEMBER-307c0cc6c879",
@@ -23653,12 +23661,13 @@
       "title": "CachedMetadata.footnotes",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "missing",
+      "status": "verified",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The public footnotes definition array is absent. Rendering footnotes elsewhere does not provide this cache contract."
+      "notes": "Footnote definition IDs, exact multiline spans, code exclusion and absent arrays are tested through the shared portable renderer/metadata scanner."
     },
     {
       "id": "API-MEMBER-c8c975fa15b1",
@@ -23683,12 +23692,13 @@
       "title": "CachedMetadata.frontmatterLinks",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "missing",
+      "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The public frontmatterLinks array is absent for a quoted wikilink property."
+      "notes": "Quoted and sequence property wikilinks expose key/link/original fields separately from body arrays. Actual YAML scalar spans support shared graph projection. YAML aliases and full property syntax remain unverified."
     },
     {
       "id": "API-MEMBER-1de2fffa3b60",
@@ -23698,12 +23708,13 @@
       "title": "CachedMetadata.frontmatterPosition",
       "sourcePath": "obsidian-api/obsidian.d.ts",
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
-      "status": "missing",
+      "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The public frontmatterPosition span is absent; Geode frontmatterEndOffset is a separate internal field."
+      "notes": "Parsed mapping frontmatter exposes its actual source span, including CRLF input. Empty/BOM/nonmapping frontmatter parity remains unverified."
     },
     {
       "id": "API-MEMBER-3e675579d038",
@@ -23730,11 +23741,11 @@
       "sourceLink": "https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts",
       "status": "partial",
       "evidence": [
-        "tests/unit/metadata-cache.test.ts",
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Wiki link targets, aliases and positions are observed, but the pinned API also explicitly includes Markdown links. The expected-failure diagnostic proves that syntax is absent."
+      "notes": "Wiki and authored Markdown destinations, escaped/nested parentheses, titles, encoded paths, source order and offsets are tested. A nested bracket label diagnostic remains expected-failing; complete Markdown grammar is not claimed. Escaped closing brackets in authored labels can truncate displayText although the destination resolves; exact label semantics remain partial."
     },
     {
       "id": "API-MEMBER-a316e0e6cf63",
@@ -23747,10 +23758,10 @@
       "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "tests/unit/list-items.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "Ordered/unordered/task items, nesting, positions, block IDs and exclusion are observed. Root parents violate the pinned ListItemCache.parent grouping contract: roots in one list should share the negative first-item line, but currently use different negative per-item values. The expected-failure diagnostic asserts the desired grouping contract."
+      "notes": "Roots now share the documented negative first-item line; line-zero -0/JSON0 ambiguity is explicit and real bookmark/SDK consumers are tested. Multiline positions and actual third-party Tasks hierarchy behavior remain unverified."
     },
     {
       "id": "API-MEMBER-b2bcab4c7b0b",
@@ -23763,9 +23774,10 @@
       "status": "partial",
       "evidence": [
         "tests/unit/parity-metadata-audit.test.ts",
-        "docs/spec/parity-api-audit-2026-10.md"
+        "tests/unit/metadata-parity-extraction.test.ts",
+        "docs/design/metadata-parity-implementation.md"
       ],
-      "notes": "The current full/collapsed reference array stores display labels, but pinned ReferenceLinkCache.link requires destination URLs. The documented shortcut example is also absent. Expected-failure diagnostics assert both desired contracts; the existing array shape alone is incomplete."
+      "notes": "Full, collapsed, shortcut and image reference uses now carry definition destinations with case-insensitive lookup and spans. Nested bracket labels remain unsupported and the broader reference grammar is not fully verified."
     },
     {
       "id": "API-MEMBER-c6e74ea52a82",

@@ -38,7 +38,7 @@ node scripts/generate-parity-ledger.mts --check \
   --api-root /path/to/obsidian-api
 ```
 
-## CachedMetadata findings
+## Initial CachedMetadata findings (`0afe4ef` baseline)
 
 The [pinned declaration](https://github.com/obsidianmd/obsidian-api/blob/9abd9605ce081383674aae1ed111c456edde0688/obsidian.d.ts)
 and [developer property inventory](https://github.com/obsidianmd/obsidian-developer-docs/blob/c56c7e770ba25dd0ea392aacf4588f9425970d36/en/Reference/TypeScript%20API/CachedMetadata.md)
@@ -75,6 +75,16 @@ behavior and pass only because the known gap still reproduces. They must lose
 `.fails` when fixed. Their green runner status is not evidence of compatibility;
 they support `missing`/`partial` findings only. Existing `metadata-cache.test.ts`
 and `list-items.test.ts` provide the remaining passing behavior evidence.
+
+## Source implementation follow-up
+
+The stacked metadata package implements the nine reproduced gaps. Its current
+bounded evidence and remaining limits are recorded in
+[metadata-parity-implementation.md](../design/metadata-parity-implementation.md).
+The table above preserves the initial audit snapshot; the generated ledger reads
+the current evidence map. Original expected failures become ordinary regressions
+only when their contracts pass. The implementation adds a separate expected-failing
+nested-label grammar diagnostic.
 
 ## Next audit inventory
 

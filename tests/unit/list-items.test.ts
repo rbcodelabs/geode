@@ -32,14 +32,14 @@ describe("parseMetadata listItems", () => {
     expect(items.map((i) => i.position.start.line)).toEqual([4, 5]);
   });
 
-  it("resolves nesting: a sub-task's parent is its parent item's line; roots are negative", () => {
+  it("resolves nesting: a sub-task's parent is its parent item's line; roots share the negative first-item line", () => {
     const md = "- [ ] parent\n    - [ ] child\n    - [ ] child2\n- [ ] sibling\n";
     const items = parseMetadata(md).listItems!;
     // lines: parent=0, child=1, child2=2, sibling=3
-    expect(items[0].parent).toBeLessThan(0); // root
+    expect(items[0].parent).toBe(-0); // negative first-item line (line zero)
     expect(items[1].parent).toBe(0); // child -> parent line 0
     expect(items[2].parent).toBe(0); // child2 -> parent line 0
-    expect(items[3].parent).toBeLessThan(0); // sibling is a root again
+    expect(items[3].parent).toBe(-0); // same root list group
   });
 
   it("supports ordered-list markers", () => {
