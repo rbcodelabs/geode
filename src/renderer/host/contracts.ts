@@ -30,6 +30,8 @@ export interface HostCapabilities {
   processDiagnostics: boolean;
   chromeCookieImport: boolean;
   artifacts: boolean;
+  /** Geode's iCloud container is reachable through `HostServices.icloudContainer` (Electron on macOS and native iOS). */
+  icloudContainer: boolean;
 }
 
 export interface RuntimeService {
@@ -302,6 +304,8 @@ export interface HostServices {
   readonly syncSafety?: import("../../shared/sync-safety").SyncSafetyService;
   /** Desktop only: main-process store access (directory / ssh hub) for the built-in hub sync provider. */
   readonly hubSync?: import("../../shared/hub-sync").HubSyncBridge;
+  /** Platform bridge to Geode's iCloud container for the core iCloud sync plugin (ADR 0030). Absent where iCloud is unreachable. */
+  readonly icloudContainer?: import("../../shared/icloud-container").IcloudContainerBridge;
   readonly network?: { request(input: import("../../shared/network").HostHttpRequest, signal?: AbortSignal): Promise<import("../../shared/network").HostHttpResponse>; };
   /**
    * Mobile only: bounded https byte fetch for the Supported plugins catalog and

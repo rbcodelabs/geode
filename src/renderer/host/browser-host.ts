@@ -187,6 +187,7 @@ export function createBrowserHost(
       processDiagnostics: false,
       chromeCookieImport: false,
       artifacts: false,
+      icloudContainer: false,
     }),
     runtime: {
       runtime: "browser",

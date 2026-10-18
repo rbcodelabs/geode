@@ -1,7 +1,7 @@
 # ADR-0029: iCloud Drive Sync Provider (Plugin)
 
 **Date:** 2026-10-05
-**Status:** Proposed (implementation merged-ready; live multi-device behavior unverified)
+**Status:** Superseded by [ADR-0030](0030-core-icloud-sync-native-bridge.md). The community plugin described here was never released and was removed; its provider semantics (path ids, `mtime:size:sha256` revisions, `.geode-sync/marker.json`, ops index, `.geode-trash/`, placeholder and conflict-copy handling) live on unchanged in the core iCloud sync plugin, now over Geode's own iCloud container instead of `com~apple~CloudDocs/Geode`. Live multi-device behavior remains unverified.
 
 ## Context
 

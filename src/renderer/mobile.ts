@@ -1,6 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { createBrowserHost, createBrowserHostState } from "./host/browser-host";
 import { createCapacitorHost, GeodeManagedVault } from "./host/capacitor-host";
+import { GeodeIcloudContainer } from "./host/capacitor-icloud-container";
 import { createLegacyGeodeFacade } from "./host/legacy-facade";
 import { installHostServices } from "./host/registry";
 import { VaultAccessError } from "./host/contracts";
@@ -148,7 +149,7 @@ const browserHost = createBrowserHost(state, {
     return { status: mobileTest.reconcileStatus, entries };
   },
 });
-const nativeHost = Capacitor.isNativePlatform() ? createCapacitorHost(GeodeManagedVault, browserHost) : browserHost;
+const nativeHost = Capacitor.isNativePlatform() ? createCapacitorHost(GeodeManagedVault, browserHost, { icloudContainer: GeodeIcloudContainer }) : browserHost;
 // Native iOS: per-file sync history, the reconcile manifest and the metadata cache overflow the 5 MB localStorage
 // snapshot the browser host uses. Without IndexedDB the durable stores fall back to the snapshot for small values.
 const supportedPluginTransport = createMobileArtifactTransport();

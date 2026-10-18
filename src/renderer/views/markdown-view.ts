@@ -1,3 +1,4 @@
+import { nativeBackgroundVisibility, type BackgroundVisibility } from "../workspaces/background-visibility";
 import { SourceOwnedNavigation } from "../markdown/source-owned-navigation";
 import { nativeRenderOwnership, ScopeCancelled, RenderScope, type RenderToken } from "../workspaces/render-ownership";
 import { Compartment, EditorSelection, EditorState, Prec } from "@codemirror/state";
@@ -30,6 +31,7 @@ import { commentDecorations, commentInteractions } from "../comments/editor-exte
 import { CommentFormatError, narrowCommentRange, parseCommentThreads, validateCommentRange } from "../comments/model";
 import { geodeCommentMarkerSyntax } from "../comments/marker-syntax";
 import { imageAttachmentHandlers } from "../markdown/attachment-handlers";
+import { inspectProperties } from "../properties/property-source";
 import { SyncConflictBannerSlot, type SyncConflictBannerInfo } from "../sync/conflict-banner";
 
 const mdHighlight = HighlightStyle.define([
@@ -52,6 +54,10 @@ const mdHighlight = HighlightStyle.define([
 ]);
 
 export type MarkdownMode = "live" | "source" | "reading";
+interface ReadingRefreshRequest {
+  file: TFile | null; editor: EditorView | null; vault: App["vault"];
+  root: string; mode: MarkdownMode; generation: number; snapshot: string;
+}
 interface RecoveryReceipt {
   vault: App["vault"];
   root: string;
@@ -90,6 +96,7 @@ export class MarkdownView implements View {
   private bodyEl: HTMLElement;
   private readingEl: HTMLElement;
   private readingContentEl: HTMLElement | null = null;
+  private readingRenderGeneration = 0;
   private editorHostEl: HTMLElement;
   private saveTimer: number | null = null;
   private lastSavedText = "";
@@ -120,12 +127,15 @@ export class MarkdownView implements View {
   private refreshScheduled = false;
   private refreshPending = false;
   private readingRefreshInFlight: Promise<void> | null = null;
+  private readingRefreshRequest: ReadingRefreshRequest | null = null;
   private retiredProjectionPending = false;
   readonly renderOwner: RenderScope;
   readonly sourceNavigation: SourceOwnedNavigation;
+  readonly backgroundVisibility: BackgroundVisibility;
   constructor(private app: App, parentOwner?: RenderScope) {
     const options = { writer: this, preflightClose: () => this.assertNativeCloseReady(), prepareClose: () => this.prepareCloseNative(), validateClose: () => this.validateRecoveryReceipt(), failureKey: "markdown-save", close: () => this.closeNative(), resume: () => this.resumeOwnedRendering() };
     this.renderOwner = parentOwner ? parentOwner.child(options) : nativeRenderOwnership(app).create(this, options);
+    this.backgroundVisibility = nativeBackgroundVisibility(app, this, () => [this.transitionGeneration, this.editor, this.mode, this.getText()]);
     this.sourceNavigation = new SourceOwnedNavigation({
       capture: () => {
         const leaf = this.ownLeaf(), file = this.file, editor = this.editor, mode = this.mode;
@@ -387,7 +397,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
+            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
             : []
         ),
         autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
@@ -839,14 +849,17 @@ export class MarkdownView implements View {
   }
 
   /** Internal sidebar mutation seam; all edits use the normal editor undo/autosave. */
-  canApplySourceEdit(): boolean {
-    return !!this.editor && !this.vaultSwitching && !this.conflictReadOnly && this.mode !== "reading";
+  canApplySourceEdit(options: { allowReading?: boolean } = {}): boolean {
+    return !!this.editor && !this.vaultSwitching && !this.autosavePaused && !this.transitionClosing &&
+      !this.bodyEl?.inert && (!this.renderOwner || this.renderOwner.admissionAllowed) &&
+      !this.conflictReadOnly && (this.mode !== "reading" || options.allowReading === true);
   }
 
-  applySourceEdit(snapshot: string, from: number, to: number, insert: string): boolean {
-    if (!this.canApplySourceEdit() || !this.editor || this.getText() !== snapshot ||
+  applySourceEdit(snapshot: string, from: number, to: number, insert: string, options: { allowReading?: boolean } = {}): boolean {
+    if (!this.canApplySourceEdit(options) || !this.editor || this.getText() !== snapshot ||
         from < 0 || to < from || to > snapshot.length) return false;
     this.editor.dispatch({ changes: { from, to, insert }, annotations: isolateHistory.of("full") });
+    if (this.mode === "reading") void this.renderReading().catch(() => this.app.notify("Could not refresh Reading view."));
     return true;
   }
 
@@ -891,7 +904,7 @@ export class MarkdownView implements View {
   }
 
   private editingExtensions(mode: MarkdownMode) {
-    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
+    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
   }
 
   private changeMode(desired: MarkdownMode): Promise<void> {
@@ -920,10 +933,30 @@ export class MarkdownView implements View {
   }
 
   private renderReading(): Promise<void> {
+    const request: ReadingRefreshRequest = { file: this.file, editor: this.editor, vault: this.app.vault, root: this.app.vault.root, mode: this.mode, generation: this.transitionGeneration, snapshot: this.getText() };
+    this.readingRefreshRequest = request;
     if (this.readingRefreshInFlight) return this.readingRefreshInFlight;
-    const operation = this.replaceProjections(async () => () => this.renderReadingNative());
+    const current = (value: ReadingRefreshRequest) => this.file === value.file && this.editor === value.editor && this.app.vault === value.vault && this.app.vault.root === value.root && this.mode === value.mode && this.transitionGeneration === value.generation && !this.transitionClosing;
+    const advances = (previous: ReadingRefreshRequest, next: ReadingRefreshRequest | null): next is ReadingRefreshRequest => !!next && next !== previous && next.file === previous.file && next.editor === previous.editor && next.vault === previous.vault && next.root === previous.root && next.mode === previous.mode && next.generation === previous.generation && current(next) && this.getText() === next.snapshot && this.canApplySourceEdit({ allowReading: true });
+    const drain = async () => {
+      let active = request;
+      // Each advance consumes a newer request; native or I/O failures never retry.
+      if (advances(active, this.readingRefreshRequest)) active = this.readingRefreshRequest;
+      for (;;) {
+        if (!current(active) || this.getText() !== active.snapshot) throw new ScopeCancelled();
+        try {
+          await this.replaceProjections(async () => () => this.renderReadingNative());
+          return;
+        } catch (error) {
+          const next = this.readingRefreshRequest;
+          if (!(error instanceof ScopeCancelled) || !advances(active, next) || next.snapshot === active.snapshot) throw error;
+          active = next;
+        }
+      }
+    };
+    const operation = Promise.resolve().then(drain);
     this.readingRefreshInFlight = operation;
-    void operation.then(() => { this.readingRefreshInFlight = null; }, () => { this.readingRefreshInFlight = null; this.refreshPending = true; });
+    void operation.then(() => { this.readingRefreshInFlight = null; this.readingRefreshRequest = null; }, () => { this.readingRefreshInFlight = null; this.readingRefreshRequest = null; this.refreshPending = true; });
     return operation;
   }
 
@@ -940,17 +973,35 @@ export class MarkdownView implements View {
   }
 
   private async renderReadingNative(token?: RenderToken) {
-    this.pagePreview.hide(); token?.check();
+    const generation = ++this.readingRenderGeneration;
+    const file = this.file;
+    const editor = this.editor;
+    const vault = this.app.vault;
+    const vaultRoot = vault.root;
+    const current = () => generation === this.readingRenderGeneration && this.file === file && this.editor === editor && this.app.vault === vault && vault.root === vaultRoot && this.mode === "reading";
+    this.pagePreview.hide();
+    token?.check();
+    if (!current()) return;
+    const snapshot = this.getText();
+
     if (this.readingContentEl) this.app.markdownRenderer.dispose(this.readingContentEl);
-    this.readingContentEl = null; this.readingEl.innerHTML = "";
+    this.readingContentEl = null;
+    this.readingEl.innerHTML = "";
     this.readingProjection = this.renderOwner?.child({}) ?? null;
-    const inner = document.createElement("div"); inner.className = "markdown-preview-sizer"; this.readingEl.appendChild(inner);
-    if (this.file) {
-      const props = this.app.metadataCache.getFileCache(this.file)?.frontmatter;
-      if (props && Object.keys(props).length) inner.appendChild(renderProperties(props));
+    const inner = document.createElement("div");
+    inner.className = "markdown-preview-sizer";
+    this.readingEl.appendChild(inner);
+    const inspection = inspectProperties(snapshot);
+    if (inspection.ok && Object.keys(inspection.values).length) inner.appendChild(renderProperties(inspection.values));
+    const contentEl = document.createElement("div");
+    this.readingContentEl = contentEl;
+    inner.appendChild(contentEl);
+    await this.app.markdownRenderer.render(snapshot, contentEl, file?.path ?? "", () => this.ownLeaf(), this.readingProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility);
+    if (!current() && this.readingContentEl === contentEl) {
+      this.app.markdownRenderer.dispose(contentEl);
+      contentEl.remove();
+      this.readingContentEl = null;
     }
-    const contentEl = document.createElement("div"); this.readingContentEl = contentEl; inner.appendChild(contentEl);
-    await this.app.markdownRenderer.render(this.getText(), contentEl, this.file?.path ?? "", () => this.ownLeaf(), this.readingProjection ?? undefined, this.sourceNavigation);
   }
 
   /** Public-compatible adapter; native callers await the internal promise. */
@@ -1055,6 +1106,7 @@ export class MarkdownView implements View {
    * becomes visible, which is the earliest point real geometry exists.
    */
   onReveal(): void {
+    this.backgroundVisibility?.reveal();
     this.editor?.requestMeasure();
   }
 
@@ -1111,6 +1163,7 @@ export class MarkdownView implements View {
   private async prepareCloseNative(): Promise<void> { await this.flushNative(); }
 
   private async closeNative(): Promise<void> {
+    this.backgroundVisibility?.reveal();
     this.pagePreview.destroy();
     this.clearSyncConflict();
     this.vaultSwitching = true;

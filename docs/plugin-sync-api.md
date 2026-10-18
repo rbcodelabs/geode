@@ -32,7 +32,7 @@ Creates receive a durable `operationKey` and must be idempotent for it. Updates,
 
 For this contract, Geode rejects providers lacking binary payloads, conditional writes, an authoritative snapshot/delta mechanism, or recoverable trash. `maxFileSize`, when present, is checked before bytes are read. The optional discriminator is `protocol: "conditional-mutation-v1"`; omitting it preserves existing provider compatibility.
 
-A filesystem-backed reference implementation of this contract is the iCloud Drive plugin in `packages/geode-icloud-sync` ([ADR 0029](adr/0029-icloud-drive-sync-provider-plugin.md)).
+A reference implementation of this contract is the core iCloud sync provider in `src/renderer/internal-plugins/icloud-sync/` ([ADR 0030](adr/0030-core-icloud-sync-native-bridge.md), which superseded the earlier community plugin of [ADR 0029](adr/0029-icloud-drive-sync-provider-plugin.md)). It is written once against a platform bridge (`src/shared/icloud-container.ts`) and is a worked example of every `conditional-mutation-v1` rule above: idempotent creates keyed by `operationKey`, revision-checked update/move/trash, recoverable trash, complete snapshots that fail closed, and `maxFileSize` checks before bytes are read. Core plugins register it through the same `registerSyncProvider` API a community plugin would use.
 
 ## Append-only history provider contract
 
@@ -87,6 +87,8 @@ Frozen transfer bytes, per-operation intents/receipts, and recovery preimages re
 ## Conditional-provider conflict and deletion policy
 
 Both-changed and remote precondition failures preserve the local original and materialize remote bytes as a timestamped `.sync-conflict-*` sibling. Edit-versus-delete is a conflict. Geode never silently merges. Local and remote deletions use trash only; permanent purge is outside this contract.
+
+Plugins can inspect and settle append-only (history) conflicts without Settings: `listConflicts()` returns them with an empty `conflictPath` and an id of `JSON.stringify([entityId, heads])`. The optional `describeHistoryConflict(entityId)`, `readHistoryConflictText(entityId, choice)` and `resolveHistoryConflict({ entityId, heads, choice })` (`choice` is `{ kind: "current" }` or `{ kind: "version", recordId }`) expose each head's record ID, device, size and deleted flag, the text of one side, and an explicit resolution. Resolution parents are exactly the supplied heads, so an unseen branch stays conflicted. These are absent for conditional providers. A plugin should show the user the proposed choice before calling resolve.
 
 Settings lists persisted conflicts with **Keep local** and **Accept remote** actions. Keep local sends the current local version (or preserves its deletion); Accept remote restores the remote version (or moves a remotely deleted local file to trash). A newer remote revision requires another sync before resolution. Remote copies remain available for manual recovery after resolution, and `.sync-conflict-<timestamp>` names are reserved and excluded from sync.
 

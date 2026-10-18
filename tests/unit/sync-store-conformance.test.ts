@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FsStoreProvider } from "../../src/sync-node/index";
 import { SYNC_MAX_FILE_BYTES, type AppendOnlySyncProvider, type VaultDescriptor } from "../../src/sync-core/history-types";
-import { bytes, childProvider, httpFixture, cleanBundle, inProcessProvider, never, randomBytes, record, rm, sha, tmpStore, type Child } from "../helpers/sync-store-harness";
+import { storedBlobSize, bytes, childProvider, httpFixture, cleanBundle, inProcessProvider, never, randomBytes, record, rm, sha, tmpStore, type Child } from "../helpers/sync-store-harness";
 
 interface Fixture { provider: AppendOnlySyncProvider; store: string; cleanup(): Promise<void> }
 const variants: Array<[string, () => Promise<Fixture>]> = [
@@ -56,7 +56,7 @@ for (const [name, make] of variants) describe(`AppendOnlySession conformance: ${
           expect(ref).toEqual({ id: digest, sha256: digest, size: ab.byteLength });
           expect(await s.putBlob({ operationId: "again", sha256: digest, size: ab.byteLength, data: ab }, never)).toEqual(ref);
           expect(sha(await s.readBlob(ref, never))).toBe(digest);
-          expect(readdirSync(join(fx.store, "blobs")).filter(n => !n.startsWith(".tmp-")).includes(digest)).toBe(true);
+          expect(storedBlobSize(fx.store, digest)).toBe(ab.byteLength);
         }
         await s.close();
       } finally { await teardown(); }

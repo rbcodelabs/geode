@@ -15,6 +15,7 @@ import { withPathLock, withVaultMutation } from "./path-lock";
 import { SenderRequests } from "./network";
 import { applyGuardedMutation } from "./sync-apply";
 import { registerHubSyncIpc } from "./hub-sync-ipc";
+import { registerIcloudContainerIpc } from "./icloud-container-ipc";
 import { SyncPrivateStorage } from "./sync-private-storage";
 import { PrivateKeyStore } from "./private-key-store";
 import { applyPortableMutation } from "./sync-config-apply";
@@ -992,6 +993,7 @@ function registerIpc() {
     syncEditorWaiters.get(`${e.sender.id}:${token}:${phase}`)?.(reason === null ? null : typeof reason === "string" ? reason : "Invalid editor guard response");
   });
   registerHubSyncIpc(ipcMain);
+  registerIcloudContainerIpc(ipcMain);
   ipcMain.handle("sync-owner-claim", async e => {
     const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");

@@ -3,6 +3,7 @@ import WebKit
 
 final class GeodeBridgeViewController: CAPBridgeViewController {
     private let managedVaultPlugin = GeodeManagedVaultPlugin()
+    private let icloudContainerPlugin = GeodeIcloudContainerPlugin()
 
     override func webView(with frame: CGRect, configuration: WKWebViewConfiguration) -> WKWebView {
         let webView = super.webView(with: frame, configuration: configuration)
@@ -45,6 +46,7 @@ final class GeodeBridgeViewController: CAPBridgeViewController {
         managedVaultPlugin.prepareManagedCoreAcceptanceFixtureIfRequested()
 #endif
         bridge?.registerPluginInstance(managedVaultPlugin)
+        bridge?.registerPluginInstance(icloudContainerPlugin)
 #if DEBUG
         installManagedCoreAcceptanceVerifierIfRequested()
 #endif
