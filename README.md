@@ -186,7 +186,18 @@ the [Releases page](https://github.com/rbcodelabs/geode/releases) whenever a
 `v*` tag is pushed. Windows and Linux builds aren't set up yet — see the
 [roadmap](docs/spec/00-overview.md) item for packaging.
 
-### Install/update via script (recommended)
+### Install via Homebrew
+
+```bash
+brew install --cask rbcodelabs/geode/geode
+```
+
+The cask lives in the [rbcodelabs/homebrew-geode](https://github.com/rbcodelabs/homebrew-geode)
+tap and installs the same signed, notarized Apple Silicon build from the
+Releases page. It is bumped automatically after each release. Geode also
+updates itself in-app; `brew upgrade --cask geode` works too.
+
+### Install/update via script
 
 `scripts/geode-update.mts` installs the latest release, or updates an
 existing install, in one command. It talks to the public GitHub API directly
