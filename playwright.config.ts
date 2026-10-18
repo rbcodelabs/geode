@@ -31,4 +31,10 @@ export default defineConfig({
   retries: 1,
   reporter: [["list"]],
   timeout: 45_000,
+  // Additional mitigation only: the specific races behind recent CI flakes were
+  // fixed at their source. Hosted macOS runners have 3 shared vCPUs, and many
+  // assertions wait on real background work (indexing, rendering, IPC) that can
+  // legitimately exceed Playwright's 5 s default there. Per-assertion timeouts
+  // still override this.
+  expect: { timeout: 10_000 },
 });

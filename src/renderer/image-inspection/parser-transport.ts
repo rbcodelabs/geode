@@ -21,7 +21,13 @@ export class ImageParserTransport implements OwnedImageParseTransport {
   private closing?: Promise<void>;
   private resolveClose?: () => void;
   private rejectClose?: (error: Error) => void;
-  constructor(doc: Document = document) {
+  /**
+   * `parseMs` bounds the worker's parse phase. It defaults to the protocol
+   * budget; only the ceiling proof overrides it, because its worst-case
+   * 300k-unit input legitimately takes ~22 s on a healthy macOS CI runner and
+   * must not turn ordinary runner jitter into a spurious deadline failure.
+   */
+  constructor(doc: Document = document, private readonly parseMs: number = PARSE_MS) {
     const body = doc.body;
     if (!body) throw new Error("Image parser document body unavailable.");
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -109,7 +115,7 @@ export class ImageParserTransport implements OwnedImageParseTransport {
       this.finish(cancelled());return;
     }
     if (active.phase === "cancelling") return;
-    if (value.kind === "worker-ready" && active.phase === "starting") { active.phase = "parsing";this.arm(PARSE_MS, "parse");return; }
+    if (value.kind === "worker-ready" && active.phase === "starting") { active.phase = "parsing";this.arm(this.parseMs, "parse");return; }
     if (value.kind === "parsed" && active.phase === "parsing") {
       try { const packed = validatePackedImages(active.source, value.payload);this.finish(undefined, packed); }
       catch { this.fail(new Error("Image parser protocol invalid result.")); }

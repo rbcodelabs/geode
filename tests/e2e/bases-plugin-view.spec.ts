@@ -327,3 +327,54 @@ test("renders a Kanban board grouped by a formula property", async () => {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+/**
+ * Regression for the CI flake behind this suite's Kanban failures: indexing
+ * announces itself with "resolved" (never "changed"), so a base opened while
+ * the metadata cache was still empty kept its first frontmatter-less result
+ * forever. Reproduced deterministically by emptying the cache, opening the
+ * base, and only then completing "indexing".
+ */
+test("a Base opened before indexing finishes re-renders when the metadata cache resolves", async () => {
+  const vaultDir = makeVault();
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-bases-plugin-e2e-ud-"));
+  fs.writeFileSync(
+    path.join(userDataDir, "geode.json"),
+    JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir })
+  );
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+
+  try {
+    const window = await app.firstWindow();
+    await expect(window.locator('.nav-file-title[data-path="Welcome.md"]')).toBeVisible();
+
+    // Present the Board notes as not yet indexed. Overriding the read accessor
+    // (rather than deleting cache rows) cannot be undone by real indexing that
+    // is still landing in the background.
+    await window.evaluate(() => {
+      const cache = (window as any).app.metadataCache;
+      const original = cache.getFileCache.bind(cache);
+      (window as any).__restoreMetadata = () => { cache.getFileCache = original; };
+      cache.getFileCache = (file: { path: string }) => (file.path.startsWith("Board/") ? null : original(file));
+    });
+
+    await window.locator('.nav-file-title[data-path="Formula Board.base"]').click();
+    await expect(window.locator(".obk-card")).toHaveCount(CARDS.length);
+    // Nothing is indexed, so every card falls into the formula's default column.
+    await expect(window.locator('.obk-column[data-column-value="❌ Dismissed"] .obk-card')).toHaveCount(CARDS.length);
+
+    await window.evaluate(() => {
+      (window as any).__restoreMetadata();
+      (window as any).app.metadataCache.trigger("resolved");
+    });
+
+    const wiring = window.locator('.obk-column[data-column-value="🔵 Open"]').locator(".obk-card-title", { hasText: "Wire the registry" });
+    await expect(wiring).toHaveCount(1);
+    await expect(window.locator('.obk-column[data-column-value="❌ Dismissed"] .obk-card')).toHaveCount(2);
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});

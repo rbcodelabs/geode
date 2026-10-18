@@ -2907,6 +2907,8 @@ export class App {
   private vaultSwitchInFlight: Promise<void> | null = null;
   private vaultSwitchTarget: string | null = null;
   private reconcileInFlight: Promise<void> | null = null;
+  /** Set when a refresh is requested while a scan is already running; see reconcileVault. */
+  private reconcileRerunRequested = false;
   private reconcileGeneration = 0;
   private suppressReconcileModify = new Set<string>();
   private externalModifyInFlight = new Map<string, Promise<void>>();
@@ -4030,9 +4032,21 @@ export class App {
       await this.vaultSwitchInFlight;
       return;
     }
-    if (this.reconcileInFlight) return this.reconcileInFlight;
+    if (this.reconcileInFlight) {
+      // The running scan may have listed the vault before the change that
+      // prompted this request (a user pressing Refresh right after a file
+      // appeared), so joining it would report a stale result as if it were
+      // current. Coalesce all such requests into one trailing pass instead.
+      this.reconcileRerunRequested = true;
+      return this.reconcileInFlight;
+    }
     const generation = this.reconcileGeneration;
-    const operation = this.performReconcile(generation);
+    const operation = (async () => {
+      do {
+        this.reconcileRerunRequested = false;
+        await this.performReconcile(generation);
+      } while (this.reconcileRerunRequested && generation === this.reconcileGeneration);
+    })();
     const tracked = operation.finally(() => {
       if (this.reconcileInFlight === tracked) this.reconcileInFlight = null;
     });

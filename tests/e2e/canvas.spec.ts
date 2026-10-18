@@ -97,10 +97,19 @@ test("opens and edits a JSON Canvas from the file explorer", async () => {
     await editor.fill("Revised idea");
     await editor.press("ControlOrMeta+Enter");
     await expect(textNode.locator(".canvas-node-text")).toHaveText("Revised idea");
-    const before = await textNode.boundingBox();
-    await textNode.dragTo(view, { targetPosition: { x: 500, y: 360 } });
-    const moved = await textNode.boundingBox();
-    expect(moved!.x).toBeGreaterThan(before!.x + 100);
+    // The view ignores pointer input while its own save of the edit is still in
+    // flight, so wait for the edit to be durable before starting the gesture.
+    await expect(view).toHaveAttribute("data-canvas-dirty", "false");
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: any) => node.id === "text")?.text).toBe("Revised idea");
+    const before = (await textNode.boundingBox())!;
+    const viewBox = (await view.boundingBox())!;
+    // A real drag emits many pointermoves; dragTo emits one, which is too thin
+    // a signal to assert on under load.
+    await window.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+    await window.mouse.down();
+    await window.mouse.move(viewBox.x + 500, viewBox.y + 360, { steps: 12 });
+    await window.mouse.up();
+    await expect.poll(async () => (await textNode.boundingBox())!.x).toBeGreaterThan(before.x + 100);
 
     const resize = textNode.locator(".canvas-node-resize-handle");
     const handle = (await resize.boundingBox())!;

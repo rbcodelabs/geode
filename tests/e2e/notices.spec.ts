@@ -11,7 +11,6 @@ const MAIN_JS = `
   module.exports.default = class extends Plugin {
     onload() {
       new Notice('plugin persistent', 0);
-      new Notice('plugin timed', 500);
 
       const fragment = document.createDocumentFragment();
       fragment.append('fragment content ');
@@ -22,7 +21,18 @@ const MAIN_JS = `
       new Notice(fragment, 0);
 
       this.app.notify('app persistent', 0);
-      this.app.notify('app timed', 500);
+
+      // The timed notices are emitted on demand, not at load: a 500 ms notice
+      // created at plugin load can expire before a slow CI runner finishes
+      // launching and running the assertions that precede its visibility check.
+      this.addCommand({
+        id: 'emit-timed',
+        name: 'Emit timed notices',
+        callback: () => {
+          new Notice('plugin timed', 500);
+          this.app.notify('app timed', 500);
+        },
+      });
     }
   };
 `;
@@ -58,8 +68,6 @@ test("notices can be dismissed without breaking interactive content and still ti
     await expect(pluginPersistent).toBeVisible();
     await expect(appPersistent).toBeVisible();
     await expect(fragmentNotice).toBeVisible();
-    await expect(window.locator(".notice", { hasText: "plugin timed" })).toBeVisible();
-    await expect(window.locator(".notice", { hasText: "app timed" })).toBeVisible();
 
     const pluginClose = pluginPersistent.getByRole("button", { name: "Dismiss notification" });
     await expect(pluginClose).toBeVisible();
@@ -76,6 +84,21 @@ test("notices can be dismissed without breaking interactive content and still ti
 
     await appPersistent.getByRole("button", { name: "Dismiss notification" }).click();
     await expect(appPersistent).toHaveCount(0);
+
+    // Emit the timed notices and observe them inside the page in the same task
+    // sequence. Checking from the test process would race the 500 ms timeout
+    // against Playwright round-trips, which are slow on a loaded runner.
+    const shownWhileLive = await window.evaluate(async () => {
+      const app = (window as any).app;
+      const present = (text: string) => [...document.querySelectorAll(".notice")].some((el) => el.textContent?.includes(text));
+      app.commands.executeCommandById("notices-probe:emit-timed");
+      const deadline = performance.now() + 400;
+      while (performance.now() < deadline && !(present("plugin timed") && present("app timed"))) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      return { plugin: present("plugin timed"), app: present("app timed") };
+    });
+    expect(shownWhileLive).toEqual({ plugin: true, app: true });
 
     await expect(window.locator(".notice", { hasText: "plugin timed" })).toHaveCount(0, { timeout: 5_000 });
     await expect(window.locator(".notice", { hasText: "app timed" })).toHaveCount(0, { timeout: 5_000 });

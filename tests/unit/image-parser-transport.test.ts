@@ -103,3 +103,14 @@ it("refuses a missing document body before allocating channels or frame handlers
  try { expect(()=>new ImageParserTransport({...b.doc,body:null} as unknown as Document)).toThrow(/body|initialization/i);expect(create).not.toHaveBeenCalled();expect(b.frame.contentWindow.postMessage).not.toHaveBeenCalled(); }
  finally {create.mockRestore();}
 });
+it("lets the ceiling proof widen the parse budget without changing the protocol default",async()=>{
+ vi.useFakeTimers();const timer=vi.spyOn(globalThis,"setTimeout");
+ try {
+  const b=browser(),transport=new ImageParserTransport(b.doc,50_000);
+  const parsed=transport.parse(""),failed=expect(parsed).rejects.toThrow(/parse deadline/i);
+  await b.ready();await vi.waitFor(()=>expect(b.messages.some(message=>message.kind==="parse")).toBe(true));
+  b.reply({kind:"worker-ready",request:1});await vi.waitFor(()=>expect(timer.mock.calls.some(call=>call[1]===50000)).toBe(true));
+  await vi.advanceTimersByTimeAsync(30_000);expect(b.frame.removed).toBe(false);
+  await vi.advanceTimersByTimeAsync(20_000);expect(b.frame.removed).toBe(true);await failed;
+ } finally { timer.mockRestore();vi.useRealTimers(); }
+});
