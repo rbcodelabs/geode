@@ -180,3 +180,42 @@ test("restores the artifact root and responsive viewport after relaunch", async 
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test("fill viewport sizes the artifact frame to the pane", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "geode-artifact-fill-e2e-"));
+  const userDataDir = path.join(temp, "user-data");
+  const artifactRoot = path.join(temp, "artifact");
+  const vaultPath = path.join(temp, "vault");
+  fs.mkdirSync(userDataDir);
+  fs.mkdirSync(artifactRoot);
+  fs.mkdirSync(vaultPath);
+  fs.writeFileSync(path.join(vaultPath, "Welcome.md"), "# Welcome\n");
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultPath], lastVault: vaultPath }));
+  fs.writeFileSync(path.join(artifactRoot, "artifact.json"), JSON.stringify({
+    schemaVersion: 1, id: "fill-proof", title: "Fill proof", entry: "index.html",
+    runtime: "static", createdByThreadId: "thread-fill", viewport: { preset: "fill", width: 1440, height: 900 },
+    permissions: { network: "none", clipboard: false },
+  }));
+  fs.writeFileSync(path.join(artifactRoot, "index.html"), "<!doctype html><h1>picker</h1>");
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.waitForFunction(() => (window as any).app?.workspace?.layoutReady);
+    await window.evaluate((root) => (window as any).app.openArtifact(root), artifactRoot);
+    const frame = window.locator(".artifact-view-frame");
+    await expect(frame).toBeVisible();
+    await expect(window.locator(".artifact-view")).toHaveClass(/is-fill/);
+    const sizes = await window.evaluate(() => {
+      const f = document.querySelector(".artifact-view-frame")!.getBoundingClientRect();
+      const s = document.querySelector(".artifact-view-stage")!.getBoundingClientRect();
+      return { fw: f.width, fh: f.height, sw: s.width, sh: s.height };
+    });
+    expect(sizes.fw).toBeCloseTo(sizes.sw, 0);
+    expect(sizes.fh).toBeCloseTo(sizes.sh, 0);
+    await window.locator('[data-viewport="mobile"]').click();
+    await expect(frame).toHaveCSS("width", "390px");
+  } finally {
+    await app.close();
+  }
+});

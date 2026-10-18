@@ -17,6 +17,11 @@ describe("parseArtifactManifest", () => {
     expect(parseArtifactManifest(validManifest)).toEqual({ ok: true, manifest: validManifest });
   });
 
+  it("accepts the fill viewport preset", () => {
+    const manifest = { ...validManifest, viewport: { preset: "fill", width: 1440, height: 900 } };
+    expect(parseArtifactManifest(manifest)).toEqual({ ok: true, manifest });
+  });
+
   it.each(["../index.html", "/tmp/index.html", "C:\\tmp\\index.html", "screens//index.html", "./index.html"])(
     "rejects non-portable or escaping entry %s",
     (entry) => {
