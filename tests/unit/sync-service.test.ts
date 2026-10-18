@@ -309,14 +309,15 @@ it("clears stale blocked/excluded details when the append-only provider unloads"
   expect(service.isAppendOnly()).toBe(false);
 });
 
-it("summarizes blocked files into a short status message while keeping the full per-file list on details", () => {
+it("keeps the full per-file blocked list on details and out of the status message", () => {
   const service = new SyncService({} as never, () => "/synthetic/vault");
   (service as any).selected = { id: "history" };
   const blocked = Array.from({ length: 23 }, (_, index) => ({ namespace: "content", path: `Weird<${index}>.md`, reason: "invalid-resource-name" }));
   const result = { signature: "preview", requiresApproval: false, uploads: 0, downloads: 0, deletions: 0, conflicts: [], blocked, excluded: [], pending: 0, upToDate: false };
   (service as any).summarize(result);
-  expect(service.getStatus().message).toBe("23 file(s) blocked");
-  expect(service.getStatus().message).not.toContain("Weird");
+  // The count is shown on the status card from details.blocked; the status itself stays healthy.
+  expect(service.getStatus().message ?? "").not.toContain("Weird");
+  expect(service.getStatus().state).toBe("idle");
   expect(service.getHistoryDetails()?.blocked).toEqual(blocked);
 });
 
