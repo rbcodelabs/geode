@@ -167,7 +167,40 @@ test("real obsidian-terminal plugin spawns a shell and streams real process I/O"
 
     const suggestInput = window.locator(".prompt-input-container input.prompt-input").first();
     await expect(suggestInput).toBeVisible({ timeout: 5_000 });
+    // Regression: the plugin-API picker emits Obsidian's .suggestion-* /
+    // .prompt-instruction* classes, which Geode must style (unstyled, the rows
+    // stacked as plain text with the instructions glued to the list).
+    const layout = await window.evaluate(() => {
+      const cs = (sel: string) => {
+        const el = document.querySelector(sel);
+        return el ? getComputedStyle(el) : null;
+      };
+      return {
+        itemDisplay: cs(".modal.prompt .suggestion-item")?.display,
+        itemPadding: cs(".modal.prompt .suggestion-item")?.paddingLeft,
+        listOverflow: cs(".modal.prompt .suggestion-container")?.overflowY,
+        instrDisplay: cs(".modal.prompt .prompt-instructions")?.display,
+        instrBorder: cs(".modal.prompt .prompt-instructions")?.borderTopWidth,
+      };
+    });
+    expect(layout).toEqual({
+      itemDisplay: "flex",
+      itemPadding: "12px",
+      listOverflow: "auto",
+      instrDisplay: "flex",
+      instrBorder: "1px",
+    });
     await expect(window.locator(".notice", { hasText: /error|fail/i })).toHaveCount(0);
+    const selectedIdx = () => window.evaluate(() =>
+      Array.from(document.querySelectorAll(".modal.prompt .suggestion-item")).findIndex((e) => e.classList.contains("is-selected")));
+    const itemCount = await window.locator(".modal.prompt .suggestion-item").count();
+    console.log("PICKER items", itemCount, "focused", await window.evaluate(() => document.activeElement?.className));
+    expect(itemCount).toBeGreaterThan(1);
+    expect(await selectedIdx()).toBe(0);
+    await window.keyboard.press("ArrowDown");
+    expect(await selectedIdx()).toBe(1);
+    await window.keyboard.press("ArrowUp");
+    expect(await selectedIdx()).toBe(0);
     const modalScope = await window.evaluateHandle(() => {
       const w = window as any;
       const scopes = w.app.keymap.scopes as unknown[];
