@@ -267,6 +267,8 @@ test("a reload that read the file before a local save cannot overwrite that save
       (window as any).__releaseStaleRead();
       await (window as any).__staleReload;
     });
+    // The in-memory document is what a later save would write back to disk.
+    expect(await window.evaluate(() => (window as any).app.workspace.getActiveLeaf().view.document.nodes[0].x)).toBe(300);
     await expect(view.locator('.canvas-node[data-node-id="text"]')).toHaveCSS("left", "300px");
   } finally {
     await app.close();
