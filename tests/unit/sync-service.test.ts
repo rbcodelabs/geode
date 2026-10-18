@@ -309,14 +309,15 @@ it("clears stale blocked/excluded details when the append-only provider unloads"
   expect(service.isAppendOnly()).toBe(false);
 });
 
-it("summarizes blocked files into a short status message while keeping the full per-file list on details", () => {
+it("keeps the full per-file blocked list on details and out of the status message", () => {
   const service = new SyncService({} as never, () => "/synthetic/vault");
   (service as any).selected = { id: "history" };
   const blocked = Array.from({ length: 23 }, (_, index) => ({ namespace: "content", path: `Weird<${index}>.md`, reason: "invalid-resource-name" }));
   const result = { signature: "preview", requiresApproval: false, uploads: 0, downloads: 0, deletions: 0, conflicts: [], blocked, excluded: [], pending: 0, upToDate: false };
   (service as any).summarize(result);
-  expect(service.getStatus().message).toBe("23 file(s) blocked");
-  expect(service.getStatus().message).not.toContain("Weird");
+  // The count is shown on the status card from details.blocked; the status itself stays healthy.
+  expect(service.getStatus().message ?? "").not.toContain("Weird");
+  expect(service.getStatus().state).toBe("idle");
   expect(service.getHistoryDetails()?.blocked).toEqual(blocked);
 });
 
@@ -524,4 +525,13 @@ it("re-evaluates a cached exclude verdict under a newly-connected provider inste
     expect(service.getHistoryDetails()?.excluded).toEqual([]);
     expect(cacheRows.get("Secret.md")).toEqual({ mtimeMs: 1, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), excludeReason: null, providerId: "provider-b" });
   } finally { await service.cancel(); }
+});
+
+it("blocked files are reported but do not put sync in the error ('Sync stopped') state", () => {
+  const service = new SyncService({} as never, () => "/synthetic/vault");
+  (service as any).selected = { id: "history" };
+  const blocked = [{ namespace: "content", path: "Big.bin", reason: "File exceeds 100 MiB limit" }];
+  (service as any).summarize({ signature: "s", requiresApproval: false, uploads: 0, downloads: 0, deletions: 0, conflicts: [], blocked, excluded: [], pending: 0, upToDate: false });
+  expect((service as any).status.state).toBe("idle");
+  expect(service.getHistoryDetails()?.blocked).toEqual(blocked);
 });

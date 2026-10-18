@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PREVIEW_REQUIRED_MESSAGE } from "../../src/sync-core/history-controller";
 import { SyncService } from "../../src/renderer/sync/sync-service";
 
 let online = true; const listeners = new Map<string, Set<() => void>>();
@@ -23,6 +24,15 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("SyncService retry/backoff", () => {
+  it("an unapproved device waits in preview state instead of retrying forever", async () => {
+    const { service, run } = make(async () => { throw new Error(PREVIEW_REQUIRED_MESSAGE); });
+    service.schedule(0); await vi.advanceTimersByTimeAsync(1);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(service.status.state).toBe("preview");
+    for (let i = 0; i < 10; i++) { service.poll(); await vi.advanceTimersByTimeAsync(60_000); }
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("a poll tick during backoff does not run or reset the backoff timer", async () => {
     const { service, run } = make(async () => { throw new Error("Timed out connecting"); });
     service.schedule(0); await vi.advanceTimersByTimeAsync(1);
@@ -74,5 +84,23 @@ describe("SyncService retry/backoff", () => {
     expect(listeners.get("online")?.size).toBe(1);
     await service.cancel();
     expect(listeners.get("online")?.size ?? 0).toBe(0);
+  });
+});
+
+describe("SyncService slot priority", () => {
+  it("a user action waits for an in-flight comparison instead of failing, and comparisons yield to it", async () => {
+    vi.useRealTimers();
+    const service: any = new SyncService({} as never, () => "/synthetic/vault");
+    service.selected = { id: "history" };
+    let release!: () => void;
+    service.running = new Promise<void>(resolve => { release = () => { service.running = undefined; resolve(); }; });
+    // A user action arrives while a comparison holds the slot: it queues, no error.
+    const userCall = service.waitForSlot(5_000).then(() => "ok");
+    service.userWaiting++;
+    // A silent comparison starting now must step aside rather than steal the slot.
+    await expect(service.withController(async () => 1, true)).rejects.toThrow("Sync already running");
+    release();
+    await expect(userCall).resolves.toBe("ok");
+    expect(service.running).toBeUndefined();
   });
 });

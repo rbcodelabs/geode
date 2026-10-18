@@ -5,7 +5,7 @@ import { SyncCoordinator } from "./coordinator";
 import type { SyncApi, SyncConflict, SyncPreview, SyncProgress, SyncProgressPhase, SyncProvider, SyncRunResult, SyncStatus } from "./types";
 import { SYNC_PROGRESS_THROTTLE_MS } from "./progress";
 import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySyncProvider, type AppendOnlySession, type VaultDescriptor } from "./history-types";
-import { HistoryController, type HistoryComparisonChoice, type HistoryConflictComparison, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
+import { HistoryController, PREVIEW_REQUIRED_MESSAGE, type HistoryComparisonChoice, type HistoryConflictComparison, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope } from "./scope";
 import { projectPortableConfig, serializePortableConfig } from "./portable-config";
 import { buildHistoryPorts, type SyncHostLite } from "../../sync-core/ports";
@@ -62,6 +62,17 @@ export class SyncService extends Events implements SyncApi {
   private appendSetupReady = false;
   private closing = false;
   private cancellations = 0;
+  /** User-initiated operations waiting for the single owner slot; read-only comparisons yield while this is non-zero. */
+  private userWaiting = 0;
+  private async waitForSlot(timeoutMs: number) {
+    const deadline = Date.now() + timeoutMs;
+    while (this.running && Date.now() < deadline) {
+      const current = this.running;
+      await current.catch(() => {});
+      // The slot is released in a finally that first awaits session close; yield so it can clear.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
   /** One-shot overrides for a rail refusal; set by the user, consumed by the next controller attempt, never by the poll. */
   private railOverrides?: SyncRailOverrides;
   private railRefusal?: SyncRailError;
@@ -271,6 +282,12 @@ export class SyncService extends Events implements SyncApi {
   }
   /** @param silent read-only work that must not publish its failure as global sync status. */
   private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal, rails?: RailContext) => Promise<T>, silent = false): Promise<T> {
+    // User actions (Preview, Confirm, Resolve, background-poll run) queue for the slot instead of failing, and read-only comparisons
+    // step aside for them: the Sync tab describes every conflict back to back, and without priority a click could never get in.
+    if (!silent) {
+      this.userWaiting++;
+      try { await this.waitForSlot(60_000); } finally { this.userWaiting--; }
+    } else if (this.userWaiting) throw new Error("Sync already running or disconnecting");
     if (this.running || this.closing || this.cancellations) throw new Error("Sync already running or disconnecting");
     const provider = this.selected; if (!provider) throw new Error("Select a provider");
     // One-shot: taken here so a failed attempt cannot leave an override armed for the unattended poll.
@@ -330,11 +347,14 @@ export class SyncService extends Events implements SyncApi {
     // The blocked-file list is easy to miss on a phone layout; keep it in the device log so it can be read from a connected Mac.
     if (value.blocked.length) console.log("[sync] blocked:", JSON.stringify(value.blocked.slice(0, 50)));
     const outstanding = value.uploads + value.downloads + value.deletions;
-    const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length;
+    // upToDate is false whenever any file is blocked, so blocked files must be excluded here or they would read as an integrity failure.
+    const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length && !value.blocked.length;
     // Per-file detail (path + reason for each blocked item) lives on `details.blocked`,
     // reachable via getHistoryDetails() — the message here stays a short summary so it
     // never turns into an unreadable semicolon-joined sentence for dozens of files.
-    this.setStatus({ state: value.blocked.length || value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: value.blocked.length ? `${value.blocked.length} file(s) blocked` : value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
+    // Blocked files (unsettled writes, over the size limit, names the hub rejects) are skipped, never published or deleted, and the rest of the
+    // vault still syncs. They are reported as a count on the status card, not as a sync failure ("Sync stopped").
+    this.setStatus({ state: value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
     return { uploads: value.uploads, downloads: value.downloads, deletes: value.deletions, conflicts: value.conflicts.length, skipped: value.excluded.length + value.blocked.length, requiresApproval: value.requiresApproval };
   }
   private async withConditional<T>(action: () => Promise<T>): Promise<T> {
@@ -344,6 +364,7 @@ export class SyncService extends Events implements SyncApi {
   }
   async preview(): Promise<SyncPreview> {
     if (!this.selected) return this.withConditional(() => this.conditional.preview());
+    await this.settled();
     const armed = this.railOverrides;
     const raw = await this.withController((controller, signal) => controller.preview(signal));
     const result = this.summarize(raw);
@@ -382,7 +403,7 @@ export class SyncService extends Events implements SyncApi {
     if (!this.selected) return this.conditional.listConflicts();
     return (this.details?.conflicts ?? []).map(conflict => ({ id: JSON.stringify([conflict.entityId, conflict.heads]), path: conflict.path, conflictPath: "", remoteRevision: conflict.heads.join(",") }));
   }
-  async resolveHistoryConflict(resolution: HistoryResolution) { return this.summarize(await this.withController((controller, signal) => controller.resolve(resolution, signal))); }
+  async resolveHistoryConflict(resolution: HistoryResolution) { await this.settled(); return this.summarize(await this.withController((controller, signal) => controller.resolve(resolution, signal))); }
   /**
    * Read-only comparison shares withController's single-owner invariants:
    * this.abort, this.session and this.lease are single-slot fields, so a second
@@ -446,7 +467,11 @@ export class SyncService extends Events implements SyncApi {
       if (!current() || this.closing || this.cancellations) return;
       if (isOffline()) return; // the `online` event reschedules; no ssh spawn or provider call while the network is down
       if (this.running) { this.schedule(); return; }
-      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return; this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.scheduleRetry(); });
+      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return;
+      // An unapproved device cannot run until the user previews and confirms. That is waiting on the user, not a failure: retrying would
+      // hold the single sync slot (ssh open + vault scan) every cycle and make Preview/Confirm fail with "already running".
+      if (error instanceof Error && error.message === PREVIEW_REQUIRED_MESSAGE) { this.setStatus({ state: "preview", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: "Preview this sync, then confirm it to start syncing" }); return; }
+      this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.scheduleRetry(); });
     }, delay);
   }
   async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); this.debouncePending = false; this.unlistenOnline(); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }
