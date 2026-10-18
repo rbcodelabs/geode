@@ -62,6 +62,17 @@ export class SyncService extends Events implements SyncApi {
   private appendSetupReady = false;
   private closing = false;
   private cancellations = 0;
+  /** User-initiated operations waiting for the single owner slot; read-only comparisons yield while this is non-zero. */
+  private userWaiting = 0;
+  private async waitForSlot(timeoutMs: number) {
+    const deadline = Date.now() + timeoutMs;
+    while (this.running && Date.now() < deadline) {
+      const current = this.running;
+      await current.catch(() => {});
+      // The slot is released in a finally that first awaits session close; yield so it can clear.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
   /** One-shot overrides for a rail refusal; set by the user, consumed by the next controller attempt, never by the poll. */
   private railOverrides?: SyncRailOverrides;
   private railRefusal?: SyncRailError;
@@ -271,6 +282,12 @@ export class SyncService extends Events implements SyncApi {
   }
   /** @param silent read-only work that must not publish its failure as global sync status. */
   private async withController<T>(operation: (controller: HistoryController, signal: AbortSignal, rails?: RailContext) => Promise<T>, silent = false): Promise<T> {
+    // User actions (Preview, Confirm, Resolve, background-poll run) queue for the slot instead of failing, and read-only comparisons
+    // step aside for them: the Sync tab describes every conflict back to back, and without priority a click could never get in.
+    if (!silent) {
+      this.userWaiting++;
+      try { await this.waitForSlot(60_000); } finally { this.userWaiting--; }
+    } else if (this.userWaiting) throw new Error("Sync already running or disconnecting");
     if (this.running || this.closing || this.cancellations) throw new Error("Sync already running or disconnecting");
     const provider = this.selected; if (!provider) throw new Error("Select a provider");
     // One-shot: taken here so a failed attempt cannot leave an override armed for the unattended poll.
@@ -334,7 +351,10 @@ export class SyncService extends Events implements SyncApi {
     // Per-file detail (path + reason for each blocked item) lives on `details.blocked`,
     // reachable via getHistoryDetails() — the message here stays a short summary so it
     // never turns into an unreadable semicolon-joined sentence for dozens of files.
-    this.setStatus({ state: value.blocked.length || value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: value.blocked.length ? `${value.blocked.length} file(s) blocked` : value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
+    // A file deferred only because it is still being written ("unsettled", e.g. live Claude logs) is expected and untouched by design; it must
+    // not turn the whole sync into an error, which keeps the background poll scanning the vault.
+    const blockedHard = value.blocked.filter(item => item.reason !== "unsettled");
+    this.setStatus({ state: blockedHard.length || value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: blockedHard.length ? `${blockedHard.length} file(s) blocked` : value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
     return { uploads: value.uploads, downloads: value.downloads, deletes: value.deletions, conflicts: value.conflicts.length, skipped: value.excluded.length + value.blocked.length, requiresApproval: value.requiresApproval };
   }
   private async withConditional<T>(action: () => Promise<T>): Promise<T> {

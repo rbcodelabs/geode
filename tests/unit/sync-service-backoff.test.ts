@@ -86,3 +86,21 @@ describe("SyncService retry/backoff", () => {
     expect(listeners.get("online")?.size ?? 0).toBe(0);
   });
 });
+
+describe("SyncService slot priority", () => {
+  it("a user action waits for an in-flight comparison instead of failing, and comparisons yield to it", async () => {
+    vi.useRealTimers();
+    const service: any = new SyncService({} as never, () => "/synthetic/vault");
+    service.selected = { id: "history" };
+    let release!: () => void;
+    service.running = new Promise<void>(resolve => { release = () => { service.running = undefined; resolve(); }; });
+    // A user action arrives while a comparison holds the slot: it queues, no error.
+    const userCall = service.waitForSlot(5_000).then(() => "ok");
+    service.userWaiting++;
+    // A silent comparison starting now must step aside rather than steal the slot.
+    await expect(service.withController(async () => 1, true)).rejects.toThrow("Sync already running");
+    release();
+    await expect(userCall).resolves.toBe("ok");
+    expect(service.running).toBeUndefined();
+  });
+});
