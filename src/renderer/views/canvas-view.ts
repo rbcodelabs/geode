@@ -440,7 +440,10 @@ export class CanvasView implements View {
     if (cached !== undefined && cached === this.lastKnownText) return;
     const generation = ++this.loadGeneration;
     const text = await this.app.vault.read(file); token?.check();
-    if (generation !== this.loadGeneration || file !== this.file || text === (this.pendingKnownText ?? this.lastKnownText)) return;
+    // `text === lastKnownText` as well as the in-flight write: a read that began
+    // before a local save can resolve while that save is still pending, and
+    // must not be mistaken for an external change.
+    if (generation !== this.loadGeneration || file !== this.file || text === this.pendingKnownText || text === this.lastKnownText) return;
     await this.load(text, resetHistory);
   }
 
@@ -3276,6 +3279,10 @@ export class CanvasView implements View {
     if (text === this.pendingKnownText || (this.pendingKnownText === null && this.matchesLastKnownDocument())) return;
     const prior = this.lastKnownText;
     this.pendingKnownText = text;
+    // Any reload that read the file before this save is now stale: applying it
+    // would put the pre-save document back over the edit (a dragged card
+    // snapping back to where it started).
+    this.loadGeneration += 1;
     this.containerEl.dataset.canvasDirty = "true";
     delete this.containerEl.dataset.canvasSaveError;
     this.setSaveStatus("Saving Canvas…", false, false);
