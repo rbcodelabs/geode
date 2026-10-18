@@ -595,7 +595,10 @@ export abstract class SuggestModal<T> extends Modal {
       const el = document.createElement("div");
       el.className = "suggestion-item" + (i === this.selectedIndex ? " is-selected" : "");
       this.renderSuggestion(item, el);
-      el.addEventListener("mousemove", () => {
+      el.addEventListener("mousemove", (e) => {
+        // Ignore synthetic moves (the list scrolling under a stationary
+        // pointer after an arrow key); they would snap the selection back.
+        if (e.movementX === 0 && e.movementY === 0) return;
         if (this.selectedIndex !== i) {
           this.selectedIndex = i;
           this.renderResults();
