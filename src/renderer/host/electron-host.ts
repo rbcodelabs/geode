@@ -35,6 +35,8 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       request: async (input, signal) => {
         if (!preload.httpRequest) throw new Error("Host networking unavailable");
         if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+        // Offline fast path: skip the IPC round trip and the doomed fetch in main.
+        if (typeof navigator !== "undefined" && navigator.onLine === false) throw new Error("Network request failed");
         const id = crypto.randomUUID();
         const cancel = () => preload.cancelHttpRequest?.(id);
         signal?.addEventListener("abort", cancel, { once: true });

@@ -1,4 +1,5 @@
 import { Events } from "../events";
+import { Backoff } from "../../shared/backoff";
 import type { HostServices } from "../host/contracts";
 import { SyncCoordinator } from "./coordinator";
 import type { SyncApi, SyncConflict, SyncPreview, SyncProgress, SyncProgressPhase, SyncProvider, SyncRunResult, SyncStatus } from "./types";
@@ -13,6 +14,7 @@ import { SyncRailError, deleteLimitRefusal, knownFileCount, shrunkScanRefusal, t
 /** Per-attempt rail context handed to the operation of a provider that opted in with `safetyRails`. */
 interface RailContext { overrides: SyncRailOverrides; stats: { known: number; found: number }; stateKey: string }
 
+const isOffline = () => typeof navigator !== "undefined" && navigator.onLine === false;
 type Provider = SyncProvider | AppendOnlySyncProvider;
 interface BindingState { schema: 1; localRoot: string; providerId?: string; binding?: VaultDescriptor; deviceId: string; scope: SyncScope; paused: boolean; createIntent?: { name: string; operationId: string } }
 const hash = async (data: ArrayBuffer) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", data))].map(value => value.toString(16).padStart(2, "0")).join("");
@@ -37,9 +39,14 @@ export class SyncService extends Events implements SyncApi {
   private generation = 0;
   private debounce?: ReturnType<typeof setTimeout>;
   private polling?: ReturnType<typeof setInterval>;
-  private retryDelay = 2000;
+  /** Retry delays after failed runs: 2s doubling to a 5 minute cap, equal jitter; reset by a completed run. */
+  private backoff = new Backoff({ baseMs: 2000, maxMs: 300_000, jitter: "equal" });
+  /** Wall-clock end of the current backoff window; polls and file events may not run before it. */
+  private backoffUntil = 0;
+  private debouncePending = false;
+  private onlineHandler?: () => void;
   /**
-   * Consecutive runs that ended in failure, sharing `retryDelay`'s exact
+   * Consecutive runs that ended in failure, sharing the backoff's exact
    * lifecycle: both grow in the retry catch and both reset once a run completes.
    * It is deliberately *not* progress state — `endProgress()` runs in
    * `withController`'s finally, so anything kept there dies with each attempt,
@@ -82,7 +89,7 @@ export class SyncService extends Events implements SyncApi {
       const root = this.vaultId(), generation = this.generation;
       void this.restore(provider).catch(error => {
         if (this.providers.get(provider.id) !== provider || root !== this.vaultId() || generation !== this.generation) return;
-        this.setStatus({ state: "error", providerId: provider.id, conflicts: 0, message: error instanceof Error ? error.message : "Reconnect required" }); this.schedule(this.retryDelay);
+        this.setStatus({ state: "error", providerId: provider.id, conflicts: 0, message: error instanceof Error ? error.message : "Reconnect required" }); this.scheduleRetry();
       });
     }
     // Clearing details alongside selected matters beyond bookkeeping: getHistoryDetails()
@@ -177,7 +184,7 @@ export class SyncService extends Events implements SyncApi {
       return controller.preview(signal);
     });
     this.summarize(preview);
-    if (resumed) { this.polling ??= setInterval(() => this.schedule(0), 30_000); if (this.status.state === "pending") this.schedule(0); }
+    if (resumed) { this.polling ??= setInterval(() => this.poll(), 30_000); if (this.status.state === "pending") this.schedule(0); }
   }
   async activate(id: string): Promise<void> {
     const provider = this.providers.get(id); if (!provider) throw new Error("Unknown sync provider");
@@ -368,8 +375,8 @@ export class SyncService extends Events implements SyncApi {
         return controller.run({ ...options, ...(!state.pendingBatch?.length && state.approved ? { beforeExecute: judge } : {}) }, signal);
       }
       return controller.run(options, signal);
-    })); this.retryDelay = 2000; this.failedRuns = 0; this.renameHints.clear(); this.observe();
-    this.polling ??= setInterval(() => this.schedule(0), 30_000); if (this.status.state === "pending") this.schedule(0); return result;
+    })); this.backoff.reset(); this.backoffUntil = 0; this.failedRuns = 0; this.renameHints.clear(); this.observe();
+    this.polling ??= setInterval(() => this.poll(), 30_000); if (this.status.state === "pending") this.schedule(0); return result;
   }
   async listConflicts(): Promise<SyncConflict[]> {
     if (!this.selected) return this.conditional.listConflicts();
@@ -413,17 +420,36 @@ export class SyncService extends Events implements SyncApi {
     const [entityId, heads] = JSON.parse(id); await this.resolveHistoryConflict({ entityId, heads, choice: { kind: "current" } });
   }
   async abandonPending() { return this.summarize(await this.withController((controller, signal) => controller.abandonPending(signal))); }
-  private schedule(delay = 2000) {
+  /** Periodic tick. Never bypasses backoff (schedule() clamps to it) and never spawns work while offline. */
+  private poll() { if (isOffline()) return; this.schedule(0); }
+  private scheduleRetry() { const delay = this.backoff.failure(); this.backoffUntil = Date.now() + delay; this.schedule(delay, true); }
+  private listenOnline() {
+    if (this.onlineHandler || typeof globalThis.addEventListener !== "function") return;
+    this.onlineHandler = () => { this.backoff.reset(); this.backoffUntil = 0; this.schedule(Math.random() * 1000, true); };
+    globalThis.addEventListener("online", this.onlineHandler);
+  }
+  private unlistenOnline() {
+    if (this.onlineHandler && typeof globalThis.removeEventListener === "function") globalThis.removeEventListener("online", this.onlineHandler);
+    this.onlineHandler = undefined;
+  }
+  private schedule(delay = 2000, retry = false) {
     if (!this.selected || this.closing || this.cancellations || this.status.state === "paused" || this.status.state === "preview") return;
+    this.listenOnline();
+    if (!retry) {
+      const remaining = this.backoffUntil - Date.now();
+      if (remaining > 0) { if (this.debouncePending) return; delay = Math.max(delay, remaining); }
+    }
     const provider = this.selected, root = this.vaultId(), generation = this.generation;
     const current = () => this.selected === provider && this.vaultId() === root && this.generation === generation;
-    clearTimeout(this.debounce); this.debounce = setTimeout(() => {
+    clearTimeout(this.debounce); this.debouncePending = true; this.debounce = setTimeout(() => {
+      this.debouncePending = false;
       if (!current() || this.closing || this.cancellations) return;
+      if (isOffline()) return; // the `online` event reschedules; no ssh spawn or provider call while the network is down
       if (this.running) { this.schedule(); return; }
-      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return; this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.retryDelay = Math.min(this.retryDelay * 2, 60_000); this.schedule(this.retryDelay); });
+      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return; this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.scheduleRetry(); });
     }, delay);
   }
-  async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }
+  async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); this.debouncePending = false; this.unlistenOnline(); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }
   async disconnect() {
     if (this.closing) throw new Error("Sync is already disconnecting");
     this.closing = true;

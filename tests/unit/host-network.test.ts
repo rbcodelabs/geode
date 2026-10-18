@@ -70,3 +70,76 @@ it("rejects oversized response headers before consuming a body", async () => {
   const fetcher = vi.fn(async () => new Response("", { headers: { "content-length": String(100 * 1024 * 1024 + 1) } }));
   await expect(requestOverHttp({ url: "https://example.invalid" }, undefined, fetcher as typeof fetch)).rejects.toThrow(/100 MiB/);
 });
+
+const ok = { status: 200, headers: {}, body: new ArrayBuffer(0) };
+const gate = () => { const waiting: Array<{ id: string; release: () => void; fail: (e: Error) => void; signal: AbortSignal }> = []; let active = 0, peak = 0;
+  const transport = (request: { url: string }, signal?: AbortSignal) => new Promise<typeof ok>((resolve, reject) => {
+    active++; peak = Math.max(peak, active); let done = false;
+    const entry = { id: request.url, signal: signal!, release: () => { if (!done) { done = true; active--; resolve(ok); } }, fail: (e: Error) => { if (!done) { done = true; active--; reject(e); } } };
+    waiting.push(entry); signal?.addEventListener("abort", () => { if (!done) { done = true; active--; } reject(new DOMException("x", "AbortError")); });
+  });
+  return { transport, waiting, peak: () => peak }; };
+
+it("caps concurrent fetches per sender and starts queued requests in FIFO order", async () => {
+  const g = gate(); const registry = new SenderRequests(g.transport as never, { maxActive: 2 });
+  const results = [0, 1, 2, 3, 4].map(i => registry.run(1, `r${i}`, { url: `https://a.invalid/${i}` }));
+  await Promise.resolve(); expect(g.waiting.map(w => w.id)).toEqual(["https://a.invalid/0", "https://a.invalid/1"]);
+  g.waiting[0].release(); await new Promise(r => setTimeout(r, 0));
+  expect(g.waiting.map(w => w.id)).toEqual(["https://a.invalid/0", "https://a.invalid/1", "https://a.invalid/2"]);
+  while (g.waiting.length < 5) { g.waiting.filter(w => w).forEach(w => w.release()); await new Promise(r => setTimeout(r, 0)); }
+  g.waiting.forEach(w => w.release()); await Promise.all(results); expect(g.peak()).toBeLessThanOrEqual(2);
+  expect(g.waiting.map(w => w.id)).toEqual([0, 1, 2, 3, 4].map(i => `https://a.invalid/${i}`));
+});
+
+it("does not hard-fail at 32 requests and rejects beyond the queue bound", async () => {
+  const g = gate(); const registry = new SenderRequests(g.transport as never, { maxActive: 1, maxQueued: 3 });
+  const pending = [0, 1, 2, 3].map(i => registry.run(1, `r${i}`, { url: `https://a.invalid/${i}` }));
+  await expect(registry.run(1, "overflow", { url: "https://a.invalid/x" })).rejects.toThrow(/queue is full/i);
+  registry.cancelOwner(1); for (const p of pending) await expect(p).rejects.toMatchObject({ name: "AbortError" });
+});
+
+it("rejects duplicate ids, active or queued", async () => {
+  const g = gate(); const registry = new SenderRequests(g.transport as never, { maxActive: 1 });
+  const a = registry.run(1, "same", { url: "https://a.invalid/1" }); const b = registry.run(1, "queued", { url: "https://a.invalid/2" });
+  await expect(registry.run(1, "queued", { url: "https://a.invalid/3" })).rejects.toThrow("Too many active requests");
+  registry.cancelOwner(1); await expect(a).rejects.toBeTruthy(); await expect(b).rejects.toBeTruthy();
+});
+
+it("cancels a queued request without ever fetching it", async () => {
+  const g = gate(); const seen: string[] = []; const registry = new SenderRequests(((r: { url: string }, s: AbortSignal) => { seen.push(r.url); return g.transport(r, s); }) as never, { maxActive: 1 });
+  const first = registry.run(1, "first", { url: "https://a.invalid/first" }); const queued = registry.run(1, "queued", { url: "https://a.invalid/queued" });
+  registry.cancel(2, "queued"); registry.cancel(1, "queued");
+  await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+  g.waiting[0].release(); await first; await Promise.resolve(); expect(seen).toEqual(["https://a.invalid/first"]);
+});
+
+it("opens a per-origin circuit after 3 transport failures, half-opens after the window, and resets on success", async () => {
+  let now = 1000; let calls = 0; let mode: "fail" | "ok" | "http" = "fail";
+  const transport = vi.fn(async () => { calls++; if (mode === "fail") throw new Error("Network request failed"); return ok; });
+  const registry = new SenderRequests(transport as never, { now: () => now, random: () => 0 });
+  const req = { url: "https://down.invalid/x" };
+  for (let i = 0; i < 3; i++) await expect(registry.run(1, `f${i}`, req)).rejects.toThrow("Network request failed");
+  expect(calls).toBe(3);
+  await expect(registry.run(1, "fast", req)).rejects.toThrow("Network request failed"); expect(calls).toBe(3);
+  await registry.run(1, "other", { url: "https://up.invalid/x" }).then(() => undefined, () => undefined); expect(calls).toBe(4);
+  now += 60_000; mode = "fail";
+  await expect(registry.run(1, "probe", req)).rejects.toThrow("Network request failed"); expect(calls).toBe(5);
+  await expect(registry.run(1, "fast2", req)).rejects.toThrow("Network request failed"); expect(calls).toBe(5);
+  now += 60_000; mode = "ok"; await registry.run(1, "recover", req); expect(calls).toBe(6);
+  mode = "fail"; await expect(registry.run(1, "after", req)).rejects.toThrow(); await expect(registry.run(1, "after2", req)).rejects.toThrow(); await registry.run(1, "after3", req).catch(() => undefined);
+  expect(calls).toBe(9);
+});
+
+it("does not count non-transport errors or aborts toward the circuit", async () => {
+  const transport = vi.fn(async () => { throw new Error("Invalid HTTP URL"); });
+  const registry = new SenderRequests(transport as never);
+  for (let i = 0; i < 6; i++) await expect(registry.run(1, `e${i}`, { url: "https://x.invalid" })).rejects.toThrow("Invalid HTTP URL");
+  expect(transport).toHaveBeenCalledTimes(6);
+});
+
+it("caps the circuit backoff window at 30s", async () => {
+  let now = 0; const transport = vi.fn(async () => { throw new Error("Network request failed"); });
+  const registry = new SenderRequests(transport as never, { now: () => now, random: () => 0.999999 });
+  for (let i = 0; i < 20; i++) { now += 31_000; await registry.run(1, `c${i}`, { url: "https://x.invalid" }).catch(() => undefined); }
+  expect(transport).toHaveBeenCalledTimes(20);
+});
