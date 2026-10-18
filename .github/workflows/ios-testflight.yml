@@ -78,6 +78,24 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Geode.xcarchive" \
             CODE_SIGNING_ALLOWED=NO
+      - name: Embed entitlements in the archive and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          # An unsigned archive (CODE_SIGNING_ALLOWED=NO) carries no entitlements, so the
+          # export re-sign only adds the basic keys and silently drops iCloud even when the
+          # provisioning profile grants it. Ad-hoc sign the app with the entitlements file so
+          # they are in the binary; the export step then re-signs and merges profile keys.
+          app="$RUNNER_TEMP/Geode.xcarchive/Products/Applications/App.app"
+          [[ -d "$app" ]] || { echo "Archived app not found: $app" >&2; exit 1; }
+          codesign --force --sign - --entitlements ios/App/App/App.entitlements "$app"
+          ents="$(codesign -d --entitlements - --xml "$app" 2>/dev/null)"
+          echo "$ents" | plutil -p - || true
+          for key in com.apple.developer.icloud-container-identifiers \
+                     com.apple.developer.icloud-services \
+                     com.apple.developer.ubiquity-container-identifiers; do
+            echo "$ents" | grep -q "$key" || { echo "Archived app is missing entitlement: $key" >&2; exit 1; }
+          done
       - name: Export, sign, and (optionally) upload to TestFlight
         env:
           IOS_APP_STORE_KEY_BASE64: ${{ secrets.IOS_APP_STORE_KEY_BASE64 }}
