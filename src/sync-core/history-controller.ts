@@ -311,6 +311,9 @@ function folderSignatures(resources: HistoryLocalResource[]): Map<string, string
             parts.get(key(r.namespace, parent))?.push(`${r.path.slice(parent.length + 1)}:${r.kind}:${r.sha256 ?? ''}`);
     return new Map([...parts].map(([path, entries]) => [path, JSON.stringify(entries.sort())]));
 }
+/** Thrown by run() until the user has approved a preview; callers must treat it as "waiting for the user", not a failure to retry. */
+export const PREVIEW_REQUIRED_MESSAGE = 'Preview this exact sync before approving it';
+
 export class HistoryController {
     private active = false;
     constructor(private readonly options: HistoryControllerOptions) { }
@@ -381,7 +384,7 @@ export class HistoryController {
                 await this.recover(state, signal);
             const plan = await this.plan(state, signal);
             if (!state.approved && (!options.approvePreview || state.previewSignature !== plan.preview.signature)) {
-                throw new Error('Preview this exact sync before approving it');
+                throw new Error(PREVIEW_REQUIRED_MESSAGE);
             }
             await options.beforeExecute?.(plan.preview);
             const wasApproved = state.approved;

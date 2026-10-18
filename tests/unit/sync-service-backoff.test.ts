@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PREVIEW_REQUIRED_MESSAGE } from "../../src/sync-core/history-controller";
 import { SyncService } from "../../src/renderer/sync/sync-service";
 
 let online = true; const listeners = new Map<string, Set<() => void>>();
@@ -23,6 +24,15 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("SyncService retry/backoff", () => {
+  it("an unapproved device waits in preview state instead of retrying forever", async () => {
+    const { service, run } = make(async () => { throw new Error(PREVIEW_REQUIRED_MESSAGE); });
+    service.schedule(0); await vi.advanceTimersByTimeAsync(1);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(service.status.state).toBe("preview");
+    for (let i = 0; i < 10; i++) { service.poll(); await vi.advanceTimersByTimeAsync(60_000); }
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("a poll tick during backoff does not run or reset the backoff timer", async () => {
     const { service, run } = make(async () => { throw new Error("Timed out connecting"); });
     service.schedule(0); await vi.advanceTimersByTimeAsync(1);

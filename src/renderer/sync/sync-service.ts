@@ -5,7 +5,7 @@ import { SyncCoordinator } from "./coordinator";
 import type { SyncApi, SyncConflict, SyncPreview, SyncProgress, SyncProgressPhase, SyncProvider, SyncRunResult, SyncStatus } from "./types";
 import { SYNC_PROGRESS_THROTTLE_MS } from "./progress";
 import { APPEND_ONLY_PROTOCOL, SYNC_MAX_FILE_BYTES, type AppendOnlySyncProvider, type AppendOnlySession, type VaultDescriptor } from "./history-types";
-import { HistoryController, type HistoryComparisonChoice, type HistoryConflictComparison, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
+import { HistoryController, PREVIEW_REQUIRED_MESSAGE, type HistoryComparisonChoice, type HistoryConflictComparison, type HistoryControllerState, type HistoryLocalResource, type HistoryLocalSnapshot, type HistoryOperation, type HistoryPreview, type HistoryResolution } from "./history-controller";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope } from "./scope";
 import { projectPortableConfig, serializePortableConfig } from "./portable-config";
 import { buildHistoryPorts, type SyncHostLite } from "../../sync-core/ports";
@@ -344,6 +344,7 @@ export class SyncService extends Events implements SyncApi {
   }
   async preview(): Promise<SyncPreview> {
     if (!this.selected) return this.withConditional(() => this.conditional.preview());
+    await this.settled();
     const armed = this.railOverrides;
     const raw = await this.withController((controller, signal) => controller.preview(signal));
     const result = this.summarize(raw);
@@ -382,7 +383,7 @@ export class SyncService extends Events implements SyncApi {
     if (!this.selected) return this.conditional.listConflicts();
     return (this.details?.conflicts ?? []).map(conflict => ({ id: JSON.stringify([conflict.entityId, conflict.heads]), path: conflict.path, conflictPath: "", remoteRevision: conflict.heads.join(",") }));
   }
-  async resolveHistoryConflict(resolution: HistoryResolution) { return this.summarize(await this.withController((controller, signal) => controller.resolve(resolution, signal))); }
+  async resolveHistoryConflict(resolution: HistoryResolution) { await this.settled(); return this.summarize(await this.withController((controller, signal) => controller.resolve(resolution, signal))); }
   /**
    * Read-only comparison shares withController's single-owner invariants:
    * this.abort, this.session and this.lease are single-slot fields, so a second
@@ -446,7 +447,11 @@ export class SyncService extends Events implements SyncApi {
       if (!current() || this.closing || this.cancellations) return;
       if (isOffline()) return; // the `online` event reschedules; no ssh spawn or provider call while the network is down
       if (this.running) { this.schedule(); return; }
-      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return; this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.scheduleRetry(); });
+      void this.run().catch(error => { if (!current() || error instanceof DOMException && error.name === "AbortError") return;
+      // An unapproved device cannot run until the user previews and confirms. That is waiting on the user, not a failure: retrying would
+      // hold the single sync slot (ssh open + vault scan) every cycle and make Preview/Confirm fail with "already running".
+      if (error instanceof Error && error.message === PREVIEW_REQUIRED_MESSAGE) { this.setStatus({ state: "preview", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: "Preview this sync, then confirm it to start syncing" }); return; }
+      this.setStatus({ state: "error", providerId: provider.id, conflicts: this.details?.conflicts.length ?? 0, message: error instanceof Error ? error.message : "Sync unavailable" }); this.failedRuns++; this.scheduleRetry(); });
     }, delay);
   }
   async cancel() { this.cancellations++; try { this.generation++; this.stopObserving?.(); this.stopObserving = undefined; clearTimeout(this.debounce); this.debouncePending = false; this.unlistenOnline(); clearInterval(this.polling); this.polling = undefined; this.abort?.abort(); await this.conditional.cancel(); await this.running?.catch(() => {}); if (this.lease) await this.host.syncSafety?.releaseOwner(this.lease); this.lease = undefined; } finally { this.cancellations--; } }
