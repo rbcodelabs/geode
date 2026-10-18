@@ -525,3 +525,12 @@ it("re-evaluates a cached exclude verdict under a newly-connected provider inste
     expect(cacheRows.get("Secret.md")).toEqual({ mtimeMs: 1, size: 3, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), excludeReason: null, providerId: "provider-b" });
   } finally { await service.cancel(); }
 });
+
+it("blocked files are reported but do not put sync in the error ('Sync stopped') state", () => {
+  const service = new SyncService({} as never, () => "/synthetic/vault");
+  (service as any).selected = { id: "history" };
+  const blocked = [{ namespace: "content", path: "Big.bin", reason: "File exceeds 100 MiB limit" }];
+  (service as any).summarize({ signature: "s", requiresApproval: false, uploads: 0, downloads: 0, deletions: 0, conflicts: [], blocked, excluded: [], pending: 0, upToDate: false });
+  expect((service as any).status.state).toBe("idle");
+  expect(service.getHistoryDetails()?.blocked).toEqual(blocked);
+});

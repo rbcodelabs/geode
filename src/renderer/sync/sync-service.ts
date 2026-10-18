@@ -347,14 +347,14 @@ export class SyncService extends Events implements SyncApi {
     // The blocked-file list is easy to miss on a phone layout; keep it in the device log so it can be read from a connected Mac.
     if (value.blocked.length) console.log("[sync] blocked:", JSON.stringify(value.blocked.slice(0, 50)));
     const outstanding = value.uploads + value.downloads + value.deletions;
-    const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length;
+    // upToDate is false whenever any file is blocked, so blocked files must be excluded here or they would read as an integrity failure.
+    const integrityBlocked = !value.upToDate && !outstanding && !value.requiresApproval && !value.conflicts.length && !value.blocked.length;
     // Per-file detail (path + reason for each blocked item) lives on `details.blocked`,
     // reachable via getHistoryDetails() — the message here stays a short summary so it
     // never turns into an unreadable semicolon-joined sentence for dozens of files.
-    // A file deferred only because it is still being written ("unsettled", e.g. live Claude logs) is expected and untouched by design; it must
-    // not turn the whole sync into an error, which keeps the background poll scanning the vault.
-    const blockedHard = value.blocked.filter(item => item.reason !== "unsettled");
-    this.setStatus({ state: blockedHard.length || value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: blockedHard.length ? `${blockedHard.length} file(s) blocked` : value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
+    // Blocked files (unsettled writes, over the size limit, names the hub rejects) are skipped, never published or deleted, and the rest of the
+    // vault still syncs. They are reported as a count on the status card, not as a sync failure ("Sync stopped").
+    this.setStatus({ state: value.pending || integrityBlocked ? "error" : value.conflicts.length ? "conflict" : value.requiresApproval ? "preview" : outstanding ? "pending" : "idle", providerId: this.selected?.id, conflicts: value.conflicts.length, message: value.pending ? `${value.pending} pending history dependencies` : integrityBlocked ? "Remote integrity or pending history blocks an up-to-date result" : outstanding ? `${outstanding} changes await synchronization` : value.excluded.length ? `${value.excluded.length} managed or excluded paths` : undefined });
     return { uploads: value.uploads, downloads: value.downloads, deletes: value.deletions, conflicts: value.conflicts.length, skipped: value.excluded.length + value.blocked.length, requiresApproval: value.requiresApproval };
   }
   private async withConditional<T>(action: () => Promise<T>): Promise<T> {
