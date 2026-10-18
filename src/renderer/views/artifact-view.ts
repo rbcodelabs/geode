@@ -3,12 +3,14 @@ import type { ReloadableView, View, WorkspaceLeaf } from "../workspace";
 import { setIcon } from "../api/icons";
 import type { ArtifactDiagnostic, ArtifactRegistration } from "../../main/artifact-runtime";
 
-type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom";
+type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 interface Viewport { preset: ViewportPreset; width: number; height: number }
 export interface ArtifactViewState { root: string; viewport?: Viewport }
 interface ArtifactWebview extends HTMLElement { src: string; reload(): void }
 
 const VIEWPORTS: Record<Exclude<ViewportPreset, "custom">, Viewport> = {
+  // Width/height are fallbacks for status text; a fill frame sizes to the pane.
+  fill: { preset: "fill", width: 1440, height: 900 },
   desktop: { preset: "desktop", width: 1440, height: 900 },
   tablet: { preset: "tablet", width: 768, height: 1024 },
   mobile: { preset: "mobile", width: 390, height: 844 },
@@ -39,7 +41,7 @@ export class ArtifactView implements View, ReloadableView {
     toolbar.append(this.iconButton("rotate-cw", "Reload artifact", () => {
       void this.app.actions.execute("web.reload", { reloadable: this, leaf: this.leaf });
     }));
-    for (const preset of ["desktop", "tablet", "mobile"] as const) {
+    for (const preset of ["fill", "desktop", "tablet", "mobile"] as const) {
       const button = document.createElement("button");
       button.className = "artifact-view-viewport-btn";
       button.type = "button";
@@ -115,10 +117,13 @@ export class ArtifactView implements View, ReloadableView {
   private applyViewport(viewport: Viewport): void {
     this.viewport = viewport;
     if (this.webview) {
-      this.webview.style.width = `${viewport.width}px`;
-      this.webview.style.height = `${viewport.height}px`;
+      const fill = viewport.preset === "fill";
+      this.webview.style.width = fill ? "100%" : `${viewport.width}px`;
+      this.webview.style.height = fill ? "100%" : `${viewport.height}px`;
     }
-    this.statusEl.textContent = `${viewport.width} × ${viewport.height}`;
+    const fill = viewport.preset === "fill";
+    this.containerEl.classList.toggle("is-fill", fill);
+    this.statusEl.textContent = fill ? "Fill" : `${viewport.width} × ${viewport.height}`;
     for (const button of this.containerEl.querySelectorAll<HTMLElement>("[data-viewport]")) {
       button.classList.toggle("is-active", button.dataset.viewport === viewport.preset);
     }
@@ -173,7 +178,7 @@ export class ArtifactView implements View, ReloadableView {
     if (state.revision > this.revision) {
       this.revision = state.revision;
       this.webview?.reload();
-      this.statusEl.textContent = `Reloaded · ${this.viewport?.width} × ${this.viewport?.height}`;
+      this.statusEl.textContent = `Reloaded · ${this.viewport?.preset === "fill" ? "Fill" : `${this.viewport?.width} × ${this.viewport?.height}`}`;
     }
     this.renderDiagnostics(state.diagnostics);
   }

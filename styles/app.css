@@ -5556,6 +5556,10 @@ body.is-mobile .page-preview {
   box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
 }
 
+/* Picker/comparison artifacts fill the pane instead of a device frame. */
+.artifact-view.is-fill .artifact-view-stage { padding: 0; align-items: stretch; overflow: hidden; }
+.artifact-view.is-fill .artifact-view-frame { flex: 1 1 auto; border: 0; border-radius: 0; box-shadow: none; }
+
 .artifact-view-error {
   max-width: 640px;
   margin: auto;

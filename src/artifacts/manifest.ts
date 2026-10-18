@@ -1,6 +1,6 @@
 export const ARTIFACT_MANIFEST_SCHEMA_VERSION = 1 as const;
 
-export type ArtifactViewportPreset = "desktop" | "tablet" | "mobile" | "custom";
+export type ArtifactViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 
 export interface ArtifactManifest {
   schemaVersion: typeof ARTIFACT_MANIFEST_SCHEMA_VERSION;
@@ -174,8 +174,8 @@ export function parseArtifactManifest(value: unknown): ArtifactManifestParseResu
   } else {
     addUnknownFields(viewport, VIEWPORT_FIELDS, "viewport", issues);
     const preset = viewport.preset;
-    if (!["desktop", "tablet", "mobile", "custom"].includes(String(preset))) {
-      issues.push({ code: "invalid_value", path: "viewport.preset", message: "Expected desktop, tablet, mobile, or custom." });
+    if (!["desktop", "tablet", "mobile", "custom", "fill"].includes(String(preset))) {
+      issues.push({ code: "invalid_value", path: "viewport.preset", message: "Expected desktop, tablet, mobile, custom, or fill." });
     }
     validateDimension(viewport.width, "viewport.width", issues);
     validateDimension(viewport.height, "viewport.height", issues);

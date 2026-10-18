@@ -16,7 +16,7 @@ export interface ArtifactRegistration {
   title: string;
   entryUrl: string;
   partition: string;
-  viewport: { preset: "desktop" | "tablet" | "mobile" | "custom"; width: number; height: number };
+  viewport: { preset: "desktop" | "tablet" | "mobile" | "custom" | "fill"; width: number; height: number };
 }
 
 export interface ArtifactDiagnostic {
