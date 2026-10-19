@@ -52,10 +52,9 @@ async function desktop(page: Page) {
 }
 
 async function openSync(page: Page): Promise<void> {
-  const nav = page.getByRole("navigation", { name: "Mobile navigation" });
-  await nav.getByRole("button", { name: "More" }).click();
-  await page.locator(".menu.mod-mobile-more").getByText("Settings", { exact: true }).click();
-  await page.locator(".modal.mod-settings").getByText("Sync", { exact: true }).first().click();
+  // The phone settings UI keeps its section list in a sheet, so open the tab directly (as sync-settings.spec.ts does).
+  await page.evaluate(() => (window as unknown as { app: { setting: { openTabById(id: string): void } } }).app.setting.openTabById("sync"));
+  await expect(page.locator(".modal.mod-settings").getByRole("heading", { name: "Sync", exact: true })).toBeVisible();
 }
 const state = (page: Page) => page.evaluate(() => ({ secrets: [...(window as unknown as { __appSecrets: Map<string, string> }).__appSecrets], applies: (window as unknown as { __applies: unknown[] }).__applies, web: JSON.stringify({ ...localStorage }) + document.cookie }));
 
