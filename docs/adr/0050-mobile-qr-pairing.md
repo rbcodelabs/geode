@@ -1,4 +1,4 @@
-# ADR 0030 — Mobile pairing by QR code
+# ADR 0050 — Mobile pairing by QR code
 
 Status: Proposed
 Date: 2026-10-14
@@ -7,7 +7,7 @@ Extends [ADR 0015](0015-plugin-provided-vault-sync.md) (plugin-provided sync, gu
 [ADR 0029](0029-https-websocket-hub-transport.md) (the HTTPS hub and its bearer token).
 Design: [mobile-qr-pairing.md](../design/mobile-qr-pairing.md).
 
-> Numbering note: this directory carries duplicated numbers; 0030 is the next unused one.
+> Numbering note: this directory carries duplicated numbers; 0050 was the next unused one when this landed (renumbered from 0030 after rebasing onto main).
 
 ## Context
 

@@ -2202,7 +2202,7 @@ class SettingsModal extends Modal {
   }
 
   /**
-   * ADR 0030 mobile pairing. Desktop (an HTTPS hub is the active provider): "Pair mobile device" shows a code. Phone: "Set up from
+   * ADR 0050 mobile pairing. Desktop (an HTTPS hub is the active provider): "Pair mobile device" shows a code. Phone: "Set up from
    * desktop" scans or pastes one. Both live in the Connection section and are torn down with the tab.
    */
   private renderPairingRows(container: HTMLElement, isHub: boolean, activeProviderId: string | undefined, redraw: (summary?: string) => void): void {

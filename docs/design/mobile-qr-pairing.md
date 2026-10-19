@@ -1,6 +1,6 @@
 # Mobile QR pairing
 
-Decision record: [ADR 0030](../adr/0030-mobile-qr-pairing.md). Builds on the HTTPS hub
+Decision record: [ADR 0050](../adr/0050-mobile-qr-pairing.md). Builds on the HTTPS hub
 ([ADR 0029](../adr/0029-https-websocket-hub-transport.md), [app-hub-sync-provider.md](app-hub-sync-provider.md)), the
 guarded sync apply and portable configuration ([ADR 0015](../adr/0015-plugin-provided-vault-sync.md),
 [plugin-sync-api.md](../plugin-sync-api.md)) and the mobile secret boundary
