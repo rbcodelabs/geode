@@ -885,6 +885,17 @@ export class TabGroup implements LeafContainer {
       el.classList.add("drag-over");
     };
     const leave = (el: HTMLElement) => el.classList.remove("drag-over");
+    // Tab-level drop handlers stopPropagation(), and the dragged tab's own
+    // dragend may never fire if it was re-rendered mid-drag, so the highlight
+    // could be left behind. Clear it on any drop/dragend in the document
+    // (capture phase, so stopPropagation can't hide it).
+    const clearHighlights = () => {
+      leave(this.tabBarEl);
+      leave(this.containerEl);
+      delete this.containerEl.dataset.dropTarget;
+    };
+    document.addEventListener("drop", clearHighlights, true);
+    document.addEventListener("dragend", clearHighlights, true);
     this.tabBarEl.addEventListener("dragover", (e) => over(e, this.tabBarEl));
     this.tabBarEl.addEventListener("dragleave", () => leave(this.tabBarEl));
     this.tabBarEl.addEventListener("drop", (e) => {
