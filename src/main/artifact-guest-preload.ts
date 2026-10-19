@@ -8,7 +8,7 @@ import {
 
 /**
  * Guest preload for artifacts whose validated manifest declares
- * `permissions.vault: "read"` (ADR 0029). Main attaches it to no other
+ * `permissions.vault: "read"` (see the Compass "ADR - Artifact vault read bridge"). Main attaches it to no other
  * artifact guest. It runs sandboxed with contextIsolation, and exposes exactly
  * two functions on `window.geodeArtifact`. It never exposes `ipcRenderer`, the
  * IPC event object, or any Node API; messages only ever travel to the

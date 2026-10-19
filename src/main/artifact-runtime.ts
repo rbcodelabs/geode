@@ -253,7 +253,7 @@ export class ArtifactRuntime {
     webPreferences.allowRunningInsecureContent = false;
     // The guest preload exists only for artifacts whose validated manifest
     // opted into vault reads. It is a separate, minimal contextBridge surface
-    // (ADR 0029); every other artifact keeps preload undefined.
+    // (see the Compass "ADR - Artifact vault read bridge"); every other artifact keeps preload undefined.
     webPreferences.preload = active.vault ? this.guestPreloadPath : undefined;
     return true;
   }

@@ -106,7 +106,7 @@ function serializeRow(row: QueryRow): SerializedRow {
 }
 
 /**
- * Renderer-side half of the artifact vault bridge (ADR 0029). One instance per
+ * Renderer-side half of the artifact vault bridge (see the Compass "ADR - Artifact vault read bridge"). One instance per
  * registered artifact, constructed from the allowlist of its validated
  * manifest. The guest is untrusted: every request is re-validated here, and
  * every failure resolves to `{ error }` rather than throwing.

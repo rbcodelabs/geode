@@ -19,7 +19,7 @@ export interface ArtifactManifest {
   permissions: {
     network: "none";
     clipboard: false;
-    /** Opt-in read access to Bases query results (ADR 0029). Absent means "none". */
+    /** Opt-in read access to Bases query results (see the Compass "ADR - Artifact vault read bridge"). Absent means "none". */
     vault?: "none" | "read";
     /** Vault-relative .base files / folders / globs the artifact may query. Required when vault is "read". */
     vaultAllowlist?: string[];

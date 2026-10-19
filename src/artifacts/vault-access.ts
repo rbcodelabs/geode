@@ -1,5 +1,5 @@
 /**
- * Pure policy for the opt-in artifact vault bridge (ADR 0029). No Electron,
+ * Pure policy for the opt-in artifact vault bridge (see the Compass "ADR - Artifact vault read bridge"). No Electron,
  * DOM, or vault imports: the manifest parser, the renderer-side bridge, and
  * unit tests all share this one definition of "what may an artifact query".
  */
