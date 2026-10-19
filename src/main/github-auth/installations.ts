@@ -1,4 +1,5 @@
 import { GITHUB_API_BASE, isRepoAllowed, type GithubAllowPolicy } from "./config";
+import { callGithub } from "./device-flow";
 import { asRecord, type GithubHttp } from "./http";
 
 export interface GithubRepo {
@@ -35,7 +36,7 @@ function apiHeaders(token: string): Record<string, string> {
 }
 
 async function getJson(http: GithubHttp, token: string, path: string): Promise<Record<string, unknown>> {
-  const res = await http({ method: "GET", url: `${GITHUB_API_BASE}${path}`, headers: apiHeaders(token) });
+  const res = await callGithub(http, { method: "GET", url: `${GITHUB_API_BASE}${path}`, headers: apiHeaders(token) });
   if (res.status === 401) throw new GithubUnauthorizedError("GitHub rejected the access token");
   if (res.status !== 200) throw new Error(`GitHub API ${path} failed: HTTP ${res.status}`);
   return asRecord(res.json);

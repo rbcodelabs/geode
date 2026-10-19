@@ -7415,3 +7415,58 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
 .footnotes-jump { font-size: var(--font-smallest); }
 .footnotes-view button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
 .footnotes-status:empty { display: none; }
+
+/* Settings > GitHub: status card built on the sync status card (tone border + dot). */
+.github-connect-card[data-tone="off"] { --sync-tone: var(--text-faint, var(--text-muted)); }
+.github-connect-card .sync-status-dot { margin-top: 0; align-self: center; }
+.github-facts {
+  display: grid;
+  gap: var(--size-4-1);
+  margin: 0;
+}
+.github-head { flex-wrap: nowrap; }
+.github-head .sync-status-text { flex: 1 1 0; }
+/* Label and value share a row when there is room, and stack when the pane is narrow. */
+.github-fact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--size-4-3);
+  font-size: var(--font-ui-small);
+}
+.github-fact dt { flex: 0 0 4.5rem; color: var(--text-muted); }
+.github-fact dd { flex: 1 1 10rem; min-width: 0; margin: 0; color: var(--text-normal); overflow-wrap: anywhere; }
+.github-status-block {
+  display: grid;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+}
+.github-status-line {
+  margin: 0;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  overflow-wrap: anywhere;
+}
+.github-status-line.is-error { color: var(--text-error, #e06c75); }
+.github-status-line.is-warn { color: var(--color-orange, #e9973f); }
+.github-repos { font-size: var(--font-ui-small); }
+.github-repos p { margin: 0 0 var(--size-4-1); }
+.github-repos ul { margin: 0; padding-left: var(--size-4-5); max-height: 9rem; overflow: auto; overflow-wrap: anywhere; }
+.github-danger-zone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-2) var(--size-4-3);
+  padding-top: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
+}
+.github-danger-zone .setting-item-description { margin: 0; }
+.github-danger-zone button.mod-warning {
+  background: transparent;
+  color: var(--text-error, #e06c75);
+  border: 1px solid var(--text-error, #e06c75);
+}
+.github-user-code { font-family: var(--font-monospace); font-size: var(--font-ui-large); letter-spacing: 0.1em; margin: 0; }

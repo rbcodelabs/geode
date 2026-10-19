@@ -120,6 +120,7 @@ describe("device flow", () => {
     expect(h.service.getStatus()).toEqual({
       state: "connected",
       login: "octocat",
+      health: { accessTokenExpiresAt: 1_010_000 + 28800 * 1000, lastRefreshAt: null, lastError: null },
       app: { slug: "geode-app", clientId: "client-x" },
     });
     expect(h.sleeps).toEqual([5000, 5000]);
@@ -235,6 +236,43 @@ describe("refresh", () => {
     h.clock.t += 8 * 3600 * 1000;
     await expect(h.service.getAccessToken()).rejects.toMatchObject({ code: "network" });
     expect(h.store.load()?.refreshToken).toBe("ghr_refresh1");
+  });
+
+  it("records the cause when the refresh cannot reach GitHub, and clears it once a refresh works", async () => {
+    let fail = true;
+    const h = await connected({
+      [REFRESH_GRANT]: () => {
+        if (fail) throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo"), { code: "ENOTFOUND", hostname: "github.com" }) });
+        return { json: tokenResponse(2) };
+      },
+    });
+    h.clock.t += 8 * 3600 * 1000;
+    await expect(h.service.getAccessToken()).rejects.toMatchObject({
+      code: "network",
+      message: "Could not reach GitHub: fetch failed (ENOTFOUND github.com)",
+    });
+    const failedAt = h.clock.t;
+    expect(h.service.getStatus()).toMatchObject({
+      state: "connected",
+      health: { lastRefreshAt: null, lastError: { at: failedAt, message: "Could not reach GitHub: fetch failed (ENOTFOUND github.com)" } },
+    });
+    fail = false;
+    h.clock.t += 60_000;
+    await h.service.getAccessToken();
+    expect(h.service.getStatus()).toMatchObject({ health: { lastRefreshAt: h.clock.t, lastError: null } });
+  });
+
+  it("names the cause when listing repositories cannot reach GitHub", async () => {
+    const h = await connected({
+      "https://api.github.com/user/installations?per_page=100": () => {
+        throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ETIMEDOUT" } });
+      },
+    });
+    await expect(h.service.listAccess()).rejects.toMatchObject({
+      code: "network",
+      message: "Could not reach GitHub: fetch failed (ETIMEDOUT)",
+    });
+    expect(h.service.getStatus()).toMatchObject({ health: { lastError: { message: expect.stringContaining("ETIMEDOUT") } } });
   });
 
   it("refreshes once and retries when GitHub rejects a still-unexpired token", async () => {
@@ -502,5 +540,49 @@ describe("settings panel warnings", () => {
     expect(lines[0]).toMatch(/Opening pull requests will fail/);
     expect(lines[1]).toMatch(/administration \(write\).*Agent threads will hold/);
     expect(permissionWarnings(null)).toEqual([]);
+  });
+});
+
+describe("connection view", () => {
+  const health = { accessTokenExpiresAt: null, lastRefreshAt: null, lastError: null };
+  const connectedStatus = (h: Partial<typeof health> = {}) =>
+    ({ state: "connected", login: "octocat", health: { ...health, ...h }, app: { slug: "a", clientId: "c" } }) as never;
+
+  it("is healthy with no messages, and says when the token was last refreshed", async () => {
+    const { connectedView } = await import("../../src/renderer/settings/github-tab");
+    const now = 10_000_000;
+    const view = connectedView(connectedStatus({ lastRefreshAt: now - 3 * 60_000 }), null, null, { ok: true, names: [] }, now);
+    expect(view).toMatchObject({ badge: "Connected", tone: "ok", messages: [] });
+    expect(view.tokenLine).toBe("Last refreshed 3 min ago");
+  });
+
+  it("shows one 'Can't reach GitHub' message when several probes fail the same way", async () => {
+    const { connectedView } = await import("../../src/renderer/settings/github-tab");
+    const msg = "Could not reach GitHub: fetch failed (ENOTFOUND api.github.com)";
+    const report = { problem: { code: "unavailable", message: msg }, permissions: null } as never;
+    const view = connectedView(
+      connectedStatus({ lastError: { at: 5_000_000, message: msg } }),
+      report,
+      null,
+      { ok: false, message: msg },
+      6_000_000,
+    );
+    expect(view.badge).toBe("Problem");
+    expect(view.messages).toHaveLength(1);
+    expect(view.messages[0].text).toMatch(/^Can't reach GitHub since .+: fetch failed \(ENOTFOUND api\.github\.com\)\. Agents in containers lose GitHub access ~15 min/);
+    expect(view.messages[0].text.match(/fetch failed/g)).toHaveLength(1);
+  });
+
+  it("reports non-network failures once and keeps extra-permission notes as warnings", async () => {
+    const { connectedView } = await import("../../src/renderer/settings/github-tab");
+    const report = {
+      problem: null,
+      permissions: assessPermissions({ contents: "write", pull_requests: "write", metadata: "read", actions: "read", checks: "read", administration: "write" }),
+    } as never;
+    const view = connectedView(connectedStatus(), report, null, { ok: false, message: "GitHub API /user failed: HTTP 403" }, 1);
+    expect(view.messages.map((m) => m.severity)).toEqual(["error", "warn"]);
+    expect(view.badge).toBe("Problem");
+    const warnOnly = connectedView(connectedStatus(), report, null, { ok: true, names: ["a/b"] }, 1);
+    expect(warnOnly.badge).toBe("Connected");
   });
 });

@@ -34,10 +34,23 @@ export interface GithubActiveApp {
   clientId: string;
 }
 
+/**
+ * What Geode itself knows about keeping the token fresh. Geode does not see
+ * whether the agent-threads plugin has delivered the token on to its daemon.
+ */
+export interface GithubConnectionHealth {
+  /** When the current access token stops working (null: GitHub gave no expiry). */
+  accessTokenExpiresAt: number | null;
+  /** Last time this session successfully refreshed the token. */
+  lastRefreshAt: number | null;
+  /** Most recent failed refresh or API call (transport/5xx), cleared by the next success. */
+  lastError: { at: number; message: string } | null;
+}
+
 export type GithubAuthState =
   | { state: "disconnected"; encryptionAvailable: boolean }
   | { state: "pending"; userCode: string; verificationUri: string; expiresAt: number }
-  | { state: "connected"; login: string | null }
+  | { state: "connected"; login: string | null; health: GithubConnectionHealth }
   | { state: "reauth_required"; message: string }
   | { state: "error"; message: string };
 
@@ -72,6 +85,8 @@ export class GithubAuthService {
   private pending: { device: DeviceCodeInfo; expiresAt: number; abort: AbortController; done: Promise<void> } | null = null;
   private failure: { state: "error" | "reauth_required"; message: string } | null = null;
   private refreshing: Promise<StoredAuth> | null = null;
+  private lastRefreshAt: number | null = null;
+  private lastError: { at: number; message: string } | null = null;
 
   constructor(private readonly deps: GithubAuthDeps) {
     this.now = deps.now ?? Date.now;
@@ -116,7 +131,13 @@ export class GithubAuthService {
       };
     }
     const stored = this.loadMatching();
-    if (stored) return { state: "connected", login: stored.login };
+    if (stored) {
+      return {
+        state: "connected",
+        login: stored.login,
+        health: { accessTokenExpiresAt: stored.accessTokenExpiresAt, lastRefreshAt: this.lastRefreshAt, lastError: this.lastError },
+      };
+    }
     if (this.failure) return this.failure;
     return { state: "disconnected", encryptionAvailable: this.deps.store.isAvailable() };
   }
@@ -254,11 +275,14 @@ export class GithubAuthService {
       const tokens = await refreshTokens(this.deps.http, stored.clientId ?? this.deps.settings().clientId, stored.refreshToken, this.now());
       const next: StoredAuth = { ...tokens, login: stored.login, clientId: stored.clientId ?? this.deps.settings().clientId };
       await this.deps.store.save(next);
+      this.lastRefreshAt = this.now();
+      this.lastError = null;
       return next;
     } catch (error) {
       if (error instanceof GithubAuthError && error.code === "reauth_required") {
         return this.requireReauth(error.message);
       }
+      this.lastError = { at: this.now(), message: (error as Error).message };
       throw error;
     }
   }
@@ -284,7 +308,13 @@ export class GithubAuthService {
 
   /** Installations the App can reach, narrowed to what the allowlist permits. */
   async listAccess(): Promise<GithubInstallation[]> {
-    const all = await this.withToken((token) => listInstallations(this.deps.http, token));
+    const all = await this.withToken((token) => listInstallations(this.deps.http, token)).catch((error) => {
+      if (error instanceof GithubAuthError && error.code === "network") {
+        this.lastError = { at: this.now(), message: error.message };
+      }
+      throw error;
+    });
+    this.lastError = null;
     const { allow } = this.deps.settings();
     if (!allow.length) return all;
     return all

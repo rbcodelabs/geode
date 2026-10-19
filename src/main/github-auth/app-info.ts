@@ -1,4 +1,5 @@
 import { GITHUB_API_BASE } from "./config";
+import { describeNetworkError } from "./describe-error";
 import { asRecord, type GithubHttp } from "./http";
 
 export interface GithubAppInfo {
@@ -28,7 +29,7 @@ export async function fetchAppInfo(http: GithubHttp, slug: string): Promise<Gith
       headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     });
   } catch (error) {
-    return { kind: "unavailable", message: `Could not reach GitHub: ${(error as Error).message}` };
+    return { kind: "unavailable", message: `Could not reach GitHub: ${describeNetworkError(error)}` };
   }
   if (res.status === 404) return { kind: "not_found" };
   const body = asRecord(res.json);

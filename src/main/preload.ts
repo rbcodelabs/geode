@@ -259,7 +259,7 @@ const api = {
    */
   githubAuth: {
     status: (): Promise<GithubAuthStatus> => ipcRenderer.invoke("github-auth-status"),
-    appInfo: (): Promise<GithubIpcResult<GithubAppReport>> => ipcRenderer.invoke("github-auth-app-info"),
+    appInfo: (opts?: { fresh?: boolean }): Promise<GithubIpcResult<GithubAppReport>> => ipcRenderer.invoke("github-auth-app-info", opts),
     start: (opts?: { confirmExtraPermissions?: boolean }): Promise<GithubIpcResult<{ userCode: string; verificationUri: string }>> => ipcRenderer.invoke("github-auth-start", opts),
     listAccess: (): Promise<GithubIpcResult<GithubInstallation[]>> => ipcRenderer.invoke("github-auth-list-access"),
     checkRepo: (repo: string): Promise<GithubIpcResult<RepoCoverage>> => ipcRenderer.invoke("github-auth-check-repo", repo),
