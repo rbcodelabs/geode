@@ -1,5 +1,6 @@
 import { GITHUB_ACCESS_TOKEN_URL, GITHUB_DEVICE_CODE_URL } from "./config";
-import { asRecord, type GithubHttp } from "./http";
+import { describeNetworkError } from "./describe-error";
+import { asRecord, type GithubHttp, type GithubHttpRequest, type GithubHttpResponse } from "./http";
 
 export const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -41,13 +42,22 @@ export class GithubAuthError extends Error {
   }
 }
 
+/** `http` with transport failures (DNS, TLS, timeouts) turned into a `network` error that names the cause. */
+export async function callGithub(http: GithubHttp, request: GithubHttpRequest): Promise<GithubHttpResponse> {
+  try {
+    return await http(request);
+  } catch (error) {
+    throw new GithubAuthError("network", `Could not reach GitHub: ${describeNetworkError(error)}`);
+  }
+}
+
 export async function requestDeviceCode(
   http: GithubHttp,
   clientId: string,
   /** Where to send the user if the App has Device Flow off. */
   settingsUrl?: string,
 ): Promise<DeviceCodeInfo> {
-  const res = await http({ method: "POST", url: GITHUB_DEVICE_CODE_URL, form: { client_id: clientId } });
+  const res = await callGithub(http, { method: "POST", url: GITHUB_DEVICE_CODE_URL, form: { client_id: clientId } });
   const body = asRecord(res.json);
   if (body.error === "device_flow_disabled") {
     throw new GithubAuthError(
@@ -102,7 +112,7 @@ export async function pollForToken(opts: PollOptions): Promise<TokenSet> {
     await sleep(intervalSeconds * 1000);
     if (signal?.aborted) throw new GithubAuthError("access_denied", "Sign-in cancelled");
     if (now() >= deadline) throw new GithubAuthError("expired_token", "The device code expired. Start again.");
-    const res = await http({
+    const res = await callGithub(http, {
       method: "POST",
       url: GITHUB_ACCESS_TOKEN_URL,
       form: { client_id: clientId, device_code: device.deviceCode, grant_type: DEVICE_GRANT_TYPE },
@@ -142,16 +152,11 @@ export async function refreshTokens(
   refreshToken: string,
   now: number,
 ): Promise<TokenSet> {
-  let res;
-  try {
-    res = await http({
-      method: "POST",
-      url: GITHUB_ACCESS_TOKEN_URL,
-      form: { client_id: clientId, grant_type: "refresh_token", refresh_token: refreshToken },
-    });
-  } catch (error) {
-    throw new GithubAuthError("network", `Could not reach GitHub: ${(error as Error).message}`);
-  }
+  const res = await callGithub(http, {
+    method: "POST",
+    url: GITHUB_ACCESS_TOKEN_URL,
+    form: { client_id: clientId, grant_type: "refresh_token", refresh_token: refreshToken },
+  });
   if (res.status >= 500) throw new GithubAuthError("network", `GitHub returned HTTP ${res.status}`);
   const tokens = parseTokenResponse(res.json, now);
   if (!tokens || !tokens.refreshToken) {

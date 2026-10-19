@@ -1619,7 +1619,7 @@ function registerIpc() {
   // GitHub App auth (see github-auth/). Opening the verification URL is a
   // browser launch, not a window, but is still skipped under GEODE_HEADLESS.
   ipcMain.handle("github-auth-status", (e) => getGithubAuth(e.sender).getStatus());
-  ipcMain.handle("github-auth-app-info", (e) => githubIpc(() => getGithubAuth(e.sender).getAppReport()));
+  ipcMain.handle("github-auth-app-info", (e, opts: unknown) => githubIpc(() => getGithubAuth(e.sender).getAppReport((opts as { fresh?: unknown } | undefined)?.fresh === true)));
   ipcMain.handle("github-auth-start", (e, opts: unknown) => githubIpc(async () => {
     const confirmExtraPermissions = (opts as { confirmExtraPermissions?: unknown } | null)?.confirmExtraPermissions === true;
     const device = await getGithubAuth(e.sender).startSignIn({ confirmExtraPermissions });
