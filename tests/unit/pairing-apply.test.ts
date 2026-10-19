@@ -60,7 +60,7 @@ describe("applyPairingBundle", () => {
     expect(p.applied).toEqual([]); expect(report.skipped.map(s => s.category)).toEqual(["editor", "appearance"]); expect(p.calls).not.toContain("reload");
   });
   it("treats already-equal settings as applied without a write", async () => {
-    const same = bundle({ portable: { editor: { readableLineLength: true, foldHeading: false, showLineNumber: false, showRibbon: true, showStatusBar: true } } });
+    const same = bundle({ portable: { editor: { readableLineLength: true, foldHeading: true, showLineNumber: false, showRibbon: true, showStatusBar: true } } });
     const p = ports({ app: {} }); const report = await applyPairingBundle(same, p.ports);
     expect(report.applied).toEqual(["editor"]); expect(p.applied).toEqual([]);
   });
