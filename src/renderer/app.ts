@@ -138,7 +138,9 @@ import { getHostServices } from "./host/registry";
 import type { HostServices } from "./host/contracts";
 import { vaultNameMessage, vaultNameProblem } from "../shared/vault-name";
 import { VaultAccessError } from "./host/contracts";
-import { mobileVaultActions, vaultAccessPresentation } from "./host/mobile-vault-access";
+import { vaultAccessPresentation } from "./host/mobile-vault-access";
+import { VaultHub, type VaultHubMode } from "./vault-hub";
+import { orderVaultPaths, vaultNameFromPath } from "./vault-hub-model";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
 import { HUB_PROVIDER_ID, HubSyncProvider, describeHubTarget } from "./sync/hub-provider";
@@ -596,144 +598,12 @@ class CommandPaletteModal extends SuggestModal<Command> {
   }
 }
 
-class ManageVaultsModal extends Modal {
-  private actionPending = false;
-
-  constructor(private geodeApp: App) {
-    super(geodeApp);
-    this.modalEl.classList.add("mod-manage-vaults");
-  }
-
-  async onOpen(): Promise<void> {
-    this.contentEl.empty();
-    const heading = document.createElement("h2");
-    heading.textContent = "Manage vaults";
-    this.contentEl.appendChild(heading);
-
-    const currentPath = this.geodeApp.vault.root;
-    const recents = await this.geodeApp.host.vaultRegistry.getRecentVaults();
-    const paths = [currentPath, ...recents.filter((vaultPath) => vaultPath !== currentPath)];
-    const list = document.createElement("div");
-    list.className = "vault-switcher-list";
-    for (const vaultPath of paths) {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "vault-switcher-row";
-      const name = document.createElement("span");
-      name.className = "vault-switcher-name";
-      name.textContent = vaultPath.split(/[\\/]/).filter(Boolean).pop() ?? vaultPath;
-      const pathEl = document.createElement("span");
-      pathEl.className = "vault-switcher-path";
-      pathEl.textContent = this.geodeApp.host.runtime.runtime === "ios" ? "Loading…" : vaultPath;
-      if (this.geodeApp.host.runtime.runtime === "ios") {
-        void this.geodeApp.host.vaultRegistry.describeVault(vaultPath).then((descriptor) => {
-          name.textContent = descriptor.name;
-          pathEl.textContent = descriptor.kind === "managed" ? "On this device" : "Files folder";
-        }).catch((error) => this.showError(error));
-      }
-      row.append(name, pathEl);
-      if (vaultPath === currentPath) {
-        row.classList.add("is-current");
-        const marker = document.createElement("span");
-        marker.className = "vault-switcher-current";
-        marker.textContent = "Open in this window";
-        row.appendChild(marker);
-      }
-      row.addEventListener("click", () => void this.runVaultAction(() => this.openVaultWindow(vaultPath)));
-      list.appendChild(row);
-    }
-    this.contentEl.appendChild(list);
-
-    const openFolder = document.createElement("button");
-    openFolder.type = "button";
-    openFolder.className = "mod-cta vault-switcher-open-folder";
-    openFolder.textContent = "Open folder as vault";
-    openFolder.addEventListener("click", () => void this.runVaultAction(() => this.chooseVault()));
-    this.contentEl.appendChild(openFolder);
-
-    if (this.geodeApp.host.capabilities.externalVaultFolder) {
-      const chooseFiles = document.createElement("button");
-      chooseFiles.type = "button";
-      chooseFiles.className = "vault-switcher-choose-files";
-      chooseFiles.textContent = "Choose folder in Files";
-      chooseFiles.addEventListener("click", () => void this.runVaultAction(() => this.chooseExternalVault()));
-      this.contentEl.appendChild(chooseFiles);
-    }
-  }
-
-  private async chooseVault(): Promise<void> {
-    const vaultPath = await this.geodeApp.host.vaultRegistry.chooseVault();
-    if (vaultPath) await this.openVaultWindow(vaultPath);
-  }
-
-  private async chooseExternalVault(): Promise<void> {
-    const vaultId = await this.geodeApp.host.vaultRegistry.chooseExternalVault();
-    if (vaultId) await this.openVaultWindow(vaultId);
-  }
-
-  private async openVaultWindow(vaultPath: string): Promise<void> {
-    if (vaultPath === this.geodeApp.vault.root) {
-      this.close();
-      return;
-    }
-    if (!this.geodeApp.host.capabilities.multipleWindows || !this.geodeApp.host.desktop) {
-      await this.geodeApp.switchVaultInWindow(vaultPath);
-    } else {
-      await this.geodeApp.host.desktop.openVaultWindow(vaultPath);
-      this.close();
-    }
-  }
-
-  private setActionPending(pending: boolean): void {
-    this.actionPending = pending;
-    for (const button of this.contentEl.querySelectorAll<HTMLButtonElement>("button")) {
-      button.disabled = pending;
-    }
-  }
-
-  private async runVaultAction(action: () => Promise<void>): Promise<void> {
-    if (this.actionPending) return;
-    this.setActionPending(true);
-    try {
-      await action();
-    } catch (error) {
-      this.showError(error);
-    } finally {
-      this.setActionPending(false);
-    }
-  }
-
-  private showError(error: unknown): void {
-    let errorEl = this.contentEl.querySelector<HTMLElement>(".vault-switcher-error");
-    if (!errorEl) {
-      errorEl = document.createElement("div");
-      errorEl.className = "vault-switcher-error";
-      this.contentEl.appendChild(errorEl);
-    }
-    errorEl.empty();
-    if (error instanceof VaultAccessError) {
-      const state = vaultAccessPresentation(error);
-      const heading = document.createElement("strong");
-      heading.textContent = state.title;
-      const message = document.createElement("span");
-      message.textContent = state.message;
-      const reconnect = document.createElement("button");
-      reconnect.type = "button";
-      reconnect.textContent = state.action;
-      reconnect.disabled = this.actionPending;
-      reconnect.addEventListener("click", () => void this.runVaultAction(async () => {
-          if (!await this.geodeApp.host.vaultRegistry.reconnectVault(state.vaultId)) {
-            message.textContent = "Reconnect canceled. The current vault is still open.";
-            return;
-          }
-          await this.openVaultWindow(state.vaultId);
-      }));
-      errorEl.append(heading, message, reconnect);
-      return;
-    }
-    errorEl.textContent = error instanceof Error ? error.message : "Unable to open that vault";
-  }
-}
+/**
+ * Surfaces whose theme follows the OS rather than a vault: the legacy picker panels and the
+ * first-run Vault Hub. A hub opened over a workspace (Manage vaults) is not one: the vault's own
+ * theme is already applied and must not be overridden by the OS appearance.
+ */
+const PICKER_THEME_OWNER_SELECTOR = ".vault-picker:not(.vault-hub), .vault-hub.is-first-run";
 
 class VaultSwitchBusyError extends Error {
   readonly code = "VAULT_SWITCH_BUSY";
@@ -2858,6 +2728,8 @@ export class App {
   private launchRegistry?: LaunchRegistry;
   private launchRunner?: LaunchRunner;
   private launchOverlay?: LaunchOverlay;
+  private vaultHub?: VaultHub;
+  private vaultHubLoading = false;
   private launchUnsubscribePlugins?: () => void;
 
   /** Internal plugins resolvable through `app.plugins.getPlugin(id)` (Obsidian-style lookup). */
@@ -3144,8 +3016,87 @@ export class App {
     if (tabId) this.activeSettingsModal.activateTab(tabId);
   }
 
-  private openManageVaults(): void {
-    new ManageVaultsModal(this).open();
+  /** Opens the Vault Hub over the workspace (ribbon "Manage vaults" and the "Open another vault" command). */
+  private async openManageVaults(): Promise<void> {
+    if (this.vaultHub?.isOpen || this.vaultHubLoading) return;
+    this.vaultHubLoading = true;
+    try {
+      const currentPath = this.vault.root;
+      const recents = await this.host.vaultRegistry.getRecentVaults();
+      this.vaultHub = this.mountVaultHub({ mode: "switcher", paths: orderVaultPaths(currentPath, recents), currentPath, rootEl: null });
+    } finally {
+      this.vaultHubLoading = false;
+    }
+  }
+
+  /**
+   * Builds and opens the Vault Hub, wiring it to the host. The hub owns presentation; vault
+   * opening, switching and creation stay here so launch logic is unchanged.
+   */
+  private mountVaultHub(args: { mode: VaultHubMode; paths: string[]; currentPath: string | null; rootEl: HTMLElement | null }): VaultHub {
+    const { mode, paths, currentPath, rootEl } = args;
+    const registry = this.host.vaultRegistry;
+    const runtime = this.host.runtime.runtime;
+    const ios = runtime === "ios";
+    const createSupport = runtime === "electron" ? registry.createVaultSupport : undefined;
+    const removeRecentVault = registry.removeRecentVault?.bind(registry);
+    const hub: VaultHub = new VaultHub({
+      mode,
+      brandChipHtml: this.brandChipHtml(),
+      currentPath,
+      entries: paths.map((vaultPath) => ({
+        path: vaultPath,
+        name: ios ? "Loading…" : vaultNameFromPath(vaultPath),
+        detail: ios ? "Loading…" : vaultPath,
+      })),
+      describe: ios || mode === "first-run"
+        ? async (vaultPath) => {
+          const descriptor = await registry.describeVault(vaultPath);
+          return { name: descriptor.name, detail: ios ? (descriptor.kind === "managed" ? "On this device" : "Files folder") : vaultPath };
+        }
+        : undefined,
+      ios,
+      externalVaultFolder: this.host.capabilities.externalVaultFolder,
+      canOpenInNewWindow: this.host.capabilities.multipleWindows && !!this.host.desktop,
+      openVault: async (vaultPath) => {
+        if (mode === "first-run") {
+          await this.openVault(vaultPath, rootEl!);
+          return "dismiss";
+        }
+        if (vaultPath === this.vault.root) return "dismiss";
+        if (!this.host.capabilities.multipleWindows || !this.host.desktop) {
+          // Reloads the page on success, so the morphed card stays up until then.
+          await this.switchVaultInWindow(vaultPath);
+          return "wait";
+        }
+        await this.host.desktop.openVaultWindow(vaultPath);
+        return "dismiss";
+      },
+      chooseFolder: () => registry.chooseVault(),
+      chooseExternalFolder: () => registry.chooseExternalVault(),
+      reconnect: (vaultId) => registry.reconnectVault(vaultId),
+      removeFromList: removeRecentVault,
+      showCreateVault: createSupport
+        ? (host, opener, onCreated) => this.showCreateVaultModal(host, createSupport, opener, onCreated)
+        : undefined,
+      exploreSample: mode === "first-run" && runtime === "electron"
+        ? async () => {
+          const result = await registry.exploreSampleVault();
+          if (!result) return null;
+          return {
+            path: result.path,
+            onOpened: async () => {
+              if (!result.created) return;
+              const startHere = this.vault.getFileByPath("Start here.md");
+              if (startHere) await this.openFile(startHere, false);
+            },
+          };
+        }
+        : undefined,
+      onClosed: () => { if (this.vaultHub === hub) this.vaultHub = undefined; },
+    });
+    hub.open();
+    return hub;
   }
 
   switchVaultInWindow(vaultId: string): Promise<void> {
@@ -3251,11 +3202,11 @@ export class App {
    * none otherwise. Idempotent, so it is safe to call from applySettings().
    */
   private syncOsAppearanceWatcher(): void {
-    const needed = this.settings.theme === "auto" || !!document.querySelector?.(".vault-picker");
+    const needed = this.settings.theme === "auto" || !!document.querySelector?.(PICKER_THEME_OWNER_SELECTOR);
     if (needed && !this.osAppearanceStop) {
       this.osAppearanceStop = watchOsAppearance(() => {
         applyThemeWithFade(() => {
-          if (document.querySelector(".vault-picker")) this.applyPickerTheme();
+          if (document.querySelector(PICKER_THEME_OWNER_SELECTOR)) this.applyPickerTheme();
           else if (this.settings.theme === "auto") this.applySettings();
         });
       });
@@ -3297,104 +3248,21 @@ export class App {
     this.drawnTitlebarEl = bar;
   }
 
-  private showVaultPicker(rootEl: HTMLElement, recents: string[]) {
+  /**
+   * First-run / no-vault screen: the Vault Hub with no current vault. When a hub is already
+   * morphing into a vault that then failed to open, put it back to the cards with the reason.
+   */
+  private showVaultPicker(rootEl: HTMLElement, recents: string[], error?: unknown) {
     this.workspace?.dispose();
     rootEl.innerHTML = "";
-    const picker = document.createElement("div");
-    picker.className = "vault-picker";
-    picker.innerHTML = `<div class="vault-picker-lockup">${this.brandChipHtml()}<h1>Geode</h1></div><p>Your knowledge base, on local Markdown files.</p>`;
-    const actions = document.createElement("div");
-    actions.className = "vault-picker-actions";
-    if (this.host.runtime.runtime === "ios") {
-      for (const action of mobileVaultActions(this.host.capabilities.externalVaultFolder)) {
-        const button = document.createElement("button");
-        button.className = action.id === "managed" ? "mod-cta" : "vault-picker-external";
-        button.textContent = action.label;
-        button.addEventListener("click", async () => {
-          button.disabled = true;
-          try {
-            const id = action.id === "managed"
-              ? await this.host.vaultRegistry.chooseVault()
-              : await this.host.vaultRegistry.chooseExternalVault();
-            if (id) await this.openVault(id, rootEl);
-          } catch (error) {
-            this.showInlineVaultError(picker, error);
-          } finally {
-            button.disabled = false;
-          }
-        });
-        actions.appendChild(button);
-      }
-    } else {
-      const createSupport = this.host.runtime.runtime === "electron" ? this.host.vaultRegistry.createVaultSupport : undefined;
-      if (createSupport) {
-        const createBtn = document.createElement("button");
-        createBtn.className = "mod-cta vault-picker-create";
-        createBtn.textContent = "Create new vault";
-        createBtn.addEventListener("click", () => this.showCreateVaultModal(picker, rootEl, createSupport, createBtn));
-        actions.appendChild(createBtn);
-      }
-      const openBtn = document.createElement("button");
-      openBtn.className = createSupport ? "vault-picker-external" : "mod-cta vault-picker-create";
-      openBtn.textContent = "Open folder as vault";
-      openBtn.addEventListener("click", async () => {
-        openBtn.disabled = true;
-        try {
-          const path = await this.host.vaultRegistry.chooseVault();
-          if (path) await this.openVault(path, rootEl);
-        } catch (error) {
-          this.showInlineVaultError(picker, error);
-        } finally {
-          openBtn.disabled = false;
-        }
-      });
-      actions.appendChild(openBtn);
-      if (this.host.runtime.runtime === "electron") {
-        const exploreBtn = document.createElement("button");
-        exploreBtn.className = "vault-picker-external";
-        exploreBtn.textContent = "Try the sample vault";
-        exploreBtn.addEventListener("click", async () => {
-          exploreBtn.disabled = true;
-          try {
-            const result = await this.host.vaultRegistry.exploreSampleVault();
-            if (!result) return;
-            await this.openVault(result.path, rootEl);
-            if (result.created) {
-              const startHere = this.vault.getFileByPath("Start here.md");
-              if (startHere) await this.openFile(startHere, false);
-            }
-          } catch (error) {
-            this.showInlineVaultError(picker, error);
-          } finally {
-            exploreBtn.disabled = false;
-          }
-        });
-        actions.appendChild(exploreBtn);
-      }
+    const existing = this.vaultHub;
+    if (existing?.isOpen && existing.mode === "first-run") {
+      existing.reset(error);
+      return;
     }
-    picker.appendChild(actions);
-    if (recents.length) {
-      const h = document.createElement("h3");
-      h.textContent = "Recent vaults";
-      picker.appendChild(h);
-      for (const path of recents) {
-        const row = document.createElement("div");
-        row.className = "vault-picker-recent";
-        const dot = document.createElement("span");
-        dot.className = "vault-picker-dot";
-        dot.setAttribute("aria-hidden", "true");
-        const label = document.createElement("span");
-        label.textContent = path;
-        row.append(dot, label);
-        void this.host.vaultRegistry.describeVault(path).then(
-          (descriptor) => { label.textContent = descriptor.name; },
-          () => { label.textContent = "Unavailable vault"; },
-        );
-        row.addEventListener("click", () => this.openVault(path, rootEl));
-        picker.appendChild(row);
-      }
-    }
-    rootEl.appendChild(picker);
+    const hub = this.mountVaultHub({ mode: "first-run", paths: recents, currentPath: null, rootEl });
+    this.vaultHub = hub;
+    if (error !== undefined) hub.showError(error);
   }
 
   private brandChipHtml(): string {
@@ -3404,9 +3272,9 @@ export class App {
 
   private showCreateVaultModal(
     picker: HTMLElement,
-    rootEl: HTMLElement,
     support: NonNullable<HostServices["vaultRegistry"]["createVaultSupport"]>,
     opener: HTMLElement,
+    onCreated: (vaultPath: string) => Promise<void>,
   ): void {
     if (picker.querySelector(".vault-create-overlay")) return;
     const overlay = document.createElement("div");
@@ -3474,7 +3342,7 @@ export class App {
       try {
         const created = await support.createVault({ parent, name: nameInput.value.trim() });
         overlay.remove();
-        await this.openVault(created, rootEl);
+        await onCreated(created);
       } catch (error) {
         busy = false;
         serverError = (error instanceof Error ? error.message : "Unable to create the vault").replace(/^Error invoking remote method '[^']*': (Error: )?/, "");
@@ -3540,7 +3408,7 @@ export class App {
         return;
       }
       const recents = await this.host.vaultRegistry.getRecentVaults();
-      this.showVaultPicker(rootEl, recents);
+      this.showVaultPicker(rootEl, recents, err);
       return;
     }
     await this.propertyTypes.load(this.host.config).catch(() => this.notify("Could not load property types. Type changes are unavailable."));
@@ -3642,7 +3510,7 @@ export class App {
     manageVaultsButton.title = "Manage vaults";
     manageVaultsButton.setAttribute("aria-label", "Manage vaults");
     setIcon(manageVaultsButton, "vault");
-    manageVaultsButton.addEventListener("click", () => this.openManageVaults());
+    manageVaultsButton.addEventListener("click", () => void this.openManageVaults());
     ribbonBottom.append(manageVaultsButton, settingsButton);
     ribbon.append(this.ribbonActionsEl, ribbonBottom);
     main.appendChild(ribbon);
@@ -4388,6 +4256,11 @@ export class App {
   private showVaultAccessError(rootEl: HTMLElement, error: VaultAccessError): void {
     this.workspace?.dispose();
     rootEl.innerHTML = "";
+    // A hub that was opening this vault takes the reconnect prompt itself, so the user stays on one screen.
+    if (this.vaultHub?.isOpen && this.vaultHub.mode === "first-run") {
+      this.vaultHub.reset(error);
+      return;
+    }
     const state = vaultAccessPresentation(error);
     const panel = document.createElement("div");
     panel.className = "vault-picker vault-access-error";
@@ -4942,7 +4815,7 @@ export class App {
       if (view) this.promptCommentForSelection(view);
     });
     c("open-settings", "Open settings", "Mod+,", () => this.setting.open());
-    c("open-another-vault", "Open another vault", undefined, () => this.openManageVaults());
+    c("open-another-vault", "Open another vault", undefined, () => void this.openManageVaults());
     c("refresh-vault", "Refresh external vault", undefined, () => void this.reconcileVault("manual"));
     if (this.host.capabilities.nodePlugins) {
       c("community-add", "Community: Install plugin or theme from GitHub", undefined, () =>
@@ -6735,6 +6608,8 @@ export class App {
     });
 
     const name = vaultPath.split(/[\\/]/).filter(Boolean).pop();
+    // A hub that is morphing into this vault shows the progress in the chosen card; otherwise use the overlay.
+    if (this.vaultHub?.mode === "first-run" && this.vaultHub.bindLaunch(runner)) return;
     this.launchOverlay = new LaunchOverlay(runner, {
       brandChipHtml: this.brandChipHtml(),
       vaultName: name,
@@ -6752,6 +6627,7 @@ export class App {
     if (!runner) return;
     runner.finish();
     this.launchOverlay?.dismiss();
+    if (this.vaultHub?.mode === "first-run") this.vaultHub.completeLaunch();
     const summary = summarizeLaunchFailures(runner.getSnapshot());
     if (summary) this.notify(summary);
   }
