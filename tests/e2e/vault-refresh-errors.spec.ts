@@ -108,3 +108,45 @@ test("refresh explains real unsupported paths, redacts copied diagnostics and re
     expect(fs.readFileSync(path.join(vault, "Welcome.md"), "utf8")).toBe("# Welcome\nExisting note bytes");
   } finally { await app.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a refresh requested while a scan is running re-scans instead of joining its stale result", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "geode-e2e-refresh-join-"));
+  const vault = path.join(root, "vault");
+  const userData = path.join(root, "user-data");
+  fs.mkdirSync(vault); fs.mkdirSync(userData);
+  fs.writeFileSync(path.join(vault, "Welcome.md"), "# Welcome\n");
+  fs.writeFileSync(path.join(userData, "geode.json"), JSON.stringify({ recentVaults: [vault], lastVault: vault }));
+  const repo = path.resolve(__dirname, "../..");
+  const app = await electron.launch({ args: [repo, `--user-data-dir=${userData}`], cwd: repo });
+  try {
+    const page = await app.firstWindow();
+    await expect(page.locator('.nav-file-title[data-path="Welcome.md"]')).toBeVisible();
+    // Let startup's own reconcile finish so only the scans below are in play.
+    await page.evaluate(() => (window as any).app.reconcileVault("manual"));
+    await expect(page.locator(".vault-reconcile-state")).toHaveCount(0);
+
+    // Hold a scan in flight after it has already listed the vault: that is the
+    // exact window in which a late change used to be missed by a joined refresh.
+    await page.evaluate(() => {
+      const vaultModel = (window as any).app.vault;
+      const original = vaultModel.reconcile.bind(vaultModel);
+      let calls = 0;
+      vaultModel.reconcile = async () => {
+        const result = await original();
+        if (++calls === 1) await new Promise<void>((resolve) => { (window as any).__releaseFirstScan = resolve; });
+        return result;
+      };
+      (window as any).__firstRefresh = (window as any).app.reconcileVault("manual");
+    });
+    await page.waitForFunction(() => typeof (window as any).__releaseFirstScan === "function");
+
+    fs.symlinkSync("missing", path.join(vault, "Unsupported.md"));
+    await page.evaluate(() => {
+      (window as any).__secondRefresh = (window as any).app.reconcileVault("manual");
+      (window as any).__releaseFirstScan();
+    });
+    await page.evaluate(() => Promise.all([(window as any).__firstRefresh, (window as any).__secondRefresh]));
+
+    await expect(page.locator(".vault-reconcile-state")).toContainText("Vault refresh failed. Your previous file list is unchanged.");
+  } finally { await app.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

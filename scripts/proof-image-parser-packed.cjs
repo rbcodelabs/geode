@@ -55,7 +55,7 @@ async function canonicalHost(helperURL){
   // deliberately withhold delivery to the host transport's readiness callback.
   withholdReady=true;startupTransport=new api.ImageParserTransport();const ready=wait('ready');const pending=startupTransport.parse('');const startupRejected=pending.then(()=>{throw Error('startup parse unexpectedly succeeded');},error=>{if(error.name!=='AbortError')throw error;return error.name;});
   await ready;const frame=document.querySelector('iframe');await startupTransport.close();const startup={receivedOwnedReady:!!withheld,rejection:await startupRejected,frameRemoved:!frame.isConnected};withholdReady=false;
-  const transport=new api.ImageParserTransport();coordinator=new api.ImageParserCoordinator(()=>transport);
+  const transport=new api.ImageParserTransport(undefined,120000);coordinator=new api.ImageParserCoordinator(()=>transport);
   const complete='['.repeat(150000)+']'.repeat(150000),firstReady=wait('worker-ready',1);
   const view={},first=coordinator.project(context(complete),view),firstCancelled=first.then(()=>{throw Error('obsolete first request published');},error=>{if(error.name!=='AbortError')throw error;return error.name;});
   await firstReady;const cancellationStart=performance.now();const second=coordinator.project(context(complete),view),secondCancelled=second.then(()=>{throw Error('obsolete pending request published');},error=>{if(error.name!=='AbortError')throw error;return error.name;});

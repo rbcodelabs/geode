@@ -49,6 +49,10 @@ test("typing / opens the command menu; picking a command removes the trigger and
     await window.keyboard.type("/trv");
     await expect(popup).toBeVisible();
     await expect(popup.locator("li").first()).toContainText("Toggle reading view");
+    // CodeMirror ignores accept keys for `interactionDelay` (75 ms) after the
+    // list last changed, and Enter then falls through to a newline. On a slow
+    // runner the assertions above can pass inside that window; wait it out.
+    await window.waitForTimeout(250);
     await window.keyboard.press("Enter");
 
     await expect(window.locator(".markdown-reading-view")).toBeVisible();

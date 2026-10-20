@@ -97,10 +97,19 @@ test("opens and edits a JSON Canvas from the file explorer", async () => {
     await editor.fill("Revised idea");
     await editor.press("ControlOrMeta+Enter");
     await expect(textNode.locator(".canvas-node-text")).toHaveText("Revised idea");
-    const before = await textNode.boundingBox();
-    await textNode.dragTo(view, { targetPosition: { x: 500, y: 360 } });
-    const moved = await textNode.boundingBox();
-    expect(moved!.x).toBeGreaterThan(before!.x + 100);
+    // The view ignores pointer input while its own save of the edit is still in
+    // flight, so wait for the edit to be durable before starting the gesture.
+    await expect(view).toHaveAttribute("data-canvas-dirty", "false");
+    await expect.poll(() => readCanvas(canvasPath)?.nodes.find((node: any) => node.id === "text")?.text).toBe("Revised idea");
+    const before = (await textNode.boundingBox())!;
+    const viewBox = (await view.boundingBox())!;
+    // A real drag emits many pointermoves; dragTo emits one, which is too thin
+    // a signal to assert on under load.
+    await window.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+    await window.mouse.down();
+    await window.mouse.move(viewBox.x + 500, viewBox.y + 360, { steps: 12 });
+    await window.mouse.up();
+    await expect.poll(async () => (await textNode.boundingBox())!.x).toBeGreaterThan(before.x + 100);
 
     const resize = textNode.locator(".canvas-node-resize-handle");
     const handle = (await resize.boundingBox())!;
@@ -203,6 +212,64 @@ test("opens and edits a JSON Canvas from the file explorer", async () => {
     expect(saved.vendorCanvas).toEqual({ keep: true });
     expect(saved.nodes.find((node: { id: string }) => node.id === "text")?.vendorNode).toBe("keep");
     expect(errors, `Console errors: ${errors.join("\n")}`).toEqual([]);
+  } finally {
+    await app.close();
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("a reload that read the file before a local save cannot overwrite that save", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-stale-vault-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-canvas-stale-user-"));
+  const canvasPath = path.join(vaultDir, "Stale.canvas");
+  fs.writeFileSync(canvasPath, JSON.stringify({
+    nodes: [{ id: "text", type: "text", x: 0, y: 0, width: 220, height: 120, text: "Card" }],
+    edges: [],
+  }));
+  fs.writeFileSync(path.join(userDataDir, "geode.json"), JSON.stringify({ recentVaults: [vaultDir], lastVault: vaultDir }));
+
+  const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userDataDir}`], cwd: repoRoot });
+  try {
+    const window = await app.firstWindow();
+    await window.locator('.nav-file-title[data-path="Stale.canvas"]').click();
+    const view = window.locator(".canvas-view");
+    await expect(view.locator(".canvas-node")).toHaveCount(1);
+
+    // A late file-watcher echo starts a reload whose disk read resolves only
+    // when released, i.e. with the pre-save contents.
+    await window.evaluate(() => {
+      const a = (window as any).app;
+      const canvas = a.workspace.getActiveLeaf().view;
+      const original = a.vault.read.bind(a.vault);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      a.vault.read = async (file: { path: string }) => {
+        const text = await original(file);
+        if (file.path === "Stale.canvas") await gate;
+        return text;
+      };
+      a.vault.contents.delete("Stale.canvas");
+      (window as any).__staleReload = canvas.reloadFromFile(true);
+      (window as any).__releaseStaleRead = () => { a.vault.read = original; release(); };
+    });
+
+    // Meanwhile the user moves the card and it is saved.
+    await window.evaluate(async () => {
+      const canvas = (window as any).app.workspace.getActiveLeaf().view;
+      canvas.document.nodes.find((node: any) => node.id === "text").x = 300;
+      canvas.render();
+      await canvas.persist();
+    });
+    await expect.poll(() => readCanvas(canvasPath)?.nodes[0].x).toBe(300);
+
+    await window.evaluate(async () => {
+      (window as any).__releaseStaleRead();
+      await (window as any).__staleReload;
+    });
+    // The in-memory document is what a later save would write back to disk.
+    expect(await window.evaluate(() => (window as any).app.workspace.getActiveLeaf().view.document.nodes[0].x)).toBe(300);
+    await expect(view.locator('.canvas-node[data-node-id="text"]')).toHaveCSS("left", "300px");
   } finally {
     await app.close();
     fs.rmSync(vaultDir, { recursive: true, force: true });

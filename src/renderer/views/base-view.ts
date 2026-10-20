@@ -515,6 +515,11 @@ export class BaseView implements View {
     this.app.vault.on("create", this.onVaultChange);
     this.app.vault.on("delete", this.onVaultChange);
     this.app.metadataCache.on("changed", this.onVaultChange);
+    // Background/paged indexing and the renderer fallback fill the cache and
+    // announce it only with "resolve"/"resolved" (never "changed"), so a base
+    // opened before indexing finishes would otherwise keep its first,
+    // frontmatter-less result (every formula/group falls into its default).
+    this.app.metadataCache.on("resolved", this.onVaultChange);
   }
 
   onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
@@ -530,6 +535,7 @@ export class BaseView implements View {
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
+    this.app.metadataCache.off("resolved", this.onVaultChange);
     this.tableView.cancelNavigation();
     this.cardsView.destroy();
     this.pluginViewHost.destroy();

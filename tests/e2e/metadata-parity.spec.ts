@@ -22,13 +22,15 @@ test("unchanged old-cache notes reindex with shared Markdown and property metada
   const app = await electron.launch({ args: [repoRoot, `--user-data-dir=${userData}`], cwd: repoRoot });
   try {
     const page = await app.firstWindow();
-    await expect.poll(() => page.evaluate(() => (window as any).app?.metadataCache?.getCache("Source.md")?.links.map((link: any) => link.link))).toEqual(["Target.md"]);
-    const result = await page.evaluate(() => {
-      const cache = (window as any).app.metadataCache;
-      const metadata = cache.getCache("Source.md");
-      return { properties: metadata.frontmatterLinks.map((link: any) => link.link), block: metadata.blocks.block.id, footnote: metadata.footnotes[0].id, counts: cache.resolvedLinks["Source.md"] };
-    });
-    expect(result).toEqual({ properties: ["Target"], block: "block", footnote: "one", counts: { "Target.md": 2, "image.png": 1 } });
+    // `getCache()` fills before link resolution runs, so `links` alone is not a
+    // completion signal: `resolvedLinks` is only populated by the later resolve
+    // pass. Poll the whole observable result instead of reading it once.
+    await expect.poll(() => page.evaluate(() => {
+      const cache = (window as any).app?.metadataCache;
+      const metadata = cache?.getCache("Source.md");
+      if (!metadata?.links?.length || !metadata.blocks?.block || !metadata.footnotes?.[0]) return null;
+      return { properties: metadata.frontmatterLinks?.map((link: any) => link.link), block: metadata.blocks.block.id, footnote: metadata.footnotes[0].id, counts: cache.resolvedLinks["Source.md"] };
+    })).toEqual({ properties: ["Target"], block: "block", footnote: "one", counts: { "Target.md": 2, "image.png": 1 } });
     expect(fs.readFileSync(path.join(vault, "Source.md"), "utf8")).toBe(text);
   } finally { await app.close(); fs.rmSync(vault, { recursive: true, force: true }); fs.rmSync(userData, { recursive: true, force: true }); }
 });

@@ -175,8 +175,10 @@ test("Bookmark heading under cursor adds a heading row", async () => {
       const file = a.vault.getFileByPath("B.md");
       await a.openFile(file, false);
       // Wait for the metadata cache to index the heading before resolving it.
-      for (let i = 0; i < 100; i++) {
-        if ((a.metadataCache.getFileCache(file)?.headings?.length ?? 0) > 0) break;
+      // Indexing runs in the background and can lag well behind first paint on
+      // a loaded runner, so allow it a generous budget and fail loudly.
+      for (let i = 0; !((a.metadataCache.getFileCache(file)?.headings?.length ?? 0) > 0); i++) {
+        if (i >= 600) throw new Error("heading was never indexed");
         await new Promise((r) => setTimeout(r, 25));
       }
       a.commands.execute("bookmark-heading");
@@ -221,8 +223,13 @@ test("Web Viewer toolbar bookmarks the current page as a link", async () => {
     const bookmarksPane = window.locator(".mod-show-generic-header");
 
     await window.evaluate(() => (window as any).app.openWebViewer("https://example.com/"));
-    await window.locator('.web-view-toolbar button[title="More options"]').click();
-    await window.locator(".menu-item", { hasText: /Bookmark this page$/ }).click();
+    // A guest that is still loading can take focus and dismiss an open menu
+    // between locating an item and clicking it. Let the load settle first.
+    await window.waitForFunction(() => {
+      const guest = document.querySelector(".web-view-frame") as (HTMLElement & { isLoading(): boolean; getURL(): string }) | null;
+      try { return !!guest && !guest.isLoading() && guest.getURL() !== "" && guest.getURL() !== "about:blank"; }
+      catch { return false; } // not yet attached / dom-ready
+    }, undefined, { polling: 100 });
 
     const readLink = () =>
       window.evaluate(() => {
@@ -234,7 +241,14 @@ test("Web Viewer toolbar bookmarks the current page as a link", async () => {
         }>;
         return items.find((item) => item.type === "link");
       });
-    await expect.poll(readLink).toMatchObject({ type: "link", url: "https://example.com/" });
+    // Opening the menu and choosing the item is one user action; retry it as a
+    // unit if the menu was dismissed before the click landed. A repeat after a
+    // success is a harmless no-op ("already bookmarked").
+    await expect(async () => {
+      await window.locator('.web-view-toolbar button[title="More options"]').click();
+      await window.locator(".menu-item", { hasText: /Bookmark this page$/ }).click({ timeout: 2_000 });
+      await expect.poll(readLink, { timeout: 2_000 }).toMatchObject({ type: "link", url: "https://example.com/" });
+    }).toPass({ timeout: 20_000 });
 
     await window.locator('.workspace-tab-header[data-type="bookmarks"]').click();
     const link = (await readLink())!;
@@ -387,8 +401,8 @@ test("Bookmark block refuses inside a code fence and leaves the file untouched (
       const file = a.vault.getFileByPath("A.md");
       await a.openFile(file, false);
       // Wait for the metadata cache to index the fenced "code" section.
-      for (let i = 0; i < 100; i++) {
-        if (a.metadataCache.getFileCache(file)?.sections?.some((s: any) => s.type === "code")) break;
+      for (let i = 0; !a.metadataCache.getFileCache(file)?.sections?.some((s: any) => s.type === "code"); i++) {
+        if (i >= 600) throw new Error("code section was never indexed");
         await new Promise((r) => setTimeout(r, 25));
       }
       // Cursor onto the "const x = 1;" line (offset 13 is inside it).
@@ -417,8 +431,8 @@ test("Bookmark block on a multi-item list lands the ^id on the cursor's bullet (
       const a = (window as any).app;
       const file = a.vault.getFileByPath("L.md");
       await a.openFile(file, false);
-      for (let i = 0; i < 100; i++) {
-        if ((a.metadataCache.getFileCache(file)?.listItems?.length ?? 0) >= 3) break;
+      for (let i = 0; (a.metadataCache.getFileCache(file)?.listItems?.length ?? 0) < 3; i++) {
+        if (i >= 600) throw new Error("list items were never indexed");
         await new Promise((r) => setTimeout(r, 25));
       }
       // Cursor on the FIRST bullet "- one" (offset 7 is inside "one").
