@@ -562,60 +562,6 @@ body.is-macos:not(.is-native-fullscreen) .workspace-ribbon.mod-left {
   height: var(--icon-size);
 }
 
-/* ---- Manage vaults ---- */
-
-.mod-manage-vaults {
-  width: min(560px, calc(100vw - 32px));
-}
-
-.vault-switcher-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 16px 0;
-}
-
-.vault-switcher-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 12px;
-  padding: 10px 12px;
-  text-align: left;
-  color: var(--text-normal);
-  background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-s);
-  cursor: pointer;
-}
-
-.vault-switcher-row:hover,
-.vault-switcher-row:focus-visible {
-  background: var(--background-modifier-hover);
-}
-
-.vault-switcher-name {
-  font-weight: var(--font-semibold);
-}
-
-.vault-switcher-path {
-  grid-column: 1 / -1;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.vault-switcher-current {
-  color: var(--text-accent);
-  font-size: var(--font-ui-smaller);
-}
-
-.vault-switcher-error {
-  margin-top: 12px;
-  color: var(--text-error);
-}
-
 .editor-conflict-banner,
 .vault-reconcile-state {
   display: flex;
@@ -5058,7 +5004,6 @@ body.is-mobile .page-preview {
 
 .vault-picker button,
 .vault-picker input,
-.vault-picker-recent,
 .vault-create-overlay {
   -webkit-app-region: no-drag;
 }
@@ -5117,23 +5062,9 @@ body.is-mobile .page-preview {
 }
 
 .vault-picker button:focus-visible,
-.vault-picker input:focus-visible,
-.vault-picker-recent:focus-visible {
+.vault-picker input:focus-visible {
   outline: 2px solid #789348;
   outline-offset: 2px;
-}
-
-.vault-picker-recent {
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 13.5px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.vault-picker-recent:hover {
-  color: var(--text-normal);
 }
 
 .vault-picker-dot {
@@ -7149,6 +7080,450 @@ body.is-mobile .cm-editor .cm-scroller {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+/* ---- Vault Hub: first-run picker + "Manage vaults" (src/renderer/vault-hub.ts) ----
+   Reuses the .vault-picker surface, palette and lockup; everything below is layout for the
+   card grid, the card menu and the card -> launch-panel morph. */
+
+.theme-light .vault-hub {
+  --background-modifier-border: rgba(35, 41, 33, 0.12);
+  --background-modifier-hover: rgba(35, 41, 33, 0.05);
+}
+
+.vault-picker.vault-hub {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  height: auto;
+  overflow-y: auto;
+  justify-content: flex-start;
+  background-color: var(--background-primary);
+  animation: vault-hub-in 0.18s ease both;
+  transition: opacity 0.22s ease;
+}
+
+.vault-hub.is-closing {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vault-hub-content {
+  /* auto margins centre short content but let tall grids scroll from the top */
+  margin: auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+}
+
+.vault-hub .vault-picker-lockup {
+  gap: 12px;
+}
+
+.vault-hub-subtitle {
+  margin: -16px 0 0;
+  transition: opacity 0.2s ease;
+}
+
+.vault-hub.is-opening .vault-hub-subtitle,
+.vault-hub.is-opening .vault-hub-hint {
+  opacity: 0;
+}
+
+.vault-hub-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  transition: opacity 0.2s ease;
+}
+
+.vault-hub button.vault-hub-close {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+
+.vault-hub button.vault-hub-close:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+}
+
+.vault-hub-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 260px));
+  justify-content: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.vault-hub-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 16px;
+  color: var(--text-normal);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.18s ease;
+}
+
+.vault-hub-card:focus {
+  outline: none;
+}
+
+.vault-hub-card:hover:not(.is-selected),
+.vault-hub-card:focus-within:not(.is-selected),
+.vault-hub-card.is-menu-open {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  border-color: var(--text-faint);
+}
+
+.vault-hub-card.is-current {
+  border-color: var(--text-accent);
+  box-shadow: 0 0 0 1px var(--text-accent) inset;
+}
+
+.vault-hub-card.is-current:hover {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--text-accent) inset;
+}
+
+.vault-hub button.vault-hub-card-main {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  padding: 18px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  color: inherit;
+  cursor: pointer;
+  flex: 1;
+}
+
+.vault-hub button.vault-hub-card-main:hover:not(:disabled) {
+  background: transparent;
+}
+
+.vault-hub-card:not(.is-add) .vault-hub-card-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 10px;
+  align-content: start;
+}
+
+.vault-hub-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  font-weight: 700;
+  font-size: 15px;
+  color: #fff;
+}
+
+.vault-hub-card-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vault-hub-card-name {
+  font-weight: 650;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-hub-card-path {
+  font-size: 12px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-hub-tag {
+  grid-column: 1 / -1;
+  justify-self: start;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--text-accent);
+  color: var(--text-accent);
+}
+
+.vault-hub button.vault-hub-more {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.vault-hub-card:hover .vault-hub-more,
+.vault-hub-card:focus-within .vault-hub-more,
+.vault-hub-card.is-menu-open .vault-hub-more {
+  opacity: 1;
+}
+
+.vault-hub button.vault-hub-more:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+}
+
+/* Touch screens have no hover, so the menu button is always there. */
+@media (hover: none) {
+  .vault-hub button.vault-hub-more {
+    opacity: 1;
+  }
+}
+
+.vault-hub-card.is-add {
+  background: transparent;
+  border-style: dashed;
+  min-height: 120px;
+  color: var(--text-muted);
+}
+
+.vault-hub-card.is-add:hover,
+.vault-hub-card.is-add:focus-within {
+  color: var(--text-normal);
+}
+
+.vault-hub-card.is-add .vault-hub-card-main {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: inherit;
+}
+
+.vault-hub-add-icon {
+  display: grid;
+  place-items: center;
+}
+
+.vault-hub-add-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.vault-hub-menu {
+  position: absolute;
+  top: 40px;
+  right: 10px;
+  z-index: 2;
+  min-width: 190px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  -webkit-app-region: no-drag;
+}
+
+.vault-hub button.vault-hub-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-normal);
+}
+
+.vault-hub button.vault-hub-menu-item:hover,
+.vault-hub button.vault-hub-menu-item:focus-visible {
+  background: var(--background-modifier-hover);
+}
+
+.vault-hub button.vault-hub-menu-item.is-danger {
+  color: var(--text-error, #c0553f);
+}
+
+.vault-hub-menu-item svg {
+  width: 15px;
+  height: 15px;
+}
+
+.vault-hub-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 460px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-error, #c0392b);
+}
+
+.vault-hub-error[hidden] {
+  display: none;
+}
+
+/* ---- Morph: the chosen card becomes the launch panel ---- */
+
+.vault-hub-launch {
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 0 18px 18px;
+}
+
+.vault-hub-launch .launch-overlay-subtitle {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.vault-hub-launch .launch-overlay-progress,
+.vault-hub-launch .launch-overlay-steps {
+  width: 100%;
+}
+
+.vault-hub-launch .launch-overlay-actions {
+  min-height: 0;
+}
+
+.vault-hub-card.is-selected {
+  border-color: var(--text-accent);
+  cursor: default;
+}
+
+.vault-hub-card.is-selected .vault-hub-more {
+  display: none;
+}
+
+.vault-hub-card.is-selected .vault-hub-launch {
+  display: flex;
+  animation: vault-hub-launch-in 0.3s ease 0.1s both;
+}
+
+.vault-hub-card.is-leaving {
+  opacity: 0;
+  transform: scale(0.92);
+  pointer-events: none;
+}
+
+.vault-hub-grid.is-morphed {
+  grid-template-columns: minmax(0, 440px);
+}
+
+.vault-hub-grid.is-morphed > .vault-hub-card:not(.is-selected) {
+  display: none;
+}
+
+.vault-hub-card.is-expanded {
+  width: 100%;
+}
+
+.vault-hub-launch .launch-overlay-progress-bar {
+  background: linear-gradient(90deg, #789348, #dbea9d);
+}
+
+.launch-overlay-progress.is-indeterminate {
+  position: relative;
+}
+
+.launch-overlay-progress.is-indeterminate .launch-overlay-progress-bar {
+  position: absolute;
+  width: 35% !important;
+  animation: vault-hub-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes vault-hub-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vault-hub-launch-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes vault-hub-indeterminate {
+  from { left: -35%; }
+  to { left: 100%; }
+}
+
+@media (max-width: 880px) {
+  .vault-hub-grid {
+    grid-template-columns: repeat(2, minmax(0, 260px));
+  }
+}
+
+@media (max-width: 580px) {
+  .vault-hub-grid {
+    grid-template-columns: minmax(0, 360px);
+  }
+}
+
+/* Reduced motion: no movement or scaling, only opacity fades. */
+@media (prefers-reduced-motion: reduce) {
+  .vault-picker.vault-hub {
+    animation-duration: 0.01s;
+    transition-duration: 0.12s;
+  }
+
+  .vault-hub-card {
+    transition: opacity 0.12s ease;
+  }
+
+  .vault-hub-card:hover:not(.is-selected),
+  .vault-hub-card:focus-within:not(.is-selected) {
+    transform: none;
+  }
+
+  .vault-hub-card.is-leaving {
+    transform: none;
+  }
+
+  .vault-hub-card.is-selected .vault-hub-launch {
+    animation: vault-hub-in 0.12s ease both;
+  }
+
+  .launch-overlay-progress.is-indeterminate .launch-overlay-progress-bar {
+    animation: none;
+    left: 0;
+    width: 100% !important;
+    opacity: 0.5;
+  }
 }
 
 /* ---- Launch sequence overlay (reuses .vault-picker surface/lockup/chip) ---- */

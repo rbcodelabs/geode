@@ -120,6 +120,7 @@ const api = {
   ): Promise<{ root: string; name: string; files: VaultFileEntry[] }> =>
     ipcRenderer.invoke("open-vault", path),
   getRecentVaults: (): Promise<string[]> => ipcRenderer.invoke("get-recent-vaults"),
+  removeRecentVault: (path: string): Promise<void> => ipcRenderer.invoke("remove-recent-vault", path),
   getLaunchVault: (): Promise<string | null> => ipcRenderer.invoke("get-launch-vault"),
   openVaultWindow: (path: string): Promise<{ action: "current" | "focused" | "created" }> =>
     ipcRenderer.invoke("open-vault-window", path),

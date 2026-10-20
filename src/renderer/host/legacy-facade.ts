@@ -17,6 +17,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     createVault: async (request) => host.vaultRegistry.createVaultSupport?.createVault(request) ?? unavailable("createVault")(),
     openVault: async (path) => ({ ...(await host.vaultRegistry.openVault(path)), files: await host.vaultFiles.list() }),
     getRecentVaults: () => host.vaultRegistry.getRecentVaults(),
+    removeRecentVault: async (path) => host.vaultRegistry.removeRecentVault?.(path) ?? unavailable("removeRecentVault")(),
     getLaunchVault: () => host.vaultRegistry.getLaunchVault(),
     openVaultWindow: host.desktop?.openVaultWindow ?? unavailable("multipleWindows") as never,
     getPluginPolicy: () => host.plugins.getPolicy() as never,
