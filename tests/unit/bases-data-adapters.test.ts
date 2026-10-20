@@ -290,3 +290,21 @@ describe("BasesViewConfig", () => {
     });
   });
 });
+
+describe("BasesEntry.frontmatter (read by TaskNotes to rebuild its task model)", () => {
+  it("exposes the note's raw frontmatter, including keys outside view.order", () => {
+    const entry = new BasesEntry(files[0], deps);
+    expect(entry.frontmatter).toEqual({ status: "To Do", owner: "rick", points: 3 });
+  });
+
+  it("is a copy: mutating it cannot corrupt the metadata cache", () => {
+    const entry = new BasesEntry(files[1], deps);
+    entry.frontmatter.status = "Hacked";
+    expect(new BasesEntry(files[1], deps).frontmatter.status).toBe("Done");
+  });
+
+  it("is an empty object, not null, for a note without frontmatter", () => {
+    const bare = { ...deps, metadataCache: { ...metadataCache, getFileCache: () => ({}) as CachedMetadata } };
+    expect(new BasesEntry(files[2], bare).frontmatter).toEqual({});
+  });
+});

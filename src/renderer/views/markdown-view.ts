@@ -24,6 +24,7 @@ import { buildViewHeaderNavButtons, type View, type WorkspaceLeaf } from "../wor
 import { setIcon } from "../api/icons";
 import type { HeadingCache, TFile } from "../types";
 import { frontmatterEndOffset, livePreview } from "../markdown/live-preview";
+import { editorInfoExtension, livePreviewFlagExtension } from "../editor-info-fields";
 import { foldingExtensions, foldRanges, foldCommand, multipleSelectionExtensions, restoreFolds, savedFolds, type FoldAction } from "../markdown/folding";
 import { resolveBlockBoundary } from "../block-boundary";
 import { PagePreviewController } from "../page-preview";
@@ -253,6 +254,20 @@ export class MarkdownView implements View {
   }
 
   /**
+   * Obsidian's `MarkdownView.getMode()`: "preview" for Reading view,
+   * "source" for both Source mode and Live Preview (Obsidian distinguishes
+   * those via `editorLivePreviewField`, not here).
+   */
+  getMode(): "source" | "preview" {
+    return this.mode === "reading" ? "preview" : "source";
+  }
+
+  /** Obsidian's `view.leaf`: the leaf hosting this view, or null while detached. */
+  get leaf(): WorkspaceLeaf | null {
+    return this.ownLeaf();
+  }
+
+  /**
    * The pane this view is currently mounted in, for link clicks originating
    * inside it. Resolved on demand rather than cached: a tab can be dragged
    * into another pane while this view stays alive, and the view is constructed
@@ -385,6 +400,7 @@ export class MarkdownView implements View {
       doc: text,
       selection: EditorSelection.cursor(initialCursorOffset ?? 0),
       extensions: [
+        editorInfoExtension(this),
         history(),
         multipleSelectionExtensions(),
         this.foldingCompartment.of(foldingExtensions(this.app.settings)),
@@ -397,7 +413,7 @@ export class MarkdownView implements View {
         syntaxHighlighting(mdHighlight),
         this.editingCompartment.of(
           this.mode !== "source"
-            ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility), commentDecorations, commentInteractions((id) => this.app.selectComment(id))]
+            ? this.editingExtensions("live")
             : []
         ),
         autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
@@ -904,7 +920,7 @@ export class MarkdownView implements View {
   }
 
   private editingExtensions(mode: MarkdownMode) {
-    return mode === "live" ? [livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
+    return mode === "live" ? [livePreviewFlagExtension(), livePreview(this.app, () => this.file?.path ?? "", () => this.ownLeaf(), this.lpProjection ?? undefined, this.sourceNavigation, this.backgroundVisibility), commentDecorations, commentInteractions(id => this.app.selectComment(id))] : [];
   }
 
   private changeMode(desired: MarkdownMode): Promise<void> {

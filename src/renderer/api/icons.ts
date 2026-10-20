@@ -113,3 +113,27 @@ export function setIcon(el: HTMLElement, iconId: string): void {
     el.textContent = /^[A-Za-z0-9_-]+$/.test(iconId) ? "" : iconId;
   }
 }
+
+function toKebabCase(pascal: string): string {
+  return pascal
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
+    .toLowerCase();
+}
+
+/**
+ * Obsidian's `getIconIds()`: every icon id `setIcon` can resolve. Lucide ids
+ * carry the `lucide-` prefix (as in Obsidian); plugin-registered icons keep
+ * their own id. Sorted and de-duplicated. A Lucide export whose kebab-case id
+ * would not round-trip through `lookupLucide` is omitted rather than listed
+ * as an id that renders blank.
+ */
+export function getIconIds(): string[] {
+  const ids = new Set<string>(customIcons.keys());
+  for (const [key, value] of Object.entries(lucide as Record<string, unknown>)) {
+    if (typeof value !== "string") continue;
+    const kebab = toKebabCase(key);
+    if (lookupLucide(kebab) === value) ids.add(`lucide-${kebab}`);
+  }
+  return [...ids].sort();
+}

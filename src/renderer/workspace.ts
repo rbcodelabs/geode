@@ -23,6 +23,24 @@ import {
   uniqueCollectionId,
 } from "./tab-collections";
 
+/**
+ * Obsidian's `View.getViewType()` is public API plugins call on any
+ * `leaf.view`, but Geode's built-in views expose a `viewType` property
+ * instead. Define the method on the instance (non-enumerable, never
+ * overriding a view's own) when a view is attached to a leaf.
+ */
+export function ensureGetViewType<T extends { viewType: string }>(view: T): T {
+  const candidate = view as T & { getViewType?: () => string };
+  if (typeof candidate.getViewType !== "function") {
+    Object.defineProperty(view, "getViewType", {
+      value: () => view.viewType,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return view;
+}
+
 export interface View {
   readonly viewType: string;
   containerEl: HTMLElement;
@@ -218,7 +236,7 @@ export class WorkspaceLeaf {
         if (this.view.viewType === "canvas" && typeof canvas.closeImplicitly === "function") await canvas.closeImplicitly();
         else await this.view.onClose();
       }
-      this.view = view;
+      this.view = ensureGetViewType(view);
       this.opened = false;
       this.contentEl.innerHTML = "";
       this.contentEl.dataset.type = view.viewType;
@@ -1885,7 +1903,7 @@ export class Sidebar implements LeafContainer {
     this.app.workspace.registerBuiltinViewType(view.viewType);
     this.views.push(view);
     const leaf = new WorkspaceLeaf(this, this.app);
-    leaf.view = view;
+    leaf.view = ensureGetViewType(view);
     leaf.contentEl.dataset.type = view.viewType;
     leaf.contentEl.appendChild(view.containerEl);
     this.leaves.push(leaf);
@@ -3554,6 +3572,14 @@ export class Workspace extends Events {
   /** Obsidian alias for iterating every open leaf. */
   iterateAllLeaves(cb: (leaf: WorkspaceLeaf) => void): void {
     this.iterateLeaves(cb);
+  }
+
+  /**
+   * Obsidian's `iterateRootLeaves`: every leaf in the main editor area,
+   * excluding the left/right sidebars.
+   */
+  iterateRootLeaves(cb: (leaf: WorkspaceLeaf) => void): void {
+    for (const group of this.groups) for (const leaf of group.leaves) cb(leaf);
   }
 
   private layoutReadyCbs: (() => void)[] = [];

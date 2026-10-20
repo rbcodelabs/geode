@@ -6,9 +6,9 @@ import * as ObsidianAPI from "../../src/renderer/api/obsidian";
  * exports the shipped bundle reads off `require("obsidian")`. Several are
  * dereferenced at load time (`class X extends AbstractInputSuggest`), so a
  * missing one aborts the whole plugin with "Class extends value undefined".
- * `it.fails` documents the gap; remove it when the export lands.
+ * Previously these were `it.fails` gaps; they are now real assertions.
  */
-const MISSING_TODAY = [
+const FORMERLY_MISSING = [
   "AbstractInputSuggest",
   "SettingGroup",
   "TAbstractFile",
@@ -31,10 +31,10 @@ describe("TaskNotes required obsidian exports", () => {
   for (const name of PRESENT) {
     it(`exports ${name}`, () => expect(name in ObsidianAPI).toBe(true));
   }
-  for (const name of MISSING_TODAY) {
-    it.fails(`exports ${name} (GAP)`, () => expect(name in ObsidianAPI).toBe(true));
+  for (const name of FORMERLY_MISSING) {
+    it(`exports ${name}`, () => expect((ObsidianAPI as Record<string, unknown>)[name]).toBeDefined());
   }
-  it.fails("MarkdownView.prototype.getMode exists (GAP)", () => {
-    expect(typeof (ObsidianAPI.MarkdownView.prototype as any).getMode).toBe("function");
+  it("MarkdownView.prototype.getMode exists", () => {
+    expect(typeof ObsidianAPI.MarkdownView.prototype.getMode).toBe("function");
   });
 });

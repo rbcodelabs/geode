@@ -7845,3 +7845,15 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
   border: 1px solid var(--text-error, #e06c75);
 }
 .github-user-code { font-family: var(--font-monospace); font-size: var(--font-ui-large); letter-spacing: 0.1em; margin: 0; }
+
+/* Plugin-API AbstractInputSuggest popover (src/renderer/api/input-suggest.ts). */
+.suggestion-container.geode-input-suggest {
+  position: fixed;
+  z-index: calc(var(--layer-modal) + 10);
+  max-height: 260px;
+  box-sizing: border-box;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}

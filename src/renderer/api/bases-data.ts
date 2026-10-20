@@ -69,6 +69,18 @@ export class BasesEntry {
   }
 
   /**
+   * The note's raw frontmatter as a plain object.
+   *
+   * Not in Obsidian's typings, but shipped plugins (TaskNotes) read
+   * `entry.frontmatter` to rebuild their own task model from the row. A copy,
+   * so a plugin cannot mutate the metadata cache through it.
+   */
+  get frontmatter(): Record<string, unknown> {
+    const frontmatter = this.deps.metadataCache.getFileCache(this.file)?.frontmatter;
+    return frontmatter ? { ...frontmatter } : {};
+  }
+
+  /**
    * The value of `propertyId` for this row.
    *
    * A property that simply isn't set yields `NullValue.value` (the engine's

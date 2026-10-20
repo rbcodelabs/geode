@@ -14,7 +14,7 @@ import { Plugin as GeodePlugin } from "../plugin";
 import type { App } from "../app";
 import { buildViewHeaderNavButtons, type WorkspaceLeaf, type View as GeodeView } from "../workspace";
 import { installObsidianDomExtensions } from "./obsidian-dom";
-import { addIcon, setIcon } from "./icons";
+import { addIcon, setIcon, getIconIds } from "./icons";
 import { computeAnchoredMenuPosition, type MenuHorizontalAlign } from "../menu-position";
 import type {
   MarkdownPostProcessor,
@@ -27,6 +27,8 @@ import { createDismissibleNotice } from "../notice";
 import { createSecretStorage } from "../secret-storage";
 import moment from "moment";
 import { getHostServices } from "../host/registry";
+import { GEODE_API_VERSION, isVersionAtLeast } from "../plugin-manifest";
+import { resolveLanguageCode } from "./language";
 import { renderMathHtml } from "../markdown/math";
 import { ensureMathStyles } from "../markdown/math-style";
 
@@ -61,14 +63,16 @@ export { isTFile, isTFolder, normalizePath } from "../types";
 // often inside cache-building loops — obsidian-tasks calls
 // `parseFrontMatterTags` per file while building its task cache, so an
 // undefined export throws mid-scan. See ./frontmatter.
-export { getAllTags, getFrontMatterInfo, parseFrontMatterTags, parseYaml, stringifyYaml } from "./frontmatter";
+export { getAllTags, getFrontMatterInfo, parseFrontMatterAliases, parseFrontMatterTags, parseYaml, stringifyYaml } from "./frontmatter";
 export type { FrontMatterInfo } from "./frontmatter";
 export { App } from "../app";
-export type { TAbstractFile, CachedMetadata, FileStats, ListedFiles } from "../types";
+export type { CachedMetadata, FileStats, ListedFiles } from "../types";
 // Keymap + in-editor suggest primitives. `EditorSuggest` must be a real,
 // subclassable export (plugins do `class X extends EditorSuggest` at
 // module-eval time) and `Scope` backs app-level keymap dispatch.
 export { Scope, EditorSuggest } from "./suggest";
+export { AbstractInputSuggest } from "./input-suggest";
+export { editorInfoField, editorLivePreviewField } from "../editor-info-fields";
 export {
   arrayBufferToBase64,
   arrayBufferToHex,
@@ -156,7 +160,7 @@ export function debounce<T extends (...args: any[]) => any>(fn: T, timeout = 0, 
 }
 
 // Icons resolve to real Lucide SVGs (Obsidian's icon set) — see api/icons.ts.
-export { addIcon, setIcon };
+export { addIcon, setIcon, getIconIds };
 /**
  * Obsidian's `loadMermaid()`: resolves to the Mermaid library, loading it on
  * first use. Geode serves the same lazily-injected instance its own internal
@@ -1171,6 +1175,50 @@ export class Setting {
   }
 }
 
+/**
+ * Obsidian's `SettingGroup` (API 1.11): a titled group of settings rendered
+ * as one card. `addSetting` hands the callback a `Setting` mounted inside the
+ * group's item list.
+ */
+export class SettingGroup {
+  containerEl: HTMLElement;
+  headerEl: HTMLElement;
+  listEl: HTMLElement;
+
+  constructor(containerEl: HTMLElement) {
+    this.containerEl = document.createElement("div");
+    this.containerEl.className = "setting-group";
+    this.headerEl = document.createElement("div");
+    this.headerEl.className = "setting-item setting-item-heading";
+    this.headerEl.hidden = true;
+    this.listEl = document.createElement("div");
+    this.listEl.className = "setting-items";
+    this.containerEl.append(this.headerEl, this.listEl);
+    containerEl.appendChild(this.containerEl);
+  }
+
+  setHeading(heading: string | DocumentFragment): this {
+    this.headerEl.replaceChildren();
+    const name = document.createElement("div");
+    name.className = "setting-item-name";
+    if (typeof heading === "string") name.textContent = heading;
+    else name.appendChild(heading);
+    this.headerEl.appendChild(name);
+    this.headerEl.hidden = false;
+    return this;
+  }
+
+  addClass(cls: string): this {
+    this.containerEl.classList.add(...cls.split(/\s+/).filter(Boolean));
+    return this;
+  }
+
+  addSetting(cb: (setting: Setting) => void): this {
+    cb(new Setting(this.listEl));
+    return this;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // PluginSettingTab
 // ---------------------------------------------------------------------------
@@ -1718,7 +1766,22 @@ export { DataAdapter, FileSystemAdapter } from "../types";
 // TFile / TFolder classes (for `instanceof`)
 // ---------------------------------------------------------------------------
 
-export { TFileClass as TFile, TFolderClass as TFolder } from "../types";
+export { TAbstractFileClass as TAbstractFile, TFileClass as TFile, TFolderClass as TFolder } from "../types";
+
+/**
+ * Obsidian's `requireApiVersion(version)`: true when the host API level is at
+ * least `version`. Compares against `GEODE_API_VERSION` (the level Geode
+ * actually emulates), never Geode's own app version. Plugins gate newer API
+ * use on this, so overstating it would route them into unsupported code paths.
+ */
+export function requireApiVersion(version: string): boolean {
+  return isVersionAtLeast(GEODE_API_VERSION, version);
+}
+
+/** Obsidian's `getLanguage()`: the UI language code (e.g. "en", "zh-TW"). */
+export function getLanguage(): string {
+  return resolveLanguageCode(typeof navigator !== "undefined" ? navigator.language : undefined);
+}
 
 // ---------------------------------------------------------------------------
 // Plugin (Geode's, extended with the Obsidian Plugin methods)

@@ -47,6 +47,15 @@ export interface BasesViewHost {
   config: BasesViewConfig;
   data: BasesQueryResult;
   allProperties: BasesPropertyId[];
+  /**
+   * The parsed `.base` definition (filters, formulas, `views[]`), current as of
+   * the latest query run. Obsidian's controller carries it as `query`; it is
+   * not documented, but TaskNotes reads `controller.query.views` to find the
+   * active view's `groupBy`.
+   */
+  query?: unknown;
+  /** Name of the view this instance renders (Obsidian's `controller.viewName`). */
+  viewName?: string;
   /** Backs `BasesView.createFileForView`. */
   createFileForView(baseFileName?: string, frontmatterProcessor?: (frontmatter: any) => void): Promise<void>;
 }
@@ -63,6 +72,18 @@ export class QueryController extends Component {
     readonly host: BasesViewHost
   ) {
     super();
+  }
+
+  /**
+   * Undocumented in Obsidian's typings, but present on the real controller and
+   * read by shipped plugins (TaskNotes). Live: always the latest definition.
+   */
+  get query(): unknown {
+    return this.host.query;
+  }
+
+  get viewName(): string | undefined {
+    return this.host.viewName;
   }
 }
 

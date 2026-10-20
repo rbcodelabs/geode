@@ -9,19 +9,12 @@ const PLUGIN_ID = "tasknotes";
 const BASES_VIEW_TYPES = ["tasknotesTaskList", "tasknotesKanban", "tasknotesCalendar", "tasknotesMiniCalendar"];
 
 /**
- * COMPATIBILITY AUDIT (not a certification) for the real, unmodified TaskNotes
- * plugin (callumalpass/tasknotes). The bundle in tests/fixtures/plugins/tasknotes
- * is the shipped release artifact; see README.md there for provenance.
+ * Certification evidence for the real, unmodified TaskNotes plugin
+ * (callumalpass/tasknotes) at the exact version in ADR-0016's certificate.
+ * The bundle in tests/fixtures/plugins/tasknotes is the shipped release
+ * artifact; see README.md there for provenance. The manifest is NOT edited in
+ * the supported scenario: admission goes through the real certificate.
  *
- * Two scenarios:
- *  1. "as shipped": the manifest is untouched. Records how Geode's admission
- *     gate (plugin-manifest.ts `isPluginManifestCompatible`, ADR-0016) treats it.
- *  2. "manifest minAppVersion lowered": ONLY manifest.json is edited in the
- *     throwaway vault so the gate lets main.js run; main.js and styles.css stay
- *     byte-identical. Every probe then records what happens at runtime.
- *
- * Probes that fail today are marked `test.fail()` with the reason, so a fix
- * flips them to "unexpectedly passed" and forces the annotation to be removed.
  * Nothing here is added to test-vault/ (other specs count its files).
  */
 
@@ -116,25 +109,34 @@ const GET_PLUGIN = `
   const plugin = (pm && pm.getPlugin('${PLUGIN_ID}')) || null;
 `;
 
-test.describe("TaskNotes as shipped (manifest untouched)", () => {
-  test("admission gate: minAppVersion 1.12.2 vs Geode API version", async () => {
+test.describe("TaskNotes admission (ADR-0016 certificate)", () => {
+  test("the shipped manifest is admitted through the exact certificate", async () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(fixtureDir, "manifest.json"), "utf8"));
-    test.info().annotations.push({ type: "version", description: `${manifest.version} minAppVersion=${manifest.minAppVersion}` });
+    expect(manifest.version).toBe("4.13.10");
     const g = await launch(null);
     try {
       await g.window.waitForTimeout(2500);
-      const state = await probe<{ loaded: boolean; loadError: string | null; views: string[]; commands: string[] }>(
+      const state = await probe<{ loaded: boolean; loadError: string | null }>(
         g.window,
-        `${GET_PLUGIN}
-         return { loaded: !!plugin, enabled: pm.isEnabled('${PLUGIN_ID}'), loadError: pm.getLoadError('${PLUGIN_ID}') || null,
-           views: Array.from(app.basesViews.keys()).filter(k => k.startsWith('tasknotes')),
-           commands: Object.keys(app.commands.commands || {}).filter(k => k.startsWith('tasknotes:')) };`
+        `${GET_PLUGIN} return { loaded: !!plugin, loadError: pm.getLoadError('${PLUGIN_ID}') || null };`
       );
-      test.info().annotations.push({ type: "as-shipped-state", description: JSON.stringify(state) });
-      // Expected today: blocked (1.12.2 > 1.10.2, no ADR-0016 certificate).
-      expect(state.ok).toBe(true);
+      expect(state.ok, state.error).toBe(true);
+      expect(state.value).toEqual({ loaded: true, loadError: null });
+    } finally {
+      await g.app.close();
+      g.cleanup();
+    }
+  });
+
+  test("a manifest declaring a higher minAppVersion than the certificate is still blocked", async () => {
+    const g = await launch("1.12.3");
+    try {
+      await g.window.waitForTimeout(2500);
+      const state = await probe<{ loaded: boolean; loadError: string | null }>(
+        g.window,
+        `${GET_PLUGIN} return { loaded: !!plugin, loadError: pm.getLoadError('${PLUGIN_ID}') || null };`
+      );
       expect(state.value?.loaded).toBe(false);
-      expect(state.value?.views).toEqual([]);
     } finally {
       await g.app.close();
       g.cleanup();
@@ -142,15 +144,14 @@ test.describe("TaskNotes as shipped (manifest untouched)", () => {
   });
 });
 
-test.describe("TaskNotes runtime (manifest minAppVersion lowered, main.js unmodified)", () => {
+test.describe("TaskNotes runtime (unmodified manifest and bundle)", () => {
   // Default mode on purpose: one failing probe must not skip the rest (they share one app).
   let g: LaunchedApp;
   let pluginLoaded = false;
   let loadError: string | null = null;
-  const BLOCKED = "Blocked: plugin fails to load (missing obsidian exports, see tests/unit/tasknotes-required-exports.test.ts)";
 
   test.beforeAll(async () => {
-    g = await launch("1.8.0");
+    g = await launch(null);
     await g.window.waitForTimeout(6000); // TaskNotes defers heavy init to layout-ready
     const r = await probe<{ loaded: boolean; err: string | null }>(
       g.window,
@@ -166,7 +167,6 @@ test.describe("TaskNotes runtime (manifest minAppVersion lowered, main.js unmodi
 
   test("plugin loads and onload completes", async () => {
     test.info().annotations.push({ type: "load-error", description: String(loadError) });
-    test.fail(!pluginLoaded, BLOCKED);
     const r = await probe<{ loaded: boolean; hasCache: boolean; hasService: boolean }>(
       g.window,
       `${GET_PLUGIN}
@@ -180,14 +180,12 @@ test.describe("TaskNotes runtime (manifest minAppVersion lowered, main.js unmodi
   });
 
   test("Bases views register", async () => {
-    test.fail(!pluginLoaded, BLOCKED);
     const r = await probe<string[]>(g.window, `return Array.from(window.app.basesViews.keys());`);
     test.info().annotations.push({ type: "registered-views", description: JSON.stringify(r.value) });
     for (const type of BASES_VIEW_TYPES) expect(r.value ?? []).toContain(type);
   });
 
   test("task note detection (tag-based) and non-task exclusion", async () => {
-    test.fail(!pluginLoaded, BLOCKED);
     const r = await probe<Record<string, unknown>>(
       g.window,
       `${GET_PLUGIN}
@@ -206,7 +204,6 @@ test.describe("TaskNotes runtime (manifest minAppVersion lowered, main.js unmodi
   });
 
   test("commands, settings tab and ribbon", async () => {
-    test.fail(!pluginLoaded, BLOCKED);
     const r = await probe<{ commands: string[]; settingTab: boolean; ribbon: number }>(
       g.window,
       `const app = window.app;
@@ -222,7 +219,6 @@ test.describe("TaskNotes runtime (manifest minAppVersion lowered, main.js unmodi
   });
 
   test("create a task through the plugin's taskService", async () => {
-    test.fail(!pluginLoaded, BLOCKED);
     const r = await probe<{ path?: string; text?: string }>(
       g.window,
       `${GET_PLUGIN}
@@ -240,7 +236,6 @@ test.describe("TaskNotes runtime (manifest minAppVersion lowered, main.js unmodi
   });
 
   test("edit a task through the plugin (processFrontMatter path) and metadata cache refresh", async () => {
-    test.fail(!pluginLoaded, BLOCKED);
     const r = await probe<{ fm: Record<string, unknown> | null; cacheStatus?: string }>(
       g.window,
       `${GET_PLUGIN}
@@ -271,35 +266,100 @@ test.describe("TaskNotes runtime (manifest minAppVersion lowered, main.js unmodi
     expect(r.value).toContain("audit: ok");
   });
 
-  test("a .base file renders TaskNotes views", async () => {
-    test.fail(!pluginLoaded, BLOCKED);
+  test("a hand-written .base renders the TaskNotes task list, with the built-in table hidden", async () => {
     await g.window.locator('.nav-file-title[data-path="Tasks.base"]').click();
-    await g.window.waitForTimeout(2500);
-    const r = await probe<{ titlesFound: string[]; errorText: string | null; sample: string; pluginDom: number; builtinTableShown: boolean }>(
+    await expect(g.window.locator(".workspace-leaf.mod-active .task-card").first()).toBeVisible({ timeout: 10_000 });
+    const r = await probe<{ titlesFound: string[]; errorText: string | null; builtinTableShown: boolean; cards: number }>(
       g.window,
       `const root = document.querySelector('.workspace-leaf.mod-active') || document;
        const text = root.textContent || '';
+       const table = root.querySelector('.bases-table-container');
        return { titlesFound: ['Write report','Ship release','Plan offsite'].filter(t => text.includes(t)),
                 errorText: (root.querySelector('.bases-error, .bases-view-error') || {}).textContent || null,
-                // Unknown view types fall back to the built-in table, which also lists the titles, so
-                // titles alone prove nothing: require TaskNotes' own DOM and the table hidden.
-                pluginDom: root.querySelectorAll('[class*="tasknotes"], [class*="task-card"]').length,
-                builtinTableShown: !!root.querySelector('.bases-table-container') && (root.querySelector('.bases-table-container').offsetParent !== null),
-                sample: text.slice(0, 300) };`
+                cards: root.querySelectorAll('.task-card').length,
+                builtinTableShown: !!table && table.offsetParent !== null };`
     );
-    test.info().annotations.push({ type: "result", description: JSON.stringify(r.value) });
     expect(r.ok, r.error).toBe(true);
-    expect(r.value?.pluginDom).toBeGreaterThan(0);
+    expect(r.value?.cards).toBeGreaterThanOrEqual(3);
     expect(r.value?.builtinTableShown).toBe(false);
     expect(r.value?.titlesFound).toEqual(["Write report", "Ship release", "Plan offsite"]);
     expect(r.value?.errorText).toBeNull();
   });
 
-  test("no console errors during load and use", async () => {
-    // KNOWN GAP: MarkdownView.getMode() is absent (TaskNotes relationship/task-card widgets call it on every
-    // layout change), so uncaught TypeErrors are emitted. Remove test.fail when Geode implements it.
-    test.fail(true, "MarkdownView.getMode is not a function");
+  // TaskNotes' own generated default views (formulas, groupBy, view options), not a hand-written base.
+  for (const [command, baseFile, assertion] of [
+    ["open-tasks-view", "tasks-default.base", ".task-card"],
+    ["open-kanban-view", "kanban-default.base", ".kanban-view__column .task-card, .kanban-view__card, .task-card"],
+    ["open-calendar-view", "mini-calendar-default.base", ".mini-calendar-view, [class*='mini-calendar']"],
+  ] as const) {
+    test(`tasknotes:${command} renders its default Base view`, async ({}, testInfo) => {
+      const r = await probe<{ file: string | null; table: boolean }>(
+        g.window,
+        `await app.commands.executeCommandById('tasknotes:${command}');
+         await new Promise(r => setTimeout(r, 1500));
+         const root = document.querySelector('.workspace-leaf.mod-active');
+         const t = root.querySelector('.bases-table-container');
+         return { file: app.workspace.getActiveFile()?.path || null, table: !!t && t.offsetParent !== null };`
+      );
+      expect(r.ok, r.error).toBe(true);
+      expect(r.value?.file).toContain(baseFile);
+      expect(r.value?.table).toBe(false);
+      const active = g.window.locator(".workspace-leaf.mod-active");
+      await expect(active.locator(assertion).first()).toBeVisible({ timeout: 10_000 });
+      if (command !== "open-calendar-view") {
+        // Every seeded task shows up as a card (kanban columns may scroll horizontally, so count DOM nodes).
+        const titles = await active.locator(".task-card").allTextContents();
+        for (const title of ["Write report", "Ship release", "Plan offsite"]) {
+          expect(titles.some((text) => text.includes(title)), `${title} card in ${command}`).toBe(true);
+        }
+        await expect(active.getByText("requires a 'group by'")).toHaveCount(0);
+      }
+      // Evidence screenshot, attached to the run (inspect via the Playwright report / test-results).
+      await testInfo.attach(`${command}.png`, { body: await g.window.screenshot(), contentType: "image/png" });
+    });
+  }
+
+  test("AbstractInputSuggest drives a working popover in a TaskNotes modal", async ({}, testInfo) => {
+    await probe(g.window, `await app.commands.executeCommandById('tasknotes:create-new-task');`);
+    const modal = g.window.locator(".modal");
+    await expect(modal.first()).toBeVisible({ timeout: 10_000 });
+    await modal.locator("[aria-label='Show detailed options']").click();
+    // The contexts field is a comma-separated text input backed by AbstractInputSuggest.
+    const input = modal.locator("input[placeholder*='context' i]").first();
+    await expect(input).toBeVisible();
+    // TaskNotes moves focus to its natural-language box shortly after opening; wait for that to settle so
+    // the blur it causes does not (correctly) dismiss the popover mid-test.
+    await g.window.waitForTimeout(1000);
+    await input.click();
+    await expect(input).toBeFocused();
+    await input.fill("w");
+    const popover = g.window.locator(".geode-input-suggest");
+    await expect(popover).toBeVisible({ timeout: 5_000 });
+    await expect(popover.locator(".suggestion-item").first()).toContainText(/work/i);
+    await testInfo.attach("input-suggest.png", { body: await g.window.screenshot(), contentType: "image/png" });
+    await input.press("ArrowDown");
+    await input.press("Enter");
+    await expect(popover).toHaveCount(0);
+    await expect(input).toHaveValue(/work/i);
+    // Escape closes only the popover, never the modal behind it.
+    await input.fill("w");
+    await expect(popover).toBeVisible();
+    await input.press("Escape");
+    await expect(popover).toHaveCount(0);
+    await expect(modal.first()).toBeVisible();
+    await g.window.keyboard.press("Escape");
+  });
+
+  test("no uncaught errors during load and use; only the documented editor fallback is logged", async () => {
     test.info().annotations.push({ type: "console-errors", description: JSON.stringify(g.consoleErrors.slice(0, 20)) });
-    expect(g.consoleErrors, `Console errors:\n${g.consoleErrors.join("\n")}`).toEqual([]);
+    // Uncaught page errors and Geode's own console errors are never acceptable.
+    const uncaught = g.consoleErrors.filter((e) => e.startsWith("pageerror:"));
+    expect(uncaught, `Uncaught errors:\n${uncaught.join("\n")}`).toEqual([]);
+    // KNOWN LIMITATION (docs/spec/03-plugin-api.md): TaskNotes' task modals try to embed Obsidian's private
+    // markdown editor via `app.embedRegistry`, which Geode does not provide. TaskNotes catches that, logs
+    // through console.error and falls back to a plain textarea; those handled logs are the only allowed noise.
+    const handledFallback = /\[TaskNotes\]\[Modals\/[A-Za-z]+\]\[persistence\]\[create(-nlp)?-markdown-editor\]/;
+    const unexpected = g.consoleErrors.filter((e) => !handledFallback.test(e));
+    expect(unexpected, `Unexpected console errors:\n${unexpected.join("\n")}`).toEqual([]);
   });
 });
