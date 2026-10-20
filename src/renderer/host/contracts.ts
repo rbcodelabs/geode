@@ -54,6 +54,11 @@ export interface VaultRegistryService {
   checkVault(id: string): Promise<void>;
   openVault(path: string): Promise<{ root: string; name: string }>;
   getRecentVaults(): Promise<string[]>;
+  /**
+   * Forget a vault in the recent list (the Vault Hub's "Remove from list"). Never touches the
+   * folder itself. Optional: hosts that cannot forget a vault omit it and the hub hides the action.
+   */
+  removeRecentVault?(id: string): Promise<void>;
   getLaunchVault(): Promise<string | null>;
   closeVault(): Promise<void>;
   /**

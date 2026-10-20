@@ -925,6 +925,15 @@ function registerIpc() {
     return cfg.recentVaults.filter((v) => fs.existsSync(v));
   });
 
+  // Forgets a vault in the recent list only; the folder on disk is never touched.
+  ipcMain.handle("remove-recent-vault", (_e, vaultPath: unknown) => {
+    if (typeof vaultPath !== "string" || !vaultPath) throw new Error("A vault path is required");
+    const cfg = loadConfig();
+    cfg.recentVaults = cfg.recentVaults.filter((v) => v !== vaultPath);
+    if (cfg.lastVault === vaultPath) delete cfg.lastVault;
+    saveConfig(cfg);
+  });
+
   ipcMain.handle("get-launch-vault", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return win ? launchTargets.get(win.id) ?? null : null;
