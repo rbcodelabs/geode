@@ -61,6 +61,12 @@ export interface VaultHubOptions {
   showCreateVault?: (host: HTMLElement, opener: HTMLElement, onCreated: (path: string) => Promise<void>) => void;
   /** Present only on first run on desktop. */
   exploreSample?: () => Promise<{ path: string; onOpened?: () => Promise<void> } | null>;
+  /**
+   * Suspend the workspace's command hotkeys while the hub is up; returns the release. Optional so
+   * the hub stays testable without an app. (A modal's Scope still reaches the root scope, so hotkeys
+   * keep working over it; the hub is a full-window screen and must not run commands behind itself.)
+   */
+  captureKeys?: () => () => void;
   /** Called once the hub has fully gone away, so the owner can drop its reference. */
   onClosed?: () => void;
 }
@@ -93,6 +99,7 @@ export class VaultHub {
   private morphTimer: ReturnType<typeof setTimeout> | null = null;
   private unbindLaunch: (() => void) | null = null;
   private entries: VaultHubEntry[];
+  private releaseKeys: (() => void) | null = null;
 
   constructor(private readonly opts: VaultHubOptions) {
     this.mode = opts.mode;
@@ -159,6 +166,7 @@ export class VaultHub {
       if (this.menuEl && !this.menuEl.contains(event.target as Node) && event.target !== this.menuOpener) this.closeMenu();
     });
     document.body.appendChild(root);
+    this.releaseKeys = this.opts.captureKeys?.() ?? null;
 
     const focusTarget =
       root.querySelector<HTMLElement>(".vault-hub-card.is-current .vault-hub-card-main") ??
@@ -186,6 +194,8 @@ export class VaultHub {
     this.cancelMorphTimer();
     this.unbindLaunchRunner();
     this.closeMenu();
+    this.releaseKeys?.();
+    this.releaseKeys = null;
     const root = this.root;
     root.classList.add("is-closing");
     setTimeout(() => {
@@ -291,7 +301,6 @@ export class VaultHub {
     detail.className = "vault-hub-card-path";
     text.append(name, detail);
     main.append(avatar, text);
-    this.paintEntry(card, entry);
     if (isCurrent) {
       const tag = document.createElement("span");
       tag.className = "vault-hub-tag";
@@ -299,6 +308,7 @@ export class VaultHub {
       main.appendChild(tag);
     }
     card.appendChild(main);
+    this.paintEntry(card, entry);
 
     const launch = document.createElement("div");
     launch.className = "vault-hub-launch";
@@ -458,7 +468,6 @@ export class VaultHub {
   private async runAction(action: () => Promise<void>): Promise<void> {
     if (this.actionPending || this.state === "closed") return;
     this.actionPending = true;
-    this.errorEl.hidden = true;
     this.setButtonsDisabled(true);
     try {
       await action();
@@ -645,7 +654,7 @@ export class VaultHub {
   }
 
   private onKeydown(event: KeyboardEvent): void {
-    // Nothing typed in the hub should reach the workspace's hotkeys behind it.
+    // Keep key events from reaching listeners behind the hub (command hotkeys are gated by captureKeys).
     event.stopPropagation();
     const target = event.target as HTMLElement;
 

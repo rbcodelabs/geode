@@ -3093,6 +3093,12 @@ export class App {
           };
         }
         : undefined,
+      captureKeys: () => {
+        // A parentless scope never reaches the root scope, so Keymap.handleKeydown gates command hotkeys.
+        const scope = new Scope();
+        this.keymap.pushScope(scope);
+        return () => this.keymap.popScope(scope);
+      },
       onClosed: () => { if (this.vaultHub === hub) this.vaultHub = undefined; },
     });
     hub.open();

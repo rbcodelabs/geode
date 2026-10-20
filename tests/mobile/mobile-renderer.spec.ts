@@ -704,7 +704,7 @@ test("@phone switches from managed storage to a selected Files vault in the curr
   await expect.poll(() => page.evaluate(() => (window as any).app?.vault?.root)).toBe("managed://default");
 
   await page.evaluate(() => (window as any).app.commands.execute("open-another-vault"));
-  const modal = page.locator(".modal.mod-manage-vaults");
+  const modal = page.locator(".vault-hub");
   await expect(modal).toBeVisible();
   await modal.getByRole("button", { name: "Choose folder in Files" }).click();
 
@@ -742,7 +742,7 @@ test("@phone flushes and detaches the old vault before activating a selected Fil
     });
     app.commands.execute("open-another-vault");
   });
-  await page.locator(".modal.mod-manage-vaults .vault-switcher-row:not(.is-current)").first().click();
+  await page.locator(".vault-hub .vault-hub-card:not(.is-current):not(.is-add) .vault-hub-card-main").first().click();
   await expect.poll(() => page.evaluate(() => (window as any).app?.vault?.root), { timeout: 8_000 })
     .toBe("external://browser-provider-proof");
 
@@ -791,13 +791,13 @@ test("@phone serializes a same-target double tap into one vault switch", async (
     app.workspace.closeAllLeaves = async () => { bump("teardown"); return teardown(); };
     app.commands.execute("open-another-vault");
   });
-  const modal = page.locator(".modal.mod-manage-vaults");
-  const target = modal.locator(".vault-switcher-row:not(.is-current)").first();
+  const modal = page.locator(".vault-hub");
+  const target = modal.locator(".vault-hub-card:not(.is-current):not(.is-add) .vault-hub-card-main").first();
   const disabledDuringSwitch = await target.evaluate((button: HTMLButtonElement) => {
     button.click();
     void (window as any).app.switchVaultInWindow("external://browser-provider-proof");
     button.click();
-    return [...button.closest(".modal")!.querySelectorAll<HTMLButtonElement>("button")]
+    return [...button.closest(".vault-hub")!.querySelectorAll<HTMLButtonElement>("button")]
       .every((candidate) => candidate.disabled);
   });
   expect(disabledDuringSwitch).toBe(true);
@@ -849,18 +849,18 @@ test("@phone keeps the first target when two vault rows are tapped rapidly", asy
     app.workspace.closeAllLeaves = async () => { bump("teardown"); return teardown(); };
     app.commands.execute("open-another-vault");
   });
-  const modal = page.locator(".modal.mod-manage-vaults");
-  const first = modal.locator(".vault-switcher-row:not(.is-current)").nth(0);
-  await expect(modal.locator(".vault-switcher-row:not(.is-current)")).toHaveCount(2);
+  const modal = page.locator(".vault-hub");
+  const first = modal.locator(".vault-hub-card:not(.is-current):not(.is-add) .vault-hub-card-main").nth(0);
+  await expect(modal.locator(".vault-hub-card:not(.is-current):not(.is-add)")).toHaveCount(2);
   const disabledDuringSwitch = await first.evaluate((button: HTMLButtonElement) => {
-    const secondButton = button.closest(".vault-switcher-list")!
-      .querySelectorAll<HTMLButtonElement>(".vault-switcher-row:not(.is-current)")[1];
+    const secondButton = button.closest(".vault-hub-grid")!
+      .querySelectorAll<HTMLButtonElement>(".vault-hub-card:not(.is-current):not(.is-add) .vault-hub-card-main")[1];
     button.click();
     void (window as any).app.switchVaultInWindow("external://browser-provider-second").catch((error: any) => {
       sessionStorage.setItem("geode:vault-switch-busy-code", error.code);
     });
     secondButton.click();
-    return [...button.closest(".modal")!.querySelectorAll<HTMLButtonElement>("button")]
+    return [...button.closest(".vault-hub")!.querySelectorAll<HTMLButtonElement>("button")]
       .every((candidate) => candidate.disabled);
   });
   expect(disabledDuringSwitch).toBe(true);
@@ -898,15 +898,15 @@ test("@phone aborts a vault switch when dirty-editor flush fails and retries wit
     (window as any).__geodeMobileTest.failNextWrite = true;
     app.commands.execute("open-another-vault");
   });
-  const modal = page.locator(".modal.mod-manage-vaults");
-  await modal.locator(".vault-switcher-row:not(.is-current)").first().click();
-  await expect(modal.locator(".vault-switcher-error")).toContainText("Injected browser write failure");
+  const modal = page.locator(".vault-hub");
+  await modal.locator(".vault-hub-card:not(.is-current):not(.is-add) .vault-hub-card-main").first().click();
+  await expect(modal.locator(".vault-hub-error")).toContainText("Injected browser write failure");
   await expect(modal.locator("button:disabled")).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).app.vault.root)).toBe("managed://default");
   expect(await page.locator(".cm-content").innerText()).toContain("retryable-dirty");
   expect(await page.evaluate(() => window.hostServices!.vaultFiles.read("Welcome.md"))).not.toBe("retryable-dirty");
 
-  await modal.locator(".vault-switcher-row:not(.is-current)").first().click();
+  await modal.locator(".vault-hub-card:not(.is-current):not(.is-add) .vault-hub-card-main").first().click();
   await expect.poll(() => page.evaluate(() => (window as any).app?.vault?.root), { timeout: 8_000 })
     .toBe("external://browser-provider-proof");
   const managed = await page.evaluate(() => JSON.parse(localStorage.getItem("geode:mobile-managed-vault:v1")!));
@@ -921,20 +921,20 @@ test("@phone reconnects the exact failed recent vault while the current vault re
     (window as any).__geodeMobileTest.externalAccess = "missing";
     (window as any).app.commands.execute("open-another-vault");
   });
-  const modal = page.locator(".modal.mod-manage-vaults");
-  await modal.locator(".vault-switcher-row:not(.is-current)").first().click();
-  await expect(modal.locator(".vault-switcher-error")).toContainText("Reconnect Provider Vault");
+  const modal = page.locator(".vault-hub");
+  await modal.locator(".vault-hub-card:not(.is-current):not(.is-add) .vault-hub-card-main").first().click();
+  await expect(modal.locator(".vault-hub-error")).toContainText("Reconnect Provider Vault");
   await expect(modal.getByRole("button", { name: "Reconnect" })).toBeVisible();
   expect(await page.evaluate(() => window.hostServices!.vaultFiles.read("Welcome.md"))).toContain("Welcome");
 
   await page.evaluate(() => { (window as any).__geodeMobileTest.reconnectResult = "cancel"; });
   await modal.getByRole("button", { name: "Reconnect" }).click();
-  await expect(modal.locator(".vault-switcher-error")).toContainText("Reconnect canceled");
+  await expect(modal.locator(".vault-hub-error")).toContainText("Reconnect canceled");
   expect(await page.evaluate(() => (window as any).app.vault.root)).toBe("managed://default");
 
   await page.evaluate(() => { (window as any).__geodeMobileTest.reconnectResult = "error"; });
   await modal.getByRole("button", { name: "Reconnect" }).click();
-  await expect(modal.locator(".vault-switcher-error")).toContainText("temporarily unavailable");
+  await expect(modal.locator(".vault-hub-error")).toContainText("temporarily unavailable");
   expect(await page.evaluate(() => window.hostServices!.vaultFiles.read("Welcome.md"))).toContain("Welcome");
 
   await page.evaluate(() => { (window as any).__geodeMobileTest.reconnectResult = "success"; });

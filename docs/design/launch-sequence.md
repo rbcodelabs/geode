@@ -8,6 +8,44 @@ step when it is optional.
 Code: `src/renderer/launch/launch-sequence.ts` (pure registry + runner, unit
 tested) and `launch-overlay.ts` (DOM). Wiring is in `App.openVaultMeasured`.
 
+## Vault Hub: the picker and the launch screen are one surface
+
+`src/renderer/vault-hub.ts` is the full-window vault screen. It replaces both the
+first-run picker and the old "Manage vaults" modal, and it shares the
+`.vault-picker` surface with this launch screen. Pure helpers (avatar color,
+ordering, arrow-key navigation) live in `vault-hub-model.ts` and are unit tested.
+
+- **Cards.** One per vault in the registry's recency order, the vault open in
+  this window first (tagged "Open in this window"). Avatar and color are derived
+  from the name. There is no last-opened time, note count or sync state: the
+  registry does not provide them, so the hub does not invent them. The hover "..."
+  menu offers "Open in new window" (desktop, not for the current vault) and
+  "Remove from list" (hosts that implement `removeRecentVault`, i.e. Electron).
+  There is no "Reveal in Finder": the host can only reveal a path inside the open vault.
+- **Dashed cards.** "Create new vault" (Electron, `createVaultSupport`), "Open
+  folder as vault", "Choose folder in Files" (hosts with `externalVaultFolder`
+  other than desktop, where it is the same dialog), and on first run "Try the sample
+  vault". iOS shows "On this device" / "Choose folder in Files" and the
+  "On this device" / "Files folder" descriptors via `describeVault`.
+- **Morph.** Choosing a card fades the others out and expands the chosen card in
+  place (FLIP on its position and width) into the launch panel. If a first-run open
+  is in flight, `setupLaunchSequence` hands the `LaunchRunner` to the hub
+  (`VaultHub.bindLaunch`) instead of creating a `LaunchOverlay`, so the card shows
+  the same snapshot, step list and Skip button; `finishLaunchSequence` fades the hub
+  out. Before the runner exists the card shows an indeterminate bar. Launch logic is
+  unchanged: the hub only reads snapshots. Opening in a new window (desktop) or an
+  in-window switch (iOS/browser, which reloads) morphs the card and then closes the
+  hub or waits for the reload. A failed open undoes the morph and shows the error;
+  `VaultAccessError` keeps its Reconnect prompt.
+- **Reduced motion.** Under `prefers-reduced-motion: reduce` nothing slides or
+  scales: the siblings and the panel only fade.
+- **Keyboard and focus.** Arrow keys, Home and End move between cards, Esc or the
+  close button dismisses it (not on first run), Tab is trapped, focus returns to the
+  previously focused element, and the workspace's command hotkeys are gated while
+  it is open. Right-click, the Menu key or Shift+F10 open a card's menu.
+- **Theme.** The hub carries the picker palette (light and dark). Only the first-run
+  hub follows the OS appearance; over a workspace it keeps the vault's theme.
+
 ## Why
 
 Auto-updates used to run ~2.5s after launch and hot-reloaded plugins that were
