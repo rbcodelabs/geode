@@ -62,6 +62,8 @@ const mobileBoundaryPlugin = {
         await Promise.all([
           copyFile("src/renderer/mobile.html", "dist/mobile/index.html"),
           copyFile("styles/app.css", "dist/mobile/app.css"),
+          // Classic script (not bundled): it must run before mobile-renderer.js so it can catch that file failing to load.
+          copyFile("src/renderer/mobile-boot-error.js", "dist/mobile/boot-error.js"),
         ]);
       }
     });

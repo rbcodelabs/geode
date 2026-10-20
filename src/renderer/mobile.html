@@ -8,9 +8,40 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' wss:" />
     <title>Geode Mobile</title>
     <link rel="stylesheet" href="./app.css" />
+    <style>
+      /* Boot splash: visible from first paint until the renderer mounts into #app.
+         Same background as the dark theme (--color-base-05) and the native launch screen. */
+      html, body { background: #1e1e1e; }
+      #boot-splash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; background: #1e1e1e; color: #dadada; z-index: 2147483647; font: 15px/1.4 -apple-system, system-ui, sans-serif; text-align: center; padding: 24px; }
+      #boot-splash svg { width: 96px; height: 96px; }
+      #boot-splash [hidden] { display: none; }
+      #boot-splash #boot-error { max-width: 32em; word-break: break-word; }
+      #boot-splash #boot-error-detail { margin-top: 8px; font-size: 12px; opacity: 0.7; }
+      /* Removed from layout once the app has rendered anything into #app. */
+      #app:not(:empty) ~ #boot-splash { display: none; }
+    </style>
+    <script src="./boot-error.js"></script>
   </head>
   <body class="theme-dark is-mobile">
     <div id="app"></div>
+    <div id="boot-splash" role="status">
+      <svg viewBox="306 254.5 412 515" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="boot-gem" x1="306" y1="254.5" x2="718" y2="769.5" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#DBEA9D" />
+            <stop offset="1" stop-color="#789348" />
+          </linearGradient>
+        </defs>
+        <path d="M512,254.5 L718,409 L640.75,769.5 L383.25,769.5 L306,409 Z" fill="url(#boot-gem)" />
+        <path d="M512,254.5 L718,409 L640.75,769.5 L512,512 Z" fill="#294835" fill-opacity="0.24" />
+        <path d="M512,254.5 L512,512 L383.25,769.5 L306,409 Z" fill="#294835" fill-opacity="0.08" />
+      </svg>
+      <div id="boot-error" hidden>
+        <strong>Geode could not start.</strong>
+        <div id="boot-error-detail"></div>
+        <div>Close and reopen the app. If this keeps happening, reinstall or report the message above.</div>
+      </div>
+    </div>
     <script src="./mobile-renderer.js"></script>
   </body>
 </html>
