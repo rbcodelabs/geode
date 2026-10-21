@@ -515,11 +515,12 @@ export class BaseView implements View {
     this.app.vault.on("create", this.onVaultChange);
     this.app.vault.on("delete", this.onVaultChange);
     this.app.metadataCache.on("changed", this.onVaultChange);
+    this.pluginViewHost.notifyConnected();
   }
 
   onClose(): Promise<void> { return this.renderOwner?.close() ?? this.closeNative(); }
 
-  onReveal(): void { this.backgroundVisibility?.reveal(); }
+  onReveal(): void { this.backgroundVisibility?.reveal(); this.pluginViewHost.notifyConnected(); }
 
   private async closeNative(): Promise<void> {
     this.reloadClosed = true; this.definitionRevision++; this.reloadOwnerGeneration++;

@@ -824,10 +824,22 @@ override imperative `display()` retain their existing behavior.
 `setDisplayFormat`, and `getValuePretty`. Values clamp to the configured range
 and snap to the configured step.
 
-Geode continues to advertise API compatibility `1.8.0`. A centralized,
+Geode advertises API compatibility `1.10.2` (`GEODE_API_VERSION`). A centralized,
 desktop-only compatibility certificate admits exactly
 `obsidian-minimal-settings@9.0.0` when its declared `minAppVersion` is no higher
-than `1.13.0`; this does not imply general Obsidian 1.13 compatibility.
+than `1.13.0`, and exactly `tasknotes@4.13.10` when its declared `minAppVersion`
+is no higher than `1.12.2`; neither implies general compatibility with those
+Obsidian versions (ADR-0016). `requireApiVersion(v)` compares against
+`GEODE_API_VERSION`.
+
+TaskNotes support adds these `obsidian` module members: `AbstractInputSuggest`
+(a popover under a text input with arrow/Enter/Escape handling, `onSelect`,
+`setValue`/`getValue`), `SettingGroup` (`setHeading`, `addClass`, `addSetting`),
+`TAbstractFile` (an `instanceof` base matching both `TFile` and `TFolder`),
+`editorInfoField` (the owning `MarkdownView`) and `editorLivePreviewField`
+(true in Live Preview) as CodeMirror state fields, `getIconIds`, `getLanguage`,
+`parseFrontMatterAliases`, `requireApiVersion`, and `MarkdownView.getMode()`
+(`"preview"` in Reading view, otherwise `"source"`) with `MarkdownView.leaf`.
 
 #### Geode extension: `Plugin.addSettingSection`
 

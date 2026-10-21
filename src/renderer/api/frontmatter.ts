@@ -150,3 +150,25 @@ export function parseYaml(yaml: string): any {
 export function stringifyYaml(obj: any): string {
   return yamlStringify(obj);
 }
+
+/**
+ * Read a note's aliases out of parsed frontmatter.
+ *
+ * Mirrors Obsidian: checks `aliases` then `alias`; a value may be an array or
+ * a single string (comma-separated). Entries are trimmed, non-string scalars
+ * stringified, and empties dropped. Returns `null` when `frontmatter` is
+ * null/omitted or has no usable aliases, matching `parseFrontMatterTags`.
+ */
+export function parseFrontMatterAliases(frontmatter: Record<string, unknown> | null): string[] | null {
+  if (!frontmatter) return null;
+  const raw = frontmatter["aliases"] ?? frontmatter["alias"];
+  if (raw == null) return null;
+  const parts: unknown[] = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : [raw];
+  const aliases: string[] = [];
+  for (const part of parts) {
+    if (typeof part !== "string" && typeof part !== "number") continue;
+    const alias = String(part).trim();
+    if (alias) aliases.push(alias);
+  }
+  return aliases.length ? aliases : null;
+}

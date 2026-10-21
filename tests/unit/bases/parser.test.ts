@@ -246,3 +246,23 @@ describe("parseExpression: never throws, reports errors instead", () => {
     expect(err(")))")).toBeTruthy();
   });
 });
+
+describe("parseExpression: symbolic logical operators", () => {
+  it("parses && / || / ! to the same AST as and / or / not", () => {
+    expect(expr("a && !b || c")).toEqual(expr("a and not b or c"));
+  });
+
+  it("keeps != distinct from !", () => {
+    expect(expr("a != b")).toEqual({
+      kind: "binary",
+      op: "!=",
+      left: { kind: "propertyPath", root: "shorthand", segments: ["a"] },
+      right: { kind: "propertyPath", root: "shorthand", segments: ["b"] },
+    });
+  });
+
+  it("parses a real TaskNotes formula", () => {
+    expect(() => expr('(due.isEmpty() == false) && date(due) < today() && status != "done"')).not.toThrow();
+    expect(() => expr("!timeEstimate || timeEstimate == 0")).not.toThrow();
+  });
+});

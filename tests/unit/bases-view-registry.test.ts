@@ -153,3 +153,26 @@ describe("BasesView", () => {
     expect(createFileForView).toHaveBeenCalledWith("Nope/New card", undefined);
   });
 });
+
+describe("QueryController (controller fields shipped plugins read)", () => {
+  it("exposes the live query definition and view name, the way Obsidian's controller does", () => {
+    const definition = { views: [{ name: "Board", type: "x", groupBy: { property: "status" } }] };
+    let latest: unknown = definition;
+    const controller = new QueryController({
+      ...makeHost(),
+      get query() { return latest; },
+      viewName: "Board",
+    });
+
+    expect(controller.viewName).toBe("Board");
+    expect(controller.query).toBe(definition);
+    latest = { views: [] }; // a reloaded definition replaces the object wholesale
+    expect(controller.query).toEqual({ views: [] });
+  });
+
+  it("returns undefined for hosts that do not supply them", () => {
+    const controller = new QueryController(makeHost());
+    expect(controller.query).toBeUndefined();
+    expect(controller.viewName).toBeUndefined();
+  });
+});

@@ -119,6 +119,15 @@ export function attachFileStats(file: Omit<TFile, "stat">): TFile {
  * Obsidian plugins (Claude Threads included) test file types. Exported to
  * plugins as `TFile`/`TFolder` from `api/obsidian.ts`.
  */
+export class TAbstractFileClass {
+  declare path: string;
+  declare name: string;
+  /** Any vault entry, file or folder: Obsidian's common base class. */
+  static [Symbol.hasInstance](obj: unknown): boolean {
+    return isTFile(obj as TAbstractFile) || isTFolder(obj as TAbstractFile);
+  }
+}
+
 export class TFileClass {
   static [Symbol.hasInstance](obj: unknown): boolean {
     return isTFile(obj as TAbstractFile);

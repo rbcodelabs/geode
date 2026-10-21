@@ -49,6 +49,8 @@ declare global {
   interface Element {
     addClass(...classes: string[]): this;
     removeClass(...classes: string[]): this;
+    addClasses(classes: string[]): this;
+    removeClasses(classes: string[]): this;
     toggleClass(classes: string | string[], value?: boolean): this;
     hasClass(cls: string): boolean;
     setAttr(key: string, value: string | number | boolean | null): this;
@@ -573,6 +575,15 @@ export function installObsidianDomExtensions(): void {
     this.classList.remove(...cls.filter(Boolean));
     return this;
   });
+  // Obsidian's array forms, distinct from the variadic addClass/removeClass.
+  define(elProto, "addClasses", function (this: Element, classes: string[]) {
+    this.classList.add(...classes.filter(Boolean));
+    return this;
+  });
+  define(elProto, "removeClasses", function (this: Element, classes: string[]) {
+    this.classList.remove(...classes.filter(Boolean));
+    return this;
+  });
   define(elProto, "toggleClass", function (this: Element, cls: string | string[], value?: boolean) {
     const classes = Array.isArray(cls) ? cls : [cls];
     for (const c of classes) this.classList.toggle(c, value);
@@ -682,13 +693,19 @@ export function installObsidianDomExtensions(): void {
   if (typeof g.activeDocument === "undefined") g.activeDocument = document;
 
   // --- globals: createEl / createDiv / createSpan / createFragment ----------
+  // Like Obsidian's, these return a DETACHED element (parent = the document,
+  // which `createElOn` never attaches to). Appending to `document.body` here
+  // leaked every element a plugin built through `activeWindow.createEl(...)`
+  // into the page: TaskNotes' task cards were created that way, so they stayed
+  // stuck on <body> and its list's `isConnected` check then treated them as
+  // already placed, leaving the list empty.
   if (typeof g.createDiv !== "function")
-    g.createDiv = (o?: ElInfoOrTag, cb?: any) => createElOn(document.body, "div", o, cb);
+    g.createDiv = (o?: ElInfoOrTag, cb?: any) => createElOn(document, "div", o, cb);
   if (typeof g.createSpan !== "function")
-    g.createSpan = (o?: ElInfoOrTag, cb?: any) => createElOn(document.body, "span", o, cb);
+    g.createSpan = (o?: ElInfoOrTag, cb?: any) => createElOn(document, "span", o, cb);
   if (typeof g.createEl !== "function")
     g.createEl = (tag: string, o?: ElInfoOrTag, cb?: any) =>
-      createElOn(document.body, tag as any, o, cb);
+      createElOn(document, tag as any, o, cb);
   if (typeof g.createFragment !== "function")
     g.createFragment = (cb?: (frag: DocumentFragment) => void) => {
       const frag = document.createDocumentFragment();
