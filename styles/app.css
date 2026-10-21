@@ -7857,3 +7857,11 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
   border-radius: 8px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
 }
+/* Pair mobile device (ADR 0050): the card holds a QR and a long code, so stack it instead of squeezing the description beside the control. */
+.setting-item.sync-pairing-card { flex-direction: column; align-items: stretch; }
+.sync-pairing-card .setting-item-info { flex: none; }
+.sync-pairing-control { display: flex; flex-direction: column; align-items: flex-start; gap: var(--size-4-2); min-width: 0; }
+.sync-pairing-live { display: flex; flex-direction: column; align-items: flex-start; gap: var(--size-4-2); min-width: 0; max-width: 100%; }
+.sync-pairing-qr { width: 280px; max-width: 100%; box-sizing: border-box; }
+.sync-pairing-qr svg { display: block; width: 100%; height: auto; }
+.sync-pairing-code { display: block; max-width: 100%; }

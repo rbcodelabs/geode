@@ -144,6 +144,11 @@ import { orderVaultPaths, vaultNameFromPath } from "./vault-hub-model";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
 import { HUB_PROVIDER_ID, HubSyncProvider, describeHubTarget } from "./sync/hub-provider";
+import { renderPairingCard } from "./pairing/desktop-card";
+import { describeApplied, renderPhonePairingPanel } from "./pairing/phone-panel";
+import { buildPairingBundle } from "./pairing/apply";
+import { createCameraScanner } from "./pairing/scanner";
+import { createPairingFetch } from "./pairing/native-fetch";
 import { formatSyncFeedback, renderSyncFeedback } from "./sync/feedback";
 import { describeSyncProgress } from "./sync/progress";
 import type { SyncPreview, SyncStatus, SyncStatusProgress } from "./sync/types";
@@ -642,6 +647,7 @@ class SettingsModal extends Modal {
    * detached container would repaint elements nobody can see.
    */
   private stopSyncProgress: (() => void) | null = null;
+  private stopPairingUi: (() => void) | null = null;
   /** Flushes the hub-location form's pending save; set while the Sync tab shows the hub provider. */
   private hubConfigSettle?: () => Promise<void>;
   private stopExternalRootsTab: (() => void) | null = null;
@@ -743,6 +749,8 @@ class SettingsModal extends Modal {
     // painting detached nodes on a 1s ticker for the life of the modal.
     this.stopSyncProgress?.();
     this.stopSyncProgress = null;
+    this.stopPairingUi?.();
+    this.stopPairingUi = null;
     this.unsubscribeHotkeys?.();
     this.stopExternalRootsTab?.();
     this.stopExternalRootsTab = null;
@@ -2193,6 +2201,41 @@ class SettingsModal extends Modal {
     createLabel.className = "sync-field-check"; row.control.append(typeField, hostField, pathField, urlField, tokenField, secureNote, createLabel, buttons, result);
   }
 
+  /**
+   * ADR 0050 mobile pairing. Desktop (an HTTPS hub is the active provider): "Pair mobile device" shows a code. Phone: "Set up from
+   * desktop" scans or pastes one. Both live in the Connection section and are torn down with the tab.
+   */
+  private renderPairingRows(container: HTMLElement, isHub: boolean, activeProviderId: string | undefined, redraw: (summary?: string) => void): void {
+    const provider = this.geodeApp.hubSyncProvider; if (!provider) return;
+    const host = this.geodeApp.host, disposers: Array<() => void> = [];
+    const appSecrets = host.secrets.app;
+    const secrets = { available: Boolean(appSecrets) && (host.secrets.appAvailable ?? host.secrets.available), get: (key: string) => appSecrets ? appSecrets.get(key) : Promise.resolve(null), remove: (key: string) => appSecrets ? appSecrets.remove(key) : Promise.resolve() };
+    const pairing = window.geode.pairing;
+    if (pairing && isHub) {
+      const sync = this.geodeApp.sync;
+      disposers.push(renderPairingCard(container, { api: pairing, build: () => buildPairingBundle({
+        hub: provider, secrets, config: host.config,
+        vault: () => { const id = sync.getBoundVaultId(), name = sync.getBoundVaultName(); return id && name ? { id, name } : null; },
+      }) }));
+    }
+    if (document.body.classList.contains("is-mobile")) {
+      disposers.push(renderPhonePairingPanel(container, {
+        scanner: createCameraScanner(),
+        flow: {
+          ports: { hub: provider, secrets, config: host.config, ...(host.syncSafety ? { syncSafety: host.syncSafety } : {}), reloadSettings: () => this.geodeApp.reloadPortableSettingsForPairing() },
+          redeemOptions: { fetch: createPairingFetch() },
+          precheck: () => activeProviderId && activeProviderId !== HUB_PROVIDER_ID ? "Another sync provider is connected on this device. Disconnect it before setting up from a code." : null,
+        },
+        onApplied: async ({ report, bundle }) => {
+          // Selecting the provider only chooses it. Joining the vault and the first sync still need the user's explicit preview/approval (ADR 0015).
+          if (!this.geodeApp.sync.getActiveProvider()) await this.geodeApp.sync.activate(HUB_PROVIDER_ID).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error)));
+          redraw(`${describeApplied(report)}${bundle.vault ? ` Next, join the shared vault "${bundle.vault.name}" below and review the first sync plan.` : ""}`);
+        },
+      }));
+    }
+    this.stopPairingUi = () => { for (const dispose of disposers.splice(0)) dispose(); };
+  }
+
   /** Explicit first-sync confirmation with the plan counts, and the safety-rail refusal with its one-shot override. */
   private renderHubPlanRows(container: HTMLElement, perform: (action: () => Promise<unknown>, kind?: "preview" | "run") => void, trackBusy: (el: HTMLButtonElement | HTMLInputElement) => void): void {
     const sync = this.geodeApp.sync, details = sync.getHistoryDetails();
@@ -2313,6 +2356,8 @@ class SettingsModal extends Modal {
     // subscription is retired explicitly here instead.
     this.stopSyncProgress?.();
     this.stopSyncProgress = null;
+    this.stopPairingUi?.();
+    this.stopPairingUi = null;
     container.innerHTML = `<h2>Sync</h2>`;
     const sync = this.geodeApp.sync;
     const providers = sync.listProviders();
@@ -2456,6 +2501,7 @@ class SettingsModal extends Modal {
     this.renderSyncIssueGroups(issues.body, "Blocked", details?.blocked ?? []);
     this.renderSyncIssueGroups(issues.body, "Excluded", details?.excluded ?? []);
     if (isHub) this.renderHubConfigRows(connection.body, trackBusy);
+    this.renderPairingRows(connection.body, isHub, active?.id, summary => this.renderSyncTab(container, summary));
     if (this.geodeApp.sync.isAppendOnly()) {
       this.renderSharedVaultSetup(connection.body, { perform, trackBusy, applyBusyState, boundVaultName, isHub });
       if (status.state === "error") {
@@ -6432,6 +6478,9 @@ export class App {
   setTheme(theme: string): Promise<void> {
     return this.setVaultConfig("theme", theme).catch(() => {});
   }
+
+  /** Pairing applied portable categories through the guarded path; pick them up exactly as a sync apply does. */
+  reloadPortableSettingsForPairing(): Promise<void> { return this.reloadPortableSettings(); }
 
   private async reloadPortableSettings(): Promise<void> {
     const root = this.vault.root; const saved = await this.host.config.read("app");
