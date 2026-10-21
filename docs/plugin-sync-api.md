@@ -34,6 +34,8 @@ For this contract, Geode rejects providers lacking binary payloads, conditional 
 
 A reference implementation of this contract is the core iCloud sync provider in `src/renderer/internal-plugins/icloud-sync/` ([ADR 0030](adr/0030-core-icloud-sync-native-bridge.md), which superseded the earlier community plugin of [ADR 0029](adr/0029-icloud-drive-sync-provider-plugin.md)). It is written once against a platform bridge (`src/shared/icloud-container.ts`) and is a worked example of every `conditional-mutation-v1` rule above: idempotent creates keyed by `operationKey`, revision-checked update/move/trash, recoverable trash, complete snapshots that fail closed, and `maxFileSize` checks before bytes are read. Core plugins register it through the same `registerSyncProvider` API a community plugin would use.
 
+Conditional providers may also declare optional `excludePath(path, data?)` for files they cannot represent (for example a Markdown-only document store; see [Compass sync provider](design/compass-sync-provider.md)). The coordinator calls it with the path, then with the bytes of an in-limit file, and removes an excluded path from both the local and remote views: it is never uploaded, downloaded, or interpreted as a deletion.
+
 ## Append-only history provider contract
 
 Providers without atomic conditional mutation may implement `protocol: "append-only-history-v1"` instead. This is a different storage protocol, not permission to perform unsafe mutable writes. See [ADR 0016](adr/0016-causal-append-only-vault-history.md) and the exact TypeScript contract in `src/renderer/sync/history-types.ts`.

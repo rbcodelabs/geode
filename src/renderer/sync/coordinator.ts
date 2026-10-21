@@ -4,7 +4,7 @@ import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, validateSyncPath, type SyncScope
 import type { SyncApi, SyncConflict, SyncPreview, SyncProvider, SyncRemoteEntry, SyncRunResult, SyncSession, SyncStatus } from "./types";
 
 interface BaselineEntry { path: string; localFingerprint: string; remoteId: string; remoteRevision: string; kind: "file" | "folder"; }
-interface SyncState { stateKey: string; vaultId: string; providerId?: string; cursor?: string; approved: boolean; paused: boolean; previewSignature?: string; baseline: Record<string, BaselineEntry>; remoteIndex: Record<string, SyncRemoteEntry>; conflicts: Record<string, { remote: SyncRemoteEntry; conflictPath: string }>; scope: SyncScope; journal: JournalOperation[]; }
+interface SyncState { stateKey: string; vaultId: string; providerId?: string; cursor?: string; approved: boolean; paused: boolean; previewSignature?: string; baseline: Record<string, BaselineEntry>; remoteIndex: Record<string, SyncRemoteEntry>; conflicts: Record<string, { remote: SyncRemoteEntry; conflictPath: string }>; scope: SyncScope; journal: JournalOperation[]; unsyncable?: Record<string, { fingerprint: string; message: string }>; }
 interface JournalOperation { id: string; type: "upload" | "download" | "local-trash" | "remote-trash"; path: string; remote?: SyncRemoteEntry; localFingerprint?: string; phase: "prepared" | "applied"; }
 interface Plan { uploads: VaultFileEntry[]; downloads: SyncRemoteEntry[]; localTrash: SyncRemoteEntry[]; remoteTrash: BaselineEntry[]; conflicts: Array<{ local?: VaultFileEntry; remote: SyncRemoteEntry }>; skipped: number; remoteEntries: SyncRemoteEntry[]; nextRemoteIndex: Record<string, SyncRemoteEntry>; expectedLocal: Record<string, string | undefined>; cursor?: string; }
 
@@ -109,7 +109,7 @@ export class SyncCoordinator extends Events implements SyncApi {
     this.setStatus({ state: state.paused ? "paused" : "idle", providerId, conflicts: 0 });
   }
 
-  async disconnect(): Promise<void> { const vaultId = this.vaultId(); await this.cancel(); this.assertVault(vaultId); const state = await this.loadState(vaultId); delete state.providerId; state.approved = false; state.cursor = undefined; state.baseline = {}; state.remoteIndex = {}; state.conflicts = {}; state.journal = []; await this.saveState(state); this.setStatus(EMPTY_STATUS); }
+  async disconnect(): Promise<void> { const vaultId = this.vaultId(); await this.cancel(); this.assertVault(vaultId); const state = await this.loadState(vaultId); delete state.providerId; state.approved = false; state.cursor = undefined; state.baseline = {}; state.remoteIndex = {}; state.conflicts = {}; state.journal = []; state.unsyncable = {}; await this.saveState(state); this.setStatus(EMPTY_STATUS); }
   async pause(): Promise<void> { const vaultId = this.vaultId(); await this.cancel(); this.assertVault(vaultId); const state = await this.loadState(vaultId); state.paused = true; await this.saveState(state); this.setStatus({ ...this.status, state: "paused" }); }
   async resume(): Promise<void> { const state = await this.loadState(); state.paused = false; await this.saveState(state); this.setStatus({ ...this.status, state: state.providerId ? "idle" : "disconnected" }); }
   async cancel(): Promise<void> { this.generation++; this.activeAbort?.abort(); await this.hydration.catch(() => undefined); await this.running?.catch(() => undefined); await this.activeSession?.close().catch(() => undefined); this.activeAbort = undefined; this.activeSession = undefined; }
@@ -136,7 +136,9 @@ export class SyncCoordinator extends Events implements SyncApi {
       const result = { ...this.toPreview(plan), cursor: state.cursor };
       delete (result as Partial<SyncPreview>).requiresApproval;
       const unresolved = Object.keys(state.conflicts).length;
-      this.setStatus({ state: unresolved ? "conflict" : "idle", providerId: state.providerId, conflicts: unresolved });
+      const refused = Object.entries(state.unsyncable ?? {});
+      const message = refused.length ? `${refused.length} file(s) not synced: ${refused.slice(0, 3).map(([path, r]) => `${path} (${r.message})`).join("; ")}` : undefined;
+      this.setStatus({ state: unresolved ? "conflict" : "idle", providerId: state.providerId, conflicts: unresolved, ...(message ? { message } : {}) });
       return result as SyncRunResult;
     });
   }
@@ -177,31 +179,47 @@ export class SyncCoordinator extends Events implements SyncApi {
     if (remoteScan.mode === "delta" && !capabilities.delta) throw new Error("Provider returned an unadvertised delta scan");
     if (remoteScan.mode === "snapshot" && !capabilities.completeSnapshots) throw new Error("Provider returned an unadvertised complete snapshot");
     if (!remoteScan.mode) throw new Error("Provider must declare snapshot or delta scan mode");
+    // Provider-declared ownership exclusions (e.g. non-Markdown files for a document store). An excluded path is removed
+    // from the local and remote views alike, so it is never uploaded, downloaded, or mistaken for a deletion.
+    const exclude = this.activeRegistration!.provider.excludePath?.bind(this.activeRegistration!.provider);
+    const excluded = new Set<string>();
     for (const entry of localScan.entries) {
       if (isPathInSyncScope(entry.path, state.scope) && (entry.isFolder || this.isWithinLimit(entry.size))) {
-        (entry as VaultFileEntry & { syncFingerprint: string }).syncFingerprint = entry.isFolder ? "folder" : await this.hash(await this.host.vaultFiles.readBinary(entry.path));
+        if (!entry.isFolder && exclude && await exclude(entry.path)) { excluded.add(entry.path); this.assertContext(signal, vaultId); continue; }
+        const bytes = entry.isFolder ? undefined : await this.host.vaultFiles.readBinary(entry.path);
+        this.assertContext(signal, vaultId);
+        if (bytes && exclude && await exclude(entry.path, bytes)) { excluded.add(entry.path); this.assertContext(signal, vaultId); continue; }
+        (entry as VaultFileEntry & { syncFingerprint: string }).syncFingerprint = bytes ? await this.hash(bytes) : "folder";
         this.assertContext(signal, vaultId);
       }
     }
+
     await this.recoverJournal(state, localScan.entries, remoteScan.entries, remoteScan.mode, session, signal, vaultId);
     const conflictCopies = new Set(Object.values(state.conflicts).map(conflict => conflict.conflictPath).filter(Boolean));
-    const localAll = localScan.entries.filter(e => isPathInSyncScope(e.path, state.scope) && !conflictCopies.has(e.path) && !/\.sync-conflict-\d+/.test(e.path));
+    const localAll = localScan.entries.filter(e => isPathInSyncScope(e.path, state.scope) && !excluded.has(e.path) && !conflictCopies.has(e.path) && !/\.sync-conflict-\d+/.test(e.path));
     const local = localAll.filter(e => !e.isFolder);
     const nextRemoteIndex = remoteScan.mode === "delta" ? { ...state.remoteIndex } : {};
     for (const change of remoteScan.entries) {
       if (change.kind === "tombstone") delete nextRemoteIndex[change.id];
       else nextRemoteIndex[change.id] = change;
     }
+    if (exclude) for (const known of Object.values(nextRemoteIndex)) if (known.kind === "file" && !excluded.has(known.path) && await exclude(known.path)) excluded.add(known.path);
+    this.assertContext(signal, vaultId);
     const remote = [
       ...Object.values(nextRemoteIndex),
       ...(remoteScan.mode === "delta" ? remoteScan.entries.filter(entry => entry.kind === "tombstone") : []),
-    ].filter(e => e.kind === "tombstone" || isPathInSyncScope(e.path, state.scope));
+    ].filter(e => e.kind === "tombstone" ? !excluded.has(e.deletedPath ?? e.path) : isPathInSyncScope(e.path, state.scope) && !excluded.has(e.path));
     this.rejectCollisions(remote);
     const byPath = new Map(remote.filter(e => e.kind !== "tombstone").map(e => [e.path, e]));
     const localByPath = new Map(localAll.map(e => [e.path, e]));
     const plan: Plan = { uploads: [], downloads: [], localTrash: [], remoteTrash: [], conflicts: [], skipped: 0, remoteEntries: remote, nextRemoteIndex, expectedLocal: {}, cursor: remoteScan.cursor };
+    // Files the provider refused for good stay skipped (and visible) until their content changes; no retry on every poll.
+    const unsyncable = state.unsyncable ?? {};
+    for (const path of Object.keys(unsyncable)) if (!local.some(e => e.path === path)) delete unsyncable[path];
     for (const entry of local) {
       if (!this.isWithinLimit(entry.size)) { plan.skipped++; continue; }
+      const refused = unsyncable[entry.path];
+      if (refused) { if (refused.fingerprint === this.fingerprint(entry)) { plan.skipped++; continue; } delete unsyncable[entry.path]; }
       const remoteEntry = byPath.get(entry.path); const baseline = state.baseline[entry.path];
       if (!remoteEntry) {
         if (!baseline) {
@@ -220,7 +238,7 @@ export class SyncCoordinator extends Events implements SyncApi {
     }
     for (const entry of remote) {
       if (entry.kind === "tombstone") { const path = entry.deletedPath ?? entry.path; const localEntry = localByPath.get(path); const baseline = state.baseline[path]; if (localEntry && baseline) { if (this.fingerprint(localEntry) === baseline.localFingerprint) plan.localTrash.push(entry); else plan.conflicts.push({ local: localEntry, remote: entry }); } continue; }
-      if (!localByPath.has(entry.path)) { const baseline = state.baseline[entry.path]; if (baseline) { if (entry.revision !== baseline.remoteRevision) plan.conflicts.push({ remote: entry }); else plan.remoteTrash.push(baseline); } else if (this.isWithinLimit(entry.size)) plan.downloads.push(entry); else plan.skipped++; }
+      if (!localByPath.has(entry.path)) { const baseline = state.baseline[entry.path]; if (baseline) { if (entry.revision !== baseline.remoteRevision) plan.conflicts.push({ remote: entry }); else plan.remoteTrash.push(baseline); } else if (entry.implicit) { /* a leftover container, not a note anyone wrote */ } else if (this.isWithinLimit(entry.size)) plan.downloads.push(entry); else plan.skipped++; }
     }
     // Pending conflicts stay explicit even if either canonical side changes or disappears.
     for (const saved of Object.values(state.conflicts)) {
@@ -250,6 +268,10 @@ export class SyncCoordinator extends Events implements SyncApi {
         plan.nextRemoteIndex[remote.id] = remote;
         state.baseline[entry.path] = { path: entry.path, localFingerprint: this.fingerprint(entry), remoteId: remote.id, remoteRevision: remote.revision, kind: "file" }; await this.ack(state, op);
       } catch (error) {
+        if (error instanceof Error && error.name === "SyncUnsyncableError") {
+          (state.unsyncable ??= {})[entry.path] = { fingerprint: this.fingerprint(entry), message: error.message };
+          await this.ack(state, op); continue;
+        }
         if (!prior || !(error instanceof Error) || error.name !== "SyncPreconditionError") throw error;
         const refreshed = await session.scan(state.cursor, signal);
         this.assertContext(signal, vaultId);

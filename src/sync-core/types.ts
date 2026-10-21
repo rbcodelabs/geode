@@ -18,6 +18,12 @@ export interface SyncRemoteEntry {
   deletedPath?: string;
   /** Echoed for a create/update completed from a durable Geode journal operation. */
   operationKey?: string;
+  /**
+   * The provider believes this entry only exists as a side effect of other content (for example a document-store
+   * parent left behind as an empty leaf). It still syncs normally once Geode has a baseline for it, but is never
+   * downloaded as a brand-new file.
+   */
+  implicit?: boolean;
 }
 
 export interface SyncScanResult {
@@ -60,6 +66,13 @@ export interface SyncProvider {
    * selection (e.g. the transport's backing store is not reachable) instead of connecting and failing on every scan.
    */
   preflight?(): Promise<void>;
+  /**
+   * Optional ownership exclusion for providers that can only represent some files (e.g. Markdown-only document
+   * stores). Called first with the path alone and, for a file small enough to be hashed, again with its bytes.
+   * A non-null reason excludes the file from both sides of the plan: it is never uploaded, downloaded, or treated
+   * as deleted. Exclusion is never turned into deletion.
+   */
+  excludePath?(path: string, data?: ArrayBuffer): string | null | Promise<string | null>;
 }
 
 export type SyncStatusState = "disconnected" | "idle" | "preview" | "pending" | "syncing" | "paused" | "conflict" | "error";
@@ -94,6 +107,14 @@ export interface SyncStatus { state: SyncStatusState; providerId?: string; messa
 export interface SyncPreview { uploads: number; downloads: number; deletes: number; conflicts: number; skipped: number; requiresApproval: boolean; }
 export interface SyncRunResult extends Omit<SyncPreview, "requiresApproval"> { cursor?: string; }
 export interface SyncConflict { id: string; path: string; conflictPath: string; remoteRevision: string; }
+
+/**
+ * A create/update the remote can never accept for this file as it stands (e.g. its name collides with a remote item the
+ * provider cannot sync). Geode skips that file, reports why, and carries on; it retries only when the file changes.
+ */
+export class SyncUnsyncableError extends Error {
+  constructor(message = "This file cannot be synced") { super(message); this.name = "SyncUnsyncableError"; }
+}
 
 export class SyncPreconditionError extends Error {
   constructor(message = "Remote revision no longer matches") { super(message); this.name = "SyncPreconditionError"; }

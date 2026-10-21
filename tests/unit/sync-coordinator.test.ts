@@ -58,6 +58,29 @@ function provider(entries: SyncRemoteEntry[] = []): SyncProvider {
 }
 
 describe("SyncCoordinator", () => {
+  it("honors a provider's excludePath on both sides: excluded files are never uploaded, downloaded or treated as deleted", async () => {
+    const host = memoryHost({ "keep.md": "k", "skip.png": "p", "binary.md": "b" });
+    const entries: SyncRemoteEntry[] = [{ id: "r1", path: "remote.png", kind: "file", revision: "1" }, { id: "r2", path: "remote.md", kind: "file", revision: "1" }];
+    const remote = provider(entries);
+    const seen: Array<[string, boolean]> = [];
+    const guarded: SyncProvider = Object.assign(remote, {
+      excludePath: (path: string, data?: ArrayBuffer) => { seen.push([path, data !== undefined]); return path.endsWith(".png") ? "images are not synced" : path === "binary.md" && data ? "not text" : null; },
+    });
+    const coordinator = new SyncCoordinator(host, () => "vault-a"); coordinator.register("plugin-a", guarded); await coordinator.activate(guarded.id);
+    expect(await coordinator.preview()).toMatchObject({ uploads: 1, downloads: 1, deletes: 0 });
+    await coordinator.run({ approvePreview: true });
+    expect(remote.create).toHaveBeenCalledTimes(1);
+    expect(remote.create.mock.calls[0][0].path).toBe("keep.md");
+    expect(host.vaultFiles.exists("remote.png")).resolves.toBe(false);
+    expect(host.vaultFiles.exists("remote.md")).resolves.toBe(true);
+    // The image is rejected by path alone, so it is never even read.
+    expect(seen).toContainEqual(["skip.png", false]);
+    expect(seen).not.toContainEqual(["skip.png", true]);
+    // Excluding a file later does not read as a deletion of its remote copy.
+    entries.push({ id: "id:keep.md", path: "keep.md", kind: "file", revision: "1" }, { id: "r3", path: "later.png", kind: "file", revision: "1" });
+    expect(await coordinator.preview()).toMatchObject({ uploads: 0, downloads: 0, deletes: 0 });
+  });
+
   it("keeps unresolved conflicts actionable after both sides delete the canonical file", async () => {
     const host = memoryHost({ "Note.md": "local" }) as HostServices & { testDelete(path: string): void };
     const entries: SyncRemoteEntry[] = [{ id: "r", path: "Note.md", kind: "file", revision: "1" }];
