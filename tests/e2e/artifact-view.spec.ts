@@ -45,8 +45,9 @@ test("opens a static artifact in a contained, networkless ephemeral guest", asyn
     await expect(view).toBeVisible();
     await expect(frame).toHaveAttribute("partition", /^geode-artifact-[0-9a-f-]+$/);
     await expect(frame).toHaveAttribute("src", "geode-artifact://runtime-proof/index.html");
-    await expect(frame).toHaveCSS("width", "720px");
-    await expect(frame).toHaveCSS("height", "480px");
+    // Fill is the default: the frame uses the pane, not the manifest's 720 × 480 hint.
+    await expect(view.locator('[data-viewport="fill"]')).toHaveClass(/is-active/);
+    await expect(frame).not.toHaveCSS("width", "720px");
     await expect(window.locator(".workspace-split.mod-root .workspace-tab-header.is-active .workspace-tab-header-inner-title"))
       .toHaveText("Runtime proof");
     await expect.poll(() => frame.evaluate((guest) =>
