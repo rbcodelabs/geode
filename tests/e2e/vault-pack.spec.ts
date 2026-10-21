@@ -99,7 +99,7 @@ test("create a vault from a pack: consent screen shows the contents, then notes 
     expect(fs.readFileSync(path.join(vaultPath, "Policies", "Handbook.md"), "utf8")).toBe("# Handbook\n");
     expect(JSON.parse(fs.readFileSync(path.join(vaultPath, ".geode", "plugins.json"), "utf8"))).toEqual([PLUGIN_ID]);
 
-    await expect.poll(() => window.evaluate((id) => (window as any).app.pluginManager.isEnabled(id), PLUGIN_ID)).toBe(true);
+    await expect.poll(() => window.evaluate((id) => (window as any).app.pluginManager?.isEnabled(id) ?? null, PLUGIN_ID)).toBe(true);
     expect(await window.evaluate((id) => (window as any).app.commands.execute(`${id}:noop`), PLUGIN_ID)).toBe(true);
     // No staging directory left next to the vault.
     expect(fs.readdirSync(ctx.documentsDir)).toEqual(["Acme Onboarding"]);
@@ -146,6 +146,7 @@ test("a policy-blocked bundled plugin is installed disabled and is not enabled",
     await expect.poll(() => window.evaluate(() => (window as any).app.vault?.getFileByPath("Start here.md")?.path ?? null)).toBe("Start here.md");
     expect(fs.existsSync(path.join(vaultPath, ".geode", "plugins", PLUGIN_ID, "main.js"))).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(vaultPath, ".geode", "plugins.json"), "utf8"))).toEqual([]);
+    await expect.poll(() => window.evaluate(() => Boolean((window as any).app.pluginManager))).toBe(true);
     expect(await window.evaluate((id) => (window as any).app.pluginManager.isEnabled(id), PLUGIN_ID)).toBe(false);
   } finally {
     await cleanup(ctx);
@@ -177,7 +178,7 @@ test("--vault-pack with --yes creates and opens the vault without a prompt", asy
     await expect.poll(() => window.evaluate(() => (window as any).app.vault?.getFileByPath("Start here.md")?.path ?? null)).toBe("Start here.md");
     await expect(window.locator(".vault-pack-modal")).toHaveCount(0);
     expect(fs.existsSync(path.join(ctx.documentsDir, "Acme Onboarding", "Policies", "Handbook.md"))).toBe(true);
-    await expect.poll(() => window.evaluate((id) => (window as any).app.pluginManager.isEnabled(id), PLUGIN_ID)).toBe(true);
+    await expect.poll(() => window.evaluate((id) => (window as any).app.pluginManager?.isEnabled(id) ?? null, PLUGIN_ID)).toBe(true);
   } finally {
     await cleanup(ctx);
   }
