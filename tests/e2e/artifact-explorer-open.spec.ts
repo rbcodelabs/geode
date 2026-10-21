@@ -47,6 +47,13 @@ test("artifact folders open from the file explorer and the command, defaulting t
     await expect(dashFrame).toBeVisible();
     await expect(dashFrame).toHaveCSS("width", /^(?!1440px)/);
     await expect(window.locator('.artifact-view [data-viewport="fill"]')).toHaveClass(/is-active/);
+    // Viewport choices are an icon-only segmented control with accessible names and pressed state.
+    const group = window.getByRole("group", { name: "Viewport size" });
+    await expect(group.getByRole("button")).toHaveCount(4);
+    await expect(group.getByRole("button", { name: "Fill pane viewport" })).toHaveAttribute("aria-pressed", "true");
+    await expect(group.getByRole("button", { name: "Mobile viewport" })).toHaveAttribute("aria-pressed", "false");
+    await expect(group.locator('[data-viewport="mobile"] svg')).toHaveCount(1);
+    await expect(group.locator('[data-viewport="mobile"]')).toHaveText("");
     await expect(window.locator('.nav-folder[class*="is-open"] > .nav-folder-title[data-path="Artifacts/dash"]')).toHaveCount(0);
 
     // Clicking it again focuses the same tab rather than opening a duplicate.
