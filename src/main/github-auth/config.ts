@@ -121,6 +121,117 @@ export function resolveGithubAppSettings(
   };
 }
 
+export type GithubSettingSource = "env" | "vault" | "global" | "default";
+
+export interface GithubSettingsView {
+  clientId: { value: string; source: GithubSettingSource };
+  appSlug: { value: string; source: GithubSettingSource };
+  /** What geode.json itself holds (the layer the Settings form edits), even when a higher layer wins. */
+  global: GithubAppConfig;
+  /** Layers that set a value above geode.json, so the UI can say the edited field is not the effective one. */
+  overriddenBy: { clientId: GithubSettingSource | null; appSlug: GithubSettingSource | null };
+  allowSources: { env: boolean; global: boolean; vault: boolean };
+  defaults: { clientId: string; appSlug: string };
+}
+
+/** Effective App settings plus which layer each value came from. Mirrors resolveGithubAppSettings. */
+export function describeGithubAppSettings(
+  layers: { env?: Record<string, string | undefined>; global?: unknown; vault?: unknown } = {},
+): GithubSettingsView {
+  const env = layers.env ?? process.env;
+  const global = parseGithubAppConfig(layers.global);
+  const vault = parseGithubAppConfig(layers.vault);
+  const pick = (envValue: string | undefined, v: string | undefined, g: string | undefined, d: string) => {
+    const e = envValue?.trim();
+    if (e) return { value: e, source: "env" as const };
+    if (v) return { value: v, source: "vault" as const };
+    if (g) return { value: g, source: "global" as const };
+    return { value: d, source: "default" as const };
+  };
+  const clientId = pick(env.GEODE_GITHUB_CLIENT_ID, vault.clientId, global.clientId, DEFAULT_GITHUB_CLIENT_ID);
+  const appSlug = pick(env.GEODE_GITHUB_APP_SLUG, vault.appSlug, global.appSlug, DEFAULT_GITHUB_APP_SLUG);
+  const above = (s: { source: GithubSettingSource }) => (s.source === "env" || s.source === "vault" ? s.source : null);
+  return {
+    clientId,
+    appSlug,
+    global,
+    overriddenBy: { clientId: above(clientId), appSlug: above(appSlug) },
+    allowSources: {
+      env: !!(envList(env.GEODE_GITHUB_ALLOWED_OWNERS) || envList(env.GEODE_GITHUB_ALLOWED_REPOS)),
+      global: !!policyFrom(global.allowedOwners, global.allowedRepos),
+      vault: !!policyFrom(vault.allowedOwners, vault.allowedRepos),
+    },
+    defaults: { clientId: DEFAULT_GITHUB_CLIENT_ID, appSlug: DEFAULT_GITHUB_APP_SLUG },
+  };
+}
+
+/** What the Settings form submits. A blank/absent field means "use the default" (key removed). */
+export interface GithubAppSettingsInput {
+  clientId?: string;
+  appSlug?: string;
+  allowedOwners?: string[];
+  allowedRepos?: string[];
+}
+
+export type GithubAppSettingsUpdate =
+  | { ok: true; github: GithubAppConfig | undefined }
+  | { ok: false; errors: Partial<Record<keyof GithubAppSettingsInput, string>> };
+
+function checkOne(value: unknown, re: RegExp, label: string): { value?: string; error?: string } {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "string") return { error: `${label} must be text.` };
+  const v = value.trim();
+  if (!v) return {};
+  return re.test(v) ? { value: v } : { error: `"${v}" is not a valid ${label}.` };
+}
+
+function checkList(value: unknown, re: RegExp, label: string): { value?: string[]; error?: string } {
+  if (value === undefined || value === null) return {};
+  if (!Array.isArray(value)) return { error: `${label} must be a list.` };
+  const out: string[] = [];
+  for (const item of value) {
+    const v = typeof item === "string" ? item.trim() : "";
+    if (!v) continue;
+    if (!re.test(v)) return { error: `"${v}" is not a valid ${label}.` };
+    if (!out.includes(v)) out.push(v);
+  }
+  return out.length ? { value: out } : {};
+}
+
+/**
+ * Validates a Settings submission and merges it into the existing geode.json
+ * `github` value. Invalid input is rejected (never silently dropped, unlike
+ * parseGithubAppConfig, which guards untrusted files). Unknown keys already in
+ * `github` are preserved. `github: undefined` means the whole key should be removed.
+ */
+export function applyGithubAppSettingsInput(existing: unknown, input: unknown): GithubAppSettingsUpdate {
+  const obj = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
+  if (!obj) return { ok: false, errors: { clientId: "Invalid settings." } };
+  const errors: Partial<Record<keyof GithubAppSettingsInput, string>> = {};
+  const clientId = checkOne(obj.clientId, CLIENT_ID_RE, "client ID");
+  const appSlug = checkOne(obj.appSlug, SLUG_RE, "app slug");
+  const owners = checkList(obj.allowedOwners, OWNER_RE, "owner");
+  const repos = checkList(obj.allowedRepos, REPO_RE, "repository (owner/name)");
+  if (clientId.error) errors.clientId = clientId.error;
+  if (appSlug.error) errors.appSlug = appSlug.error;
+  if (owners.error) errors.allowedOwners = owners.error;
+  if (repos.error) errors.allowedRepos = repos.error;
+  if (Object.keys(errors).length) return { ok: false, errors };
+
+  const next: Record<string, unknown> =
+    existing && typeof existing === "object" && !Array.isArray(existing) ? { ...(existing as Record<string, unknown>) } : {};
+  const set = (key: string, value: unknown) => {
+    if (value === undefined) delete next[key];
+    else next[key] = value;
+  };
+  set("clientId", clientId.value);
+  set("appSlug", appSlug.value);
+  // Lists are only touched when the caller sent them, so a form without list fields keeps them.
+  if ("allowedOwners" in obj) set("allowedOwners", owners.value);
+  if ("allowedRepos" in obj) set("allowedRepos", repos.value);
+  return { ok: true, github: Object.keys(next).length ? (next as GithubAppConfig) : undefined };
+}
+
 /** Back-compat helpers (env + defaults only). */
 export function resolveGithubClientId(env: Record<string, string | undefined> = process.env): string {
   return resolveGithubAppSettings({ env }).clientId;

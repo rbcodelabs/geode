@@ -15,7 +15,11 @@ Layers, highest precedence first (clientId / appSlug come from the first layer t
 { "github": { "clientId": "Iv23li…", "appSlug": "bankrate-prototypes", "allowedOwners": ["bankrate-prototypes"], "allowedRepos": ["me/side-project"] } }
 ```
 
-Malformed values are ignored. A vault can be authored by someone else, so its allowlist can only **narrow** the global one (every list must pass). Env `GEODE_GITHUB_ALLOWED_OWNERS` / `GEODE_GITHUB_ALLOWED_REPOS` (comma separated) replace the geode.json list.
+### From Settings
+
+Settings > GitHub > "GitHub App" edits the `github` key of `geode.json` (slug, client ID, optional allowed owners/repos) without hand-editing. IPC: `github-auth-get-settings` returns the effective values plus the layer each came from (`env` / `vault` / `global` / `default`); `github-auth-set-settings` validates with the same patterns as the parser and **rejects** invalid input (the parser, which guards untrusted files, drops it), preserves other `geode.json` and `github` keys, and removes blank fields. "Use default" removes the whole `github` key. After saving, the form re-checks the App (`GET /apps/{slug}`, uncached) and shows `app_not_found` / `app_mismatch` inline. It also says when an environment variable or the open vault's `.geode/app.json` overrides the saved value, because then the field being edited is not the effective one. Switching to a different client ID drops the stored token (see "Changing the App"), so the user must reconnect. Unchanged: a vault's `.geode/app.json` can still override `clientId`/`appSlug`, and its allowlist can only narrow.
+
+Malformed values in files are ignored. A vault can be authored by someone else, so its allowlist can only **narrow** the global one (every list must pass). Env `GEODE_GITHUB_ALLOWED_OWNERS` / `GEODE_GITHUB_ALLOWED_REPOS` (comma separated) replace the geode.json list.
 
 ## Checks before sign-in
 

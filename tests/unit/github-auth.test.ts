@@ -10,6 +10,8 @@ import {
   resolveGithubClientId,
   resolveGithubAppSettings,
   parseGithubAppConfig,
+  describeGithubAppSettings,
+  applyGithubAppSettingsInput,
   assessPermissions,
   isRepoAllowed,
   type GithubAppSettings,
@@ -584,5 +586,85 @@ describe("connection view", () => {
     expect(view.badge).toBe("Problem");
     const warnOnly = connectedView(connectedStatus(), report, null, { ok: true, names: ["a/b"] }, 1);
     expect(warnOnly.badge).toBe("Connected");
+  });
+});
+
+describe("App settings (Settings > GitHub)", () => {
+  it("reports which layer each effective value comes from", () => {
+    expect(describeGithubAppSettings({ env: {} })).toMatchObject({
+      clientId: { source: "default" },
+      appSlug: { source: "default" },
+      overriddenBy: { clientId: null, appSlug: null },
+    });
+    const view = describeGithubAppSettings({
+      env: { GEODE_GITHUB_APP_SLUG: "env-app" },
+      global: { clientId: "Iv-global", appSlug: "global-app" },
+      vault: { clientId: "Iv-vault" },
+    });
+    expect(view.appSlug).toEqual({ value: "env-app", source: "env" });
+    expect(view.clientId).toEqual({ value: "Iv-vault", source: "vault" });
+    expect(view.overriddenBy).toEqual({ clientId: "vault", appSlug: "env" });
+    expect(view.global).toEqual({ clientId: "Iv-global", appSlug: "global-app" });
+    // Must agree with the resolver that actually drives sign-in.
+    const resolved = resolveGithubAppSettings({ env: { GEODE_GITHUB_APP_SLUG: "env-app" }, global: { clientId: "Iv-global" }, vault: { clientId: "Iv-vault" } });
+    expect([view.clientId.value, view.appSlug.value]).toEqual([resolved.clientId, resolved.appSlug]);
+  });
+
+  it("reports global-sourced values and allowlist sources", () => {
+    const view = describeGithubAppSettings({ env: { GEODE_GITHUB_ALLOWED_OWNERS: "x" }, global: { appSlug: "mine", allowedOwners: ["acme"] } });
+    expect(view.appSlug).toEqual({ value: "mine", source: "global" });
+    expect(view.allowSources).toEqual({ env: true, global: true, vault: false });
+  });
+
+  it("validates and writes the fields, trimming and de-duplicating lists", () => {
+    const res = applyGithubAppSettingsInput(undefined, {
+      clientId: " Iv23abcd ",
+      appSlug: "my-co-app",
+      allowedOwners: ["acme", "acme", " "],
+      allowedRepos: ["me/side-project"],
+    });
+    expect(res).toEqual({
+      ok: true,
+      github: { clientId: "Iv23abcd", appSlug: "my-co-app", allowedOwners: ["acme"], allowedRepos: ["me/side-project"] },
+    });
+  });
+
+  it("rejects invalid values instead of silently dropping them", () => {
+    const res = applyGithubAppSettingsInput({ appSlug: "keep" }, {
+      clientId: "x",
+      appSlug: "bad slug!",
+      allowedOwners: ["../evil"],
+      allowedRepos: ["noslash"],
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(Object.keys(res.errors).sort()).toEqual(["allowedOwners", "allowedRepos", "appSlug", "clientId"]);
+    expect(applyGithubAppSettingsInput(undefined, "nope").ok).toBe(false);
+    expect(applyGithubAppSettingsInput(undefined, { clientId: 5 }).ok).toBe(false);
+  });
+
+  it("removes blank fields (use the default) and the whole key when nothing remains", () => {
+    expect(applyGithubAppSettingsInput({ clientId: "Iv-old", appSlug: "old" }, { clientId: "", appSlug: "new-app" })).toEqual({
+      ok: true,
+      github: { appSlug: "new-app" },
+    });
+    expect(applyGithubAppSettingsInput({ clientId: "Iv-old" }, { clientId: "", appSlug: "" })).toEqual({ ok: true, github: undefined });
+  });
+
+  it("preserves unrelated github keys and leaves lists alone when not submitted", () => {
+    const res = applyGithubAppSettingsInput({ allowedOwners: ["acme"], future: 1 }, { appSlug: "new-app" });
+    expect(res).toEqual({ ok: true, github: { allowedOwners: ["acme"], future: 1, appSlug: "new-app" } });
+  });
+
+  it("round-trips through the resolver", () => {
+    const res = applyGithubAppSettingsInput(undefined, { clientId: "Iv23abcd", appSlug: "my-co-app" });
+    if (!res.ok) throw new Error("expected ok");
+    expect(resolveGithubAppSettings({ env: {}, global: res.github })).toMatchObject({ clientId: "Iv23abcd", appSlug: "my-co-app" });
+  });
+
+  it("explains overriding layers in the settings notes", async () => {
+    const { appSettingsNotes } = await import("../../src/renderer/settings/github-tab");
+    const notes = appSettingsNotes(describeGithubAppSettings({ env: {}, global: { appSlug: "g" }, vault: { clientId: "Iv-vault" } }));
+    expect(notes[0]).toContain("g (geode.json)");
+    expect(notes.join("\n")).toContain("Client ID is set by the open vault's .geode/app.json");
   });
 });
