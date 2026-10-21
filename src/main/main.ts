@@ -7,6 +7,8 @@ import { pathToFileURL } from "node:url";
 import { installCommunity, resolveCommunity } from "./community";
 import { bootstrapFreshVault } from "./default-vault-bootstrap";
 import { copyStarterVault } from "./starter-vault";
+import { exportVaultPack, sweepStaleStaging, VAULT_PACK_EXTENSION } from "./vault-pack";
+import { isAbsoluteLocalPath, parseVaultPackLaunch, VaultPackService } from "./vault-pack-service";
 import { importFromObsidianVault } from "./obsidian-import";
 import type { ResolveOpts } from "./github-resolve";
 import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
@@ -293,10 +295,33 @@ app.on("open-url", (event, url) => {
   event.preventDefault();
   deepLinks.accept(url);
 });
+/**
+ * A `.vault` pack handed to this process (`--vault-pack <path>`, a double-clicked
+ * file, or macOS `open-file`) that is waiting for the user's consent in the
+ * next window to ask (`vault-pack-launch`). `--yes` skips this entirely.
+ */
+let pendingLaunchPack: string | null = null;
+// `--yes` is honored for this FIRST launch argv only (never second-instance, never open-file).
+const startupPackLaunch = parseVaultPackLaunch(process.argv, process.cwd(), { allowYes: true });
+if (startupPackLaunch && !startupPackLaunch.yes) pendingLaunchPack = startupPackLaunch.packPath;
+app.on("open-file", (event, filePath) => {
+  if (!filePath.toLowerCase().endsWith(VAULT_PACK_EXTENSION)) return;
+  event.preventDefault();
+  if (!isAbsoluteLocalPath(filePath)) return;
+  pendingLaunchPack = path.resolve(filePath);
+  if (app.isReady()) createWindow();
+});
 const hasSingleInstanceLock = isHeadless || app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
-app.on("second-instance", (_event, argv) => {
+app.on("second-instance", (_event, argv, workingDirectory) => {
   deepLinks.acceptArgv(argv);
+  // A pack handed to an already-running instance ALWAYS shows the consent screen, even with --yes.
+  const packLaunch = parseVaultPackLaunch(argv, workingDirectory, { allowYes: false });
+  if (packLaunch) {
+    pendingLaunchPack = packLaunch.packPath;
+    createWindow();
+    return;
+  }
   const win = BrowserWindow.getAllWindows()[0];
   if (win && !isHeadless) {
     if (win.isMinimized()) win.restore();
@@ -496,6 +521,48 @@ function loadManagedPolicy(): ManagedPolicy | null {
     return null;
   }
   return validatePolicy(raw);
+}
+
+const vaultPacks = new VaultPackService({
+  policy: () => loadManagedPolicy(),
+  geodeVersion: app.getVersion(),
+});
+
+/**
+ * Machine-level directory of organization vault packs (`*.vault`), beside the
+ * ADR 0002 managed-policy file so IT deploys both to the same admin-owned
+ * place. `GEODE_PACK_DIR` overrides it for tests, like `GEODE_POLICY_PATH`.
+ */
+function organizationPackDir(): string {
+  return process.env.GEODE_PACK_DIR || path.join(path.dirname(policyFilePath()), "vault-packs");
+}
+
+/** Registers a window with the pack service and forgets its grants/tokens when it closes. */
+const trackedPackSenders = new Set<number>();
+function trackVaultPackSender(sender: Electron.WebContents): number {
+  const id = sender.id;
+  if (!trackedPackSenders.has(id)) {
+    trackedPackSenders.add(id);
+    sender.once("destroyed", () => {
+      trackedPackSenders.delete(id);
+      vaultPacks.closeSender(id);
+    });
+  }
+  return id;
+}
+
+/** `--vault-pack <path> --yes`: create a vault from the pack in Documents with no prompt. Returns its path, or null on failure. */
+async function launchPackUnattended(packPath: string): Promise<string | null> {
+  try {
+    const documentsDir = process.env.GEODE_DOCUMENTS_DIR || app.getPath("documents");
+    // Unattended installs are the one path with no consent screen: leave a trail in the diagnostics log.
+    console.warn(`[vault-pack] unattended apply (--yes) of ${packPath} into ${documentsDir}`);
+    recordDiagnostic(undefined, { at: Date.now(), category: "vault-pack", level: "warning", message: `unattended-apply: ${packPath}` });
+    return await vaultPacks.createUnattended(packPath, documentsDir);
+  } catch (error) {
+    console.error(`--vault-pack: could not create a vault from "${packPath}"`, error);
+    return null;
+  }
 }
 
 /**
@@ -890,21 +957,20 @@ function registerIpc() {
       if (!st.isDirectory()) throw new Error(`"${dest}" already exists and is not a folder`);
       return { path: dest, created: false };
     }
-    await fsp.mkdir(dest, { recursive: true });
-    try {
-      await copyStarterVault(dest);
-    } catch (error) {
-      await fsp.rm(dest, { recursive: true, force: true }).catch(() => {});
-      throw error;
-    }
+    await fsp.mkdir(documentsDir, { recursive: true });
+    // The starter vault is a vault pack (ADR 0050): staged beside `dest` and
+    // moved into place only on success, so a failure leaves nothing behind.
+    await copyStarterVault(dest);
     return { path: dest, created: true };
   });
 
-  ipcMain.handle("get-default-vault-location", () => ({
+  ipcMain.handle("get-default-vault-location", (e) => {
     // Same GEODE_DOCUMENTS_DIR override as explore-sample-vault (e2e only).
-    path: process.env.GEODE_DOCUMENTS_DIR || app.getPath("documents"),
-    home: app.getPath("home"),
-  }));
+    const location = process.env.GEODE_DOCUMENTS_DIR || app.getPath("documents");
+    // Main chose this location, so it may receive a vault created from a pack (ADR 0050).
+    vaultPacks.grantParent(trackVaultPackSender(e.sender), location);
+    return { path: location, home: app.getPath("home") };
+  });
 
   ipcMain.handle("choose-parent-folder", async (e, defaultPath: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
@@ -915,11 +981,53 @@ function registerIpc() {
       properties: ["openDirectory"],
     });
     if (result.canceled || !result.filePaths.length) return null;
+    vaultPacks.grantParent(trackVaultPackSender(e.sender), result.filePaths[0]);
     return result.filePaths[0];
   });
 
   ipcMain.handle("create-vault", async (_e, request: { parent?: unknown; name?: unknown } | null) =>
     createVaultFolder(request?.parent, request?.name));
+
+  // Vault packs (ADR 0050). The renderer only ever holds opaque tokens and
+  // summaries; `inspect` writes nothing and `create` applies the exact bytes
+  // that were inspected, so there is no path to a silent install from here.
+  ipcMain.handle("vault-pack:choose", async (e) => {
+    const senderId = trackVaultPackSender(e.sender);
+    // Native dialogs can't be driven by Playwright; headless e2e injects the choice.
+    let chosen: string | null;
+    if (isHeadless && process.env.GEODE_TEST_VAULT_PACK_PICK) {
+      chosen = process.env.GEODE_TEST_VAULT_PACK_PICK;
+    } else {
+      const win = BrowserWindow.fromWebContents(e.sender)!;
+      const result = await dialog.showOpenDialog(win, {
+        title: "Choose a vault pack",
+        filters: [{ name: "Geode vault pack", extensions: ["vault"] }],
+        properties: ["openFile"],
+      });
+      chosen = result.canceled || !result.filePaths.length ? null : result.filePaths[0];
+    }
+    if (chosen) vaultPacks.grantPath(senderId, chosen);
+    return chosen;
+  });
+  ipcMain.handle("vault-pack:inspect", (e, packPath: unknown) => vaultPacks.inspect(trackVaultPackSender(e.sender), packPath));
+  ipcMain.handle("vault-pack:inspect-dropped", async (e, packPath: unknown) => {
+    const senderId = trackVaultPackSender(e.sender);
+    await vaultPacks.grantDropped(senderId, packPath);
+    return vaultPacks.inspect(senderId, packPath);
+  });
+  ipcMain.handle("vault-pack:discard", (e, token: unknown) => vaultPacks.discard(trackVaultPackSender(e.sender), token));
+  ipcMain.handle("vault-pack:create", (e, request: { token?: unknown; parent?: unknown; name?: unknown } | null) =>
+    vaultPacks.create(trackVaultPackSender(e.sender), request?.token, request?.parent, request?.name));
+  ipcMain.handle("vault-pack:launch", async (e) => {
+    const senderId = trackVaultPackSender(e.sender);
+    const packPath = pendingLaunchPack;
+    pendingLaunchPack = null;
+    if (!packPath) return null;
+    vaultPacks.grantPath(senderId, packPath);
+    return vaultPacks.inspect(senderId, packPath);
+  });
+  ipcMain.handle("vault-pack:organization", (e) => vaultPacks.listOrganizationPacks(trackVaultPackSender(e.sender), organizationPackDir()));
+  ipcMain.handle("vault-pack:export", (e) => exportCurrentVaultAsPack(BrowserWindow.fromWebContents(e.sender)));
 
   ipcMain.handle("get-recent-vaults", () => {
     const cfg = loadConfig();
@@ -2519,6 +2627,36 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
   return win;
 }
 
+/** "Save vault as pack…": exports the window's open vault to a `.vault` file. */
+async function exportCurrentVaultAsPack(win: BrowserWindow | null | undefined): Promise<{ path: string; fileCount: number; pluginCount: number } | null> {
+  const root = win ? sessions.get(win.id)?.root : undefined;
+  if (!win || !root) {
+    await dialog.showMessageBox({ type: "info", message: "Open a vault first", detail: "Save vault as pack exports the vault that is open in this window." });
+    return null;
+  }
+  let target: string | undefined;
+  if (isHeadless && process.env.GEODE_TEST_VAULT_PACK_SAVE) {
+    target = process.env.GEODE_TEST_VAULT_PACK_SAVE;
+  } else {
+    const result = await dialog.showSaveDialog(win, {
+      title: "Save vault as pack",
+      defaultPath: `${path.basename(root)}${VAULT_PACK_EXTENSION}`,
+      filters: [{ name: "Geode vault pack", extensions: ["vault"] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    target = result.filePath;
+  }
+  if (!target.toLowerCase().endsWith(VAULT_PACK_EXTENSION)) target += VAULT_PACK_EXTENSION;
+  try {
+    const summary = await exportVaultPack(root, target, { name: path.basename(root) }, { policy: loadManagedPolicy(), geodeVersion: app.getVersion() });
+    if (!isHeadless) shell.showItemInFolder(target);
+    return { path: target, fileCount: summary.fileCount, pluginCount: summary.plugins.length };
+  } catch (error) {
+    await dialog.showMessageBox(win, { type: "error", message: "Could not save the vault pack", detail: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
 function installApplicationMenu(): void {
   const template = buildApplicationMenuTemplate(process.platform, async () => {
       try {
@@ -2553,7 +2691,8 @@ function installApplicationMenu(): void {
     const target = window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow();
     target?.webContents.reload();
   },
-  async () => { await checkForUpdatesManually(); });
+  async () => { await checkForUpdatesManually(); },
+  (window) => { void exportCurrentVaultAsPack(window instanceof BrowserWindow ? window : BrowserWindow.getFocusedWindow()); });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
@@ -2596,6 +2735,8 @@ app.whenReady().then(() => {
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
   }
   registerIpc();
+  // A crash mid-apply can leave a `.geode-pack-*` staging folder in the folder new vaults go to.
+  void sweepStaleStaging(process.env.GEODE_DOCUMENTS_DIR || app.getPath("documents"));
   powerMonitor.on("suspend", () => {
     handleWatchdogPowerEvent(crashStates, "suspend", Date.now(), recordDiagnostic);
   });
@@ -2603,7 +2744,11 @@ app.whenReady().then(() => {
     handleWatchdogPowerEvent(crashStates, "resume", Date.now(), recordDiagnostic);
   });
   installApplicationMenu();
-  createWindow();
+  if (startupPackLaunch?.yes) {
+    void launchPackUnattended(startupPackLaunch.packPath).then((created) => createWindow(false, created ?? undefined));
+  } else {
+    createWindow();
+  }
   initAutoUpdater();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

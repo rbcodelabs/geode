@@ -28,6 +28,10 @@
  * renderer's settings/workspace autosave paths only fire after `open-vault`
  * has already returned).
  *
+ * Since ADR 0050 the two resources are translated into an in-memory vault
+ * pack and applied through `applyVaultPack` (the same staged, allowlisted
+ * path a `.vault` file takes); behavior is unchanged.
+ *
  * Each of the two seeding steps (theme, plugins) is independently
  * try/caught — a failure in one (missing files, a malformed
  * default-plugins.json, a permission error) must never block the other, and
@@ -41,6 +45,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { installCommunity as defaultInstallCommunity } from "./community";
 import type { ResolveOpts } from "./github-resolve";
+import { applyVaultPack, buildMemoryPack } from "./vault-pack";
 
 interface DefaultPluginsFile {
   plugins: string[];
@@ -76,8 +81,8 @@ function isEnoent(err: unknown): boolean {
 }
 
 /**
- * Copies `resources/default-theme/<ThemeName>/{theme.css,manifest.json}`
- * into `<root>/.geode/themes/<ThemeName>/`, if (and only if) a deploying
+ * Reads `resources/default-theme/<ThemeName>/{theme.css,manifest.json}` into
+ * pack files under `.geode/themes/<ThemeName>/`, if (and only if) a deploying
  * organization has dropped a theme folder into `resources/default-theme/`
  * before building. `<ThemeName>` is discovered from the directory itself —
  * nothing here hardcodes an organization's theme name. If more than one
@@ -85,11 +90,11 @@ function isEnoent(err: unknown): boolean {
  * seeds exactly one default theme, same as the design it was generalized
  * from).
  *
- * Returns the theme's folder name (used by `writeAppConfig` to select it),
+ * Returns the theme's folder name (used to select it in `.geode/app.json`),
  * or `undefined` if there's nothing to copy — the expected, common case for
  * every regular upstream user, so this logs nothing in that case.
  */
-async function copyDefaultTheme(root: string): Promise<string | undefined> {
+async function readDefaultTheme(files: Map<string, Buffer>): Promise<string | undefined> {
   const themesRoot = path.join(resourcesDir(), "default-theme");
   let entries: fs.Dirent[];
   try {
@@ -106,26 +111,23 @@ async function copyDefaultTheme(root: string): Promise<string | undefined> {
   if (!themeName) return undefined;
 
   const srcDir = path.join(themesRoot, themeName);
-  const destDir = path.join(root, ".geode", "themes", themeName);
-  await fsp.mkdir(destDir, { recursive: true });
+  const read = new Map<string, Buffer>();
   for (const file of ["theme.css", "manifest.json"]) {
-    await fsp.copyFile(path.join(srcDir, file), path.join(destDir, file));
+    read.set(`.geode/themes/${themeName}/${file}`, await fsp.readFile(path.join(srcDir, file)));
   }
+  // Only add once both files were read, so a half-readable theme is never seeded.
+  for (const [k, v] of read) files.set(k, v);
   return themeName;
 }
 
 /**
  * Reads `resources/default-plugins.json` (shape: `{ "plugins": string[] }`,
- * each entry an `"owner/repo"` GitHub reference) and installs each one via
- * the existing GitHub-install pipeline (`installCommunity`, already used by
- * the manual "install from GitHub" UI flow).
+ * each entry an `"owner/repo"` GitHub reference).
  *
  * Returns `null` if the file doesn't exist — the expected, common case for
- * every regular upstream user; no install attempt is made and nothing is
- * written to `.geode/plugins.json`. Returns the ids that installed
- * successfully otherwise (possibly empty, if every install failed).
+ * every regular upstream user.
  */
-async function installDefaultPlugins(root: string, install: InstallCommunityFn): Promise<string[] | null> {
+async function readDefaultPluginRepos(): Promise<string[] | null> {
   let raw: string;
   try {
     raw = await fsp.readFile(path.join(resourcesDir(), "default-plugins.json"), "utf8");
@@ -135,25 +137,7 @@ async function installDefaultPlugins(root: string, install: InstallCommunityFn):
   }
 
   const parsed = JSON.parse(raw) as DefaultPluginsFile;
-  const repos = Array.isArray(parsed?.plugins) ? parsed.plugins : [];
-
-  const results = await Promise.allSettled(repos.map((repo) => install(root, repo, { type: "plugin" })));
-
-  const ids: string[] = [];
-  results.forEach((result, i) => {
-    if (result.status === "fulfilled") {
-      ids.push(result.value.id);
-    } else {
-      console.error(`Failed to install default plugin "${repos[i]}"`, result.reason);
-    }
-  });
-  return ids;
-}
-
-async function writePluginsConfig(root: string, ids: string[]): Promise<void> {
-  const geodeDir = path.join(root, ".geode");
-  await fsp.mkdir(geodeDir, { recursive: true });
-  await fsp.writeFile(path.join(geodeDir, "plugins.json"), JSON.stringify(ids, null, 2), "utf8");
+  return Array.isArray(parsed?.plugins) ? parsed.plugins : [];
 }
 
 /**
@@ -168,14 +152,8 @@ async function writePluginsConfig(root: string, ids: string[]): Promise<void> {
  * defaults as of this repo's current version — verified against
  * `src/renderer/app.ts`'s `settings` initializer, not assumed.
  */
-async function writeAppConfig(root: string, themeName: string): Promise<void> {
-  const geodeDir = path.join(root, ".geode");
-  await fsp.mkdir(geodeDir, { recursive: true });
-  await fsp.writeFile(
-    path.join(geodeDir, "app.json"),
-    JSON.stringify({ theme: "light", cssTheme: themeName }, null, 2),
-    "utf8"
-  );
+function appConfigFile(themeName: string): Buffer {
+  return Buffer.from(JSON.stringify({ theme: "light", cssTheme: themeName }, null, 2), "utf8");
 }
 
 /**
@@ -185,35 +163,44 @@ async function writeAppConfig(root: string, themeName: string): Promise<void> {
  * ahead of their build. No-op for any vault that already has a `.geode/`
  * folder, and a no-op step-by-step for whichever of those two resources is
  * absent — which, for every upstream build of this repo, is both of them.
- * Never throws — every step is individually guarded so a partial failure in
- * one step still lets the others (and vault opening itself) proceed.
+ * Never throws — each input is individually guarded so a failure reading
+ * one still lets the other (and vault opening itself) proceed, and GitHub
+ * plugin install failures are skipped rather than aborting the seed.
  */
 export async function bootstrapFreshVault(root: string, deps: BootstrapFreshVaultDeps = {}): Promise<void> {
   if (fs.existsSync(path.join(root, ".geode"))) return;
 
-  const install = deps.installCommunity ?? defaultInstallCommunity;
+  const files = new Map<string, Buffer>();
 
   let themeName: string | undefined;
   try {
-    themeName = await copyDefaultTheme(root);
+    themeName = await readDefaultTheme(files);
   } catch (err) {
     console.error("Failed to install default theme", err);
   }
 
+  let repos: string[] | null = null;
   try {
-    const installedIds = await installDefaultPlugins(root, install);
-    if (installedIds !== null) {
-      await writePluginsConfig(root, installedIds);
-    }
+    repos = await readDefaultPluginRepos();
   } catch (err) {
     console.error("Failed to install default plugin set", err);
   }
 
-  if (themeName) {
-    try {
-      await writeAppConfig(root, themeName);
-    } catch (err) {
-      console.error("Failed to write default app.json", err);
-    }
+  if (themeName) files.set(".geode/app.json", appConfigFile(themeName));
+  if (files.size === 0 && repos === null) return;
+
+  // default-plugins.json entries have no id until installCommunity resolves
+  // them, so they ride along as `unresolvedGithubPlugins` rather than manifest entries.
+  const pack = buildMemoryPack({ id: "geode-default-seed", name: "Default vault seed", files });
+  try {
+    await applyVaultPack({ kind: "memory", pack }, root, {
+      requireEmptyDest: false,
+      githubFailure: "skip",
+      pluginsJson: repos !== null ? "always" : "when-needed",
+      installCommunity: deps.installCommunity ?? defaultInstallCommunity,
+      unresolvedGithubPlugins: repos ?? [],
+    });
+  } catch (err) {
+    console.error("Failed to seed default vault contents", err);
   }
 }

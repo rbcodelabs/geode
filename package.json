@@ -109,6 +109,14 @@
     "appId": "com.rbcodelabs.geode",
     "productName": "Geode",
     "forceCodeSigning": true,
+    "fileAssociations": [
+      {
+        "ext": "vault",
+        "name": "Geode vault pack",
+        "description": "Geode vault pack",
+        "role": "Viewer"
+      }
+    ],
     "protocols": [
       {
         "name": "Geode deep links",

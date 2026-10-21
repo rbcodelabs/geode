@@ -11,6 +11,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     acquirePowerSaveBlocker: async () => "unsupported",
     releasePowerSaveBlocker: async () => false,
     chooseVault: () => host.vaultRegistry.chooseVault(),
+    vaultPack: host.vaultRegistry.vaultPackSupport,
     exploreSampleVault: async () => (await host.vaultRegistry.exploreSampleVault()) ?? unavailable("exploreSampleVault")(),
     getDefaultVaultLocation: async () => host.vaultRegistry.createVaultSupport?.getDefaultLocation() ?? unavailable("createVault")(),
     chooseParentFolder: async (defaultPath) => host.vaultRegistry.createVaultSupport?.chooseParentFolder(defaultPath) ?? unavailable("createVault")(),

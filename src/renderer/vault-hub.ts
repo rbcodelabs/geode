@@ -39,6 +39,19 @@ export interface VaultHubEntry {
   detail: string;
 }
 
+/** Where a `.vault` pack for "Create vault from pack…" comes from. */
+export type VaultHubPackSource =
+  | { kind: "pick" }
+  | { kind: "path"; path: string }
+  | { kind: "dropped"; file: File };
+
+export interface VaultHubPackOptions {
+  /** Resolve + inspect the pack and show the consent screen inside `host`; resolves once it is on screen. Rejects with a readable error. */
+  show(host: HTMLElement, opener: HTMLElement, source: VaultHubPackSource, onCreated: (path: string) => Promise<void>): Promise<void>;
+  /** Packs in the machine-level organization directory (manifest-only listing). */
+  listOrganization(): Promise<Array<{ path: string; fileName: string; name?: string; version?: string; error?: string }>>;
+}
+
 export interface VaultHubOptions {
   mode: VaultHubMode;
   brandChipHtml: string;
@@ -59,6 +72,8 @@ export interface VaultHubOptions {
   removeFromList?: (path: string) => Promise<void>;
   /** Present only where vaults can be created (desktop Electron). Mounts the existing create dialog inside `host`. */
   showCreateVault?: (host: HTMLElement, opener: HTMLElement, onCreated: (path: string) => Promise<void>) => void;
+  /** Present only where vault packs are supported (desktop Electron; ADR 0050). */
+  vaultPack?: VaultHubPackOptions;
   /** Present only on first run on desktop. */
   exploreSample?: () => Promise<{ path: string; onOpened?: () => Promise<void> } | null>;
   /**
@@ -110,6 +125,16 @@ export class VaultHub {
     return this.state === "opening";
   }
 
+  /** The hub's root element (consent screens for packs are mounted inside it). */
+  get rootElement(): HTMLElement {
+    return this.root;
+  }
+
+  /** A vault was created outside the hub's own cards (e.g. from a pack's consent screen): open it with the usual morph. */
+  adoptCreated(path: string): Promise<void> {
+    return this.runAction(() => this.launch(path, vaultNameFromPath(path)));
+  }
+
   get isOpen(): boolean {
     return this.state !== "closed";
   }
@@ -152,6 +177,7 @@ export class VaultHub {
     this.errorEl.setAttribute("role", "alert");
     this.errorEl.hidden = true;
     content.append(lockup, this.subtitleEl, this.grid, this.errorEl);
+    if (this.opts.vaultPack) this.mountPackSurfaces(content, root);
     if (this.opts.mode === "switcher") {
       const hint = document.createElement("p");
       hint.className = "vault-hub-hint";
@@ -260,6 +286,56 @@ export class VaultHub {
       return;
     }
     el.textContent = error instanceof Error ? error.message : "Unable to open that vault";
+    el.scrollIntoView?.({ block: "nearest" });
+  }
+
+  // ---- vault packs (ADR 0050) ------------------------------------------------------------------
+
+  private showPack(opener: HTMLElement, source: VaultHubPackSource): void {
+    const pack = this.opts.vaultPack;
+    if (!pack || this.state !== "browsing") return;
+    this.errorEl.hidden = true;
+    pack.show(this.root, opener, source, (created) => this.adoptCreated(created)).catch((error) => this.showError(error));
+  }
+
+  /** Drop target for `.vault` files, plus the organization-vaults list (loaded lazily, hidden when empty). */
+  private mountPackSurfaces(content: HTMLElement, root: HTMLElement): void {
+    const pack = this.opts.vaultPack!;
+    root.addEventListener("dragover", (event) => {
+      if (event.dataTransfer && Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) event.preventDefault();
+    });
+    root.addEventListener("drop", (event) => {
+      const file = Array.from(event.dataTransfer?.files ?? []).find((f) => f.name.toLowerCase().endsWith(".vault"));
+      if (!file) return;
+      event.preventDefault();
+      this.showPack(root, { kind: "dropped", file });
+    });
+
+    const section = document.createElement("div");
+    section.className = "vault-hub-org vault-picker-org";
+    section.hidden = true;
+    content.appendChild(section);
+    void pack.listOrganization().then((packs) => {
+      if (!packs.length || this.state === "closed") return;
+      const heading = document.createElement("h3");
+      heading.textContent = "Organization vaults";
+      section.appendChild(heading);
+      for (const entry of packs) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "vault-picker-recent vault-picker-org-pack";
+        const dot = document.createElement("span");
+        dot.className = "vault-picker-dot";
+        dot.setAttribute("aria-hidden", "true");
+        const label = document.createElement("span");
+        label.textContent = entry.name ? `${entry.name} ${entry.version ?? ""}`.trim() : `${entry.fileName} (unavailable: ${entry.error ?? "unreadable"})`;
+        row.append(dot, label);
+        if (entry.name) row.addEventListener("click", () => this.showPack(row, { kind: "path", path: entry.path }));
+        else row.disabled = true;
+        section.appendChild(row);
+      }
+      section.hidden = false;
+    }, () => {});
   }
 
   // ---- rendering -------------------------------------------------------------------------------
@@ -400,6 +476,10 @@ export class VaultHub {
     if (showCreate) {
       add("create", "Create new vault", "plus", (button) => showCreate(this.root, button, (created) =>
         this.runAction(() => this.launch(created, vaultNameFromPath(created)))));
+    }
+    const pack = this.opts.vaultPack;
+    if (pack && showCreate) {
+      add("pack", "Create vault from pack\u2026", "package", (button) => this.showPack(button, { kind: "pick" }));
     }
     add("open-folder", "Open folder as vault", "folder-open", chooseAndOpen(this.opts.chooseFolder));
     // Desktop's "external folder" is the same native dialog as "Open folder", so a second card would only be noise there.
