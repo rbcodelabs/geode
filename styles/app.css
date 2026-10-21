@@ -7932,6 +7932,11 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
 }
 .github-status-line.is-error { color: var(--text-error, #e06c75); }
 .github-status-line.is-warn { color: var(--color-orange, #e9973f); }
+/* Settings > GitHub > GitHub App form: stacked labelled fields, no stray heading margins. */
+.github-app-card h3, .github-app-card > p { margin: 0; }
+.github-app-card .sync-field input[type="text"] { box-sizing: border-box; }
+.github-app-card input[aria-invalid="true"] { outline: 1px solid var(--text-error, #e06c75); }
+.github-field-error[hidden], .github-app-card .github-status-block[hidden] { display: none; }
 .github-repos { font-size: var(--font-ui-small); }
 .github-repos p { margin: 0 0 var(--size-4-1); }
 .github-repos ul { margin: 0; padding-left: var(--size-4-5); max-height: 9rem; overflow: auto; overflow-wrap: anywhere; }

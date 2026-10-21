@@ -407,22 +407,49 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
   const formMessages = document.createElement("div");
   formMessages.className = "github-status-block";
   formMessages.setAttribute("role", "status");
+  formMessages.hidden = true;
   const saveButton = button("Save", () => void saveApp(), "mod-cta");
   const resetButton = button("Use default", () => void saveApp(true));
   const formActions = document.createElement("div");
   formActions.className = "sync-card-actions github-actions";
-  const field = (label: string, input: HTMLInputElement) => {
+  const fieldErrors = new Map<string, HTMLElement>();
+  const field = (key: string, label: string, input: HTMLInputElement) => {
     const row = document.createElement("label");
-    row.className = "github-fact";
-    row.append(text("span", label), input);
+    row.className = "sync-field";
+    const error = text("span", "", "github-status-line is-error github-field-error");
+    error.hidden = true;
+    fieldErrors.set(key, error);
+    input.addEventListener("input", () => { error.hidden = true; input.removeAttribute("aria-invalid"); });
+    row.append(text("span", label, "sync-field-label"), input, error);
     return row;
+  };
+  const inputs: Record<string, HTMLInputElement> = { appSlug: slugInput, clientId: clientInput, allowedOwners: ownersInput, allowedRepos: reposInput };
+  const showFieldErrors = (errors: Record<string, string | undefined>) => {
+    for (const [key, el] of fieldErrors) {
+      const msg = errors[key];
+      el.hidden = !msg;
+      el.textContent = msg ?? "";
+      if (msg) inputs[key].setAttribute("aria-invalid", "true");
+      else inputs[key].removeAttribute("aria-invalid");
+    }
   };
   const splitList = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
   const showFormMessages = (messages: ConnectionMessage[]) => {
     formMessages.replaceChildren();
+    formMessages.hidden = messages.length === 0;
     for (const m of messages) formMessages.append(text("p", m.text, `github-status-line is-${m.severity}${m.kind ? ` github-${m.kind}` : ""}`));
   };
+  const notesEl = document.createElement("div");
+  notesEl.className = "github-app-notes";
+  notesEl.style.display = "grid";
+  notesEl.style.gap = "var(--size-4-2)";
+  const fillNotes = (view: AppSettingsView) => {
+    const [effective, ...overrides] = appSettingsNotes(view);
+    notesEl.replaceChildren(text("p", effective, "setting-item-description"));
+    if (overrides.length) notesEl.append(messageBlock(overrides.map((t) => ({ severity: "warn" as const, text: t, kind: "app-warning" as const }))));
+  };
   const fillForm = (view: AppSettingsView) => {
+    fillNotes(view);
     slugInput.value = view.global.appSlug ?? "";
     slugInput.placeholder = `Default: ${view.defaults.appSlug}`;
     clientInput.value = view.global.clientId ?? "";
@@ -448,12 +475,13 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
       );
       if (disposed) return;
       if (!res.ok) {
-        showFormMessages(Object.values(res.errors).map((msg) => ({ severity: "error" as const, text: String(msg) })));
+        showFieldErrors(res.errors);
+        showFormMessages([{ severity: "error", text: "Not saved. Fix the highlighted fields." }]);
         return;
       }
+      showFieldErrors({});
       fillForm(res.settings);
       const messages: ConnectionMessage[] = [{ severity: "warn", text: "Saved. If this is a different GitHub App, the current GitHub sign-in is dropped and you will need to reconnect." }];
-      for (const n of appSettingsNotes(res.settings).slice(1)) messages.push({ severity: "warn", text: n });
       // Verify straight away so a typo shows up here rather than at the next sign-in.
       const check = await api.appInfo({ fresh: true });
       if (disposed) return;
@@ -478,11 +506,11 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
     form.replaceChildren(
       text("h3", "GitHub App"),
       text("p", "Use your own GitHub App (for example a company's private App) instead of the built-in one. Saved to geode.json. Switching Apps disconnects the current GitHub sign-in; you will be asked to reconnect.", "setting-item-description"),
-      field("App slug", slugInput),
-      field("Client ID", clientInput),
-      field("Allowed owners", ownersInput),
-      field("Allowed repositories", reposInput),
-      messageBlock(appSettingsNotes(view).map((t, i) => ({ severity: "warn" as const, text: t, kind: i ? ("app-warning" as const) : undefined }))),
+      field("appSlug", "App slug", slugInput),
+      field("clientId", "Client ID", clientInput),
+      field("allowedOwners", "Allowed owners", ownersInput),
+      field("allowedRepos", "Allowed repositories", reposInput),
+      notesEl,
       formMessages,
       formActions,
     );
