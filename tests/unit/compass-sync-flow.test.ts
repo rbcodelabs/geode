@@ -166,6 +166,52 @@ describe("Compass through the real sync coordinator", () => {
     expect(vault.paths()).toEqual([0, 1, 2, 3, 4, 5, 6].map((i) => `Note ${i}.md`));
   });
 
+  it("skips a file whose name collides with an unsyncable Compass item instead of blocking the run, and does not retry it", async () => {
+    const vault = vaultHost({ "Whiteboard Canvas.md": "std note", "Extra.md": "extra" });
+    server.outOfScope.add("Whiteboard Canvas");
+    server.seed("Remote", "r");
+    const coordinator = await connect(vault);
+    await coordinator.preview();
+    await coordinator.run({ approvePreview: true });
+    expect(vault.text("Remote.md")).toBe("r");
+    expect(server.contentOf("Extra")).toBe("extra");
+    expect(coordinator.getStatus().message).toMatch(/Whiteboard Canvas\.md.*not syncable/);
+    const attempts = () => server.requests.filter((r) => r.method === "POST" && r.body?.path === "Whiteboard Canvas.md").length;
+    expect(attempts()).toBe(1);
+    expect(await coordinator.preview()).toMatchObject({ uploads: 0, skipped: 1 });
+    await coordinator.run();
+    expect(attempts()).toBe(1);
+    vault.write("Whiteboard Canvas.md", "edited");
+    await coordinator.run();
+    expect(attempts()).toBe(2);
+    expect(vault.text("Remote.md")).toBe("r");
+  });
+
+  it("does not download a folder-turned-leaf as an empty note, yet keeps syncing a deliberately empty uploaded note", async () => {
+    server.addFrontmatter = true;
+    server.seed("Dir/Child", "child body");
+    const vault = vaultHost({ "Empty.md": "" });
+    const coordinator = await connect(vault);
+    await coordinator.preview();
+    await coordinator.run({ approvePreview: true });
+    expect(vault.text("Dir/Child.md")).toContain("child body");
+    expect(server.paths()).toContain("Empty");
+
+    server.removeBehindBack("Dir/Child");
+    server.makeLeaf("Dir");
+    await coordinator.run();
+    expect(vault.paths()).not.toContain("Dir.md");
+    // The empty note was uploaded earlier: later scans must keep it, not read it as deleted.
+    expect(vault.text("Empty.md")).toBe("");
+    expect(vault.trashed).toEqual(["Dir/Child.md"]);
+    await coordinator.run();
+    expect(vault.text("Empty.md")).toBe("");
+    // And it still syncs as a file once it gets content.
+    vault.write("Empty.md", "now with text");
+    await coordinator.run();
+    expect(server.contentOf("Empty")).toBe("now with text");
+  });
+
   it("works with delta scans, including deletions arriving as tombstones", async () => {
     const vault = vaultHost({ "Edit.md": "e1", "Gone.md": "g" });
     const coordinator = await connect(vault, { useDelta: true });

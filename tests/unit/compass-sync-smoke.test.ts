@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { FakeCompassServer } from "../helpers/fake-compass-server";
 
 let server: FakeCompassServer;
-beforeEach(async () => { server = new FakeCompassServer(); await server.start(); });
+beforeEach(async () => { server = new FakeCompassServer(); server.addFrontmatter = true; await server.start(); });
 afterEach(() => server.stop());
 
 function runSmoke(extra: Record<string, string> = {}): Promise<{ code: number | null; output: string }> {

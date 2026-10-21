@@ -31,6 +31,10 @@ export class FakeCompassServer {
   tombstoneKinds = true;
   /** Serve incremental scans for a supplied cursor. */
   deltaEnabled = true;
+  /** Doc paths (without .md) held by items outside the sync scope; creating one answers 409 path_conflict. */
+  readonly outOfScope = new Set<string>();
+  /** Store and serve content the way the real server does: with `compass_*` frontmatter added. */
+  addFrontmatter = false;
   readonly requests: Array<{ method: string; path: string; query: URLSearchParams; body?: any; headers: IncomingMessage["headers"] }> = [];
   private docs = new Map<string, Doc>();
   private tombstones: Tombstone[] = [];
@@ -61,6 +65,14 @@ export class FakeCompassServer {
   seedFolder(path: string): Doc {
     this.ensureParents(path);
     return this.put({ id: `doc-${this.nextId++}`, path, kind: "folder", content: "", version: ++this.version });
+  }
+
+  /** Turn a folder-doc into a body-less leaf, as when its last child is deleted. */
+  makeLeaf(path: string): void {
+    const doc = this.byPath(path)!;
+    doc.kind = "file";
+    doc.content = "";
+    doc.version = ++this.version;
   }
 
   /** Edit a doc behind the client's back (another device). */
@@ -120,11 +132,12 @@ export class FakeCompassServer {
   }
 
   private wire(doc: Doc, withContent = false) {
+    const stored = this.addFrontmatter && doc.kind === "file" ? `---\ncompass_doc_id: ${doc.id}\ncompass_doc_type: standard\n---\n${doc.content}` : doc.content;
     return {
       id: doc.id, path: doc.path, kind: doc.kind, revision: String(doc.version),
-      size: doc.kind === "file" ? Buffer.byteLength(doc.content) : 0,
-      hash: doc.kind === "file" ? createHash("sha256").update(doc.content).digest("hex") : undefined,
-      ...(withContent ? { content: doc.content } : {}),
+      size: doc.kind === "file" ? Buffer.byteLength(stored) : 0,
+      hash: doc.kind === "file" ? createHash("sha256").update(stored).digest("hex") : undefined,
+      ...(withContent ? { content: stored } : {}),
     };
   }
 
@@ -209,6 +222,7 @@ export class FakeCompassServer {
     const prior = this.operations.get(body.operationKey);
     if (prior && this.docs.has(prior)) return this.send(res, 201, this.wire(this.docs.get(prior)!));
     if (Buffer.byteLength(body.content) > 1024 * 1024) return this.problem(res, 413, "too_large");
+    if (this.outOfScope.has(path)) return this.problem(res, 409, "path_conflict", "That path is occupied by a doc outside the sync scope.");
     if (this.byPath(path)) return this.problem(res, 409, "path_conflict");
     this.ensureParents(path);
     const doc = this.put({ id: `doc-${this.nextId++}`, path, kind: "file", content: body.content, version: ++this.version });

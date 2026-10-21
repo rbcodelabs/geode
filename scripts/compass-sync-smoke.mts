@@ -12,7 +12,7 @@
  * It creates one probe note under "Geode Smoke <timestamp>/", then: scan, create, replay the create (idempotency),
  * read, update, stale update (must be a precondition failure), move, trash, and a final scan. Exit code 1 on any failed check.
  */
-import { createCompassProvider } from "../src/renderer/internal-plugins/compass-sync/provider";
+import { createCompassProvider, stripFrontmatter } from "../src/renderer/internal-plugins/compass-sync/provider";
 
 const env = (name: string): string => {
   const value = process.env[name];
@@ -66,10 +66,13 @@ try {
     const afterCreate = await session.scan(undefined, signal);
     check("scan lists the new note and its folder", afterCreate.entries.some((e) => e.id === created.id && e.path === path) && afterCreate.entries.some((e) => e.kind === "folder" && e.path === `Geode Smoke ${stamp}`));
 
-    check("read returns the content", text(await session.read(created, signal)) === "# probe\n");
+    // The server stores the text with compass_* frontmatter added; compare the body.
+    const readBack = stripFrontmatter(text(await session.read(created, signal)));
+    check("read returns the uploaded body (frontmatter stripped)", readBack === "# probe\n", JSON.stringify(readBack));
 
     const updated = await session.update({ id: created.id, path, data: bytes("# probe v2\n"), expectedRevision: created.revision, operationKey: `${operationKey}-u`, signal });
     check("update advances the revision", updated.revision !== created.revision);
+    check("updated content survives", stripFrontmatter(text(await session.read(updated, signal))) === "# probe v2\n");
     const stale = await session.update({ id: created.id, path, data: bytes("# stale\n"), expectedRevision: created.revision, operationKey: `${operationKey}-s`, signal }).then(() => "accepted", (error: Error) => error.name);
     check("stale update is a SyncPreconditionError", stale === "SyncPreconditionError", String(stale));
 

@@ -15,7 +15,7 @@
  */
 import { validateSyncPath } from "../../../sync-core/scope";
 import type { SyncProvider, SyncProviderCapabilities, SyncRemoteEntry, SyncScanResult, SyncSession, SyncWriteInput } from "../../sync/types";
-import { SyncPreconditionError } from "../../sync/types";
+import { SyncPreconditionError, SyncUnsyncableError } from "../../sync/types";
 
 export const COMPASS_PROVIDER_ID = "compass.docs";
 export const COMPASS_PROVIDER_NAME = "Compass";
@@ -29,6 +29,8 @@ const PAGE_LIMIT = 200;
 const MAX_SCAN_RESTARTS = 3;
 const MAX_SCAN_PAGES = 10_000;
 const REQUEST_TIMEOUT_MS = 60_000;
+/** A leaf doc no bigger than this (frontmatter included) is checked for an empty body; see `markImplicitLeaves`. */
+const IMPLICIT_PROBE_MAX_SIZE = 1024;
 
 export const ErrorCodes = {
   disabled: "compass-sync-disabled",
@@ -77,6 +79,8 @@ export class CompassHttpError extends Error {
 
 export function createCompassProvider(options: CompassProviderOptions): SyncProvider {
   const maxFileSize = options.maxFileSize ?? COMPASS_MAX_FILE_SIZE;
+  /** `id@revision` -> body is empty. A revision is immutable, so a verdict never needs re-checking. */
+  const bodyless = new Map<string, boolean>();
   const capabilities: SyncProviderCapabilities = { ...COMPASS_CAPABILITIES, maxFileSize };
   const resolve = async (): Promise<CompassConnection> => {
     const connection = await options.connection();
@@ -100,7 +104,7 @@ export function createCompassProvider(options: CompassProviderOptions): SyncProv
     },
     async open({ vaultId }) {
       const connection = await resolve();
-      return new CompassSession(vaultId, new CompassClient(connection, options), connection, options, maxFileSize);
+      return new CompassSession(vaultId, new CompassClient(connection, options), connection, options, maxFileSize, bodyless);
     },
     excludePath: (path, data) => compassExclusion(path, data),
   };
@@ -148,6 +152,16 @@ function representable(path: string): boolean {
     return false;
   }
   return !path.split("/").some((part) => part.startsWith(".")) && !/\.sync-conflict-\d+/.test(path);
+}
+
+/** The doc body without a leading YAML frontmatter block (Compass adds `compass_*` keys to what it stores). */
+export function stripFrontmatter(content: string): string {
+  const match = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+  return match ? content.slice(match[0].length) : content;
+}
+
+function isTrashPath(docPath: string): boolean {
+  return docPath === TRASH_FOLDER || docPath.startsWith(`${TRASH_FOLDER}/`);
 }
 
 // --- HTTP -----------------------------------------------------------------
@@ -277,6 +291,7 @@ class CompassSession implements SyncSession {
     private readonly connection: CompassConnection,
     private readonly options: CompassProviderOptions,
     private readonly maxFileSize: number,
+    private readonly bodyless: Map<string, boolean>,
   ) {}
 
   async close(): Promise<void> {
@@ -343,7 +358,8 @@ class CompassSession implements SyncSession {
         const mapped = this.mapEntry(wireEntry, wire.mode ?? mode);
         if (mapped === "ambiguous-tombstone") return mapped;
         if (mapped) entries.push(mapped);
-        else dropped++;
+        // The reserved trash folder is hidden on purpose; only genuinely unrepresentable entries are worth reporting.
+        else if (!(typeof wireEntry?.path === "string" && isTrashPath(wireEntry.path.normalize("NFC")))) dropped++;
       }
       if (wire.skipped?.length) this.options.onDiagnostics?.(this.vaultId, `Compass skipped ${wire.skipped.length} doc(s) it could not serve${wire.reason ? `: ${wire.reason}` : ""}`);
       finalCursor = wire.cursor ?? null;
@@ -357,17 +373,50 @@ class CompassSession implements SyncSession {
       if (page === MAX_SCAN_PAGES - 1) incomplete ??= "partial";
     }
     if (dropped > 0) this.options.onDiagnostics?.(this.vaultId, `${dropped} Compass entr${dropped === 1 ? "y" : "ies"} cannot be represented in a vault and were left out`);
+    if (mode === "snapshot" && !incomplete) await this.markImplicitLeaves(entries, signal);
     if (incomplete === "unavailable") return { status: "unavailable", entries: [], errorCode: ErrorCodes.unavailable };
     // No checkpoint means the server could not vouch for the walk: never let absence delete anything.
     if (incomplete || finalCursor === null || !mode) return { status: "partial", entries, errorCode: ErrorCodes.partial, ...(mode ? { mode } : {}) };
     return { status: "complete", mode, entries, cursor: finalCursor };
   }
 
+  /**
+   * Compass has no folder docs: a folder is a doc with children. When its last child goes, the parent becomes a body-less
+   * leaf and the scan calls it a file, which Geode would download as an empty note. A leaf small enough to hold nothing but
+   * frontmatter is fetched once (verdicts are cached per revision); if its body is empty it is flagged `implicit`. The
+   * coordinator never downloads an implicit entry it has no baseline for, but still syncs one it already tracks, so a note
+   * the user deliberately created empty and uploaded keeps syncing as a file.
+   */
+  private async markImplicitLeaves(entries: SyncRemoteEntry[], signal: AbortSignal): Promise<void> {
+    const parents = new Set<string>();
+    for (const entry of entries) {
+      const stem = entry.path.endsWith(MARKDOWN_EXTENSION) ? entry.path.slice(0, -MARKDOWN_EXTENSION.length) : entry.path;
+      for (let slash = stem.indexOf("/"); slash > 0; slash = stem.indexOf("/", slash + 1)) parents.add(stem.slice(0, slash));
+    }
+    for (const entry of entries) {
+      if (entry.kind !== "file" || (entry.size !== undefined && entry.size > IMPLICIT_PROBE_MAX_SIZE)) continue;
+      if (parents.has(entry.path.slice(0, -MARKDOWN_EXTENSION.length))) continue;
+      const key = `${entry.id}@${entry.revision}`;
+      let empty = this.bodyless.get(key);
+      if (empty === undefined) {
+        try {
+          const doc = await this.client.request<CompassEntryWire>("GET", encodeURIComponent(entry.id), { query: { revision: entry.revision }, signal });
+          empty = typeof doc?.content === "string" && stripFrontmatter(doc.content).trim() === "";
+        } catch (error) {
+          if (isAbort(error) || signal.aborted) throw error;
+          continue; // cannot tell: behave as an ordinary note
+        }
+        this.bodyless.set(key, empty);
+      }
+      if (empty) entry.implicit = true;
+    }
+  }
+
   /** Map one wire entry; `null` drops what a vault cannot represent. */
   private mapEntry(wire: CompassEntryWire, mode: "snapshot" | "delta" | undefined): SyncRemoteEntry | null | "ambiguous-tombstone" {
     if (!wire || typeof wire.id !== "string" || typeof wire.path !== "string" || typeof wire.revision !== "string") return null;
     const docPath = wire.path.normalize("NFC");
-    const trashed = docPath === TRASH_FOLDER || docPath.startsWith(`${TRASH_FOLDER}/`);
+    const trashed = isTrashPath(docPath);
     if (wire.kind === "tombstone" || (trashed && mode === "delta")) {
       if (mode !== "delta") return null;
       return this.tombstoneFor(wire, docPath, trashed);
@@ -503,7 +552,11 @@ class CompassSession implements SyncSession {
       if (error instanceof CompassHttpError && error.status === 409) {
         if (error.code === "revision_conflict") throw new SyncPreconditionError(error.message);
         if (error.code === "has_children") throw new Error("This folder still has items inside on Compass; Geode removes files before folders, so sync again once they are gone.");
-        if (error.code === "path_conflict") throw new Error("A doc or folder already exists at that path on Compass");
+        if (error.code === "path_conflict") {
+          // A name held by an item outside the sync scope (a canvas, a task, ...) can never be written by this file.
+          if (/outside the sync scope|out_of_scope/i.test(`${error.message} ${error.code}`)) throw new SyncUnsyncableError("name collides with a Compass item that is not syncable");
+          throw new Error("A doc or folder already exists at that path on Compass");
+        }
       }
       if (error instanceof CompassHttpError && error.status === 404) throw new SyncPreconditionError("Remote doc no longer exists");
       throw error;

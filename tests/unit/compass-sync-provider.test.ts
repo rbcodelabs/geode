@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { COMPASS_MAX_FILE_SIZE, TRASH_FOLDER, compassExclusion, createCompassProvider, docPathOfVault, vaultPathOfDoc, type CompassConnection } from "../../src/renderer/internal-plugins/compass-sync/provider";
+import { COMPASS_MAX_FILE_SIZE, TRASH_FOLDER, compassExclusion, stripFrontmatter, createCompassProvider, docPathOfVault, vaultPathOfDoc, type CompassConnection } from "../../src/renderer/internal-plugins/compass-sync/provider";
 import type { SyncProvider, SyncSession } from "../../src/renderer/sync/types";
 import { FakeCompassServer } from "../helpers/fake-compass-server";
 
@@ -51,6 +51,53 @@ describe("Compass provider declaration", () => {
     expect(compassExclusion(`${TRASH_FOLDER}/x/Note.md`)).toMatch(/reserved/);
     expect(compassExclusion("bin.md", new Uint8Array([0xff, 0xfe, 0x00]).buffer)).toMatch(/UTF-8/);
     expect(provider().excludePath?.("photo.png")).toMatch(/Markdown/);
+  });
+});
+
+describe("implicit leaves, unsyncable names and diagnostics", () => {
+  it("strips Compass frontmatter", () => {
+    expect(stripFrontmatter("---\ncompass_doc_id: x\n---\nbody\n")).toBe("body\n");
+    expect(stripFrontmatter("---\ncompass_doc_id: x\n---\n")).toBe("");
+    expect(stripFrontmatter("no frontmatter\n---\nx")).toBe("no frontmatter\n---\nx");
+  });
+
+  it("flags a body-less leaf (a former folder) implicit, but not parents with children or notes with a body", async () => {
+    server.addFrontmatter = true;
+    server.seed("Parent/Child", "has body");
+    server.seed("Former", "x");
+    server.makeLeaf("Former");
+    server.seed("Real", "text");
+    const entries = (await (await open()).scan(undefined, signal())).entries;
+    const byPath = Object.fromEntries(entries.map((e) => [e.path, e]));
+    expect(byPath["Former.md"].implicit).toBe(true);
+    expect(byPath["Real.md"].implicit).toBeUndefined();
+    expect(byPath["Parent/Child.md"].implicit).toBeUndefined();
+    expect(byPath["Parent"].kind).toBe("folder");
+  });
+
+  it("probes each revision once", async () => {
+    server.addFrontmatter = true;
+    server.seed("Tiny", "t");
+    const p = provider();
+    await (await p.open({ vaultId: "v" })).scan(undefined, signal());
+    const reads = () => server.requests.filter((r) => r.method === "GET" && !r.path.endsWith("/scan")).length;
+    const first = reads();
+    await (await p.open({ vaultId: "v" })).scan(undefined, signal());
+    expect(reads()).toBe(first);
+  });
+
+  it("a create onto a name held by an out-of-scope item is an unsyncable-file error, not a generic failure", async () => {
+    server.outOfScope.add("Whiteboard Canvas");
+    const error = await (await open()).create({ path: "Whiteboard Canvas.md", data: text("x"), operationKey: "op-c", signal: signal() }).catch((e: Error) => e);
+    expect((error as Error).name).toBe("SyncUnsyncableError");
+    expect((error as Error).message).toMatch(/not syncable/);
+  });
+
+  it("does not count the intentionally hidden trash folder as unrepresentable", async () => {
+    server.seed("Good", "g");
+    server.seed(`${TRASH_FOLDER}/2026/Old`, "o");
+    await (await open()).scan(undefined, signal());
+    expect(diagnostics.join(" ")).not.toMatch(/cannot be represented/);
   });
 });
 
