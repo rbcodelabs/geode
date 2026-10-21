@@ -125,6 +125,16 @@ describe("manifest compatibility admission", () => {
     expect(compatible({}, "mobile").compatible).toBe(false);
   });
 
+  it("admits only the exact desktop TaskNotes 4.13.10 certificate", () => {
+    const tasknotes = { id: "tasknotes", version: "4.13.10", minAppVersion: "1.12.2" };
+    expect(compatible(tasknotes)).toEqual({ compatible: true, certified: true });
+    expect(compatible({ ...tasknotes, version: "4.13.11" }).compatible).toBe(false);
+    expect(compatible({ ...tasknotes, version: "4.13.9" }).compatible).toBe(false);
+    expect(compatible({ ...tasknotes, minAppVersion: "1.12.3" }).compatible).toBe(false);
+    expect(compatible({ ...tasknotes, id: "tasknotes-fork" }).compatible).toBe(false);
+    expect(compatible(tasknotes, "mobile").compatible).toBe(false);
+  });
+
   it("continues to block arbitrary 1.13 plugins while preserving baseline admission", () => {
     expect(compatible({ id: "unverified-modern-plugin" }).compatible).toBe(false);
     expect(compatible({ id: "baseline-plugin", minAppVersion: "1.8.0" })).toEqual({

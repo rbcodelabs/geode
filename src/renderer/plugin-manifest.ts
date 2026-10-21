@@ -77,6 +77,14 @@ const PLUGIN_COMPATIBILITY_CERTIFICATES: readonly PluginCompatibilityCertificate
     maxMinAppVersion: "1.13.0",
     platform: "desktop",
   },
+  // TaskNotes declares 1.12.2 for CLI handlers and SettingGroup, both gated at
+  // runtime by requireApiVersion() so the 1.10.2 code path is what runs.
+  {
+    id: "tasknotes",
+    version: "4.13.10",
+    maxMinAppVersion: "1.12.2",
+    platform: "desktop",
+  },
 ];
 
 export class ManifestError extends Error {

@@ -16,6 +16,7 @@ import { SenderRequests } from "./network";
 import { applyGuardedMutation } from "./sync-apply";
 import { registerHubSyncIpc } from "./hub-sync-ipc";
 import { registerIcloudContainerIpc } from "./icloud-container-ipc";
+import { registerPairingIpc } from "./pairing-ipc";
 import { SyncPrivateStorage } from "./sync-private-storage";
 import { PrivateKeyStore } from "./private-key-store";
 import { applyPortableMutation } from "./sync-config-apply";
@@ -1003,6 +1004,8 @@ function registerIpc() {
   });
   registerHubSyncIpc(ipcMain);
   registerIcloudContainerIpc(ipcMain);
+  const pairing = registerPairingIpc(ipcMain);
+  app.on("before-quit", () => pairing.closeAll());
   ipcMain.handle("sync-owner-claim", async e => {
     const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");

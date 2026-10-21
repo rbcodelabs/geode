@@ -5,7 +5,8 @@
 
 ## Context
 
-Geode truthfully advertises Obsidian API compatibility 1.8.0. Minimal Theme
+Geode truthfully advertises Obsidian API compatibility (1.8.0 when this ADR was
+accepted; `GEODE_API_VERSION` has since moved to 1.10.2 — see Amendment). Minimal Theme
 Settings 9.0.0 declares 1.13.0 because it uses the new declarative settings
 surface, even though the concrete runtime surface it needs is small. Raising
 Geode's global version would admit every plugin requiring APIs through 1.13,
@@ -18,7 +19,7 @@ between those operations.
 
 ## Decision
 
-Keep `GEODE_API_VERSION` at 1.8.0 and centralize plugin admission in one
+Keep `GEODE_API_VERSION` below the certified plugins' declared minimum and centralize plugin admission in one
 manifest-identity predicate. Add one certificate for the exact tuple:
 
 | id | version | maximum declared minAppVersion | platform |
@@ -71,3 +72,28 @@ semantics, config validation and persistence ordering. Electron coverage runs
 the unmodified official Minimal Theme Settings 9.0.0 release bundle. The fixture
 includes the upstream MIT license and records its release URLs, exact identity,
 and SHA-256 hashes for reproducibility.
+
+## Amendment 2026-10-20: TaskNotes 4.13.10
+
+`GEODE_API_VERSION` is now 1.10.2 (Bases plugin API landed). The decision above
+is unchanged: the global level stays below 1.13 and 1.12 so unverified plugins
+stay blocked.
+
+A second certificate admits the unmodified release bundle of TaskNotes:
+
+| id | version | maximum declared minAppVersion | platform |
+|---|---:|---:|---|
+| `tasknotes` | `4.13.10` | `1.12.2` | desktop |
+
+TaskNotes declares 1.12.2, but gates the newer surface (CLI handlers at 1.12.2,
+`SettingGroup` at 1.11.0, Bases at 1.10.1) at runtime with `requireApiVersion`.
+Geode's `requireApiVersion` compares against `GEODE_API_VERSION`, so TaskNotes
+takes the 1.10.2 code path; the certificate does not make Geode claim 1.12.
+The runtime slice it needs, added alongside: `AbstractInputSuggest`,
+`SettingGroup`, `TAbstractFile`, `editorInfoField`, `editorLivePreviewField`,
+`getIconIds`, `getLanguage`, `parseFrontMatterAliases`, `requireApiVersion`, and
+`MarkdownView.getMode()`.
+
+Each TaskNotes release changes the tuple and must earn its own certificate via
+`tests/e2e/tasknotes-compat.spec.ts` against the new bundle. Not covered:
+TaskNotes' optional HTTP API server, webhooks, OAuth calendar sync, and mobile.

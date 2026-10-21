@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { View } from "../../src/renderer/api/obsidian";
-import { TabGroup, Workspace, WorkspaceLeaf } from "../../src/renderer/workspace";
+import { TabGroup, Workspace, WorkspaceLeaf, ensureGetViewType } from "../../src/renderer/workspace";
 import { DeferredView } from "../../src/renderer/views/deferred-view";
 import { instantiatePluginClass } from "../../src/renderer/plugin-manager";
 
@@ -41,6 +41,23 @@ describe("Workspace public query contracts", () => {
     expect(workspace.activeLeaf).toBe(leaf);
     expect(workspace.getActiveViewOfType(FirstView as any)).toBe(first);
     expect(workspace.getActiveViewOfType(SecondView as any)).toBeNull();
+  });
+
+  it("iterateRootLeaves visits only main-area leaves, not sidebar-docked ones", () => {
+    const center = { view: { viewType: "markdown" } } as unknown as WorkspaceLeaf;
+    const docked = { view: { viewType: "outline" } } as unknown as WorkspaceLeaf;
+    const workspace = fakeWorkspace([center], center);
+    Object.assign(workspace, { rightSidebar: { groups: [{ leaves: [docked] }] } });
+    const root: WorkspaceLeaf[] = [];
+    const all: WorkspaceLeaf[] = [];
+
+    workspace.iterateRootLeaves((leaf) => root.push(leaf));
+    workspace.iterateAllLeaves((leaf) => all.push(leaf));
+
+    expect(root).toEqual([center]);
+    expect(all).toEqual([center, docked]);
+    const none = fakeWorkspace([], null);
+    none.iterateRootLeaves(() => { throw new Error("no leaves expected"); });
   });
 
   it("iterates, filters, and detaches leaves by exact view type", () => {
@@ -428,5 +445,21 @@ describe("Workspace/View through require('obsidian')", () => {
     ) as unknown as { results: unknown[] };
 
     expect(PluginClass.results).toEqual([true, 1]);
+  });
+});
+
+describe("ensureGetViewType (Obsidian View.getViewType on Geode's built-in views)", () => {
+  it("adds a non-enumerable getViewType that tracks viewType", () => {
+    const view = { viewType: "markdown" };
+    ensureGetViewType(view);
+    expect((view as unknown as { getViewType(): string }).getViewType()).toBe("markdown");
+    expect(Object.keys(view)).toEqual(["viewType"]);
+  });
+
+  it("never overrides a view's own getViewType", () => {
+    const own = () => "mine";
+    const view = { viewType: "bookmarks", getViewType: own };
+    ensureGetViewType(view);
+    expect(view.getViewType).toBe(own);
   });
 });

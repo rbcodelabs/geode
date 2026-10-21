@@ -216,6 +216,25 @@ export function tokenize(source: string): Token[] {
           push("neq", start, i + 2);
           i += 2;
         } else {
+          // Obsidian's documented logical-not; the keyword form `not` also works.
+          push("not", start, i + 1);
+          i++;
+        }
+        continue;
+      case "&":
+        // Obsidian's documented `&&`; a lone `&` is not part of the grammar.
+        if (source[i + 1] === "&") {
+          push("and", start, i + 2);
+          i += 2;
+        } else {
+          i++;
+        }
+        continue;
+      case "|":
+        if (source[i + 1] === "|") {
+          push("or", start, i + 2);
+          i += 2;
+        } else {
           i++;
         }
         continue;

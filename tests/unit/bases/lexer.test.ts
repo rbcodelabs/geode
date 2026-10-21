@@ -67,9 +67,14 @@ describe("tokenize", () => {
     expect(types("> <")).toEqual(["gt", "lt", "eof"]);
   });
 
-  it("drops a lone '=' or '!' rather than throwing (not part of the grammar)", () => {
-    expect(() => tokenize("= !")).not.toThrow();
-    expect(types("= !")).toEqual(["eof"]);
+  it("drops a lone '=', '&' or '|' rather than throwing (not part of the grammar)", () => {
+    expect(() => tokenize("= & |")).not.toThrow();
+    expect(types("= & |")).toEqual(["eof"]);
+  });
+
+  it("tokenizes Obsidian's symbolic logical operators as and/or/not", () => {
+    expect(types("a && b || !c")).toEqual(["identifier", "and", "identifier", "or", "not", "identifier", "eof"]);
+    expect(types("a != b")).toEqual(["identifier", "neq", "identifier", "eof"]);
   });
 
   it("skips unrecognized characters silently, never throwing", () => {

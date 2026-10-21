@@ -32,6 +32,17 @@ export interface PluginViewUpdate {
 export class BasesPluginViewHost {
   readonly containerEl: HTMLElement;
 
+  /** Latest parsed definition; the reused view's controller reads it live (see BasesViewHost.query). */
+  private latestDef: BaseDefinition | null = null;
+
+  /**
+   * True when the last `onDataUpdated()` ran while the container was detached.
+   * Plugin views commonly skip rendering when `containerEl.isConnected` is
+   * false (TaskNotes' task list does), so a first render on a not-yet-attached
+   * leaf would otherwise be lost until the data next changes.
+   */
+  private updatedWhileDetached = false;
+
   private current: { viewType: string; viewName: string; view: BasesView } | null = null;
 
   constructor(
@@ -80,6 +91,7 @@ export class BasesPluginViewHost {
     const data = toBasesQueryResult(update.result, update.columns, summaryDeps);
     const allProperties: BasesPropertyId[] = update.allPropertyPaths.map(toPropertyId);
 
+    this.latestDef = update.def;
     const view = this.ensureView(registration, update.view, config, data, allProperties);
     if (!view) return false;
 
@@ -92,6 +104,7 @@ export class BasesPluginViewHost {
     view.allProperties = allProperties;
 
     this.containerEl.style.display = "";
+    this.updatedWhileDetached = !this.containerEl.isConnected;
     try {
       view.onDataUpdated();
     } catch (error) {
@@ -102,6 +115,20 @@ export class BasesPluginViewHost {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Replay the pending update once the container is in the document. Called by
+   * `BaseView` after the leaf attaches it; a no-op when nothing was missed.
+   */
+  notifyConnected(): void {
+    if (!this.updatedWhileDetached || !this.current || !this.containerEl.isConnected) return;
+    this.updatedWhileDetached = false;
+    try {
+      this.current.view.onDataUpdated();
+    } catch (error) {
+      console.error(`Bases view "${this.current.viewType}" failed to render:`, error);
+    }
   }
 
   /** Hide without tearing down — used when a built-in layout takes over the screen. */
@@ -137,11 +164,14 @@ export class BasesPluginViewHost {
     }
     this.destroy();
 
+    const hostRef = this;
     const controller = new QueryController({
       app: this.app,
       config,
       data,
       allProperties,
+      get query() { return hostRef.latestDef; },
+      viewName: definition.name,
       // Resolves to void, matching the public signature: the view's contract is
       // "the note now exists", and the board picks it up through the vault
       // `create` event like any other new file.
