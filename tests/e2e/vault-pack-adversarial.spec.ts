@@ -53,7 +53,7 @@ for (const [label, make, message] of hostile) {
     try {
       const { window } = ctx;
       await window.getByRole("button", { name: "Create vault from pack…" }).click();
-      await expect(window.locator(".vault-picker-error")).toContainText(message);
+      await expect(window.locator(".vault-hub-error")).toContainText(message);
       await expect(window.locator(".vault-pack-modal")).toHaveCount(0);
       expect(fs.readdirSync(ctx.documentsDir)).toEqual([]);
       // The hub is still usable afterwards.
@@ -137,7 +137,7 @@ test("--vault-pack with a hostile pack and no --yes tells the user why instead o
   const ctx = await launch(buildPackZip({ extraEntries: [{ name: "vault/link", data: Buffer.from("/etc/passwd"), mode: 0o120777 }] }), { args: ["--vault-pack", "<pack>"] });
   try {
     await expect(ctx.window.locator(".vault-picker")).toBeVisible();
-    await expect(ctx.window.locator(".vault-picker-error, .vault-pack-modal")).toHaveCount(1, { timeout: 5_000 });
+    await expect(ctx.window.locator(".vault-hub-error, .vault-pack-modal")).toHaveCount(1, { timeout: 5_000 });
     expect(fs.readdirSync(ctx.documentsDir)).toEqual([]);
   } finally {
     await cleanup(ctx);
