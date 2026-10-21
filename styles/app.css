@@ -454,8 +454,9 @@ body.is-mobile .mobile-navigation {
   grid-template-columns: repeat(5, minmax(44px, 1fr));
   flex: 0 0 auto;
   min-height: calc(52px + max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)));
-  padding: 0 max(4px, env(safe-area-inset-right))
-    max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)) max(4px, env(safe-area-inset-left));
+  /* Side padding clears the ~47-55pt display corner radius so the outer tabs are not clipped. */
+  padding: 0 max(14px, env(safe-area-inset-right))
+    calc(max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)) + 4px) max(14px, env(safe-area-inset-left));
   border-top: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
   z-index: 70;
@@ -468,6 +469,8 @@ body.is-mobile .tooltip {
 /* Keep the readout clear of the bottom navigation border. */
 body.is-mobile .status-bar {
   padding: 6px 14px 10px;
+  /* The bottom navigation draws the single hairline; the status bar's own border made a double line. */
+  border-top: none;
 }
 
 .mobile-navigation-action {
@@ -475,7 +478,7 @@ body.is-mobile .status-bar {
   min-height: 44px;
   padding: 4px 2px;
   border: 0;
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-m);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -492,6 +495,7 @@ body.is-mobile .status-bar {
 .mobile-navigation-action:focus-visible {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
+  outline: none; /* soft pill instead of an edge-hugging outline box */
 }
 
 .mobile-navigation-action svg {
@@ -5192,6 +5196,14 @@ body.is-mobile .page-preview {
   gap: 10px;
 }
 
+.empty-state-gem {
+  display: none;
+}
+
+.empty-state-actions {
+  display: contents;
+}
+
 .empty-state-title {
   font-size: 20px;
   color: var(--text-faint);
@@ -5229,6 +5241,100 @@ body.is-mobile .page-preview {
 
 .new-tab-picker-results {
   max-height: 320px;
+}
+
+/* Phone New Tab launcher: side gutters clear the rounded display corners, quieter hierarchy,
+   and the three text links become a tidy list of 44px tappable rows. */
+body.is-mobile .empty-state {
+  justify-content: flex-start;
+  padding: 14vh max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left));
+  box-sizing: border-box;
+  gap: 0;
+  overflow-y: auto;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--background-primary) 94%, var(--text-accent)),
+    var(--background-primary) 70%
+  );
+}
+
+body.is-mobile .empty-state-gem {
+  display: block;
+  width: 44px;
+  height: auto;
+  flex: 0 0 auto;
+  opacity: 0.9;
+  margin-bottom: 14px;
+}
+
+body.is-mobile .empty-state-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 22px;
+}
+
+body.is-mobile .new-tab-picker {
+  width: min(100%, 480px);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 6px 20px rgb(0 0 0 / 0.08);
+}
+
+body.is-mobile .new-tab-picker-input {
+  box-sizing: border-box;
+  height: 48px;
+  font-size: 16px;
+}
+
+body.is-mobile .new-tab-picker-results {
+  max-height: min(320px, 30vh);
+}
+
+body.is-mobile .empty-state-actions {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 480px);
+  margin-top: 16px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+body.is-mobile .empty-state-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 40px 0 16px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-radius: 0;
+  text-align: left;
+  touch-action: manipulation;
+}
+
+body.is-mobile .empty-state-action:last-child {
+  border-bottom: none;
+}
+
+body.is-mobile .empty-state-action::after {
+  content: "";
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-top: 1.5px solid var(--text-faint);
+  border-right: 1.5px solid var(--text-faint);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+body.is-mobile .empty-state-action-hint {
+  display: none;
 }
 
 /* ---- Deferred view placeholder ----
