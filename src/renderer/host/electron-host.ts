@@ -15,7 +15,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent" | "onAgentBrowserWindowOpen"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "removeRecentVault" | "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "icloudContainer" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "removeRecentVault" | "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "vaultPack" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "icloudContainer" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 >>;
@@ -71,6 +71,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       chooseVault: () => preload.chooseVault(),
       chooseExternalVault: () => preload.chooseVault(),
       exploreSampleVault: () => preload.exploreSampleVault(),
+      vaultPackSupport: preload.vaultPack,
       createVaultSupport: preload.getDefaultVaultLocation && preload.chooseParentFolder && preload.createVault ? {
         getDefaultLocation: () => preload.getDefaultVaultLocation!(),
         chooseParentFolder: (defaultPath) => preload.chooseParentFolder!(defaultPath),

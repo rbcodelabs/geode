@@ -137,9 +137,18 @@ import { applyWindowChromeState } from "./window-chrome";
 import { getHostServices } from "./host/registry";
 import type { HostServices } from "./host/contracts";
 import { vaultNameMessage, vaultNameProblem } from "../shared/vault-name";
+import type { VaultPackOffer } from "../shared/vault-pack-types";
+
+/** Readable text from an Electron IPC rejection ("Error invoking remote method 'x': VaultPackError: message"). */
+function ipcErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  return error.message
+    .replace(/^Error invoking remote method '[^']*': /, "")
+    .replace(/^(?:[A-Za-z]*Error: )+/, "") || fallback;
+}
 import { VaultAccessError } from "./host/contracts";
 import { vaultAccessPresentation } from "./host/mobile-vault-access";
-import { VaultHub, type VaultHubMode } from "./vault-hub";
+import { VaultHub, type VaultHubMode, type VaultHubPackSource } from "./vault-hub";
 import { orderVaultPaths, vaultNameFromPath } from "./vault-hub-model";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
@@ -3107,6 +3116,7 @@ export class App {
     const ios = runtime === "ios";
     const createSupport = runtime === "electron" ? registry.createVaultSupport : undefined;
     const removeRecentVault = registry.removeRecentVault?.bind(registry);
+    const packSupport = runtime === "electron" ? registry.vaultPackSupport : undefined;
     const hub: VaultHub = new VaultHub({
       mode,
       brandChipHtml: this.brandChipHtml(),
@@ -3158,6 +3168,12 @@ export class App {
               if (startHere) await this.openFile(startHere, false);
             },
           };
+        }
+        : undefined,
+      vaultPack: packSupport && createSupport
+        ? {
+          show: (host, opener, source, onCreated) => this.showCreateFromPack(host, opener, source, packSupport, createSupport, onCreated),
+          listOrganization: () => packSupport.listOrganizationPacks(),
         }
         : undefined,
       captureKeys: () => {
@@ -3247,7 +3263,26 @@ export class App {
         this.host.vaultRegistry.getLaunchVault(),
         this.host.vaultRegistry.getRecentVaults(),
       ]));
-      if (launchTarget || recents.length) {
+      // A pack handed to this process (`--vault-pack`, double-clicked .vault) needs the user's consent first, so it takes
+      // the hub even when recent vaults exist.
+      const packSupport = this.host.runtime.runtime === "electron" ? this.host.vaultRegistry.vaultPackSupport : undefined;
+      let launchPackError: unknown = null;
+      const launchPack = packSupport && !launchTarget
+        ? await packSupport.getLaunchPack().catch((error) => { launchPackError = error; return null; })
+        : null;
+      const packCreate = this.host.vaultRegistry.createVaultSupport;
+      if (launchPack && packSupport && packCreate) {
+        this.applyPickerTheme();
+        this.showVaultPicker(rootEl, recents);
+        this.syncOsAppearanceWatcher();
+        const hub = this.vaultHub;
+        if (hub) this.showVaultPackConsent(hub.rootElement, packSupport, packCreate, launchPack, hub.rootElement, (created) => hub.adoptCreated(created));
+      } else if (launchPackError) {
+        // A pack handed to us at launch that failed validation: say why instead of opening a vault as if nothing happened.
+        this.applyPickerTheme();
+        this.showVaultPicker(rootEl, recents, new Error(ipcErrorMessage(launchPackError, "Unable to read that vault pack")));
+        this.syncOsAppearanceWatcher();
+      } else if (launchTarget || recents.length) {
         await this.openVault(launchTarget ?? recents[0], rootEl);
       } else {
         // No vault yet, so no per-vault theme to apply: follow the OS appearance
@@ -3418,7 +3453,7 @@ export class App {
         await onCreated(created);
       } catch (error) {
         busy = false;
-        serverError = (error instanceof Error ? error.message : "Unable to create the vault").replace(/^Error invoking remote method '[^']*': (Error: )?/, "");
+        serverError = ipcErrorMessage(error, "Unable to create the vault");
         refresh();
         nameInput.focus();
       }
@@ -3458,6 +3493,194 @@ export class App {
       parent = location.path;
       home = location.home;
       locationInput.value = shorten(parent);
+      locationInput.title = parent;
+      refresh();
+    }, (error) => {
+      serverError = error instanceof Error ? error.message : "Unable to find a default location";
+      refresh();
+    });
+  }
+
+  /**
+   * Hub entry point for packs: resolve the pack (native picker, a path main listed, or a dropped file),
+   * inspect it (nothing is written) and show the consent screen. Errors surface as readable text.
+   */
+  private async showCreateFromPack(
+    host: HTMLElement,
+    opener: HTMLElement,
+    source: VaultHubPackSource,
+    packSupport: NonNullable<HostServices["vaultRegistry"]["vaultPackSupport"]>,
+    createSupport: NonNullable<HostServices["vaultRegistry"]["createVaultSupport"]>,
+    onCreated: (vaultPath: string) => Promise<void>,
+  ): Promise<void> {
+    try {
+      let offer: VaultPackOffer;
+      if (source.kind === "pick") {
+        const packPath = await packSupport.choose();
+        if (!packPath) return;
+        offer = await packSupport.inspect(packPath);
+      } else if (source.kind === "path") {
+        offer = await packSupport.inspect(source.path);
+      } else {
+        offer = await packSupport.inspectDropped(packSupport.pathForFile(source.file));
+      }
+      this.showVaultPackConsent(host, packSupport, createSupport, offer, opener, onCreated);
+    } catch (error) {
+      throw new Error(ipcErrorMessage(error, "Unable to read that vault pack"));
+    }
+  }
+
+  /**
+   * ADR 0050 consent screen. Everything shown comes from the validated pack
+   * (untrusted text, so it is only ever assigned via textContent). Cancel
+   * discards the inspected pack; nothing has been written to disk until Create.
+   */
+  private showVaultPackConsent(
+    picker: HTMLElement,
+    packSupport: NonNullable<HostServices["vaultRegistry"]["vaultPackSupport"]>,
+    createSupport: NonNullable<HostServices["vaultRegistry"]["createVaultSupport"]>,
+    offer: VaultPackOffer,
+    opener: HTMLElement,
+    onCreated: (vaultPath: string) => Promise<void>,
+  ): void {
+    picker.querySelector(".vault-pack-overlay")?.remove();
+    const { summary } = offer;
+    const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    };
+    const overlay = el("div", "vault-create-overlay vault-pack-overlay");
+    const dialog = el("div", "vault-create-modal vault-pack-modal");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "vault-pack-title");
+    const title = el("h2", "vault-create-title", "Create vault from pack");
+    title.id = "vault-pack-title";
+    dialog.append(el("div", "vault-create-accent"), title);
+
+    const meta = el("div", "vault-pack-meta");
+    meta.append(el("div", "vault-pack-name", summary.name), el("div", "vault-pack-version", `Version ${summary.version}`));
+    if (summary.description) meta.append(el("div", "vault-pack-description", summary.description));
+    meta.append(el("div", "vault-pack-count", `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} will be added`));
+    dialog.append(meta);
+
+    if (summary.plugins.length) {
+      const warning = el("div", "vault-pack-warning", "Plugins run with full access to your computer, like any app you install. Only continue if you trust the source of this pack.");
+      warning.setAttribute("role", "note");
+      const pluginList = el("ul", "vault-pack-plugins");
+      for (const plugin of summary.plugins) {
+        const item = el("li", "vault-pack-plugin");
+        item.append(el("span", "vault-pack-plugin-name", `${plugin.name ?? plugin.id}${plugin.version ? ` ${plugin.version}` : ""}`));
+        const source = plugin.source === "github" ? `GitHub: ${plugin.repo}` : "Bundled in this pack";
+        item.append(el("span", "vault-pack-plugin-source", source));
+        if (plugin.sha256) {
+          const hash = el("code", "vault-pack-plugin-hash", `sha256 ${plugin.sha256.slice(0, 16)}\u2026`);
+          hash.title = plugin.sha256;
+          item.append(hash);
+        }
+        const state = plugin.blocked ? "Blocked by your administrator: installed disabled" : plugin.enabled ? "Enabled" : "Installed disabled";
+        item.append(el("span", "vault-pack-plugin-state", state));
+        if (plugin.firstParty) {
+          item.append(el("span", "vault-pack-plugin-impersonation", `Warning: "${plugin.id}" is the id of a plugin that ships with Geode. Only continue if you expected this pack to replace it.`));
+        }
+        pluginList.append(item);
+      }
+      dialog.append(el("div", "vault-create-label", `Plugins (${summary.plugins.length})`), pluginList, warning);
+    }
+
+    const nameField = el("div", "vault-create-field");
+    const nameLabel = el("label", "vault-create-label", "Vault name");
+    const nameInput = el("input", "vault-create-input");
+    nameInput.id = "vault-pack-name-input";
+    nameLabel.htmlFor = nameInput.id;
+    nameInput.type = "text";
+    nameInput.spellcheck = false;
+    nameInput.autocomplete = "off";
+    nameInput.value = summary.name.replace(/[/\\:\0]/g, "-").trim().slice(0, 100) || "My vault";
+    nameField.append(nameLabel, nameInput);
+    const locationField = el("div", "vault-create-field");
+    const locationLabel = el("label", "vault-create-label", "Location");
+    const row = el("div", "vault-create-row");
+    const locationInput = el("input", "vault-create-input vault-create-path");
+    locationInput.id = "vault-pack-location";
+    locationLabel.htmlFor = locationInput.id;
+    locationInput.type = "text";
+    locationInput.readOnly = true;
+    const browseBtn = el("button", undefined, "Browse\u2026");
+    browseBtn.type = "button";
+    browseBtn.className = "vault-create-browse";
+    row.append(locationInput, browseBtn);
+    locationField.append(locationLabel, row);
+    const errorEl = el("div", "vault-create-error");
+    errorEl.setAttribute("role", "alert");
+    errorEl.hidden = true;
+    const actions = el("div", "vault-create-actions");
+    const cancelBtn = el("button", "vault-create-cancel", "Cancel");
+    cancelBtn.type = "button";
+    const submitBtn = el("button", "mod-cta vault-picker-create vault-create-submit", "Create vault");
+    submitBtn.type = "button";
+    actions.append(cancelBtn, submitBtn);
+    dialog.append(nameField, locationField, errorEl, actions);
+    overlay.append(dialog);
+    picker.append(overlay);
+
+    let parent = "";
+    let busy = false;
+    let serverError = "";
+    const refresh = () => {
+      const problem = vaultNameProblem(nameInput.value);
+      const message = problem ? vaultNameMessage(problem) : serverError;
+      errorEl.textContent = message;
+      errorEl.hidden = !message;
+      nameInput.setAttribute("aria-invalid", message ? "true" : "false");
+      submitBtn.disabled = busy || !!problem || !parent;
+    };
+    const decline = () => {
+      void packSupport.discard(offer.token).catch(() => {});
+      overlay.remove();
+      if (opener.isConnected) opener.focus();
+    };
+    const submit = async () => {
+      if (submitBtn.disabled) return;
+      busy = true;
+      serverError = "";
+      refresh();
+      try {
+        const created = await packSupport.create({ token: offer.token, parent, name: nameInput.value.trim() });
+        // Keep the (busy) dialog up while the hub opens the new vault; the hub fades away with it.
+        await onCreated(created);
+        overlay.remove();
+      } catch (error) {
+        busy = false;
+        serverError = ipcErrorMessage(error, "Unable to create the vault");
+        refresh();
+      }
+    };
+    nameInput.addEventListener("input", () => { serverError = ""; refresh(); });
+    browseBtn.addEventListener("click", async () => {
+      try {
+        const chosen = await createSupport.chooseParentFolder(parent || undefined);
+        if (chosen) { parent = chosen; serverError = ""; locationInput.value = parent; locationInput.title = parent; refresh(); }
+      } catch (error) {
+        serverError = error instanceof Error ? error.message : "Unable to choose a folder";
+        refresh();
+      }
+    });
+    cancelBtn.addEventListener("click", decline);
+    submitBtn.addEventListener("click", () => { void submit(); });
+    overlay.addEventListener("mousedown", (event) => { if (event.target === overlay) decline(); });
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); decline(); return; }
+      if (event.key === "Enter" && event.target === nameInput) { event.preventDefault(); void submit(); }
+    });
+    refresh();
+    cancelBtn.focus();
+    void createSupport.getDefaultLocation().then((location) => {
+      if (!overlay.isConnected) return;
+      parent = location.path;
+      locationInput.value = parent;
       locationInput.title = parent;
       refresh();
     }, (error) => {
@@ -4368,7 +4591,7 @@ export class App {
       message.setAttribute("role", "alert");
       container.appendChild(message);
     }
-    message.textContent = error instanceof Error ? error.message : "Unable to access that vault";
+    message.textContent = ipcErrorMessage(error, "Unable to access that vault");
   }
 
   private showCrashRecoveryBanner(shell: HTMLElement): void {

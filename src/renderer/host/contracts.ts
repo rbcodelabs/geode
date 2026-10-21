@@ -1,5 +1,7 @@
 import type { ResourceRef } from "../../shared/root-registry";
 
+import type { VaultPackHostSupport } from "../../shared/vault-pack-types";
+
 export interface VaultFileEntry {
   path: string;
   isFolder: boolean;
@@ -73,6 +75,8 @@ export interface VaultRegistryService {
    * hosts omit it, and the picker hides the button). `getDefaultVaultLocation`
    * supplies the default parent folder and the home dir for `~` display.
    */
+  /** Desktop-only (ADR 0050): create vaults from `.vault` packs. Other hosts omit it and the picker hides the entry points. */
+  vaultPackSupport?: VaultPackHostSupport;
   createVaultSupport?: {
     getDefaultLocation(): Promise<{ path: string; home: string }>;
     chooseParentFolder(defaultPath?: string): Promise<string | null>;

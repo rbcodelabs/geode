@@ -1,8 +1,9 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { VaultRefreshResult } from "../shared/vault-refresh";
 import { pathToFileURL } from "node:url";
 import * as path from "node:path";
 import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-resolve";
+import type { OrganizationPackEntry, VaultPackHostSupport, VaultPackOffer } from "../shared/vault-pack-types";
 import type { ObsidianImportResult } from "./obsidian-import";
 import type { ManagedPolicy } from "../renderer/policy";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
@@ -115,6 +116,18 @@ const api = {
   getDefaultVaultLocation: (): Promise<{ path: string; home: string }> => ipcRenderer.invoke("get-default-vault-location"),
   chooseParentFolder: (defaultPath?: string): Promise<string | null> => ipcRenderer.invoke("choose-parent-folder", defaultPath),
   createVault: (request: { parent: string; name: string }): Promise<string> => ipcRenderer.invoke("create-vault", request),
+  /** Vault packs (ADR 0050). `inspect` writes nothing; `createVaultFromPack` applies the exact bytes that were inspected. */
+  vaultPack: {
+    choose: (): Promise<string | null> => ipcRenderer.invoke("vault-pack:choose"),
+    inspect: (packPath: string): Promise<VaultPackOffer> => ipcRenderer.invoke("vault-pack:inspect", packPath),
+    inspectDropped: (packPath: string): Promise<VaultPackOffer> => ipcRenderer.invoke("vault-pack:inspect-dropped", packPath),
+    discard: (token: string): Promise<void> => ipcRenderer.invoke("vault-pack:discard", token),
+    create: (request: { token: string; parent: string; name: string }): Promise<string> => ipcRenderer.invoke("vault-pack:create", request),
+    getLaunchPack: (): Promise<VaultPackOffer | null> => ipcRenderer.invoke("vault-pack:launch"),
+    listOrganizationPacks: (): Promise<OrganizationPackEntry[]> => ipcRenderer.invoke("vault-pack:organization"),
+    pathForFile: (file: File): string => webUtils.getPathForFile(file),
+    exportCurrent: (): Promise<{ path: string; fileCount: number; pluginCount: number } | null> => ipcRenderer.invoke("vault-pack:export"),
+  } satisfies VaultPackHostSupport,
   openVault: (
     path: string
   ): Promise<{ root: string; name: string; files: VaultFileEntry[] }> =>
@@ -463,12 +476,14 @@ export type GeodeApi = Omit<
   "requestUrl" | "pluginFetch" | "getSupportedPluginCatalog" | "installSupportedPlugin" |
   "readSecretsSync" | "getSecret" | "listSecrets" | "setSecret" | "deleteSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "isSecretEncryptionAvailable" | "beginMetadataCacheRead" | "readMetadataCachePage" | "cancelMetadataCacheRead" |
-  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless" | "pairing"
+  "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache" | "browserHeaderRules" | "githubAuth" | "isHeadless" | "pairing" | "vaultPack"
 > & {
   /** Desktop only: absent on mobile/browser hosts. */
   pairing?: ElectronOnlyGeodeApi["pairing"];
   /** Desktop-only: true under GEODE_HEADLESS / --headless (e2e). Absent (falsy) on mobile/browser. */
   isHeadless?: boolean;
+  /** Desktop-only vault pack support (ADR 0050). */
+  vaultPack?: VaultPackHostSupport;
   audioCaptureWorklet?: ElectronOnlyGeodeApi["audioCaptureWorklet"];
   beginMetadataCacheRead?: ElectronOnlyGeodeApi["beginMetadataCacheRead"];
   readMetadataCachePage?: ElectronOnlyGeodeApi["readMetadataCachePage"];

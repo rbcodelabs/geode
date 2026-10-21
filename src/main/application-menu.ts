@@ -20,7 +20,11 @@ export function buildApplicationMenuTemplate(
   onExportDiagnostics: () => void | Promise<void>,
   onReloadApp: ReloadAppHandler,
   onCheckForUpdates: () => void | Promise<void>,
+  onSaveVaultAsPack?: (window: BaseWindow | undefined) => void,
 ): MenuItemConstructorOptions[] {
+  const saveAsPack: MenuItemConstructorOptions[] = onSaveVaultAsPack
+    ? [{ label: "Save Vault as Pack…", click: (_menuItem, window) => onSaveVaultAsPack(window) }, { type: "separator" }]
+    : [];
   const isMac = platform === "darwin";
   return [
     ...(isMac ? [{ role: "appMenu" as const }] : []),
@@ -29,8 +33,8 @@ export function buildApplicationMenuTemplate(
       // is a bare `{ role: "close" }` on CmdOrCtrl+W.
       label: "File",
       submenu: isMac
-        ? [{ role: "close" as const, accelerator: CLOSE_WINDOW_ACCELERATOR }]
-        : [{ role: "quit" as const }],
+        ? [...saveAsPack, { role: "close" as const, accelerator: CLOSE_WINDOW_ACCELERATOR }]
+        : [...saveAsPack, { role: "quit" as const }],
     },
     { role: "editMenu" },
     {
