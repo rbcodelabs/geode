@@ -42,3 +42,29 @@ test("@phone open drawer never leaves a clipped page toolbar icon peeking beside
     expect(!visible || box.x >= edge || box.x + box.width <= edge).toBe(true);
   }
 });
+
+test("@phone bottom navigation outer tabs clear the rounded display corners", async ({ page }) => {
+  await page.goto(mobileUrl);
+  const nav = page.getByRole("navigation", { name: "Mobile navigation" });
+  const buttons = nav.getByRole("button");
+  const count = await buttons.count();
+  expect(count).toBeGreaterThanOrEqual(2);
+  const viewportWidth = page.viewportSize()!.width;
+  const first = (await buttons.first().boundingBox())!;
+  const last = (await buttons.nth(count - 1).boundingBox())!;
+  expect(first.x).toBeGreaterThanOrEqual(12);
+  expect(viewportWidth - (last.x + last.width)).toBeGreaterThanOrEqual(12);
+});
+
+test("@phone New Tab picker keeps side gutters and hides keyboard hints", async ({ page }) => {
+  await page.goto(mobileUrl);
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  const picker = page.locator(".new-tab-picker");
+  await expect(picker).toBeVisible();
+  const box = (await picker.boundingBox())!;
+  const viewportWidth = page.viewportSize()!.width;
+  expect(box.x).toBeGreaterThanOrEqual(12);
+  expect(viewportWidth - (box.x + box.width)).toBeGreaterThanOrEqual(12);
+  await expect(page.locator(".empty-state-action-hint").first()).toBeHidden();
+});

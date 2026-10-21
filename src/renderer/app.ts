@@ -398,10 +398,10 @@ class EmptyView implements View {
     this.containerEl.appendChild(picker.containerEl);
     picker.focus();
 
-    const actions = [
-      { label: "Create new note (Cmd/Ctrl+N)", fn: () => app.createNewNote() },
-      { label: "Open quick switcher (Cmd/Ctrl+O)", fn: () => app.openQuickSwitcher() },
-      { label: "Open command palette (Cmd/Ctrl+P)", fn: () => app.openCommandPalette() },
+    const actions: { label: string; hint?: string; fn: () => void }[] = [
+      { label: "Create new note", hint: "(Cmd/Ctrl+N)", fn: () => app.createNewNote() },
+      { label: "Open quick switcher", hint: "(Cmd/Ctrl+O)", fn: () => app.openQuickSwitcher() },
+      { label: "Open command palette", hint: "(Cmd/Ctrl+P)", fn: () => app.openCommandPalette() },
     ];
     if (app.isWebViewerAvailable()) {
       actions.push({ label: "Open browser", fn: () => { void app.openWebViewer(); } });
@@ -409,7 +409,14 @@ class EmptyView implements View {
     for (const a of actions) {
       const btn = document.createElement("button");
       btn.className = "empty-state-action";
-      btn.textContent = a.label;
+      btn.append(a.label);
+      if (a.hint) {
+        // Hidden on phones (no hardware keyboard) via .empty-state-action-hint.
+        const hint = document.createElement("span");
+        hint.className = "empty-state-action-hint";
+        hint.textContent = ` ${a.hint}`;
+        btn.appendChild(hint);
+      }
       btn.addEventListener("click", a.fn);
       this.containerEl.appendChild(btn);
     }

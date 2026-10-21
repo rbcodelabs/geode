@@ -454,8 +454,9 @@ body.is-mobile .mobile-navigation {
   grid-template-columns: repeat(5, minmax(44px, 1fr));
   flex: 0 0 auto;
   min-height: calc(52px + max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)));
-  padding: 0 max(4px, env(safe-area-inset-right))
-    max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)) max(4px, env(safe-area-inset-left));
+  /* Side padding clears the ~47-55pt display corner radius so the outer tabs are not clipped. */
+  padding: 0 max(14px, env(safe-area-inset-right))
+    calc(max(env(safe-area-inset-bottom), var(--geode-native-safe-area-bottom, 0px)) + 4px) max(14px, env(safe-area-inset-left));
   border-top: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
   z-index: 70;
@@ -475,7 +476,7 @@ body.is-mobile .status-bar {
   min-height: 44px;
   padding: 4px 2px;
   border: 0;
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-m);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -492,6 +493,7 @@ body.is-mobile .status-bar {
 .mobile-navigation-action:focus-visible {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
+  outline: none; /* soft pill instead of an edge-hugging outline box */
 }
 
 .mobile-navigation-action svg {
@@ -5229,6 +5231,42 @@ body.is-mobile .page-preview {
 
 .new-tab-picker-results {
   max-height: 320px;
+}
+
+/* Phone New Tab launcher: side gutters clear the rounded display corners, quieter hierarchy,
+   and the three text links become a tidy list of 44px tappable rows. */
+body.is-mobile .empty-state {
+  justify-content: flex-start;
+  padding: 18vh max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left));
+  box-sizing: border-box;
+  gap: 0;
+  overflow-y: auto;
+}
+
+body.is-mobile .empty-state-title {
+  font-size: 15px;
+  margin-bottom: 14px;
+}
+
+body.is-mobile .new-tab-picker {
+  width: min(100%, 480px);
+  box-shadow: var(--shadow-s);
+}
+
+body.is-mobile .new-tab-picker-results {
+  max-height: min(320px, 30vh);
+}
+
+body.is-mobile .empty-state-action {
+  width: min(100%, 480px);
+  min-height: 44px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: center;
+  touch-action: manipulation;
+}
+
+body.is-mobile .empty-state-action-hint {
+  display: none;
 }
 
 /* ---- Deferred view placeholder ----
