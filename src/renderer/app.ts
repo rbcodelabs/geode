@@ -391,7 +391,17 @@ class EmptyView implements View {
   refresh(app: App): void { this.render(app); }
 
   private render(app: App): void {
-    this.containerEl.innerHTML = `<div class="empty-state-title">No file is open</div>`;
+    this.containerEl.innerHTML = `<svg class="empty-state-gem" viewBox="306 254.5 412 515" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="empty-state-gem-gradient" x1="306" y1="254.5" x2="718" y2="769.5" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#DBEA9D" />
+            <stop offset="1" stop-color="#789348" />
+          </linearGradient>
+        </defs>
+        <path d="M512,254.5 L718,409 L640.75,769.5 L383.25,769.5 L306,409 Z" fill="url(#empty-state-gem-gradient)" />
+        <path d="M512,254.5 L718,409 L640.75,769.5 L512,512 Z" fill="#294835" fill-opacity="0.24" />
+        <path d="M512,254.5 L512,512 L383.25,769.5 L306,409 Z" fill="#294835" fill-opacity="0.08" />
+      </svg><div class="empty-state-title">No file is open</div>`;
 
     const picker = new NewTabPickerList(app);
     picker.containerEl.className = "new-tab-picker";
@@ -406,6 +416,10 @@ class EmptyView implements View {
     if (app.isWebViewerAvailable()) {
       actions.push({ label: "Open browser", fn: () => { void app.openWebViewer(); } });
     }
+    // display: contents on desktop, a single rounded list card on phones.
+    const list = document.createElement("div");
+    list.className = "empty-state-actions";
+    this.containerEl.appendChild(list);
     for (const a of actions) {
       const btn = document.createElement("button");
       btn.className = "empty-state-action";
@@ -418,7 +432,7 @@ class EmptyView implements View {
         btn.appendChild(hint);
       }
       btn.addEventListener("click", a.fn);
-      this.containerEl.appendChild(btn);
+      list.appendChild(btn);
     }
   }
 

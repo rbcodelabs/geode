@@ -68,3 +68,28 @@ test("@phone New Tab picker keeps side gutters and hides keyboard hints", async 
   expect(viewportWidth - (box.x + box.width)).toBeGreaterThanOrEqual(12);
   await expect(page.locator(".empty-state-action-hint").first()).toBeHidden();
 });
+
+test("@phone New Tab shows the gem mark, and the bottom nav has a single hairline", async ({ page }) => {
+  await page.goto(mobileUrl);
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  const gem = page.locator(".empty-state-gem");
+  await expect(gem).toBeVisible();
+  expect((await gem.boundingBox())!.width).toBeCloseTo(44, 0);
+  const inputHeight = (await page.locator(".new-tab-picker-input").boundingBox())!.height;
+  expect(inputHeight).toBeGreaterThanOrEqual(48);
+  const statusBorder = await page
+    .locator(".status-bar")
+    .evaluate((el) => getComputedStyle(el).borderTopWidth);
+  expect(statusBorder).toBe("0px");
+  const navBorder = await page
+    .getByRole("navigation", { name: "Mobile navigation" })
+    .evaluate((el) => getComputedStyle(el).borderTopWidth);
+  expect(navBorder).toBe("1px");
+});
+
+test("@phone New Tab gem is hidden when body is not in mobile mode", async ({ page }) => {
+  await page.goto(mobileUrl);
+  await page.evaluate(() => document.body.classList.remove("is-mobile"));
+  await expect(page.locator(".empty-state-gem")).toBeHidden();
+});
