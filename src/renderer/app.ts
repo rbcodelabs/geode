@@ -39,6 +39,7 @@ import { FormatConverterPlugin } from "./internal-plugins/format-converter/forma
 import { SlashCommandsPlugin } from "./internal-plugins/slash-commands/slash-commands-plugin";
 import { SlidesPlugin } from "./internal-plugins/slides/slides-plugin";
 import { IcloudSyncPlugin } from "./internal-plugins/icloud-sync/icloud-sync-plugin";
+import { CompassSyncPlugin } from "./internal-plugins/compass-sync/compass-sync-plugin";
 import { MermaidPlugin } from "./internal-plugins/mermaid/mermaid-plugin";
 import { OnboardingPlugin } from "./internal-plugins/onboarding/onboarding-plugin";
 import {
@@ -182,6 +183,8 @@ interface AppSettings {
   slidesEnabled: boolean;
   /** iCloud sync core plugin (ADR 0030); off by default. Only offered where the host reaches Geode's iCloud container. */
   icloudSyncEnabled: boolean;
+  /** Compass sync core plugin (`compass.docs`); off by default. Needs a Compass URL, workspace and token. */
+  compassSyncEnabled: boolean;
   /** Footnotes core plugin; optional sidebar, off by default. */
   footnotesEnabled: boolean;
   /**
@@ -1344,6 +1347,7 @@ class SettingsModal extends Modal {
     cookieBtn.addEventListener("click", () => new ChromeCookieImportModal(this.geodeApp).open());
     cookieControl.appendChild(cookieBtn);
     this.renderIcloudSyncSettings(container);
+    this.renderCompassSyncSettings(container);
   }
 
   /** Re-render Core plugins without losing the user's place: the tab is rebuilt from scratch, which resets scroll to the top. */
@@ -1446,6 +1450,87 @@ class SettingsModal extends Modal {
       pickControl.appendChild(select);
     };
     void render().finally(() => this.restorePendingCoreScroll());
+  }
+
+  /**
+   * Compass sync core plugin: enable toggle and connection settings. Every field saves as it is edited; the token and the
+   * extra header's value go to secure storage and are never shown again. Pick "Compass" under Settings > Sync afterwards.
+   */
+  private renderCompassSyncSettings(container: HTMLElement): void {
+    const section = document.createElement("div");
+    section.className = "compass-sync-settings";
+    container.appendChild(section);
+    section.innerHTML = `<h3>Compass sync</h3>`;
+    this.addToggle(section, "Enable Compass sync", this.geodeApp.settings.compassSyncEnabled, (enabled) => {
+      this.geodeApp.settings.compassSyncEnabled = enabled;
+      this.geodeApp.syncCompassSyncPlugin();
+      this.geodeApp.saveSettings();
+      this.reloadCoreTabKeepingScroll();
+    });
+    const plugin = this.geodeApp.compassSyncPlugin;
+    if (!this.geodeApp.settings.compassSyncEnabled || !plugin) return;
+
+    const { control } = this.addRow(section, "Connection", "Syncs this vault's Markdown notes with the docs of a Compass workspace. Then choose Compass under Settings > Sync. Non-Markdown files are not synced.");
+    control.parentElement?.classList.add("sync-stacked-setting");
+    const field = (label: string, input: HTMLInputElement | HTMLSelectElement, help?: string) => {
+      const wrap = document.createElement("label"); wrap.className = "sync-field";
+      const text = document.createElement("span"); text.className = "sync-field-label"; text.textContent = label;
+      wrap.append(text, input);
+      if (help) { const note = document.createElement("span"); note.className = "sync-field-help"; note.textContent = help; wrap.append(note); }
+      return wrap;
+    };
+    const text = (label: string, type: string, placeholder: string) => {
+      const input = document.createElement("input"); input.type = type; input.placeholder = placeholder; input.autocomplete = "off"; input.spellcheck = false; input.setAttribute("aria-label", label);
+      return input;
+    };
+    const url = text("Compass URL", "url", "https://compass.example.com");
+    const workspace = text("Compass workspace id", "text", "workspace id");
+    const token = text("Compass token", "password", "Access token");
+    const headerName = text("Extra header name", "text", "x-vercel-protection-bypass");
+    const headerValue = text("Extra header value", "password", "Header value");
+    const trash = document.createElement("select"); trash.setAttribute("aria-label", "Compass deletions");
+    trash.append(new Option("Move to \"Geode Trash\" folder (recoverable)", "move"), new Option("Delete permanently", "delete"));
+    const secureNote = document.createElement("div"); secureNote.className = "sync-field-help";
+    if (!plugin.canStoreSecrets) { token.disabled = true; headerValue.disabled = true; secureNote.textContent = "Secure storage is unavailable on this device, so Compass cannot be used here. Tokens are never kept in the vault or in app settings."; }
+    const test = document.createElement("button"); test.type = "button"; test.textContent = "Test connection";
+    const result = document.createElement("div"); result.className = "sync-setup-result"; result.setAttribute("aria-live", "polite");
+    control.append(
+      field("Compass URL", url, "Base URL of the Compass deployment."), field("Workspace id", workspace),
+      field("Token", token, "Kept in secure storage on this device only."), secureNote,
+      field("Extra header name", headerName, "Optional, e.g. x-vercel-protection-bypass for a preview deployment."), field("Extra header value", headerValue),
+      field("When a note is deleted locally", trash), test, result,
+    );
+
+    let debounce: ReturnType<typeof setTimeout> | undefined, chain: Promise<void> = Promise.resolve(), tokenDirty = false, headerDirty = false;
+    const save = () => {
+      const pendingToken = tokenDirty ? token.value : undefined, pendingHeader = headerDirty ? headerValue.value : undefined;
+      tokenDirty = headerDirty = false;
+      const config = { baseUrl: url.value, workspaceId: workspace.value, extraHeaderName: headerName.value, trashMode: trash.value === "delete" ? "delete" as const : "move" as const, useDelta: false };
+      chain = chain.then(async () => {
+        await plugin.setConfig(config);
+        if (pendingToken !== undefined) { await plugin.setToken(pendingToken); token.value = ""; token.placeholder = pendingToken ? "Token saved on this device" : "Access token"; }
+        if (pendingHeader !== undefined) { await plugin.setExtraHeaderValue(pendingHeader); headerValue.value = ""; headerValue.placeholder = pendingHeader ? "Header value saved on this device" : "Header value"; }
+      }).then(() => { result.textContent = "Compass settings saved."; }, error => { result.textContent = error instanceof Error ? error.message : String(error); });
+      return chain;
+    };
+    const queue = () => { clearTimeout(debounce); debounce = setTimeout(() => void save(), 300); };
+    for (const el of [url, workspace, headerName]) el.addEventListener("input", queue);
+    trash.addEventListener("change", queue);
+    token.addEventListener("input", () => { tokenDirty = true; });
+    token.addEventListener("change", () => { tokenDirty = true; queue(); });
+    headerValue.addEventListener("input", () => { headerDirty = true; });
+    headerValue.addEventListener("change", () => { headerDirty = true; queue(); });
+    void plugin.getConfig().then(async config => {
+      if (!control.isConnected) return;
+      url.value = config.baseUrl; workspace.value = config.workspaceId; headerName.value = config.extraHeaderName; trash.value = config.trashMode;
+      if (await plugin.hasToken()) token.placeholder = "Token saved on this device";
+      if (await plugin.hasExtraHeaderValue()) headerValue.placeholder = "Header value saved on this device";
+    }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
+    test.addEventListener("click", () => {
+      result.textContent = "Connecting...";
+      clearTimeout(debounce);
+      void save().then(() => plugin.testConnection()).then(message => { result.textContent = message; }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
+    });
   }
 
   private async updateWebViewer(
@@ -2745,6 +2830,8 @@ export class App {
   slidesPlugin?: SlidesPlugin;
   /** Live iCloud sync plugin, or undefined while the core plugin is off or the host has no iCloud container. */
   icloudSyncPlugin?: IcloudSyncPlugin;
+  /** Live Compass sync plugin, or undefined while the core plugin is off. */
+  compassSyncPlugin?: CompassSyncPlugin;
   themeManager = new ThemeManager(this);
   communityManager = new CommunityManager(this);
   settings: AppSettings = {
@@ -2763,6 +2850,7 @@ export class App {
     slashCommandsEnabled: true,
     slidesEnabled: false,
     icloudSyncEnabled: false,
+    compassSyncEnabled: false,
     footnotesEnabled: false,
     metadataScanCapBytes: DEFAULT_METADATA_SCAN_CAP_BYTES,
   };
@@ -3438,6 +3526,7 @@ export class App {
         slashCommandsEnabled: saved.slashCommandsEnabled !== false,
         slidesEnabled: saved.slidesEnabled === true,
         icloudSyncEnabled: saved.icloudSyncEnabled === true,
+        compassSyncEnabled: saved.compassSyncEnabled === true,
         footnotesEnabled: saved.footnotesEnabled === true,
         // Always re-resolved (never trusted verbatim) — a hand-edited or
         // stale config could carry 0/negative/non-numeric/huge values, and
@@ -3705,6 +3794,7 @@ export class App {
     this.syncSlashCommandsPlugin();
     this.syncSlidesPlugin();
     this.syncIcloudSyncPlugin();
+    this.syncCompassSyncPlugin();
     await this.syncFootnotesPlugin();
     this.syncNoteComposerPlugin();
     // Built-in sync provider for the hub the headless `geode-wiki sync` uses (directory or ssh). Registered per
@@ -4459,6 +4549,8 @@ export class App {
     this.slidesPlugin = undefined;
     this.icloudSyncPlugin?.unload();
     this.icloudSyncPlugin = undefined;
+    this.compassSyncPlugin?.unload();
+    this.compassSyncPlugin = undefined;
     this.noteComposerPlugin?.unload();
     this.noteComposerPlugin = undefined;
     this.workspace?.dispose();
@@ -6511,6 +6603,20 @@ export class App {
     if (!this.settings.icloudSyncEnabled || !this.host.capabilities.icloudContainer || !bridge) return;
     this.icloudSyncPlugin = new IcloudSyncPlugin(this, bridge);
     this.icloudSyncPlugin.load();
+  }
+
+  /**
+   * Load or unload the Compass sync core plugin to match `settings.compassSyncEnabled`. The token lives in the app's secure
+   * storage (`secrets.app`), the same place as the HTTPS hub token; without it the plugin still loads but cannot take a token.
+   */
+  syncCompassSyncPlugin(): void {
+    this.compassSyncPlugin?.unload();
+    this.compassSyncPlugin = undefined;
+    if (!this.settings.compassSyncEnabled) return;
+    const appSecrets = this.host.secrets.app;
+    const secrets = appSecrets ? { available: this.host.secrets.appAvailable ?? this.host.secrets.available, get: (key: string) => appSecrets.get(key), set: (key: string, value: string) => appSecrets.set(key, value), remove: (key: string) => appSecrets.remove(key) } : undefined;
+    this.compassSyncPlugin = new CompassSyncPlugin(this, secrets ? { secrets } : {});
+    this.compassSyncPlugin.load();
   }
 
   /** Load or unload the Audio recorder core plugin to match `settings.audioRecorderEnabled`. */

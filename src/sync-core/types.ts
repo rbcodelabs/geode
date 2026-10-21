@@ -60,6 +60,13 @@ export interface SyncProvider {
    * selection (e.g. the transport's backing store is not reachable) instead of connecting and failing on every scan.
    */
   preflight?(): Promise<void>;
+  /**
+   * Optional ownership exclusion for providers that can only represent some files (e.g. Markdown-only document
+   * stores). Called first with the path alone and, for a file small enough to be hashed, again with its bytes.
+   * A non-null reason excludes the file from both sides of the plan: it is never uploaded, downloaded, or treated
+   * as deleted. Exclusion is never turned into deletion.
+   */
+  excludePath?(path: string, data?: ArrayBuffer): string | null | Promise<string | null>;
 }
 
 export type SyncStatusState = "disconnected" | "idle" | "preview" | "pending" | "syncing" | "paused" | "conflict" | "error";

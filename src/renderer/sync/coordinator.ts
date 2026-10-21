@@ -177,25 +177,36 @@ export class SyncCoordinator extends Events implements SyncApi {
     if (remoteScan.mode === "delta" && !capabilities.delta) throw new Error("Provider returned an unadvertised delta scan");
     if (remoteScan.mode === "snapshot" && !capabilities.completeSnapshots) throw new Error("Provider returned an unadvertised complete snapshot");
     if (!remoteScan.mode) throw new Error("Provider must declare snapshot or delta scan mode");
+    // Provider-declared ownership exclusions (e.g. non-Markdown files for a document store). An excluded path is removed
+    // from the local and remote views alike, so it is never uploaded, downloaded, or mistaken for a deletion.
+    const exclude = this.activeRegistration!.provider.excludePath?.bind(this.activeRegistration!.provider);
+    const excluded = new Set<string>();
     for (const entry of localScan.entries) {
       if (isPathInSyncScope(entry.path, state.scope) && (entry.isFolder || this.isWithinLimit(entry.size))) {
-        (entry as VaultFileEntry & { syncFingerprint: string }).syncFingerprint = entry.isFolder ? "folder" : await this.hash(await this.host.vaultFiles.readBinary(entry.path));
+        if (!entry.isFolder && exclude && await exclude(entry.path)) { excluded.add(entry.path); this.assertContext(signal, vaultId); continue; }
+        const bytes = entry.isFolder ? undefined : await this.host.vaultFiles.readBinary(entry.path);
+        this.assertContext(signal, vaultId);
+        if (bytes && exclude && await exclude(entry.path, bytes)) { excluded.add(entry.path); this.assertContext(signal, vaultId); continue; }
+        (entry as VaultFileEntry & { syncFingerprint: string }).syncFingerprint = bytes ? await this.hash(bytes) : "folder";
         this.assertContext(signal, vaultId);
       }
     }
+
     await this.recoverJournal(state, localScan.entries, remoteScan.entries, remoteScan.mode, session, signal, vaultId);
     const conflictCopies = new Set(Object.values(state.conflicts).map(conflict => conflict.conflictPath).filter(Boolean));
-    const localAll = localScan.entries.filter(e => isPathInSyncScope(e.path, state.scope) && !conflictCopies.has(e.path) && !/\.sync-conflict-\d+/.test(e.path));
+    const localAll = localScan.entries.filter(e => isPathInSyncScope(e.path, state.scope) && !excluded.has(e.path) && !conflictCopies.has(e.path) && !/\.sync-conflict-\d+/.test(e.path));
     const local = localAll.filter(e => !e.isFolder);
     const nextRemoteIndex = remoteScan.mode === "delta" ? { ...state.remoteIndex } : {};
     for (const change of remoteScan.entries) {
       if (change.kind === "tombstone") delete nextRemoteIndex[change.id];
       else nextRemoteIndex[change.id] = change;
     }
+    if (exclude) for (const known of Object.values(nextRemoteIndex)) if (known.kind === "file" && !excluded.has(known.path) && await exclude(known.path)) excluded.add(known.path);
+    this.assertContext(signal, vaultId);
     const remote = [
       ...Object.values(nextRemoteIndex),
       ...(remoteScan.mode === "delta" ? remoteScan.entries.filter(entry => entry.kind === "tombstone") : []),
-    ].filter(e => e.kind === "tombstone" || isPathInSyncScope(e.path, state.scope));
+    ].filter(e => e.kind === "tombstone" ? !excluded.has(e.deletedPath ?? e.path) : isPathInSyncScope(e.path, state.scope) && !excluded.has(e.path));
     this.rejectCollisions(remote);
     const byPath = new Map(remote.filter(e => e.kind !== "tombstone").map(e => [e.path, e]));
     const localByPath = new Map(localAll.map(e => [e.path, e]));
