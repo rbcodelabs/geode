@@ -181,6 +181,16 @@ export class FileExplorerView implements View {
       titleEl.className = "nav-item-title";
       titleEl.textContent = folder.name;
       row.appendChild(arrow);
+      const isArtifact = this.app.isArtifactFolder(folder);
+      if (isArtifact) {
+        // An artifact folder opens in the artifact view; the chevron still expands it.
+        row.classList.add("is-artifact");
+        row.setAttribute("aria-label", `Open artifact ${folder.path}`);
+        const icon = document.createElement("span");
+        icon.className = "nav-artifact-icon";
+        setIcon(icon, "layout-dashboard");
+        row.appendChild(icon);
+      }
       row.appendChild(titleEl);
       row.addEventListener("click", (e) => {
         if (e.shiftKey) {
@@ -194,6 +204,11 @@ export class FileExplorerView implements View {
           return;
         }
         this.setSingleSelection(folder.path);
+        if (isArtifact && !arrow.contains(e.target as Node)) {
+          if (this.app.workspace.isCompactMobile()) this.app.workspace.closeMobileDrawers(false);
+          void this.app.openArtifactFolder(folder);
+          return;
+        }
         if (this.expanded.has(folder.path)) this.expanded.delete(folder.path);
         else this.expanded.add(folder.path);
         this.render();
@@ -443,6 +458,12 @@ export class FileExplorerView implements View {
     // checks `file instanceof TFile` (like most) safely no-ops on folders,
     // while a folder-aware plugin can still act on the TFolder it receives.
     const menu = this.app.buildMenu(resourceItems);
+    if (this.app.isArtifactFolder(folder)) {
+      menu.addItem((item) => item
+        .setTitle("Open artifact")
+        .setIcon("layout-dashboard")
+        .onClick(() => void this.app.openArtifactFolder(folder)));
+    }
     this.app.workspace.trigger("file-menu", menu, folder, FileExplorerView.MENU_SOURCE);
     menu.showAtMouseEvent(e);
   }

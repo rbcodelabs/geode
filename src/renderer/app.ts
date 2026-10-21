@@ -74,6 +74,7 @@ import { SearchView } from "./views/search-view";
 import { GraphView } from "./views/graph-view";
 import { WebView, isUrlShaped, resolveWebInput } from "./views/web-view";
 import { ArtifactView } from "./views/artifact-view";
+import { collectArtifactFolders, isArtifactFolder } from "./artifacts/artifact-folders";
 import { Modal, PromptModal, SuggestList, SuggestModal, fuzzyMatch, type FuzzyMatch } from "./modals/modals";
 import { ConflictCompareModal } from "./modals/conflict-compare-modal";
 import { ErrorDetailsModal } from "./modals/error-details-modal";
@@ -5176,6 +5177,15 @@ export class App {
         return true;
       },
     });
+    this.commands.add({
+      id: "open-artifact",
+      name: "Open artifact…",
+      checkCallback: (checking) => {
+        if (!this.host.capabilities.artifacts) return false;
+        if (!checking) this.chooseArtifact();
+        return true;
+      },
+    });
     c("pin-tab", "Toggle pin on current tab", undefined, () => {
       const leaf = this.workspace.getActiveLeaf();
       leaf?.togglePinned();
@@ -5470,8 +5480,46 @@ export class App {
       this.notify("Artifacts are available on desktop only");
       return;
     }
+    // Focus the tab that already shows this artifact instead of stacking duplicates.
+    for (const existing of this.workspace.getLeavesOfType("geode-artifact")) {
+      if (existing.view instanceof ArtifactView && existing.view.getState().root === root) {
+        this.workspace.setActiveLeaf(existing);
+        return;
+      }
+    }
     const leaf = this.workspace.getLeaf(true);
     await leaf.setViewState({ type: "geode-artifact", active: true, state: { root } });
+  }
+
+  /** True when this platform can run artifacts and `folder` holds an `artifact.json`. */
+  isArtifactFolder(folder: TFolder): boolean {
+    return this.host.capabilities.artifacts && isArtifactFolder(folder);
+  }
+
+  /** Open an artifact that lives inside the vault (a folder containing `artifact.json`). */
+  async openArtifactFolder(folder: TFolder): Promise<void> {
+    if (!(this.vault.adapter instanceof FileSystemAdapter)) {
+      this.notify("Artifacts can only be opened from a local vault");
+      return;
+    }
+    await this.openArtifact(this.vault.adapter.getFullPath(folder.path));
+  }
+
+  /** "Open artifact…" command: pick from the artifact folders in this vault. */
+  chooseArtifact(): void {
+    const folders = collectArtifactFolders(this.vault.getRoot());
+    if (!folders.length) {
+      this.notify("No artifacts found in this vault. An artifact is a folder containing artifact.json.");
+      return;
+    }
+    const open = (folder: TFolder): void => { void this.openArtifactFolder(folder); };
+    const picker = new (class extends SuggestModal<TFolder> {
+      getItems(): TFolder[] { return folders; }
+      getItemText(folder: TFolder): string { return folder.path; }
+      onChooseItem(folder: TFolder): void { open(folder); }
+    })(this);
+    picker.inputEl.placeholder = "Open an artifact…";
+    picker.open();
   }
 
   /** "Search the web" (Obsidian compat command `search-web`): prompts for a query, opens the results in a Web Viewer tab. */

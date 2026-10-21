@@ -159,7 +159,9 @@ export class ArtifactView implements View, ReloadableView {
         return;
       }
       this.registration = registration;
-      this.viewport ??= registration.viewport;
+      // Fill is the default so an artifact uses the whole pane. A viewport the user
+      // picked (persisted in the view state) still wins; the manifest viewport is only a hint.
+      this.viewport ??= VIEWPORTS.fill;
       this.leaf.updateHeader();
       const frame = document.createElement("webview") as unknown as ArtifactWebview;
       frame.className = "artifact-view-frame";

@@ -8077,3 +8077,5 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
   white-space: nowrap;
   cursor: help;
 }
+.nav-folder-title.is-artifact .nav-artifact-icon { display: inline-flex; align-items: center; margin-right: 4px; color: var(--interactive-accent); }
+.nav-folder-title.is-artifact .nav-artifact-icon svg { width: 14px; height: 14px; }
