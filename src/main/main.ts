@@ -133,6 +133,8 @@ import {
   GithubAuthService,
   GithubTokenStore,
   resolveGithubAppSettings,
+  describeGithubAppSettings,
+  applyGithubAppSettingsInput,
   type GithubAppSettings,
 } from "./github-auth";
 
@@ -1739,6 +1741,21 @@ function registerIpc() {
   // GitHub App auth (see github-auth/). Opening the verification URL is a
   // browser launch, not a window, but is still skipped under GEODE_HEADLESS.
   ipcMain.handle("github-auth-status", (e) => getGithubAuth(e.sender).getStatus());
+  ipcMain.handle("github-auth-get-settings", (e) => {
+    getGithubAuth(e.sender); // refresh githubVaultRoot for this window
+    return describeGithubAppSettings({ global: loadConfig().github, vault: readVaultAppConfig(githubVaultRoot) });
+  });
+  ipcMain.handle("github-auth-set-settings", (e, input: unknown) => {
+    getGithubAuth(e.sender);
+    const cfg = loadConfig();
+    const update = input && typeof input === "object" && (input as { reset?: unknown }).reset === true
+      ? { ok: true as const, github: undefined }
+      : applyGithubAppSettingsInput(cfg.github, input);
+    if (!update.ok) return update;
+    const { github: _old, ...rest } = cfg;
+    saveConfig(update.github ? { ...rest, github: update.github } : rest);
+    return { ok: true as const, settings: describeGithubAppSettings({ global: update.github, vault: readVaultAppConfig(githubVaultRoot) }) };
+  });
   ipcMain.handle("github-auth-app-info", (e, opts: unknown) => githubIpc(() => getGithubAuth(e.sender).getAppReport((opts as { fresh?: unknown } | undefined)?.fresh === true)));
   ipcMain.handle("github-auth-start", (e, opts: unknown) => githubIpc(async () => {
     const confirmExtraPermissions = (opts as { confirmExtraPermissions?: unknown } | null)?.confirmExtraPermissions === true;

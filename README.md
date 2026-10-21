@@ -25,7 +25,8 @@ for the latest published notes.
   local tokens and links to GitHub to revoke access. Agent Threads credential
   handoff is not included yet. See [GitHub authentication](docs/design/github-app-auth.md)
   for GitHub App setup, the on-demand token API, and optional
-  `GEODE_GITHUB_CLIENT_ID` / `GEODE_GITHUB_APP_SLUG` overrides.
+  `GEODE_GITHUB_CLIENT_ID` / `GEODE_GITHUB_APP_SLUG` overrides. A different
+  (for example company-private) App can be chosen in Settings > GitHub.
 
 - **Keychain-backed plugin secrets** — `app.secretStorage` encrypts through the
   OS keychain via Electron `safeStorage`, migrating any previously stored

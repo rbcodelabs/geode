@@ -21,7 +21,7 @@ import type { SupportedPluginCatalogIpcState } from "./supported-plugin-catalog"
 import type { SecretSnapshot } from "./secret-store";
 import type { NormalizedWebViewerEvent } from "../shared/web-viewer-connectors";
 type GithubIpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string; url?: string };
-import type { GithubAppReport, GithubAuthStatus, GithubInstallation, RepoCoverage } from "./github-auth";
+import type { GithubAppReport, GithubSettingsView, GithubAppSettingsInput, GithubAppSettingsUpdate, GithubAuthStatus, GithubInstallation, RepoCoverage } from "./github-auth";
 import type { HeaderRuleAddResult, HeaderRuleSummary } from "./browser-header-rules";
 
 async function invokeExternalRoot<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -282,6 +282,11 @@ const api = {
    */
   githubAuth: {
     status: (): Promise<GithubAuthStatus> => ipcRenderer.invoke("github-auth-status"),
+    getSettings: (): Promise<GithubSettingsView> => ipcRenderer.invoke("github-auth-get-settings"),
+    /** Validates and writes `github` in geode.json; `{ reset: true }` removes it (use the default App). */
+    setSettings: (input: GithubAppSettingsInput | { reset: true }): Promise<
+      Exclude<GithubAppSettingsUpdate, { ok: true }> | { ok: true; settings: GithubSettingsView }
+    > => ipcRenderer.invoke("github-auth-set-settings", input),
     appInfo: (opts?: { fresh?: boolean }): Promise<GithubIpcResult<GithubAppReport>> => ipcRenderer.invoke("github-auth-app-info", opts),
     start: (opts?: { confirmExtraPermissions?: boolean }): Promise<GithubIpcResult<{ userCode: string; verificationUri: string }>> => ipcRenderer.invoke("github-auth-start", opts),
     listAccess: (): Promise<GithubIpcResult<GithubInstallation[]>> => ipcRenderer.invoke("github-auth-list-access"),

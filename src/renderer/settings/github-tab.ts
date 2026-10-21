@@ -122,6 +122,29 @@ export function connectedView(
   return { badge: problem ? "Problem" : "Connected", tone: problem ? "bad" : "ok", messages, tokenLine };
 }
 
+type AppSettingsView = Awaited<ReturnType<GithubAuthApi["getSettings"]>>;
+
+const SOURCE_LABEL: Record<"env" | "vault" | "global" | "default", string> = {
+  env: "environment variable",
+  vault: "open vault's .geode/app.json",
+  global: "geode.json",
+  default: "built-in default",
+};
+
+/** Where each effective value comes from, and which higher layers hide what the form edits. */
+export function appSettingsNotes(view: AppSettingsView): string[] {
+  const notes = [
+    `Effective App: ${view.appSlug.value} (${SOURCE_LABEL[view.appSlug.source]}), client ID ${view.clientId.value} (${SOURCE_LABEL[view.clientId.source]}).`,
+  ];
+  const fields: ["clientId" | "appSlug", string][] = [["appSlug", "App slug"], ["clientId", "Client ID"]];
+  for (const [key, label] of fields) {
+    const by = view.overriddenBy[key];
+    if (by) notes.push(`${label} is set by the ${SOURCE_LABEL[by]}, which overrides the value saved here. Remove it there for this setting to take effect.`);
+  }
+  if (view.allowSources.env) notes.push("Repository allowlist is set by environment variables and replaces the one saved here.");
+  return notes;
+}
+
 /** Settings "GitHub" card: device-flow sign-in, reachable repos, disconnect. Returns a disposer. */
 export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () => void {
   let disposed = false;
@@ -362,6 +385,137 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
     if (open) actions.append(open);
     if (actions.childElementCount) card.append(actions);
   };
+
+  // The App form is built once (not by the poll) so typing is never interrupted.
+  const form = document.createElement("section");
+  form.className = "github-app-card sync-status-card";
+  container.append(form);
+  const slugInput = document.createElement("input");
+  slugInput.type = "text";
+  slugInput.spellcheck = false;
+  const clientInput = document.createElement("input");
+  clientInput.type = "text";
+  clientInput.spellcheck = false;
+  const ownersInput = document.createElement("input");
+  ownersInput.type = "text";
+  ownersInput.spellcheck = false;
+  ownersInput.placeholder = "Optional: comma-separated owners";
+  const reposInput = document.createElement("input");
+  reposInput.type = "text";
+  reposInput.spellcheck = false;
+  reposInput.placeholder = "Optional: comma-separated owner/name";
+  const formMessages = document.createElement("div");
+  formMessages.className = "github-status-block";
+  formMessages.setAttribute("role", "status");
+  formMessages.hidden = true;
+  const saveButton = button("Save", () => void saveApp(), "mod-cta");
+  const resetButton = button("Use default", () => void saveApp(true));
+  const formActions = document.createElement("div");
+  formActions.className = "sync-card-actions github-actions";
+  const fieldErrors = new Map<string, HTMLElement>();
+  const field = (key: string, label: string, input: HTMLInputElement) => {
+    const row = document.createElement("label");
+    row.className = "sync-field";
+    const error = text("span", "", "github-status-line is-error github-field-error");
+    error.hidden = true;
+    fieldErrors.set(key, error);
+    input.addEventListener("input", () => { error.hidden = true; input.removeAttribute("aria-invalid"); });
+    row.append(text("span", label, "sync-field-label"), input, error);
+    return row;
+  };
+  const inputs: Record<string, HTMLInputElement> = { appSlug: slugInput, clientId: clientInput, allowedOwners: ownersInput, allowedRepos: reposInput };
+  const showFieldErrors = (errors: Record<string, string | undefined>) => {
+    for (const [key, el] of fieldErrors) {
+      const msg = errors[key];
+      el.hidden = !msg;
+      el.textContent = msg ?? "";
+      if (msg) inputs[key].setAttribute("aria-invalid", "true");
+      else inputs[key].removeAttribute("aria-invalid");
+    }
+  };
+  const splitList = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
+  const showFormMessages = (messages: ConnectionMessage[]) => {
+    formMessages.replaceChildren();
+    formMessages.hidden = messages.length === 0;
+    for (const m of messages) formMessages.append(text("p", m.text, `github-status-line is-${m.severity}${m.kind ? ` github-${m.kind}` : ""}`));
+  };
+  const notesEl = document.createElement("div");
+  notesEl.className = "github-app-notes";
+  notesEl.style.display = "grid";
+  notesEl.style.gap = "var(--size-4-2)";
+  const fillNotes = (view: AppSettingsView) => {
+    const [effective, ...overrides] = appSettingsNotes(view);
+    notesEl.replaceChildren(text("p", effective, "setting-item-description"));
+    if (overrides.length) notesEl.append(messageBlock(overrides.map((t) => ({ severity: "warn" as const, text: t, kind: "app-warning" as const }))));
+  };
+  const fillForm = (view: AppSettingsView) => {
+    fillNotes(view);
+    slugInput.value = view.global.appSlug ?? "";
+    slugInput.placeholder = `Default: ${view.defaults.appSlug}`;
+    clientInput.value = view.global.clientId ?? "";
+    clientInput.placeholder = `Default: ${view.defaults.clientId}`;
+    ownersInput.value = (view.global.allowedOwners ?? []).join(", ");
+    reposInput.value = (view.global.allowedRepos ?? []).join(", ");
+  };
+  let formBusy = false;
+  const saveApp = async (reset = false) => {
+    if (formBusy) return;
+    formBusy = true;
+    saveButton.disabled = resetButton.disabled = true;
+    try {
+      const res = await api.setSettings(
+        reset
+          ? { reset: true }
+          : {
+              appSlug: slugInput.value,
+              clientId: clientInput.value,
+              allowedOwners: splitList(ownersInput.value),
+              allowedRepos: splitList(reposInput.value),
+            },
+      );
+      if (disposed) return;
+      if (!res.ok) {
+        showFieldErrors(res.errors);
+        showFormMessages([{ severity: "error", text: "Not saved. Fix the highlighted fields." }]);
+        return;
+      }
+      showFieldErrors({});
+      fillForm(res.settings);
+      const messages: ConnectionMessage[] = [{ severity: "warn", text: "Saved. If this is a different GitHub App, the current GitHub sign-in is dropped and you will need to reconnect." }];
+      // Verify straight away so a typo shows up here rather than at the next sign-in.
+      const check = await api.appInfo({ fresh: true });
+      if (disposed) return;
+      if (!check.ok) messages.push({ severity: "error", text: check.message });
+      else if (check.value.problem && check.value.problem.code !== "unavailable") {
+        messages.push({ severity: "error", text: `${check.value.problem.code}: ${check.value.problem.message}`, kind: "app-problem" });
+      } else if (check.value.problem) messages.push({ severity: "warn", text: `Could not verify the App: ${check.value.problem.message}` });
+      else messages.push({ severity: "warn", text: `Verified: ${check.value.name ?? check.value.slug}.` });
+      showFormMessages(messages);
+      report = null;
+      reportError = null;
+      lastKey = "";
+      void render();
+    } finally {
+      formBusy = false;
+      saveButton.disabled = resetButton.disabled = false;
+    }
+  };
+  void api.getSettings().then((view) => {
+    if (disposed) return;
+    fillForm(view);
+    form.replaceChildren(
+      text("h3", "GitHub App"),
+      text("p", "Use your own GitHub App (for example a company's private App) instead of the built-in one. Saved to geode.json. Switching Apps disconnects the current GitHub sign-in; you will be asked to reconnect.", "setting-item-description"),
+      field("appSlug", "App slug", slugInput),
+      field("clientId", "Client ID", clientInput),
+      field("allowedOwners", "Allowed owners", ownersInput),
+      field("allowedRepos", "Allowed repositories", reposInput),
+      notesEl,
+      formMessages,
+      formActions,
+    );
+    formActions.append(saveButton, resetButton);
+  });
 
   void render();
   timer = setInterval(() => void render(), POLL_MS);
