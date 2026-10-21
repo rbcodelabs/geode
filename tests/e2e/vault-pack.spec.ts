@@ -177,7 +177,7 @@ test("--vault-pack with --yes creates and opens the vault without a prompt", asy
     await expect.poll(() => window.evaluate(() => (window as any).app.vault?.getFileByPath("Start here.md")?.path ?? null)).toBe("Start here.md");
     await expect(window.locator(".vault-pack-modal")).toHaveCount(0);
     expect(fs.existsSync(path.join(ctx.documentsDir, "Acme Onboarding", "Policies", "Handbook.md"))).toBe(true);
-    expect(await window.evaluate((id) => (window as any).app.pluginManager.isEnabled(id), PLUGIN_ID)).toBe(true);
+    await expect.poll(() => window.evaluate((id) => (window as any).app.pluginManager.isEnabled(id), PLUGIN_ID)).toBe(true);
   } finally {
     await cleanup(ctx);
   }

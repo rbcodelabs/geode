@@ -286,6 +286,7 @@ export class VaultHub {
       return;
     }
     el.textContent = error instanceof Error ? error.message : "Unable to open that vault";
+    el.scrollIntoView?.({ block: "nearest" });
   }
 
   // ---- vault packs (ADR 0050) ------------------------------------------------------------------

@@ -5193,6 +5193,15 @@ body.is-mobile .page-preview {
   overflow-y: auto;
 }
 
+/* Keep Cancel / Create reachable when the consent list is taller than the window. */
+.vault-pack-modal .vault-create-actions {
+  position: sticky;
+  bottom: -20px;
+  margin: 0 -20px -20px;
+  padding: 12px 20px 20px;
+  background: var(--background-primary);
+}
+
 .vault-pack-meta {
   display: flex;
   flex-direction: column;
