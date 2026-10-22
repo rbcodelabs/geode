@@ -22,6 +22,7 @@ import { ThemeManager } from "./theme-manager";
 import { CommunityManager, type UpdateSummary } from "./community/community-manager";
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
+import { appendManagedNote, disableManaged, readInstallControlState } from "./community/install-policy-ui";
 import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
 import { renderMobileSupportedPluginCatalog } from "./community/mobile-supported-catalog-view";
 import { loadMobileSupportedCatalog } from "./community/mobile-supported-plugins";
@@ -1563,6 +1564,12 @@ class SettingsModal extends Modal {
     const communityHeading = document.createElement("h2");
     communityHeading.textContent = "Community plugins & themes";
     container.appendChild(communityHeading);
+    // Advisory UI for the pluginInstall policy; the main-process handlers enforce it (docs/adr/0052).
+    const installPolicy = readInstallControlState();
+    const policyNoteEl = document.createElement("div");
+    policyNoteEl.className = "managed-policy-note-host";
+    container.appendChild(policyNoteEl);
+    void installPolicy.then((st) => { if (st.note) appendManagedNote(policyNoteEl, st.note); });
     if (!this.geodeApp.host.capabilities.nodePlugins) {
       const unavailable = document.createElement("p");
       unavailable.className = "community-mobile-unavailable";
@@ -1575,6 +1582,7 @@ class SettingsModal extends Modal {
     addBtn.disabled = !this.geodeApp.host.capabilities.nodePlugins;
     addBtn.title = addBtn.disabled ? "Community installation is available on desktop only" : "";
     control.appendChild(addBtn);
+    void installPolicy.then((st) => { if (!st.github && st.note) disableManaged(addBtn, st.note); });
     const listEl = document.createElement("div");
     listEl.className = "community-list";
     container.appendChild(listEl);
@@ -1588,12 +1596,22 @@ class SettingsModal extends Modal {
       const catalogEl = document.createElement("section");
       catalogEl.className = "supported-plugin-catalog";
       container.appendChild(catalogEl);
-      void renderSupportedPluginCatalog(catalogEl, {
-        load: () => window.geode.getSupportedPluginCatalog!(),
-        install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
-        enable: (pluginId) => this.geodeApp.pluginManager.enable(pluginId),
-        getLoadError: (pluginId) => this.geodeApp.pluginManager.getLoadError(pluginId),
-        onInstalled: () => { void this.renderCommunityList(listEl); },
+      void installPolicy.then((st) => {
+        if (!st.catalog) {
+          // Shown, not removed, so the administrator's reason is visible. Nothing is fetched.
+          const blocked = document.createElement("div");
+          blocked.className = "supported-catalog-state managed-policy-note";
+          blocked.textContent = st.note ?? "Managed by your administrator: the supported-plugin catalog is unavailable.";
+          catalogEl.appendChild(blocked);
+          return;
+        }
+        return renderSupportedPluginCatalog(catalogEl, {
+          load: () => window.geode.getSupportedPluginCatalog!(),
+          install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
+          enable: (pluginId) => this.geodeApp.pluginManager.enable(pluginId),
+          getLoadError: (pluginId) => this.geodeApp.pluginManager.getLoadError(pluginId),
+          onInstalled: () => { void this.renderCommunityList(listEl); },
+        });
       });
     }
 
@@ -1635,6 +1653,7 @@ class SettingsModal extends Modal {
       }
     });
     importControl.appendChild(importBtn);
+    void installPolicy.then((st) => { if (!st.importObsidian && st.note) disableManaged(importBtn, st.note); });
 
     void this.renderCommunityList(listEl);
   }
