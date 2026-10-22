@@ -440,10 +440,12 @@ describe("permission assessment", () => {
 describe("App verification at sign-in", () => {
   const ok = { [DEVICE_URL]: () => ({ json: deviceResponse }), [DEVICE_GRANT]: () => ({ json: tokenResponse(1) }), ...userRoute };
 
-  it("refuses an unknown App slug and never asks for a device code", async () => {
+  it("still connects when the App slug has no public record (private App)", async () => {
     const h = setup({ ...ok, [APP_URL]: () => ({ status: 404, json: { message: "Not Found" } }) });
-    await expect(h.service.startSignIn()).rejects.toMatchObject({ code: "app_not_found" });
-    expect(h.calls.some((c) => c.url === DEVICE_URL)).toBe(false);
+    await h.service.startSignIn();
+    await h.service.waitForSignIn();
+    expect(h.calls.some((c) => c.url === DEVICE_URL)).toBe(true);
+    expect((await h.service.getAppReport()).problem?.code).toBe("unavailable");
   });
 
   it("refuses a client ID that belongs to a different App", async () => {
