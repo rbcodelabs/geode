@@ -43,7 +43,7 @@ enforcement, since a user can set an environment variable).
 | Plugin installation | `pluginInstall` | *Proposed* (schema and layering shipped; enforcement not) |
 | Sync (in-app providers and CLI) | `sync` | *Proposed* (schema and layering shipped; enforcement not) |
 | Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* (schema and layering shipped; enforcement not) |
-| CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* (schema and layering shipped; enforcement not) |
+| CLI background processes (scheduled sync, hub server) | `daemons` | **Shipped** for the `geode-wiki` CLI (ADR 0055); a guardrail, not a security boundary |
 | GitHub connection settings and sign-in | `github` | *Proposed* (schema and layering shipped; enforcement not) |
 | Vault-level policy file (narrowing only) | `<vault>/.geode/policy.json` | **Shipped** (ADR 0051) |
 
@@ -152,6 +152,11 @@ policy), but it is a guardrail on the supported binaries, **not a security
 boundary against a user who can build or run arbitrary Node code**. Orgs needing a
 hard boundary should rely on endpoint controls (application allowlisting, network
 egress rules) in addition to this policy.
+
+CLI status: **Shipped** (ADR 0055). `sync.enabled=false` makes `init`, `preview`, `run`,
+`resolve`, `gc`, `serve` and `schedule install` exit **6** (`blocked-by-policy`);
+`status`, `conflicts` and `schedule print|status|uninstall` keep working. The in-app
+providers are a separate surface and are tracked separately.
 
 ### 4. Thread execution targets and daemons — proposed
 
@@ -309,6 +314,27 @@ Proposed schema:
 
 The same guardrail caveat as sync applies: this governs the shipped CLI, not a
 determined local user.
+
+CLI status: **Shipped** (ADR 0055); section 4a (thread execution targets) is not part of
+it. Rules as built:
+
+- A `sync run` started by an installed unit exits 6 under `allowSchedule=false`. The
+  scheduled command line is fixed by ADR 0025 and is not changed, and units installed
+  before the policy existed cannot be changed, so "started by a unit" is detected from
+  the service manager's environment (`INVOCATION_ID` for systemd, `XPC_SERVICE_NAME`
+  starting `com.geode.wiki-sync.` for launchd). That is a heuristic: spoofable, and a
+  hand-run `systemd-run` looks scheduled. A hand-run `sync run` from a terminal stays
+  allowed under `allowSchedule=false` (it is not a daemon).
+- `allowServe=false` blocks both `sync serve` (stdio, the command ssh runs on a hub) and
+  `sync serve --http`. `serve` has no vault root, so only the machine layer applies.
+- `allowedListenAddresses` is matched textually against the `--listen` host after
+  normalisation (brackets stripped, lower-cased, IPv6 canonicalised). DNS names are never
+  resolved: a name passes only if it is itself listed. `127.0.0.1`, `::1` and `localhost`
+  are one loopback class (listing any admits all). `0.0.0.0` and `::` pass only if listed
+  exactly; listing loopback never admits them. An empty list allows nothing; an absent
+  list means no restriction.
+- Exit code 6 is added to the exit-code table in [headless-wiki-sync.md](headless-wiki-sync.md).
+  systemd units written from now on list it in `SuccessExitStatus=4 5 6`.
 
 ### 5. GitHub connection — proposed
 

@@ -95,7 +95,7 @@ name when it is wrong, instead of clobbering blind.
 | 4 | `conflicts` | `sync` only: unresolved conflicts remain |
 | 5 | `locked` | `sync` only: another sync run holds the lock; nothing was done |
 
-Codes 4 and 5 are produced only by `geode-wiki sync` ([headless-wiki-sync.md](headless-wiki-sync.md), [ADR 0025](../adr/0025-geode-wiki-sync-cli.md)).
+Codes 4, 5 and 6 (6 = blocked by administrator policy, [ADR 0055](../adr/0055-cli-policy.md)) are produced only by `geode-wiki sync` ([headless-wiki-sync.md](headless-wiki-sync.md), [ADR 0025](../adr/0025-geode-wiki-sync-cli.md)).
 
 Three properties worth stating explicitly, because each is a thing a caller can
 rely on:

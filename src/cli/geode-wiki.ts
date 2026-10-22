@@ -106,6 +106,7 @@ Exit codes:
   3  unavailable  the vault folder or the catalog store could not be reached
   4  conflicts    (sync) unresolved conflicts remain
   5  locked       (sync) another sync run holds the vault's lock; nothing was done
+  6  policy       (sync) blocked by administrator policy (status "blocked-by-policy"); nothing was done
 
 There is no "refresh" command. Every invocation is a fresh capture, so the
 process is the refresh.`;
