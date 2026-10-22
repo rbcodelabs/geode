@@ -41,7 +41,7 @@ enforcement, since a user can set an environment variable).
 |---|---|---|
 | Plugin execution (allow/block by id) | `plugins` | **Shipped** |
 | Plugin installation | `pluginInstall` | *Proposed* (schema and layering shipped; enforcement not) |
-| Sync (in-app providers and CLI) | `sync` | *Proposed* (schema and layering shipped; enforcement not) |
+| Sync (in-app providers and CLI) | `sync` | In-app providers: implemented (ADR 0053). CLI: *Proposed* |
 | Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* (schema and layering shipped; enforcement not) |
 | CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* (schema and layering shipped; enforcement not) |
 | GitHub connection settings and sign-in | `github` | *Proposed* (schema and layering shipped; enforcement not) |
@@ -112,7 +112,13 @@ Open question: pre-installed plugin folders (copied in by a user or synced from
 another machine) are not "installs". `plugins` allowlist mode is the control for
 those; this doc should not promise more.
 
-### 3. Sync — proposed
+### 3. Sync — in-app providers implemented (ADR 0053); CLI proposed
+
+**Status (in-app providers):** implemented per [ADR 0053](../adr/0053-sync-policy.md): main-process gates on `hub-sync`,
+`icloud-container`, `sync-owner-claim`, `sync-private-storage`, `sync-local-apply` and the sync scan channels; hub
+allowlist applied in `validateHubTarget` (folder/ssh) and in the renderer (HTTPS, advisory); Sync pane and iCloud toggle
+show a managed note. Provider ids are `hub` (registered as `geode.hub`) and `icloud`. With a `hubAllowlist`, folder and ssh
+hubs are refused. The headless CLI rows below are still proposed.
 
 There are two sync surfaces and they need separate switches.
 
