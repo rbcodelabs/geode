@@ -156,7 +156,7 @@ export class PropertyEditor {
     else if (type === "list" || type === "tags") this.list(valueCell, key, Array.isArray(value) ? value : value === null ? [] : [value], editable, value);
     else valueCell.append(this.valueInput(key, value as PropertyScalar, editable, next => this.apply({ kind: "set", key, value: next, expected: value }), undefined, type));
     if (compatible && !["list", "tags"].includes(type) && value !== null) {
-      const clear = document.createElement("button"); clear.type = "button"; clear.textContent = "Unset"; clear.setAttribute("aria-label", `Unset value: ${key}`); clear.disabled = !editable;
+      const clear = document.createElement("button"); clear.type = "button"; clear.className = "metadata-property-unset"; clear.textContent = "Unset"; clear.setAttribute("aria-label", `Unset value: ${key}`); clear.disabled = !editable;
       clear.addEventListener("click", () => this.apply({ kind: "set", key, value: null, expected: value })); valueCell.append(clear);
     }
     const remove = document.createElement("button"); remove.type = "button"; remove.className = "metadata-property-remove"; remove.textContent = "×"; remove.setAttribute("aria-label", `Remove property: ${key}`); remove.disabled = !editable || !supported; remove.addEventListener("click", () => this.apply({ kind: "remove", key, expected: value }));

@@ -8109,3 +8109,14 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
 }
 .nav-folder-title.is-artifact .nav-artifact-icon { display: inline-flex; align-items: center; margin-right: 4px; color: inherit; opacity: 0.8; }
 .nav-folder-title.is-artifact .nav-artifact-icon svg { width: 14px; height: 14px; }
+
+/* Unset: small, quiet, hover-revealed — sits inline after the value instead of a full-size button. */
+.metadata-property-value:not(.metadata-property-list) { display: flex; align-items: center; gap: 6px; }
+.metadata-property-value:not(.metadata-property-list) > .metadata-input { flex: 1; min-width: 0; }
+.metadata-property button.metadata-property-unset {
+  flex: none; height: auto; min-height: 0; padding: 1px 6px; font-size: var(--font-ui-smaller, 11px);
+  color: var(--text-faint); background: transparent; border: 0; box-shadow: none; cursor: pointer;
+  opacity: 0; border-radius: 4px;
+}
+.metadata-property:hover button.metadata-property-unset, .metadata-property button.metadata-property-unset:focus-visible { opacity: 1; }
+.metadata-property button.metadata-property-unset:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
