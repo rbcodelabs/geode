@@ -8,6 +8,17 @@ export interface VaultPackPluginSummary {
   /** Verified sha256 of main.js (bundled only). */
   sha256?: string;
   repo?: string;
+  /**
+   * GitHub only. The semver range the pack pins the plugin to. Absent means
+   * "unpinned latest": whatever the repository's newest release is at apply time.
+   */
+  range?: string;
+  /** GitHub with `range`: the effective release-age floor in days (policy, then entry, then the default of 3). */
+  minReleaseAgeDays?: number;
+  /** GitHub: what the plugin resolves to right now. Best effort, filled in by the consent flow (needs network); may differ at apply time. */
+  resolvedVersion?: string;
+  /** GitHub: why it could not be resolved right now (e.g. every matching release is too new). Apply would fail the same way. */
+  resolveError?: string;
   /** Plugin name/version from its own manifest (bundled only). */
   name?: string;
   version?: string;

@@ -528,6 +528,7 @@ function loadManagedPolicy(): ManagedPolicy | null {
 const vaultPacks = new VaultPackService({
   policy: () => loadManagedPolicy(),
   geodeVersion: app.getVersion(),
+  resolveCommunity: (spec, opts) => resolveCommunity(spec, opts),
 });
 
 /**
@@ -1874,8 +1875,11 @@ function registerIpc() {
   // install metadata for the modal preview; install downloads + writes files.
   // Both re-resolve from the caller's owner/repo spec — the renderer never
   // supplies file URLs or paths.
-  ipcMain.handle("community-resolve", async (_e, spec: string, opts: ResolveOpts) => {
-    return resolveCommunity(spec, opts ?? {});
+  ipcMain.handle("community-resolve", async (e, spec: string, opts: ResolveOpts) => {
+    // The open vault (if any) lets a plugin locked under a semver range (ADR 0050) resolve inside that range.
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win ? sessions.get(win.id) : undefined;
+    return resolveCommunity(spec, opts ?? {}, session?.root);
   });
 
   ipcMain.handle("community-install", async (e, spec: string, opts: ResolveOpts) => {
