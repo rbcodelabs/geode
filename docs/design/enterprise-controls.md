@@ -1,7 +1,11 @@
 # Enterprise controls
 
-Status: **Partly shipped, partly proposed.** Only the plugin allowlist/blocklist
-([ADR 0002](../adr/0002-enterprise-plugin-policy.md)) exists in code. Everything
+Status: **Partly shipped, partly proposed.** The plugin allowlist/blocklist
+([ADR 0002](../adr/0002-enterprise-plugin-policy.md)) and the policy core
+([ADR 0051](../adr/0051-policy-layering.md): schema and validators for every area,
+machine + vault layering, the vault policy file, its write protection) exist in code.
+The per-area *enforcement* for install, sync, thread execution, GitHub and daemons is
+not built: those files are parsed and merged but nothing acts on them yet. Everything
 marked *Proposed* below is a design for review, not behavior you can deploy today.
 
 This page is the admin-facing map: what an IT team can control, how, and where
@@ -36,12 +40,12 @@ enforcement, since a user can set an environment variable).
 | Area | Policy key | Status |
 |---|---|---|
 | Plugin execution (allow/block by id) | `plugins` | **Shipped** |
-| Plugin installation | `pluginInstall` | *Proposed* |
-| Sync (in-app providers and CLI) | `sync` | *Proposed* |
-| Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* |
-| CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* |
-| GitHub connection settings and sign-in | `github` | *Proposed* |
-| Vault-level policy file (narrowing only) | `<vault>/.geode/policy.json` | *Proposed* |
+| Plugin installation | `pluginInstall` | *Proposed* (schema and layering shipped; enforcement not) |
+| Sync (in-app providers and CLI) | `sync` | *Proposed* (schema and layering shipped; enforcement not) |
+| Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* (schema and layering shipped; enforcement not) |
+| CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* (schema and layering shipped; enforcement not) |
+| GitHub connection settings and sign-in | `github` | *Proposed* (schema and layering shipped; enforcement not) |
+| Vault-level policy file (narrowing only) | `<vault>/.geode/policy.json` | **Shipped** (ADR 0051) |
 
 ### 1. Plugin execution — shipped
 
@@ -388,7 +392,28 @@ Limits, as elsewhere: policy governs Geode's own code paths. A user with a perso
 a thread running on "This machine". Use the `threadExecution` controls and endpoint
 egress rules for that; `github` policy only governs the connection Geode brokers.
 
-### 6. Vault-level policy — proposed
+### 6. Vault-level policy — shipped
+
+Shipped in [ADR 0051](../adr/0051-policy-layering.md): the loader, the merge, the
+`get-effective-policy` IPC, the open-time notice, `vaultPolicy: "ignore"`, and write
+protection for the file. Notes from building it, where the text below was wrong or
+incomplete:
+
+- List rows marked "intersection" below are intersections only for exact-match lists.
+  `github.allowedOwners/Repos/Logins` and `pluginInstall.sources` are kept per layer and
+  every layer must pass (owners/repos are an OR within a layer, and globs cannot be
+  intersected). This is the existing GitHub behavior and still cannot widen.
+- `github.disconnect` is also machine-only, for the same reason as `settingsLocked`.
+- `.geode/policy.json` **is** on the protected-path list: `vault-write`, `vault-write-binary`,
+  `vault-mkdir`, `vault-delete`, `vault-rename`, `vault-rmdir`, `config-write` and
+  `plugin-files-replace` refuse it, including case, `..`, symlink, hard-link and
+  trailing-dot aliases. The investigation found `config-write` was the sharp edge
+  (`writeConfig("policy", ...)` wrote the file directly). It does **not** stop code that
+  already has Node access: the renderer runs with `nodeIntegration: true`, so a plugin
+  can `require("fs")` and rewrite the file, and a thread running on "This machine" can
+  too. Treat the vault file as a convention plus protection from Geode's own IPC, not a
+  boundary against arbitrary plugin code; pair it with the machine `plugins` allowlist.
+- The notice reads "This vault restricts: plugins, sync." followed by the file's `note`.
 
 So far every control comes from the machine-level file. This adds a second source: a
 policy file inside the vault, read alongside the machine file. It suits teams that
@@ -461,12 +486,17 @@ Open questions:
 
 - Does `.geode/` replicate through Geode's own sync or iCloud? If so a vault policy
   change would propagate to every device of every member, which is useful for teams but
-  needs to be a stated behavior. Not checked.
+  needs to be a stated behavior. Partly checked: Geode's guarded sync apply
+  (`src/sync-node/sync-apply.ts`) cannot write `.geode/policy.json` (it rejects dot
+  segments other than portable `.geode`, and portable writes map to fixed config names),
+  so a synced vault does not replicate it through that path. Plugin-provided sync
+  providers and the iCloud container were not checked.
 - Should a vault be able to *require* things (for example `requirePluginsAllowlist`)?
   Not proposed: requirement is not narrowing, and it would let a vault block opening
   on a machine that lacks something.
 - Show the effective, merged policy and where each rule came from in Settings. Strongly
   recommended for supportability, mirroring the existing GitHub "overridden by" notes.
+  The data exists (`get-effective-policy` returns a provenance map); no UI renders it yet.
 
 ## Cross-cutting behavior
 
@@ -486,9 +516,10 @@ Open questions:
    writable by standard users.
 2. Push via Jamf, Intune, or your configuration tool. Keep the file in source
    control on your side; Geode does not sign or version-check beyond `policyVersion`.
-3. Verify on a pilot machine. Today only `plugins` can be verified in the app;
-   check `Settings` and the startup notice, or run with `GEODE_POLICY_PATH` pointed
-   at a test file first.
+3. Verify on a pilot machine. Today only `plugins` is enforced; check the startup
+   notice, or run with `GEODE_POLICY_PATH` pointed at a test file first. Other areas
+   validate and merge (inspect them with `window.geode.getEffectivePolicy()`) but do
+   not change app behavior yet.
 4. Remember the baseline: no file means no restrictions.
 
 ## Not covered
@@ -502,7 +533,8 @@ Open questions:
 
 ## Next steps
 
-1. Review this proposal and decide which areas to build first. Suggested order:
+1. The core (schema, layering, vault file, write guards) is done. Decide which areas to
+   enforce first. Suggested order:
    plugin installation, then `sync.enabled` and `hubAllowlist`, then `threadExecution` (needs a plugin-host API to hand policy to plugins), then `github` (small, self-contained: the layering already exists), then `daemons`.
 2. Each built area gets its own ADR (next free number) and unit tests in the style of
    `tests/unit/policy.test.ts`, plus an e2e spec using `GEODE_POLICY_PATH`.
