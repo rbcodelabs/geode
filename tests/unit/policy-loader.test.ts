@@ -78,10 +78,14 @@ describe("loadVaultPolicy", () => {
     expect(loadVaultPolicy(vaultRoot, null)?.plugins).toBeUndefined();
   });
   it("is not read at all when the machine policy says vaultPolicy: ignore", () => {
-    writeVault({ policyVersion: 1, plugins: { mode: "blocklist", ids: ["x"] } });
-    const spy = vi.spyOn(fs, "readFileSync");
+    // A directory at the policy path makes any read attempt log an error, so
+    // "no vault error logged" proves the file was never opened.
+    fs.mkdirSync(path.join(vaultRoot, ".geode", "policy.json"), { recursive: true });
+    const errors = vi.spyOn(console, "error");
     expect(loadVaultPolicy(vaultRoot, { policyVersion: 1, vaultPolicy: "ignore" })).toBeNull();
-    expect(spy.mock.calls.some((c) => String(c[0]).endsWith("policy.json"))).toBe(false);
+    expect(errors).not.toHaveBeenCalled();
+    expect(loadVaultPolicy(vaultRoot, null)).toBeNull();
+    expect(errors).toHaveBeenCalled();
   });
 });
 
