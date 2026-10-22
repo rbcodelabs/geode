@@ -309,6 +309,9 @@ this ADR.
 
 ## Open questions / future extensibility
 
+Proposed follow-on control areas (plugin installation, sync, local daemons) are
+sketched in [docs/design/enterprise-controls.md](../design/enterprise-controls.md).
+
 Not designed here, per the locked scope, but the schema (`policyVersion` +
 namespaced top-level keys) is chosen so none of these require a breaking
 change:
