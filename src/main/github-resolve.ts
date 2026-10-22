@@ -408,7 +408,8 @@ export async function resolveItem(
       if (!tagVersion || !satisfies(tagVersion, parsedRange)) {
         throw new Error(`Release ${tagged.tag_name} of ${repoName} is outside version range "${opts.range}"`);
       }
-      release = tagged;
+      // An explicit tag (the update path pins the tag it resolved) gets the same release-age floor as a fresh resolve.
+      release = selectReleaseInRange([tagged], repoName, { range: opts.range, minReleaseAgeDays: opts.minReleaseAgeDays, now: opts.now });
     } else {
       release = selectReleaseInRange(releases, repoName, { range: opts.range, minReleaseAgeDays: opts.minReleaseAgeDays, now: opts.now });
     }
