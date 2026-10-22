@@ -38,7 +38,8 @@ enforcement, since a user can set an environment variable).
 | Plugin execution (allow/block by id) | `plugins` | **Shipped** |
 | Plugin installation | `pluginInstall` | *Proposed* |
 | Sync (in-app providers and CLI) | `sync` | *Proposed* |
-| Local daemons and background processes | `daemons` | *Proposed* |
+| Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* |
+| CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* |
 
 ### 1. Plugin execution — shipped
 
@@ -146,7 +147,86 @@ boundary against a user who can build or run arbitrary Node code**. Orgs needing
 hard boundary should rely on endpoint controls (application allowlisting, network
 egress rules) in addition to this policy.
 
-### 4. Local daemons and background processes — proposed
+### 4. Thread execution targets and daemons — proposed
+
+Two different things are called "daemon" here. The first is the one admins usually
+mean.
+
+#### 4a. Claude Threads "Run on" targets
+
+The Claude Threads plugin (separate repo, `agent-threads`) lets each thread run in
+one of three places. Each needs its own on/off switch:
+
+| Target | What it is | Risk profile |
+|---|---|---|
+| **This machine** | Agent harness runs directly on the host (Geode's Node renderer), with the user's filesystem, keychain and network | Highest ambient access |
+| **Local daemon** | `agent-threads` daemon in an Apple `container` VM on the same Mac, bound to `127.0.0.1`; vault mounted read-write (`.geode`/`.obsidian` read-only), plus opted-in shared folders, secrets, AWS profiles, GitHub connection | Isolated, but credentials and folders are pushed in, and `host_exec` can reach back to the Mac |
+| **Remote daemon** | `agent-threads` daemon on another machine (homelab, VM) reached over `ws://`/`wss://` (e.g. via Tailscale) | Data, secrets and MCP servers leave the machine |
+
+Proposed schema, a sibling key in the same managed policy file:
+
+```json
+{
+  "policyVersion": 1,
+  "threadExecution": {
+    "machine": true,
+    "localDaemon": false,
+    "remoteDaemon": false,
+    "remoteDaemonHosts": ["wss://threads.corp.example:8443"]
+  }
+}
+```
+
+- Each flag is independent. `false` means the target is unavailable; an omitted flag
+  means allowed. All three `false` is legal, and means no thread can run (useful for
+  an organisation that wants Claude Threads installed but inert). The plugin should
+  say so explicitly rather than failing at send time.
+- `remoteDaemonHosts` (optional) pins which remote endpoints may be registered.
+  This is a better control than the blunt on/off for orgs that run their own daemon.
+  Matching is exact scheme+host+port, no wildcards.
+- **Disabling a target must be enforced at launch, not only hidden in the picker.**
+  Starting a thread, resuming one, and a scheduled item that targets a disabled
+  place must all refuse with a message naming the policy. Threads already running
+  in a daemon are not killed mid-run; they are refused on next resume.
+- Disabling `localDaemon` should also stop it being created or started from
+  Settings; an existing container is left in place (non-destructive), just not
+  started or attached.
+- Disabling `remoteDaemon` should also block the data paths that ride on it:
+  registering a daemon, pushing secrets (`Settings → Remote → Edit`), and running MCP
+  servers on a daemon.
+- `machine: false` with `localDaemon: true` (sandboxed execution only) must be a
+  supported combination. It is likely the most common enterprise setup, so it needs
+  an explicit test.
+
+**Where enforcement lives.** The target decision is made in the plugin, not in
+Geode. Geode can only supply the policy, so this needs two pieces:
+
+1. Geode exposes the already-validated policy to plugins through the plugin host API
+   (today only `PluginManager` consumes `getPluginPolicy`). `threadExecution` is
+   validated in `src/renderer/policy.ts` like every other area, then handed over
+   read-only. A plugin cannot write it.
+2. The `agent-threads` plugin reads it and enforces at its launch path. A plugin that
+   ignores the policy is exactly as trustworthy as the plugin set, so pair this with
+   the `plugins` allowlist (pin the plugin id) and, ideally, plugin version pinning.
+
+Honest limits: because plugins run with full Node access, a user who can install
+arbitrary plugin code can bypass a plugin-level check. This control is meaningful
+together with `plugins` allowlist mode, not on its own. The local-daemon container
+and any remote daemon are separate processes with their own listeners, so the
+daemon side should also be able to refuse (see 4b) when started by a different
+user or on a different host than policy allows.
+
+Open questions for review:
+
+- Should "This machine" be gate-able per harness (Claude, Codex, OpenCode) or only
+  as a whole? Proposed: whole, for v1.
+- Should `host_exec` (daemon running one command on the Mac) be its own switch? It
+  is the main path from the isolated daemon back to the host, so probably yes, as
+  `threadExecution.hostExec`.
+- Mobile remote access (WebSocket relay) is a fourth egress path, not one of the
+  three targets; list it here if admins want it governed too.
+
+#### 4b. CLI background processes
 
 Geode itself ships no resident daemon. The long-running pieces are things a user
 opts into through the CLI:
@@ -217,13 +297,13 @@ determined local user.
 - Live reload of policy mid-session.
 - Cryptographic signing of the policy file.
 - Auto-update pinning and forced settings (reserved keys in ADR 0002; no design yet).
-- Anything about the Claude Threads plugin's own network access; that is a plugin
-  concern, controlled today via the `plugins` allowlist.
+- Network egress of the Claude Threads plugin beyond execution targets (model API
+  calls, MCP servers); use endpoint controls.
 
 ## Next steps
 
 1. Review this proposal and decide which areas to build first. Suggested order:
-   plugin installation, then `sync.enabled` and `hubAllowlist`, then `daemons`.
+   plugin installation, then `sync.enabled` and `hubAllowlist`, then `threadExecution` (needs a plugin-host API to hand policy to plugins), then `daemons`.
 2. Each built area gets its own ADR (next free number) and unit tests in the style of
    `tests/unit/policy.test.ts`, plus an e2e spec using `GEODE_POLICY_PATH`.
 3. Record the roadmap item in Compass (`rbcodelabs/geode`); this repo is not the
