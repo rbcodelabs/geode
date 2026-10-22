@@ -40,6 +40,7 @@ enforcement, since a user can set an environment variable).
 | Sync (in-app providers and CLI) | `sync` | *Proposed* |
 | Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* |
 | CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* |
+| GitHub connection settings and sign-in | `github` | *Proposed* |
 
 ### 1. Plugin execution — shipped
 
@@ -304,6 +305,88 @@ Proposed schema:
 The same guardrail caveat as sync applies: this governs the shipped CLI, not a
 determined local user.
 
+### 5. GitHub connection — proposed
+
+Geode's GitHub connection (Settings → GitHub) signs a user in with the Geode GitHub
+App via the device flow and hands threads short-lived, repository-scoped tokens. The
+sign-in state and tokens are in the OS keychain. The settings surface today
+(`src/main/github-auth/config.ts`, `src/renderer/settings/github-tab.ts`):
+
+| Setting | Where it can be set today |
+|---|---|
+| App `clientId`, `appSlug` | env (`GEODE_GITHUB_CLIENT_ID`, `GEODE_GITHUB_APP_SLUG`), then the open vault's `.geode/app.json`, then `geode.json` `github`, then the built-in default |
+| Allowed owners / repos (what agents may reach) | env (replaces the `geode.json` list), `geode.json`, and the vault's `.geode/app.json`; the lists are ANDed, so a vault can narrow but not widen |
+| Connect, reconnect, disconnect | Settings form; IPC `github-auth-start`, `github-auth-disconnect` |
+| Save or reset the settings form | IPC `github-auth-set-settings` (writes `geode.json`) |
+
+Everything above is user-writable, so none of it binds an administrator's intent.
+Two gaps matter for an enterprise:
+
+1. **A user can point Geode at a different GitHub App** (own `clientId`/`appSlug`) by
+   env var, `geode.json` or a vault file, and can **widen or clear the global
+   allowlist** by editing `geode.json`. A vault can also set `clientId`/`appSlug`,
+   and the vault layer outranks `geode.json`. Review whether an untrusted vault
+   should be able to redirect the sign-in app; managed policy closes this for
+   managed machines either way.
+2. Nothing stops a user connecting a personal GitHub account on a managed machine.
+
+Proposed schema:
+
+```json
+{
+  "policyVersion": 1,
+  "github": {
+    "settingsLocked": true,
+    "clientId": "Iv1.corpapp",
+    "appSlug": "corp-geode",
+    "allowedOwners": ["your-org"],
+    "allowedRepos": [],
+    "connect": true,
+    "disconnect": false,
+    "allowedLogins": ["*@your-org-emu"],
+    "deliverToRemoteDaemon": false
+  }
+}
+```
+
+- `settingsLocked: true` makes the GitHub settings form read-only ("managed by your
+  administrator") and makes the main process refuse `github-auth-set-settings`.
+  This is the "limit the ability to change the connection settings" switch. It locks
+  everything the form edits: client id, app slug, and the allowlists.
+- `clientId` and `appSlug`, when present, are **pinned**: they beat env vars, the
+  vault's `.geode/app.json` and `geode.json`. Whether or not `settingsLocked` is set,
+  a pinned value cannot be overridden by any user-writable layer.
+- `allowedOwners` and `allowedRepos` become one more allow policy in the existing
+  intersection. Since `resolveGithubAppSettings` already requires every policy to
+  pass, managed policy slots in as another entry that no other layer can remove.
+  An all-invalid list fails closed, matching how the existing parser treats a bad
+  allowlist. (Note the contrast with the rest of managed policy, which fails open on
+  bad input. This is deliberate: a broken allowlist restricts, never opens up.)
+- `connect: false` disables sign-in entirely: `github-auth-start` is refused and the
+  Connect button is shown as managed. Use when GitHub access is provided another way.
+- `disconnect: false` prevents the user removing an admin-provisioned connection.
+  This is the least certain field: the connection is a per-user OAuth token, not an
+  admin-provisioned one, so there may be little to protect. Included for review.
+- `allowedLogins` (optional) restricts which GitHub accounts may be connected, checked
+  against the login returned after sign-in (`fetchViewerLogin`). Mismatch means the
+  connection is rejected and the token discarded. Intended for orgs using Enterprise
+  Managed Users, whose logins carry a known suffix. Matching is exact or a single
+  leading `*`; this is the one pattern in policy besides install sources.
+- `deliverToRemoteDaemon: false` stops the plugin passing GitHub tokens to remote
+  daemons even when the user ticks "Use Geode GitHub connection". It ties into
+  `threadExecution`: a token is credentials leaving the machine. A parallel field for
+  the local container could follow; proposed only for remote in v1.
+
+Existing connections: when policy newly forbids the connected account or app, Geode
+does not silently delete anything. It marks the connection as blocked by policy,
+stops issuing tokens, and shows a reconnect-or-contact-admin message. Relaxing
+policy restores it.
+
+Limits, as elsewhere: policy governs Geode's own code paths. A user with a personal
+`gh` login or token in their environment can still reach GitHub from a shell or from
+a thread running on "This machine". Use the `threadExecution` controls and endpoint
+egress rules for that; `github` policy only governs the connection Geode brokers.
+
 ## Cross-cutting behavior
 
 | Topic | Decision |
@@ -313,7 +396,7 @@ determined local user.
 | Visibility | A control that is policy-disabled should say so in the UI ("managed by your administrator"), never silently vanish. |
 | Logging | Main process logs which policy area refused an action. No telemetry leaves the machine. |
 | Unknown keys | Ignored, so an older Geode reading a newer policy file stays safe. |
-| Invalid area | Only that area is ignored (fail open); other areas still apply, matching how `plugins` is handled today. |
+| Invalid area | Only that area is ignored (fail open); other areas still apply, matching how `plugins` is handled today. Exception: an invalid allowlist (`github.allowedOwners/Repos`) fails closed, as the existing GitHub config parser already does. |
 | Validation | Extend `src/renderer/policy.ts` (pure, shared by main and renderer) so validation cannot drift between processes. |
 
 ## Deploying
@@ -339,7 +422,7 @@ determined local user.
 ## Next steps
 
 1. Review this proposal and decide which areas to build first. Suggested order:
-   plugin installation, then `sync.enabled` and `hubAllowlist`, then `threadExecution` (needs a plugin-host API to hand policy to plugins), then `daemons`.
+   plugin installation, then `sync.enabled` and `hubAllowlist`, then `threadExecution` (needs a plugin-host API to hand policy to plugins), then `github` (small, self-contained: the layering already exists), then `daemons`.
 2. Each built area gets its own ADR (next free number) and unit tests in the style of
    `tests/unit/policy.test.ts`, plus an e2e spec using `GEODE_POLICY_PATH`.
 3. Record the roadmap item in Compass (`rbcodelabs/geode`); this repo is not the
