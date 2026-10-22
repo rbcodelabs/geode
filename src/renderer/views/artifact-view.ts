@@ -23,6 +23,13 @@ const VIEWPORTS: Record<Exclude<ViewportPreset, "custom">, Viewport> = {
   mobile: { preset: "mobile", width: 390, height: 844 },
 };
 
+const VIEWPORT_CONTROLS: Record<Exclude<ViewportPreset, "custom">, { icon: string; label: string }> = {
+  fill: { icon: "maximize-2", label: "Fill pane" },
+  desktop: { icon: "monitor", label: "Desktop" },
+  tablet: { icon: "tablet", label: "Tablet" },
+  mobile: { icon: "smartphone", label: "Mobile" },
+};
+
 export class ArtifactView implements View, ReloadableView {
   readonly viewType = "geode-artifact";
   readonly reloadLabel = "Reload artifact";
@@ -50,17 +57,26 @@ export class ArtifactView implements View, ReloadableView {
     toolbar.append(this.iconButton("rotate-cw", "Reload artifact", () => {
       void this.app.actions.execute("web.reload", { reloadable: this, leaf: this.leaf });
     }));
+    // One segmented control instead of four loose buttons: icon-only, with the
+    // name and size in the tooltip and the active choice exposed via aria-pressed.
+    const viewports = document.createElement("div");
+    viewports.className = "artifact-view-viewports";
+    viewports.setAttribute("role", "group");
+    viewports.setAttribute("aria-label", "Viewport size");
     for (const preset of ["fill", "desktop", "tablet", "mobile"] as const) {
+      const meta = VIEWPORT_CONTROLS[preset];
       const button = document.createElement("button");
-      button.className = "artifact-view-viewport-btn";
+      button.className = "clickable-icon artifact-view-viewport-btn";
       button.type = "button";
       button.dataset.viewport = preset;
-      button.textContent = preset[0].toUpperCase();
-      button.title = `${preset}: ${VIEWPORTS[preset].width} × ${VIEWPORTS[preset].height}`;
-      button.setAttribute("aria-label", `${preset} viewport`);
+      button.title = preset === "fill" ? meta.label : `${meta.label} (${VIEWPORTS[preset].width} × ${VIEWPORTS[preset].height})`;
+      button.setAttribute("aria-label", `${meta.label} viewport`);
+      button.setAttribute("aria-pressed", "false");
+      setIcon(button, meta.icon);
       button.addEventListener("click", () => this.applyViewport(VIEWPORTS[preset]));
-      toolbar.append(button);
+      viewports.append(button);
     }
+    toolbar.append(viewports);
     toolbar.append(this.iconButton("camera", "Capture artifact screenshot", () => { void this.capture(); }));
     this.diagnosticsButton.className = "artifact-view-diagnostics-btn";
     this.diagnosticsButton.type = "button";
@@ -136,7 +152,9 @@ export class ArtifactView implements View, ReloadableView {
     this.containerEl.classList.toggle("is-fill", fill);
     this.statusEl.textContent = fill ? "Fill" : `${viewport.width} × ${viewport.height}`;
     for (const button of this.containerEl.querySelectorAll<HTMLElement>("[data-viewport]")) {
-      button.classList.toggle("is-active", button.dataset.viewport === viewport.preset);
+      const active = button.dataset.viewport === viewport.preset;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
     }
     this.persistState();
   }
@@ -159,7 +177,9 @@ export class ArtifactView implements View, ReloadableView {
         return;
       }
       this.registration = registration;
-      this.viewport ??= registration.viewport;
+      // Fill is the default so an artifact uses the whole pane. A viewport the user
+      // picked (persisted in the view state) still wins; the manifest viewport is only a hint.
+      this.viewport ??= VIEWPORTS.fill;
       this.leaf.updateHeader();
       const frame = document.createElement("webview") as unknown as ArtifactWebview;
       frame.className = "artifact-view-frame";

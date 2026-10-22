@@ -5641,7 +5641,6 @@ body.is-mobile .empty-state-action-hint {
   flex: 0 0 auto;
 }
 
-.artifact-view-viewport-btn,
 .artifact-view-diagnostics-btn {
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
@@ -5650,11 +5649,42 @@ body.is-mobile .empty-state-action-hint {
   min-height: 28px;
 }
 
-.artifact-view-viewport-btn.is-active,
 .artifact-view-diagnostics-btn.has-errors {
   color: var(--text-accent);
   border-color: var(--interactive-accent);
 }
+
+/* Segmented viewport control: one rounded group of icon buttons. */
+.artifact-view-viewports {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+.artifact-view-viewport-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+.artifact-view-viewport-btn svg { width: 16px; height: 16px; }
+.artifact-view-viewport-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.artifact-view-viewport-btn.is-active {
+  color: var(--text-normal);
+  background: var(--background-primary);
+  box-shadow: 0 0 0 1px var(--background-modifier-border);
+}
+.artifact-view-viewport-btn:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
 
 .artifact-view-status {
   overflow: hidden;
@@ -8077,3 +8107,5 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
   white-space: nowrap;
   cursor: help;
 }
+.nav-folder-title.is-artifact .nav-artifact-icon { display: inline-flex; align-items: center; margin-right: 4px; color: inherit; opacity: 0.8; }
+.nav-folder-title.is-artifact .nav-artifact-icon svg { width: 14px; height: 14px; }
