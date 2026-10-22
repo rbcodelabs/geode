@@ -11,7 +11,8 @@ import { exportVaultPack, sweepStaleStaging, VAULT_PACK_EXTENSION } from "./vaul
 import { isAbsoluteLocalPath, parseVaultPackLaunch, VaultPackService } from "./vault-pack-service";
 import { importFromObsidianVault } from "./obsidian-import";
 import type { ResolveOpts } from "./github-resolve";
-import { validatePolicy, type ManagedPolicy } from "../renderer/policy";
+import { loadEffectivePolicy, loadManagedPolicy, policyFilePath } from "./policy-loader";
+import { assertNotPolicyFile } from "./policy-guard";
 import type { DataWriteOptions } from "../renderer/vault";
 import { withPathLock, withVaultMutation } from "./path-lock";
 import { SenderRequests } from "./network";
@@ -477,52 +478,6 @@ function loadConfig(): GlobalConfig {
 
 function saveConfig(cfg: GlobalConfig) {
   fs.writeFileSync(appConfigPath(), JSON.stringify(cfg, null, 2));
-}
-
-/**
- * Fixed, OS-specific, machine-level path for the enterprise-managed plugin
- * policy file — deliberately NOT the same directory as `appConfigPath()`
- * above. `appConfigPath()` lives under `app.getPath("userData")`, which on
- * macOS resolves to `~/Library/Application Support/Geode/` (inside the
- * user's home, user-owned). The managed-policy path below is
- * `/Library/Application Support/Geode/` at the filesystem root (no `~`) —
- * owned by an admin/root account under default OS permissions. That's the
- * entire tamper-resistance story for v1; see docs/adr/0002.
- *
- * `GEODE_POLICY_PATH` overrides the OS default so tests (and e2e specs) can
- * point at a temp file instead of requiring root writes to a real system
- * path — never touch the real system paths from tests/CI.
- */
-function policyFilePath(): string {
-  if (process.env.GEODE_POLICY_PATH) return process.env.GEODE_POLICY_PATH;
-  switch (process.platform) {
-    case "darwin":
-      return "/Library/Application Support/Geode/managed-policy.json";
-    case "win32":
-      return path.join(process.env.ProgramData ?? "C:\\ProgramData", "Geode", "managed-policy.json");
-    default:
-      return "/etc/geode/managed-policy.json";
-  }
-}
-
-/**
- * Read + validate the managed policy file fresh on every call — no
- * caching, no file watcher (see docs/adr/0002 "Live-apply vs. read-once").
- * Fails open (returns `null`) on a missing file, unreadable file, or
- * invalid JSON; `validatePolicy` handles fail-open for structurally
- * invalid-but-parseable content (bad `policyVersion`/`mode`/etc).
- */
-function loadManagedPolicy(): ManagedPolicy | null {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(policyFilePath(), "utf8"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error("Managed policy: failed to read/parse policy file; ignoring (fail open).", err);
-    }
-    return null;
-  }
-  return validatePolicy(raw);
 }
 
 const vaultPacks = new VaultPackService({
@@ -1089,6 +1044,14 @@ function registerIpc() {
   // already-running process picks up a just-changed policy immediately.
   ipcMain.handle("get-plugin-policy", () => loadManagedPolicy());
 
+  // Machine + vault policy merged for this window's vault (docs/adr/0051).
+  // Same read-fresh model; a window with no vault open gets the machine layer
+  // alone.
+  ipcMain.handle("get-effective-policy", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    return loadEffectivePolicy((win && sessions.get(win.id)?.root) ?? null);
+  });
+
   const httpRequests = new SenderRequests();
   const httpOwners = new Set<number>();
   ipcMain.handle("host-http-request", async (e, id: string, request: HostHttpRequest) => {
@@ -1270,6 +1233,7 @@ function registerIpc() {
       throw error;
     });
     await withVaultMutation(session.root, [pluginRoot], async () => {
+      await assertNotPolicyFile(session.root, pluginRoot, "remove");
       const manifest = await readOptional("manifest.json");
       if (manifest !== expectedManifest) {
         throw new Error("PLUGIN_FILES_CHANGED");
@@ -1309,13 +1273,21 @@ function registerIpc() {
   ipcMain.handle("vault-write", async (e, rel: string, data: string, options?: DataWriteOptions) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    return withVaultMutation(sessions.get(win.id)!.root, [abs], () => writeVaultFile(abs, data, options));
+    const root = sessions.get(win.id)!.root;
+    return withVaultMutation(root, [abs], async () => {
+      await assertNotPolicyFile(root, abs, "write");
+      return writeVaultFile(abs, data, options);
+    });
   });
 
   ipcMain.handle("vault-write-binary", async (e, rel: string, data: ArrayBuffer, options?: DataWriteOptions) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    return withVaultMutation(sessions.get(win.id)!.root, [abs], () => writeVaultBinary(abs, data, options));
+    const root = sessions.get(win.id)!.root;
+    return withVaultMutation(root, [abs], async () => {
+      await assertNotPolicyFile(root, abs, "write");
+      return writeVaultBinary(abs, data, options);
+    });
   });
 
   const deviceStore = new PrivateKeyStore(path.join(app.getPath("userData"), "device-state"), "json");
@@ -1369,7 +1341,12 @@ function registerIpc() {
 
   ipcMain.handle("vault-mkdir", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
-    const target = resolveVaultPath(win, rel); await withVaultMutation(sessions.get(win.id)!.root, [target], () => fsp.mkdir(target, { recursive: true }));
+    const root = sessions.get(win.id)!.root;
+    const target = resolveVaultPath(win, rel);
+    await withVaultMutation(root, [target], async () => {
+      await assertNotPolicyFile(root, target, "mkdir");
+      await fsp.mkdir(target, { recursive: true });
+    });
   });
 
   // Obsidian's `adapter.list(normalizedPath)`: the direct children of a
@@ -1394,7 +1371,9 @@ function registerIpc() {
   ipcMain.handle("vault-delete", async (e, rel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const abs = resolveVaultPath(win, rel);
-    return withVaultMutation(sessions.get(win.id)!.root, [abs], async () => {
+    const root = sessions.get(win.id)!.root;
+    return withVaultMutation(root, [abs], async () => {
+      await assertNotPolicyFile(root, abs, "remove");
       // Move to OS trash rather than permanent deletion (Obsidian's default).
       await shell.trashItem(abs);
     });
@@ -1407,7 +1386,7 @@ function registerIpc() {
   // `delete`/`delete-folder` events (and the metadata-cache invalidation they
   // drive) arrive exactly as they do for any other removal; nothing extra to
   // fire here.
-  registerVaultRemoveIpc(ipcMain, e => requireVaultRoot(BrowserWindow.fromWebContents(e.sender)!));
+  registerVaultRemoveIpc(ipcMain, e => requireVaultRoot(BrowserWindow.fromWebContents(e.sender)!), assertNotPolicyFile);
 
   ipcMain.handle("vault-rename", async (e, rel: string, newRel: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
@@ -1416,6 +1395,8 @@ function registerIpc() {
     const to = resolveVaultPath(win, newRel);
     return withVaultMutation(session.root, [from, to], async () => {
       if (sessions.get(win.id) !== session) throw new Error("Vault changed before rename");
+      await assertNotPolicyFile(session.root, from, "rename-from");
+      await assertNotPolicyFile(session.root, to, "rename-to");
       const folder = (await fsp.stat(from)).isDirectory();
       await fsp.mkdir(path.dirname(to), { recursive: true });
       await fsp.rename(from, to);
@@ -1602,6 +1583,9 @@ function registerIpc() {
     if (!session) return;
     const dir = path.join(session.root, ".geode");
     await withVaultMutation(session.root, [dir], async () => {
+      // `name` is caller-controlled: `policy`, `../.geode/policy` and
+      // `Policy.` all land on the host-owned policy file.
+      await assertNotPolicyFile(session.root, path.join(dir, `${name}.json`), "write");
       await fsp.mkdir(dir, { recursive: true });
       await writeJsonAtomic(path.join(dir, `${name}.json`), data);
     });
