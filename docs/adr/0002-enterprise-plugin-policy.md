@@ -309,6 +309,7 @@ this ADR.
 
 ## Open questions / future extensibility
 
+A narrowing-only vault policy file (revisiting the rejected "policy embedded in the vault" alternative) is also proposed there, section 6.
 Proposed follow-on control areas (plugin installation, sync, local daemons) are
 sketched in [docs/design/enterprise-controls.md](../design/enterprise-controls.md).
 

@@ -10,7 +10,7 @@ second mechanism.
 
 ## Principles (inherited from ADR 0002)
 
-- **One machine-level JSON file**, root/admin-owned, deployed by MDM (Jamf, Intune)
+- **A machine-level JSON file** (and, proposed, a narrowing-only vault file, section 6), root/admin-owned, deployed by MDM (Jamf, Intune)
   or imaging. No console, no phone-home, no per-org fork, no license gating.
 - **Fail open.** A missing, unreadable, or malformed file means no restrictions.
   Most installs have no policy file; that must never change their behavior.
@@ -41,6 +41,7 @@ enforcement, since a user can set an environment variable).
 | Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* |
 | CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* |
 | GitHub connection settings and sign-in | `github` | *Proposed* |
+| Vault-level policy file (narrowing only) | `<vault>/.geode/policy.json` | *Proposed* |
 
 ### 1. Plugin execution — shipped
 
@@ -386,6 +387,86 @@ Limits, as elsewhere: policy governs Geode's own code paths. A user with a perso
 `gh` login or token in their environment can still reach GitHub from a shell or from
 a thread running on "This machine". Use the `threadExecution` controls and endpoint
 egress rules for that; `github` policy only governs the connection Geode brokers.
+
+### 6. Vault-level policy — proposed
+
+So far every control comes from the machine-level file. This adds a second source: a
+policy file inside the vault, read alongside the machine file. It suits teams that
+share a vault (a repo, a synced folder, a distributed template) and want the vault
+itself to carry its rules, including on machines with no MDM.
+
+This reverses one rejected alternative in ADR 0002, which dismissed a vault-embedded
+policy because it sits in the same trust boundary as the user. That objection still
+holds for *enforcement against the user*, so the design below keeps vault policy
+weaker than machine policy on purpose.
+
+**Location.** `<vault>/.geode/policy.json`, next to the existing per-vault files
+(`plugins.json`, `app.json`, `community.json`). Same schema and `policyVersion` as the
+machine file, restricted to the areas below. Read when the vault opens, on the same
+read-fresh, no-watcher model.
+
+**The one rule: vault policy can only narrow.** The effective rule for any action is
+the machine policy AND the vault policy. Neither can re-allow what the other denies.
+This is the model the GitHub allowlist already uses (a vault's list is ANDed on top
+of the global one), applied to every area:
+
+| Area | How layers combine |
+|---|---|
+| `plugins` | Each layer is evaluated on its own; a plugin is blocked if **any** layer blocks it. So a machine blocklist plus a vault allowlist yields "in the vault's list and not in the machine's blocklist". |
+| `pluginInstall`, `sync.enabled`, `threadExecution` flags, `hostExec`, `mobileRemoteAccess`, `github.connect` | Boolean AND: `false` in either layer wins. |
+| `pluginInstall.mode` | The stricter of the two (`disabled` > `catalog-only` > `allowed`). |
+| Lists: `harnesses`, `sync.providers`, `hubAllowlist`, `remoteDaemonHosts`, `pluginInstall.sources`, `github.allowedOwners/Repos/Logins` | Intersection; an absent list means no restriction from that layer. |
+| Pinned values (`github.clientId`, `github.appSlug`) and `settingsLocked` | **Machine file only.** A vault file cannot pin or lock these; a vault could otherwise lock a user out of settings in someone else's vault. These keys in a vault file are ignored with a logged warning. |
+| `daemons` | CLI behavior is per-root, so a vault file may narrow it for that root. |
+
+Anything a vault file tries that would widen (a longer list, `true` where the machine
+says `false`) is simply ineffective, because the machine layer is still in the AND.
+
+**Why this is safe to read from an untrusted vault.** Opening a vault someone else
+authored can then only remove capabilities, never add them, so there is no
+privilege-escalation path through the file. The cost is a nuisance one: a hostile or
+careless vault can disable features inside itself. Mitigations:
+
+- Geode shows a visible notice on open when a vault policy is active ("This vault
+  restricts: plugins, sync"), with the reason string if the file supplies one
+  (`"note": "..."`, display only).
+- Nothing outside that vault is affected, and removing or editing the file lifts it.
+- The user can always open the file, since it is plain JSON in the vault.
+
+**What it is not.** Without a machine file, vault policy is a team convention, not
+enforcement: the user who owns the vault can edit or delete it. It enforces against
+*other people's* vaults and against plugins and agents running inside the vault, which
+matters because **agents and plugins can write to `.geode/` too**. A narrowing file
+that a plugin cannot loosen is worth having only if plugins cannot rewrite it, so
+decide whether `.geode/policy.json` is on the protected-path list that plugin file
+APIs and agent tools refuse to write. Proposed: yes, same as other config Geode
+treats as host-owned. This needs checking against the existing write guards
+(`vault-write` and `config-write`) before committing to it.
+
+**Admin control over this layer.** The machine file can govern whether vault policy is
+read:
+
+```json
+{ "policyVersion": 1, "vaultPolicy": "narrow" | "ignore" }
+```
+
+Default is `narrow`. `ignore` is for admins who want exactly their own policy and no
+vault-supplied behavior. There is deliberately no `widen` option.
+
+**Other vault-side files.** Only `.geode/policy.json` is read. Geode does not read
+policy from `.obsidian/`, from plugin folders, or from `app.json`; and `.geode/app.json`
+keeps its existing role for GitHub App settings, now subject to the machine pin.
+
+Open questions:
+
+- Does `.geode/` replicate through Geode's own sync or iCloud? If so a vault policy
+  change would propagate to every device of every member, which is useful for teams but
+  needs to be a stated behavior. Not checked.
+- Should a vault be able to *require* things (for example `requirePluginsAllowlist`)?
+  Not proposed: requirement is not narrowing, and it would let a vault block opening
+  on a machine that lacks something.
+- Show the effective, merged policy and where each rule came from in Settings. Strongly
+  recommended for supportability, mirroring the existing GitHub "overridden by" notes.
 
 ## Cross-cutting behavior
 
