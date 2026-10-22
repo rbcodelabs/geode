@@ -288,7 +288,8 @@ const api = {
     getSettings: (): Promise<GithubSettingsView> => ipcRenderer.invoke("github-auth-get-settings"),
     /** Validates and writes `github` in geode.json; `{ reset: true }` removes it (use the default App). */
     setSettings: (input: GithubAppSettingsInput | { reset: true }): Promise<
-      Exclude<GithubAppSettingsUpdate, { ok: true }> | { ok: true; settings: GithubSettingsView }
+      | (Exclude<GithubAppSettingsUpdate, { ok: true }> & { blockedByPolicy?: true; message?: string })
+      | { ok: true; settings: GithubSettingsView }
     > => ipcRenderer.invoke("github-auth-set-settings", input),
     appInfo: (opts?: { fresh?: boolean }): Promise<GithubIpcResult<GithubAppReport>> => ipcRenderer.invoke("github-auth-app-info", opts),
     start: (opts?: { confirmExtraPermissions?: boolean }): Promise<GithubIpcResult<{ userCode: string; verificationUri: string }>> => ipcRenderer.invoke("github-auth-start", opts),

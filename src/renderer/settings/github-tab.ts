@@ -124,7 +124,11 @@ export function connectedView(
 
 type AppSettingsView = Awaited<ReturnType<GithubAuthApi["getSettings"]>>;
 
-const SOURCE_LABEL: Record<"env" | "vault" | "global" | "default", string> = {
+/** Shown wherever policy disables a control, so it is explained rather than missing. */
+export const MANAGED_NOTE = "Managed by your administrator.";
+
+const SOURCE_LABEL: Record<"policy" | "env" | "vault" | "global" | "default", string> = {
+  policy: "administrator policy",
   env: "environment variable",
   vault: "open vault's .geode/app.json",
   global: "geode.json",
@@ -139,9 +143,12 @@ export function appSettingsNotes(view: AppSettingsView): string[] {
   const fields: ["clientId" | "appSlug", string][] = [["appSlug", "App slug"], ["clientId", "Client ID"]];
   for (const [key, label] of fields) {
     const by = view.overriddenBy[key];
-    if (by) notes.push(`${label} is set by the ${SOURCE_LABEL[by]}, which overrides the value saved here. Remove it there for this setting to take effect.`);
+    if (by === "policy") notes.push(`${label} is pinned by your administrator and overrides the value saved here. ${MANAGED_NOTE}`);
+    else if (by) notes.push(`${label} is set by the ${SOURCE_LABEL[by]}, which overrides the value saved here. Remove it there for this setting to take effect.`);
   }
   if (view.allowSources.env) notes.push("Repository allowlist is set by environment variables and replaces the one saved here.");
+  if (view.allowSources.policy) notes.push("Your administrator also restricts the repositories and owners agents may reach; this applies on top of the allowlist saved here and cannot be widened.");
+  if (view.managed?.settingsLocked) notes.push(`These settings are locked. ${MANAGED_NOTE}`);
   return notes;
 }
 
@@ -274,6 +281,35 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
       return;
     }
 
+    const managed = status.managed;
+    applyLock(managed?.settingsLocked === true);
+
+    if (status.state === "blocked_by_policy") {
+      // The connection is kept, but unusable until policy is relaxed or the user signs in with an allowed account.
+      header("bad", "Blocked by administrator policy", status.login ? `Signed in as ${status.login}` : null);
+      card.append(facts(["Account", status.login ?? "Unknown"], appRow));
+      card.append(messageBlock([{ severity: "error", text: status.message }]));
+      const actions = document.createElement("div");
+      actions.className = "sync-card-actions github-actions";
+      if (managed?.connect === false) {
+        card.append(text("p", `Signing in is disabled. ${MANAGED_NOTE}`, "setting-item-description github-managed-note"));
+      } else {
+        actions.append(
+          button("Reconnect GitHub", () => {
+            void api.start({ confirmExtraPermissions: extraPermissions }).then((res) => {
+              startError = res.ok ? null : { message: res.message, url: res.url };
+              lastKey = "";
+              void render();
+            });
+          }, "mod-cta"),
+        );
+      }
+      if (startError) card.append(messageBlock([{ severity: "error", text: startError.message }]));
+      if (actions.childElementCount) card.append(actions);
+      card.append(text("p", "Your connection has not been deleted. It works again if the policy is relaxed.", "setting-item-description"));
+      return;
+    }
+
     if (status.state === "connected") {
       const view = connectedView(status, report, reportError, access, now);
       header(view.tone, view.badge, view.tokenLine);
@@ -321,8 +357,9 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
 
       const footer = document.createElement("div");
       footer.className = "github-danger-zone";
+      const disconnectManaged = managed?.disconnect === false;
       footer.append(
-        text("span", "Removes Geode's local GitHub tokens.", "setting-item-description"),
+        text("span", disconnectManaged ? `Disconnecting is disabled. ${MANAGED_NOTE}` : "Removes Geode's local GitHub tokens.", `setting-item-description${disconnectManaged ? " github-managed-note" : ""}`),
         button(
           "Disconnect",
           () => {
@@ -341,6 +378,8 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
           "mod-warning",
         ),
       );
+      const disconnectButton = footer.querySelector("button");
+      if (disconnectManaged && disconnectButton) disconnectButton.disabled = true;
       card.append(footer);
       return;
     }
@@ -365,7 +404,9 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
     const actions = document.createElement("div");
     actions.className = "sync-card-actions github-actions";
     const keychainMissing = status.state === "disconnected" && !status.encryptionAvailable;
-    if (!keychainMissing) {
+    if (managed?.connect === false) {
+      card.append(text("p", `Signing in to GitHub is disabled. ${MANAGED_NOTE}`, "setting-item-description github-managed-note"));
+    } else if (!keychainMissing) {
       actions.append(
         button(
           extraPermissions ? "Connect anyway" : status.state === "reauth_required" ? "Reconnect GitHub" : "Connect GitHub",
@@ -448,7 +489,18 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
     notesEl.replaceChildren(text("p", effective, "setting-item-description"));
     if (overrides.length) notesEl.append(messageBlock(overrides.map((t) => ({ severity: "warn" as const, text: t, kind: "app-warning" as const }))));
   };
+  // Locked by managed policy: shown read-only with a note rather than hidden. The main process
+  // refuses `github-auth-set-settings` regardless; this only keeps the form honest.
+  const lockNote = text("p", `These settings are locked. ${MANAGED_NOTE}`, "setting-item-description github-managed-note");
+  lockNote.hidden = true;
+  let formLocked = false;
+  function applyLock(locked: boolean) {
+    formLocked = locked;
+    lockNote.hidden = !locked;
+    for (const el of [slugInput, clientInput, ownersInput, reposInput, saveButton, resetButton]) el.disabled = locked;
+  }
   const fillForm = (view: AppSettingsView) => {
+    applyLock(view.managed?.settingsLocked === true);
     fillNotes(view);
     slugInput.value = view.global.appSlug ?? "";
     slugInput.placeholder = `Default: ${view.defaults.appSlug}`;
@@ -459,7 +511,7 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
   };
   let formBusy = false;
   const saveApp = async (reset = false) => {
-    if (formBusy) return;
+    if (formBusy || formLocked) return;
     formBusy = true;
     saveButton.disabled = resetButton.disabled = true;
     try {
@@ -474,6 +526,11 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
             },
       );
       if (disposed) return;
+      if (!res.ok && res.blockedByPolicy) {
+        applyLock(true);
+        showFormMessages([{ severity: "error", text: res.message ?? `Not saved. ${MANAGED_NOTE}` }]);
+        return;
+      }
       if (!res.ok) {
         showFieldErrors(res.errors);
         showFormMessages([{ severity: "error", text: "Not saved. Fix the highlighted fields." }]);
@@ -497,7 +554,7 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
       void render();
     } finally {
       formBusy = false;
-      saveButton.disabled = resetButton.disabled = false;
+      saveButton.disabled = resetButton.disabled = formLocked;
     }
   };
   void api.getSettings().then((view) => {
@@ -511,6 +568,7 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
       field("allowedOwners", "Allowed owners", ownersInput),
       field("allowedRepos", "Allowed repositories", reposInput),
       notesEl,
+      lockNote,
       formMessages,
       formActions,
     );

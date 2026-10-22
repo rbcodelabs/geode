@@ -124,6 +124,7 @@ describe("device flow", () => {
       login: "octocat",
       health: { accessTokenExpiresAt: 1_010_000 + 28800 * 1000, lastRefreshAt: null, lastError: null },
       app: { slug: "geode-app", clientId: "client-x" },
+      managed: { settingsLocked: false, connect: true, disconnect: true, loginRestricted: false },
     });
     expect(h.sleeps).toEqual([5000, 5000]);
     expect(await h.service.getAccessToken()).toBe("ghu_access1");
