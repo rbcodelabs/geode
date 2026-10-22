@@ -169,34 +169,74 @@ Proposed schema, a sibling key in the same managed policy file:
 {
   "policyVersion": 1,
   "threadExecution": {
-    "machine": true,
-    "localDaemon": false,
-    "remoteDaemon": false,
-    "remoteDaemonHosts": ["wss://threads.corp.example:8443"]
+    "harnesses": ["claude", "codex"],
+    "machine":      { "enabled": false },
+    "localDaemon":  { "enabled": true, "harnesses": ["claude"] },
+    "remoteDaemon": { "enabled": true, "harnesses": ["claude", "codex"],
+                      "hosts": ["wss://threads.corp.example:8443"] },
+    "hostExec":     { "enabled": false },
+    "mobileRemoteAccess": false
   }
 }
 ```
 
-- Each flag is independent. `false` means the target is unavailable; an omitted flag
-  means allowed. All three `false` is legal, and means no thread can run (useful for
-  an organisation that wants Claude Threads installed but inert). The plugin should
-  say so explicitly rather than failing at send time.
-- `remoteDaemonHosts` (optional) pins which remote endpoints may be registered.
-  This is a better control than the blunt on/off for orgs that run their own daemon.
-  Matching is exact scheme+host+port, no wildcards.
-- **Disabling a target must be enforced at launch, not only hidden in the picker.**
-  Starting a thread, resuming one, and a scheduled item that targets a disabled
-  place must all refuse with a message naming the policy. Threads already running
-  in a daemon are not killed mid-run; they are refused on next resume.
-- Disabling `localDaemon` should also stop it being created or started from
-  Settings; an existing container is left in place (non-destructive), just not
-  started or attached.
-- Disabling `remoteDaemon` should also block the data paths that ride on it:
-  registering a daemon, pushing secrets (`Settings → Remote → Edit`), and running MCP
-  servers on a daemon.
-- `machine: false` with `localDaemon: true` (sandboxed execution only) must be a
-  supported combination. It is likely the most common enterprise setup, so it needs
-  an explicit test.
+**Targets and harnesses.** Each of `machine`, `localDaemon` and `remoteDaemon` is
+controlled independently, and each can be limited to specific harnesses. Harness ids
+are `claude`, `codex` and `opencode` (the three Claude Threads can start today).
+
+- `enabled: false` makes the target unavailable. A bare boolean (`"machine": false`)
+  is accepted as shorthand for `{ "enabled": false }`. Omitted means allowed.
+- `harnesses` on a target is an allowlist for that target; omitted means every
+  harness. The top-level `harnesses` is a global allowlist across all targets.
+- A thread may start only if **all** of these hold: the target is enabled, the
+  harness is in the global list, and the harness is in the target's list. Policy can
+  only narrow, never widen: a target list cannot re-allow a harness the global list
+  removed. This avoids the allow/block precedence problem ADR 0002 deliberately
+  avoided, because every list is an allowlist and the result is an intersection.
+- Example above: nothing runs directly on the host; Claude only in the local
+  container; Claude and Codex on the company's remote daemon; OpenCode nowhere.
+- Harness ids not recognized by the installed plugin are ignored (a newer policy file
+  with an older plugin stays safe), but an empty effective set must be reported to
+  the user rather than failing at send time.
+- All targets disabled is legal and leaves Claude Threads installed but inert.
+
+**Remote hosts.** `remoteDaemon.hosts` (optional) pins which endpoints may be
+registered and used. Matching is exact scheme+host+port, no wildcards. Better than a
+plain on/off for organisations that run their own daemon.
+
+**`host_exec`.** This is the daemon running one command on the Mac, and the main
+path from the isolated daemon back to the host. It gets its own switch rather than
+riding on `localDaemon`, because an org may want the container but not the path out
+of it. `{ "enabled": false }` removes the tool from the daemon's tool surface and
+refuses calls that arrive anyway. A possible second field, `allowAlways: false`,
+would keep the per-call approval prompt but remove the "Always allow" option; that
+field is a suggestion and not yet agreed. `hostExec` is independent of `machine`:
+disabling the machine target does not disable `host_exec`, and the doc tests both
+combinations.
+
+**Mobile remote access.** `mobileRemoteAccess: false` disables the WebSocket-relay
+feature (Settings → Agent Threads → Remote Access) that mirrors desktop sessions to
+a phone and lets the phone send prompts and resolve tool approvals. Because the
+relay is an egress and control path into the executor, it is governed here even
+though it is not one of the three targets. When disabled: the toggle is shown as
+managed and off, no relay connection is opened, and any paired devices are not
+deleted (non-destructive), they just cannot connect. Pairing state resumes if policy
+is relaxed.
+
+**Behavior common to all of these.**
+
+- **Enforce at launch, not only in the picker.** Starting a thread, resuming one, and
+  a scheduled item that targets a disallowed place or harness must refuse with a
+  message naming the policy. Running threads are not killed mid-run; they are
+  refused on next resume.
+- Disabling `localDaemon` also stops the container being created or started from
+  Settings. An existing container is left in place, not started or attached.
+- Disabling `remoteDaemon` also blocks registering a daemon, pushing secrets
+  (`Settings → Remote → Edit`), and running MCP servers on a daemon.
+- Changing the harness picker: harnesses the policy removes disappear from "New
+  thread" with a managed note, and the right-click harness switch refuses them.
+- `machine: false` with `localDaemon: true` (sandboxed execution only) is likely the
+  most common enterprise setup, so it needs an explicit test.
 
 **Where enforcement lives.** The target decision is made in the plugin, not in
 Geode. Geode can only supply the policy, so this needs two pieces:
@@ -218,13 +258,9 @@ user or on a different host than policy allows.
 
 Open questions for review:
 
-- Should "This machine" be gate-able per harness (Claude, Codex, OpenCode) or only
-  as a whole? Proposed: whole, for v1.
-- Should `host_exec` (daemon running one command on the Mac) be its own switch? It
-  is the main path from the isolated daemon back to the host, so probably yes, as
-  `threadExecution.hostExec`.
-- Mobile remote access (WebSocket relay) is a fourth egress path, not one of the
-  three targets; list it here if admins want it governed too.
+- Should `hostExec.allowAlways` exist, or is `enabled` enough for v1?
+- Per-harness limits apply to targets today; should they also apply to MCP servers
+  or skills? Not proposed.
 
 #### 4b. CLI background processes
 
