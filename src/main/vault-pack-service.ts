@@ -21,7 +21,8 @@ import { randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { ManagedPolicy } from "../renderer/policy";
-import type { OrganizationPackEntry, VaultPackOffer } from "../shared/vault-pack-types";
+import type { OrganizationPackEntry, VaultPackOffer, VaultPackSummary } from "../shared/vault-pack-types";
+import type { CommunityPreview, ResolveOpts } from "./github-resolve";
 import {
   createVaultFromPack,
   inspectVaultPack,
@@ -34,6 +35,7 @@ import {
 } from "./vault-pack";
 import { DEFAULT_ZIP_LIMITS, readZipEntry } from "./vault-pack-zip";
 
+const RESOLVE_TIMEOUT_MS = 8000;
 const MAX_PENDING_PER_SENDER = 4;
 const MAX_GRANTS_PER_SENDER = 64;
 export const CONSENT_TTL_MS = 10 * 60 * 1000;
@@ -42,6 +44,12 @@ export interface VaultPackServiceDeps {
   policy: () => ManagedPolicy | null;
   geodeVersion: string;
   installCommunity?: ApplyVaultPackOptions["installCommunity"];
+  /**
+   * Resolve-only (no download) lookup used to show, on the consent screen, which
+   * version a GitHub plugin resolves to right now. Best effort: absent or failing
+   * just leaves the version off the screen.
+   */
+  resolveCommunity?: (spec: string, opts: ResolveOpts) => Promise<CommunityPreview>;
   /** Injectable clock for tests. */
   now?: () => number;
 }
@@ -122,6 +130,29 @@ export class VaultPackService {
     return { data: await fsp.readFile(packPath as string), fileName: path.basename(packPath as string) };
   }
 
+  /** Fills `resolvedVersion` / `resolveError` on GitHub plugins. Never throws and never blocks consent for long. */
+  private async annotateGithubPlugins(summary: VaultPackSummary): Promise<void> {
+    const resolve = this.deps.resolveCommunity;
+    if (!resolve) return;
+    await Promise.all(
+      summary.plugins.filter((p) => p.source === "github" && p.repo).map(async (plugin) => {
+        const opts: ResolveOpts = { type: "plugin", ...(plugin.range ? { range: plugin.range, minReleaseAgeDays: plugin.minReleaseAgeDays } : {}) };
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          const preview = await Promise.race([
+            resolve(plugin.repo!, opts),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timed out")), RESOLVE_TIMEOUT_MS); }),
+          ]);
+          plugin.resolvedVersion = preview.version;
+        } catch (err) {
+          plugin.resolveError = err instanceof Error ? err.message : String(err);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }),
+    );
+  }
+
   private prune(): void {
     const t = this.now();
     for (const [token, p] of this.pending) if (p.expiresAt <= t) this.pending.delete(token);
@@ -134,6 +165,7 @@ export class VaultPackService {
     }
     const { data, fileName } = await this.readPack(packPath);
     const summary = await inspectVaultPack({ kind: "buffer", data }, this.opts());
+    await this.annotateGithubPlugins(summary);
     this.prune();
     const token = randomBytes(16).toString("hex");
     this.pending.set(token, { data, fileName, senderId, expiresAt: this.now() + CONSENT_TTL_MS });

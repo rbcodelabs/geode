@@ -19,6 +19,8 @@
  * in the main process (src/main/community.ts) in Phase 1+ — not here.
  */
 
+import { compareVersions, parseRange, parseVersion, rangeIncludesPrerelease, satisfies } from "../shared/semver-range";
+
 export type ItemType = "plugin" | "theme";
 
 export interface RepoSpec {
@@ -81,8 +83,11 @@ export interface CommunityPreview {
   ref: string;
 }
 
-/** Result of a completed install — same shape as the preview. */
-export type InstalledResult = CommunityPreview;
+/** Result of a completed install — the preview plus (plugins) the sha256 of every file written. */
+export type InstalledResult = CommunityPreview & {
+  /** sha256 hex of each installed plugin file, keyed by filename. Present for plugin installs. */
+  fileHashes?: Record<string, string>;
+};
 
 export interface CertifiedArtifactHashes {
   "manifest.json": string;
@@ -122,6 +127,18 @@ export interface ResolveOpts {
   includePrerelease?: boolean;
   /** Admitted immutable identity, revalidated against staged bytes before replacement. */
   expected?: CommunityInstallExpectation;
+  /**
+   * npm-style semver range (plugins only). Resolves against the release LIST:
+   * the highest satisfying release, never `releases/latest`. Prereleases are
+   * excluded unless the range itself names one. With `tag`, the tagged release
+   * is used but must still satisfy the range. The manifest's own `version` must
+   * satisfy it too, or the resolve is refused.
+   */
+  range?: string;
+  /** With `range`: skip releases published less than this many days ago (default 0 here; pack installs pass their own). */
+  minReleaseAgeDays?: number;
+  /** Clock override for tests (ms since epoch). */
+  now?: number;
 }
 
 export const DEFAULT_API_BASE = "https://api.github.com";
@@ -168,6 +185,55 @@ export function selectRelease(
   return eligible.reduce((newest, r) =>
     Date.parse(r.published_at) > Date.parse(newest.published_at) ? r : newest
   );
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Pick the highest release satisfying `range` that is at least `minReleaseAgeDays`
+ * old (by `published_at`). Throws a descriptive error when nothing qualifies,
+ * and in particular when releases satisfy the range but are all too young: it
+ * never silently falls back to a young release.
+ */
+export function selectReleaseInRange(
+  releases: GithubRelease[],
+  repo: string,
+  opts: { range: string; minReleaseAgeDays?: number; now?: number },
+): GithubRelease {
+  const parsed = parseRange(opts.range);
+  const allowPrerelease = rangeIncludesPrerelease(parsed);
+  const minAgeDays = opts.minReleaseAgeDays ?? 0;
+  const now = opts.now ?? Date.now();
+
+  const candidates: Array<{ release: GithubRelease; version: NonNullable<ReturnType<typeof parseVersion>> }> = [];
+  for (const release of releases) {
+    if (release.draft) continue;
+    if (release.prerelease && !allowPrerelease) continue;
+    const version = parseVersion(release.tag_name);
+    if (!version || !satisfies(version, parsed)) continue;
+    candidates.push({ release, version });
+  }
+  if (candidates.length === 0) {
+    throw new Error(`No release of ${repo} satisfies version range "${opts.range}"`);
+  }
+  candidates.sort((a, b) => compareVersions(b.version, a.version));
+
+  const ageDays = (r: GithubRelease): number => {
+    const published = Date.parse(r.published_at);
+    // An unreadable date cannot prove maturity.
+    return Number.isFinite(published) ? (now - published) / DAY_MS : -Infinity;
+  };
+  const eligible = candidates.find((c) => minAgeDays <= 0 || ageDays(c.release) >= minAgeDays);
+  if (!eligible) {
+    const newest = candidates[0].release;
+    const age = ageDays(newest);
+    throw new Error(
+      `Every release of ${repo} satisfying "${opts.range}" is younger than the minimum release age of ${minAgeDays} day${minAgeDays === 1 ? "" : "s"} ` +
+      `(newest: ${newest.tag_name}, published ${Number.isFinite(age) ? `${Math.max(0, Math.floor(age))} day(s) ago` : "at an unknown time"}). ` +
+      `Wait, widen the range, or have an administrator lower minReleaseAgeDays.`,
+    );
+  }
+  return eligible.release;
 }
 
 /**
@@ -328,6 +394,32 @@ export async function resolveItem(
   opts: ResolveOpts = {}
 ): Promise<ResolvedItem> {
   const { type = "auto", tag, includePrerelease = true } = opts;
+
+  if (opts.range !== undefined) {
+    if (type === "theme") throw new Error("A version range only applies to plugins");
+    const parsedRange = parseRange(opts.range);
+    const releases = await fetchReleases(deps, spec);
+    const repoName = `${spec.owner}/${spec.repo}`;
+    let release: GithubRelease;
+    if (tag) {
+      const tagged = selectRelease(releases, { tag });
+      if (!tagged) throw new Error(`Release "${tag}" not found for ${repoName}`);
+      const tagVersion = parseVersion(tagged.tag_name);
+      if (!tagVersion || !satisfies(tagVersion, parsedRange)) {
+        throw new Error(`Release ${tagged.tag_name} of ${repoName} is outside version range "${opts.range}"`);
+      }
+      // An explicit tag (the update path pins the tag it resolved) gets the same release-age floor as a fresh resolve.
+      release = selectReleaseInRange([tagged], repoName, { range: opts.range, minReleaseAgeDays: opts.minReleaseAgeDays, now: opts.now });
+    } else {
+      release = selectReleaseInRange(releases, repoName, { range: opts.range, minReleaseAgeDays: opts.minReleaseAgeDays, now: opts.now });
+    }
+    const item = await resolvePluginFromRelease(deps, release);
+    // The manifest is authoritative for the installed version: a tag that lies is refused.
+    if (!satisfies(item.version, parsedRange)) {
+      throw new Error(`${repoName} release ${release.tag_name} declares version ${item.version}, which is outside version range "${opts.range}"`);
+    }
+    return item;
+  }
 
   // Explicit theme: always raw default-branch.
   if (type === "theme") {

@@ -3,6 +3,7 @@
 **Date:** 2026-10-21
 **Status:** Accepted
 **Compass:** OPP-13
+**Amended:** 2026-10-22 (pinned GitHub plugins)
 
 ## Context
 
@@ -29,8 +30,8 @@ An enterprise wants to distribute initial notes, templates, settings, and
    - `plugins/<id>/`: bundled plugin builds (`manifest.json`, `main.js`,
      optional `styles.css`), installed to `.geode/plugins/<id>/`.
    - A manifest plugin entry is either `{ id, source: "bundled", sha256 }` or
-     `{ id, source: "github", repo: "owner/repo" }`, plus `enabled` and
-     `locked` flags.
+     `{ id, source: "github", repo: "owner/repo", range?, minReleaseAgeDays? }`
+     (see "Pinned GitHub plugins"), plus `enabled` and `locked` flags.
 2. **One apply function.** `applyVaultPack(packSource, destRoot, opts)` in
    `src/main/vault-pack.ts`. `copyStarterVault` and `bootstrapFreshVault`
    become callers: the built-in starter vault is a pack, and ADR 0014 inputs
@@ -128,10 +129,10 @@ Where the implementation made a decision the sections above leave open:
   folders are preserved.
 - **`locked`** is validated and carried in the summary but is reserved: nothing
   enforces it and the consent screen does not show it.
-- **GitHub plugins are unpinned.** A `github` entry resolves to whatever the
-  repository's latest release is at apply time, so it is not covered by
-  `contentSha256`. Pin or bundle plugins whose exact bytes matter; pinning is
-  future work alongside signing.
+- **GitHub plugins without a `range` are unpinned.** An entry with no `range`
+  resolves to whatever the repository's latest release is at apply time and is
+  not covered by `contentSha256`. Pin it with a `range` (see "Pinned GitHub
+  plugins" below) or bundle it. Pinning to exact bytes still needs signing.
 - **Main-owned consent.** `inspect` accepts only a pack path main obtained for
   that window (its file picker, the organization directory listing, the
   launch argument, or a drop that main re-validates as an absolute local
@@ -151,3 +152,123 @@ Where the implementation made a decision the sections above leave open:
   file, or `GEODE_PACK_DIR`; listed from each pack's manifest only and cached),
   and File > "Save Vault as Pack…". Stale `.geode-pack-*` staging folders older
   than an hour are swept from the default vault location at startup.
+
+## Pinned GitHub plugins
+
+Amends the "GitHub plugins are unpinned" note above. Closes the gap a security
+review flagged: a `github` plugin entry was "whatever is latest", so a
+compromised or hijacked repository release reached every new vault.
+
+### Manifest
+
+A `source: "github"` entry gains two optional fields:
+
+```json
+{ "id": "my-plugin", "source": "github", "repo": "acme/my-plugin",
+  "range": "^1.4.0", "minReleaseAgeDays": 3, "enabled": true }
+```
+
+- **`range`**: an npm-style semver range (`^1.4.0`, `~1.4`, `>=1.4.2 <2`,
+  `1.x`, `1.2.3 - 2.0.0`, `^1 || ^3`). Matched by an in-repo implementation
+  (`src/shared/semver-range.ts`, no dependency). A malformed range rejects the
+  whole pack at validation. Absent means unpinned, and the entry behaves
+  exactly as before: the repository's newest release, no age floor, no lock.
+- **`minReleaseAgeDays`**: optional, 0 to 365, only valid with a `range`.
+
+### Resolution
+
+With a `range`, the resolver reads the repository's release list (not
+`releases/latest`) and installs the **highest satisfying version**, not the most
+recently published one. Drafts and releases whose tag is not semver are ignored.
+Prereleases are excluded unless the range itself names a prerelease (npm's
+rule: `>=1.4.0` never matches `1.5.0-beta.1`, `>=1.5.0-beta.1` does). The
+installed manifest's own `version` must also satisfy the range, so a tag that
+lies about its contents is refused.
+
+### Minimum release age
+
+Modeled on pnpm's `minimumReleaseAge`. Releases published less than N days ago
+(by `published_at`) are skipped, so a freshly pushed malicious release has time
+to be noticed and pulled. N is, in order of precedence:
+
+1. `packs.minReleaseAgeDays` in the ADR 0002 managed policy, when set. It is
+   authoritative: a pack cannot lower what an administrator raised, and `0`
+   waives the wait.
+2. The entry's `minReleaseAgeDays`.
+3. The default, **3**.
+
+If every satisfying release is younger than N, the install **fails** with an
+error naming the newest candidate and its age; it never falls back to a young
+release. An unreadable `published_at` counts as too young. Set 0 (policy or
+entry) to take the newest satisfying release at once; the consent screen shows
+"no release-age wait" when that is in force.
+
+### Lock record
+
+After a ranged plugin installs, Geode writes `.geode/plugins.lock.json` in the
+new vault:
+
+```json
+{ "lockVersion": 1, "plugins": { "my-plugin": {
+    "repo": "acme/my-plugin", "range": "^1.4.0", "minReleaseAgeDays": 3,
+    "version": "1.4.2", "ref": "v1.4.2",
+    "files": { "manifest.json": "<sha256>", "main.js": "<sha256>", "styles.css": "<sha256>" },
+    "lockedAt": "2026-10-22T12:00:00.000Z" } } }
+```
+
+The file is written by Geode, never extracted from a pack: it is not on the
+`.geode/` allowlist, so a pack's copy is skipped like any other runtime state.
+It is written in the staging directory, so it appears atomically with the vault.
+Unpinned plugins are not locked.
+
+While the plugin stays installed, `installCommunity` (the single choke point
+for pack apply, reinstall and the community auto-update path) consults the lock:
+
+- **Within the range.** Resolving (including the renderer's update check) uses
+  the locked range and age floor. A result outside the range is refused, even if
+  the caller supplies a wider range or asks for a specific tag.
+- **Same version, same bytes.** When the resolved version equals the locked
+  version, the downloaded files must match the recorded sha256 values (reusing
+  `validateArtifactHashes`, the path catalog certificates use), or the install
+  is refused and the existing plugin directory is left untouched.
+- **New version in range.** The install proceeds and the lock entry moves
+  forward to the new version and hashes.
+- **Uninstall releases the lock.** The entry only applies while
+  `.geode/plugins/<id>/` exists; the next ranged install overwrites a stale
+  entry. A corrupt lock file is an error, never ignored, since ignoring it would
+  switch off the checks it exists for.
+
+The lock protects against a re-published or altered release and against drifting
+across a major version. It does not protect against an administrator-level local
+attacker (they can edit the lock) or replace signing, which stays deferred.
+
+### Managed machines
+
+ADR 0002 gains an optional `packs` section. `packs.requireGithubRange: true`
+(default off) refuses any pack GitHub entry without a `range`, at inspect and
+apply, and refuses ADR 0014 `default-plugins.json` entries, which cannot carry
+one. `packs.minReleaseAgeDays` is described above.
+
+### Consent screen
+
+For each GitHub plugin the screen shows **"Pinned range ^1.4.0"** or
+**"Unpinned: latest release"** (the latter with a warning), what the plugin
+resolves to right now, and the age rule. The resolved version is a best-effort
+lookup made when the pack is inspected (8 second limit, no download); if it
+fails or every candidate is too young, the screen says so instead. The version
+actually installed is resolved again at apply time and may differ if a new
+release appeared in between, but it always satisfies the same range.
+
+### Consequences and tests
+
+- Pack authors who want reproducibility add a `range`. Existing packs keep
+  working unchanged.
+- Applying a ranged pack needs the repository's releases to exist and be old
+  enough; a brand new plugin release blocks a pack that depends on it for N days
+  unless the author or administrator sets 0.
+- Unit tests: `tests/unit/semver-range.test.ts` (range grammar, prerelease
+  rule), `tests/unit/pinned-github-plugins.test.ts` (resolution, age cutoff and
+  its no-eligible-release error, lock write, lock mismatch, out-of-range
+  refusal, in-range update) and `tests/unit/vault-pack-pinning.test.ts`
+  (manifest validation, legacy entries, policy refusal, forged lock skipped,
+  consent rows, service annotation).
