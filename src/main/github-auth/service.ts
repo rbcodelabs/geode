@@ -189,15 +189,9 @@ export class GithubAuthService {
     const base = { slug: appSlug, clientId, name: app?.name ?? null, ownerLogin: app?.ownerLogin ?? null, settingsUrl };
     if (lookup.kind === "not_found") {
       // A private App has no public record, so GET /apps/{slug} 404s for it as well as for a typo.
-      // Don't block sign-in: the device-code request itself rejects a wrong client ID.
-      return {
-        ...base,
-        permissions: null,
-        problem: {
-          code: "unavailable",
-          message: `GitHub has no public record of an App with the slug "${appSlug}" (private Apps are not publicly visible), so it could not be verified. Check github.appSlug if sign-in fails.`,
-        },
-      };
+      // That is not a fault: nothing to verify, nothing to warn about. The device-code request
+      // itself rejects a wrong client ID, so a bad slug/client pair still fails at sign-in.
+      return { ...base, permissions: null, problem: null };
     }
     if (lookup.kind === "unavailable") {
       return { ...base, permissions: null, problem: { code: "unavailable", message: lookup.message } };

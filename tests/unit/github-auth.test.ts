@@ -339,6 +339,21 @@ describe("installation coverage", () => {
     }),
   };
 
+  it("follows pagination past 100 repositories", async () => {
+    const page = (from: number, n: number) => ({
+      json: { repositories: Array.from({ length: n }, (_, i) => ({ id: from + i, full_name: `acme/r${from + i}`, private: true })) },
+    });
+    const h = setup({
+      ...routes,
+      "https://api.github.com/user/installations?per_page=100": () => ({ json: { installations: [{ id: 42, account: { login: "acme" } }] } }),
+      "https://api.github.com/user/installations/42/repositories?per_page=100": () => page(1, 100),
+      "https://api.github.com/user/installations/42/repositories?per_page=100&page=2": () => page(101, 30),
+    });
+    await h.service.startSignIn();
+    await h.service.waitForSignIn();
+    expect((await h.service.listAccess())[0].repositories).toHaveLength(130);
+  });
+
   it("lists installations with their repositories", async () => {
     const h = setup(routes);
     await h.service.startSignIn();
@@ -445,7 +460,7 @@ describe("App verification at sign-in", () => {
     await h.service.startSignIn();
     await h.service.waitForSignIn();
     expect(h.calls.some((c) => c.url === DEVICE_URL)).toBe(true);
-    expect((await h.service.getAppReport()).problem?.code).toBe("unavailable");
+    expect((await h.service.getAppReport()).problem).toBeNull();
   });
 
   it("refuses a client ID that belongs to a different App", async () => {
