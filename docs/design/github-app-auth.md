@@ -23,7 +23,7 @@ Malformed values in files are ignored. A vault can be authored by someone else, 
 
 ## Checks before sign-in
 
-- `GET /apps/{slug}` (public) must exist and its `client_id` must match, else `app_not_found` / `app_mismatch`. If GitHub cannot answer, sign-in proceeds.
+- `GET /apps/{slug}` is a best-effort check: if it returns an App, its `client_id` must match (else `app_mismatch`). If GitHub cannot answer, or has no public record (404 — private Apps), sign-in proceeds and the device-code request validates the client ID.
 - `device_flow_disabled` is reported plainly, with a link to the App settings.
 - Permissions are compared with what Geode needs (contents write, pull_requests write, metadata/actions/checks read). **Missing** ones warn that features will fail. **Extra** ones warn that agent threads will hold them and require an explicit "Connect anyway" (`confirmation_required`).
 
