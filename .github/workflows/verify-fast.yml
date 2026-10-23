@@ -1,0 +1,145 @@
+name: Verify (fast)
+
+# Sharded Linux gate. It runs next to the macOS `verify` job in verify.yml and is meant to
+# replace it as the per-PR required check once its time and flake rate are proven (the macOS
+# job then moves to main/tag pushes). Standard Linux runners are free and unmetered for public
+# repositories; the cost of this layout is concurrency (free plan: 20 concurrent jobs).
+#
+#   static  typecheck + the two Node proofs                          ~1 min
+#   unit    vitest, UNIT_SHARDS shards                               ~1 min each
+#   e2e     Playwright (Electron under xvfb), E2E_SHARDS shards      ~2 min each (about 65 tests per shard)
+#   fast-verify  single aggregate check that needs all of the above
+#
+# Shard counts live in the matrices below; keep E2E_SHARDS equal to the number of entries in
+# the e2e matrix (Playwright needs the total).
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  UNIT_SHARDS: 3
+  E2E_SHARDS: 8
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "25"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Plain Node extraction proof
+        run: npm run proof:headless
+      - name: Local wiki proof
+        run: npm run proof:local-wiki
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "25"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Build the headless CLI (some unit tests drive the real binary)
+        run: npm run build:cli
+      - name: Unit tests (shard ${{ matrix.shard }}/${{ env.UNIT_SHARDS }})
+        run: npx vitest run --shard=${{ matrix.shard }}/${{ env.UNIT_SHARDS }}
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "25"
+          cache: npm
+      - name: Cache the Electron binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Install xvfb and Electron runtime libraries
+        # Install only what the runner image lacks, and skip `apt-get update` unless the install fails:
+        # the index refresh was the slowest step by far (10 s to 230 s depending on the mirror).
+        run: |
+          pkgs="xvfb xauth libgtk-3-0t64 libnss3 libgbm1 libasound2t64 libxss1 libxtst6 libatk-bridge2.0-0t64 libdrm2 libxkbcommon0 libcups2t64"
+          missing=""
+          for p in $pkgs; do dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"; done
+          echo "missing:$missing"
+          if [ -n "$missing" ]; then
+            sudo apt-get install -y -qq --no-install-recommends $missing \
+              || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends $missing; }
+          fi
+      - name: Build
+        run: npm run build
+      - name: E2E (shard ${{ matrix.shard }}/${{ env.E2E_SHARDS }})
+        # One worker per display: workers sharing an Xvfb display fight over input focus.
+        # See scripts/e2e-linux-shards.mts for the full explanation.
+        #
+        # --grep-invert skips four tests that are unreliable on hosted Linux runners although they pass on
+        # our own Linux workers: three that simulate renderer/guest crashes or relaunch the app repeatedly
+        # (they time out), and the packed image-parser proof (fails ~1 run in 4 here and also flakes on the
+        # macOS runner). They keep running in the macOS `verify` job. TODO: find out why and drop this.
+        run: >-
+          xvfb-run -a npx playwright test --workers=1
+          --shard=${{ matrix.shard }}/${{ env.E2E_SHARDS }}
+          --grep-invert "guest crashes and recovers|crashed renderer journals evidence|twice into the same Documents|parses all complete ceiling fixtures"
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shard-${{ matrix.shard }}-results
+          path: test-results/
+          retention-days: 7
+
+  fast-verify:
+    # The one check to require in branch protection.
+    if: always()
+    needs: [static, unit, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All shards passed
+        run: |
+          echo "static=${{ needs.static.result }} unit=${{ needs.unit.result }} e2e=${{ needs.e2e.result }}"
+          [[ "${{ needs.static.result }}" == "success" && "${{ needs.unit.result }}" == "success" && "${{ needs.e2e.result }}" == "success" ]]
