@@ -242,7 +242,9 @@ test("GitHub plugins: consent shows the pinned range vs unpinned latest, and cre
       return;
     }
     const dl = /^\/dl\/([^/]+\/[^/]+)\/([^/]+)\/(manifest\.json|main\.js)$/.exec(url);
-    if (dl) {
+    if (dl && Object.hasOwn(releasesByRepo, dl[1])) {
+      // Stub only: the repo is allowlisted above and the body is served as plain text, never HTML.
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
       const id = dl[1].split("/")[1];
       res.end(dl[3] === "main.js"
         ? `module.exports.default = class P extends require('geode').Plugin {};`
