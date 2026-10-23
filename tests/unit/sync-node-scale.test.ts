@@ -6,6 +6,9 @@ import { noPortable, openHost, rmrf, tmp } from "../helpers/node-host-harness";
 
 const FILES = 21_000, DIRS = 300;
 
+// A regression guard, not a benchmark: hosted CI runners share CPU with other jobs, so allow 2x there.
+const BUDGET_MS = process.env.CI ? 6000 : 3000;
+
 it(`scans a ${FILES}-file vault: cold, warm, and a warm full engine snapshot (cache hits) within budget`, async () => {
   const root = tmp("scale"), state = tmp("scale-state");
   try {
@@ -36,8 +39,8 @@ it(`scans a ${FILES}-file vault: cold, warm, and a warm full engine snapshot (ca
     expect(reads).toBe(0);
 
     console.log(`[sync-node-scale] ${FILES} files: cold scan ${coldMs.toFixed(0)} ms, warm scan ${warmMs.toFixed(0)} ms, first snapshot (hash all) ${firstMs.toFixed(0)} ms, warm snapshot ${secondMs.toFixed(0)} ms, warm snapshot after restart ${restartMs.toFixed(0)} ms`);
-    expect(warmMs).toBeLessThan(3000);
-    expect(secondMs).toBeLessThan(3000);
-    expect(restartMs).toBeLessThan(3000);
+    expect(warmMs).toBeLessThan(BUDGET_MS);
+    expect(secondMs).toBeLessThan(BUDGET_MS);
+    expect(restartMs).toBeLessThan(BUDGET_MS);
   } finally { rmrf(root); rmrf(state); }
 }, 120_000);

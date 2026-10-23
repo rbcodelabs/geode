@@ -443,7 +443,8 @@ describe("Keychain-backed host.secrets.app", () => {
   });
 });
 
-describe("free-space check is measured per batch but never trusted past the point it would refuse", () => {
+// Stages 35 MiB twice through the chunked store: ~5.6 s on a hosted CI runner, over the 5 s default.
+describe("free-space check is measured per batch but never trusted past the point it would refuse", { timeout: 60_000 }, () => {
   it("measures once for many small stages, and re-measures (and refuses) as soon as the estimate would not clear", async () => {
     const { vault, safety, token } = await open();
     let measured = 0; const original = vault.plugin.syncPrivateAvailableBytes!.bind(vault.plugin);

@@ -133,7 +133,9 @@ test("Daily Notes settings persist lifecycle and keep plugin compatibility live"
     await expect(modal.getByRole("textbox", { name: "New file location" })).toHaveValue("Journal/Daily");
     await expect(modal.getByRole("textbox", { name: "Date format" })).toHaveValue("YYYY.MM.DD");
     await expect(modal.getByRole("textbox", { name: "Template file location" })).toHaveValue("Templates/Daily.md");
-    const live = await window.evaluate(() => {
+    // The settings file is written before the plugin finishes enabling in memory, so the file alone
+    // does not prove the live state has caught up: poll for it instead of reading once.
+    await expect.poll(() => window.evaluate(() => {
       const a = window as any;
       const descriptor = a.app.internalPlugins.getPluginById("daily-notes");
       return {
@@ -141,8 +143,7 @@ test("Daily Notes settings persist lifecycle and keep plugin compatibility live"
         options: a.__dailyOptions,
         enabledLookup: !!a.app.internalPlugins.getEnabledPluginById("daily-notes"),
       };
-    });
-    expect(live).toEqual({
+    })).toEqual({
       sameOptions: true,
       options: { folder: "Journal/Daily", format: "YYYY.MM.DD", template: "Templates/Daily.md" },
       enabledLookup: true,
