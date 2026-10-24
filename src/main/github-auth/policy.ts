@@ -34,7 +34,9 @@ export const UNMANAGED_GITHUB: GithubManagedControls = {
 
 export const POLICY_BLOCK_PREFIX = "blocked by administrator policy: github";
 
-export function managedControls(policy: EffectiveGithubPolicy | undefined): GithubManagedControls {
+export function managedControls(
+  policy: Pick<EffectiveGithubPolicy, "settingsLocked" | "connect" | "disconnect" | "allowedLogins"> | undefined,
+): GithubManagedControls {
   if (!policy) return UNMANAGED_GITHUB;
   return {
     settingsLocked: policy.settingsLocked === true,

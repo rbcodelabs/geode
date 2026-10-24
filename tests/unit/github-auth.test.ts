@@ -614,7 +614,7 @@ describe("App settings (Settings > GitHub)", () => {
   it("reports global-sourced values and allowlist sources", () => {
     const view = describeGithubAppSettings({ env: { GEODE_GITHUB_ALLOWED_OWNERS: "x" }, global: { appSlug: "mine", allowedOwners: ["acme"] } });
     expect(view.appSlug).toEqual({ value: "mine", source: "global" });
-    expect(view.allowSources).toEqual({ env: true, global: true, vault: false });
+    expect(view.allowSources).toEqual({ env: true, global: true, vault: false, policy: false });
   });
 
   it("validates and writes the fields, trimming and de-duplicating lists", () => {
