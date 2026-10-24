@@ -138,6 +138,7 @@ import {
   resolveGithubAppSettings,
   describeGithubAppSettings,
   applyGithubAppSettingsInput,
+  settingsLockedMessage,
   type GithubAppSettings,
 } from "./github-auth";
 
@@ -554,8 +555,16 @@ function readVaultAppConfig(root: string | undefined): unknown {
   }
 }
 
+/**
+ * Effective managed `github` policy for the window that made the current call,
+ * read fresh each time (no cache, no watcher; docs/adr/0002, 0054).
+ */
+function githubPolicy() {
+  return loadEffectivePolicy(githubVaultRoot ?? null).effective.github;
+}
+
 function currentGithubSettings(): GithubAppSettings {
-  return resolveGithubAppSettings({ global: loadConfig().github, vault: readVaultAppConfig(githubVaultRoot) });
+  return resolveGithubAppSettings({ global: loadConfig().github, vault: readVaultAppConfig(githubVaultRoot), policy: githubPolicy() });
 }
 
 function getGithubAuth(sender?: Electron.WebContents): GithubAuthService {
@@ -1749,10 +1758,14 @@ function registerIpc() {
   ipcMain.handle("github-auth-status", (e) => getGithubAuth(e.sender).getStatus());
   ipcMain.handle("github-auth-get-settings", (e) => {
     getGithubAuth(e.sender); // refresh githubVaultRoot for this window
-    return describeGithubAppSettings({ global: loadConfig().github, vault: readVaultAppConfig(githubVaultRoot) });
+    return describeGithubAppSettings({ global: loadConfig().github, vault: readVaultAppConfig(githubVaultRoot), policy: githubPolicy() });
   });
   ipcMain.handle("github-auth-set-settings", (e, input: unknown) => {
     getGithubAuth(e.sender);
+    // Managed `github.settingsLocked`: enforced here in main, not just by a disabled form.
+    if (githubPolicy().settingsLocked) {
+      return { ok: false as const, errors: {}, blockedByPolicy: true as const, message: settingsLockedMessage() };
+    }
     const cfg = loadConfig();
     const update = input && typeof input === "object" && (input as { reset?: unknown }).reset === true
       ? { ok: true as const, github: undefined }
@@ -1760,7 +1773,7 @@ function registerIpc() {
     if (!update.ok) return update;
     const { github: _old, ...rest } = cfg;
     saveConfig(update.github ? { ...rest, github: update.github } : rest);
-    return { ok: true as const, settings: describeGithubAppSettings({ global: update.github, vault: readVaultAppConfig(githubVaultRoot) }) };
+    return { ok: true as const, settings: describeGithubAppSettings({ global: update.github, vault: readVaultAppConfig(githubVaultRoot), policy: githubPolicy() }) };
   });
   ipcMain.handle("github-auth-app-info", (e, opts: unknown) => githubIpc(() => getGithubAuth(e.sender).getAppReport((opts as { fresh?: unknown } | undefined)?.fresh === true)));
   ipcMain.handle("github-auth-start", (e, opts: unknown) => githubIpc(async () => {

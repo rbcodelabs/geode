@@ -16,6 +16,15 @@ import {
 import { DEFAULT_GITHUB_CLIENT_ID, GITHUB_REVOKE_PAGE_URL, isRepoAllowed, type GithubAppSettings } from "./config";
 import type { GithubHttp } from "./http";
 import {
+  connectBlockedMessage,
+  connectionBlockedMessage,
+  disconnectBlockedMessage,
+  githubLoginAllowed,
+  loginRejectedMessage,
+  managedControls,
+  type GithubManagedControls,
+} from "./policy";
+import {
   checkRepoCoverage,
   fetchViewerLogin,
   GithubUnauthorizedError,
@@ -52,9 +61,15 @@ export type GithubAuthState =
   | { state: "pending"; userCode: string; verificationUri: string; expiresAt: number }
   | { state: "connected"; login: string | null; health: GithubConnectionHealth }
   | { state: "reauth_required"; message: string }
+  /**
+   * A connection exists but managed policy forbids using it (account not
+   * allowed, or GitHub disabled). Nothing is deleted and no tokens are issued;
+   * relaxing the policy restores it.
+   */
+  | { state: "blocked_by_policy"; login: string | null; message: string }
   | { state: "error"; message: string };
 
-export type GithubAuthStatus = GithubAuthState & { app: GithubActiveApp };
+export type GithubAuthStatus = GithubAuthState & { app: GithubActiveApp; managed: GithubManagedControls };
 
 /** Result of checking the configured App against GitHub: identity, settings link and permission diff. */
 export interface GithubAppReport {
@@ -107,18 +122,30 @@ export class GithubAuthService {
   private loadMatching(): StoredAuth | null {
     const stored = this.deps.store.load();
     if (!stored) return null;
-    const wanted = this.deps.settings().clientId;
+    const settings = this.deps.settings();
+    const wanted = settings.clientId;
     if ((stored.clientId ?? DEFAULT_GITHUB_CLIENT_ID) === wanted) return stored;
     this.failure = {
       state: "reauth_required",
       message: "The GitHub App Geode is configured to use has changed. Connect GitHub again to use the new App.",
     };
-    void this.deps.store.clear();
+    // A managed pin is policy, not a user edit: keep the old tokens (they are never
+    // sent to the pinned App) so relaxing the pin restores the connection.
+    if (!settings.policy?.clientIdPinned) void this.deps.store.clear();
+    return null;
+  }
+
+  /** Why policy forbids using this stored connection right now, or null when it is allowed. */
+  private policyBlock(stored: StoredAuth): string | null {
+    const policy = this.deps.settings().policy;
+    if (!policy) return null;
+    if (!policy.connect) return connectionBlockedMessage(stored.login, "connect");
+    if (!githubLoginAllowed(policy.allowedLogins, stored.login)) return connectionBlockedMessage(stored.login, "login");
     return null;
   }
 
   getStatus(): GithubAuthStatus {
-    return { ...this.rawStatus(), app: this.app };
+    return { ...this.rawStatus(), app: this.app, managed: managedControls(this.deps.settings().policy) };
   }
 
   private rawStatus(): GithubAuthState {
@@ -132,6 +159,11 @@ export class GithubAuthService {
     }
     const stored = this.loadMatching();
     if (stored) {
+      const blocked = this.policyBlock(stored);
+      if (blocked) {
+        const rejection = this.failure?.state === "error" ? this.failure.message : null;
+        return { state: "blocked_by_policy", login: stored.login, message: rejection ?? blocked };
+      }
       return {
         state: "connected",
         login: stored.login,
@@ -148,6 +180,9 @@ export class GithubAuthService {
    * resolves when it finishes (tests use it; the UI polls `getStatus`).
    */
   async startSignIn(opts: { confirmExtraPermissions?: boolean } = {}): Promise<DeviceCodeInfo> {
+    if (this.deps.settings().policy?.connect === false) {
+      throw new GithubAuthError("blocked_by_policy", connectBlockedMessage());
+    }
     if (!this.deps.store.isAvailable()) {
       throw new GithubAuthError("unexpected", "No OS keychain is available, so GitHub tokens cannot be stored safely.");
     }
@@ -225,7 +260,18 @@ export class GithubAuthService {
       try {
         login = await fetchViewerLogin(this.deps.http, tokens.accessToken);
       } catch {
-        // The login is cosmetic; the tokens are still valid.
+        // The login is cosmetic unless policy restricts accounts (checked next).
+      }
+      // Evaluated fresh at completion: policy may have changed while the user was on github.com.
+      const policy = this.deps.settings().policy;
+      if (policy?.connect === false) {
+        this.failure = { state: "error", message: connectBlockedMessage() };
+        return;
+      }
+      if (!githubLoginAllowed(policy?.allowedLogins ?? [], login)) {
+        // Reject: the freshly issued token is dropped here and never persisted.
+        this.failure = { state: "error", message: loginRejectedMessage(login) };
+        return;
       }
       await this.deps.store.save({ ...tokens, login, clientId });
     } catch (error) {
@@ -247,6 +293,8 @@ export class GithubAuthService {
    * `reauth_required` when the user must reconnect.
    */
   async getAccessToken(repoFullName?: string): Promise<string> {
+    const early = this.loadMatchingForPolicy();
+    if (early) throw new GithubAuthError("blocked_by_policy", early);
     if (repoFullName && !isRepoAllowed(this.deps.settings().allow, repoFullName)) {
       throw new GithubAuthError("not_allowed", `${repoFullName} is outside the repositories Geode is allowed to reach (github.allowedOwners / allowedRepos).`);
     }
@@ -254,6 +302,12 @@ export class GithubAuthService {
     if (!stored) throw new GithubAuthError("reauth_required", "GitHub is not connected.");
     if (!this.isNearExpiry(stored)) return stored.accessToken;
     return (await this.refresh(stored)).accessToken;
+  }
+
+  /** The block message for the stored connection (read without side effects beyond loadMatching), or null. */
+  private loadMatchingForPolicy(): string | null {
+    const stored = this.loadMatching();
+    return stored ? this.policyBlock(stored) : null;
   }
 
   private isNearExpiry(auth: StoredAuth): boolean {
@@ -333,6 +387,9 @@ export class GithubAuthService {
    * have, so the user is pointed at GitHub's settings page to revoke there.
    */
   async disconnect(): Promise<{ revokeUrl: string }> {
+    if (this.deps.settings().policy?.disconnect === false) {
+      throw new GithubAuthError("blocked_by_policy", disconnectBlockedMessage());
+    }
     this.cancelPending();
     this.failure = null;
     await this.deps.store.clear();

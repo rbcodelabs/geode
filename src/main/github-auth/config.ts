@@ -13,6 +13,8 @@ export const DEFAULT_GITHUB_CLIENT_ID = "Iv23litirg6G1u4PLtEp";
  */
 export const DEFAULT_GITHUB_APP_SLUG = "geode-rb-code-labs";
 
+import { managedControls, type EffectiveGithubPolicy, type GithubManagedControls } from "./policy";
+
 /** What one config layer (geode.json `github`, `.geode/app.json`) may say. */
 export interface GithubAppConfig {
   clientId?: string;
@@ -34,6 +36,31 @@ export interface GithubAppSettings {
   appSlug: string;
   /** Every policy must pass, so a vault can narrow the global allowlist but never widen it. */
   allow: GithubAllowPolicy[];
+  /**
+   * Managed-policy controls (docs/adr/0054). Absent = unmanaged. `allow` already
+   * includes the managed allowlists; the rest is read by the service and IPC handlers.
+   */
+  policy?: GithubPolicyControls;
+}
+
+export interface GithubPolicyControls extends GithubManagedControls {
+  /** One list per policy layer; the signed-in login must match an entry in each. */
+  allowedLogins: string[][];
+  /** The managed policy pins the App client ID (tokens from another App are kept, not deleted). */
+  clientIdPinned: boolean;
+}
+
+export type GithubConfigLayers = {
+  env?: Record<string, string | undefined>;
+  global?: unknown;
+  vault?: unknown;
+  /** Effective managed policy for the calling window's vault (stage-1 layering). */
+  policy?: EffectiveGithubPolicy;
+};
+
+function controlsFrom(policy: EffectiveGithubPolicy | undefined): GithubPolicyControls | undefined {
+  if (!policy) return undefined;
+  return { ...managedControls(policy), allowedLogins: policy.allowedLogins ?? [], clientIdPinned: !!policy.clientId };
 }
 
 const CLIENT_ID_RE = /^[A-Za-z0-9._-]{4,64}$/;
@@ -95,16 +122,16 @@ function policyFrom(owners: string[] | undefined, repos: string[] | undefined): 
 }
 
 /**
- * Layers, highest precedence first: environment variables, then
+ * Layers, highest precedence first: managed policy pins (`github.clientId` /
+ * `github.appSlug`), then environment variables, then
  * `.geode/app.json` in the open vault, then `github` in `geode.json`, then the
  * built-in default. clientId/appSlug come from the highest layer that sets
  * them. Allowlists differ on purpose: env replaces the geode.json list, but a
  * vault's list is ANDed on top, so opening an untrusted vault can only
- * narrow where agents reach.
+ * narrow where agents reach. Managed allowlists are further entries in that
+ * intersection, which no other layer can remove.
  */
-export function resolveGithubAppSettings(
-  layers: { env?: Record<string, string | undefined>; global?: unknown; vault?: unknown } = {},
-): GithubAppSettings {
+export function resolveGithubAppSettings(layers: GithubConfigLayers = {}): GithubAppSettings {
   const env = layers.env ?? process.env;
   const global = parseGithubAppConfig(layers.global);
   const vault = parseGithubAppConfig(layers.vault);
@@ -114,14 +141,17 @@ export function resolveGithubAppSettings(
     ? policyFrom(envOwners, envRepos)
     : policyFrom(global.allowedOwners, global.allowedRepos);
   const vaultPolicy = policyFrom(vault.allowedOwners, vault.allowedRepos);
+  const managed = (layers.policy?.allow ?? []).map((p) => ({ owners: p.owners, repos: p.repos }));
+  const controls = controlsFrom(layers.policy);
   return {
-    clientId: env.GEODE_GITHUB_CLIENT_ID?.trim() || vault.clientId || global.clientId || DEFAULT_GITHUB_CLIENT_ID,
-    appSlug: env.GEODE_GITHUB_APP_SLUG?.trim() || vault.appSlug || global.appSlug || DEFAULT_GITHUB_APP_SLUG,
-    allow: [base, vaultPolicy].filter((p): p is GithubAllowPolicy => p !== null),
+    clientId: layers.policy?.clientId || env.GEODE_GITHUB_CLIENT_ID?.trim() || vault.clientId || global.clientId || DEFAULT_GITHUB_CLIENT_ID,
+    appSlug: layers.policy?.appSlug || env.GEODE_GITHUB_APP_SLUG?.trim() || vault.appSlug || global.appSlug || DEFAULT_GITHUB_APP_SLUG,
+    allow: [base, vaultPolicy, ...managed].filter((p): p is GithubAllowPolicy => p !== null),
+    ...(controls ? { policy: controls } : {}),
   };
 }
 
-export type GithubSettingSource = "env" | "vault" | "global" | "default";
+export type GithubSettingSource = "policy" | "env" | "vault" | "global" | "default";
 
 export interface GithubSettingsView {
   clientId: { value: string; source: GithubSettingSource };
@@ -130,27 +160,34 @@ export interface GithubSettingsView {
   global: GithubAppConfig;
   /** Layers that set a value above geode.json, so the UI can say the edited field is not the effective one. */
   overriddenBy: { clientId: GithubSettingSource | null; appSlug: GithubSettingSource | null };
-  allowSources: { env: boolean; global: boolean; vault: boolean };
+  allowSources: { env: boolean; global: boolean; vault: boolean; policy: boolean };
+  /** What managed policy locks or disables, so the UI can say "managed by your administrator". */
+  managed: GithubManagedControls;
   defaults: { clientId: string; appSlug: string };
 }
 
 /** Effective App settings plus which layer each value came from. Mirrors resolveGithubAppSettings. */
-export function describeGithubAppSettings(
-  layers: { env?: Record<string, string | undefined>; global?: unknown; vault?: unknown } = {},
-): GithubSettingsView {
+export function describeGithubAppSettings(layers: GithubConfigLayers = {}): GithubSettingsView {
   const env = layers.env ?? process.env;
   const global = parseGithubAppConfig(layers.global);
   const vault = parseGithubAppConfig(layers.vault);
-  const pick = (envValue: string | undefined, v: string | undefined, g: string | undefined, d: string) => {
+  const pick = (
+    pinned: string | undefined,
+    envValue: string | undefined,
+    v: string | undefined,
+    g: string | undefined,
+    d: string,
+  ) => {
+    if (pinned) return { value: pinned, source: "policy" as const };
     const e = envValue?.trim();
     if (e) return { value: e, source: "env" as const };
     if (v) return { value: v, source: "vault" as const };
     if (g) return { value: g, source: "global" as const };
     return { value: d, source: "default" as const };
   };
-  const clientId = pick(env.GEODE_GITHUB_CLIENT_ID, vault.clientId, global.clientId, DEFAULT_GITHUB_CLIENT_ID);
-  const appSlug = pick(env.GEODE_GITHUB_APP_SLUG, vault.appSlug, global.appSlug, DEFAULT_GITHUB_APP_SLUG);
-  const above = (s: { source: GithubSettingSource }) => (s.source === "env" || s.source === "vault" ? s.source : null);
+  const clientId = pick(layers.policy?.clientId, env.GEODE_GITHUB_CLIENT_ID, vault.clientId, global.clientId, DEFAULT_GITHUB_CLIENT_ID);
+  const appSlug = pick(layers.policy?.appSlug, env.GEODE_GITHUB_APP_SLUG, vault.appSlug, global.appSlug, DEFAULT_GITHUB_APP_SLUG);
+  const above = (s: { source: GithubSettingSource }) => (s.source === "policy" || s.source === "env" || s.source === "vault" ? s.source : null);
   return {
     clientId,
     appSlug,
@@ -160,7 +197,9 @@ export function describeGithubAppSettings(
       env: !!(envList(env.GEODE_GITHUB_ALLOWED_OWNERS) || envList(env.GEODE_GITHUB_ALLOWED_REPOS)),
       global: !!policyFrom(global.allowedOwners, global.allowedRepos),
       vault: !!policyFrom(vault.allowedOwners, vault.allowedRepos),
+      policy: (layers.policy?.allow ?? []).some((p) => p.owners.length > 0 || p.repos.length > 0),
     },
+    managed: managedControls(layers.policy),
     defaults: { clientId: DEFAULT_GITHUB_CLIENT_ID, appSlug: DEFAULT_GITHUB_APP_SLUG },
   };
 }

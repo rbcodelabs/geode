@@ -44,7 +44,7 @@ enforcement, since a user can set an environment variable).
 | Sync (in-app providers and CLI) | `sync` | In-app providers: implemented (ADR 0053). CLI: *Proposed* |
 | Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* (schema and layering shipped; enforcement not) |
 | CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* (schema and layering shipped; enforcement not) |
-| GitHub connection settings and sign-in | `github` | *Proposed* (schema and layering shipped; enforcement not) |
+| GitHub connection settings and sign-in | `github` | **Shipped** (ADR 0054); `deliverToRemoteDaemon` enforcement is stage 3, in the plugin |
 | Vault-level policy file (narrowing only) | `<vault>/.geode/policy.json` | **Shipped** (ADR 0051) |
 
 ### 1. Plugin execution — shipped
@@ -318,7 +318,13 @@ Proposed schema:
 The same guardrail caveat as sync applies: this governs the shipped CLI, not a
 determined local user.
 
-### 5. GitHub connection — proposed
+### 5. GitHub connection — shipped
+
+Shipped in [ADR 0054](../adr/0054-github-connection-policy.md), except `deliverToRemoteDaemon`: the
+agent-threads plugin has no remote-daemon GitHub delivery yet, so the value is only exposed in the
+effective policy and enforcement belongs to stage 3, in the plugin. Notes: `connect: false` also blocks
+token issuance for an existing connection (non-destructively); a managed `clientId` pin keeps, rather than
+clears, tokens from another App; new auth state `blocked_by_policy`.
 
 Geode's GitHub connection (Settings → GitHub) signs a user in with the Geode GitHub
 App via the device flow and hands threads short-lived, repository-scoped tokens. The
