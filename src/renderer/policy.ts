@@ -157,7 +157,14 @@ function readBool(o: Obj, key: string, field: string): boolean | undefined {
  * A non-empty array with no valid entry is dropped too: keeping it would turn
  * a typo into a deny-all, which contradicts fail-open.
  */
-function readList(o: Obj, key: string, field: string, accept: (s: string) => string | undefined): string[] | undefined {
+function readList(
+  o: Obj,
+  key: string,
+  field: string,
+  accept: (s: string) => string | undefined,
+  /** Security allowlist: a non-empty list with no valid entry becomes `[POLICY_NO_MATCH]` instead of being dropped. */
+  failClosed = false,
+): string[] | undefined {
   const v = o[key];
   if (v === undefined) return undefined;
   if (!Array.isArray(v)) {
@@ -174,6 +181,10 @@ function readList(o: Obj, key: string, field: string, accept: (s: string) => str
     }
   }
   if (v.length > 0 && out.length === 0) {
+    if (failClosed) {
+      console.error(`Managed policy: "${field}" has no valid entries; restricting everything (fail closed).`);
+      return [POLICY_NO_MATCH];
+    }
     dropField(field, "has no valid entries");
     return undefined;
   }
@@ -263,7 +274,7 @@ function validatePluginInstall(raw: unknown): PluginInstallPolicy | undefined {
     return undefined;
   }
   const out: PluginInstallPolicy = { mode: raw.mode };
-  const sources = readList(raw, "sources", "pluginInstall.sources", sourceOf);
+  const sources = readList(raw, "sources", "pluginInstall.sources", sourceOf, true);
   if (sources) out.sources = sources;
   return out;
 }

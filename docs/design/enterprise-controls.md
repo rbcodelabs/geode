@@ -100,7 +100,9 @@ Proposed schema:
   and Obsidian import are refused.
 - `sources` (optional, with `allowed`): restrict community installs to listed
   GitHub owners/repos. This is the one place a glob is justified, and it is
-  deliberately limited to the repo path, not plugin ids.
+  deliberately limited to the repo path, not plugin ids. A non-empty list with no valid
+  entry fails closed (matches nothing), a deviation from "only github lists fail closed"
+  (ADR 0052).
 - Install policy composes with `plugins`: install can be allowed while execution
   is still gated by the allowlist, and vice versa.
 

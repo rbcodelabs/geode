@@ -56,8 +56,11 @@ catalog listing, Obsidian import, or file replace, which carry no repository.
 
 ### Failure modes
 
-- Missing, unreadable, oversized or invalid policy: fail open (ADR 0002). An all-invalid `sources` list fails
-  closed (stage 1 behavior).
+- Missing, unreadable, oversized or invalid policy: fail open (ADR 0002). Exception: a non-empty
+  `pluginInstall.sources` whose entries are ALL invalid fails closed (the validator yields `["!none"]`, which
+  matches nothing), because `sources` is a security allowlist. This is a small additive change to the stage-1
+  validator (`readList(..., failClosed)` in `src/renderer/policy.ts`) and a deviation from "only the GitHub
+  lists fail closed". Partially valid lists keep their valid entries; a non-array `sources` is still dropped.
 - Refusal throws `Plugin install blocked by administrator policy: pluginInstall (<reason>).` and logs the
   action in the main process. Nothing is written.
 - Policy changes apply on the next call; nothing is cached and an open vault is not unloaded.
