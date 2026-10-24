@@ -155,7 +155,7 @@ describe("validatePolicy: control areas", () => {
       expect(v({ pluginInstall: { mode: "allowed", sources: ["github.com/your-org/*", "github.com/a/b"] } })?.pluginInstall)
         .toEqual({ mode: "allowed", sources: ["github.com/your-org/*", "github.com/a/b"] });
     });
-    it("drops the area on a bad mode; fails a source list with no valid entry closed (sources: ["!none"]); keeps the valid entries", () => {
+    it("drops the area on a bad mode; fails a source list with no valid entry closed; keeps the valid entries", () => {
       expect(v({ pluginInstall: { mode: 1 } })?.pluginInstall).toBeUndefined();
       expect(v({ pluginInstall: { mode: "allowed", sources: ["*/x", "a b"] } })?.pluginInstall)
         .toEqual({ mode: "allowed", sources: ["!none"] });
