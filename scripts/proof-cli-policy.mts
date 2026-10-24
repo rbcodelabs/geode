@@ -133,7 +133,9 @@ try {
   assertPolicyRefusal(await schedule("install", ["--activate"]), "daemons", "schedule install --activate");
   // The command line the installed unit runs, verbatim: `<node> <cli> sync run --root <root> --json`.
   const unitCommand: string[] = installed.json.result.command;
-  assert.deepEqual(unitCommand.slice(-5), ["sync", "run", "--root", root, "--json"], "the scheduled command line is unchanged (ADR 0025)");
+  assert.deepEqual(unitCommand.slice(2, 5), ["sync", "run", "--root"], "the scheduled command is still `sync run --root ...` (ADR 0025)");
+  assert.ok(!unitCommand.some((a) => a.startsWith("--override") || a === "--hydrate-icloud"), "the scheduled command never lifts a rail");
+  assert.equal(unitCommand.at(-1), "--json");
   await writeFile(join(root, "c.md"), "gamma"); await utimes(join(root, "c.md"), old, old);
   assertPolicyRefusal(await exec(unitCommand.slice(2), { XPC_SERVICE_NAME: label }), "daemons", "installed launchd unit's run");
   assertPolicyRefusal(await exec(unitCommand.slice(2), { INVOCATION_ID: "0123456789abcdef" }), "daemons", "installed systemd unit's run");

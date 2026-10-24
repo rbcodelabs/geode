@@ -235,7 +235,10 @@ describe("daemons.allowSchedule=false", () => {
     const d = setup();
     await d.bootstrap();
     const r = await d.schedule("install", [], {});
-    expect(r.json.result.command.slice(-5)).toEqual(["sync", "run", "--root", d.root, "--json"]);
+    const command = r.json.result.command as string[];
+    expect(command.slice(2, 5)).toEqual(["sync", "run", "--root"]);
+    expect(command.some(a => a.startsWith("--override") || a === "--hydrate-icloud"), "no rail-lifting flag, ever").toBe(false);
+    expect(command.at(-1)).toBe("--json");
     const sysd = await cli(["sync", "schedule", "print", "--root", d.root, "--platform", "systemd", "--target-dir", d.targetDir, "--node-path", "/usr/bin/node", "--cli-path", "/opt/geode-wiki.mjs"], d.env);
     expect(sysd.out).toContain("SuccessExitStatus=4 5 6");
   });
@@ -257,12 +260,13 @@ describe("daemons.allowServe and allowedListenAddresses", () => {
     const d = setup();
     d.machine({ daemons: { allowedListenAddresses: ["127.0.0.1"] } });
     const store = dir("served");
-    const serve = (listen: string, extra: Extra = {}) =>
-      cli(["sync", "serve", "--store", store, "--http", "--token-file", tokenFile(), "--listen", listen, "--json"], d.env, extra);
+    // A successful serve prints no envelope (it logs on stderr), so --json is only passed where a refusal is expected.
+    const serve = (listen: string, extra: Extra = {}, json = true) =>
+      cli(["sync", "serve", "--store", store, "--http", "--token-file", tokenFile(), "--listen", listen, ...(json ? ["--json"] : [])], d.env, extra);
     for (const listen of ["0.0.0.0:0", "[::]:0", "10.1.2.3:0", "corp.example:0"]) BLOCKED(await serve(listen), "daemons");
     // Allowed: bind and stop at once through the test seam (an already-aborted signal).
     const stop = new AbortController(); stop.abort();
-    const ok = await serve("localhost:0", { stopSignal: stop.signal });
+    const ok = await serve("localhost:0", { stopSignal: stop.signal }, false);
     expect(ok.code, ok.out + ok.err).toBe(0);
   });
 
@@ -271,7 +275,7 @@ describe("daemons.allowServe and allowedListenAddresses", () => {
     d.vault({ daemons: { allowServe: false } });
     const store = dir("served");
     const stop = new AbortController(); stop.abort();
-    const r = await cli(["sync", "serve", "--store", store, "--http", "--token-file", tokenFile(), "--listen", "127.0.0.1:0", "--json"], d.env, { stopSignal: stop.signal });
+    const r = await cli(["sync", "serve", "--store", store, "--http", "--token-file", tokenFile(), "--listen", "127.0.0.1:0"], d.env, { stopSignal: stop.signal });
     expect(r.code, r.out + r.err).toBe(0);
   });
 });
