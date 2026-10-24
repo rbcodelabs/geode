@@ -14,6 +14,7 @@ import type { ResolveOpts } from "./github-resolve";
 import { loadEffectivePolicy, loadManagedPolicy, policyFilePath } from "./policy-loader";
 import { assertNotPolicyFile } from "./policy-guard";
 import { guardPluginInstall, repoFromSpec } from "./plugin-install-policy";
+import { assertSyncChannelAllowed, createSyncPolicyFor } from "./sync-policy-gate";
 import type { DataWriteOptions } from "../renderer/vault";
 import { withPathLock, withVaultMutation } from "./path-lock";
 import { SenderRequests } from "./network";
@@ -1088,11 +1089,14 @@ function registerIpc() {
   ipcMain.on("sync-editor-result", (e, token: string, phase: string, reason: unknown) => {
     syncEditorWaiters.get(`${e.sender.id}:${token}:${phase}`)?.(reason === null ? null : typeof reason === "string" ? reason : "Invalid editor guard response");
   });
-  registerHubSyncIpc(ipcMain);
-  registerIcloudContainerIpc(ipcMain);
+  // Managed sync policy (docs/adr/0053): effective policy of the calling window's vault, read fresh per call.
+  const syncPolicyFor = createSyncPolicyFor(e => { const win = BrowserWindow.fromWebContents(e.sender); return (win && sessions.get(win.id)?.root) ?? null; });
+  registerHubSyncIpc(ipcMain, undefined, syncPolicyFor);
+  registerIcloudContainerIpc(ipcMain, undefined, syncPolicyFor);
   const pairing = registerPairingIpc(ipcMain);
   app.on("before-quit", () => pairing.closeAll());
   ipcMain.handle("sync-owner-claim", async e => {
+    assertSyncChannelAllowed(syncPolicyFor, e);
     const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
     const root = await fsp.realpath(session.root);
@@ -1105,6 +1109,7 @@ function registerIpc() {
   });
   ipcMain.handle("sync-owner-release", (e, token: string) => { for (const [root, owner] of syncOwners) if (owner.senderId === e.sender.id && owner.token === token) syncOwners.delete(root); });
   ipcMain.handle("sync-private-storage", async (e, token: string, binding: string, request: import("../shared/sync-safety").SyncStorageRequest) => {
+    assertSyncChannelAllowed(syncPolicyFor, e);
     const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
     if (!session || typeof binding !== "string" || !/^[a-f0-9]{64}$/.test(binding)) throw new Error("Invalid sync storage binding");
     const root = await fsp.realpath(session.root); const owner = syncOwners.get(root);
@@ -1127,6 +1132,7 @@ function registerIpc() {
     return result;
   });
   ipcMain.handle("sync-local-apply", async (e, ownerToken: string, input: GuardedMutation) => {
+    assertSyncChannelAllowed(syncPolicyFor, e);
     const win = BrowserWindow.fromWebContents(e.sender)!; const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
     const root = await fsp.realpath(session.root);
@@ -1180,6 +1186,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("vault-sync-scan", async (e) => {
+    assertSyncChannelAllowed(syncPolicyFor, e);
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
@@ -1191,6 +1198,7 @@ function registerIpc() {
   // Same strict scan, but iCloud placeholders come back as blocked paths (untouchable by the engine) instead of
   // failing the whole scan. Used by the desktop sync host; `vault-sync-scan` stays for older callers.
   ipcMain.handle("vault-sync-scan-blocked", async (e) => {
+    assertSyncChannelAllowed(syncPolicyFor, e);
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");

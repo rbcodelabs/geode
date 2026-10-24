@@ -2,6 +2,7 @@ import { APPEND_ONLY_PROTOCOL, type AppendOnlySession, type AppendOnlySyncProvid
 import { canonicalHubUrl, hubTargetProblem, hubTokenKey, type HubConfig, type HubErrorInfo, type HubProbeResult, type HubRequest, type HubResultMap, type HubSyncBridge, type HubTarget } from "../../shared/hub-sync";
 import { isStoreError } from "../../shared/store-errors";
 import { HttpStoreProvider, type HttpStoreSession, type WebSocketFactory } from "./http-store";
+import { hubTargetBlockReason, SYNC_POLICY_BLOCKED, syncProviderBlockReason, type SyncPolicyView } from "../../shared/sync-policy";
 
 /**
  * Built-in sync provider "Folder, SSH or HTTPS hub": the same hub stores the headless `geode-wiki sync` uses. The history
@@ -38,6 +39,13 @@ export interface HubProviderOptions {
   secrets?: HubSecretStore;
   /** Test seam: the WebSocket constructor (default: the platform's) and permission to use ws:// (never offered by the settings UI). */
   http?: { webSocket?: WebSocketFactory; allowInsecure?: boolean; connectTimeoutMs?: number };
+  /**
+   * Effective managed `sync` policy, read fresh. ADVISORY: this renderer runs with nodeIntegration, so this check stops an
+   * ordinary session from dialling a hub the administrator did not allow (and gives the clear message) but is not a
+   * security boundary. Folder and ssh hubs are additionally enforced in the main process; an HTTPS hub is dialled from
+   * here, so this is the only place its allowlist can be applied (docs/adr/0053-sync-policy.md).
+   */
+  policy?: () => Promise<SyncPolicyView | null>;
 }
 
 const abortError = () => new DOMException("Sync context changed", "AbortError");
@@ -133,6 +141,13 @@ export class HubSyncProvider implements AppendOnlySyncProvider {
 
   private configKey(root = this.root()): string { return `sync-hub/config/${root}`; }
 
+  /** Throws (code `policy-blocked`) before anything is dialled when managed policy forbids this provider or hub. */
+  private async assertPolicy(target: HubTarget): Promise<void> {
+    const policy = await this.options.policy?.().catch(() => null) ?? null;
+    const blocked = syncProviderBlockReason(policy, HUB_PROVIDER_ID) ?? hubTargetBlockReason(policy, target);
+    if (blocked) throw new HubSyncError({ code: SYNC_POLICY_BLOCKED, message: blocked });
+  }
+
   async getConfig(): Promise<HubConfig | null> {
     const value = await this.deviceState.read<HubConfig>(this.configKey());
     if (!value) return null;
@@ -150,6 +165,7 @@ export class HubSyncProvider implements AppendOnlySyncProvider {
   /** "Test connection": reachability and, when creating is on, whether the hub can be created. Creates nothing. */
   async probe(signal: AbortSignal): Promise<HubProbeResult> {
     const config = await this.requireConfig();
+    await this.assertPolicy(config.target);
     if (config.target.kind === "http") {
       const hubs = await this.withHttp(config.target, signal, provider => provider.discover(signal));
       return { vaults: hubs, detail: "Reached the hub over WebSocket, signed in with the token, and listed its vaults. Whether a new hub can be created there is only known when you create it." };
@@ -166,12 +182,14 @@ export class HubSyncProvider implements AppendOnlySyncProvider {
 
   async discover(signal: AbortSignal): Promise<VaultDescriptor[]> {
     const { target } = await this.requireConfig();
+    await this.assertPolicy(target);
     if (target.kind === "http") return this.withHttp(target, signal, provider => provider.discover(signal));
     return this.invoke({ method: "discover", target }, signal);
   }
 
   async createVault(input: { name: string; operationId: string }, signal: AbortSignal): Promise<VaultDescriptor> {
     const config = await this.requireConfig();
+    await this.assertPolicy(config.target);
     // Same guard as `geode-wiki sync init --create`: starting a history in an empty store is explicit.
     if (!config.create) throw new HubSyncError({ code: "create-not-allowed", message: "Creating a new hub vault is switched off.", hint: "Tick \"Create the hub if it is missing\" to start a new history in this store, or join the existing vault." });
     if (config.target.kind === "http") return this.withHttp(config.target, signal, provider => provider.createVault(input, signal));
@@ -180,6 +198,7 @@ export class HubSyncProvider implements AppendOnlySyncProvider {
 
   async open(context: { binding: VaultDescriptor; deviceId: string }, signal: AbortSignal): Promise<AppendOnlySession> {
     const config = await this.requireConfig();
+    await this.assertPolicy(config.target);
     if (config.target.kind === "http") {
       // The connection belongs to this session: it is dropped when the session closes, and re-made (replaying hello + open) if the link drops.
       if (signal.aborted) throw abortError();

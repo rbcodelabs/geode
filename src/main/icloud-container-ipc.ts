@@ -8,6 +8,8 @@ import {
   type IcloudContainerBridge,
 } from "../shared/icloud-container";
 import { NodeIcloudContainer } from "../sync-node/icloud-container";
+import { icloudCallBlockReason, type SyncPolicyInput } from "../shared/sync-policy";
+import type { SyncPolicyFor } from "./sync-policy-gate";
 
 /**
  * Main-process endpoint of the iCloud container bridge (ADR 0030). The renderer holds only the container root
@@ -26,8 +28,12 @@ export function toFailure(error: unknown): IcloudBridgeFailure {
 
 const ALLOWED = new Set<string>(ICLOUD_BRIDGE_METHODS);
 
-export async function dispatchIcloudCall(bridge: IcloudContainerBridge, method: unknown, args: unknown, signal: AbortSignal): Promise<IcloudBridgeResponse> {
+export async function dispatchIcloudCall(bridge: IcloudContainerBridge, method: unknown, args: unknown, signal: AbortSignal, policy?: SyncPolicyInput): Promise<IcloudBridgeResponse> {
   try {
+    // Managed sync policy (docs/adr/0053): refuse before touching the container. Reported as `unavailable` so no new
+    // bridge error code is needed; the message names the policy. Only `discardWrite` (local cleanup) passes.
+    const blocked = typeof method === "string" ? icloudCallBlockReason(policy, method) : null;
+    if (blocked) throw new IcloudBridgeError("unavailable", blocked);
     if (typeof method !== "string" || !ALLOWED.has(method) || !Array.isArray(args)) throw new IcloudBridgeError("failed", "Unknown iCloud container request");
     const fn = bridge[method as IcloudBridgeMethod] as (...callArgs: unknown[]) => Promise<unknown>;
     // `discardWrite` is the one primitive without a signal; every other method takes it last.
@@ -38,7 +44,7 @@ export async function dispatchIcloudCall(bridge: IcloudContainerBridge, method: 
   }
 }
 
-export function registerIcloudContainerIpc(ipcMain: IpcMain, createBridge: () => IcloudContainerBridge & { close(): Promise<void> } = () => new NodeIcloudContainer()): void {
+export function registerIcloudContainerIpc(ipcMain: IpcMain, createBridge: () => IcloudContainerBridge & { close(): Promise<void> } = () => new NodeIcloudContainer(), policyFor?: SyncPolicyFor): void {
   const bridges = new Map<number, IcloudContainerBridge & { close(): Promise<void> }>();
   const inflight = new Map<string, AbortController>();
   ipcMain.handle("icloud-container", async (event, method: unknown, args: unknown, requestId: unknown) => {
@@ -57,7 +63,7 @@ export function registerIcloudContainerIpc(ipcMain: IpcMain, createBridge: () =>
     const abort = new AbortController();
     inflight.set(key, abort);
     try {
-      return await dispatchIcloudCall(bridge, method, args, abort.signal);
+      return await dispatchIcloudCall(bridge, method, args, abort.signal, policyFor?.(event));
     } finally {
       inflight.delete(key);
     }
