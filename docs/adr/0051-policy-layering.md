@@ -82,7 +82,7 @@ snippets), vault-pack import (`.geode` allowlist is `app.json`, `hotkeys.json`, 
 |---|---|
 | Machine or vault file missing, unreadable, invalid JSON, wrong `policyVersion`, or over 1 MiB | That layer is ignored (fail open). |
 | One area malformed | That area is ignored; other areas apply. Bad optional field: only the field is dropped. |
-| Non-empty list with no valid entry | Dropped (fail open), **except** `github.allowedOwners/allowedRepos/allowedLogins`, which fail **closed** (replaced by a sentinel that matches nothing). |
+| Non-empty list with no valid entry | **Fail closed** (replaced by a sentinel that matches nothing) for every restrictive allowlist: `github.allowedOwners/allowedRepos/allowedLogins`, `pluginInstall.sources`, `sync.providers`, `sync.hubAllowlist`, all `threadExecution` harness/host lists, and `daemons.allowedListenAddresses`. A non-array value or a bad scalar field is still dropped (fail open). Amended after stage 2 integration; the original stage 1 text failed closed only for the GitHub lists. |
 | Unknown keys | Ignored. |
 | Vault file tries to widen | Ineffective: the machine layer is still in the AND. |
 | Vault file sets a machine-only key | Ignored, warned. |

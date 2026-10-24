@@ -41,8 +41,8 @@ enforcement, since a user can set an environment variable).
 |---|---|---|
 | Plugin execution (allow/block by id) | `plugins` | **Shipped** |
 | Plugin installation | `pluginInstall` | **Shipped** (ADR 0052: six main-process handlers, Settings notes) |
-| Sync (in-app providers and CLI) | `sync` | In-app providers: implemented (ADR 0053). CLI: *Proposed* |
-| Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* (schema and layering shipped; enforcement not) |
+| Sync (in-app providers and CLI) | `sync` | **Shipped**: in-app providers (ADR 0053) and the `geode-wiki` CLI (ADR 0055). HTTPS hubs dial from the renderer, so `hubAllowlist` cannot be enforced in the main process for them (see section 3) |
+| Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | Schema, layering and `window.geode.getEffectivePolicy()` shipped in Geode; enforcement lives in the agent-threads plugin (stage 3, in progress; not yet verified) |
 | CLI background processes (scheduled sync, hub server) | `daemons` | **Shipped** for the `geode-wiki` CLI (ADR 0055); a guardrail, not a security boundary |
 | GitHub connection settings and sign-in | `github` | **Shipped** (ADR 0054); `deliverToRemoteDaemon` enforcement is stage 3, in the plugin |
 | Vault-level policy file (narrowing only) | `<vault>/.geode/policy.json` | **Shipped** (ADR 0051) |
@@ -417,10 +417,12 @@ Proposed schema:
   connection is rejected and the token discarded. Intended for orgs using Enterprise
   Managed Users, whose logins carry a known suffix. Matching is exact or a single
   leading `*`; this is the one pattern in policy besides install sources.
-- `deliverToRemoteDaemon: false` stops the plugin passing GitHub tokens to remote
-  daemons even when the user ticks "Use Geode GitHub connection". It ties into
-  `threadExecution`: a token is credentials leaving the machine. A parallel field for
-  the local container could follow; proposed only for remote in v1.
+- `deliverToRemoteDaemon: false` is reserved for the plugin. A survey of agent-threads found that
+  it has NO GitHub token delivery to remote daemons today (only to the host and the local
+  container), so there is nothing to gate yet; the value is carried in the effective policy so the
+  plugin can honour it if remote delivery is ever added. Credentials can still leave the machine
+  through the plugin's generic allowlisted secret push (Settings, Remote, Edit), which the
+  `threadExecution.remoteDaemon` switch blocks wholesale.
 
 Existing connections: when policy newly forbids the connected account or app, Geode
 does not silently delete anything. It marks the connection as blocked by policy,
@@ -547,7 +549,7 @@ Open questions:
 | Visibility | A control that is policy-disabled should say so in the UI ("managed by your administrator"), never silently vanish. |
 | Logging | Main process logs which policy area refused an action. No telemetry leaves the machine. |
 | Unknown keys | Ignored, so an older Geode reading a newer policy file stays safe. |
-| Invalid area | Only that area is ignored (fail open); other areas still apply, matching how `plugins` is handled today. Exception: an invalid allowlist (`github.allowedOwners/Repos`) fails closed, as the existing GitHub config parser already does. |
+| Invalid area | Only that area is ignored (fail open); other areas still apply, matching how `plugins` is handled today. Exception: a restrictive allowlist that has entries but none valid fails closed (see ADR 0051 for the full list), so a typo can never remove a restriction. |
 | Validation | Extend `src/renderer/policy.ts` (pure, shared by main and renderer) so validation cannot drift between processes. |
 
 ## Deploying

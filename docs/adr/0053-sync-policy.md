@@ -51,9 +51,9 @@ configuration is deleted or rewritten; the Settings pane still lists the binding
 ## Failure modes
 
 Missing, unreadable, oversized or invalid policy files fail open (ADR 0002); a policy that fails to evaluate is logged
-and allows. Schema-level caveat from stage 1: a `sync.hubAllowlist` or `sync.providers` array that is non-empty but has no
-valid entry is dropped by the validator (fail open), while an explicitly empty array restricts everything. A typo in
-every entry therefore removes the restriction.
+and allows. A `sync.hubAllowlist` or `sync.providers` array that is non-empty but has no valid entry fails CLOSED (the validator
+replaces it with a sentinel that matches nothing), and an explicitly empty array restricts everything, so a typo in every
+entry can never remove the restriction. (Changed after integration; stage 1 originally dropped such a list.)
 
 ## Limits (not enforceable here)
 
