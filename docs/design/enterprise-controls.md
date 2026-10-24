@@ -40,7 +40,7 @@ enforcement, since a user can set an environment variable).
 | Area | Policy key | Status |
 |---|---|---|
 | Plugin execution (allow/block by id) | `plugins` | **Shipped** |
-| Plugin installation | `pluginInstall` | *Proposed* (schema and layering shipped; enforcement not) |
+| Plugin installation | `pluginInstall` | **Shipped** (ADR 0052: six main-process handlers, Settings notes) |
 | Sync (in-app providers and CLI) | `sync` | *Proposed* (schema and layering shipped; enforcement not) |
 | Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* (schema and layering shipped; enforcement not) |
 | CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* (schema and layering shipped; enforcement not) |
