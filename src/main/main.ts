@@ -13,6 +13,7 @@ import { importFromObsidianVault } from "./obsidian-import";
 import type { ResolveOpts } from "./github-resolve";
 import { loadEffectivePolicy, loadManagedPolicy, policyFilePath } from "./policy-loader";
 import { assertNotPolicyFile } from "./policy-guard";
+import { guardPluginInstall, repoFromSpec } from "./plugin-install-policy";
 import type { DataWriteOptions } from "../renderer/vault";
 import { withPathLock, withVaultMutation } from "./path-lock";
 import { SenderRequests } from "./network";
@@ -750,10 +751,13 @@ function registerIpc() {
   }
   ipcMain.handle("external-roots-list", (e, ref: RootDirectoryRef, options?: { cursor?: string }) => externalRootReply(async () => (await externalRootSession(e.sender)).listDirectory(ref, options)));
   ipcMain.handle("external-roots-read", (e, ref: ResourceRef) => externalRootReply(async () => (await externalRootSession(e.sender)).readText(ref)));
-  ipcMain.handle("supported-plugin-catalog", async () => ({
-    currentGeodeVersion: app.getVersion(),
-    ...await supportedPluginCatalogService().load(),
-  }));
+  ipcMain.handle("supported-plugin-catalog", async (e) => {
+    guardPluginInstall(installPolicyRoot(e), "supported-plugin-catalog");
+    return {
+      currentGeodeVersion: app.getVersion(),
+      ...await supportedPluginCatalogService().load(),
+    };
+  });
   ipcMain.handle("supported-plugin-install", async (e, pluginId: unknown, release: unknown) => {
     if (typeof pluginId !== "string" || (release !== "tested" && release !== "latest")) {
       throw new Error("Invalid supported-plugin install request");
@@ -761,9 +765,12 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
+    // Mode check before the catalog fetch; the sources check needs the repo, so it follows admission.
+    guardPluginInstall(session.root, "supported-plugin-catalog");
     const state = await supportedPluginCatalogService().load();
     if (state.status === "unavailable") throw new Error("Supported plugin catalog is unavailable");
     const request = admitSupportedPluginInstall(state.catalog, pluginId, release, app.getVersion());
+    guardPluginInstall(session.root, "supported-plugin-install", repoFromSpec(request.repo));
     return installCommunity(session.root, request.repo, request.options);
   });
   ipcMain.handle("request-url", (_e, request: PrivilegedRequestUrlParam) =>
@@ -1044,6 +1051,12 @@ function registerIpc() {
   // already-running process picks up a just-changed policy immediately.
   ipcMain.handle("get-plugin-policy", () => loadManagedPolicy());
 
+  /** Vault root of the calling window, for evaluating the effective install policy (null: machine layer only). */
+  const installPolicyRoot = (e: Electron.IpcMainInvokeEvent): string | null => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    return (win && sessions.get(win.id)?.root) ?? null;
+  };
+
   // Machine + vault policy merged for this window's vault (docs/adr/0051).
   // Same read-fresh model; a window with no vault open gets the machine layer
   // alone.
@@ -1227,6 +1240,7 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
+    guardPluginInstall(session.root, "plugin-files-replace");
     const pluginRoot = path.join(session.root, ".geode", "plugins", id);
     const readOptional = (file: string) => fsp.readFile(path.join(pluginRoot, file), "utf8").catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null;
@@ -1858,7 +1872,8 @@ function registerIpc() {
   // install metadata for the modal preview; install downloads + writes files.
   // Both re-resolve from the caller's owner/repo spec — the renderer never
   // supplies file URLs or paths.
-  ipcMain.handle("community-resolve", async (_e, spec: string, opts: ResolveOpts) => {
+  ipcMain.handle("community-resolve", async (e, spec: string, opts: ResolveOpts) => {
+    guardPluginInstall(installPolicyRoot(e), "community-resolve", spec);
     return resolveCommunity(spec, opts ?? {});
   });
 
@@ -1866,6 +1881,7 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
+    guardPluginInstall(session.root, "community-install", spec);
     return installCommunity(session.root, spec, opts ?? {});
   });
 
@@ -1877,6 +1893,7 @@ function registerIpc() {
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const session = sessions.get(win.id);
     if (!session) throw new Error("No vault open");
+    guardPluginInstall(session.root, "community-import-obsidian");
     return importFromObsidianVault(session.root);
   });
 

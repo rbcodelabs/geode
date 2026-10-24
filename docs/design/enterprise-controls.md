@@ -40,7 +40,7 @@ enforcement, since a user can set an environment variable).
 | Area | Policy key | Status |
 |---|---|---|
 | Plugin execution (allow/block by id) | `plugins` | **Shipped** |
-| Plugin installation | `pluginInstall` | *Proposed* (schema and layering shipped; enforcement not) |
+| Plugin installation | `pluginInstall` | **Shipped** (ADR 0052: six main-process handlers, Settings notes) |
 | Sync (in-app providers and CLI) | `sync` | *Proposed* (schema and layering shipped; enforcement not) |
 | Thread execution targets (this machine / local daemon / remote daemon) | `threadExecution` | *Proposed* (schema and layering shipped; enforcement not) |
 | CLI background processes (scheduled sync, hub server) | `daemons` | *Proposed* (schema and layering shipped; enforcement not) |
@@ -100,7 +100,9 @@ Proposed schema:
   and Obsidian import are refused.
 - `sources` (optional, with `allowed`): restrict community installs to listed
   GitHub owners/repos. This is the one place a glob is justified, and it is
-  deliberately limited to the repo path, not plugin ids.
+  deliberately limited to the repo path, not plugin ids. A non-empty list with no valid
+  entry fails closed (matches nothing), a deviation from "only github lists fail closed"
+  (ADR 0052).
 - Install policy composes with `plugins`: install can be allowed while execution
   is still gated by the allowlist, and vice versa.
 
