@@ -65,6 +65,7 @@ otherwise (`state-dir-invalid`).
 | 3 | unavailable | `vault-unavailable`, `store-unavailable`, `store-failed` |
 | 4 | conflicts | `conflicts` — from `preview`, `run`, `status`, `conflicts`, `resolve` when conflicts remain |
 | 5 | locked | `locked` — another run holds the lock; nothing was done |
+| 6 | policy | `blocked-by-policy` — blocked by administrator policy (`sync.enabled`, `daemons`); nothing was done. `result` carries `policy` (`sync` or `daemons`), `setting`, `message` and, when known, `layers`. See [ADR 0055](../adr/0055-cli-policy.md) |
 
 `sync-failed` is the catch-all for an error the workflow does not recognise; its
 `message` is in the payload. Statuses ride the usual envelope
@@ -248,7 +249,7 @@ user service+timer.
   `com.geode.wiki-sync.<first 8 hex of sha256(root)>`, `StartInterval`, `RunAtLoad false`,
   `ThrottleInterval 60`, `ProcessType Background`, an explicit `PATH`/`HOME`, logs under
   `~/Library/Logs/geode-wiki-sync/<label>.{out,err}.log`. systemd: `geode-wiki-sync-<hash>.service`
-  (`Type=oneshot`, `SuccessExitStatus=4 5`) and `.timer`, logs under
+  (`Type=oneshot`, `SuccessExitStatus=4 5 6`; units written before exit 6 existed list only `4 5`, so a policy refusal shows as a failed oneshot there, which is harmless: it is not restarted) and `.timer`, logs under
   `${XDG_STATE_HOME:-~/.local/state}/geode-wiki-sync/`.
 - **install** refuses (`not-initialised`, or `schedule-not-approved`) unless the root is bound and its first
   run has been approved, so a schedule never bypasses the first-run rail. The scheduled command is built in
@@ -259,7 +260,7 @@ user service+timer.
 - **status** reports files present, whether the job is loaded/enabled (a read-only `launchctl print` /
   `systemctl --user is-enabled`), the launchd "last exit code" when it prints one, and the last run read
   back from the last JSON envelope in the stdout log (status, exit code, and whether it was a normal outcome).
-- **Exit 4 (conflicts) and 5 (locked) are normal outcomes** of a scheduled run. systemd is told via
+- **Exit 4 (conflicts), 5 (locked) and 6 (blocked by administrator policy) are normal outcomes** of a scheduled run. systemd is told via
   `SuccessExitStatus`. launchd has no equivalent: an interval job with no `KeepAlive` is never restarted and
   a non-zero status is only recorded, so nothing is "failed" in a way that matters; what is not feasible is
   hiding the number from `launchctl print`. Each run appends one envelope line to the stdout log, so
@@ -291,6 +292,8 @@ scan rail still applies.
 | `npx vitest run tests/unit/sync-cli.test.ts` | Every status/exit, each rail and override, convergence, conflicts, lock, gc (in-process, real directories and hub) |
 | `npx vitest run tests/unit/cli-import-audit.test.ts` | The real bundle passes the audit, and each rule fails, naming the edge, on a broken graph |
 | `npm run proof:wiki-sync` | The built binary in real subprocesses (including config files and `Name 2.md` round-tripping between two vaults): two vaults, a hub over a stand-in `ssh` running the real remote command line; `sync schedule` print/install/uninstall with a recording `launchctl`, including executing the scheduled command; all six exit codes; conflicts; deletes; each refusal; the lock held by one process and refused (exit 5) in another |
+| `npx vitest run tests/unit/cli-policy-decisions.test.ts tests/unit/cli-policy.test.ts` | Managed policy (ADR 0055): the pure decisions, and `run()` under `sync.enabled` / `daemons` including layering with a vault file and an already-installed schedule |
+| `npm run proof:wiki-policy` | The built binary in subprocesses with `GEODE_POLICY_PATH`: exit 6 and the JSON envelope for each refusal, fail-open, layering, an installed unit's run refused without syncing, listen-address rules, a real allowed loopback bind |
 | `npx vitest run tests/unit/sync-schedule.test.ts` | Rendering of both platforms, interval and flag rules, the approval refusal, install/status/uninstall against a stub service manager and temp `--target-dir`s |
 | `npm run proof:wiki-cli` | Unchanged claims, plus the exact input set now including the sync files |
 

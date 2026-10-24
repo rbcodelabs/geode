@@ -21,6 +21,7 @@ import {
   parseSettleRule, type SettleRule,
 } from "../sync-node/index";
 import { emit, usageOutcome, type CliOutcome, type Streams } from "./output";
+import { checkListenPolicy, checkSyncPolicy } from "./policy";
 import {
   defaultHome, defaultPlatform, execScheduleRunner, installSchedule, parseInterval, renderSchedule, scheduleStatus,
   uninstallSchedule, type ScheduleRunner, type SchedulePlatform, type ScheduleSpec,
@@ -101,11 +102,19 @@ Scheduling (sync schedule):
              carry an --override-* or --hydrate-icloud flag.
   uninstall  remove the units (with --activate: also launchctl bootout / systemctl disable --now)
   status     files present, activated, and the last run's result from the log
-  --interval defaults to 300 seconds, minimum 60. Exit 4 and 5 from a scheduled run are normal outcomes.
+  --interval defaults to 300 seconds, minimum 60. Exit 4, 5 and 6 from a scheduled run are normal outcomes.
+
+Administrator policy (a guardrail on this binary, not a security boundary):
+  sync.enabled=false            init, preview, run, resolve, gc, serve and schedule install exit 6; status, conflicts,
+                                schedule print|status|uninstall keep working
+  daemons.allowSchedule=false   schedule install (and --activate) exit 6, and so does a sync run started by an installed unit
+  daemons.allowServe=false      serve exits 6 before binding or reading the store
+  daemons.allowedListenAddresses  serve --http --listen is checked against the list; exit 6 when the host is not listed
 
 Exit codes (in addition to 0-3 documented at the top level):
   4  conflicts   unresolved conflicts remain
-  5  locked      another sync run holds this vault's lock; nothing was done`;
+  5  locked      another sync run holds this vault's lock; nothing was done
+  6  policy      blocked by administrator policy (status blocked-by-policy); nothing was done`;
 
 /* ----------------------------------------------------------------- helpers */
 
@@ -199,11 +208,19 @@ export async function runSync(argv: readonly string[], ctx: SyncCliContext): Pro
     return emit(usageOutcome(`${name} takes ${spec.positionals.length} positional argument(s) (${spec.positionals.map(p => `<${p}>`).join(" ") || "none"}), got ${positionals.length}`, name), json, streams);
   }
 
-  if (sub === "serve") return serve(values, ctx, json);
+  if (sub === "serve") {
+    // `serve` has no vault root, so only the machine layer applies. Checked before anything is read or bound.
+    const refused = checkSyncPolicy({ sub }, null, ctx.env, name);
+    return refused ? emit(refused, json, streams) : serve(values, ctx, json);
+  }
   if (sub === "schedule") return emit(await schedule(values, positionals[0], ctx), json, streams);
   if (typeof values.root !== "string" || values.root === "") return emit(usageOutcome("--root <dir> is required", name), json, streams);
   const context = contextFrom(values, ctx);
   if (isOutcome(context)) return emit({ ...context, command: name }, json, streams);
+
+  // Administrator policy (ADR 0055), read fresh, before the vault or the store is touched. Fails open.
+  const blocked = checkSyncPolicy({ sub }, values.root as string, ctx.env, name);
+  if (blocked) return emit(blocked, json, streams);
 
   // Everything decidable from argv alone is decided before the vault or the store is touched.
   let outcome: CliOutcome;
@@ -248,6 +265,8 @@ async function serveHttp(values: Values, store: string, ctx: SyncCliContext, jso
     listen = parseListenAddress(typeof values.listen === "string" ? values.listen : "127.0.0.1:8787");
     token = readTokenFile(isAbsolute(values["token-file"]) ? values["token-file"] : resolvePath(values["token-file"]), log);
   } catch (error) { return emit(usageOutcome((error as Error).message, "sync serve"), json, ctx.streams); }
+  const listenRefused = checkListenPolicy(listen.host, ctx.env, "sync serve");
+  if (listenRefused) return emit(listenRefused, json, ctx.streams);
   const loopback = listen.host === "127.0.0.1" || listen.host === "::1" || listen.host === "localhost";
   if (!loopback) log(`warning: listening on ${listen.host} without TLS; the token and vault data cross the network in the clear unless a TLS proxy (tailscale serve) is in front`);
   let server;
@@ -410,7 +429,7 @@ async function schedule(values: Values, action: string, ctx: SyncCliContext): Pr
         `label       ${r.label}  (${r.platform}, every ${r.intervalSeconds}s)`,
         ...r.files.map((f) => `file        ${f.present ? "present" : "missing"}  ${f.path}`),
         `activated   ${r.activated ? "yes" : "no"}${r.launchdLastExitCode !== undefined ? `   (launchd last exit code ${r.launchdLastExitCode})` : ""}`,
-        last ? `last run    ${last.status} (exit ${last.exitCode} ${last.exitName}) at ${last.at}${last.normal ? "" : "   <-- a failure, see the logs"}${last.exitCode === 4 || last.exitCode === 5 ? "   (normal outcome, not a launchd failure)" : ""}` : "last run    none recorded",
+        last ? `last run    ${last.status} (exit ${last.exitCode} ${last.exitName}) at ${last.at}${last.normal ? "" : "   <-- a failure, see the logs"}${last.exitCode === 4 || last.exitCode === 5 || last.exitCode === 6 ? "   (normal outcome, not a launchd failure)" : ""}` : "last run    none recorded",
         `logs        ${r.logs.out}`,
       ],
     };
@@ -425,7 +444,10 @@ async function schedule(values: Values, action: string, ctx: SyncCliContext): Pr
     return { command: name, status: "ok", result: r, lines, ...(r.failures.length ? { warnings: r.failures.map((f) => `warning: ${f}`) } : {}) };
   }
 
-  // install: the first-run rail must not be bypassed by a schedule.
+  // install: administrator policy first (it covers --activate too), then the first-run rail.
+  const blocked = checkSyncPolicy({ sub: "schedule", action: "install" }, values.root as string, ctx.env, name);
+  if (blocked) return blocked;
+  // The first-run rail must not be bypassed by a schedule.
   const context = contextFrom(values, ctx);
   if (isOutcome(context)) return { ...context, command: name };
   let stateDir: string; let approved: boolean;
@@ -451,7 +473,7 @@ async function schedule(values: Values, action: string, ctx: SyncCliContext): Pr
       ...r.files.map((f) => `wrote  ${f}`),
       `logs   ${r.logs.out}`,
       activate ? "activated" : `not activated. To activate: ${r.activateCommands.join(" ; ")}`,
-      "exit 4 (conflicts) and 5 (locked) from a scheduled run are normal outcomes; see `sync schedule status`",
+      "exit 4 (conflicts), 5 (locked) and 6 (blocked by policy) from a scheduled run are normal outcomes; see `sync schedule status`",
     ],
   };
 }

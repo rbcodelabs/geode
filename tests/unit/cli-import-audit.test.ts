@@ -76,6 +76,25 @@ describe("the audit is not vacuous: each rule fails on a broken graph and names 
     expect(text).toContain("src/main/main.ts is in the CLI graph");
     expect(text).toContain("src/renderer/app.ts is in the CLI graph");
   });
+  it("rule 6: policy loading reaches the CLI only through src/cli/policy.ts -> src/policy-node/index.ts", () => {
+    const importers = Object.keys(real).filter(m => real[m].imports.some(e => e.path === "src/policy-node/index.ts"));
+    expect(importers).toEqual(["src/cli/policy.ts"]);
+    expect(Object.keys(real)).toContain("src/policy-node/policy-files.ts");
+    expect(Object.keys(real)).toContain("src/renderer/policy-layering.ts");
+    // Other CLI modules cannot take the loader, and policy.ts cannot take anything else.
+    expect(auditCliImports(withEdge("src/cli/sync.ts", "src/policy-node/index.ts")).join("\n")).toContain("only src/cli/policy.ts may import the policy loader");
+    expect(auditCliImports(withEdge("src/cli/policy.ts", "src/renderer/policy.ts")).join("\n")).toContain("src/cli/policy.ts imports src/renderer/policy.ts");
+    expect(auditCliImports(withEdge("src/cli/policy.ts", "src/sync-node/index.ts")).join("\n")).toContain("src/cli/policy.ts may import only src/policy-node/index.ts");
+  });
+  it("rule 6: the exception is not a hole in the renderer rule; policy-node and the pure modules stay pure", () => {
+    expect(auditCliImports(withEdge("src/policy-node/policy-files.ts", "src/renderer/app.ts")).join("\n")).toContain("src/policy-node/ may only reach itself");
+    expect(auditCliImports(withEdge("src/policy-node/policy-files.ts", "src/main/main.ts")).join("\n")).toContain("src/policy-node/policy-files.ts imports src/main/main.ts");
+    expect(auditCliImports(withEdge("src/renderer/policy.ts", "src/renderer/app.ts")).join("\n")).toContain("the pure policy modules may import only each other");
+    const inputs = clone(); inputs["src/renderer/app.ts"] = { imports: [] };
+    expect(auditCliImports(inputs).join("\n")).toContain("src/renderer/app.ts is in the CLI graph");
+    // A CLI module other than policy.ts cannot import a policy renderer file directly either.
+    expect(auditCliImports(withEdge("src/cli/sync.ts", "src/renderer/policy-layering.ts")).join("\n")).toContain("src/cli/sync.ts imports src/renderer/policy-layering.ts");
+  });
   it("rule 5: the engine importing its caller", () => {
     expect(auditCliImports(withEdge("src/sync-node/wiki-sync.ts", "src/cli/output.ts")).join("\n")).toContain("the engine must not import its callers");
     expect(auditCliImports(withEdge("src/wiki/index.ts", "src/cli/output.ts")).join("\n")).toContain("src/wiki/index.ts imports src/cli/output.ts");

@@ -105,8 +105,8 @@ try {
   }
   assert.deepEqual(
     sources.filter((path) => path.startsWith("src/renderer/")),
-    ["src/renderer/api/frontmatter.ts", "src/renderer/comments/model.ts"],
-    "the CLI must inherit exactly the SDK's two portable renderer helpers and no more",
+    ["src/renderer/api/frontmatter.ts", "src/renderer/comments/model.ts", "src/renderer/policy-layering.ts", "src/renderer/policy.ts"],
+    "the CLI must inherit exactly the SDK's two portable renderer helpers and the two pure policy modules (ADR 0055, audit rule 6), and no more",
   );
 
   // EXACT, not a permitted superset — same discipline as the SDK audit. A
@@ -118,10 +118,16 @@ try {
     "src/cli/geode-wiki.ts",
     "src/cli/main.ts",
     "src/cli/output.ts",
+    "src/cli/policy-decisions.ts",
+    "src/cli/policy.ts",
     "src/cli/sync-schedule.ts",
     "src/cli/sync.ts",
+    "src/policy-node/index.ts",
+    "src/policy-node/policy-files.ts",
     "src/renderer/api/frontmatter.ts",
     "src/renderer/comments/model.ts",
+    "src/renderer/policy-layering.ts",
+    "src/renderer/policy.ts",
     "src/shared/hub-sync.ts",
     "src/shared/portable-assets.ts",
     "src/shared/store-errors.ts",

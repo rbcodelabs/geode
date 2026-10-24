@@ -19,8 +19,8 @@
 /* -------------------------------------------------------------- exit codes */
 
 /**
- * Six outcomes, distinguishable without reading stdout. The first four are the
- * vault/catalog vocabulary; 4 and 5 exist only for `geode-wiki sync` (ADR 0025).
+ * Seven outcomes, distinguishable without reading stdout. The first four are the
+ * vault/catalog vocabulary; 4, 5 and 6 exist only for `geode-wiki sync` (ADR 0025, ADR 0055).
  *
  * The line between `refused` and `usage` is where the failure was decided:
  * `usage` means the CLI could not turn argv into an operation and the engine
@@ -42,6 +42,8 @@ export const EXIT = {
   conflicts: 4,
   /** `sync` only: another sync run holds this vault's lock. Nothing was done. */
   locked: 5,
+  /** `sync` only: blocked by administrator policy (`sync.enabled` / `daemons`). Nothing was done. See ADR 0055. */
+  policy: 6,
 } as const;
 
 export type ExitName = keyof typeof EXIT;
@@ -73,6 +75,7 @@ export function exitNameFor(status: string): ExitName {
   if (AFFIRMATIVE.has(status)) return "ok";
   if (status === "conflicts") return "conflicts";
   if (status === "locked") return "locked";
+  if (status === "blocked-by-policy") return "policy";
   return UNAVAILABLE.has(status) ? "unavailable" : "refused";
 }
 
