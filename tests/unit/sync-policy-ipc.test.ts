@@ -178,11 +178,12 @@ describe("renderer HubSyncProvider (advisory check, before anything is dialled)"
   });
 
   it("a policy getter that throws fails open", async () => {
-    let sockets = 0;
-    const webSocket = (() => { sockets++; throw new Error("reached the socket"); }) as never;
-    const provider = new HubSyncProvider(undefined, device(), () => "/vault", { policy: async () => { throw new Error("ipc down"); }, http: { webSocket } });
+    const provider = new HubSyncProvider(undefined, device(), () => "/vault", { policy: async () => { throw new Error("ipc down"); } });
     await provider.setConfig({ schema: 1, target: { kind: "http", url: "https://hub.corp.example" }, create: false });
-    await provider.probe(new AbortController().signal).catch(() => {});
-    expect(sockets).toBe(1);
+    // It gets past the policy and fails further on for its own reason (no secure storage / token on this fake device).
+    const error = await provider.probe(new AbortController().signal).then(() => null, (e) => e);
+    expect(error).toBeTruthy();
+    expect((error as { code?: string }).code).not.toBe("policy-blocked");
+    expect(String((error as Error).message)).not.toMatch(MESSAGE);
   });
 });

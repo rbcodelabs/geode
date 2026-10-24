@@ -121,7 +121,7 @@ test("sync.providers without hub refuses the hub channel and greys the provider 
     expect(JSON.stringify(hub.value)).toMatch(/provider \\"hub\\" is not permitted|provider "hub" is not permitted/);
     const modal = await openSyncTab(ctx.page);
     await expect(modal.locator("[data-sync-policy-note]")).toContainText("Sync providers are limited to: icloud");
-    await expect(modal.getByRole("combobox", { name: "Sync provider" }).locator('option[value="geode.hub"]')).toBeDisabled();
+    await expect(modal.getByRole("combobox", { name: "Sync provider" }).locator('option[value="geode.hub"]')).toHaveJSProperty("disabled", true);
   } finally { await close(ctx); }
 });
 
@@ -140,7 +140,7 @@ test("sync.hubAllowlist: a non-allowed HTTPS hub is refused before any connectio
     const modal = await openSyncTab(ctx.page);
     await modal.getByRole("combobox", { name: "Sync provider" }).selectOption("geode.hub");
     await expect(modal.locator("[data-sync-policy-hubs]")).toContainText("https://hub.corp.example");
-    await expect(modal.getByRole("combobox", { name: "Hub type" }).locator('option[value="fs"]')).toBeDisabled();
+    await expect(modal.getByRole("combobox", { name: "Hub type" }).locator('option[value="fs"]')).toHaveJSProperty("disabled", true);
     await modal.getByRole("combobox", { name: "Hub type" }).selectOption("http");
     await modal.getByRole("textbox", { name: "Hub URL" }).fill(hubUrl);
     const result = modal.locator("[data-hub-result]");
