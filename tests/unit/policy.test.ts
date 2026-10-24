@@ -175,8 +175,21 @@ describe("validatePolicy: control areas", () => {
       const p = v({ sync: { enabled: "no", providers: ["hub"], hubAllowlist: "https://x" } });
       expect(p?.sync).toEqual({ providers: ["hub"] });
     });
-    it("a hub allowlist of only junk is dropped (fail open), not turned into deny-all", () => {
-      expect(v({ sync: { hubAllowlist: ["not a url", "ftp://x"] } })?.sync).toEqual({});
+    it("a hub allowlist or provider list of only junk fails CLOSED (matches nothing), never open", () => {
+      expect(v({ sync: { hubAllowlist: ["not a url", "ftp://x"] } })?.sync).toEqual({ hubAllowlist: ["!none"] });
+      expect(v({ sync: { providers: ["bad provider!"] } })?.sync).toEqual({ providers: ["!none"] });
+    });
+    it("an explicitly empty list still restricts everything and is kept as empty", () => {
+      expect(v({ sync: { providers: [] } })?.sync).toEqual({ providers: [] });
+    });
+  });
+
+  describe("threadExecution fail-closed lists", () => {
+    it("harness and host lists with no valid entry restrict everything instead of being dropped", () => {
+      const p = v({ threadExecution: { harnesses: ["bad harness!"], remoteDaemon: { enabled: true, harnesses: ["!!"], hosts: ["nope"] } } });
+      expect(p?.threadExecution?.harnesses).toEqual(["!none"]);
+      expect(p?.threadExecution?.remoteDaemon?.harnesses).toEqual(["!none"]);
+      expect(p?.threadExecution?.remoteDaemon?.hosts).toEqual(["!none"]);
     });
   });
 
@@ -260,7 +273,7 @@ describe("validatePolicy: control areas", () => {
         .toEqual({ allowSchedule: false, allowServe: true, allowedListenAddresses: ["127.0.0.1", "::1"] });
     });
     it("drops bad fields", () => {
-      expect(v({ daemons: { allowServe: 0, allowedListenAddresses: ["bad addr"] } })?.daemons).toEqual({});
+      expect(v({ daemons: { allowServe: 0, allowedListenAddresses: ["bad addr"] } })?.daemons).toEqual({ allowedListenAddresses: ["!none"] });
     });
   });
 

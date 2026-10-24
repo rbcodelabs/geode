@@ -287,9 +287,9 @@ function validateSync(raw: unknown): SyncPolicy | undefined {
   const out: SyncPolicy = {};
   const enabled = readBool(raw, "enabled", "sync.enabled");
   if (enabled !== undefined) out.enabled = enabled;
-  const providers = readList(raw, "providers", "sync.providers", tokenOf);
+  const providers = readList(raw, "providers", "sync.providers", tokenOf, true);
   if (providers) out.providers = providers;
-  const hubs = readList(raw, "hubAllowlist", "sync.hubAllowlist", originOf(["https", "http", "wss", "ws"]));
+  const hubs = readList(raw, "hubAllowlist", "sync.hubAllowlist", originOf(["https", "http", "wss", "ws"]), true);
   if (hubs) out.hubAllowlist = hubs;
   return out;
 }
@@ -304,10 +304,10 @@ function validateTarget(raw: unknown, field: string, withHosts: boolean): Remote
   const out: RemoteDaemonTargetPolicy = {};
   const enabled = readBool(raw, "enabled", `${field}.enabled`);
   if (enabled !== undefined) out.enabled = enabled;
-  const harnesses = readList(raw, "harnesses", `${field}.harnesses`, tokenOf);
+  const harnesses = readList(raw, "harnesses", `${field}.harnesses`, tokenOf, true);
   if (harnesses) out.harnesses = harnesses;
   if (withHosts) {
-    const hosts = readList(raw, "hosts", `${field}.hosts`, originOf(["wss", "ws", "https", "http"]));
+    const hosts = readList(raw, "hosts", `${field}.hosts`, originOf(["wss", "ws", "https", "http"]), true);
     if (hosts) out.hosts = hosts;
   }
   return out;
@@ -319,7 +319,7 @@ function validateThreadExecution(raw: unknown): ThreadExecutionPolicy | undefine
     return undefined;
   }
   const out: ThreadExecutionPolicy = {};
-  const harnesses = readList(raw, "harnesses", "threadExecution.harnesses", tokenOf);
+  const harnesses = readList(raw, "harnesses", "threadExecution.harnesses", tokenOf, true);
   if (harnesses) out.harnesses = harnesses;
   for (const key of ["machine", "localDaemon"] as const) {
     if (raw[key] === undefined) continue;
@@ -383,7 +383,8 @@ function validateDaemons(raw: unknown): DaemonsPolicy | undefined {
     if (v !== undefined) out[key] = v;
   }
   const addresses = readList(raw, "allowedListenAddresses", "daemons.allowedListenAddresses", (s) =>
-    LISTEN_ADDRESS_RE.test(s) ? s.toLowerCase() : undefined
+    LISTEN_ADDRESS_RE.test(s) ? s.toLowerCase() : undefined,
+    true
   );
   if (addresses) out.allowedListenAddresses = addresses;
   return out;
