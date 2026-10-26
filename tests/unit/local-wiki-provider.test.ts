@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -430,7 +430,12 @@ describe("local wiki provider: regressions found in review", () => {
     expect(opened.status).toBe("ok");
     if (opened.status !== "ok") return;
 
-    await rm(root, { recursive: true, force: true });
+    // Park the original instead of deleting it. Deleting frees its inode, and ext4/tmpfs hand
+    // that same inode number straight back to the directory created next, so the identity check
+    // legitimately sees "the same directory" and the test flaked on hosted CI runners.
+    const parked = `${root}.parked`;
+    roots.push(parked);
+    await rename(root, parked);
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "Note.md"), "a stranger's note\n", "utf8");
 

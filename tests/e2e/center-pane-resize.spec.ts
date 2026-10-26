@@ -173,7 +173,9 @@ test("a vertical split with tall content still shrinks to its resized share", as
   });
   // `attachResize`'s own 240px-minimum-pane clamp is the floor here (240px
   // of an ~800px-tall window), not a target this test picked.
-  expect(result.sizes[0]).toBeLessThan(0.32);
+  // The clamp is 240px, so the share it yields depends on the window height: ~0.32 at 750px and
+  // ~0.33 at 720px. Assert against the clamp for this window instead of a fixed share.
+  expect(result.sizes[0]).toBeLessThan(Math.max(0.32, 240 / result.containerHeight + 0.02));
   // The bug: the tall pane refused to shrink below its content's intrinsic
   // height (hundreds of lines — far more than 30% of an 800px window) and
   // rendered close to `containerHeight`, starving the short pane down near

@@ -47,19 +47,34 @@ export async function fetchViewerLogin(http: GithubHttp, token: string): Promise
   return typeof body.login === "string" ? body.login : null;
 }
 
+const PAGE_SIZE = 100;
+/** Safety stop: 100 pages x 100 items is far beyond any real installation. */
+const MAX_PAGES = 100;
+
+/** Every item of a paginated list endpoint. Page 1 keeps the bare `?per_page=` URL. */
+async function listAll(http: GithubHttp, token: string, path: string, key: string): Promise<unknown[]> {
+  const items: unknown[] = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const body = await getJson(http, token, `${path}?per_page=${PAGE_SIZE}${page > 1 ? `&page=${page}` : ""}`);
+    const batch = Array.isArray(body[key]) ? (body[key] as unknown[]) : [];
+    items.push(...batch);
+    if (batch.length < PAGE_SIZE) break;
+  }
+  return items;
+}
+
 export async function listInstallations(http: GithubHttp, token: string): Promise<GithubInstallation[]> {
-  const body = await getJson(http, token, "/user/installations?per_page=100");
-  const raw = Array.isArray(body.installations) ? body.installations : [];
+  const raw = await listAll(http, token, "/user/installations", "installations");
   const result: GithubInstallation[] = [];
   for (const item of raw) {
     const inst = asRecord(item);
     if (typeof inst.id !== "number") continue;
-    const repos = await getJson(http, token, `/user/installations/${inst.id}/repositories?per_page=100`);
+    const repoItems = await listAll(http, token, `/user/installations/${inst.id}/repositories`, "repositories");
     const login = asRecord(inst.account).login;
     result.push({
       id: inst.id,
       account: typeof login === "string" ? login : "unknown",
-      repositories: (Array.isArray(repos.repositories) ? repos.repositories : []).flatMap((r) => {
+      repositories: repoItems.flatMap((r) => {
         const repo = asRecord(r);
         if (typeof repo.id !== "number" || typeof repo.full_name !== "string") return [];
         return [{ id: repo.id, fullName: repo.full_name, private: repo.private === true }];
