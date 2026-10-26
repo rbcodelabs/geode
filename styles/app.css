@@ -8122,3 +8122,22 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
 }
 .metadata-property:hover button.metadata-property-unset, .metadata-property button.metadata-property-unset:focus-visible { opacity: 1; max-width: 80px; padding-left: 6px; padding-right: 6px; margin-left: 0; }
 .metadata-property button.metadata-property-unset:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+
+/* Controls that managed policy (or a disabled state) has turned off must read as off. Scoped to Settings so other
+   panes that style their own disabled buttons are untouched. The Sync pane makes everything but its note `inert`
+   when sync is off, which has no visual state of its own. */
+.mod-settings button:disabled,
+.mod-settings button.is-managed-disabled,
+.mod-settings input:disabled,
+.mod-settings select:disabled,
+.mod-settings textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.mod-settings button.mod-cta:disabled:hover,
+.mod-settings button.is-managed-disabled:hover {
+  background: var(--interactive-accent);
+}
+.mod-settings [inert]:not(.sync-policy-note) {
+  opacity: 0.5;
+}
