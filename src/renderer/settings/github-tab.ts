@@ -503,9 +503,10 @@ export function renderGithubTab(container: HTMLElement, api: GithubAuthApi): () 
     applyLock(view.managed?.settingsLocked === true);
     fillNotes(view);
     slugInput.value = view.global.appSlug ?? "";
-    slugInput.placeholder = `Default: ${view.defaults.appSlug}`;
+    // A policy pin is the effective value, so show it rather than a misleading built-in default.
+    slugInput.placeholder = view.appSlug.source === "policy" ? `Set by your administrator: ${view.appSlug.value}` : `Default: ${view.defaults.appSlug}`;
     clientInput.value = view.global.clientId ?? "";
-    clientInput.placeholder = `Default: ${view.defaults.clientId}`;
+    clientInput.placeholder = view.clientId.source === "policy" ? `Set by your administrator: ${view.clientId.value}` : `Default: ${view.defaults.clientId}`;
     ownersInput.value = (view.global.allowedOwners ?? []).join(", ");
     reposInput.value = (view.global.allowedRepos ?? []).join(", ");
   };
