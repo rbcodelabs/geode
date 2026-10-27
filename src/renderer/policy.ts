@@ -126,6 +126,16 @@ export interface ManagedPolicy {
   vaultPolicy?: VaultPolicyMode;
   /** Display-only reason string (shown in the vault-policy notice). */
   note?: string;
+  /** Vault-pack GitHub plugin handling (ADR 0050). Each key is optional. */
+  packs?: {
+    /** Refuse pack GitHub plugin entries that carry no semver `range` (default off). */
+    requireGithubRange?: boolean;
+    /**
+     * Release-age floor in days for ranged GitHub plugin entries. When present it is
+     * authoritative: pack entries cannot override it. `0` disables the wait.
+     */
+    minReleaseAgeDays?: number;
+  };
 }
 
 type Obj = Record<string, unknown>;
@@ -230,16 +240,6 @@ function originOf(schemes: string[]): (s: string) => string | undefined {
     } catch {
       return undefined;
     }
-  };
-  /** Vault-pack GitHub plugin handling (ADR 0050). Each key is optional. */
-  packs?: {
-    /** Refuse pack GitHub plugin entries that carry no semver `range` (default off). */
-    requireGithubRange?: boolean;
-    /**
-     * Release-age floor in days for ranged GitHub plugin entries. When present it is
-     * authoritative: pack entries cannot override it. `0` disables the wait.
-     */
-    minReleaseAgeDays?: number;
   };
 }
 
@@ -464,8 +464,8 @@ export function validatePolicy(raw: unknown): ManagedPolicy | null {
     else dropField("note", "must be a non-empty string");
   }
 
-  if (obj.packs !== undefined) {
-    const packs = obj.packs;
+  if (raw.packs !== undefined) {
+    const packs = raw.packs;
     if (!packs || typeof packs !== "object" || Array.isArray(packs)) {
       console.error('Managed policy: "packs" is present but not an object; ignoring packs policy.');
     } else {
