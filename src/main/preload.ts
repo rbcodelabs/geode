@@ -6,6 +6,7 @@ import type { CommunityPreview, InstalledResult, ResolveOpts } from "./github-re
 import type { OrganizationPackEntry, VaultPackHostSupport, VaultPackOffer } from "../shared/vault-pack-types";
 import type { ObsidianImportResult } from "./obsidian-import";
 import type { ManagedPolicy } from "../renderer/policy";
+import type { EffectivePolicyResult } from "../renderer/policy-layering";
 import type { ChromeProfile, ChromeCookieImportResult } from "./chrome-cookies";
 import type { ProcessMetric } from "./process-metrics";
 import type { CrashDiagnostic } from "./crash-journal";
@@ -138,6 +139,8 @@ const api = {
   openVaultWindow: (path: string): Promise<{ action: "current" | "focused" | "created" }> =>
     ipcRenderer.invoke("open-vault-window", path),
   getPluginPolicy: (): Promise<ManagedPolicy | null> => ipcRenderer.invoke("get-plugin-policy"),
+  /** Machine + vault policy merged for this window's vault, with provenance. */
+  getEffectivePolicy: (): Promise<EffectivePolicyResult> => ipcRenderer.invoke("get-effective-policy"),
   getVaultRoot: (): Promise<string | null> => ipcRenderer.invoke("get-vault-root"),
   list: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-list"),
   scanForSync: (): Promise<VaultFileEntry[]> => ipcRenderer.invoke("vault-sync-scan"),
@@ -285,7 +288,8 @@ const api = {
     getSettings: (): Promise<GithubSettingsView> => ipcRenderer.invoke("github-auth-get-settings"),
     /** Validates and writes `github` in geode.json; `{ reset: true }` removes it (use the default App). */
     setSettings: (input: GithubAppSettingsInput | { reset: true }): Promise<
-      Exclude<GithubAppSettingsUpdate, { ok: true }> | { ok: true; settings: GithubSettingsView }
+      | (Exclude<GithubAppSettingsUpdate, { ok: true }> & { blockedByPolicy?: true; message?: string })
+      | { ok: true; settings: GithubSettingsView }
     > => ipcRenderer.invoke("github-auth-set-settings", input),
     appInfo: (opts?: { fresh?: boolean }): Promise<GithubIpcResult<GithubAppReport>> => ipcRenderer.invoke("github-auth-app-info", opts),
     start: (opts?: { confirmExtraPermissions?: boolean }): Promise<GithubIpcResult<{ userCode: string; verificationUri: string }>> => ipcRenderer.invoke("github-auth-start", opts),

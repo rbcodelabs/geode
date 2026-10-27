@@ -6,3 +6,4 @@ export * from "./installations";
 export * from "./app-info";
 export * from "./token-store";
 export * from "./service";
+export * from "./policy";

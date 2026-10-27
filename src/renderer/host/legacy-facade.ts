@@ -22,6 +22,7 @@ export function createLegacyGeodeFacade(host: HostServices): GeodeApi {
     getLaunchVault: () => host.vaultRegistry.getLaunchVault(),
     openVaultWindow: host.desktop?.openVaultWindow ?? unavailable("multipleWindows") as never,
     getPluginPolicy: () => host.plugins.getPolicy() as never,
+    getEffectivePolicy: async () => (await host.plugins.getEffectivePolicy?.() ?? null) as never,
     getVaultRoot: async () => (await host.vaultRegistry.getLaunchVault()),
     list: () => host.vaultFiles.list(),
     httpRequest: async (_id, input) => { if (!host.network) throw new Error("Host networking unavailable"); return host.network.request(input); },

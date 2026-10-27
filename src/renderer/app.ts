@@ -23,6 +23,7 @@ import { ThemeManager } from "./theme-manager";
 import { CommunityManager, type UpdateSummary } from "./community/community-manager";
 import { formatObsidianImportNotice } from "./community/import-notice";
 import { InstallFromGithubModal } from "./community/install-modal";
+import { appendManagedNote, disableManaged, readInstallControlState } from "./community/install-policy-ui";
 import { renderSupportedPluginCatalog } from "./community/supported-catalog-view";
 import { renderMobileSupportedPluginCatalog } from "./community/mobile-supported-catalog-view";
 import { loadMobileSupportedCatalog } from "./community/mobile-supported-plugins";
@@ -154,6 +155,8 @@ import { VaultHub, type VaultHubMode, type VaultHubPackSource } from "./vault-hu
 import { orderVaultPaths, vaultNameFromPath } from "./vault-hub-model";
 import { WebViewerService, WebViewerUpdateError, DEFAULT_WEB_VIEWER_OPTIONS, type WebViewerOptions } from "./web-viewer";
 import { SyncService } from "./sync/sync-service";
+import { describeSyncPolicy, syncProviderBlockReason, type SyncPolicyView } from "../shared/sync-policy";
+import type { EffectivePolicyResult } from "./policy-layering";
 import { HUB_PROVIDER_ID, HubSyncProvider, describeHubTarget } from "./sync/hub-provider";
 import { renderPairingCard } from "./pairing/desktop-card";
 import { describeApplied, renderPhonePairingPanel } from "./pairing/phone-panel";
@@ -1421,6 +1424,17 @@ class SettingsModal extends Modal {
       this.geodeApp.saveSettings();
       this.reloadCoreTabKeepingScroll();
     });
+    // Managed sync policy (docs/adr/0053): the toggle stays visible but disabled, with a note. The main process refuses
+    // the iCloud container channel regardless; the stored setting is left as it is, so lifting the policy resumes.
+    void this.geodeApp.getSyncPolicy().then(policy => {
+      const reason = syncProviderBlockReason(policy, "icloud");
+      if (!reason || !section.isConnected) return;
+      const toggle = section.querySelector<HTMLInputElement>('input[aria-label="Enable iCloud sync"]');
+      if (toggle) toggle.disabled = true;
+      const note = document.createElement("p"); note.className = "setting-item-description"; note.setAttribute("data-sync-policy-note", "");
+      note.textContent = "Managed by your administrator: iCloud sync is not permitted by policy.";
+      section.querySelector("h3")?.after(note);
+    });
     const plugin = this.geodeApp.icloudSyncPlugin;
     if (!this.geodeApp.settings.icloudSyncEnabled || !plugin) return;
 
@@ -1564,6 +1578,12 @@ class SettingsModal extends Modal {
     const communityHeading = document.createElement("h2");
     communityHeading.textContent = "Community plugins & themes";
     container.appendChild(communityHeading);
+    // Advisory UI for the pluginInstall policy; the main-process handlers enforce it (docs/adr/0052).
+    const installPolicy = readInstallControlState();
+    const policyNoteEl = document.createElement("div");
+    policyNoteEl.className = "managed-policy-note-host";
+    container.appendChild(policyNoteEl);
+    void installPolicy.then((st) => { if (st.note) appendManagedNote(policyNoteEl, st.note); });
     if (!this.geodeApp.host.capabilities.nodePlugins) {
       const unavailable = document.createElement("p");
       unavailable.className = "community-mobile-unavailable";
@@ -1576,6 +1596,7 @@ class SettingsModal extends Modal {
     addBtn.disabled = !this.geodeApp.host.capabilities.nodePlugins;
     addBtn.title = addBtn.disabled ? "Community installation is available on desktop only" : "";
     control.appendChild(addBtn);
+    void installPolicy.then((st) => { if (!st.github && st.note) disableManaged(addBtn, st.note); });
     const listEl = document.createElement("div");
     listEl.className = "community-list";
     container.appendChild(listEl);
@@ -1589,12 +1610,22 @@ class SettingsModal extends Modal {
       const catalogEl = document.createElement("section");
       catalogEl.className = "supported-plugin-catalog";
       container.appendChild(catalogEl);
-      void renderSupportedPluginCatalog(catalogEl, {
-        load: () => window.geode.getSupportedPluginCatalog!(),
-        install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
-        enable: (pluginId) => this.geodeApp.pluginManager.enable(pluginId),
-        getLoadError: (pluginId) => this.geodeApp.pluginManager.getLoadError(pluginId),
-        onInstalled: () => { void this.renderCommunityList(listEl); },
+      void installPolicy.then((st) => {
+        if (!st.catalog) {
+          // Shown, not removed, so the administrator's reason is visible. Nothing is fetched.
+          const blocked = document.createElement("div");
+          blocked.className = "supported-catalog-state managed-policy-note";
+          blocked.textContent = st.note ?? "Managed by your administrator: the supported-plugin catalog is unavailable.";
+          catalogEl.appendChild(blocked);
+          return;
+        }
+        return renderSupportedPluginCatalog(catalogEl, {
+          load: () => window.geode.getSupportedPluginCatalog!(),
+          install: (plugin, release) => this.geodeApp.communityManager.installSupported(plugin.id, release),
+          enable: (pluginId) => this.geodeApp.pluginManager.enable(pluginId),
+          getLoadError: (pluginId) => this.geodeApp.pluginManager.getLoadError(pluginId),
+          onInstalled: () => { void this.renderCommunityList(listEl); },
+        });
       });
     }
 
@@ -1636,6 +1667,7 @@ class SettingsModal extends Modal {
       }
     });
     importControl.appendChild(importBtn);
+    void installPolicy.then((st) => { if (!st.importObsidian && st.note) disableManaged(importBtn, st.note); });
 
     void this.renderCommunityList(listEl);
   }
@@ -2231,6 +2263,16 @@ class SettingsModal extends Modal {
       }).catch(error => { result.textContent = error instanceof Error ? error.message : String(error); });
     });
     createLabel.className = "sync-field-check"; row.control.append(typeField, hostField, pathField, urlField, tokenField, secureNote, createLabel, buttons, result);
+    // Managed hub allowlist (docs/adr/0053): folder and ssh hubs cannot be matched against an allowlist, so they are shown
+    // disabled with a note rather than hidden. Typed URLs are checked when the hub is used (Test connection, Join, Create).
+    void this.geodeApp.getSyncPolicy().then(policy => {
+      const view = describeSyncPolicy(policy);
+      if (view.disabled || !view.hubAllowlist || !row.control.isConnected) return;
+      for (const option of Array.from(kind.options)) if (option.value !== "http") { option.disabled = true; option.textContent = `${option.textContent} (managed by your administrator)`; }
+      const note = document.createElement("div"); note.className = "sync-field-help"; note.setAttribute("data-sync-policy-hubs", "");
+      note.textContent = `Managed by your administrator: only these HTTPS hubs may be used: ${view.hubAllowlist.join(", ") || "none"}.`;
+      typeField.append(note);
+    });
   }
 
   /**
@@ -2381,6 +2423,36 @@ class SettingsModal extends Modal {
     };
   }
 
+  /**
+   * Shows what managed policy leaves of Sync (docs/adr/0053): a "managed by your administrator" note, providers the policy
+   * excludes disabled in the picker, and (when sync is off) the whole pane inert. Controls stay visible rather than
+   * vanishing. Advisory UI; the main process is what refuses.
+   */
+  private async applySyncPolicyToTab(container: HTMLElement, select: HTMLSelectElement, generation: number): Promise<void> {
+    const policy = await this.geodeApp.getSyncPolicy();
+    if (generation !== this.syncTabGeneration || !container.isConnected) return;
+    const view = describeSyncPolicy(policy);
+    const notes: string[] = [];
+    if (view.disabled) notes.push("Sync is turned off. Your sync settings and history are kept, and sync resumes if it is turned back on.");
+    else {
+      if (view.providers) {
+        for (const option of Array.from(select.options)) if (option.value && syncProviderBlockReason(policy, option.value)) { option.disabled = true; option.textContent = `${option.textContent} (managed by your administrator)`; }
+        notes.push(`Sync providers are limited to: ${view.providers.join(", ") || "none"}.`);
+      }
+      if (view.hubAllowlist) notes.push(`Sync hubs are limited to: ${view.hubAllowlist.join(", ") || "none"}.`);
+    }
+    if (!notes.length) return;
+    const note = document.createElement("div");
+    note.className = "sync-policy-note setting-item-description";
+    note.setAttribute("data-sync-policy-note", ""); note.setAttribute("role", "note");
+    note.textContent = `Managed by your administrator. ${notes.join(" ")}`;
+    container.querySelector("h2")?.after(note);
+    if (view.disabled) {
+      select.disabled = true;
+      for (const child of Array.from(container.children)) if (child !== note && child.tagName !== "H2") (child as HTMLElement).inert = true;
+    }
+  }
+
   private renderSyncTab(container: HTMLElement, summary = ""): void {
     const generation = ++this.syncTabGeneration;
     // innerHTML detaches the previous render's nodes but leaves `container`
@@ -2457,8 +2529,14 @@ class SettingsModal extends Modal {
     select.setAttribute("aria-label", "Sync provider");
     select.append(new Option("Not connected", ""), ...providers.map(provider => new Option(provider.name, provider.id)));
     select.value = active?.id ?? "";
-    select.addEventListener("change", () => { void (select.value ? sync.activate(select.value) : sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error))); });
+    select.addEventListener("change", () => {
+      const chosen = select.value;
+      // Early, advisory refusal with the policy's own message; the main process enforces regardless (docs/adr/0053).
+      void (async () => { const blocked = chosen ? syncProviderBlockReason(await this.geodeApp.getSyncPolicy(), chosen) : null; if (blocked) throw new Error(blocked); })()
+        .then(() => chosen ? sync.activate(chosen) : sync.disconnect()).then(() => this.renderSyncTab(container)).catch(error => this.geodeApp.notify(error instanceof Error ? error.message : String(error)));
+    });
     control.appendChild(select);
+    void this.applySyncPolicyToTab(container, select, generation);
     // The provider row above names the transport (e.g. "Google Drive (managed vault)"); the
     // bound shared vault has its own name, only meaningful on the append-only/history path.
     if (boundVaultName) this.addRow(connection.body, "Vault", `Bound to shared vault "${boundVaultName}"`);
@@ -2732,6 +2810,16 @@ export class App {
   /** Built-in "Folder, SSH or HTTPS hub" sync provider; present where the host has guarded sync (`syncSafety`), re-created per opened vault. */
   hubSyncProvider?: HubSyncProvider;
   private hubSyncUnregister?: () => Promise<void>;
+  /**
+   * Effective managed `sync` policy for this vault, read fresh (docs/adr/0053). Null = no policy / unreadable (fail open).
+   * Renderer use is advisory (UI notes, early refusals); the main process is what enforces.
+   */
+  async getSyncPolicy(): Promise<SyncPolicyView | null> {
+    try {
+      const result = (await this.host.plugins.getEffectivePolicy?.()) as EffectivePolicyResult | null | undefined;
+      return result?.effective?.sync ?? null;
+    } catch { return null; }
+  }
   readonly comments: CommentService;
   vault: Vault;
   metadataCache: MetadataCache;
@@ -3994,7 +4082,7 @@ export class App {
     if (this.host.syncSafety && (this.host.hubSync || typeof WebSocket === "function")) {
       const appSecrets = this.host.secrets.app;
       const secrets = appSecrets ? { available: this.host.secrets.appAvailable ?? this.host.secrets.available, get: (key: string) => appSecrets.get(key), set: (key: string, value: string) => appSecrets.set(key, value), remove: (key: string) => appSecrets.remove(key) } : undefined;
-      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root, secrets ? { secrets } : {});
+      const provider = new HubSyncProvider(this.host.hubSync, this.host.deviceState, () => this.vault.root, { ...(secrets ? { secrets } : {}), policy: () => this.getSyncPolicy() });
       this.hubSyncProvider = provider; this.hubSyncUnregister = this.sync.register("geode", provider);
     }
     this.registerActions();

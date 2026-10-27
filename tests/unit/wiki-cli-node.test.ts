@@ -43,10 +43,16 @@ it("drives the real binary in real subprocesses, with an enforced layering", () 
     "src/cli/geode-wiki.ts",
     "src/cli/main.ts",
     "src/cli/output.ts",
+    "src/cli/policy-decisions.ts",
+    "src/cli/policy.ts",
     "src/cli/sync-schedule.ts",
     "src/cli/sync.ts",
+    "src/policy-node/index.ts",
+    "src/policy-node/policy-files.ts",
     "src/renderer/api/frontmatter.ts",
     "src/renderer/comments/model.ts",
+    "src/renderer/policy-layering.ts",
+    "src/renderer/policy.ts",
     "src/shared/hub-sync.ts",
     "src/shared/portable-assets.ts",
     "src/shared/store-errors.ts",
@@ -90,7 +96,7 @@ it("drives the real binary in real subprocesses, with an enforced layering", () 
     "src/wiki/snapshot.ts",
   ]);
   expect(graph.cliModules).toEqual([
-    "src/cli/geode-wiki.ts", "src/cli/main.ts", "src/cli/output.ts", "src/cli/sync-schedule.ts", "src/cli/sync.ts",
+    "src/cli/geode-wiki.ts", "src/cli/main.ts", "src/cli/output.ts", "src/cli/policy-decisions.ts", "src/cli/policy.ts", "src/cli/sync-schedule.ts", "src/cli/sync.ts",
   ]);
   // Two minutes, not vitest's default five seconds. This proof bundles the CLI
   // and then spawns roughly forty separate `geode-wiki` processes — which is

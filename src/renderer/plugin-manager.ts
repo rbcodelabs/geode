@@ -8,7 +8,14 @@ import {
 } from "./plugin-manifest";
 import * as ObsidianAPI from "./api/obsidian";
 import * as GeodeAPI from "./api/geode";
-import { isPluginBlocked, type ManagedPolicy } from "./policy";
+import type { ManagedPolicy } from "./policy";
+import {
+  isPluginBlockedEffective,
+  resolveEffectivePolicy,
+  vaultPolicyAreas,
+  type EffectivePolicy,
+  type EffectivePolicyResult,
+} from "./policy-layering";
 import { measureOperation, recordMeasure } from "./perf-instrumentation";
 import {
   classifyMobilePlugin,
@@ -137,7 +144,8 @@ export class PluginManager {
   private manifestSources = new Map<string, string>();
   private loadErrors = new Map<string, string>();
   private loaded = new Map<string, LoadedPlugin>();
-  private policy: ManagedPolicy | null = null;
+  private policy: EffectivePolicy | null = null;
+  private vaultPolicyNoticeShown = false;
   private quarantine: Record<string, QuarantineEntry> = {};
   private recoveryMode = false;
   private containing = new Set<string>();
@@ -165,14 +173,15 @@ export class PluginManager {
   async initialize(): Promise<void> {
     this.loadErrors.clear();
     const [policy, , quarantine, recovery, enabledConfig, mobileOptIns] = await Promise.all([
-      measureOperation("plugin-policy-read", async () => (await window.geode.getPluginPolicy?.()) ?? null),
+      measureOperation("plugin-policy-read", () => this.readEffectivePolicy()),
       measureOperation("plugin-discovery", () => this.rescan()),
       window.geode.readConfig(QUARANTINE_KEY),
       window.geode.getCrashRecoveryState?.(),
       window.geode.readConfig(CONFIG_KEY),
       window.geode.readConfig(MOBILE_OPT_INS_KEY),
     ]);
-    this.policy = policy;
+    this.policy = policy.effective;
+    this.announceVaultPolicy(policy.vault);
     this.quarantine = (quarantine as Record<string, QuarantineEntry> | null) ?? {};
     this.recoveryMode = recovery?.suppressPlugins === true;
     this.mobileOptIns = new Set((mobileOptIns as string[] | null) ?? []);
@@ -203,6 +212,27 @@ export class PluginManager {
     }));
   }
 
+  /**
+   * Machine + vault policy for this vault. Falls back to the machine-only
+   * `getPluginPolicy` on hosts (and test fakes) without `getEffectivePolicy`.
+   */
+  private async readEffectivePolicy(): Promise<{ effective: EffectivePolicy | null; vault: ManagedPolicy | null }> {
+    const result = (await window.geode.getEffectivePolicy?.()) as EffectivePolicyResult | null | undefined;
+    if (result?.effective) return { effective: result.effective, vault: result.vault };
+    const machine = ((await window.geode.getPluginPolicy?.()) ?? null) as ManagedPolicy | null;
+    return { effective: machine ? resolveEffectivePolicy(machine, null).effective : null, vault: null };
+  }
+
+  /** One notice per vault open when the vault carries a policy file (docs/design/enterprise-controls.md, section 6). */
+  private announceVaultPolicy(vault: ManagedPolicy | null): void {
+    if (this.vaultPolicyNoticeShown) return;
+    const areas = vaultPolicyAreas(vault);
+    if (!vault || areas.length === 0) return;
+    this.vaultPolicyNoticeShown = true;
+    const reason = vault.note ? ` ${vault.note}` : "";
+    this.app.notify(`This vault restricts: ${areas.join(", ")}.${reason}`, 8000);
+  }
+
   isRecoveryMode(): boolean { return this.recoveryMode; }
 
   listQuarantined(): Record<string, QuarantineEntry> { return { ...this.quarantine }; }
@@ -227,7 +257,7 @@ export class PluginManager {
 
   /** Whether plugin `id` is currently blocked by the enterprise-managed policy. */
   isBlocked(id: string): boolean {
-    return isPluginBlocked(this.policy, id);
+    return isPluginBlockedEffective(this.policy, id);
   }
 
   isMobileRuntime(): boolean {

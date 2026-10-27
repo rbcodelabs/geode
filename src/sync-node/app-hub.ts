@@ -7,6 +7,7 @@ import { hubTargetProblem, type HubErrorInfo, type HubOpenReply, type HubProbeRe
 import { FsStoreProvider } from "./fs-store";
 import { spawnSshStore } from "./rpc-store";
 import { isStoreError } from "./store-errors";
+import { hubTargetBlockReason, SYNC_POLICY_BLOCKED, type SyncPolicyInput } from "../shared/sync-policy";
 
 /**
  * The Node half of the desktop "Folder or SSH hub" provider. The app's HistoryController runs in the renderer and
@@ -26,11 +27,14 @@ export class HubError extends Error {
 }
 
 /** Validates a renderer-supplied target (strictly: see hubTargetProblem) and normalises a folder path. */
-export function validateHubTarget(value: unknown): MainHubTarget {
+export function validateHubTarget(value: unknown, policy?: SyncPolicyInput): MainHubTarget {
   if ((value as { kind?: unknown } | null)?.kind === "http") throw new HubError("invalid-target", "HTTPS hubs are reached from the app window, not through the main process");
   const problem = hubTargetProblem(value);
   if (problem) throw new HubError("invalid-target", problem);
   const target = value as MainHubTarget;
+  // Managed sync policy (docs/adr/0053): checked here, before any provider, ssh child or folder access exists.
+  const blocked = hubTargetBlockReason(policy, target);
+  if (blocked) throw new HubError(SYNC_POLICY_BLOCKED, blocked);
   return target.kind === "fs" ? { kind: "fs", path: path.resolve(target.path) } : { kind: "ssh", host: target.host, path: target.path };
 }
 

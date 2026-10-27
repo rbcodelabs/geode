@@ -256,6 +256,8 @@ export interface PluginHostService {
   }>;
   replacePluginFiles(id: string, expectedManifest: string, replacement: PluginFileSet): Promise<void>;
   getPolicy(): Promise<unknown | null>;
+  /** Machine + vault policy merged (`EffectivePolicyResult`); hosts without managed policy omit it. */
+  getEffectivePolicy?(): Promise<unknown | null>;
   getCrashRecoveryState(): Promise<{ suppressPlugins: boolean; entries: unknown[] }>;
   leaveCrashRecovery(): Promise<void>;
   reportCrashDiagnostic(entry: unknown): Promise<void>;

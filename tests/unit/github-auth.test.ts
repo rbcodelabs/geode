@@ -124,6 +124,7 @@ describe("device flow", () => {
       login: "octocat",
       health: { accessTokenExpiresAt: 1_010_000 + 28800 * 1000, lastRefreshAt: null, lastError: null },
       app: { slug: "geode-app", clientId: "client-x" },
+      managed: { settingsLocked: false, connect: true, disconnect: true, loginRestricted: false },
     });
     expect(h.sleeps).toEqual([5000, 5000]);
     expect(await h.service.getAccessToken()).toBe("ghu_access1");
@@ -630,7 +631,7 @@ describe("App settings (Settings > GitHub)", () => {
   it("reports global-sourced values and allowlist sources", () => {
     const view = describeGithubAppSettings({ env: { GEODE_GITHUB_ALLOWED_OWNERS: "x" }, global: { appSlug: "mine", allowedOwners: ["acme"] } });
     expect(view.appSlug).toEqual({ value: "mine", source: "global" });
-    expect(view.allowSources).toEqual({ env: true, global: true, vault: false });
+    expect(view.allowSources).toEqual({ env: true, global: true, vault: false, policy: false });
   });
 
   it("validates and writes the fields, trimming and de-duplicating lists", () => {

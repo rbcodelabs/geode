@@ -49,8 +49,9 @@ const hubDir = () => dir("hub");
 const bulk = (d: ReturnType<typeof device>, n: number, prefix = "n") => { for (let i = 0; i < n; i++) d.write(`${prefix}${String(i).padStart(3, "0")}.md`, `note ${i}`); };
 
 describe("exit vocabulary", () => {
-  it("adds exactly 4 (conflicts) and 5 (locked) to the original four", () => {
-    expect(EXIT).toEqual({ ok: 0, refused: 1, usage: 2, unavailable: 3, conflicts: 4, locked: 5 });
+  it("adds exactly 4 (conflicts), 5 (locked) and 6 (policy) to the original four", () => {
+    expect(EXIT).toEqual({ ok: 0, refused: 1, usage: 2, unavailable: 3, conflicts: 4, locked: 5, policy: 6 });
+    expect(exitNameFor("blocked-by-policy")).toBe("policy");
     expect(exitNameFor("conflicts")).toBe("conflicts");
     expect(exitNameFor("locked")).toBe("locked");
     expect(exitNameFor("store-unavailable")).toBe("unavailable");

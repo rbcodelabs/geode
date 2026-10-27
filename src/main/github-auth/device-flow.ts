@@ -32,6 +32,8 @@ export type GithubAuthErrorCode =
   | "app_mismatch"
   | "confirmation_required"
   | "not_allowed"
+  /** Refused by managed (administrator) policy; the message names the policy. */
+  | "blocked_by_policy"
   | "unexpected";
 
 export class GithubAuthError extends Error {

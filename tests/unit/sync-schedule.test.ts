@@ -47,13 +47,13 @@ describe("renderSchedule (pure)", () => {
     expect(service).toMatch(/Environment="PATH=[^"\n]*\/opt\/n\\\\x\/bin/);
   });
 
-  it("systemd: service + timer, SuccessExitStatus 4 5, XDG log dir, enable --now", () => {
+  it("systemd: service + timer, SuccessExitStatus 4 5 6, XDG log dir, enable --now", () => {
     const u = renderSchedule(spec({ platform: "systemd", intervalSeconds: 900, xdgStateHome: "/state", xdgConfigHome: "/cfg" }));
     const [service, timer] = u.files;
     expect(service.path).toBe(`/cfg/systemd/user/geode-wiki-sync-${scheduleHash("/Users/me/Vault")}.service`);
     expect(service.content).toContain("Type=oneshot");
     expect(service.content).toContain("ExecStart=/opt/node/bin/node /opt/geode/dist/cli/geode-wiki.mjs sync run --root /Users/me/Vault --json");
-    expect(service.content).toContain("SuccessExitStatus=4 5");
+    expect(service.content).toContain("SuccessExitStatus=4 5 6");
     expect(service.content).toContain(`StandardOutput=append:/state/geode-wiki-sync/${u.label}.out.log`);
     expect(timer.content).toContain("OnUnitInactiveSec=900");
     expect(timer.content).toContain("WantedBy=timers.target");
@@ -120,7 +120,7 @@ describe("sync schedule via the CLI", () => {
     expect(readdirSync(v.target)).toEqual([]);
     expect(calls).toEqual([]);
     const human = await cli(["sync", "schedule", "print", "--root", v.root, "--platform", "systemd", ...v.flags], v.env);
-    expect(human.out).toContain("SuccessExitStatus=4 5");
+    expect(human.out).toContain("SuccessExitStatus=4 5 6");
   });
 
   it("usage errors exit 2: bad action, interval under 60, bad platform, relative paths, and override flags are not accepted", async () => {

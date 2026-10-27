@@ -5,6 +5,7 @@ import type { App } from "../../src/renderer/app";
 import { GEODE_API_VERSION } from "../../src/renderer/plugin-manifest";
 import { clearMeasures, getRecentMeasures } from "../../src/renderer/perf-instrumentation";
 import { threadsProjectSource } from "../../src/renderer/integrations/threads-projects";
+import { resolveEffectivePolicy } from "../../src/renderer/policy-layering";
 
 /** Minimal manifest.json content, valid unless overridden. */
 function manifestJson(id: string, overrides: Record<string, unknown> = {}): string {
@@ -1058,6 +1059,41 @@ describe("PluginManager", () => {
 
       expect(pm.isEnabled("foo")).toBe(false);
       expect((globalThis as any).__pluginLog).toEqual([]);
+    });
+
+    it("uses the effective (machine + vault) policy: a vault blocklist blocks, and a one-time notice names the vault restriction", async () => {
+      const notify = vi.fn();
+      const app = { commands: { add: vi.fn(), remove: vi.fn() }, notify } as unknown as App;
+      const fs = installFakeGeode(["foo", "bar"]);
+      const vault = { policyVersion: 1 as const, plugins: { mode: "blocklist" as const, ids: ["foo"] }, note: "Team vault" };
+      Object.assign((globalThis as any).window.geode, {
+        getEffectivePolicy: vi.fn(async () => ({
+          machine: null,
+          vault,
+          ...resolveEffectivePolicy(null, vault),
+        })),
+      });
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      fs.files.set(".geode/plugins/bar/manifest.json", manifestJson("bar"));
+
+      const pm = new PluginManager(app);
+      await pm.initialize();
+      await pm.initialize();
+
+      expect(pm.isBlocked("foo")).toBe(true);
+      expect(pm.isBlocked("bar")).toBe(false);
+      const notices = notify.mock.calls.map((c) => c[0] as string).filter((m) => m.startsWith("This vault restricts"));
+      expect(notices).toEqual(["This vault restricts: plugins. Team vault"]);
+    });
+
+    it("falls back to the machine-only policy when the host has no getEffectivePolicy", async () => {
+      const fs = installFakeGeode(["foo"], {
+        policy: { policyVersion: 1, plugins: { mode: "blocklist", ids: ["foo"] } },
+      });
+      fs.files.set(".geode/plugins/foo/manifest.json", manifestJson("foo"));
+      const pm = new PluginManager(fakeApp);
+      await pm.initialize();
+      expect(pm.isBlocked("foo")).toBe(true);
     });
 
     it("isBlocked() reflects blocklist and allowlist modes", async () => {

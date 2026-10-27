@@ -15,7 +15,7 @@ export type ElectronPreloadApi = Pick<GeodeApi,
   | "publishHotkeys" | "onGuestHotkey" | "onGuestWindowOpen" | "onGuestWindowClose" | "onGuestWindowFocus" | "onWebViewerBridgeEvent" | "onAgentBrowserWindowOpen"
   | "writeBinary"
 > & Partial<Pick<GeodeApi,
-  "removeRecentVault" | "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "vaultPack" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "icloudContainer" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
+  "getEffectivePolicy" | "removeRecentVault" | "getDefaultVaultLocation" | "chooseParentFolder" | "createVault" | "vaultPack" | "list" | "scanForSync" | "scanForSyncBlocked" | "scanForRefresh" | "httpRequest" | "cancelHttpRequest" | "claimSyncOwner" | "hubSync" | "icloudContainer" | "privateSyncStorage" | "releaseSyncOwner" | "applySyncMutation" | "onSyncPrepare" | "onSyncRelease" | "readDeviceState" | "writeDeviceState" | "removeDeviceState" |
   "externalRoots" | "isSecretStorageAvailable" | "readSecret" | "writeSecret" | "removeSecret" | "readAppSecret" | "writeAppSecret" | "removeAppSecret" |
   "readHashCache" | "upsertHashCacheEntries" | "pruneHashCache"
 >>;
@@ -169,6 +169,7 @@ export function createElectronHost(preload: ElectronPreloadApi): HostServices {
       readPluginFile: (path, rendererSentAt) => preload.readPluginFile(path, rendererSentAt),
       replacePluginFiles: (id, expected, replacement) => preload.replacePluginFiles(id, expected, replacement),
       getPolicy: () => preload.getPluginPolicy(),
+      ...(preload.getEffectivePolicy ? { getEffectivePolicy: () => preload.getEffectivePolicy!() } : {}),
       getCrashRecoveryState: () => preload.getCrashRecoveryState(),
       leaveCrashRecovery: () => preload.leaveCrashRecovery(),
       reportCrashDiagnostic: (entry) => preload.reportCrashDiagnostic(entry as never),
