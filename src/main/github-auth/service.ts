@@ -80,7 +80,7 @@ export interface GithubAppReport {
   ownerLogin: string | null;
   settingsUrl: string;
   /** Set when the App could not be confirmed (not found, ID mismatch, offline). */
-  problem: { code: "app_not_found" | "app_mismatch" | "unavailable"; message: string } | null;
+  problem: { code: "app_mismatch" | "unavailable"; message: string } | null;
   permissions: PermissionReport | null;
 }
 
@@ -223,7 +223,10 @@ export class GithubAuthService {
     const settingsUrl = appSettingsUrl(app, appSlug);
     const base = { slug: appSlug, clientId, name: app?.name ?? null, ownerLogin: app?.ownerLogin ?? null, settingsUrl };
     if (lookup.kind === "not_found") {
-      return { ...base, permissions: null, problem: { code: "app_not_found", message: `No GitHub App with the slug "${appSlug}" exists. Check github.appSlug.` } };
+      // A private App has no public record, so GET /apps/{slug} 404s for it as well as for a typo.
+      // That is not a fault: nothing to verify, nothing to warn about. The device-code request
+      // itself rejects a wrong client ID, so a bad slug/client pair still fails at sign-in.
+      return { ...base, permissions: null, problem: null };
     }
     if (lookup.kind === "unavailable") {
       return { ...base, permissions: null, problem: { code: "unavailable", message: lookup.message } };

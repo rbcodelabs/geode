@@ -24,12 +24,18 @@ import { FIRST_PARTY_PLUGIN_IDS, type VaultPackPluginSummary, type VaultPackSumm
 import { vaultNameMessage, vaultNameProblem } from "../shared/vault-name";
 import { installCommunity as defaultInstallCommunity } from "./community";
 import type { ResolveOpts } from "./github-resolve";
+import { recordPluginLock } from "./plugin-lock";
+import { isValidRange, satisfies } from "../shared/semver-range";
 import { DEFAULT_ZIP_LIMITS, foldName, readZip, writeZip, ZipError, type ZipLimits, type ZipWriteEntry } from "./vault-pack-zip";
 
 export type { VaultPackPluginSummary, VaultPackSummary } from "../shared/vault-pack-types";
 
 export const VAULT_PACK_EXTENSION = ".vault";
 export const VAULT_PACK_MANIFEST = "vault-pack.json";
+
+/** Release-age floor for ranged GitHub plugins when neither the policy nor the entry sets one (ADR 0050). */
+export const DEFAULT_MIN_RELEASE_AGE_DAYS = 3;
+const MAX_MIN_RELEASE_AGE_DAYS = 365;
 
 const PACK_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 /** Same shape as plugin manifest ids (src/renderer/plugin-manifest.ts, src/renderer/policy.ts). */
@@ -63,7 +69,17 @@ export type VaultPackPlugin =
       /** Reserved by ADR 0050: validated, but not enforced anywhere. */
       locked: boolean;
     }
-  | { id: string; source: "github"; repo: string; enabled: boolean; locked: boolean };
+  | {
+      id: string;
+      source: "github";
+      repo: string;
+      /** npm-style semver range. Absent = unpinned: install whatever the repository's latest release is. */
+      range?: string;
+      /** With `range`: skip releases younger than this many days. The ADR 0002 policy value, when set, overrides it. */
+      minReleaseAgeDays?: number;
+      enabled: boolean;
+      locked: boolean;
+    };
 
 export interface VaultPackManifest {
   packVersion: 1;
@@ -161,12 +177,42 @@ export function validateVaultPackManifest(raw: unknown): VaultPackManifest {
       if (typeof entry.repo !== "string" || !REPO_RE.test(entry.repo)) {
         throw new VaultPackError(`${VAULT_PACK_MANIFEST}: github plugin "${pluginId}" needs a "repo" of the form owner/repo`);
       }
-      manifest.plugins.push({ id: pluginId, source: "github", repo: entry.repo, enabled, locked });
+      let range: string | undefined;
+      if (entry.range !== undefined) {
+        if (!isValidRange(entry.range)) {
+          throw new VaultPackError(`${VAULT_PACK_MANIFEST}: github plugin "${pluginId}" has a malformed "range" ${JSON.stringify(entry.range)} (use an npm-style range such as "^1.4.0" or ">=1.4.2 <2")`);
+        }
+        range = entry.range;
+      }
+      let minReleaseAgeDays: number | undefined;
+      if (entry.minReleaseAgeDays !== undefined) {
+        const n = entry.minReleaseAgeDays;
+        if (typeof n !== "number" || !Number.isFinite(n) || n < 0 || n > MAX_MIN_RELEASE_AGE_DAYS) {
+          throw new VaultPackError(`${VAULT_PACK_MANIFEST}: github plugin "${pluginId}" "minReleaseAgeDays" must be a number from 0 to ${MAX_MIN_RELEASE_AGE_DAYS}`);
+        }
+        if (range === undefined) throw new VaultPackError(`${VAULT_PACK_MANIFEST}: github plugin "${pluginId}" sets "minReleaseAgeDays" without a "range"`);
+        minReleaseAgeDays = n;
+      }
+      manifest.plugins.push({
+        id: pluginId, source: "github", repo: entry.repo,
+        ...(range !== undefined ? { range } : {}),
+        ...(minReleaseAgeDays !== undefined ? { minReleaseAgeDays } : {}),
+        enabled, locked,
+      });
     } else {
       throw new VaultPackError(`${VAULT_PACK_MANIFEST}: plugin "${pluginId}" has unknown source ${JSON.stringify(entry.source)}`);
     }
   }
   return manifest;
+}
+
+/**
+ * The release-age floor for a ranged GitHub entry. The ADR 0002 policy value is
+ * authoritative when set (an administrator can require a wait, or waive it with
+ * 0); otherwise the entry's own value; otherwise the default.
+ */
+export function effectiveMinReleaseAgeDays(entry: { minReleaseAgeDays?: number }, policy: ManagedPolicy | null | undefined): number {
+  return policy?.packs?.minReleaseAgeDays ?? entry.minReleaseAgeDays ?? DEFAULT_MIN_RELEASE_AGE_DAYS;
 }
 
 function parseSemver(v: string): [number, number, number] | null {
@@ -383,7 +429,16 @@ function prepare(pack: LoadedVaultPack, opts: VaultPackOptions): PreparedVaultPa
     const blocked = isPluginBlocked(opts.policy ?? null, plugin.id);
     const firstParty = FIRST_PARTY_PLUGIN_IDS.includes(plugin.id);
     if (plugin.source === "github") {
-      plugins.push({ id: plugin.id, source: "github", repo: plugin.repo, enabled: plugin.enabled, locked: plugin.locked, firstParty, blocked });
+      if (!plugin.range && opts.policy?.packs?.requireGithubRange) {
+        throw new VaultPackError(
+          `GitHub plugin "${plugin.id}" (${plugin.repo}) has no version range, and this computer's managed policy requires one. Ask the pack author to add a "range" such as "^1.4.0".`,
+        );
+      }
+      plugins.push({
+        id: plugin.id, source: "github", repo: plugin.repo,
+        ...(plugin.range ? { range: plugin.range, minReleaseAgeDays: effectiveMinReleaseAgeDays(plugin, opts.policy) } : {}),
+        enabled: plugin.enabled, locked: plugin.locked, firstParty, blocked,
+      });
       continue;
     }
     const files = pack.pluginFiles.get(plugin.id);
@@ -472,7 +527,13 @@ export type InstallCommunityFn = (
   root: string,
   specInput: string,
   opts: ResolveOpts,
-) => Promise<{ id: string }>;
+) => Promise<{
+  id: string;
+  /** Reported by the real installer; required for ranged entries, which are range-checked and locked from it. */
+  version?: string;
+  ref?: string;
+  fileHashes?: Record<string, string>;
+}>;
 
 export interface ApplyVaultPackOptions extends VaultPackOptions {
   /** Overridable in tests to avoid real GitHub calls. */
@@ -567,22 +628,61 @@ export async function applyVaultPack(
     await writeStaged(stageRoot, writes, prepared.dirs);
 
     const install = opts.installCommunity ?? defaultInstallCommunity;
-    const jobs: Array<{ repo: string; expectedId?: string; enabled: boolean }> = [
+    type GithubJob = { repo: string; expectedId?: string; enabled: boolean; range?: string; minReleaseAgeDays?: number };
+    const githubFailures: Array<{ repo: string; message: string }> = [];
+    // ADR 0014 default plugins carry no range, so a managed policy that requires one refuses them (and "skip" mode logs it).
+    const unresolvedRepos = opts.unresolvedGithubPlugins ?? [];
+    const refuseUnresolved = !!opts.policy?.packs?.requireGithubRange;
+    if (refuseUnresolved) {
+      for (const repo of unresolvedRepos) githubFailures.push({ repo, message: "has no version range, which this computer's managed policy requires" });
+    }
+    const jobs: GithubJob[] = [
       ...manifest.plugins
         .filter((p): p is Extract<VaultPackPlugin, { source: "github" }> => p.source === "github")
-        .map((p) => ({ repo: p.repo, expectedId: p.id, enabled: p.enabled })),
-      ...(opts.unresolvedGithubPlugins ?? []).map((repo) => ({ repo, enabled: true })),
+        .map((p) => ({
+          repo: p.repo, expectedId: p.id, enabled: p.enabled,
+          ...(p.range ? { range: p.range, minReleaseAgeDays: effectiveMinReleaseAgeDays(p, opts.policy) } : {}),
+        })),
+      ...(refuseUnresolved ? [] : unresolvedRepos.map((repo) => ({ repo, enabled: true }))),
     ];
-    const githubFailures: Array<{ repo: string; message: string }> = [];
     const installedGithub = new Set<string>();
     const unresolvedEnabled: string[] = [];
-    const settled = await Promise.allSettled(jobs.map((j) => install(stageRoot, j.repo, { type: "plugin" })));
+    const settled = await Promise.allSettled(
+      jobs.map((j) =>
+        install(stageRoot, j.repo, {
+          type: "plugin",
+          ...(j.range ? { range: j.range, minReleaseAgeDays: j.minReleaseAgeDays } : {}),
+        }),
+      ),
+    );
+    const lockWrites: Array<Promise<void>> = [];
+    const discardIds: string[] = [];
     settled.forEach((result, i) => {
       const job = jobs[i];
       if (result.status === "fulfilled") {
         if (job.expectedId && result.value.id !== job.expectedId) {
           githubFailures.push({ repo: job.repo, message: `installed plugin id "${result.value.id}" does not match manifest id "${job.expectedId}"` });
+        } else if (job.range && !(result.value.version && result.value.ref && result.value.fileHashes)) {
+          githubFailures.push({ repo: job.repo, message: `the installer did not report the resolved version and file hashes needed to lock range "${job.range}"` });
+          discardIds.push(result.value.id);
+        } else if (job.range && !satisfies(result.value.version!, job.range)) {
+          // Defence in depth: the resolver already enforces the range, but a result outside it is never accepted.
+          githubFailures.push({ repo: job.repo, message: `resolved version ${result.value.version} is outside the pack's range "${job.range}"` });
+          discardIds.push(result.value.id);
         } else {
+          if (job.range) {
+            lockWrites.push(
+              recordPluginLock(stageRoot, result.value.id, {
+                repo: job.repo,
+                range: job.range,
+                minReleaseAgeDays: job.minReleaseAgeDays ?? DEFAULT_MIN_RELEASE_AGE_DAYS,
+                version: result.value.version!,
+                ref: result.value.ref!,
+                files: result.value.fileHashes!,
+                lockedAt: new Date().toISOString(),
+              }),
+            );
+          }
           installedGithub.add(result.value.id);
           if (job.enabled && !job.expectedId) unresolvedEnabled.push(result.value.id);
         }
@@ -590,6 +690,15 @@ export async function applyVaultPack(
         githubFailures.push({ repo: job.repo, message: result.reason instanceof Error ? result.reason.message : String(result.reason) });
       }
     });
+    // Code that could not be range-checked or locked must not stay on disk, even when failures are tolerated.
+    for (const id of discardIds) {
+      if (PLUGIN_ID_RE.test(id)) await fsp.rm(path.join(stageRoot, ".geode", "plugins", id), { recursive: true, force: true });
+    }
+    try {
+      await Promise.all(lockWrites);
+    } catch (err) {
+      githubFailures.push({ repo: "plugins.lock.json", message: err instanceof Error ? err.message : String(err) });
+    }
     if (githubFailures.length) {
       if ((opts.githubFailure ?? "fail") === "fail") {
         throw new VaultPackError(`Could not install GitHub plugin ${githubFailures.map((f) => `${f.repo} (${f.message})`).join(", ")}`);
@@ -684,7 +793,7 @@ export function buildMemoryPack(spec: {
   dirs?: Iterable<string>;
   /** Bundled plugins: id -> filename -> bytes. */
   bundled?: Map<string, Map<string, Buffer>>;
-  github?: Array<{ id: string; repo: string; enabled?: boolean }>;
+  github?: Array<{ id: string; repo: string; enabled?: boolean; range?: string; minReleaseAgeDays?: number }>;
 }): LoadedVaultPack {
   const pluginFiles = spec.bundled ?? new Map<string, Map<string, Buffer>>();
   const plugins: VaultPackPlugin[] = [];
@@ -694,7 +803,12 @@ export function buildMemoryPack(spec: {
     for (const [file, data] of files) if (file !== "main.js") fileHashes[file] = sha256Hex(data);
     plugins.push({ id, source: "bundled", sha256: main ? sha256Hex(main) : "0".repeat(64), files: fileHashes, enabled: true, locked: false });
   }
-  for (const g of spec.github ?? []) plugins.push({ id: g.id, source: "github", repo: g.repo, enabled: g.enabled ?? true, locked: false });
+  for (const g of spec.github ?? []) plugins.push({
+    id: g.id, source: "github", repo: g.repo,
+    ...(g.range ? { range: g.range } : {}),
+    ...(g.minReleaseAgeDays !== undefined ? { minReleaseAgeDays: g.minReleaseAgeDays } : {}),
+    enabled: g.enabled ?? true, locked: false,
+  });
   return {
     manifest: {
       packVersion: 1,

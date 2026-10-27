@@ -1,4 +1,5 @@
 import { PropertyTypes } from "./properties/property-types";
+import { renderVaultPackPlugin } from "./vault-pack-consent";
 import type { BaseSyncFocusReceipt } from "./views/bases/paused-edit";
 import { SourceNavigationEffectFailure, type SourceNavigationRequest } from "./markdown/source-owned-navigation";
 import { ScopeCancelled } from "./workspaces/render-ownership";
@@ -3660,20 +3661,7 @@ export class App {
       warning.setAttribute("role", "note");
       const pluginList = el("ul", "vault-pack-plugins");
       for (const plugin of summary.plugins) {
-        const item = el("li", "vault-pack-plugin");
-        item.append(el("span", "vault-pack-plugin-name", `${plugin.name ?? plugin.id}${plugin.version ? ` ${plugin.version}` : ""}`));
-        const source = plugin.source === "github" ? `GitHub: ${plugin.repo}` : "Bundled in this pack";
-        item.append(el("span", "vault-pack-plugin-source", source));
-        if (plugin.sha256) {
-          const hash = el("code", "vault-pack-plugin-hash", `sha256 ${plugin.sha256.slice(0, 16)}\u2026`);
-          hash.title = plugin.sha256;
-          item.append(hash);
-        }
-        const state = plugin.blocked ? "Blocked by your administrator: installed disabled" : plugin.enabled ? "Enabled" : "Installed disabled";
-        item.append(el("span", "vault-pack-plugin-state", state));
-        if (plugin.firstParty) {
-          item.append(el("span", "vault-pack-plugin-impersonation", `Warning: "${plugin.id}" is the id of a plugin that ships with Geode. Only continue if you expected this pack to replace it.`));
-        }
+        const item = renderVaultPackPlugin((tag, className, text) => el(tag, className, text), plugin);
         pluginList.append(item);
       }
       dialog.append(el("div", "vault-create-label", `Plugins (${summary.plugins.length})`), pluginList, warning);

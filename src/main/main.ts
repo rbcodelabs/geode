@@ -486,6 +486,7 @@ function saveConfig(cfg: GlobalConfig) {
 const vaultPacks = new VaultPackService({
   policy: () => loadManagedPolicy(),
   geodeVersion: app.getVersion(),
+  resolveCommunity: (spec, opts) => resolveCommunity(spec, opts),
 });
 
 /**
@@ -1895,7 +1896,10 @@ function registerIpc() {
   // supplies file URLs or paths.
   ipcMain.handle("community-resolve", async (e, spec: string, opts: ResolveOpts) => {
     guardPluginInstall(installPolicyRoot(e), "community-resolve", spec);
-    return resolveCommunity(spec, opts ?? {});
+    // The open vault (if any) lets a plugin locked under a semver range (ADR 0050) resolve inside that range.
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const session = win ? sessions.get(win.id) : undefined;
+    return resolveCommunity(spec, opts ?? {}, session?.root);
   });
 
   ipcMain.handle("community-install", async (e, spec: string, opts: ResolveOpts) => {

@@ -5253,6 +5253,28 @@ body.is-mobile .page-preview {
   color: var(--text-muted);
 }
 
+.vault-pack-plugin-pin {
+  font-weight: 600;
+}
+
+.vault-pack-plugin-pinned {
+  color: var(--text-normal);
+}
+
+.vault-pack-plugin-unpinned,
+.vault-pack-plugin-unpinned-warning {
+  color: var(--text-error, #c0392b);
+}
+
+.vault-pack-plugin-pin-detail,
+.vault-pack-plugin-unpinned-warning {
+  flex-basis: 100%;
+}
+
+.vault-pack-plugin-pin-detail {
+  color: var(--text-muted);
+}
+
 .vault-pack-plugin-impersonation {
   flex-basis: 100%;
   color: var(--text-error, #c0392b);
