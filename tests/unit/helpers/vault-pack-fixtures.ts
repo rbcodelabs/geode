@@ -23,7 +23,7 @@ export interface FixtureOptions {
   /** vault-relative path -> contents */
   files?: Record<string, string | Buffer>;
   bundled?: FixturePlugin[];
-  github?: Array<{ id: string; repo: string; enabled?: boolean }>;
+  github?: Array<{ id: string; repo: string; enabled?: boolean; range?: string; minReleaseAgeDays?: number }>;
   manifest?: Record<string, unknown>;
   /** Raw extra zip entries (hostile names, symlinks, ...), written verbatim. */
   extraEntries?: ZipWriteEntry[];
@@ -62,7 +62,12 @@ export function buildPackZip(options: FixtureOptions = {}): Buffer {
     });
   }
   for (const g of options.github ?? []) {
-    plugins.push({ id: g.id, source: "github", repo: g.repo, enabled: g.enabled ?? true, locked: false });
+    plugins.push({
+      id: g.id, source: "github", repo: g.repo,
+      ...(g.range !== undefined ? { range: g.range } : {}),
+      ...(g.minReleaseAgeDays !== undefined ? { minReleaseAgeDays: g.minReleaseAgeDays } : {}),
+      enabled: g.enabled ?? true, locked: false,
+    });
   }
   const manifest = {
     packVersion: 1,

@@ -24,7 +24,20 @@ export interface ManagedPolicy {
     mode: "allowlist" | "blocklist";
     ids: string[];
   };
+  /** Vault-pack GitHub plugin handling (ADR 0050). Each key is optional. */
+  packs?: {
+    /** Refuse pack GitHub plugin entries that carry no semver `range` (default off). */
+    requireGithubRange?: boolean;
+    /**
+     * Release-age floor in days for ranged GitHub plugin entries. When present it is
+     * authoritative: pack entries cannot override it. `0` disables the wait.
+     */
+    minReleaseAgeDays?: number;
+  };
 }
+
+/** Largest accepted `packs.minReleaseAgeDays` (one year). */
+export const MAX_MIN_RELEASE_AGE_DAYS = 365;
 
 /**
  * Parse and validate an already-`JSON.parse`d policy document. Never
@@ -79,6 +92,26 @@ export function validatePolicy(raw: unknown): ManagedPolicy | null {
         }
         policy.plugins = { mode: p.mode, ids };
       }
+    }
+  }
+
+  if (obj.packs !== undefined) {
+    const packs = obj.packs;
+    if (!packs || typeof packs !== "object" || Array.isArray(packs)) {
+      console.error('Managed policy: "packs" is present but not an object; ignoring packs policy.');
+    } else {
+      const k = packs as Record<string, unknown>;
+      const parsed: NonNullable<ManagedPolicy["packs"]> = {};
+      if (k.requireGithubRange !== undefined) {
+        if (typeof k.requireGithubRange === "boolean") parsed.requireGithubRange = k.requireGithubRange;
+        else console.warn('Managed policy: "packs.requireGithubRange" must be a boolean; ignoring it.');
+      }
+      if (k.minReleaseAgeDays !== undefined) {
+        const n = k.minReleaseAgeDays;
+        if (typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= MAX_MIN_RELEASE_AGE_DAYS) parsed.minReleaseAgeDays = n;
+        else console.warn(`Managed policy: "packs.minReleaseAgeDays" must be a number from 0 to ${MAX_MIN_RELEASE_AGE_DAYS}; ignoring it.`);
+      }
+      policy.packs = parsed;
     }
   }
 

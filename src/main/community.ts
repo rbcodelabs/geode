@@ -31,6 +31,8 @@ import {
   type ResolveOpts,
   type ResolvedItem,
 } from "./github-resolve";
+import { satisfies } from "../shared/semver-range";
+import { activeLockEntry, recordPluginLock } from "./plugin-lock";
 
 /** Only these filenames are ever written to disk, regardless of what a repo ships. */
 const ALLOWED_FILES = new Set(["manifest.json", "main.js", "styles.css", "theme.css"]);
@@ -48,6 +50,8 @@ function bases(): { apiBase: string; rawBase: string } {
 export function validateArtifactHashes(
   expected: CertifiedArtifactHashes,
   actual: Partial<Record<"manifest.json" | "main.js" | "styles.css", Buffer>>,
+  /** Names the source of `expected` in errors: the catalog certificate, or `.geode/plugins.lock.json`. */
+  source = "catalog",
 ): void {
   for (const name of ["manifest.json", "main.js", "styles.css"] as const) {
     const expectedHash = expected[name];
@@ -56,7 +60,7 @@ export function validateArtifactHashes(
     if (!expectedHash && bytes) throw new Error(`Downloaded artifact ${name} is not certified`);
     if (!expectedHash || !bytes) continue;
     const actualHash = createHash("sha256").update(bytes).digest("hex");
-    if (actualHash !== expectedHash) throw new Error(`${name} failed catalog SHA-256 verification`);
+    if (actualHash !== expectedHash) throw new Error(`${name} failed ${source} SHA-256 verification`);
   }
 }
 
@@ -147,9 +151,19 @@ async function preserveItemState(sourceDir: string, stagingDir: string): Promise
 /** Resolve `owner/repo` to install metadata (no download) — for the modal preview. */
 export async function resolveCommunity(
   specInput: string,
-  opts: ResolveOpts
+  opts: ResolveOpts,
+  /** The open vault, when there is one: a plugin locked under a range (ADR 0050) then resolves within that range. */
+  root?: string,
 ): Promise<CommunityPreview> {
-  const { spec, resolved } = await resolve(specInput, opts);
+  let effective = opts;
+  if (root && opts.type !== "theme") {
+    const { owner, repo } = parseRepoSpec(specInput);
+    const locked = await activeLockEntry(root, `${owner}/${repo}`);
+    if (locked && opts.range === undefined) {
+      effective = { ...opts, range: locked.entry.range, minReleaseAgeDays: locked.entry.minReleaseAgeDays };
+    }
+  }
+  const { spec, resolved } = await resolve(specInput, effective);
   return toPreview(spec, resolved);
 }
 
@@ -164,8 +178,23 @@ export async function installCommunity(
   specInput: string,
   opts: ResolveOpts
 ): Promise<InstalledResult> {
-  const { spec, resolved } = await resolve(specInput, opts);
+  // A plugin locked under a range (ADR 0050) keeps resolving inside that range, and a result outside it is refused.
+  const { owner, repo } = parseRepoSpec(specInput);
+  const locked = opts.type !== "theme" ? await activeLockEntry(root, `${owner}/${repo}`) : null;
+  const effective: ResolveOpts =
+    locked && opts.range === undefined ? { ...opts, range: locked.entry.range, minReleaseAgeDays: locked.entry.minReleaseAgeDays } : opts;
+  const { spec, resolved } = await resolve(specInput, effective);
   assertSafeId(resolved.id);
+  if (locked) {
+    if (resolved.type !== "plugin" || resolved.id !== locked.id) {
+      throw new Error(`${spec.owner}/${spec.repo} is locked as plugin "${locked.id}" but resolved as ${resolved.type} "${resolved.id}"`);
+    }
+    if (!satisfies(resolved.version, locked.entry.range)) {
+      throw new Error(
+        `${resolved.id} ${resolved.version} is outside the locked version range "${locked.entry.range}" (.geode/plugins.lock.json); refusing to install it`
+      );
+    }
+  }
 
   const subdir = resolved.type === "plugin" ? "plugins" : "themes";
   const geodeDir = path.join(root, ".geode");
@@ -176,6 +205,7 @@ export async function installCommunity(
   // Staging dir inside .geode/ so the final rename is on the same volume
   // (a cross-device rename from the OS temp dir would fail with EXDEV).
   const staging = await fsp.mkdtemp(path.join(geodeDir, "install-"));
+  let installedHashes: Record<string, string> | undefined;
   try {
     let wroteManifest = false;
     let wroteEntry = false;
@@ -209,6 +239,17 @@ export async function installCommunity(
       }
     }
 
+    if (resolved.type === "plugin") {
+      installedHashes = {};
+      for (const [name, bytes] of Object.entries(stagedPluginFiles)) {
+        installedHashes[name] = createHash("sha256").update(bytes).digest("hex");
+      }
+      // Same version as locked: the bytes must be the ones that were recorded.
+      if (locked && locked.entry.version === resolved.version) {
+        validateArtifactHashes(locked.entry.files as unknown as CertifiedArtifactHashes, stagedPluginFiles, "plugins.lock.json");
+      }
+    }
+
     await preserveItemState(destDir, staging);
     await fsp.rm(destDir, { recursive: true, force: true });
     await fsp.rename(staging, destDir);
@@ -217,5 +258,14 @@ export async function installCommunity(
     throw err;
   }
 
-  return toPreview(spec, resolved);
+  if (locked && resolved.type === "plugin") {
+    await recordPluginLock(root, resolved.id, {
+      ...locked.entry,
+      version: resolved.version,
+      ref: resolved.ref,
+      files: installedHashes!,
+      lockedAt: new Date().toISOString(),
+    });
+  }
+  return { ...toPreview(spec, resolved), ...(installedHashes ? { fileHashes: installedHashes } : {}) };
 }

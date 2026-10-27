@@ -177,6 +177,22 @@ Notes:
   with a logged warning**, not treated as invalidating the whole file.
 - No glob/wildcard support in v1. Keeps matching a single `Array.includes`
   check, trivially unit-testable.
+- **`packs` (added by ADR 0050).** An optional sibling key that governs GitHub
+  plugins listed in vault packs:
+
+  ```ts
+  packs?: {
+    requireGithubRange?: boolean;  // refuse pack GitHub entries with no semver "range" (default false)
+    minReleaseAgeDays?: number;    // 0-365; authoritative release-age floor for ranged entries
+  };
+  ```
+
+  `requireGithubRange: true` makes a pack with an unpinned GitHub plugin fail
+  at inspect and apply (and refuses ADR 0014 default plugins, which carry no
+  range). `minReleaseAgeDays`, when present, overrides both the default of 3 and
+  any per-entry value in the pack, so an administrator can raise the wait or
+  waive it with `0`. Invalid values are skipped with a warning, like `ids`.
+  Absent keys change nothing.
 - **Extensibility for future policy areas:** add sibling top-level keys, e.g.
   `updates: { pin: "0.2.17" }` or `settings: { forced: {...} }`, following
   the same `policyVersion`-gated, optional-key pattern.

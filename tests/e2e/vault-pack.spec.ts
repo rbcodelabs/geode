@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
@@ -218,5 +219,75 @@ test("Save vault as pack exports a vault that imports back", async () => {
   } finally {
     await cleanup(ctx);
     fs.rmSync(exportDir, { recursive: true, force: true });
+  }
+});
+
+test("GitHub plugins: consent shows the pinned range vs unpinned latest, and create locks the resolved release", async () => {
+  // A stub GitHub: acme/pinned-plugin has 1.5.0 (10 days old), 1.6.0 (1 day old, inside the 3-day floor)
+  // and 2.0.0 (outside the range); acme/loose-plugin is the unpinned entry.
+  const day = 24 * 60 * 60 * 1000;
+  const releasesByRepo: Record<string, Array<{ tag: string; ageDays: number }>> = {
+    "acme/pinned-plugin": [{ tag: "v1.5.0", ageDays: 10 }, { tag: "v1.6.0", ageDays: 1 }, { tag: "v2.0.0", ageDays: 30 }],
+    "acme/loose-plugin": [{ tag: "v0.3.0", ageDays: 20 }],
+  };
+  let base = "";
+  const server = http.createServer((req, res) => {
+    const url = req.url ?? "";
+    const list = /^\/repos\/([^/]+\/[^/]+)\/releases$/.exec(url);
+    if (list && releasesByRepo[list[1]]) {
+      res.end(JSON.stringify(releasesByRepo[list[1]].map((r) => ({
+        tag_name: r.tag, prerelease: false, published_at: new Date(Date.now() - r.ageDays * day).toISOString(),
+        assets: ["manifest.json", "main.js"].map((name) => ({ name, browser_download_url: `${base}/dl/${list[1]}/${r.tag}/${name}` })),
+      }))));
+      return;
+    }
+    const dl = /^\/dl\/([^/]+\/[^/]+)\/([^/]+)\/(manifest\.json|main\.js)$/.exec(url);
+    if (dl && Object.hasOwn(releasesByRepo, dl[1])) {
+      // Stub only: the repo is allowlisted above and the body is served as plain text, never HTML.
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      const id = dl[1].split("/")[1];
+      res.end(dl[3] === "main.js"
+        ? `module.exports.default = class P extends require('geode').Plugin {};`
+        : JSON.stringify({ id, name: id, version: dl[2].slice(1), minAppVersion: "0.1.0", description: "stub", author: "Acme" }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end("not found");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const packDir = fs.mkdtempSync(path.join(os.tmpdir(), "geode-vault-pack-gh-"));
+  const packPath = path.join(packDir, "gh.vault");
+  fs.writeFileSync(packPath, buildPackZip({
+    github: [
+      { id: "pinned-plugin", repo: "acme/pinned-plugin", range: "^1.4.0" },
+      { id: "loose-plugin", repo: "acme/loose-plugin" },
+    ],
+  }));
+  const ctx = await launch({ env: { GEODE_TEST_VAULT_PACK_PICK: packPath, GEODE_GITHUB_API_BASE: base } });
+  try {
+    const { window } = ctx;
+    await window.getByRole("button", { name: "Create vault from pack…" }).click();
+    const dialog = window.locator(".vault-pack-modal");
+    await expect(dialog).toBeVisible();
+    const pinned = dialog.locator(".vault-pack-plugin", { hasText: "acme/pinned-plugin" });
+    await expect(pinned.locator(".vault-pack-plugin-pin")).toHaveText("Pinned range ^1.4.0");
+    // 1.6.0 is inside the range but younger than the default 3-day floor, so the consent screen reports 1.5.0.
+    await expect(pinned.locator(".vault-pack-plugin-pin-detail")).toContainText("currently resolves to 1.5.0; skips releases newer than 3 days");
+    const loose = dialog.locator(".vault-pack-plugin", { hasText: "acme/loose-plugin" });
+    await expect(loose.locator(".vault-pack-plugin-pin")).toHaveText("Unpinned: latest release");
+    await expect(loose.locator(".vault-pack-plugin-unpinned-warning")).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Create vault" }).click();
+    const lockPath = path.join(ctx.documentsDir, "Acme Onboarding", ".geode", "plugins.lock.json");
+    await expect.poll(() => fs.existsSync(lockPath)).toBe(true);
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    expect(Object.keys(lock.plugins)).toEqual(["pinned-plugin"]);
+    expect(lock.plugins["pinned-plugin"]).toMatchObject({ repo: "acme/pinned-plugin", range: "^1.4.0", version: "1.5.0", ref: "v1.5.0" });
+    expect(lock.plugins["pinned-plugin"].files["main.js"]).toMatch(/^[0-9a-f]{64}$/);
+  } finally {
+    await cleanup(ctx);
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(packDir, { recursive: true, force: true });
   }
 });
