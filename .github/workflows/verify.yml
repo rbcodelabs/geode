@@ -15,7 +15,9 @@ concurrency:
 jobs:
   verify:
     runs-on: macos-latest
-    timeout-minutes: 30
+    # The serial macOS e2e gate (~520 specs) needs ~33 min since the managed-policy specs landed; it was cancelled at
+    # exactly 30 min on main (0c864be) and on PR #438. Same checks, just room to finish.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
