@@ -75,7 +75,7 @@
     "electron-builder": "^26.16.1",
     "esbuild": "^0.28.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@aws-sdk/dsql-signer": "3.1136.0",
