@@ -1,21 +1,27 @@
 import { validateVaultAllowlistEntry, VAULT_ALLOWLIST_MAX_ENTRIES } from "./vault-access";
 
-export const ARTIFACT_MANIFEST_SCHEMA_VERSION = 1 as const;
+/** Schema versions this build can read. v2 adds the `nextjs` runtime and `loopback` network permission. */
+export const ARTIFACT_MANIFEST_SCHEMA_VERSIONS = [1, 2] as const;
+export type ArtifactManifestSchemaVersion = (typeof ARTIFACT_MANIFEST_SCHEMA_VERSIONS)[number];
 
 export type ArtifactViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 
-export interface ArtifactManifest {
-  schemaVersion: typeof ARTIFACT_MANIFEST_SCHEMA_VERSION;
+interface ArtifactManifestBase {
+  schemaVersion: ArtifactManifestSchemaVersion;
   id: string;
   title: string;
+  /** For `static` a served file; for `nextjs` a source path that is validated but never served. */
   entry: string;
-  runtime: "static";
   createdByThreadId: string;
   viewport: {
     preset: ArtifactViewportPreset;
     width: number;
     height: number;
   };
+}
+
+export interface StaticArtifactManifest extends ArtifactManifestBase {
+  runtime: "static";
   permissions: {
     network: "none";
     clipboard: false;
@@ -25,6 +31,20 @@ export interface ArtifactManifest {
     vaultAllowlist?: string[];
   };
 }
+
+/** Schema v2 only. The dev server is owned by the producer; see ADR 0005. */
+export interface NextjsArtifactManifest extends ArtifactManifestBase {
+  schemaVersion: 2;
+  runtime: "nextjs";
+  permissions: {
+    network: "loopback";
+    clipboard: false;
+    /** A Next.js artifact never gets the vault bridge, so only "none" is accepted. */
+    vault?: "none";
+  };
+}
+
+export type ArtifactManifest = StaticArtifactManifest | NextjsArtifactManifest;
 
 export type ArtifactManifestIssueCode =
   | "invalid_type"
@@ -186,13 +206,17 @@ export function parseArtifactManifest(value: unknown): ArtifactManifestParseResu
 
   addUnknownFields(value, ROOT_FIELDS, "", issues);
   const schemaVersion = required(value, "schemaVersion", issues);
-  if (schemaVersion !== ARTIFACT_MANIFEST_SCHEMA_VERSION) {
+  const knownSchema = schemaVersion === 1 || schemaVersion === 2;
+  if (!knownSchema) {
     issues.push({
       code: "unsupported_schema",
       path: "schemaVersion",
-      message: `Expected schema version ${ARTIFACT_MANIFEST_SCHEMA_VERSION}.`,
+      message: `Expected schema version ${ARTIFACT_MANIFEST_SCHEMA_VERSIONS.join(" or ")}.`,
     });
   }
+  // An unknown version is validated against the strictest (v1) rules so the
+  // report stays focused on the schema error rather than guessing a future shape.
+  const isV2 = schemaVersion === 2;
 
   const id = required(value, "id", issues);
   validateString(id, "id", issues, {
@@ -206,8 +230,13 @@ export function parseArtifactManifest(value: unknown): ArtifactManifestParseResu
   const entry = required(value, "entry", issues);
   validateEntry(entry, issues);
   const runtime = required(value, "runtime", issues);
-  if (runtime !== "static") {
-    issues.push({ code: "invalid_value", path: "runtime", message: 'Only runtime "static" is supported.' });
+  const runtimeOk = isV2 ? runtime === "static" || runtime === "nextjs" : runtime === "static";
+  if (!runtimeOk) {
+    issues.push({
+      code: "invalid_value",
+      path: "runtime",
+      message: isV2 ? 'Expected runtime "static" or "nextjs".' : 'Only runtime "static" is supported.',
+    });
   }
   const createdByThreadId = required(value, "createdByThreadId", issues);
   validateString(createdByThreadId, "createdByThreadId", issues, {
@@ -235,13 +264,29 @@ export function parseArtifactManifest(value: unknown): ArtifactManifestParseResu
     issues.push({ code: "invalid_type", path: "permissions", message: "Expected an object." });
   } else {
     addUnknownFields(permissions, PERMISSION_FIELDS, "permissions", issues);
-    if (permissions.network !== "none") {
-      issues.push({ code: "invalid_value", path: "permissions.network", message: 'Only network permission "none" is supported.' });
+    // Runtime and network are coupled: static => none, nextjs => loopback.
+    const expectedNetwork = isV2 && runtime === "nextjs" ? "loopback" : "none";
+    if (permissions.network !== expectedNetwork) {
+      issues.push({
+        code: "invalid_value",
+        path: "permissions.network",
+        message: expectedNetwork === "loopback"
+          ? 'Runtime "nextjs" requires network permission "loopback".'
+          : 'Only network permission "none" is supported.',
+      });
     }
     if (permissions.clipboard !== false) {
       issues.push({ code: "invalid_value", path: "permissions.clipboard", message: "Clipboard access must be false." });
     }
-    validateVaultPermission(permissions, issues);
+    if (isV2 && runtime === "nextjs" && permissions.vault === "read") {
+      issues.push({
+        code: "invalid_value",
+        path: "permissions.vault",
+        message: 'Runtime "nextjs" cannot request vault read access.',
+      });
+    } else {
+      validateVaultPermission(permissions, issues);
+    }
   }
 
   if (issues.length > 0) return { ok: false, issues };

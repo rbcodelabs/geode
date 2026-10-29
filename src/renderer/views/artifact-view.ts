@@ -11,7 +11,13 @@ import { ArtifactVaultBridge } from "../artifacts/vault-bridge";
 
 type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom" | "fill";
 interface Viewport { preset: ViewportPreset; width: number; height: number }
-export interface ArtifactViewState { root: string; viewport?: Viewport }
+export interface ArtifactViewState {
+  root: string;
+  viewport?: Viewport;
+  /** Dev server URL for `nextjs` artifacts. Untrusted here; main re-validates it on registration. */
+  url?: string;
+  runtime?: "static" | "nextjs";
+}
 interface ArtifactWebview extends HTMLElement { src: string; reload(): void; send(channel: string, ...args: unknown[]): void }
 interface WebviewIpcMessageEvent extends Event { channel: string; args: unknown[] }
 
@@ -41,6 +47,7 @@ export class ArtifactView implements View, ReloadableView {
   private registration: ArtifactRegistration | null = null;
   private webview: ArtifactWebview | null = null;
   private root = "";
+  private devServerUrl: string | undefined;
   private viewport: Viewport | undefined;
   private loadGeneration = 0;
   private pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -130,12 +137,19 @@ export class ArtifactView implements View, ReloadableView {
       return;
     }
     this.root = state.root;
+    this.devServerUrl = typeof state.url === "string" && state.url ? state.url : undefined;
     this.viewport = state.viewport;
     this.persistState();
     await this.load(this.root);
   }
 
-  getState(): ArtifactViewState { return { root: this.root, viewport: this.viewport }; }
+  getState(): ArtifactViewState {
+    return {
+      root: this.root,
+      viewport: this.viewport,
+      ...(this.devServerUrl ? { url: this.devServerUrl, runtime: "nextjs" as const } : {}),
+    };
+  }
   private persistState(): void {
     this.leaf.setPersistedState(this.getState());
     this.app.workspace.trigger("layout-change");
@@ -165,7 +179,10 @@ export class ArtifactView implements View, ReloadableView {
     this.stageEl.replaceChildren();
     this.statusEl.textContent = "Validating artifact…";
     try {
-      const result = await window.geode.registerArtifact(root);
+      const result = await window.geode.registerArtifact(
+        root,
+        this.devServerUrl ? { devServerUrl: this.devServerUrl } : undefined,
+      );
       if (!result.ok) {
         const details = result.error.issues?.map((issue) => `${issue.path}: ${issue.message}`).join("\n");
         this.showError(details ? `${result.error.message}\n${details}` : result.error.message);
@@ -255,7 +272,7 @@ export class ArtifactView implements View, ReloadableView {
 
   private async capture(): Promise<void> {
     try {
-      const capture = await window.geode.captureArtifact(this.root);
+      const capture = await window.geode.captureArtifact(this.root, this.devServerUrl ? { url: this.devServerUrl } : undefined);
       this.statusEl.textContent = `Captured ${capture.width} × ${capture.height}`;
     } catch (error) {
       this.statusEl.textContent = `Capture failed: ${(error as Error).message}`;

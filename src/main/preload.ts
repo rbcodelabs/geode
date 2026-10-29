@@ -349,12 +349,12 @@ const api = {
   reportActivePlugins: (pluginIds: string[]): Promise<void> =>
     ipcRenderer.invoke("crash-active-plugins", pluginIds),
   leaveCrashRecovery: (): Promise<void> => ipcRenderer.invoke("crash-recovery-leave"),
-  registerArtifact: (root: string): Promise<ArtifactRegistrationResult> =>
-    ipcRenderer.invoke("artifact-register", root),
+  registerArtifact: (root: string, options?: { devServerUrl?: string }): Promise<ArtifactRegistrationResult> =>
+    ipcRenderer.invoke("artifact-register", root, options),
   unregisterArtifact: (registrationId: string): Promise<boolean> =>
     ipcRenderer.invoke("artifact-unregister", registrationId),
   getArtifactState: (registrationId: string) => ipcRenderer.invoke("artifact-state", registrationId),
-  captureArtifact: (root: string) => ipcRenderer.invoke("artifact-capture", root),
+  captureArtifact: (root: string, options?: { url?: string }) => ipcRenderer.invoke("artifact-capture", root, options),
   onVaultEvent: (cb: (ev: VaultEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: VaultEvent) => cb(ev);
     ipcRenderer.on("vault-event", listener);

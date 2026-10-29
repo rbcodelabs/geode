@@ -58,7 +58,7 @@ Rejected because file origins have awkward containment and privilege semantics,
 make CSP/navigation policy harder to reason about, and do not provide a clean
 per-artifact origin.
 
-### Run an HTTP development server for every artifact
+### Run an HTTP development server for every artifact (see ADR 0005 for the later nextjs runtime)
 
 Rejected for the static MVP. It adds process, port, dependency, and teardown
 risks without benefit for dependency-free artifacts. A supervised dev-server
