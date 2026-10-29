@@ -1984,9 +1984,11 @@ function registerIpc() {
     const state = win ? crashStates.get(win.id) : undefined;
     if (state) state.suppressPlugins = false;
   });
-  ipcMain.handle("artifact-register", async (e, root: string) => {
+  ipcMain.handle("artifact-register", async (e, root: string, options?: { devServerUrl?: unknown }) => {
     try {
-      return { ok: true, registration: await artifactRuntime.register(e.sender, root) } as const;
+      // Options are untrusted renderer input; the runtime validates devServerUrl.
+      const devServerUrl = options && typeof options === "object" ? options.devServerUrl : undefined;
+      return { ok: true, registration: await artifactRuntime.register(e.sender, root, { devServerUrl }) } as const;
     } catch (error) {
       return serializeArtifactRegistrationError(error);
     }
@@ -1995,8 +1997,8 @@ function registerIpc() {
     artifactRuntime.unregister(e.sender, registrationId));
   ipcMain.handle("artifact-state", (e, registrationId: string) =>
     artifactRuntime.getState(e.sender, registrationId));
-  ipcMain.handle("artifact-capture", (e, root: string) =>
-    artifactRuntime.capture(e.sender, root));
+  ipcMain.handle("artifact-capture", (e, root: string, options?: { url?: unknown }) =>
+    artifactRuntime.capture(e.sender, root, { url: options && typeof options === "object" ? options.url : undefined }));
   ipcMain.handle("hotkeys-publish", (e, combos: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win) return;
@@ -2502,6 +2504,8 @@ function createWindow(suppressPlugins = false, launchTarget?: string) {
     // guest on the same shared partition) is safe to call unconditionally.
     if (isAgentBrowserGuest(guest)) boundHeaderRuleSessions.add(guest.session);
     guest.setWindowOpenHandler(({ url, disposition }) => {
+      // Next.js artifact guests may not open popups or Web Viewer tabs at all.
+      if (artifactRuntime.isNextjsGuest(guest)) return { action: "deny" };
       let protocol = "";
       try { protocol = new URL(url).protocol; } catch { /* deny malformed targets */ }
       if ((protocol === "http:" || protocol === "https:") && !win.isDestroyed()) {
