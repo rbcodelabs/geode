@@ -97,7 +97,18 @@ jobs:
             mount_dir="$(mktemp -d "$RUNNER_TEMP/geode-dmg.XXXXXX")"
             hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir"
             verify_app "$mount_dir/Geode.app"
-            hdiutil detach "$mount_dir"
+            # Unmounting can transiently fail with "Resource busy" (Spotlight/spctl still holding the volume) even though
+            # every check above passed; that flaked the v0.30.15 release. Retry, then force as a last resort (the runner is
+            # disposable). Verification above stays strict: only the unmount is tolerant.
+            detached=0
+            for attempt in 1 2 3 4 5; do
+              if hdiutil detach "$mount_dir"; then detached=1; break; fi
+              echo "hdiutil detach attempt $attempt failed; retrying" >&2
+              sleep 3
+            done
+            if [[ $detached -ne 1 ]]; then
+              hdiutil detach -force "$mount_dir" || echo "warning: could not detach $mount_dir" >&2
+            fi
           done
           for zip in "${zips[@]}"; do
             extract_dir="$(mktemp -d "$RUNNER_TEMP/geode-zip.XXXXXX")"
