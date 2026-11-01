@@ -148,6 +148,39 @@ async function preserveItemState(sourceDir: string, stagingDir: string): Promise
   }
 }
 
+/**
+ * Replace `destDir` with the staged install without ever deleting plugin state
+ * before the replacement is in place. The old directory is renamed aside first
+ * (atomic, so a running plugin's later writes land in the new one), its state
+ * is copied into staging, and only then is staging renamed over `destDir`.
+ * Any failure puts the old directory back. Deleting `destDir` in place instead
+ * can fail midway with ENOTEMPTY when a live plugin writes into it, leaving
+ * data.json already removed and the staged copy discarded: that lost every
+ * thread in the claude-threads plugin.
+ */
+export async function swapIntoPlace(staging: string, destDir: string, geodeDir: string): Promise<void> {
+  const aside = path.join(geodeDir, `install-old-${path.basename(destDir)}-${process.pid}-${Date.now()}`);
+  let movedAside = false;
+  try {
+    await fsp.rename(destDir, aside);
+    movedAside = true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  try {
+    if (movedAside) await preserveItemState(aside, staging);
+    await fsp.rename(staging, destDir);
+  } catch (err) {
+    if (movedAside) {
+      await fsp.rm(destDir, { recursive: true, force: true }).catch(() => {});
+      await fsp.rename(aside, destDir);
+    }
+    throw err;
+  }
+  // The install is complete; a leftover backup is harmless, so cleanup is best effort.
+  if (movedAside) await fsp.rm(aside, { recursive: true, force: true }).catch(() => {});
+}
+
 /** Resolve `owner/repo` to install metadata (no download) — for the modal preview. */
 export async function resolveCommunity(
   specInput: string,
@@ -250,9 +283,7 @@ export async function installCommunity(
       }
     }
 
-    await preserveItemState(destDir, staging);
-    await fsp.rm(destDir, { recursive: true, force: true });
-    await fsp.rename(staging, destDir);
+    await swapIntoPlace(staging, destDir, geodeDir);
   } catch (err) {
     await fsp.rm(staging, { recursive: true, force: true });
     throw err;
