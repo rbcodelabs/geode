@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { Session, WebContents, WebPreferences } from "electron";
-import { session, WebContentsView } from "electron";
+import { BrowserWindow, session } from "electron";
 import chokidar, { type FSWatcher } from "chokidar";
 import { parseArtifactManifestJson, type ArtifactManifest, type ArtifactManifestIssue } from "../artifacts/manifest";
 import {
@@ -424,7 +424,7 @@ export class ArtifactRuntime {
   }
 
   /**
-   * Capture without a visible window: an unattached offscreen WebContentsView
+   * Capture without a visible window: a never-shown offscreen BrowserWindow
    * bound to a throwaway session with exactly the same restrictions as a live
    * guest (origin filter, CSP, denied permissions), no preload, no Node.
    */
@@ -436,10 +436,18 @@ export class ArtifactRuntime {
   ): Promise<ArtifactCaptureResult> {
     const partition = `geode-artifact-capture-${randomUUID()}`;
     const captureSession = session.fromPartition(partition, { cache: false });
-    let view: WebContentsView | undefined;
+    let win: BrowserWindow | undefined;
     try {
       await this.configureSession(captureSession, { artifactId, root, allowedOrigin });
-      view = new WebContentsView({
+      // A never-shown offscreen window, not an unattached view: a detached
+      // WebContentsView has no host to size it, so capturePage() returns 0x0.
+      win = new BrowserWindow({
+        show: false,
+        width: viewport.width,
+        height: viewport.height,
+        useContentSize: true,
+        frame: false,
+        skipTaskbar: true,
         webPreferences: {
           session: captureSession,
           offscreen: true,
@@ -451,8 +459,8 @@ export class ArtifactRuntime {
           allowRunningInsecureContent: false,
         },
       });
-      const contents = view.webContents;
-      view.setBounds({ x: 0, y: 0, width: viewport.width, height: viewport.height });
+      const contents = win.webContents;
+      contents.setFrameRate(5);
       contents.setWindowOpenHandler(() => ({ action: "deny" }));
       this.denyOffOriginNavigation(contents, allowedOrigin);
       const loaded = new Promise<void>((resolve, reject) => {
@@ -472,7 +480,7 @@ export class ArtifactRuntime {
       if (error instanceof ArtifactRegistrationError) throw error;
       throw new ArtifactRegistrationError("capture_failed", `Capture failed: ${(error as Error).message}`);
     } finally {
-      if (view && !view.webContents.isDestroyed()) view.webContents.close();
+      if (win && !win.isDestroyed()) win.destroy();
       await Promise.allSettled([captureSession.clearCache(), captureSession.clearStorageData()]);
     }
   }
