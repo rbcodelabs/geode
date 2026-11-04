@@ -5550,8 +5550,11 @@ export class App {
     });
   }
 
-  /** Open a validated static design artifact in an isolated guest session. */
-  async openArtifact(root: string): Promise<void> {
+  /**
+   * Open a validated design artifact in an isolated guest session. `opts.url` is
+   * the producer-owned dev server for `nextjs` artifacts; main re-validates it.
+   */
+  async openArtifact(root: string, opts: { url?: string } = {}): Promise<void> {
     if (!this.host.capabilities.artifacts) {
       this.notify("Artifacts are available on desktop only");
       return;
@@ -5559,12 +5562,16 @@ export class App {
     // Focus the tab that already shows this artifact instead of stacking duplicates.
     for (const existing of this.workspace.getLeavesOfType("geode-artifact")) {
       if (existing.view instanceof ArtifactView && existing.view.getState().root === root) {
+        // Same root, new dev server (restart on another port): re-register in place.
+        if (opts.url && existing.view.getState().url !== opts.url) {
+          await existing.view.setState({ ...existing.view.getState(), url: opts.url });
+        }
         this.workspace.setActiveLeaf(existing);
         return;
       }
     }
     const leaf = this.workspace.getLeaf(true);
-    await leaf.setViewState({ type: "geode-artifact", active: true, state: { root } });
+    await leaf.setViewState({ type: "geode-artifact", active: true, state: opts.url ? { root, url: opts.url, runtime: "nextjs" } : { root } });
   }
 
   /** True when this platform can run artifacts and `folder` holds an `artifact.json`. */

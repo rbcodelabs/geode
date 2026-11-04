@@ -53,7 +53,7 @@ describe("parseArtifactManifest", () => {
   });
 
   it("rejects future schemas instead of guessing", () => {
-    const result = parseArtifactManifest({ ...validManifest, schemaVersion: 2 });
+    const result = parseArtifactManifest({ ...validManifest, schemaVersion: 3 });
     expect(result).toEqual({
       ok: false,
       issues: [expect.objectContaining({ code: "unsupported_schema", path: "schemaVersion" })],
@@ -115,5 +115,55 @@ describe("parseArtifactManifest vault permission", () => {
   it("still rejects unknown permission fields", () => {
     expect(issuePaths(withPermissions({ vault: "read", vaultAllowlist: ["a.base"], filesystem: "all" })))
       .toContain("permissions.filesystem");
+  });
+});
+
+describe("parseArtifactManifest schema v2", () => {
+  const v2Static = { ...validManifest, schemaVersion: 2 };
+  const v2Nextjs = {
+    ...validManifest,
+    schemaVersion: 2,
+    entry: "app/page.tsx",
+    runtime: "nextjs",
+    permissions: { network: "loopback", clipboard: false },
+  };
+  const issuePaths = (value: unknown): string[] => {
+    const result = parseArtifactManifest(value);
+    return result.ok ? [] : result.issues.map((issue) => issue.path);
+  };
+
+  it("accepts a v2 static manifest", () => {
+    expect(parseArtifactManifest(v2Static)).toEqual({ ok: true, manifest: v2Static });
+  });
+
+  it("accepts a v2 nextjs manifest with loopback network", () => {
+    expect(parseArtifactManifest(v2Nextjs)).toEqual({ ok: true, manifest: v2Nextjs });
+  });
+
+  it("keeps v1 static-only: nextjs and loopback are rejected under schema 1", () => {
+    expect(issuePaths({ ...v2Nextjs, schemaVersion: 1 })).toEqual(expect.arrayContaining(["runtime", "permissions.network"]));
+    expect(issuePaths({ ...validManifest, permissions: { network: "loopback", clipboard: false } })).toEqual(["permissions.network"]);
+  });
+
+  it("still rejects unknown runtimes under v2", () => {
+    expect(issuePaths({ ...v2Static, runtime: "vite" })).toContain("runtime");
+  });
+
+  it("couples runtime and network", () => {
+    expect(issuePaths({ ...v2Nextjs, permissions: { network: "none", clipboard: false } })).toEqual(["permissions.network"]);
+    expect(issuePaths({ ...v2Static, permissions: { network: "loopback", clipboard: false } })).toEqual(["permissions.network"]);
+    expect(issuePaths({ ...v2Nextjs, permissions: { network: "any", clipboard: false } })).toEqual(["permissions.network"]);
+  });
+
+  it("rejects vault read access for nextjs and keeps clipboard false", () => {
+    expect(issuePaths({
+      ...v2Nextjs,
+      permissions: { network: "loopback", clipboard: false, vault: "read", vaultAllowlist: ["a.base"] },
+    })).toEqual(["permissions.vault"]);
+    expect(issuePaths({ ...v2Nextjs, permissions: { network: "loopback", clipboard: true } })).toEqual(["permissions.clipboard"]);
+  });
+
+  it("still validates entry as a portable relative path for nextjs", () => {
+    expect(issuePaths({ ...v2Nextjs, entry: "../page.tsx" })).toEqual(["entry"]);
   });
 });
