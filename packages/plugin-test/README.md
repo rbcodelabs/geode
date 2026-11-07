@@ -13,3 +13,7 @@ Build the harness bundle first: `npm run build -w packages/plugin-test`; set `CH
 - The browser host is a mobile runtime (`is-mobile` on `<body>`), so plugins take their mobile code path. Desktop-only code (`fs`, Electron) does not run.
 - Must be served from `http://localhost` (the fixture does this) — `crypto.randomUUID` is absent on fake origins.
 - Bundle is ~6 MB: the shim pulls in the whole app. A lean core is future work.
+
+## Layers
+- `launchPlugin` (browser): `npm run test:plugin-harness`.
+- `launchApp` (real Electron, desktop layout): exercised by `tests/e2e/plugin-harness.spec.ts` in the normal e2e run.

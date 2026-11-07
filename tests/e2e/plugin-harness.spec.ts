@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { launchApp } from "../src/index";
+import { launchApp } from "../../packages/plugin-test/src/index";
 
-const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/menu-plugin");
+// Layer B of @rbcodelabs/geode-plugin-test: the real app with a plugin loaded from a folder.
+// Lives here so the sharded Electron job in verify-fast runs it; the browser layer is `npm run test:plugin-harness`.
+const dir = path.resolve(__dirname, "../../packages/plugin-test/tests/fixtures/menu-plugin");
 
-// Real Electron host (desktop layout). Needs `npm run build` at the repo root; on Linux run under xvfb-run.
 test("plugin view and Menu work in the real app", async () => {
   const h = await launchApp({ plugins: [{ id: "menu-plugin", dir }] });
   try {
