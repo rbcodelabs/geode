@@ -1,9 +1,12 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as vitestIt, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ExternalRootService } from "../../src/main/external-root-service";
 import { JsonRootRegistryStore, RootRegistry } from "../../src/main/root-registry";
+// External roots are macOS-only in the product (main.ts refuses them elsewhere; the e2e specs skip off darwin). The
+// registry fixtures here also assume POSIX paths and physical identities, so these tests run on macOS and Linux only.
+const it = vitestIt.skipIf(process.platform === "win32");
 vi.mock("node:fs/promises", async (original) => ({ ...await original<typeof import("node:fs/promises")>() }));
 
 const temporary: string[] = [];

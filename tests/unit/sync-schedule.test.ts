@@ -22,7 +22,8 @@ const spec = (over: Partial<ScheduleSpec> = {}): ScheduleSpec => ({
 });
 
 describe("renderSchedule (pure)", () => {
-  it("launchd: label from a short root hash, interval, absolute argv, log paths, RunAtLoad false, throttle", () => {
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
+  it.skipIf(process.platform === "win32")("launchd: label from a short root hash, interval, absolute argv, log paths, RunAtLoad false, throttle", () => {
     const u = renderSchedule(spec());
     const hash = scheduleHash("/Users/me/Vault");
     expect(hash).toMatch(/^[0-9a-f]{8}$/);
@@ -47,6 +48,8 @@ describe("renderSchedule (pure)", () => {
     expect(service).toMatch(/Environment="PATH=[^"\n]*\/opt\/n\\\\x\/bin/);
   });
 
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
+
   it("systemd: service + timer, SuccessExitStatus 4 5 6, XDG log dir, enable --now", () => {
     const u = renderSchedule(spec({ platform: "systemd", intervalSeconds: 900, xdgStateHome: "/state", xdgConfigHome: "/cfg" }));
     const [service, timer] = u.files;
@@ -59,6 +62,8 @@ describe("renderSchedule (pure)", () => {
     expect(timer.content).toContain("WantedBy=timers.target");
     expect(u.activate).toEqual([["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", `${u.label}.timer`]]);
   });
+
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
 
   it("is deterministic and quotes awkward paths", () => {
     expect(renderSchedule(spec())).toEqual(renderSchedule(spec()));
@@ -148,6 +153,8 @@ describe("sync schedule via the CLI", () => {
     expect(readdirSync(v.target)).toEqual([]);
     expect(calls).toEqual([]);
   });
+
+  // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
 
   it("install -> status -> uninstall on an approved vault; nothing activates without --activate", async () => {
     const { cli, calls, results } = harness(); const v = vault();

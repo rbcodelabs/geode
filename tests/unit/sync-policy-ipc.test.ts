@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { dispatchHubRequest, registerHubSyncIpc } from "../../src/main/hub-sync-ipc";
 import { dispatchIcloudCall, registerIcloudContainerIpc } from "../../src/main/icloud-container-ipc";
@@ -53,7 +54,7 @@ describe("hub-sync refusals", () => {
     expect(made).toEqual([]);
     // Allowed by policy: the request proceeds to the (watched) provider, which is the proof it was not blocked.
     const allowed = await dispatchHubRequest(manager, "w", REQUESTS[0]!, signal, { providers: ["hub"] });
-    expect(made).toEqual(["fs:/srv/hub"]);
+    expect(made).toEqual([`fs:${resolve("/srv/hub")}`]);
     expect(allowed).toMatchObject({ ok: false, error: { code: expect.not.stringMatching(/policy-blocked/) } });
   });
 
@@ -70,7 +71,7 @@ describe("hub-sync refusals", () => {
     const { manager, made } = watchedManager();
     await dispatchHubRequest(manager, "w", REQUESTS[0]!, signal);
     await dispatchHubRequest(manager, "w", REQUESTS[0]!, signal, null);
-    expect(made).toEqual(["fs:/srv/hub", "fs:/srv/hub"]);
+    expect(made).toEqual([`fs:${resolve("/srv/hub")}`, `fs:${resolve("/srv/hub")}`]);
   });
 
   it("a refused request on an open session closes that session, and never touches the store", async () => {
@@ -106,7 +107,7 @@ describe("hub-sync refusals", () => {
     expect(await call()).toMatchObject({ ok: false, error: { code: "policy-blocked" } });
     policy = { enabled: true };
     await call();
-    expect(made).toEqual(["fs:/srv/hub", "fs:/srv/hub"]); // blocked call created nothing
+    expect(made).toEqual([`fs:${resolve("/srv/hub")}`, `fs:${resolve("/srv/hub")}`]); // blocked call created nothing
   });
 });
 

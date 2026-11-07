@@ -476,7 +476,9 @@ describe("root registry persistence", () => {
     expect(await fs.readFile(file, "utf8")).toBe(original);
   });
 
-  it.each(["parent-first", "child-first"] as const)(
+  // POSIX-only fixtures ("/workspace/repo"): external roots are macOS-only in the product and their canonical-path
+  // validation expects POSIX paths.
+  it.skipIf(process.platform === "win32").each(["parent-first", "child-first"] as const)(
     "rejects persisted ancestor/descendant overlap in %s order",
     async (order) => {
       const parent = persistedRoot(rootIdA, "/workspace/repo");
@@ -491,7 +493,7 @@ describe("root registry persistence", () => {
     }
   );
 
-  it("allows sibling canonical paths that merely share a string prefix", async () => {
+  it.skipIf(process.platform === "win32")("allows sibling canonical paths that merely share a string prefix", async () => {
     const store: RootRegistryStore = {
       load: async () => ({
         schemaVersion: ROOT_REGISTRY_SCHEMA_VERSION,

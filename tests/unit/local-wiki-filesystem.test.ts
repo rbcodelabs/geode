@@ -68,6 +68,8 @@ describe("bounded Node folder capture", () => {
     expect(s.info.diagnostics.filter(d => d.code === "symlink-excluded").map(d => d.path).sort()).toEqual(["broken.md", "directory", "external.md", "internal.md", "loop"]);
   });
 
+  // POSIX-only: chmod-based unreadable files.
+
   it("retains unavailable identities for oversize, invalid encoding and read failures", async () => {
     const root = await fixture({ "big.md": "12345", "bad.md": new Uint8Array([0xc3, 0x28]), "denied.md": "1", "ok.md": "1234" });
     const s = await snapshot(root, { limits: { maxNoteBytes: 4 }, filesystem: { ...nodeWikiFileSystem, open: async path => {
@@ -129,6 +131,8 @@ describe("bounded Node folder capture", () => {
     expect(await openLocalWikiSnapshot(join(root, "missing"))).toEqual({ status: "error", error: { code: "root-unavailable" } });
     expect(await openLocalWikiSnapshot(join(root, "file.md"))).toEqual({ status: "error", error: { code: "root-not-directory" } });
   });
+
+  // POSIX-only: needs FIFOs.
 
   it("skips special files without opening them", async () => {
     const root = await fixture({ "special.md": "unread" });
@@ -197,6 +201,8 @@ describe("observed filesystem races and failures", () => {
     expect(s.search("outside").hits).toEqual([]);
   });
 
+  // POSIX-only: needs symlinks (privileged on Windows) and inode identity.
+
   it("rejects replacement inode and ancestor symlink swaps through the adapter", async () => {
     const root = await fixture({ "dir/a.md": "safe", "replacement.md": "different" });
     const outside = await fixture({ "a.md": "outside" });
@@ -230,6 +236,8 @@ describe("observed filesystem races and failures", () => {
     expect(s.info.diagnostics).toContainEqual({ code: "file-changed", path: "a.md" });
   });
 
+  // POSIX-only: needs symlinks (privileged on Windows).
+
   it("rejects a sibling-prefix canonical escape and never opens the file", async () => {
     const root = await fixture({ "a.md": "safe" });
     let opened = false;
@@ -241,6 +249,8 @@ describe("observed filesystem races and failures", () => {
     expect(s.readNote("a.md").status).toBe("unavailable");
     expect(s.info.diagnostics).toContainEqual({ code: "path-changed", path: "a.md" });
   });
+
+  // POSIX-only: chmod-based unreadable directories.
 
   it("reports descendant listing/stat failures as incomplete discovery", async () => {
     const root = await fixture({ "denied/a.md": "", "bad.md": "", "good.md": "good" });

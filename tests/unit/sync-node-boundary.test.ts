@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, sep } from "node:path";
 import { expect, it } from "vitest";
 
 const root = resolve(__dirname, "../../src/sync-node");
@@ -15,9 +15,9 @@ it("src/sync-node imports no electron, renderer, or main-process code", () => {
       expect(spec, file).not.toMatch(/^electron(\/|$)/);
       if (spec.startsWith(".")) {
         const target = resolve(dirname(file), spec);
-        const ok = target.startsWith(root + "/") || target.startsWith(resolve(root, "../shared") + "/") || target.startsWith(resolve(root, "../sync-core") + "/");
+        const ok = target.startsWith(root + sep) || target.startsWith(resolve(root, "../shared") + sep) || target.startsWith(resolve(root, "../sync-core") + sep);
         expect(ok, `${file} imports ${spec}`).toBe(true);
-        expect(target, file).not.toMatch(/src\/(renderer|main)(\/|$)/);
+        expect(target.split(sep).join("/"), file).not.toMatch(/src\/(renderer|main)(\/|$)/);
       }
     }
   }

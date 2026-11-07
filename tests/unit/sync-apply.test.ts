@@ -50,7 +50,7 @@ it("recognizes a committed operation after an interrupted acknowledgement", asyn
 
 it("does not destroy a file after durable recovery preparation fails", async () => {
   const f = await fixture(); await fs.writeFile(f.recovery, "not a directory");
-  await expect(applyGuardedMutation(f.vault, f.recovery, { operationId: randomUUID(), path: "Note.md", expectedHash: hash("old"), kind: "trash" }, f.deps)).rejects.toMatchObject({ code: "ENOTDIR" });
+  await expect(applyGuardedMutation(f.vault, f.recovery, { operationId: randomUUID(), path: "Note.md", expectedHash: hash("old"), kind: "trash" }, f.deps)).rejects.toThrow(/ENOTDIR|not a directory/); // POSIX stat reports ENOTDIR; Windows reports ENOENT and the guard throws "not a directory"
   expect(await fs.readFile(path.join(f.vault, "Note.md"), "utf8")).toBe("old");
 });
 

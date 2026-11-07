@@ -513,6 +513,8 @@ describe("ExternalRootDesktopBoundary text reads", () => {
       .rejects.toMatchObject({ code: "session-changed" });
   });
 
+  // POSIX-only: needs FIFOs / unix-domain sockets; external roots are macOS-only in the product.
+
   it("opens nonblocking so a last-moment FIFO substitution cannot hang the host", async () => {
     const { repo, boundary } = await fixture();
     await fs.writeFile(path.join(repo, "note.txt"), "hello");
@@ -522,6 +524,8 @@ describe("ExternalRootDesktopBoundary text reads", () => {
     const flags = open.mock.calls[0][1] as number;
     expect(flags & fsConstants.O_NONBLOCK).toBe(fsConstants.O_NONBLOCK);
   });
+
+  // POSIX-only: needs FIFOs / unix-domain sockets; external roots are macOS-only in the product.
 
   it("rejects special filesystem nodes before opening a handle", async () => {
     const { repo, boundary } = await fixture();

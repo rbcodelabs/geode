@@ -31,10 +31,11 @@ afterEach(() => {
 });
 
 describe("resolveVaultPath (the shared vault boundary)", () => {
-  const root = "/vault";
+  // A native absolute root, as in production (a POSIX literal like "/vault" resolves to "C:\\vault" on Windows).
+  const root = path.resolve("/vault");
 
   it("resolves an ordinary relative path under the root", () => {
-    expect(resolveVaultPath(root, "Notes/Attachments")).toBe("/vault/Notes/Attachments");
+    expect(resolveVaultPath(root, "Notes/Attachments")).toBe(path.join(root, "Notes", "Attachments"));
   });
 
   it("refuses a path that climbs out of the vault", () => {
@@ -48,19 +49,20 @@ describe("resolveVaultPath (the shared vault boundary)", () => {
   });
 
   it("does not treat a sibling directory sharing a name prefix as inside", () => {
-    expect(() => resolveVaultPath("/vault", "../vaultmore/x")).toThrow(/Path escapes vault/);
+    expect(() => resolveVaultPath(root, "../vaultmore/x")).toThrow(/Path escapes vault/);
   });
 });
 
 describe("resolveVaultFolderPath", () => {
+  const VAULT = path.resolve("/vault");
   it("refuses the vault root itself in every spelling", () => {
-    expect(() => resolveVaultFolderPath("/vault", "")).toThrow(/refusing to remove the vault root/);
-    expect(() => resolveVaultFolderPath("/vault", ".")).toThrow(/refusing to remove the vault root/);
-    expect(() => resolveVaultFolderPath("/vault", "Notes/..")).toThrow(/refusing to remove the vault root/);
+    expect(() => resolveVaultFolderPath(VAULT, "")).toThrow(/refusing to remove the vault root/);
+    expect(() => resolveVaultFolderPath(VAULT, ".")).toThrow(/refusing to remove the vault root/);
+    expect(() => resolveVaultFolderPath(VAULT, "Notes/..")).toThrow(/refusing to remove the vault root/);
   });
 
   it("still resolves real folders", () => {
-    expect(resolveVaultFolderPath("/vault", "Notes/Attachments")).toBe("/vault/Notes/Attachments");
+    expect(resolveVaultFolderPath(VAULT, "Notes/Attachments")).toBe(path.join(VAULT, "Notes", "Attachments"));
   });
 });
 

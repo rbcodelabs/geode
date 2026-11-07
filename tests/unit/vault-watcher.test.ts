@@ -1,3 +1,4 @@
+import { sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { isIgnoredSegment, isIgnoredVaultPath } from "../../src/main/vault-ignore";
 import {
@@ -48,7 +49,7 @@ function harness(options: {
   let fallbackEmit: ((event: VaultWatchEventName, relativePath: string) => void) | null = null;
 
   const relativeOf = (absolutePath: string) =>
-    absolutePath === ROOT ? "" : absolutePath.slice(ROOT.length + 1);
+    absolutePath === ROOT ? "" : absolutePath.slice(ROOT.length + 1).split(sep).join("/"); // product joins with native separators; the fake tree is keyed by "/"
 
   const dependencies: VaultWatcherDependencies = {
     watchRecursive(_root, onEvent, onError) {

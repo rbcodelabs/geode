@@ -222,7 +222,7 @@ describe("parseVaultPackLaunch and --yes restrictions", () => {
   });
   it("parses --vault-pack <path> and --vault-pack=<path>", () => {
     expect(parseVaultPackLaunch(["geode", "--vault-pack", "/p/a.vault"], cwd, first)).toEqual({ packPath: "/p/a.vault", yes: false });
-    expect(parseVaultPackLaunch(["geode", "--vault-pack=rel/a.vault"], cwd, first)).toEqual({ packPath: "/work/rel/a.vault", yes: false });
+    expect(parseVaultPackLaunch(["geode", "--vault-pack=rel/a.vault"], cwd, first)).toEqual({ packPath: path.resolve("/work", "rel/a.vault"), yes: false });
   });
   it("honors --yes only on the first launch, with an absolute local path", () => {
     expect(parseVaultPackLaunch(["geode", "--vault-pack", "/p/a.vault", "--yes"], cwd, first)?.yes).toBe(true);
@@ -235,7 +235,7 @@ describe("parseVaultPackLaunch and --yes restrictions", () => {
     expect(parseVaultPackLaunch(argv, cwd)?.yes).toBe(false);
   });
   it("refuses --yes for relative paths (prompt still shown) and drops UNC paths and URLs entirely", () => {
-    expect(parseVaultPackLaunch(["geode", "--vault-pack", "rel/a.vault", "--yes"], cwd, first)).toEqual({ packPath: "/work/rel/a.vault", yes: false });
+    expect(parseVaultPackLaunch(["geode", "--vault-pack", "rel/a.vault", "--yes"], cwd, first)).toEqual({ packPath: path.resolve("/work", "rel/a.vault"), yes: false });
     for (const bad of ["\\\\host\\share\\a.vault", "//host/share/a.vault", "file:///p/a.vault", "https://evil.example/a.vault"]) {
       expect(parseVaultPackLaunch(["geode", "--vault-pack", bad, "--yes"], cwd, first)).toBeNull();
     }

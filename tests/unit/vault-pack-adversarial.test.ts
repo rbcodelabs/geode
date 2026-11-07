@@ -286,6 +286,8 @@ describe("destination handling", () => {
     await expect(createVaultFromPack(buf(buildPackZip()), await tmp(), { toString: () => "x" })).rejects.toThrow(VaultPackError);
   });
 
+  // POSIX-only: relies on chmod to make a directory/file unwritable/unreadable; Windows ACLs differ.
+
   it("a read-only parent fails cleanly and leaves no staging directory", async () => {
     if (process.getuid?.() === 0) return;
     const parent = await tmp();
@@ -339,6 +341,8 @@ describe("export edge cases", () => {
     expect(await fs.readFile(path.join(created, "a.md"), "utf8")).toBe("a");
     await expect(fs.stat(path.join(created, ".geode", "workspace.json"))).rejects.toThrow();
   });
+
+  // POSIX-only: relies on chmod to make a directory/file unwritable/unreadable; Windows ACLs differ.
 
   it("an unreadable file fails the export with an error and leaves neither output nor temp file", async () => {
     if (process.getuid?.() === 0) return;
