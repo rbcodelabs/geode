@@ -3,7 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "description": "Playwright harness that runs Obsidian-style plugins against Geode's real `obsidian` implementation in a browser",
-  "type": "module",
   "main": "./src/index.ts",
   "scripts": {
     "build": "node build.mjs",

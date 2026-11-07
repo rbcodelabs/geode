@@ -1,10 +1,9 @@
 import { chromium, type Browser, type BrowserType, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { HarnessSeed } from "./setup";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
+const here = __dirname;
 const root = path.resolve(here, "../../..");
 const ORIGIN = "http://localhost:4173"; // must be a secure origin: crypto.randomUUID is missing on fake origins
 

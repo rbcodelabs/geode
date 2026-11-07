@@ -2,10 +2,9 @@ import { _electron as electron, type ElectronApplication, type Page } from "@pla
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { PluginSource } from "./index";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = path.resolve(__dirname, "../../..");
 
 export interface LaunchAppOptions {
   plugins: PluginSource[];

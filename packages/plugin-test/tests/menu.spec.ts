@@ -1,9 +1,8 @@
 import { expect, test } from "@playwright/test";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { launchPlugin } from "../src/index";
 
-const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/menu-plugin");
+const dir = path.join(__dirname, "fixtures/menu-plugin");
 
 test("plugin view loads and its Menu flips to stay inside the viewport", async () => {
   const h = await launchPlugin({ plugins: [{ id: "menu-plugin", dir }] });
