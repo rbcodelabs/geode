@@ -416,7 +416,7 @@ export class MarkdownView implements View {
             ? this.editingExtensions("live")
             : []
         ),
-        autocompletion({ override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
+        autocompletion({ interactionDelay: 0, override: [wikilinkCompletion, (ctx) => app.slashCommandsPlugin?.completionSource(ctx) ?? null] }),
         placeholder("Start writing…"),
         EditorView.lineWrapping,
         Prec.high(
