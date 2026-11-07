@@ -556,7 +556,7 @@ describe.each([
   });
 });
 
-describe("iCloud provider over the node fs bridge only", () => {
+describe.skipIf(!NODE_BRIDGE_SUPPORTED)("iCloud provider over the node fs bridge only", () => {
   let h: ReturnType<typeof createNodeHarness>;
   beforeEach(() => {
     h = createNodeHarness();

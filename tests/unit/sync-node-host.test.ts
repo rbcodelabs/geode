@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildHistoryPorts, SyncBlockedError } from "../../src/sync-core/ports";
 import { DEFAULT_SYNC_SCOPE, isPathInSyncScope, portableConfigCategory } from "../../src/sync-core/scope";
@@ -289,7 +289,7 @@ describe("state directory", () => {
   });
   it("defaults to ~/.geode/sync/<vaultId>, honours GEODE_SYNC_HOME, and refuses path-like vault ids", () => {
     expect(defaultStateDir("v1", {}, "/home/u")).toBe(join("/home/u", ".geode", "sync", "v1"));
-    expect(defaultStateDir("v1", { GEODE_SYNC_HOME: "/data/sync" }, "/home/u")).toBe(join("/data/sync", "v1"));
+    expect(defaultStateDir("v1", { GEODE_SYNC_HOME: "/data/sync" }, "/home/u")).toBe(join(resolve("/data/sync"), "v1")); // GEODE_SYNC_HOME is path.resolve()d (adds a drive letter on Windows)
     expect(() => defaultStateDir("../x", {}, "/h")).toThrow(SyncStateDirError);
   });
   it("persists device state durably and lays out ops/, trash/, recovery/ under it; storage and apply demand the lease", async () => {
