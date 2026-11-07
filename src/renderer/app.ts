@@ -4909,7 +4909,7 @@ export class App {
 
   private async observeMarkdownAction(operation: Promise<unknown>): Promise<void> {
     try { await operation; }
-    catch (error) { if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not change this note's presentation."); }
+    catch (error) { console.warn(`DIAG markdown action failed: ${error instanceof Error ? error.constructor.name + ': ' + error.message : String(error)}`); if (!(error instanceof ScopeCancelled)) this.notify(error instanceof Error ? error.message : "Could not change this note's presentation."); }
   }
 
   private registerActions(): void {

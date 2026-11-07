@@ -18,6 +18,8 @@ test("typing / opens the command menu; picking a command removes the trigger and
   });
   try {
     const window = await app.firstWindow();
+    const logs: string[] = [];
+    window.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
     await expect(window.locator(".workspace")).toBeVisible();
     await window.locator('.nav-file-title[data-path="Slash.md"]').click();
     const content = window.locator(".cm-content");
@@ -51,7 +53,21 @@ test("typing / opens the command menu; picking a command removes the trigger and
     await expect(popup.locator("li").first()).toContainText("Toggle reading view");
     await window.keyboard.press("Enter");
 
-    await expect(window.locator(".markdown-reading-view")).toBeVisible();
+    try {
+      await expect(window.locator(".markdown-reading-view")).toBeVisible();
+    } catch (error) {
+      const state = await window.evaluate(() => ({
+        text: document.querySelector(".cm-content")?.textContent ?? null,
+        readingDisplay: (document.querySelector(".markdown-reading-view") as HTMLElement | null)?.style.display ?? null,
+        readingHtml: document.querySelector(".markdown-reading-view")?.innerHTML.slice(0, 200) ?? null,
+        popup: !!document.querySelector(".cm-tooltip-autocomplete"),
+        notices: [...document.querySelectorAll(".notice")].map((n) => n.textContent),
+      }));
+      const diagnostics = JSON.stringify({ state, logs: logs.slice(-40), disk: fs.readFileSync(path.join(vaultDir, "Slash.md"), "utf8") }, null, 2);
+      await test.info().attach("slash-diagnostics", { body: diagnostics, contentType: "application/json" });
+      console.log(`SLASH-DIAG ${diagnostics}`);
+      throw error;
+    }
     await expect(popup).toBeHidden();
 
     // The trigger text was removed from the document before the command ran.

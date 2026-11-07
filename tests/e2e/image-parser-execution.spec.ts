@@ -12,6 +12,12 @@ test("parses all complete ceiling fixtures with owned asynchronous Reading autho
   await mkdir(info.outputDir,{recursive:true});
   const terminal=info.outputPath("packed-parser-terminal.json");
   const result=await runChild({script:resolve("scripts/run-image-parser-packed-proof.cjs"),args:[terminal],cwd:process.cwd(),resultFile:terminal,logFile:info.outputPath("packed-parser-native.log"),timeoutMs:330_000});
+  if(result.code!==0||result.status!=="ok"){
+    const log=await readFile(info.outputPath("packed-parser-native.log"),"utf8").catch(()=>"(no log)");
+    const body=JSON.stringify({code:result.code,status:result.status,result:result.result,logTail:log.slice(-6000)},null,2);
+    await info.attach("image-parser-diagnostics",{body,contentType:"application/json"});
+    console.log("IMGPARSER-DIAG "+body);
+  }
   expect(result.code).toBe(0);expect(result.status).toBe("ok");expect(result.result.validated).toBe(true);
   const validation=result.result;
   const reportPath=resolve("test-results/image-parser-packed-proof",validation.report);
