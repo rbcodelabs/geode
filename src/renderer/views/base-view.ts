@@ -195,6 +195,18 @@ export class BaseView implements View {
     this.scheduleRerender();
   };
 
+  /**
+   * The metadata cache emits "resolved" as the last step of every index mutation. A formula/group column reads
+   * frontmatter at query time, so a board built while notes were still being indexed (or one that missed an
+   * intermediate "changed" echo) would otherwise stay stale: on macOS CI a Kanban grouped by `formula.*` was
+   * observed with the cache correct but cards still in the unresolved-formula column. Re-running the query once the
+   * index settles makes the board converge regardless of how the intermediate events were coalesced or dropped.
+   */
+  private readonly onMetadataResolved = () => {
+    if (!nativeRenderOwnership(this.app).admissionOpen) return;
+    this.scheduleRerender();
+  };
+
   /** Re-parse from disk only if the file's current content differs from what we last wrote/read — see `lastKnownText`'s doc comment. */
   private reloadIfChangedExternally(): Promise<void> {
     this.reloadRequestGeneration++;
@@ -515,6 +527,7 @@ export class BaseView implements View {
     this.app.vault.on("create", this.onVaultChange);
     this.app.vault.on("delete", this.onVaultChange);
     this.app.metadataCache.on("changed", this.onVaultChange);
+    this.app.metadataCache.on("resolved", this.onMetadataResolved);
     this.pluginViewHost.notifyConnected();
   }
 
@@ -531,6 +544,7 @@ export class BaseView implements View {
     this.app.vault.off("create", this.onVaultChange);
     this.app.vault.off("delete", this.onVaultChange);
     this.app.metadataCache.off("changed", this.onVaultChange);
+    this.app.metadataCache.off("resolved", this.onMetadataResolved);
     this.tableView.cancelNavigation();
     this.cardsView.destroy();
     this.pluginViewHost.destroy();

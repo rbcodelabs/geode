@@ -314,11 +314,35 @@ test("renders a Kanban board grouped by a formula property", async () => {
     // No catch-all column: an unresolved formula would pool everything there.
     await expect(window.locator('.obk-column[data-column-value="Uncategorized"]')).toHaveCount(0);
 
-    for (const { name, status } of CARDS) {
-      const column = window.locator(`.obk-column[data-column-value="${FORMULA_COLUMN_OF[status]}"]`);
-      await expect(column.locator(".obk-card-title", { hasText: name })).toHaveCount(1);
+    // On failure, say where every card actually landed and what the metadata cache holds for each note — a bare
+    // "expected 1, received 0" on a macOS-only flake tells us nothing about whether the formula, the cache or the
+    // board is wrong.
+    try {
+      for (const { name, status } of CARDS) {
+        const column = window.locator(`.obk-column[data-column-value="${FORMULA_COLUMN_OF[status]}"]`);
+        await expect(column.locator(".obk-card-title", { hasText: name })).toHaveCount(1);
+      }
+      await expect(window.locator('.obk-column[data-column-value="❌ Dismissed"] .obk-card')).toHaveCount(2);
+    } catch (error) {
+      const diagnostic = await window
+        .evaluate(() => {
+          const app = (globalThis as { app?: { vault: { getMarkdownFiles(): { path: string }[] }; metadataCache: { getFileCache(f: unknown): { frontmatter?: Record<string, unknown> } | null } } }).app;
+          return {
+            columns: [...document.querySelectorAll(".obk-column")].map((column) => ({
+              value: column.getAttribute("data-column-value"),
+              cards: [...column.querySelectorAll(".obk-card-title")].map((title) => title.textContent),
+            })),
+            frontmatter: (app?.vault.getMarkdownFiles() ?? [])
+              .filter((file) => file.path.startsWith("Board/"))
+              .map((file) => ({ path: file.path, status: app?.metadataCache.getFileCache(file)?.frontmatter?.status ?? null })),
+          };
+        })
+        .catch((evaluateError) => ({ evaluateError: String(evaluateError) }));
+      const text = JSON.stringify(diagnostic, null, 2);
+      await test.info().attach("kanban-formula-diagnostic.json", { body: text, contentType: "application/json" });
+      console.log(`[kanban-formula-diagnostic] ${text}`);
+      throw error;
     }
-    await expect(window.locator('.obk-column[data-column-value="❌ Dismissed"] .obk-card')).toHaveCount(2);
 
     expect(consoleErrors, `Console errors: ${consoleErrors.join("\n")}`).toEqual([]);
   } finally {
