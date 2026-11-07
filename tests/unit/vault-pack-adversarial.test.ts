@@ -288,7 +288,7 @@ describe("destination handling", () => {
 
   // POSIX-only: relies on chmod to make a directory/file unwritable/unreadable; Windows ACLs differ.
 
-  it("a read-only parent fails cleanly and leaves no staging directory", async () => {
+  it.skipIf(process.platform === "win32")("a read-only parent fails cleanly and leaves no staging directory", async () => {
     if (process.getuid?.() === 0) return;
     const parent = await tmp();
     await fs.chmod(parent, 0o555);
@@ -344,7 +344,7 @@ describe("export edge cases", () => {
 
   // POSIX-only: relies on chmod to make a directory/file unwritable/unreadable; Windows ACLs differ.
 
-  it("an unreadable file fails the export with an error and leaves neither output nor temp file", async () => {
+  it.skipIf(process.platform === "win32")("an unreadable file fails the export with an error and leaves neither output nor temp file", async () => {
     if (process.getuid?.() === 0) return;
     const v = await makeVault();
     await fs.writeFile(path.join(v, "secret.md"), "s");

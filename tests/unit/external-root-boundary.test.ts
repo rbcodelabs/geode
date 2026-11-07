@@ -515,7 +515,7 @@ describe("ExternalRootDesktopBoundary text reads", () => {
 
   // POSIX-only: needs FIFOs / unix-domain sockets; external roots are macOS-only in the product.
 
-  it("opens nonblocking so a last-moment FIFO substitution cannot hang the host", async () => {
+  it.skipIf(process.platform === "win32")("opens nonblocking so a last-moment FIFO substitution cannot hang the host", async () => {
     const { repo, boundary } = await fixture();
     await fs.writeFile(path.join(repo, "note.txt"), "hello");
     const attached = await attachRepo(boundary);
@@ -527,7 +527,7 @@ describe("ExternalRootDesktopBoundary text reads", () => {
 
   // POSIX-only: needs FIFOs / unix-domain sockets; external roots are macOS-only in the product.
 
-  it("rejects special filesystem nodes before opening a handle", async () => {
+  it.skipIf(process.platform === "win32")("rejects special filesystem nodes before opening a handle", async () => {
     const { repo, boundary } = await fixture();
     const socket = createServer();
     await new Promise<void>((resolve, reject) => {

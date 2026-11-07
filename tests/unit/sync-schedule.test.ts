@@ -50,7 +50,7 @@ describe("renderSchedule (pure)", () => {
 
   // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
 
-  it("systemd: service + timer, SuccessExitStatus 4 5 6, XDG log dir, enable --now", () => {
+  it.skipIf(process.platform === "win32")("systemd: service + timer, SuccessExitStatus 4 5 6, XDG log dir, enable --now", () => {
     const u = renderSchedule(spec({ platform: "systemd", intervalSeconds: 900, xdgStateHome: "/state", xdgConfigHome: "/cfg" }));
     const [service, timer] = u.files;
     expect(service.path).toBe(`/cfg/systemd/user/geode-wiki-sync-${scheduleHash("/Users/me/Vault")}.service`);
@@ -65,7 +65,7 @@ describe("renderSchedule (pure)", () => {
 
   // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
 
-  it("is deterministic and quotes awkward paths", () => {
+  it.skipIf(process.platform === "win32")("is deterministic and quotes awkward paths", () => {
     expect(renderSchedule(spec())).toEqual(renderSchedule(spec()));
     const odd = renderSchedule(spec({ root: "/Users/me/My <Vault> & \"Notes\"" }));
     expect(odd.files[0].content).toContain("My &lt;Vault&gt; &amp; &quot;Notes&quot;");
@@ -156,7 +156,7 @@ describe("sync schedule via the CLI", () => {
 
   // POSIX-only: launchd/systemd unit files are POSIX; the renderer resolves paths with the host path module and Windows scheduling is unsupported (defaultPlatform() falls back to systemd: known gap).
 
-  it("install -> status -> uninstall on an approved vault; nothing activates without --activate", async () => {
+  it.skipIf(process.platform === "win32")("install -> status -> uninstall on an approved vault; nothing activates without --activate", async () => {
     const { cli, calls, results } = harness(); const v = vault();
     put(v.root, "a.md", "a");
     await cli(sync(v, "init", "--store", v.hub, "--create"), v.env);
