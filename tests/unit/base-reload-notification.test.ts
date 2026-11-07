@@ -18,3 +18,14 @@ it("observes a notification reload rejection and exposes a visible error", async
   expect(view.reloadIfChangedExternally).toHaveBeenCalledOnce();
   expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("reload read failed"));
 });
+
+it("re-runs the query once when the metadata cache settles, coalescing a burst of resolved events", async () => {
+  const element = () => ({ style: {}, appendChild() {}, append() {}, setAttribute() {} });
+  vi.stubGlobal("document", { createElement: element, body: { classList: { contains: () => false } } });
+  const view = new BaseView({ notify: vi.fn() } as any) as any;
+  view.runAndRender = vi.fn();
+  view.onMetadataResolved(); view.onMetadataResolved(); view.onMetadataResolved();
+  expect(view.runAndRender).not.toHaveBeenCalled(); // deferred to a microtask, not run inline
+  await Promise.resolve();
+  expect(view.runAndRender).toHaveBeenCalledOnce();
+});
