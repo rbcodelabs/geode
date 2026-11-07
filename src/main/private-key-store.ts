@@ -1,3 +1,4 @@
+import { fsyncDirectory } from '../shared/fsync-directory';
 import * as fsp from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
@@ -73,10 +74,8 @@ export class PrivateKeyStore {
   }
 
   private async syncDirectory(directory: string, allowMissing = false): Promise<void> {
-    let handle: Awaited<ReturnType<typeof fsp.open>>;
-    try { handle = await this.io.open(directory, 'r'); }
+    try { await fsyncDirectory(directory, { open: (target, flags) => this.io.open(target, flags) }); }
     catch (error) { if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
-    try { await handle.sync(); } finally { await handle.close(); }
   }
 
   private lock<T>(key: string, work: () => Promise<T>): Promise<T> {

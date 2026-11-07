@@ -1,3 +1,4 @@
+import { fsyncDirectory } from "../../src/shared/fsync-directory.ts";
 import { open } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -44,6 +45,5 @@ export async function saveInventory(path: string, value: unknown): Promise<void>
   const file = await open(path,"wx",0o600);
   try { await file.writeFile(JSON.stringify(inventory,null,2) + "\n"); await file.sync(); }
   finally { await file.close(); }
-  const directory = await open(dirname(path),"r");
-  try { await directory.sync(); } finally { await directory.close(); }
+  await fsyncDirectory(dirname(path));
 }

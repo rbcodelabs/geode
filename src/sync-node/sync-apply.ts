@@ -1,3 +1,4 @@
+import { fsyncDirectory } from "../shared/fsync-directory";
 import type { GuardedMutation, GuardedMutationResult } from "../shared/sync-safety";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -38,7 +39,7 @@ export async function ensureDurableDirectory(target: string): Promise<void> {
   }
   for (const directory of missing.reverse()) {
     await fs.mkdir(directory, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
-    const parent = await fs.open(path.dirname(directory), "r"); try { await parent.sync(); } finally { await parent.close(); }
+    await fsyncDirectory(path.dirname(directory));
   }
 }
 
@@ -51,8 +52,7 @@ export async function durableWrite(target: string, data: Uint8Array): Promise<vo
   const file = await fs.open(staging, "wx", 0o600);
   try { await file.writeFile(data); await file.sync(); } finally { await file.close(); }
   await fs.rename(staging, target);
-  const directory = await fs.open(path.dirname(target), "r");
-  try { await directory.sync(); } finally { await directory.close(); }
+  await fsyncDirectory(path.dirname(target));
 }
 
 async function snapshot(target: string): Promise<{ hash: string | null; bytes?: Buffer }> {
@@ -155,8 +155,7 @@ export async function applyGuardedMutation(root: string, recoveryRoot: string, i
       else if (deps.trash) await deps.trash(target);
       else throw new Error("No trash strategy configured");
     }
-    const parent = await fs.open(path.dirname(target), "r");
-    try { await parent.sync(); } finally { await parent.close(); }
+    await fsyncDirectory(path.dirname(target));
     await deps.checkpoint?.("committed"); deps.assertContext?.();
     receipt.state = "applied"; await durableWrite(receiptFile, Buffer.from(JSON.stringify(receipt)));
     await deps.checkpoint?.("acknowledged");

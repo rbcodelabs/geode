@@ -1,3 +1,4 @@
+import { fsyncDirectory } from "../shared/fsync-directory";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -17,7 +18,7 @@ export class SyncPrivateStorage {
     const handle = await fs.open(temporary, "wx", 0o600);
     try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
     await fs.rename(temporary, target);
-    const directory = await fs.open(this.root, "r"); try { await directory.sync(); } finally { await directory.close(); }
+    await fsyncDirectory(this.root);
   }
   async stage(key: string, bytes: ArrayBuffer): Promise<string> {
     if (bytes.byteLength > 100 * 1024 * 1024) throw new Error("Sync file exceeds 100 MiB limit");
