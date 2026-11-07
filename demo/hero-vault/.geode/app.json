@@ -1,0 +1,16 @@
+{
+  "theme": "light",
+  "readableLineLength": true,
+  "baseFontSize": 16,
+  "foldHeading": false,
+  "showLineNumber": false,
+  "showRibbon": true,
+  "showStatusBar": true,
+  "cssTheme": "Ivory",
+  "webViewer": {
+    "searchEngine": "https://duckduckgo.com/?q=",
+    "homeUrl": "https://duckduckgo.com/",
+    "openLinksInApp": false
+  },
+  "metadataScanCapBytes": 300000
+}

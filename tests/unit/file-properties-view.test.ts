@@ -296,3 +296,36 @@ it("restores an unrelated blocked checkbox's original unset presentation", () =>
   const checkbox = state.input("Value: done"); checkbox.checked = true; (checkbox as any).indeterminate = false; checkbox.events.get("change")!({});
   expect(checkbox.checked).toBe(false); expect((checkbox as any).indeterminate).toBe(true); expect(owner.getText()).toContain("done: null"); expect(state.input("Value: status")).toBe(failed); state.view.onClose();
 });
+
+describe("Properties header add control and list pills", () => {
+  const byClass = (root: Element, name: string) => root.all().filter(element => element.className.split(" ").includes(name));
+  it("puts Add property on the Properties header row, not in its own row", () => {
+    const { view, input } = setup();
+    const root = view.containerEl as unknown as Element;
+    const heading = byClass(root, "metadata-properties-heading")[0];
+    const add = input("Add property");
+    expect(heading.children).toContain(add); expect(add.className).toContain("metadata-add-button");
+    expect(add.text()).toBe("+"); expect(root.text()).not.toContain("+ Add property"); view.onClose();
+  });
+  it("opens the new-property row when the header + is clicked, and saves through the guarded buffer", () => {
+    const { view, input, enter, owner, getText } = setup();
+    expect(input("New property name")).toBeUndefined();
+    input("Add property").events.get("click")!({});
+    const name = input("New property name"); expect(name).toBeDefined();
+    name.value = "rating"; name.events.get("input")!({});
+    const value = input("New property value"); value.value = "5"; value.events.get("input")!({});
+    name.events.get("keydown")!({ key: "Enter", preventDefault() {} });
+    expect(owner.applySourceEdit).toHaveBeenCalled(); expect(getText()).toContain("rating: 5"); view.onClose();
+    void enter;
+  });
+  it("renders list properties as pills with the add button last in the same container", () => {
+    const { view } = setup("---\ntags: [intro, geode]\n---\nBody");
+    const root = view.containerEl as unknown as Element;
+    const list = byClass(root, "metadata-property-list")[0];
+    const items = byClass(list, "metadata-list-item");
+    expect(items).toHaveLength(2);
+    const last = list.children[list.children.length - 1];
+    expect(last.tag).toBe("button"); expect(last.attributes["aria-label"]).toBe("Add tags list item");
+    for (const item of items) expect(item.children[item.children.length - 1].textContent).toBe("×"); view.onClose();
+  });
+});

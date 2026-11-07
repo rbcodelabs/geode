@@ -21,6 +21,7 @@ export class PropertyEditor {
   private readonly wiredInputs = new WeakSet<HTMLInputElement>();
   private stopTypes?: () => void;
   private closed = false;
+  private adding = false;
   constructor(private readonly options: PropertyEditorOptions) {
     this.root.className = "metadata-properties";
     this.stopTypes = options.types?.onChange(() => this.refresh());
@@ -47,7 +48,8 @@ export class PropertyEditor {
     if (!force && this.dirty && (this.rejectedDraft || this.root.contains(document.activeElement))) return;
     const inspection = inspectProperties(this.options.getText());
     const inner = document.createElement("div"); inner.className = "metadata-properties-inner";
-    const heading = document.createElement("div"); heading.className = "metadata-properties-heading"; heading.textContent = "Properties";
+    const heading = document.createElement("div"); heading.className = "metadata-properties-heading";
+    const title = document.createElement("span"); title.textContent = "Properties"; heading.append(title);
     inner.append(heading);
     if (!inspection.ok) {
       inner.append(this.message(inspection.error), this.sourceButton());
@@ -56,10 +58,12 @@ export class PropertyEditor {
       if (!editable) { const message = document.createElement("div"); message.className = "pane-empty"; message.textContent = "This note is read-only."; inner.append(message); }
       for (const [key, value] of Object.entries(inspection.values)) inner.append(this.row(key, value, editable));
       if (this.error) inner.append(this.message(this.error));
-      const add = document.createElement("button"); add.type = "button"; add.className = "metadata-add-button"; add.textContent = "+ Add property"; add.setAttribute("aria-label", "Add property"); add.disabled = !editable;
-      add.addEventListener("click", () => { if (this.permitAction()) add.replaceWith(this.newRow()); });
-      inner.append(add);
+      if (this.adding) inner.append(this.newRow());
+      const add = document.createElement("button"); add.type = "button"; add.className = "metadata-add-button"; add.textContent = "+"; add.title = "Add property"; add.setAttribute("aria-label", "Add property"); add.disabled = !editable;
+      add.addEventListener("click", () => { if (this.permitAction()) { this.adding = true; this.refresh(true); } });
+      heading.append(add);
     }
+    this.adding = false;
     this.root.replaceChildren(inner);
     this.restoreFocus(focus);
   }
@@ -189,7 +193,7 @@ export class PropertyEditor {
     values.forEach((value, index) => {
       const item = document.createElement("div"); item.className = "metadata-list-item";
       item.append(this.valueInput(key, value, editable, next => this.apply({ kind: "set", key, value: values.map((previous, position) => position === index ? next : previous), expected }), index));
-      const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "−"; remove.disabled = !editable; remove.setAttribute("aria-label", `Remove ${key} item ${index + 1}`); remove.addEventListener("click", () => this.apply({ kind: "set", key, value: values.filter((_, position) => position !== index), expected }));
+      const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "×"; remove.disabled = !editable; remove.setAttribute("aria-label", `Remove ${key} item ${index + 1}`); remove.addEventListener("click", () => this.apply({ kind: "set", key, value: values.filter((_, position) => position !== index), expected }));
       item.append(remove); container.append(item);
     });
     const add = document.createElement("button"); add.type = "button"; add.textContent = "+"; add.disabled = !editable; add.setAttribute("aria-label", `Add ${key} list item`); add.addEventListener("click", () => this.apply({ kind: "set", key, value: [...values, ""], expected })); container.append(add);

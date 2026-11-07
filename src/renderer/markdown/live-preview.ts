@@ -1267,7 +1267,7 @@ export function livePreview(
     // 1-based line number — populated by the "Blockquote" case below and
     // consumed by "QuoteMark" to tint the background and, on the header
     // line, swap the `[!type]` marker for an icon.
-    const calloutLines = new Map<number, { meta: CalloutMeta; isHeader: boolean }>();
+    const calloutLines = new Map<number, { meta: CalloutMeta; isHeader: boolean; isLast: boolean }>();
 
     for (const { from, to } of view.visibleRanges) {
       syntaxTree(view.state).iterate({
@@ -1302,7 +1302,7 @@ export function livePreview(
               const meta = calloutMeta(header.type);
               const endLine = doc.lineAt(Math.min(node.to, doc.length));
               for (let ln = startLine.number; ln <= endLine.number; ln++) {
-                calloutLines.set(ln, { meta, isHeader: ln === startLine.number });
+                calloutLines.set(ln, { meta, isHeader: ln === startLine.number, isLast: ln === endLine.number });
               }
               break;
             }
@@ -1313,6 +1313,7 @@ export function livePreview(
               if (callout) {
                 cls += ` cm-callout callout-${callout.meta.cssClass}`;
                 if (callout.isHeader) cls += " cm-callout-title";
+                if (callout.isLast) cls += " cm-callout-last";
               }
               decos.push(Decoration.line({ class: cls }).range(line.from));
               const after = doc.sliceString(node.to, node.to + 1);

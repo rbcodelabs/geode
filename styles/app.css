@@ -2972,7 +2972,14 @@ sup.cm-footnote-ref {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   margin-bottom: 6px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+.metadata-properties-heading > button.metadata-add-button {
+  flex: none; width: 20px; height: 20px; min-height: 0; padding: 0; line-height: 1; font-size: 14px; font-weight: 500;
+  color: var(--text-faint); background: transparent; border: 0; box-shadow: none; border-radius: 4px; cursor: pointer; text-align: center;
+}
+.metadata-properties-heading > button.metadata-add-button:hover:not(:disabled) { color: var(--text-normal); background: var(--background-modifier-hover); }
+.metadata-properties-heading > button.metadata-add-button:disabled { display: none; }
 
 .metadata-property {
   display: flex;
@@ -3219,9 +3226,9 @@ sup.cm-footnote-ref {
    every callout back to the fallback color (caught via visual testing in
    Live Preview, where the analogous .cm-line.cm-callout rule had this bug). */
 .callout {
-  border-radius: 8px;
-  padding: 12px 14px;
-  margin: 8px 0;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin: 14px 0;
   background: color-mix(in srgb, var(--callout-accent, var(--callout-note)) 8%, transparent);
   border-left: 3px solid var(--callout-accent, var(--callout-note));
 }
@@ -3252,7 +3259,7 @@ sup.cm-footnote-ref {
   display: none;
 }
 
-.callout-content > :first-child { margin-top: 6px; }
+.callout-content > :first-child { margin-top: 8px; }
 .callout-content > :last-child { margin-bottom: 0; }
 
 .callout-note { --callout-accent: var(--callout-note); }
@@ -3276,14 +3283,29 @@ sup.cm-footnote-ref {
 .cm-line.cm-callout {
   background: color-mix(in srgb, var(--callout-accent, var(--callout-note)) 8%, transparent);
   border-left: 3px solid var(--callout-accent, var(--callout-note));
-  padding-left: 11px;
-  margin-left: -14px;
+  /* The box sits inside the note's text column (like any blockquote) and its content is indented by the bar and the
+     left padding below, so a callout reads as indented relative to the body text rather
+     than hanging out into the margin. */
+  padding-right: 18px;
+  /* Paragraph text is inset 6px inside its .cm-line (CodeMirror's default line padding), so the bar needs the same
+     inset to sit flush with the body text's left edge. */
+  margin-left: 6px;
+  margin-right: 0;
+  /* Beats .cm-live-quote's 14px !important (higher specificity) to give the content room inside the bar. */
+  padding-left: 18px !important;
+  line-height: 1.6;
 }
 
 .cm-line.cm-callout-title {
   font-weight: 600;
   color: var(--callout-accent, var(--callout-note));
+  padding-top: 14px;
+  padding-bottom: 2px;
+  border-top-right-radius: 10px;
 }
+.cm-line.cm-callout-last { padding-bottom: 14px; border-bottom-right-radius: 10px; }
+/* A one-line callout is both the title and the last line: keep the top and bottom breathing room symmetrical. */
+.cm-line.cm-callout-title.cm-callout-last { padding-bottom: 14px; }
 
 .cm-callout-icon {
   display: inline-flex;
@@ -8007,9 +8029,8 @@ body.is-mobile .cm-editor .cm-scroller {
 .file-properties-name { color: var(--text-muted); margin-bottom: 12px; overflow-wrap: anywhere; }
 .file-properties-view .metadata-properties { padding: 0; margin: 0; }
 .file-properties-view .metadata-properties-inner { width: 100%; max-width: none; }
-.metadata-property-list { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
-.metadata-list-item { display: flex; gap: 4px; min-width: 0; }
-.metadata-list-item input { flex: 1; min-width: 0; }
+.metadata-property-list { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px; }
+.metadata-list-item { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
 .metadata-property button.metadata-property-remove { background: transparent; border: 0; box-shadow: none; }
 button.metadata-add-button { width: 100%; text-align: left; background: transparent; border: 0; box-shadow: none; color: var(--text-muted); }
 .metadata-property.is-new { flex-wrap: wrap; }
@@ -8144,6 +8165,31 @@ select.metadata-property-type { width: 28px; min-width: 28px; padding: 2px 0; fo
 }
 .metadata-property:hover button.metadata-property-unset, .metadata-property button.metadata-property-unset:focus-visible { opacity: 1; max-width: 80px; padding-left: 6px; padding-right: 6px; margin-left: 0; }
 .metadata-property button.metadata-property-unset:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+
+/* List properties (tags, aliases, …): a single wrapping row of pills. Each pill is an inline-editable input sized to
+   its content with a small remove (×); a round + pill ends the row. */
+.metadata-property-list > .metadata-list-item {
+  gap: 2px; padding: 0 3px 0 10px; border-radius: 999px;
+  background: var(--background-modifier-hover); border: 1px solid var(--background-modifier-border);
+}
+.metadata-property-list > .metadata-list-item:focus-within { border-color: var(--interactive-accent, var(--background-modifier-border-focus)); }
+.metadata-property-list > .metadata-list-item > input.metadata-input {
+  field-sizing: content; flex: none; width: auto; min-width: 2ch; max-width: 22ch;
+  height: auto; padding: 2px 0; background: transparent; border: 0; box-shadow: none; font-size: var(--font-ui-small, 12px);
+}
+.metadata-list-item > button, .metadata-property-list > button {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; min-height: 0; padding: 0;
+  line-height: 1; font-size: var(--font-ui-small, 12px); color: var(--text-faint); background: transparent;
+  border: 0; box-shadow: none; cursor: pointer; border-radius: 50%;
+}
+.metadata-list-item > button { opacity: 0.55; }
+.metadata-list-item:hover > button, .metadata-list-item > button:focus-visible { opacity: 1; }
+.metadata-property-list > button { width: 22px; height: 22px; border: 1px dashed var(--background-modifier-border); opacity: 0.7; }
+.metadata-property-list > button:hover:not(:disabled) { opacity: 1; }
+.metadata-list-item > button:hover:not(:disabled), .metadata-property-list > button:hover:not(:disabled) {
+  color: var(--text-normal); background: var(--background-modifier-hover);
+}
+.metadata-list-item > button:disabled, .metadata-property-list > button:disabled { display: none; }
 
 /* Controls that managed policy (or a disabled state) has turned off must read as off. Scoped to Settings so other
    panes that style their own disabled buttons are untouched. The Sync pane makes everything but its note `inert`

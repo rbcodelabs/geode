@@ -1,0 +1,16 @@
+{
+  "version": 3,
+  "center": { "root": { "type": "tabs", "leaves": [], "active": 0 }, "activeGroup": 0 },
+  "left": { "root": { "type": "tabs", "leaves": [], "active": 0 }, "collapsed": false, "width": 260 },
+  "right": {
+    "root": {
+      "type": "split", "direction": "vertical", "sizes": [0.5, 0.5],
+      "children": [
+        { "type": "tabs", "leaves": [], "active": 0 },
+        { "type": "tabs", "leaves": [{ "type": "graph" }], "active": 0 }
+      ]
+    },
+    "collapsed": false,
+    "width": 340
+  }
+}
