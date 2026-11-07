@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { Session, WebContents, WebPreferences } from "electron";
-import { session } from "electron";
+import { BrowserWindow, session } from "electron";
 import chokidar, { type FSWatcher } from "chokidar";
 import { parseArtifactManifestJson, type ArtifactManifest, type ArtifactManifestIssue } from "../artifacts/manifest";
-import { ARTIFACT_SCHEME, isArtifactUrlAllowed, STATIC_ARTIFACT_CSP } from "../artifacts/security-policy";
+import {
+  ARTIFACT_SCHEME,
+  isArtifactUrlAllowed,
+  nextjsArtifactCsp,
+  parseLoopbackDevServerUrl,
+  STATIC_ARTIFACT_CSP,
+} from "../artifacts/security-policy";
 import { resolveArtifactEntry, resolveArtifactFile } from "./artifact-paths";
 
 export const ARTIFACT_MANIFEST_FILENAME = "artifact.json";
@@ -16,6 +22,7 @@ export interface ArtifactRegistration {
   title: string;
   entryUrl: string;
   partition: string;
+  runtime: ArtifactManifest["runtime"];
   viewport: { preset: "desktop" | "tablet" | "mobile" | "custom" | "fill"; width: number; height: number };
   /**
    * Present only when the validated manifest opted in with
@@ -61,18 +68,64 @@ interface ActiveArtifact extends ArtifactRegistration {
   artifactSession: Session;
   revision: number;
   diagnostics: ArtifactDiagnostic[];
-  watcher: FSWatcher;
+  /** Static artifacts only; a Next.js dev server does its own HMR. */
+  watcher?: FSWatcher;
+  /** Next.js artifacts only: the single http origin (and ws twin) the guest may reach. */
+  allowedOrigin?: string;
   guest?: WebContents;
 }
 
-function vaultGrant(permissions: ArtifactManifest["permissions"]): Pick<ArtifactRegistration, "vault"> {
+export interface ArtifactRegisterOptions {
+  /** Untrusted. Validated here; required for `nextjs` manifests and forbidden for `static`. */
+  devServerUrl?: unknown;
+}
+
+export interface ArtifactCaptureOptions {
+  /** Untrusted. Only used for `nextjs` artifacts when no live guest exists. */
+  url?: unknown;
+}
+
+const CAPTURE_LOAD_TIMEOUT_MS = 20_000;
+const CAPTURE_SETTLE_MS = 600;
+
+function vaultGrant(manifest: ArtifactManifest): Pick<ArtifactRegistration, "vault"> {
+  if (manifest.runtime !== "static") return {};
+  const { permissions } = manifest;
   if (permissions.vault !== "read" || !permissions.vaultAllowlist?.length) return {};
   return { vault: { access: "read", allowlist: [...permissions.vaultAllowlist] } };
 }
 
+function resolveDevServerOrigin(
+  manifest: ArtifactManifest,
+  devServerUrl: unknown,
+): { origin: string; url: string } | null {
+  if (manifest.runtime === "static") {
+    if (devServerUrl !== undefined && devServerUrl !== null) {
+      throw new ArtifactRegistrationError("dev_server_invalid", "A dev server URL is only valid for a nextjs artifact.");
+    }
+    return null;
+  }
+  const parsed = parseLoopbackDevServerUrl(devServerUrl);
+  if (!parsed.ok) {
+    throw new ArtifactRegistrationError(
+      "dev_server_invalid",
+      devServerUrl === undefined || devServerUrl === null
+        ? "A nextjs artifact needs a dev server URL."
+        : parsed.reason,
+    );
+  }
+  return parsed;
+}
+
 export class ArtifactRegistrationError extends Error {
   constructor(
-    public readonly code: "manifest_read" | "manifest_invalid" | "entry_invalid" | "registration_missing",
+    public readonly code:
+      | "manifest_read"
+      | "manifest_invalid"
+      | "entry_invalid"
+      | "dev_server_invalid"
+      | "registration_missing"
+      | "capture_failed",
     message: string,
     public readonly issues?: ArtifactManifestIssue[],
   ) {
@@ -132,7 +185,7 @@ export class ArtifactRuntime {
   private readonly registrations = new Map<string, ActiveArtifact>();
   private readonly registrationsByPartition = new Map<string, ActiveArtifact>();
 
-  async register(owner: WebContents, requestedRoot: string): Promise<ArtifactRegistration> {
+  private async readManifest(requestedRoot: string): Promise<{ root: string; manifest: ArtifactManifest }> {
     let root: string;
     let manifestJson: string;
     try {
@@ -155,36 +208,52 @@ export class ArtifactRuntime {
     } catch (error) {
       throw new ArtifactRegistrationError("entry_invalid", (error as Error).message);
     }
+    return { root, manifest: parsed.manifest };
+  }
+
+  async register(owner: WebContents, requestedRoot: string, options: ArtifactRegisterOptions = {}): Promise<ArtifactRegistration> {
+    const { root, manifest } = await this.readManifest(requestedRoot);
+    const devServer = resolveDevServerOrigin(manifest, options?.devServerUrl);
 
     const registrationId = randomUUID();
     const partition = `geode-artifact-${registrationId}`;
     const artifactSession = session.fromPartition(partition, { cache: false });
-    const watcher = chokidar.watch(root, {
-      ignoreInitial: true,
-      ignored: (candidate) => path.relative(root, candidate).split(path.sep)[0] === "captures",
-    });
+    const watcher = devServer
+      ? undefined
+      : chokidar.watch(root, {
+          ignoreInitial: true,
+          ignored: (candidate) => path.relative(root, candidate).split(path.sep)[0] === "captures",
+        });
     const active: ActiveArtifact = {
       registrationId,
-      artifactId: parsed.manifest.id,
-      title: parsed.manifest.title,
-      entryUrl: `${ARTIFACT_SCHEME}://${parsed.manifest.id}/${parsed.manifest.entry.split("/").map(encodeURIComponent).join("/")}`,
+      artifactId: manifest.id,
+      title: manifest.title,
+      entryUrl: devServer
+        ? devServer.url
+        : `${ARTIFACT_SCHEME}://${manifest.id}/${manifest.entry.split("/").map(encodeURIComponent).join("/")}`,
       partition,
-      viewport: parsed.manifest.viewport,
-      ...vaultGrant(parsed.manifest.permissions),
+      runtime: manifest.runtime,
+      viewport: manifest.viewport,
+      ...vaultGrant(manifest),
       ownerWebContentsId: owner.id,
       root,
       artifactSession,
       revision: 0,
       diagnostics: [],
       watcher,
+      allowedOrigin: devServer?.origin,
     };
 
-    watcher.on("all", () => { active.revision += 1; });
+    watcher?.on("all", () => { active.revision += 1; });
 
     try {
-      await this.configureSession(active);
+      await this.configureSession(artifactSession, {
+        artifactId: active.artifactId,
+        root,
+        allowedOrigin: active.allowedOrigin,
+      });
     } catch (error) {
-      await watcher.close();
+      await watcher?.close();
       throw error;
     }
     this.registrations.set(registrationId, active);
@@ -195,24 +264,42 @@ export class ArtifactRuntime {
       title: active.title,
       entryUrl: active.entryUrl,
       partition: active.partition,
+      runtime: active.runtime,
       viewport: active.viewport,
       ...(active.vault ? { vault: active.vault } : {}),
     };
   }
 
-  private async configureSession(active: ActiveArtifact): Promise<void> {
-    const target = active.artifactSession;
+  private async configureSession(
+    target: Session,
+    policy: { artifactId: string; root: string; allowedOrigin?: string },
+  ): Promise<void> {
+    const { artifactId, root, allowedOrigin } = policy;
     target.setPermissionCheckHandler(() => false);
     target.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     target.setDevicePermissionHandler(() => false);
     target.setDisplayMediaRequestHandler((_request, callback) => callback({}));
     target.on("will-download", (event) => event.preventDefault());
+    // Authoritative network boundary; CSP below is defense in depth.
     target.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
       const use = details.resourceType === "mainFrame" ? "document" : "subresource";
-      callback({ cancel: !isArtifactUrlAllowed(details.url, active.artifactId, use) });
+      callback({ cancel: !isArtifactUrlAllowed(details.url, artifactId, use, allowedOrigin) });
     });
+    if (allowedOrigin) {
+      const csp = nextjsArtifactCsp(allowedOrigin);
+      target.webRequest.onHeadersReceived({ urls: ["<all_urls>"] }, (details, callback) => {
+        const responseHeaders: Record<string, string[]> = {};
+        // Replace rather than append: any CSP the dev server sent must not loosen ours.
+        for (const [name, value] of Object.entries(details.responseHeaders ?? {})) {
+          if (name.toLowerCase() !== "content-security-policy") responseHeaders[name] = value;
+        }
+        responseHeaders["Content-Security-Policy"] = [csp];
+        callback({ responseHeaders });
+      });
+      return;
+    }
     await target.protocol.handle(ARTIFACT_SCHEME, async (request) => {
-      if (!isArtifactUrlAllowed(request.url, active.artifactId, "document")) {
+      if (!isArtifactUrlAllowed(request.url, artifactId, "document")) {
         return response(403, "Artifact origin denied.");
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -221,7 +308,7 @@ export class ArtifactRuntime {
       const relativePath = artifactPathname(request.url);
       if (!relativePath) return response(404, "Artifact file not found.");
       try {
-        const { file: filePath } = await resolveArtifactFile(active.root, relativePath);
+        const { file: filePath } = await resolveArtifactFile(root, relativePath);
         const body = request.method === "HEAD" ? null : await fsp.readFile(filePath);
         return new Response(body, {
           status: 200,
@@ -263,6 +350,7 @@ export class ArtifactRuntime {
       candidate.ownerWebContentsId === owner.id && candidate.artifactSession === guest.session);
     if (!active) return false;
     active.guest = guest;
+    if (active.allowedOrigin) this.denyOffOriginNavigation(guest, active.allowedOrigin);
     guest.on("console-message", (details) => {
       const detail = details as unknown as {
         level?: "debug" | "info" | "warning" | "error";
@@ -285,21 +373,49 @@ export class ArtifactRuntime {
     return true;
   }
 
+  /** Redirects and frame navigations off the dev-server origin are cancelled (the request filter would too). */
+  private denyOffOriginNavigation(guest: WebContents, allowedOrigin: string): void {
+    const deny = (event: { preventDefault(): void }, url: string): void => {
+      if (!isArtifactUrlAllowed(url, "", "document", allowedOrigin)) event.preventDefault();
+    };
+    guest.on("will-navigate", deny);
+    guest.on("will-redirect", deny);
+    guest.on("will-frame-navigate", (event) => deny(event, event.url));
+  }
+
+  /** True for Next.js artifact guests, which must never open popups or Web Viewer tabs. */
+  isNextjsGuest(guest: WebContents): boolean {
+    return [...this.registrations.values()].some((candidate) =>
+      candidate.allowedOrigin !== undefined && candidate.artifactSession === guest.session);
+  }
+
   getState(owner: WebContents, registrationId: string): ArtifactRuntimeState | null {
     const active = this.registrations.get(registrationId);
     if (!active || active.ownerWebContentsId !== owner.id) return null;
     return { revision: active.revision, diagnostics: [...active.diagnostics] };
   }
 
-  async capture(owner: WebContents, requestedRoot: string): Promise<ArtifactCaptureResult> {
+  async capture(owner: WebContents, requestedRoot: string, options: ArtifactCaptureOptions = {}): Promise<ArtifactCaptureResult> {
     const root = await fsp.realpath(path.resolve(requestedRoot));
     const active = [...this.registrations.values()].find((candidate) =>
       candidate.ownerWebContentsId === owner.id && candidate.root === root);
-    if (!active?.guest || active.guest.isDestroyed()) {
+    if (active?.guest && !active.guest.isDestroyed()) {
+      return this.writeCapture(root, await active.guest.capturePage());
+    }
+    const url = options?.url;
+    if (url === undefined || url === null) {
+      if (active?.allowedOrigin) return this.captureHeadless(root, active.artifactId, active.allowedOrigin, active.viewport);
       throw new ArtifactRegistrationError("registration_missing", "Open the artifact preview before capturing it.");
     }
-    const image = await active.guest.capturePage();
-    const capturesRoot = path.join(active.root, "captures");
+    // A URL means "capture the dev server", which is only valid for a nextjs manifest.
+    const { manifest } = await this.readManifest(root);
+    const devServer = resolveDevServerOrigin(manifest, url);
+    if (!devServer) throw new ArtifactRegistrationError("dev_server_invalid", "A capture URL is only valid for a nextjs artifact.");
+    return this.captureHeadless(root, manifest.id, devServer.origin, manifest.viewport);
+  }
+
+  private async writeCapture(root: string, image: Electron.NativeImage): Promise<ArtifactCaptureResult> {
+    const capturesRoot = path.join(root, "captures");
     await fsp.mkdir(capturesRoot, { recursive: true });
     const capturePath = path.join(capturesRoot, `capture-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
     await fsp.writeFile(capturePath, image.toPNG());
@@ -307,9 +423,71 @@ export class ArtifactRuntime {
     return { path: capturePath, width: size.width, height: size.height };
   }
 
+  /**
+   * Capture without a visible window: a never-shown offscreen BrowserWindow
+   * bound to a throwaway session with exactly the same restrictions as a live
+   * guest (origin filter, CSP, denied permissions), no preload, no Node.
+   */
+  private async captureHeadless(
+    root: string,
+    artifactId: string,
+    allowedOrigin: string,
+    viewport: { width: number; height: number },
+  ): Promise<ArtifactCaptureResult> {
+    const partition = `geode-artifact-capture-${randomUUID()}`;
+    const captureSession = session.fromPartition(partition, { cache: false });
+    let win: BrowserWindow | undefined;
+    try {
+      await this.configureSession(captureSession, { artifactId, root, allowedOrigin });
+      // A never-shown offscreen window, not an unattached view: a detached
+      // WebContentsView has no host to size it, so capturePage() returns 0x0.
+      win = new BrowserWindow({
+        show: false,
+        width: viewport.width,
+        height: viewport.height,
+        useContentSize: true,
+        frame: false,
+        skipTaskbar: true,
+        webPreferences: {
+          session: captureSession,
+          offscreen: true,
+          nodeIntegration: false,
+          nodeIntegrationInSubFrames: false,
+          contextIsolation: true,
+          sandbox: true,
+          webSecurity: true,
+          allowRunningInsecureContent: false,
+        },
+      });
+      const contents = win.webContents;
+      contents.setFrameRate(5);
+      contents.setWindowOpenHandler(() => ({ action: "deny" }));
+      this.denyOffOriginNavigation(contents, allowedOrigin);
+      const loaded = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Timed out loading the dev server.")), CAPTURE_LOAD_TIMEOUT_MS);
+        contents.once("did-finish-load", () => { clearTimeout(timer); resolve(); });
+        contents.once("did-fail-load", (_event, _code, description) => {
+          clearTimeout(timer);
+          reject(new Error(description || "Dev server failed to load."));
+        });
+      });
+      loaded.catch(() => { /* observed below; avoids an unhandled rejection while loadURL is pending */ });
+      await contents.loadURL(`${allowedOrigin}/`).catch(() => { /* surfaced through did-fail-load */ });
+      await loaded;
+      await new Promise((resolve) => setTimeout(resolve, CAPTURE_SETTLE_MS));
+      return await this.writeCapture(root, await contents.capturePage());
+    } catch (error) {
+      if (error instanceof ArtifactRegistrationError) throw error;
+      throw new ArtifactRegistrationError("capture_failed", `Capture failed: ${(error as Error).message}`);
+    } finally {
+      if (win && !win.isDestroyed()) win.destroy();
+      await Promise.allSettled([captureSession.clearCache(), captureSession.clearStorageData()]);
+    }
+  }
+
   private async dispose(active: ActiveArtifact): Promise<void> {
-    await active.watcher.close();
-    active.artifactSession.protocol.unhandle(ARTIFACT_SCHEME);
+    await active.watcher?.close();
+    if (!active.allowedOrigin) active.artifactSession.protocol.unhandle(ARTIFACT_SCHEME);
     await Promise.allSettled([active.artifactSession.clearCache(), active.artifactSession.clearStorageData()]);
   }
 
