@@ -53,7 +53,8 @@ it.each(["nonzero", "missing", "partial", "stale", "failure"])("never writes ter
   const f = fixture(mode), result = spawnSync(process.execPath, [f.script, f.terminal], { cwd: f.root, env: { ...process.env, NODE_OPTIONS: `--require ${f.hook}` }, encoding: "utf8" });
   expect(result.status).not.toBe(0); expect(existsSync(f.terminal)).toBe(false);
 });
-it("writes fresh digest-bound success only after actual runner validation of a synthetic complete fixture", () => {
+// POSIX-only: the synthetic runner shells out with POSIX process-group tooling (Windows: ENAMETOOLONG).
+it.skipIf(process.platform === "win32")("writes fresh digest-bound success only after actual runner validation of a synthetic complete fixture", () => {
   const f = fixture("positive"), result = spawnSync(process.execPath, [f.script, f.terminal], { cwd: f.root, env: { ...process.env, NODE_OPTIONS: `--require ${f.hook}` }, encoding: "utf8" });
   expect(result.status, result.stderr).toBe(0);
   const terminal = JSON.parse(readFileSync(f.terminal, "utf8")), directory = join(f.root, "test-results/image-decoder-proof", terminal.runId);
@@ -61,7 +62,8 @@ it("writes fresh digest-bound success only after actual runner validation of a s
   expect(JSON.parse(readFileSync(join(directory, "validation.json"), "utf8"))).toEqual(terminal);
   expect(readFileSync(join(directory, "actual-preload.js"))).toEqual(readFileSync(join(f.root, "dist/preload.js")));
 });
-it("the existing owner terminates a real hanging synthetic descendant and verifies observed groups", async () => {
+// POSIX-only: verifies POSIX process groups.
+it.skipIf(process.platform === "win32")("the existing owner terminates a real hanging synthetic descendant and verifies observed groups", async () => {
   const f = fixture("hang"), previous = process.env.NODE_OPTIONS; process.env.NODE_OPTIONS = `--require ${f.hook}`;
   try {
     const result = await runChild({ script: f.script, args: [f.terminal], cwd: f.root, resultFile: f.terminal, logFile: join(f.root, "owned.log"), timeoutMs: 1800 });

@@ -46,7 +46,8 @@ it("writes terminal success only after both fresh reports validate",()=>{
  const f=fixture("positive"),result=spawnSync(process.execPath,[f.script,f.terminal],{cwd:f.root,env:{...process.env,NODE_OPTIONS:`--require ${f.hook}`},encoding:"utf8"});
  expect(result.status,result.stderr).toBe(0);const terminal=JSON.parse(readFileSync(f.terminal,"utf8"));expect(terminal.validated).toBe(true);expect(terminal.stock.validated).toBe(true);expect(terminal.stock.runId).toBe(terminal.runId);
 });
-it("the existing aggregate owner times out a real hanging stock descendant and cleans observed groups",async()=>{
+// POSIX-only: verifies POSIX process groups.
+it.skipIf(process.platform === "win32")("the existing aggregate owner times out a real hanging stock descendant and cleans observed groups",async()=>{
  const f=fixture("hang"),previous=process.env.NODE_OPTIONS;process.env.NODE_OPTIONS=`--require ${f.hook}`;
  try{
   const result=await runChild({script:f.script,args:[f.terminal],cwd:f.root,resultFile:f.terminal,logFile:join(f.root,"owned.log"),timeoutMs:1800});

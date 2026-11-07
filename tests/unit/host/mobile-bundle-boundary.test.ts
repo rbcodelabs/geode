@@ -28,5 +28,5 @@ describe("mobile renderer build boundary", () => {
       source.includes("node:") ||
       /node_modules\/electron(?:\/|$)/.test(source)
     )).toEqual([]);
-  });
+  }, 60_000); // spawns a real bundler build: ~1.5 s alone but >12 s when the whole suite runs in parallel on a small machine; the 5 s default flakes
 });

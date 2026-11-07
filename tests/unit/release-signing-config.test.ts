@@ -9,7 +9,8 @@ const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
 };
 
 describe("macOS release trust configuration", () => {
-  it("executes the workflow manifest check against arm64, Intel, mixed, and incomplete releases", () => {
+  // POSIX-only: runs the macOS release workflow's shell check; the release pipeline is macOS-only.
+  it.skipIf(process.platform === "win32")("executes the workflow manifest check against arm64, Intel, mixed, and incomplete releases", () => {
     const workflow = YAML.parse(readFileSync(".github/workflows/release.yml", "utf8"));
     const step = workflow.jobs["build-mac"].steps.find((item: { name?: string }) => item.name === "Verify signed artifacts and updater manifest");
     const script = step.run.split("node <<'NODE'\n")[1].split("\nNODE")[0];

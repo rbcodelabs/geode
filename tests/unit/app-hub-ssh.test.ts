@@ -30,7 +30,8 @@ function installSsh(body: string): string {
   return bin;
 }
 
-describe("the default ssh transport", () => {
+// POSIX-only: these tests put a fake `ssh` shell script on PATH; Windows cannot execute POSIX shell scripts.
+describe.skipIf(process.platform === "win32")("the default ssh transport", () => {
   it("syncs a vault end to end through ssh and converges with the CLI on the same store directory", async () => {
     const child = await childBundle(), store = dir("remote-store");
     const log = join(dir("log"), "ssh-args");
